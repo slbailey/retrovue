@@ -64,7 +64,7 @@ Define the canonical tone, structure, and formatting rules for all Retrovue docu
 - Update contract docs and associated tests in the same change set.
 - Annotate deprecated docs with a top note and link to the replacement.
 - For diagrams, embed Mermaid code blocks or link to the `.mmd` source checked into the repo.
-- Use the templates in `docs/_standards/templates` for new files.
+- Use the templates in `docs/standards/` (`*-template.md`) for new files.
 
 ## Review checklist
 

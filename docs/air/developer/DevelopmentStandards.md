@@ -4,13 +4,13 @@ _Metadata: Status=Stable; Scope=Developer standards; Owner=@runtime-platform_
 
 ## Purpose
 
-Document the local expectations for C++ module layout, matching the canonical guidance in `_standards/repository-conventions.md`.
+Document the local expectations for C++ module layout, matching the canonical guidance in `../standards/repository-conventions.md`.
 
 ## Scope
 
 - Applies to native RetroVue modules such as `retrovue-air`.
 - Covers header/source placement, namespace structure, and CMake exposure.
-- Supplements shared standards; defer to `_standards/` when conflicts arise.
+- Supplements shared standards; defer to `../standards/` when conflicts arise.
 
 ## Project layout
 
@@ -53,5 +53,5 @@ project-root/
 
 ## See also
 
-- `_standards/repository-conventions.md`
-- `_standards/documentation-standards.md`
+- `../standards/repository-conventions.md`
+- `../standards/documentation-standards.md`

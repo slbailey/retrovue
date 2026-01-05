@@ -4,7 +4,7 @@ _Metadata: Status=Adopted; Scope=Contract testing; Domains=MetricsAndTiming, Pla
 
 ## Purpose
 
-Define the shared harness, naming rules, and regression expectations for contract suites in `retrovue-air`. This mirrors the canonical pattern documented in `_standards/test-methodology.md`.
+Define the shared harness, naming rules, and regression expectations for contract suites in `retrovue-air`. This mirrors the canonical pattern documented in `../standards/test-methodology.md`.
 
 ## Scope
 
@@ -153,7 +153,7 @@ There is no generated docs index today. If we later add automation, it should:
 
 ## See also
 
-- `_standards/test-methodology.md`
+- `../standards/test-methodology.md`
 - `docs/contracts/PlayoutEngineContract.md`
 - `docs/contracts/MetricsAndTimingContract.md`
 - `docs/contracts/RendererContract.md`

@@ -71,4 +71,3 @@ retrovue <noun> <verb> --flag value
 - [Architecture overview](../architecture/ArchitectureOverview.md) — System context
 - [Glossary](../GLOSSARY.md) — Canonical terminology
 
-

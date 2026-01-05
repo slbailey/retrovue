@@ -11,6 +11,14 @@ Define the testing strategy, validation workflow, and database usage rules that 
 - **Integration tests** — Exercise cross-module flows (e.g., ingest pipelines) using the real database schema and configured dependencies.
 - **Regression/analysis suites** — Specialized checks (e.g., `tests/CONTRACT_MIGRATION.md`) document migration paths and must remain up to date.
 
+## Contract testing harness
+
+- Base every contract suite on a shared harness (`BaseContractTest`) that provides deterministic clocks, registry hooks,
+  and helper assertions. Each suite declares which contract rule IDs it covers.
+- Prefer traceable test naming (prefix with rule IDs) to keep alignment with `docs/contracts/**`.
+- Store reusable fixtures under `tests/fixtures/`; suffix helper doubles with `Stub` or `Fake` to clarify intent.
+- Keep contract suites easy to run in isolation (pytest file-level, ctest target-level) so iteration stays fast.
+
 ## Workflow expectations
 
 1. Update the relevant contract document in `docs/contracts/` first.

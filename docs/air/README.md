@@ -4,7 +4,7 @@ _Metadata: Status=Canonical; Scope=Documentation index_
 
 ## Purpose
 
-Guide contributors and operators to the correct documentation based on their goal or audience. This index mirrors the structure defined in `_standards/documentation-index-template.md`.
+Guide contributors and operators to the correct documentation based on their goal or audience. This index mirrors the structure defined in `../standards/documentation-index-template.md`.
 
 ## Architecture
 

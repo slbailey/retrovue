@@ -17,7 +17,8 @@ Document the canonical directory structure, naming rules, and cross-repo alignme
 - `alembic/` — Database migrations and env configuration.
 - `scripts/` — One-off operational scripts (validated before inclusion).
 - `src_legacy/` — Quarantine for deprecated modules; new code must not import from here.
-- `docs/_standards/` — Shared standards (this directory) synchronized across repos.
+- `docs/standards/` — Shared standards (documentation/testing methodology) synchronized across repos.
+- `build/` — Generated artifacts (e.g., CMake cache, generated protos) (checked in only when contracts require it).
 
 ## File placement rules
 
@@ -26,7 +27,18 @@ Document the canonical directory structure, naming rules, and cross-repo alignme
 - Usecases accept explicit parameters and sessions/unit-of-work, never call `commit()` inside helper utilities.
 - CLI commands call usecases and format output; they do not enforce business logic.
 - Runtime code does not import from CLI or tests.
-- Documentation changes live under `docs/`; templates stay in `docs/_standards/`.
+- Documentation changes live under `docs/`; shared templates and standards live in `docs/standards/`.
+
+## C++ layout (native modules like retrovue-air)
+
+- Public headers live under `include/retrovue/<module>/`. File names use PascalCase or descriptive snake_case that
+  mirrors the class (`FrameRingBuffer.h`, `MetricsExporter.h`).
+- Implementation files live under `src/<module>/` with matching stem names (`FrameRingBuffer.cpp` pairs with
+  `FrameRingBuffer.h`).
+- Namespaces mirror the directory path, e.g. `retrovue::buffer::FrameRingBuffer`.
+- Avoid flat headers directly under `include/`; every public artifact belongs to a module directory.
+- Internal-only headers stay beside their `.cpp` files in `src/`.
+- Generated proto sources land under the build system’s output directory and are not manually edited.
 
 ## Naming conventions
 
@@ -42,7 +54,7 @@ Document the canonical directory structure, naming rules, and cross-repo alignme
 - Semantic versioning applies to packaged artifacts; document release notes in `CHANGELOG.md`.
 - Migrations are idempotent per environment; do not modify existing versions—add new revisions instead.
 - Contract changes require corresponding updates to tests and docs before code merges.
-- Keep `docs/_standards/` synchronized across sibling repos; note repo-specific exceptions inline.
+- Keep `docs/standards/` synchronized across sibling repos; note repo-specific exceptions inline.
 
 ## Cross-repo expectations
 
