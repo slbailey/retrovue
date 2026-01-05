@@ -23,6 +23,12 @@ This project is a monorepo containing the following components:
 └── README.md
 ```
 
+## Start here (docs)
+
+- **System component map**: `docs/ComponentMap.md` (what the key parts are, what they do, and where their interfaces live)
+- **Core (Python) docs index**: `docs/core/README.md`
+- **Air (C++) docs index**: `docs/air/README.md`
+
 ## Getting Started
 
 ### Prerequisites

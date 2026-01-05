@@ -6,6 +6,12 @@ _Metadata: Status=Canonical; Scope=Documentation index_
 
 Guide contributors and operators to the correct documentation based on their goal or audience. This index mirrors the structure defined in `../standards/documentation-index-template.md`.
 
+## Start here
+
+- [System component map](../ComponentMap.md) - cross-repo component list and primary interfaces (Core + Air).
+- [Architecture Overview](architecture/ArchitectureOverview.md) - system context and design drivers.
+- [Playout Engine Contract](contracts/PlayoutEngineContract.md) - gRPC + metrics guarantees and rule IDs.
+
 ## Architecture
 
 - [Architecture Overview](architecture/ArchitectureOverview.md) - System context and design drivers.
