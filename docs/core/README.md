@@ -6,6 +6,7 @@ This directory is organized by audience and layer.
 
 ## Start here (after time away)
 
+- [System component map](../ComponentMap.md) — key components + responsibilities + interfaces (Core + Air).
 - [Repo review and roadmap](overview/RepoReviewAndRoadmap.md) — component map + priorities (“what’s next”).
 - [Architecture overview](architecture/ArchitectureOverview.md) — system mental model (layers and flow).
 - [Contracts index](contracts/resources/README.md) — what the CLI/usecase system guarantees today.
