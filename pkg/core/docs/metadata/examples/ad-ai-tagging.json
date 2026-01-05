@@ -1,0 +1,32 @@
+{
+  "case": "ad-ai-tagging",
+  "asset_type": "ad",
+  "inputs": {
+    "plex": {
+      "title": "Tasty Cereal — 30s",
+      "advertiser": "Tasty Cereal Co.",
+      "duration": 30
+    },
+    "ai": {
+      "content_warnings": ["sugar"],
+      "confidence": 0.74
+    }
+  },
+  "expected": {
+    "resolved": {
+      "title": "Tasty Cereal — 30s",
+      "advertiser": "Tasty Cereal Co.",
+      "runtime_seconds": 30,
+      "content_warnings": ["sugar"]
+    },
+    "provenance": {
+      "title": "plex",
+      "advertiser": "plex",
+      "runtime_seconds": "plex_or_probe",
+      "content_warnings": "ai_enrichment"
+    }
+  }
+}
+
+
+

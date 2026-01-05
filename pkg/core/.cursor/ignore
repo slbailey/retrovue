@@ -1,0 +1,26 @@
+# virtualenvs
+venv/
+.venv/
+env/
+.env/
+
+# builds / dist
+build/
+dist/
+frontend/
+node_modules/
+
+# alembic migrations (generated)
+alembic/
+
+# legacy/quarantine
+src_legacy/
+src/retrovue/app/
+src/retrovue/content_manager/
+src/retrovue/schedule_manager/
+
+# coverage / cache
+.pytest_cache/
+__pycache__/
+.mypy_cache/
+.ruff_cache/

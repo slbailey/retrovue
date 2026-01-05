@@ -1,0 +1,49 @@
+{
+  "case": "episode-fs-vs-plex",
+  "asset_type": "episode",
+  "inputs": {
+    "filename": {
+      "source_name": "filesystem",
+      "source_path": "file://X:/TV/Retro Hour/S01E02 - Pilot Part II.mkv",
+      "parsed": {
+        "title": "Retro Hour - Pilot Part II",
+        "season_number": 1,
+        "episode_number": 2
+      }
+    },
+    "plex": {
+      "title": "Pilot (Part 2)",
+      "description": "Part two of the pilot.",
+      "genres": ["comedy"],
+      "originallyAvailableAt": "1987-09-19"
+    },
+    "probe": {
+      "runtime_seconds": 1487,
+      "aspect_ratio": 1.3333,
+      "resolution": "480p"
+    }
+  },
+  "expected": {
+    "resolved": {
+      "title": "Pilot (Part 2)",
+      "season_number": 1,
+      "episode_number": 2,
+      "genres": ["comedy"],
+      "runtime_seconds": 1487,
+      "aspect_ratio": "4:3",
+      "resolution": "480p"
+    },
+    "provenance": {
+      "title": "plex",
+      "genres": "plex",
+      "season_number": "filename",
+      "episode_number": "filename",
+      "runtime_seconds": "probe",
+      "aspect_ratio": "probe",
+      "resolution": "probe"
+    }
+  }
+}
+
+
+

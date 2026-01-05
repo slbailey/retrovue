@@ -1,0 +1,275 @@
+{
+  "series": {
+    "required": [
+      "series_id",
+      "asset_type",
+      "title"
+    ],
+    "optional": [
+      "original_title",
+      "sort_title",
+      "description",
+      "tagline",
+      "genres",
+      "subgenres",
+      "themes",
+      "keywords",
+      "tone",
+      "mood",
+      "production_year",
+      "release_date",
+      "decade",
+      "country_of_origin",
+      "original_language",
+      "spoken_languages",
+      "content_rating",
+      "poster_image_url",
+      "backdrop_image_url",
+      "thumbnail_url",
+      "credits",
+      "external_ids",
+      "studio",
+      "network",
+      "seasons_count",
+      "episode_count",
+      "franchise_id",
+      "source_name",
+      "source_uid",
+      "canonical_key"
+    ],
+    "enrichment": [
+      "ai_summary",
+      "ai_keywords",
+      "ai_genres",
+      "ai_tone"
+    ]
+  },
+  "episode": {
+    "required": [
+      "episode_id",
+      "asset_type",
+      "series_id",
+      "season_number",
+      "episode_number",
+      "title",
+      "runtime_seconds"
+    ],
+    "optional": [
+      "original_title",
+      "sort_title",
+      "description",
+      "tagline",
+      "genres",
+      "subgenres",
+      "themes",
+      "keywords",
+      "tone",
+      "mood",
+      "production_year",
+      "release_date",
+      "original_air_date",
+      "decade",
+      "country_of_origin",
+      "original_language",
+      "spoken_languages",
+      "content_rating",
+      "aspect_ratio",
+      "resolution",
+      "color",
+      "audio_channels",
+      "audio_format",
+      "closed_captions",
+      "subtitles",
+      "poster_image_url",
+      "backdrop_image_url",
+      "thumbnail_url",
+      "credits",
+      "external_ids",
+      "source_name",
+      "source_uid",
+      "source_path",
+      "file_sha256",
+      "canonical_key",
+      "absolute_episode_number",
+      "production_code"
+    ],
+    "enrichment": [
+      "ai_summary",
+      "ai_keywords",
+      "ai_genres",
+      "ai_tone"
+    ]
+  },
+  "movie": {
+    "required": [
+      "movie_id",
+      "asset_type",
+      "title",
+      "runtime_seconds"
+    ],
+    "optional": [
+      "original_title",
+      "sort_title",
+      "description",
+      "tagline",
+      "genres",
+      "subgenres",
+      "themes",
+      "keywords",
+      "tone",
+      "mood",
+      "production_year",
+      "release_date",
+      "decade",
+      "country_of_origin",
+      "original_language",
+      "spoken_languages",
+      "content_rating",
+      "aspect_ratio",
+      "resolution",
+      "color",
+      "audio_channels",
+      "audio_format",
+      "closed_captions",
+      "subtitles",
+      "poster_image_url",
+      "backdrop_image_url",
+      "thumbnail_url",
+      "credits",
+      "external_ids",
+      "source_name",
+      "source_uid",
+      "source_path",
+      "file_sha256",
+      "canonical_key"
+    ],
+    "enrichment": [
+      "ai_summary",
+      "ai_keywords",
+      "ai_genres",
+      "ai_tone"
+    ]
+  },
+  "bumper": {
+    "required": [
+      "bumper_id",
+      "asset_type",
+      "title",
+      "bump_type",
+      "runtime_seconds"
+    ],
+    "optional": [
+      "description",
+      "era",
+      "network",
+      "content_rating",
+      "aspect_ratio",
+      "resolution",
+      "poster_image_url",
+      "backdrop_image_url",
+      "thumbnail_url",
+      "external_ids",
+      "source_name",
+      "source_uid",
+      "source_path",
+      "file_sha256",
+      "canonical_key"
+    ],
+    "enrichment": [
+      "ai_summary",
+      "ai_keywords",
+      "ai_genres",
+      "ai_tone"
+    ]
+  },
+  "promo": {
+    "required": [
+      "promo_id",
+      "asset_type",
+      "title",
+      "runtime_seconds"
+    ],
+    "optional": [
+      "description",
+      "genres",
+      "content_rating",
+      "poster_image_url",
+      "backdrop_image_url",
+      "thumbnail_url",
+      "external_ids",
+      "promoted_asset_type",
+      "promoted_asset_id",
+      "campaign_name",
+      "air_window_start",
+      "air_window_end",
+      "network",
+      "call_to_action",
+      "source_name",
+      "source_uid",
+      "source_path",
+      "file_sha256",
+      "canonical_key"
+    ],
+    "enrichment": [
+      "ai_summary",
+      "ai_keywords",
+      "ai_genres",
+      "ai_tone"
+    ]
+  },
+  "ad": {
+    "required": [
+      "ad_id",
+      "asset_type",
+      "title",
+      "advertiser",
+      "runtime_seconds"
+    ],
+    "optional": [
+      "description",
+      "genres",
+      "poster_image_url",
+      "backdrop_image_url",
+      "thumbnail_url",
+      "external_ids",
+      "product",
+      "campaign_name",
+      "air_date",
+      "air_window_start",
+      "air_window_end",
+      "region",
+      "regulatory_disclaimers",
+      "content_warnings",
+      "source_name",
+      "source_uid",
+      "source_path",
+      "file_sha256",
+      "canonical_key"
+    ],
+    "enrichment": [
+      "ai_summary",
+      "ai_keywords",
+      "ai_genres",
+      "ai_tone"
+    ]
+  },
+  "block": {
+    "required": [
+      "block_id",
+      "asset_type",
+      "title",
+      "date",
+      "lineup"
+    ],
+    "optional": [
+      "theme",
+      "description",
+      "curator",
+      "canonical_key"
+    ],
+    "enrichment": []
+  }
+}
+
+
+

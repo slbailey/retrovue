@@ -1,0 +1,29 @@
+---
+alwaysApply: true
+match:
+  - "tests/contracts/**"
+  - "src/retrovue/**"
+---
+
+# Contract-First Rules
+
+## When editing CLI or usecases
+- **First**: look for a matching test under `tests/contracts/`:
+  - `test_source_*`
+  - `test_collection_*`
+  - `test_asset_*` (future)
+- **Then**: make the minimal change to the implementation to satisfy that test.
+- **Do not** add new behavior to the CLI that is not described in a contract test.
+
+## Test commands to run
+Prefer running **narrow** test sets while iterating:
+
+```bash
+pytest tests/contracts/test_source_add_contract.py tests/contracts/test_source_add_data_contract.py -vv
+pytest tests/contracts/test_source_list_data_contract.py -vv
+pytest tests/contracts/test_source_discover_contract.py tests/contracts/test_source_discover_data_contract.py -vv
+```
+
+Run the full contracts only before a commit:
+
+pytest tests/contracts -vv

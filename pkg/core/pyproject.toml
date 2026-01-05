@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retrovue"
+version = "0.1.0"
+description = "A modern media library management system"
+authors = [{ name = "Retrovue Team" }]
+readme = "Readme.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2",
+    "typer>=0.12",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.10.0",
+    "psycopg[binary]>=3.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "structlog>=23.0.0",
+    "prometheus-client>=0.17.0",
+    "jsonschema>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "types-requests",
+]
+
+[project.scripts]
+retrovue = "retrovue.cli.main:cli"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+extend-exclude = [
+    "frontend",
+    "dist",
+    "build",
+    "venv",
+    ".venv",
+    "example_session.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E203",  # space before :
+    "E501",  # long lines (black-style)
+    "B905",  # zip strict
+    "B008",  # function-call in default args (fastapi)
+    "B904",  # raise from
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+"alembic/versions/*" = ["F401"]
+
+[tool.mypy]
+python_version = "3.12"
+pythonpath = ["src"]
+files = ["src"]
+ignore_missing_imports = true
+explicit_package_bases = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+exclude = """
+(?x)
+  ^alembic[\\/]               # migrations are runtime-only
+| ^src_legacy[\\/]            # legacy code
+| ^tests[\\/]                 # tests are not typed yet
+| ^src[\\/]retrovue[\\/]tests[\\/]
+| ^src[\\/]retrovue[\\/]runtime[\\/]     # enable later
+| ^src[\\/]retrovue[\\/]streaming[\\/]   # enable later
+| ^src[\\/]retrovue[\\/]diagnostics[\\/] # enable later
+| ^src[\\/]retrovue[\\/]resolver[\\/]    # enable later
+| ^src[\\/]retrovue[\\/]infra[\\/]logging\\.py$
+| ^src[\\/]retrovue[\\/]infra[\\/]asset_repository\\.py$
+| ^src[\\/]retrovue[\\/]cli[\\/]commands[\\/]source\\.py$
+| ^src[\\/]retrovue[\\/]cli[\\/]commands[\\/]collection\\.py$
+| ^src[\\/]retrovue[\\/]cli[\\/]commands[\\/]_ops[\\/]source_ingest_service\\.py$
+| ^src[\\/]retrovue[\\/]adapters[\\/]importers[\\/]plex_importer\\.py$
+"""
+
+[[tool.mypy.overrides]]
+module = [
+    "requests.*",
+    "typer.*",
+    "fastapi.*",
+    "uvicorn.*",
+    "sqlalchemy.*",
+    "alembic.*",
+    "structlog.*",
+    "prometheus_client.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["retrovue.adapters.importers.plex_importer"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q --tb=short"
+xfail_strict = false
+markers = [
+    "contract: marks tests as contract tests (deselect with '-m \"not contract\"')",
+]

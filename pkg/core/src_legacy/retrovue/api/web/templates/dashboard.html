@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Retrovue Admin{% endblock %}
+
+{% block content %}
+<div class="px-4 py-6 sm:px-0">
+    <div class="border-4 border-dashed border-gray-200 rounded-lg p-8">
+        <h1 class="text-3xl font-bold text-gray-900 mb-8">Retrovue Admin Dashboard</h1>
+        
+        <!-- Dashboard tiles -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <!-- Plex Servers tile -->
+            <div class="bg-white overflow-hidden shadow rounded-lg">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0">
+                            <div class="w-8 h-8 bg-blue-500 rounded-md flex items-center justify-center">
+                                <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"></path>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Plex Servers</dt>
+                                <dd class="text-lg font-medium text-gray-900">2</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-5 py-3">
+                    <div class="text-sm">
+                        <a href="/sources" class="font-medium text-blue-600 hover:text-blue-500">Manage sources</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Collections tile -->
+            <div class="bg-white overflow-hidden shadow rounded-lg">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0">
+                            <div class="w-8 h-8 bg-green-500 rounded-md flex items-center justify-center">
+                                <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Collections</dt>
+                                <dd class="text-lg font-medium text-gray-900">5</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-5 py-3">
+                    <div class="text-sm">
+                        <a href="/sources" class="font-medium text-green-600 hover:text-green-500">View collections</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ingest tile -->
+            <div class="bg-white overflow-hidden shadow rounded-lg">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0">
+                            <div class="w-8 h-8 bg-yellow-500 rounded-md flex items-center justify-center">
+                                <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Last Ingest</dt>
+                                <dd class="text-lg font-medium text-gray-900">2 hours ago</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-5 py-3">
+                    <div class="text-sm">
+                        <a href="/sources" class="font-medium text-yellow-600 hover:text-yellow-500">Run ingest</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Assets tile -->
+            <div class="bg-white overflow-hidden shadow rounded-lg">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0">
+                            <div class="w-8 h-8 bg-purple-500 rounded-md flex items-center justify-center">
+                                <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"></path>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Canonical Assets</dt>
+                                <dd class="text-lg font-medium text-gray-900">1,247</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-5 py-3">
+                    <div class="text-sm">
+                        <a href="/assets" class="font-medium text-purple-600 hover:text-purple-500">Browse assets</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick actions -->
+        <div class="mt-8">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Quick Actions</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <a href="/sources/new" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"></path>
+                    </svg>
+                    Add Plex Server
+                </a>
+                
+                <button onclick="runQuickIngest()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
+                    </svg>
+                    Run Ingest
+                </button>
+                
+                <a href="/assets" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"></path>
+                    </svg>
+                    Browse Assets
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function runQuickIngest() {
+    // Show loading indicator
+    document.getElementById('loading').style.display = 'block';
+    
+    // Run ingest for plex source
+    fetch('/ingest/run', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'source=plex&source_id=plex-1&library_ids=[]'
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Show result in a modal or alert
+        alert('Ingest completed! Check the results in the Sources page.');
+        document.getElementById('loading').style.display = 'none';
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Ingest failed: ' + error.message);
+        document.getElementById('loading').style.display = 'none';
+    });
+}
+</script>
+{% endblock %}
+
+

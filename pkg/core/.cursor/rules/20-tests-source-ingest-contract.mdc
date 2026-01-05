@@ -1,0 +1,17 @@
+---
+alwaysApply: true
+match:
+  - "tests/contracts/test_source_ingest_*.py"
+---
+
+# Source ingest test rules
+
+- This command currently runs in **discovery-only** mode; legacy ingest/orchestrator code must **not** be reintroduced.
+- Tests should be updated to match current CLI behavior; **do not** update CLI to match legacy tests.
+- Expected behaviors:
+  - No collections → exit 0, print informative message
+  - Collections but none ingestible/sync-enabled → exit 0, print informative message
+  - Eligible collections but ingest not yet implemented → exit 1, print: "Ingest operation is not available" (or close)
+  - Missing source → exit 1, "Error: Source '<id>' not found"
+- Do **not** loosen exit-code assertions to "0 or 1" for ingest tests.
+- Do **not** call or reintroduce legacy `SourceService` or orchestrator modules.

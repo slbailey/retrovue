@@ -1,0 +1,71 @@
+{
+  "rules": [
+    {
+      "description": "Retrovue uses domain → contract → test → implement",
+      "match": ["src/retrovue/**", "tests/**"],
+      "instructions": [
+        "Before adding or changing runtime code, check for an existing contract test under tests/contracts/.",
+        "If no contract exists, propose/outline a contract file but do NOT implement large runtime changes.",
+        "Prefer adding or updating usecases in src/retrovue/usecases over putting logic directly in CLI handlers."
+      ]
+    },
+    {
+      "description": "Do not reintroduce legacy service layers",
+      "match": [
+        "src/retrovue/app/**",
+        "src/retrovue/content_manager/**",
+        "src/retrovue/schedule_manager/**",
+        "src_legacy/**"
+      ],
+      "instructions": [
+        "These directories are considered legacy or quarantined.",
+        "Do NOT add new code here.",
+        "Do NOT migrate new CLI features to these directories.",
+        "If old behavior is needed, re-implement it under src/retrovue/usecases or src/retrovue/cli/commands."
+      ]
+    },
+    {
+      "description": "CLI commands must stay thin and call usecases",
+      "match": ["src/retrovue/cli/commands/**"],
+      "instructions": [
+        "Do NOT construct importers or services directly here unless explicitly required by a contract test.",
+        "Call the corresponding function in src/retrovue/usecases/* and let tests patch that.",
+        "Preserve existing JSON shapes and human-readable messages defined in tests/contracts/*."
+      ]
+    },
+    {
+      "description": "Asset/domain modeling must stay centralized",
+      "match": ["src/retrovue/domain/**"],
+      "instructions": [
+        "Define new SQLAlchemy entities in src/retrovue/domain/entities.py instead of creating new scattered domain files.",
+        "If a repository is needed, put it under src/retrovue/repositories/ as a thin SQLAlchemy wrapper that uses the existing Unit of Work.",
+        "Do NOT create a new UnitOfWork implementation."
+      ]
+    },
+    {
+      "description": "Testing cadence for source-related edits",
+      "match": [
+        "src/retrovue/cli/commands/source.py",
+        "src/retrovue/usecases/source_*.py",
+        "tests/contracts/test_source_*"
+      ],
+      "instructions": [
+        "After changes, run ONLY the relevant contract tests:",
+        "pytest tests/contracts/test_source_add_contract.py tests/contracts/test_source_add_data_contract.py -vv",
+        "pytest tests/contracts/test_source_list_data_contract.py -vv",
+        "pytest tests/contracts/test_source_discover_contract.py tests/contracts/test_source_discover_data_contract.py -vv",
+        "Run the full suite only when all above are green."
+      ]
+    },
+    {
+      "description": "Discovery is discovery-only",
+      "match": ["src/retrovue/cli/commands/source.py"],
+      "instructions": [
+        "The command `source discover` must call retrovue.usecases.source_discover.discover_collections(...) once.",
+        "Do NOT persist discovered collections here.",
+        "On missing source, print `Error: Source '<id>' not found` and exit 1.",
+        "In JSON mode, always emit: status, source, total, collections_added, collections."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Sources - Retrovue Admin{% endblock %}
+
+{% block content %}
+<div class="px-4 py-6 sm:px-0">
+    <div class="sm:flex sm:items-center">
+        <div class="sm:flex-auto">
+            <h1 class="text-2xl font-semibold text-gray-900">Content Sources</h1>
+            <p class="mt-2 text-sm text-gray-700">Manage your Plex servers and filesystem sources.</p>
+        </div>
+        <div class="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+            <a href="/sources/new" class="inline-flex items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto">
+                <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"></path>
+                </svg>
+                Add Plex Server
+            </a>
+        </div>
+    </div>
+
+    <div class="mt-8 flow-root">
+        <div class="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+            <div class="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
+                <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+                    <table class="min-w-full divide-y divide-gray-300">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Type</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Status</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">URL</th>
+                                <th scope="col" class="relative px-6 py-3">
+                                    <span class="sr-only">Actions</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for source in sources %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                    {{ source.name }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                                        {% if source.type == 'plex' %}bg-blue-100 text-blue-800
+                                        {% elif source.type == 'filesystem' %}bg-green-100 text-green-800
+                                        {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                        {{ source.type.title() }}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                                        {% if source.status == 'connected' %}bg-green-100 text-green-800
+                                        {% elif source.status == 'active' %}bg-green-100 text-green-800
+                                        {% else %}bg-red-100 text-red-800{% endif %}">
+                                        {{ source.status.title() }}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {{ source.base_url or 'N/A' }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    <div class="flex justify-end space-x-2">
+                                        <a href="/sources/{{ source.id }}" class="text-blue-600 hover:text-blue-900">View</a>
+                                        {% if source.type == 'plex' %}
+                                        <button onclick="discoverLibraries('{{ source.id }}')" class="text-green-600 hover:text-green-900">Discover</button>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function discoverLibraries(sourceId) {
+    // Show loading indicator
+    document.getElementById('loading').style.display = 'block';
+    
+    // Discover libraries
+    fetch(`/sources/${sourceId}/discover`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Show result in a modal or redirect to source detail
+        window.location.href = `/sources/${sourceId}`;
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to discover libraries: ' + error.message);
+        document.getElementById('loading').style.display = 'none';
+    });
+}
+</script>
+{% endblock %}
+
+

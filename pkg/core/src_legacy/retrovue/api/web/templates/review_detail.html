@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Review Item - Retrovue Admin{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900">Review Item</h1>
+            <p class="text-gray-600">Review and resolve this item</p>
+        </div>
+        <a href="/review" class="text-sm text-blue-600 hover:text-blue-500">
+            ← Back to Review Queue
+        </a>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Asset Information -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Asset Information</h2>
+            <dl class="space-y-3">
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">File Path</dt>
+                    <dd class="text-sm text-gray-900 font-mono break-all">{{ asset.uri }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Size</dt>
+                    <dd class="text-sm text-gray-900">{{ "%.1f"|format(asset.size / (1024*1024)) }} MB</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Hash</dt>
+                    <dd class="text-sm text-gray-900 font-mono">{{ asset.hash_sha256[:16] }}...</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Status</dt>
+                    <dd class="text-sm">
+                        {% if asset.canonical %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            Canonical
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                            Pending
+                        </span>
+                        {% endif %}
+                    </dd>
+                </div>
+            </dl>
+        </div>
+
+        <!-- Review Information -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Review Information</h2>
+            <dl class="space-y-3">
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Reason</dt>
+                    <dd class="text-sm text-gray-900">{{ review.reason }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Confidence</dt>
+                    <dd class="text-sm text-gray-900">
+                        <div class="flex items-center space-x-2">
+                            <div class="flex-1 bg-gray-200 rounded-full h-2">
+                                <div class="bg-yellow-500 h-2 rounded-full" style="width: '{{ review.confidence * 100 }}%'"></div>
+                            </div>
+                            <span class="text-sm font-medium">{{ "%.1f"|format(review.confidence * 100) }}%</span>
+                        </div>
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Created</dt>
+                    <dd class="text-sm text-gray-900">{{ review.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+
+    <!-- Extracted Labels -->
+    {% if raw_labels %}
+    <div class="bg-white shadow rounded-lg p-6">
+        <h2 class="text-lg font-medium text-gray-900 mb-4">Extracted Labels</h2>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {% for key, value in raw_labels.items() %}
+            <div class="bg-gray-50 rounded-lg p-3">
+                <dt class="text-sm font-medium text-gray-500">{{ key }}</dt>
+                <dd class="text-sm text-gray-900 mt-1">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Resolution Form -->
+    <div class="bg-white shadow rounded-lg p-6">
+        <h2 class="text-lg font-medium text-gray-900 mb-4">Resolve Review</h2>
+        <form method="POST" action="/review/{{ review.id }}/resolve" class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="title" class="block text-sm font-medium text-gray-700">Title *</label>
+                    <input type="text" 
+                           id="title" 
+                           name="title" 
+                           value="{{ raw_labels.get('title_guess', '') }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                           required>
+                </div>
+                <div>
+                    <label for="episode_title" class="block text-sm font-medium text-gray-700">Episode Title</label>
+                    <input type="text" 
+                           id="episode_title" 
+                           name="episode_title" 
+                           value="{{ raw_labels.get('episode_title', '') }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label for="season" class="block text-sm font-medium text-gray-700">Season</label>
+                    <input type="number" 
+                           id="season" 
+                           name="season" 
+                           value="{{ raw_labels.get('season', '') }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+                <div>
+                    <label for="episode" class="block text-sm font-medium text-gray-700">Episode</label>
+                    <input type="number" 
+                           id="episode" 
+                           name="episode" 
+                           value="{{ raw_labels.get('episode', '') }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+                <div>
+                    <label for="year" class="block text-sm font-medium text-gray-700">Year</label>
+                    <input type="number" 
+                           id="year" 
+                           name="year" 
+                           value="{{ raw_labels.get('year', '') }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+            </div>
+
+            <div>
+                <label for="notes" class="block text-sm font-medium text-gray-700">Notes</label>
+                <textarea id="notes" 
+                          name="notes" 
+                          rows="3"
+                          class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          placeholder="Optional notes about this resolution..."></textarea>
+            </div>
+
+            <div class="flex justify-end space-x-3">
+                <a href="/review" 
+                   class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Cancel
+                </a>
+                <button type="submit" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Resolve Review
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+
+
+

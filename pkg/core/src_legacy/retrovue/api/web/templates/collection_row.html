@@ -1,0 +1,44 @@
+<tr id="row-{{ collection.external_id }}">
+    <td class="px-6 py-4 whitespace-nowrap">
+        <input type="checkbox" 
+            {% if collection.sync_enabled %}checked{% endif %}
+            hx-put="/sources/{{ source_id }}/collections/{{ collection.external_id }}"
+            hx-vals='js:{sync_enabled: this.checked, mapping_pairs: JSON.stringify({{ (collection.mapping_pairs or []) | tojson }})}'
+            hx-target="#row-{{ collection.external_id }}"
+            hx-swap="outerHTML"
+            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+        {{ collection.name }}
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+            {% if collection.source_type == 'plex' %}bg-blue-100 text-blue-800
+            {% elif collection.source_type == 'filesystem' %}bg-green-100 text-green-800
+            {% else %}bg-gray-100 text-gray-800{% endif %}">
+            {{ collection.source_type.title() }}
+        </span>
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+        {{ collection.config.plex_path if collection.config and collection.config.plex_path else 'N/A' }}
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+        <input type="text" 
+            value="{{ collection.mapping_pairs[0][1] if collection.mapping_pairs and collection.mapping_pairs|length > 0 else '' }}"
+            class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
+            placeholder="/local/path">
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+        <div class="space-y-1">
+            {% for mapping in (collection.mapping_pairs or []) %}
+            <div class="text-xs">
+                <span class="font-mono">{{ mapping[0] }}</span> → 
+                <span class="font-mono">{{ mapping[1] }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+        <button onclick="editMapping('{{ collection.external_id }}')" class="text-blue-600 hover:text-blue-900">Edit</button>
+    </td>
+</tr>

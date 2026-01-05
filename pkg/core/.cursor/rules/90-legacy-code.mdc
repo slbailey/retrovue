@@ -1,0 +1,32 @@
+---
+alwaysApply: true
+---
+
+# Legacy / Quarantine Rules
+
+These locations are considered **legacy** or **to be moved**:
+
+```text
+src/retrovue/app/
+src/retrovue/content_manager/
+src/retrovue/schedule_manager/
+src_legacy/
+Rules
+Do not add new code here.
+
+Do not import from these into new code unless it is an explicit migration step.
+
+If existing code still references these modules, prefer to:
+
+Create a new usecase under src/retrovue/usecases/
+
+Update the CLI to call the new usecase
+
+Add/adjust the contract test
+
+Then decommission the legacy module
+
+Temporary moves
+If you need to keep old code around, move it under src_legacy/ with the same structure.
+
+New features never go into src_legacy/.

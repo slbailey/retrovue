@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}{{ source.name }} - Retrovue Admin{% endblock %}
+
+{% block content %}
+<div class="px-4 py-6 sm:px-0">
+    <div class="sm:flex sm:items-center">
+        <div class="sm:flex-auto">
+            <h1 class="text-2xl font-semibold text-gray-900">{{ source.name }}</h1>
+            <p class="mt-2 text-sm text-gray-700">{{ source.type.title() }} server at {{ source.base_url }}</p>
+        </div>
+        <div class="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+            <button onclick="runIngest('{{ source.id }}')" class="inline-flex items-center justify-center rounded-md border border-transparent bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 sm:w-auto">
+                <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
+                </svg>
+                Run Ingest
+            </button>
+        </div>
+    </div>
+
+    <!-- Server Status -->
+    <div class="mt-8 bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg leading-6 font-medium text-gray-900">Server Status</h3>
+            <div class="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-3">
+                <div class="bg-gray-50 overflow-hidden shadow rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-green-500 rounded-md flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Status</dt>
+                                    <dd class="text-lg font-medium text-gray-900">{{ source.status.title() }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-gray-50 overflow-hidden shadow rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-blue-500 rounded-md flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Collections</dt>
+                                    <dd class="text-lg font-medium text-gray-900">5</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-gray-50 overflow-hidden shadow rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-purple-500 rounded-md flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Last Ingest</dt>
+                                    <dd class="text-lg font-medium text-gray-900">2 hours ago</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collections -->
+    <div class="mt-8">
+        <div class="sm:flex sm:items-center">
+            <div class="sm:flex-auto">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Collections</h3>
+                <p class="mt-2 text-sm text-gray-700">Manage library collections and path mappings.</p>
+            </div>
+            <div class="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+                <button onclick="discoverLibraries('{{ source.id }}')" class="inline-flex items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
+                    </svg>
+                    Discover Libraries
+                </button>
+            </div>
+        </div>
+
+        <!-- Collections table -->
+        <div id="collections-container" class="mt-4">
+            <div hx-get="/sources/{{ source.id }}/collections" hx-trigger="load" hx-target="#collections-container" hx-swap="innerHTML">
+                <div class="animate-pulse">
+                    <div class="bg-gray-200 h-32 rounded"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ingest Results -->
+    <div id="ingest-results" class="mt-8"></div>
+</div>
+
+<script>
+function discoverLibraries(sourceId) {
+    // Show loading indicator
+    document.getElementById('loading').style.display = 'block';
+    
+    // Discover libraries
+    fetch(`/sources/${sourceId}/discover`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Update collections container
+        document.getElementById('collections-container').innerHTML = html;
+        document.getElementById('loading').style.display = 'none';
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to discover libraries: ' + error.message);
+        document.getElementById('loading').style.display = 'none';
+    });
+}
+
+function runIngest(sourceId) {
+    // Show loading indicator
+    document.getElementById('loading').style.display = 'block';
+    
+    // Run ingest
+    fetch('/ingest/run', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `source=plex&source_id=${sourceId}&library_ids=[]`
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Show result
+        document.getElementById('ingest-results').innerHTML = html;
+        document.getElementById('loading').style.display = 'none';
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Ingest failed: ' + error.message);
+        document.getElementById('loading').style.display = 'none';
+    });
+}
+</script>
+{% endblock %}
+
+

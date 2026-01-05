@@ -1,0 +1,42 @@
+{
+  "case": "movie-missing-genres",
+  "asset_type": "movie",
+  "inputs": {
+    "plex": {
+      "title": "Retro Nights",
+      "description": "A nostalgic journey...",
+      "genres": [],
+      "year": 1986,
+      "originallyAvailableAt": "1986-06-21"
+    },
+    "probe": {
+      "runtime_seconds": 5400,
+      "resolution": "1080p",
+      "aspect_ratio": 1.7778
+    },
+    "ai": {
+      "ai_genres": ["drama", "romance"],
+      "confidence": 0.86
+    }
+  },
+  "expected": {
+    "resolved": {
+      "title": "Retro Nights",
+      "genres": ["drama", "romance"],
+      "ai_genres": ["drama", "romance"],
+      "runtime_seconds": 5400,
+      "aspect_ratio": "16:9",
+      "resolution": "1080p"
+    },
+    "provenance": {
+      "title": "plex",
+      "genres": "ai_backfill_when_missing",
+      "runtime_seconds": "probe",
+      "aspect_ratio": "probe",
+      "resolution": "probe"
+    }
+  }
+}
+
+
+
