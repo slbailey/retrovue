@@ -86,4 +86,3 @@ sequenceDiagram
 - [Related architecture doc](../architecture/<other>.md) — Short description
 - [Contract doc](../contracts/resources/<contract>.md) — Guarantees the implementation must satisfy
 
-

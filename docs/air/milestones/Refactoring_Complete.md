@@ -29,6 +29,6 @@ Capture the outcomes of the refactoring cycle that aligned `retrovue-air` with R
 
 ## See also
 
-- `_standards/repository-conventions.md`
-- `_standards/documentation-standards.md`
+- `../standards/repository-conventions.md`
+- `../standards/documentation-standards.md`
 

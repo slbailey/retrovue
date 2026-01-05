@@ -75,8 +75,8 @@ How to extend RetroVue safely by adding plugins.
 
 House writing style, collaboration, and testing standards.
 
-- [AI assistant methodology](_standards/ai-assistant-methodology.md)
-- [Documentation standards](_standards/documentation-standards.md)
-- [Repository conventions](_standards/repository-conventions.md)
-- [Test methodology](_standards/test-methodology.md)
+- [AI assistant methodology](../standards/ai-assistant-methodology.md)
+- [Documentation standards](../standards/documentation-standards.md)
+- [Repository conventions](../standards/repository-conventions.md)
+- [Test methodology](../standards/test-methodology.md)
 - [Glossary](GLOSSARY.md)

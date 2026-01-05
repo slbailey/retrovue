@@ -59,4 +59,3 @@ Provide a concise narrative (3–5 sentences) describing what changed or what yo
 - [Linked incident](../developer/incidents/<file>.md) — Optional description
 - [Change request](../developer/rfcs/<file>.md) — Optional description
 
-

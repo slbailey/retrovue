@@ -1,6 +1,6 @@
 _Metadata: Status=Draft; Scope=Domain; Owner=@runtime-platform_
 
-_Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [Metrics and Timing Domain](MetricsAndTimingDomain.md); [Telemetry Guidelines](../_standards/documentation-standards.md)_
+_Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [Metrics and Timing Domain](MetricsAndTimingDomain.md); [Telemetry Guidelines](../standards/documentation-standards.md)_
 
 # Domain - Metrics Export
 
@@ -60,4 +60,4 @@ Define the abstraction that captures runtime metrics and exposes them to downstr
 
 - [MasterClock Domain](MasterClockDomain.md)
 - [Metrics and Timing Domain](MetricsAndTimingDomain.md)
-- [Runtime Telemetry Standards](../_standards/documentation-standards.md)
+- [Runtime Telemetry Standards](../standards/documentation-standards.md)

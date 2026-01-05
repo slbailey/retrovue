@@ -40,5 +40,5 @@ Opaque handle referencing scheduled media assets; supplied by ChannelManager via
 
 ## See also
 
-- `_standards/documentation-standards.md`
+- `../standards/documentation-standards.md`
 - `docs/contracts/PlayoutEngineContract.md`

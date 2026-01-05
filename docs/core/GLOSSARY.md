@@ -1,4 +1,4 @@
-_Related: [Documentation standards](_standards/documentation-standards.md) • [Architecture overview](architecture/ArchitectureOverview.md) • [Runtime: Channel manager](runtime/channel_manager.md)_
+_Related: [Documentation standards](../standards/documentation-standards.md) • [Architecture overview](architecture/ArchitectureOverview.md) • [Runtime: Channel manager](runtime/channel_manager.md)_
 
 # Glossary
 
@@ -89,7 +89,7 @@ The execution layer that operates in real-time: [PlaylogEvent](#playlogevent-pla
 
 See also:
 
-- [Documentation standards](_standards/documentation-standards.md)
+- [Documentation standards](../standards/documentation-standards.md)
 - [Channel manager](runtime/channel_manager.md)
 - [Producer lifecycle](runtime/ProducerLifecycle.md)
 - [ScheduleDay](domain/ScheduleDay.md)

@@ -1,4 +1,4 @@
-> **Replaced:** The authoritative repository layout lives in [`../_standards/repository-conventions.md`](../_standards/repository-conventions.md). This document remains as historical background.
+> **Replaced:** The authoritative repository layout lives in [`../standards/repository-conventions.md`](../standards/repository-conventions.md). This document remains as historical background.
 
 # 📁 Project Structure & Allowed Patterns
 

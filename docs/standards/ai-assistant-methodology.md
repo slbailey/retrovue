@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Establish how ChatGPT and Cursor collaborate across Retrovue repositories (core, air, docs) so every task follows the same contract-first, documentation-led workflow.
+Establish how ChatGPT and Cursor collaborate across Retrovue repositories (core, air, docs) so every task follows the
+same contract-first, documentation-led workflow.
 
 ## Roles
 
@@ -10,7 +11,7 @@ Establish how ChatGPT and Cursor collaborate across Retrovue repositories (core,
 
 - Owns architecture context, requirements, and cross-repo consistency.
 - Designs prompts that specify target files, required sections, style, and acceptance criteria.
-- Reviews Cursor output for correctness, tone, placement, and contract alignment.
+- Reviews AI-generated output for correctness, tone, placement, and contract alignment.
 - Requests revisions until deliverables satisfy the documented standard.
 - Never writes production code directly.
 
@@ -20,24 +21,26 @@ Establish how ChatGPT and Cursor collaborate across Retrovue repositories (core,
 - Generates documentation, code, migrations, and tests while respecting repository layout.
 - Performs syntax and import checks before declaring completion.
 - Runs relevant pytest or lint commands iteratively until they succeed.
-- Reports completion using the `## Summary / Validation` structure (Summary, Validation/Assumptions, Follow-ups, Suggested tests).
+- Reports completion using the `## Summary / Validation` structure (Summary, Validation/Assumptions, Follow-ups,
+  Suggested tests).
 - Avoids pasting code in chat unless explicitly instructed to do so.
 
 ## Collaboration workflow
 
 1. **Document first** — ChatGPT instructs Cursor to draft or update documentation before any runtime code changes.
 2. **Review cycle** — ChatGPT inspects the generated doc and issues revision prompts until the doc is authoritative.
-3. **Implement** — ChatGPT provides a detailed code-generation prompt; Cursor writes the implementation within declared paths.
+3. **Implement** — ChatGPT provides a detailed code-generation prompt; Cursor writes the implementation within declared
+   paths.
 4. **Validate** — Cursor lint-checks, runs targeted tests, and self-repairs failures (Test Iteration Mode).
-5. **Test authoring** — When behavior stabilizes, ChatGPT directs Cursor to add or update tests; Cursor repeats validation.
+5. **Test authoring** — When behavior stabilizes, ChatGPT directs Cursor to add or update tests; Cursor repeats
+   validation.
 6. **Sign-off** — The duo loops until docs, code, and tests align and all validations pass.
 
 ## Prompt and output rules
 
 - Prompts must include explicit file paths; Cursor must not infer new locations.
 - Cursor must not create new top-level directories without written approval.
-- Output mode defaults to in-place edits; chat replies only contain `## Summary / Validation` unless overridden.
-- For long-running commands, Cursor uses background execution and reports progress in the summary.
+- Output mode defaults to in-place edits unless explicitly overridden.
 - Any ambiguity is escalated back to ChatGPT for clarification before proceeding.
 
 ## Documentation expectations
@@ -45,14 +48,14 @@ Establish how ChatGPT and Cursor collaborate across Retrovue repositories (core,
 - House tone is declarative, operational, and concise (see `documentation-standards.md`).
 - Each doc begins with `## Purpose` (and `_Related:` breadcrumbs when context warrants).
 - Contracts use **MUST / SHOULD / MAY** language for normative statements.
-- CLI examples mirror actual command syntax and show PowerShell variants when they differ from bash.
+- CLI examples mirror actual command syntax and show PowerShell variants when they differ.
 
 ## File placement
 
 - Respect the canonical layout defined in `repository-conventions.md`.
 - Place use cases in `src/retrovue/usecases/`, CLI wiring in `src/retrovue/cli/commands/`, and docs under `docs/`.
 - Legacy code remains quarantined under `src_legacy/`; do not revive it without migration guidance.
-- New standards belong in `docs/_standards/` so sibling repos can sync without duplication.
+- Shared standards belong in `docs/standards/` (this directory); do not fork per-component variants.
 
 ## Test iteration mode
 
@@ -65,12 +68,11 @@ Establish how ChatGPT and Cursor collaborate across Retrovue repositories (core,
 
 - Major process changes (e.g., new directory layers, test harnesses) require updating this document first.
 - Cross-repo differences are resolved here; downstream docs add repo-specific notes only when necessary.
-- ChatGPT keeps this methodology current and ensures both Retrovue Core and Retrovue Air adhere to it.
+- Keep this methodology current and ensure both Retrovue Core and Retrovue Air adhere to it.
 
 ## See also
 
 - [Documentation standards](documentation-standards.md)
 - [Test methodology](test-methodology.md)
 - [Repository conventions](repository-conventions.md)
-
 

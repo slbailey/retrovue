@@ -66,8 +66,8 @@ This project uses a combination of human expertise and AI assistance to maintain
 
 ## Template maintenance
 
-- Treat files in `docs/_standards/templates` as canonical. Update them only when patterns change across multiple repos.
-- When editing a template, document the change in the main `CHANGELOG.md` and summarize why the pattern shifted.
+- Treat files in `docs/standards/` (`*-template.md`) as canonical. Update them only when patterns change across multiple repos.
+- When editing a template, document the change in the main `CHANGELOG.md` (or `changelog-template.md`) and summarize why the pattern shifted.
 - Propagate template changes to downstream repos (retrovue-air, retrovue-docs) as part of the same initiative.
 
 ## Review process
