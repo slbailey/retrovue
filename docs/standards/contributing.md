@@ -10,10 +10,33 @@ Applies to every Markdown file under `docs/`, component READMEs, doc templates, 
 
 ## Before you write
 
-- For style and formatting guidance, see [`_standards/documentation-standards.md`](documentation-standards.md) and review the relevant templates in this directory.
+- For style and formatting guidance, see [`documentation-standards.md`](documentation-standards.md) and review the relevant templates in this directory.
 - Search for existing coverage (`Select-String` or repo search) to avoid duplicate docs.
 - Update or extend the closest existing doc before creating a new one. New doc trees require explicit approval.
 - Log new glossary terms in `docs/GLOSSARY.md`.
+
+## AI-Assisted Development Workflow
+
+This project uses a combination of human expertise and AI assistance to maintain high-quality, consistent documentation and code. The following roles and workflows apply.
+
+### Roles
+
+*   **Architect (Human or AI-driven prompt designer):** Owns the overall architecture, requirements, and cross-repository consistency. Designs detailed prompts that specify target files, required sections, style, and acceptance criteria. Reviews AI-generated output for correctness, tone, and alignment with project standards.
+*   **Implementer (AI Assistant):** Executes prompts exactly as written. Generates documentation, code, and tests, respecting existing conventions and file structures. Performs syntax checks, runs tests, and reports on the outcome.
+
+### Collaboration Workflow
+
+1.  **Document First:** Draft or update documentation **before** any code changes.
+2.  **Review Cycle:** The Architect reviews the generated documentation and requests revisions until it is authoritative.
+3.  **Implement:** The Architect provides a detailed code-generation prompt, and the Implementer writes the code.
+4.  **Validate:** The Implementer runs linters and tests, self-correcting until all checks pass.
+5.  **Sign-off:** The process repeats until documentation, code, and tests are all aligned and validated.
+
+### Prompt and Output Rules
+
+*   Prompts must include explicit file paths. The AI assistant must not infer new locations.
+*   The AI assistant must not create new top-level directories without explicit approval.
+*   Any ambiguity must be escalated back to the Architect for clarification before proceeding.
 
 ## Creating documentation
 
@@ -43,8 +66,8 @@ Applies to every Markdown file under `docs/`, component READMEs, doc templates, 
 
 ## Template maintenance
 
-- Treat files in `docs/_standards/*-template.md` as canonical. Update them only when patterns change across multiple repos.
-- When editing a template, document the change in `changelog-template.md` and summarize why the pattern shifted.
+- Treat files in `docs/_standards/templates` as canonical. Update them only when patterns change across multiple repos.
+- When editing a template, document the change in the main `CHANGELOG.md` and summarize why the pattern shifted.
 - Propagate template changes to downstream repos (retrovue-air, retrovue-docs) as part of the same initiative.
 
 ## Review process

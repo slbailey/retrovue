@@ -12,6 +12,12 @@ Define the canonical tone, structure, and formatting rules for all Retrovue docu
 - Emojis are reserved for public-facing overview docs (top-level README). Internal docs stay emoji-free.
 - Use second-person sparingly; prefer descriptive narration (“The CLI returns…”) over imperatives.
 
+## Structure and Content
+
+- Each doc begins with `## Purpose` and, when helpful, `_Related:` breadcrumbs.
+- Contracts use **MUST / SHOULD / MAY** language for normative statements.
+- CLI examples must mirror actual command syntax and show PowerShell variants when they differ from bash.
+
 ## Heading and section order
 
 - Use sentence case for headings (`## Purpose`, not `## PURPOSE`).
@@ -58,7 +64,7 @@ Define the canonical tone, structure, and formatting rules for all Retrovue docu
 - Update contract docs and associated tests in the same change set.
 - Annotate deprecated docs with a top note and link to the replacement.
 - For diagrams, embed Mermaid code blocks or link to the `.mmd` source checked into the repo.
-- Use the templates in `docs/_standards/` (README, architecture, dev notes, changelog) for new files.
+- Use the templates in `docs/_standards/templates` for new files.
 
 ## Review checklist
 
@@ -72,7 +78,6 @@ Define the canonical tone, structure, and formatting rules for all Retrovue docu
 
 ## See also
 
-- [AI assistant methodology](ai-assistant-methodology.md)
 - [Repository conventions](repository-conventions.md)
 - [Test methodology](test-methodology.md)
 
