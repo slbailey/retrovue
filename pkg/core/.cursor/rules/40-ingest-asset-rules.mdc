@@ -1,0 +1,13 @@
+---
+alwaysApply: true
+---
+
+### Ingest / Asset update rules
+
+- When ingest finds an **existing** Asset and detects a change (content or enricher), it must:
+  - update the existing row **in-place** in the current session,
+  - downgrade `state` from `ready` → `enriching`,
+  - force `approved_for_broadcast = false`,
+  - **not** call `commit()`.
+- Ingest must record the change in the JSON stats (`assets_changed_content`, `assets_changed_enricher`).
+- Do **not** introduce a new repository module or directory for this — use the private `_AssetRepository` in the same file.

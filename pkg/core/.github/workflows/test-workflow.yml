@@ -1,0 +1,289 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: retrovue_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify working directory
+        run: |
+          pwd
+          ls -la
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          ls -la *.txt
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio ruff mypy types-requests
+          pip install -e .
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Run linting
+        run: |
+          echo "🔍 Running ruff check (src only) with project config..."
+          ruff check src --config pyproject.toml
+          echo "✅ Ruff check passed"
+          echo "🔍 Running mypy type checking..."
+          mypy
+          echo "✅ MyPy check passed"
+
+      # ENFORCED contracts only. Do NOT run draft/in-progress contracts here.
+
+      - name: Enforce SourceAdd contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: SourceAdd contract tests must pass"
+          pytest tests/contracts/test_source_add_contract.py tests/contracts/test_source_add_data_contract.py -v --tb=short
+          echo "✅ SourceAdd contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce SourceList contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: SourceList contract tests must pass"
+          pytest tests/contracts/test_source_list_contract.py tests/contracts/test_source_list_data_contract.py -v --tb=short
+          echo "✅ SourceList contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce EnricherAdd contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: EnricherAdd contract tests must pass"
+          pytest tests/contracts/test_enricher_add_contract.py tests/contracts/test_enricher_add_data_contract.py -v --tb=short
+          echo "✅ EnricherAdd contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce EnricherListTypes contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: EnricherListTypes contract tests must pass"
+          pytest tests/contracts/test_enricher_list_types_contract.py tests/contracts/test_enricher_list_types_data_contract.py -v --tb=short
+          echo "✅ EnricherListTypes contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce EnricherList contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: EnricherList contract tests must pass"
+          pytest tests/contracts/test_enricher_list_contract.py tests/contracts/test_enricher_list_data_contract.py -v --tb=short
+          echo "✅ EnricherList contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce EnricherUpdate contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: EnricherUpdate contract tests must pass"
+          pytest tests/contracts/test_enricher_update_contract.py tests/contracts/test_enricher_update_data_contract.py -v --tb=short
+          echo "✅ EnricherUpdate contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce EnricherRemove contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: EnricherRemove contract tests must pass"
+          pytest tests/contracts/test_enricher_remove_contract.py tests/contracts/test_enricher_remove_data_contract.py -v --tb=short
+          echo "✅ EnricherRemove contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce SourceListTypes contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: SourceListTypes contract tests must pass"
+          pytest tests/contracts/test_source_list_types_contract.py tests/contracts/test_source_list_types_data_contract.py -v --tb=short
+          echo "✅ SourceListTypes contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce SourceDiscover contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: SourceDiscover contract tests must pass"
+          pytest tests/contracts/test_source_discover_contract.py tests/contracts/test_source_discover_data_contract.py -v --tb=short
+          echo "✅ SourceDiscover contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce SourceDelete contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: SourceDelete contract tests must pass"
+          pytest tests/contracts/test_source_delete_contract.py tests/contracts/test_source_delete_data_contract.py -v --tb=short
+          echo "✅ SourceDelete contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce SourceIngest contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: SourceIngest contract tests must pass"
+          pytest tests/contracts/test_source_ingest_contract.py tests/contracts/test_source_ingest_data_contract.py -v --tb=short
+          echo "✅ SourceIngest contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce CollectionList contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: CollectionList contract tests must pass"
+          pytest tests/contracts/test_collection_list_contract.py tests/contracts/test_collection_list_data_contract.py -v --tb=short
+          echo "✅ CollectionList contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce CollectionShow contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: CollectionShow contract tests must pass"
+          pytest tests/contracts/test_collection_show_contract.py -v --tb=short
+          echo "✅ CollectionShow contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce CollectionUpdate contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: CollectionUpdate contract tests must pass"
+          pytest tests/contracts/test_collection_update_contract.py -v --tb=short
+          echo "✅ CollectionUpdate contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce CollectionWipe contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: CollectionWipe contract tests must pass"
+          pytest tests/contracts/test_collection_wipe_contract.py -v --tb=short
+          echo "✅ CollectionWipe contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce CollectionIngest contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: CollectionIngest contract tests must pass"
+          pytest tests/contracts/test_collection_ingest_contract.py tests/contracts/test_collection_ingest_data_contract.py -v --tb=short
+          echo "✅ CollectionIngest contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce AssetAttention contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: AssetAttention contract tests must pass"
+          pytest tests/contracts/test_asset_attention_contract.py tests/contracts/test_asset_attention_data_contract.py -v --tb=short
+          echo "✅ AssetAttention contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce AssetResolve contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: AssetResolve contract tests must pass"
+          pytest tests/contracts/test_asset_resolve_contract.py tests/contracts/test_asset_resolve_data_contract.py -v --tb=short
+          echo "✅ AssetResolve contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Enforce AssetConfidence contract (ENFORCED)
+        run: |
+          echo "🔒 ENFORCED: AssetConfidence contract tests must pass"
+          pytest tests/contracts/test_asset_confidence_contract.py tests/contracts/test_asset_confidence_data_contract.py -v --tb=short
+          echo "✅ AssetConfidence contract enforcement passed"
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test
+
+      - name: Cleanup test database
+        run: |
+          echo "🧹 Cleaning up test database..."
+          python -c "
+          import os
+          import time
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.exc import OperationalError
+
+          # Use TEST_DATABASE_URL if available, otherwise use default
+          db_url = os.getenv('TEST_DATABASE_URL', 'postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test')
+
+          # Create engine with longer timeout and retry logic
+          engine = create_engine(
+              db_url,
+              pool_pre_ping=True,
+              pool_timeout=60,  # Increased timeout
+              connect_args={'connect_timeout': 30}  # Connection timeout
+          )
+
+          # Retry connection with exponential backoff
+          max_retries = 3
+          for attempt in range(max_retries):
+              try:
+                  with engine.connect() as conn:
+                      # Check if database is accessible
+                      result = conn.execute(text('SELECT 1'))
+                      print(f'✅ Database connection successful (attempt {attempt + 1})')
+                      
+                      # Clean up test data
+                      # Note: broadcast_* and title/episode tables have been dropped
+                      tables_to_clean = [
+                          'path_mappings',
+                          'collections',
+                          'sources',
+                          'provider_refs',
+                          'review_queue',
+                          'markers',
+                          'assets',
+                          'asset_editorial',
+                          'asset_probed',
+                          'asset_relationships',
+                          'asset_sidecar',
+                          'asset_station_ops'
+                      ]
+                      
+                      for table in tables_to_clean:
+                          try:
+                              conn.execute(text(f'DELETE FROM {table}'))
+                              print(f'  Cleaned table: {table}')
+                          except Exception as e:
+                              print(f'  Warning: Could not clean table {table}: {e}')
+                      
+                      conn.commit()
+                      print('✅ Test database cleaned up successfully')
+                      break
+                      
+              except OperationalError as e:
+                  print(f'❌ Database connection failed (attempt {attempt + 1}/{max_retries}): {e}')
+                  if attempt < max_retries - 1:
+                      wait_time = 2 ** attempt  # Exponential backoff
+                      print(f'⏳ Waiting {wait_time} seconds before retry...')
+                      time.sleep(wait_time)
+                  else:
+                      print('❌ All connection attempts failed, skipping cleanup')
+                      exit(0)  # Don't fail the workflow for cleanup issues
+              except Exception as e:
+                  print(f'❌ Unexpected error during cleanup: {e}')
+                  exit(0)  # Don't fail the workflow for cleanup issues
+          "
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retrovue_test

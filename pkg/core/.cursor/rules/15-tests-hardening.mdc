@@ -1,0 +1,197 @@
+---
+alwaysApply: false
+match:
+  - "tests/contracts/**"
+  - "docs/contracts/**"
+  - ".cursor/rules/**"
+---
+
+# Contract Test Hardening Rules
+
+---
+
+## 🌟 Contract-First Workflow
+
+- **Contracts** must live under `docs/contracts/**`. These are the **single source of truth**.
+- Every test under `tests/contracts/**` **must declare** which contract it enforces at the top, for example:
+
+  ```text
+  # CONTRACT: docs/contracts/.../<ContractName>.md
+  # PURPOSE: enforce rules defined in that contract only
+  ```
+
+- **If a test conflicts with the implementation**, correct the test to match the contract – do **not** start by changing the implementation.
+
+- **Source-of-truth hierarchy:**
+    1. `docs/contracts/**`
+    2. `tests/contracts/**`
+    3. `src/**`
+
+- Cursor must **not generate tests** for functions lacking a written contract.
+
+---
+
+## 📁 File Structure and Naming
+
+- **One test file per contract.**  
+  If a contract already has a test, append to that file — _never_ create duplicates:
+    - 🚫 `tests/contracts/test_source_contract_2.py`
+    - 🚫 `tests/contracts/test_source_contract_extra.py`
+
+- **Naming pattern:**
+  ```
+  tests/contracts/test_<contract_name>_contract.py
+
+  def test_<contract_name>__<rule_under_test>():
+      ...
+  ```
+
+---
+
+## 🔒 Assert Only What the Contract Promises
+
+Never assert on:
+- DB/ORM primary keys
+- auto-generated timestamps
+- internal/private attributes
+- list order (unless the contract _explicitly_ guarantees order)
+- exact CLI formatting (color, width, wrapping)
+
+**Example:**  
+If contract says _“returns a list of sources”_, only assert:
+- that a list is returned
+- required keys exist in each
+- item types match the contract
+
+_Do not_ assert:
+- specific IDs
+- ordering (unless the contract says e.g., “Results MUST be sorted by name ASC.”)
+
+---
+
+## 🚫 No Golden Output/Snapshot Testing
+
+- Do **not** capture all of stdout or JSON as a golden file, _except_ if contract says output is “presentation-stable.”
+
+Prefer **structural assertions**:
+```python
+assert "id" in result
+assert "name" in result
+assert isinstance(result["assets"], list)
+```
+- Only assert full dict equality if the contract marks the output as _frozen_.
+
+---
+
+## ☑️ Deterministic Fixtures
+
+- Use fixtures from `tests/fixtures/contracts/**` or factory helpers with stable output.
+- **Never** use `uuid4()`, current timestamps, or random values directly in assertions.
+- Normalization is required for any unavoidable randomness:
+  ```python
+  data.pop("created_at", None)
+  data.pop("updated_at", None)
+  ```
+
+---
+
+## 🖥️ CLI Contract Test Guidelines
+
+- Assert **exit codes**
+- Assert presence of **required tokens/sections**
+- **Do not** check for ANSI colors, progress bars, wrapping output, etc.
+- Normalize paths to avoid relative/absolute/OS-specific mismatches.
+
+**Example pattern:**
+```python
+result = runner.invoke(app, ["source", "list"])
+assert result.exit_code == 0
+out = result.stdout.lower()
+assert "source" in out
+```
+
+---
+
+## ❗ Canonical Error Testing
+
+- When contracts describe errors, test the error **type** or **error code**, _not_ the message.
+
+**Example:**
+```python
+with pytest.raises(SourceNotFoundError):
+    service.get_source("missing-id")
+```
+- Only assert on error message text if the contract _guarantees_ its stability and user-facing quality.
+
+---
+
+## 🛑 No Discovery-Style Contract Tests
+
+Contract tests **must not**:
+- list all items,
+- pick the first,
+- then assert on that record's values.
+
+Instead, they must _create or load the exact record_ they will operate on within the test or fixture.
+
+---
+
+## ⚡ Keep Contract Tests Fast
+
+- Each contract test should run in **< 500ms**.
+- Must **not** start external dependencies (FFmpeg, Docker, remote stores).
+- Heavy/integration-style checks belong in `tests/integration/**`, _not_ in `tests/contracts/**`.
+
+---
+
+## 📝 Every Contract Doc Must List Its Tests
+
+- Every file under `docs/contracts/**` must have a `## Tests` section like:
+
+  ```markdown
+  ## Tests
+  - [ ] tests/contracts/test_source_contract.py::test_source_contract__lists_sources_minimal_shape
+  - [ ] tests/contracts/test_source_contract.py::test_source_contract__returns_404_for_missing_source
+  ```
+- When Cursor adds a contract test, it _must also add_ its reference to this list.
+- If the contract is missing a `## Tests` section, Cursor must create it.
+
+---
+
+## 🔁 Prefer Shared Assertion Helpers
+
+- When asserting dicts/lists, use `assert_contains_fields` (add it if missing):
+
+  ```python
+  # tests/contracts/utils.py
+  def assert_contains_fields(obj, expected: dict):
+      for key, value in expected.items():
+          assert key in obj
+          if value is not ...:
+              assert obj[key] == value
+  ```
+
+- Contract tests should use `assert_contains_fields(...)` **instead** of raw dict equality.
+
+---
+
+## 🚫 Prohibited “Fixes” and Test Behavior
+
+- Cursor **must not** change implementation just to satisfy a test _not_ in a written contract.
+- If a test fails because it asserted on a non-guaranteed field, the test is **wrong**.
+- If a test fails because a contract changed, update:
+    1. The contract doc
+    2. The test
+    3. _Then_ the implementation
+
+---
+
+## 🧩 Optional Cursor Enforcement Flags
+
+{
+  "require_contract_tag": true,
+  "seed_randomness": true,
+  "disallow_prints": true,
+  "ignore_private_methods": true,
+  "require_typed_io": true
+}

@@ -1,0 +1,22 @@
+---
+alwaysApply: true
+---
+
+# Retrovue – Foundation Rules
+
+## Development flow
+1. **Domain → Contract → Test → Implement.**
+2. Do **not** jump straight to runtime code under `src/retrovue/...` without checking `tests/contracts/` for the corresponding feature.
+3. If there is **no** contract test for the feature, prefer to **add/extend a contract test** instead of pushing logic into the CLI.
+
+## Python / Tooling
+- Target Python: **3.12** (matches `pyproject.toml`).
+- Keep line length at **100** (ruff/mypy will complain otherwise).
+- Prefer modern SQLAlchemy 2.x style (already used in `src/retrovue/domain/entities.py`).
+
+## Where code lives
+- **Core app**: `src/retrovue/`
+- **CLI**: `src/retrovue/cli/commands/`
+- **Usecases**: `src/retrovue/usecases/`
+- **Domain models (SQLAlchemy)**: `src/retrovue/domain/entities.py`
+- **Contracts / tests**: `tests/contracts/`

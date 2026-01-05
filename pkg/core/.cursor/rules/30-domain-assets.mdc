@@ -1,0 +1,40 @@
+---
+alwaysApply: false
+match:
+  - "src/retrovue/domain/**"
+  - "src/retrovue/repositories/**"
+  - "tests/contracts/test_collection_ingest_*"
+  - "tests/contracts/test_asset_*"
+---
+
+# Asset / Collection / Ingest Rules
+
+## Single-table asset model
+- Use **one** `assets` table (SQLAlchemy model lives in `src/retrovue/domain/entities.py`).
+- Distinguish *ingested inventory* vs *broadcast-ready* via flags:
+  - `state` ∈ {`new`, `enriching`, `ready`, `retired`}
+  - `approved_for_broadcast` (bool, default false)
+  - `operator_verified` (bool, default false)
+- **Do NOT** add a second parallel “catalog” table right now.
+
+## Canonical identity
+- Each asset must have:
+  - `collection_uuid` (FK)
+  - `canonical_key` (TEXT)
+  - `canonical_key_hash` (SHA256 string)
+- DB must enforce unique:
+  - `(collection_uuid, canonical_key_hash)`
+
+## Repositories
+- New file: `src/retrovue/repositories/asset_repository.py`
+- It may:
+  - `get_by_collection_and_canonical_hash(...)`
+  - `add(asset)`
+  - `delete(...)` (later)
+- It may **not** create its own UnitOfWork; reuse the existing one.
+
+## Collection ingest
+- Ingest must **silently** dedupe:
+  - found → existing → update/skip
+  - not found → create
+- Do NOT throw operator-facing errors for duplicates.

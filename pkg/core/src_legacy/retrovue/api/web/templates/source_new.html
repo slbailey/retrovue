@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Add Plex Server - Retrovue Admin{% endblock %}
+
+{% block content %}
+<div class="px-4 py-6 sm:px-0">
+    <div class="max-w-2xl">
+        <h1 class="text-2xl font-semibold text-gray-900">Add Plex Server</h1>
+        <p class="mt-2 text-sm text-gray-700">Configure a new Plex server as a content source.</p>
+        
+        <form method="POST" action="/sources" class="mt-8 space-y-6">
+            <div class="bg-white shadow px-4 py-5 sm:rounded-lg sm:p-6">
+                <div class="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
+                    <div class="sm:col-span-6">
+                        <label for="name" class="block text-sm font-medium text-gray-700">Server Name</label>
+                        <div class="mt-1">
+                            <input type="text" name="name" id="name" required
+                                class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                placeholder="My Plex Server">
+                        </div>
+                        <p class="mt-2 text-sm text-gray-500">A friendly name for this Plex server.</p>
+                    </div>
+                    
+                    <div class="sm:col-span-6">
+                        <label for="base_url" class="block text-sm font-medium text-gray-700">Server URL</label>
+                        <div class="mt-1">
+                            <input type="url" name="base_url" id="base_url" required
+                                class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                placeholder="http://localhost:32400">
+                        </div>
+                        <p class="mt-2 text-sm text-gray-500">The base URL of your Plex server (e.g., http://localhost:32400).</p>
+                    </div>
+                    
+                    <div class="sm:col-span-6">
+                        <label for="token" class="block text-sm font-medium text-gray-700">Plex Token</label>
+                        <div class="mt-1">
+                            <input type="password" name="token" id="token" required
+                                class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                placeholder="Your Plex authentication token">
+                        </div>
+                        <p class="mt-2 text-sm text-gray-500">
+                            Your Plex authentication token. 
+                            <a href="https://support.plex.tv/articles/204059436/" target="_blank" class="text-blue-600 hover:text-blue-500">
+                                How to find your Plex token
+                            </a>
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex justify-end space-x-3">
+                <a href="/sources" class="bg-white py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Cancel
+                </a>
+                <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Add Server
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+

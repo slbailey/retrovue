@@ -1,0 +1,13 @@
+{
+  "type": "movie",
+  "title": "Sample Movie",
+  "duration": 5400000,
+  "contentRating": "PG-13",
+  "year": 2023,
+  "summary": "A sample movie for testing",
+  "Guid": [
+    {
+      "id": "imdb://tt1234567"
+    }
+  ]
+}

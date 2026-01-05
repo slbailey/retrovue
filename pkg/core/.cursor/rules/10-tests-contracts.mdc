@@ -1,0 +1,21 @@
+---
+alwaysApply: true
+match:
+  - "tests/contracts/**/*.py"
+---
+
+# Global rules for contract tests
+
+- Contract tests must assert **deterministic** outcomes.
+  - Prefer exact exit codes:
+    - success → 0
+    - validation / not found / unsupported → 1
+  - Avoid assertions like “exit code in (0, 1)” unless the corresponding CLI / usecase is *explicitly* specified in the contract to return different codes for the same scenario.
+  - If a test must temporarily accept multiple codes (e.g. during a refactor), add a clear `# TODO: tighten exit code once CLI is stable` comment.
+- Do **not** loosen output assertions just to make a test pass. If the CLI output changed, update the contract test to match the new, documented behavior.
+- Patch / mock at the **public seam** the CLI actually uses (usecases or `_ops` helpers), **not** at deep legacy services.
+  - Good: `retrovue.usecases.source_add.add_source`
+  - Good: `retrovue._ops.source_delete.perform_source_deletions`
+  - Bad: `retrovue.content_manager.source_service.SourceService`
+- Do **not** introduce DB-destructive behavior (truncate / drop) inside contract tests. Contract tests should assume an **isolated test database** (e.g. `RETROVUE_DATABASE_URL` pointing to `*_test`).
+- Keep assertions **specific** to the command being tested — don’t assert on unrelated side effects (like background discovery) unless the contract says the command does that.

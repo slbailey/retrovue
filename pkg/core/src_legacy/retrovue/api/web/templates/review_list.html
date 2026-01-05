@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Review Queue - Retrovue Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900">Review Queue</h1>
+            <p class="text-gray-600">Items requiring manual review for quality assurance</p>
+        </div>
+        <div class="text-sm text-gray-500">
+            {{ reviews|length }} pending items
+        </div>
+    </div>
+
+    <!-- Review Items Table -->
+    {% if reviews %}
+    <div class="bg-white shadow overflow-hidden sm:rounded-md">
+        <ul class="divide-y divide-gray-200">
+            {% for review in reviews %}
+            <li class="px-6 py-4 hover:bg-gray-50">
+                <div class="flex items-center justify-between">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center space-x-3">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-yellow-100 rounded-full flex items-center justify-center">
+                                    <span class="text-yellow-600 text-sm font-medium">!</span>
+                                </div>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center space-x-2">
+                                    <p class="text-sm font-medium text-gray-900 truncate">
+                                        {{ review.uri.split('/')[-1] }}
+                                    </p>
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                        {{ "%.1f"|format(review.confidence * 100) }}% confidence
+                                    </span>
+                                </div>
+                                <div class="mt-1 flex items-center space-x-4 text-sm text-gray-500">
+                                    <span>{{ "%.1f"|format(review.size / (1024*1024)) }} MB</span>
+                                    <span>{{ review.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                                </div>
+                                <div class="mt-1">
+                                    <p class="text-sm text-gray-600">{{ review.reason }}</p>
+                                </div>
+                                {% if review.raw_labels %}
+                                <div class="mt-2 flex flex-wrap gap-1">
+                                    {% for key, value in review.raw_labels.items() %}
+                                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                        {{ key }}: {{ value }}
+                                    </span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <a href="/review/{{ review.id }}" 
+                           class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                            Review
+                        </a>
+                    </div>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% else %}
+    <!-- Empty State -->
+    <div class="text-center py-12">
+        <div class="mx-auto h-12 w-12 text-gray-400">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        </div>
+        <h3 class="mt-2 text-sm font-medium text-gray-900">No pending reviews</h3>
+        <p class="mt-1 text-sm text-gray-500">All items have been reviewed or no items are queued for review.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+
+
+

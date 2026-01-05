@@ -1,0 +1,21 @@
+# Core web framework dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+jinja2>=3.1.0
+python-multipart>=0.0.6
+
+# Database and logging dependencies
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+psycopg[binary]>=3.1.0
+structlog>=25.0.0
+
+# Additional dependencies that might be needed
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+starlette>=0.40.0
+typer[all]>=0.9.0
+rich>=13.0.0
+jsonschema>=4.0.0
+requests>=2.0.0
+prometheus-client>=0.17.0

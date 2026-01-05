@@ -1,0 +1,15 @@
+{
+  "type": "episode",
+  "title": "Sample Episode",
+  "grandparentTitle": "Sample Show",
+  "parentIndex": 1,
+  "index": 2,
+  "duration": 1320000,
+  "contentRating": "TV-PG",
+  "summary": "A sample episode for testing",
+  "Guid": [
+    {
+      "id": "tvdb://12345"
+    }
+  ]
+}

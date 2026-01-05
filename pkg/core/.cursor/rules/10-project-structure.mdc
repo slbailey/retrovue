@@ -1,0 +1,53 @@
+---
+alwaysApply: true
+---
+
+# Project structure rules
+
+Reference: [`docs/architecture/Directories.md`](docs/architecture/Directories.md)
+
+1. **Authoritative docs paths**
+
+   - High-level architecture: `docs/architecture/`
+
+   - Ingest-specific behavior (importers, canonical keys, duplicate detection): `docs/ingest/`
+
+   - CLI/contract test alignment notes: `docs/contracts/`
+
+   - If you are about to create a doc under a new top-level folder, **STOP** and ask.
+
+2. **No new top-level code dirs**
+
+   Allowed: `src/retrovue/domain/`, `src/retrovue/usecases/`, `src/retrovue/cli/`, `src/retrovue/infra/`, `src/retrovue/runtime/`
+
+   - Do **NOT** create `src/retrovue/repositories/` or `src/retrovue/services/` without being told to.
+
+   - If you need a repo, define a private class in the same file (e.g. `_AssetRepository`).
+
+   - Use the existing UnitOfWork/session. Do **NOT** call `commit()` inside helpers.
+
+3. **Ingest code MUST use shared canonical logic**
+
+   - If you need a canonical ID, import from: `src/retrovue/infra/canonical.py`
+
+   - Do **NOT** reimplement canonicalization in ingest services.
+
+4. **Contracts first**
+
+   - If a change affects ingest, update:
+
+     - `docs/ingest/canonical-key.md`
+
+     - relevant tests in `tests/contracts/`
+
+   - Then implement.
+
+5. **No multi-exit tests**
+
+   - Tests that accept both exit 0 and exit 1 are *temporary only*.
+
+   - If you loosen a test, you must **leave a comment** in the test citing the rule and mark it `# TODO tighten exit code once CLI stabilized`.
+
+6. **CLI command registration**
+
+   - When adding a new CLI noun (e.g., `asset`), you must also update `src/retrovue/cli/main.py` to register it — unless the project already has a central CLI discovery mechanism.

@@ -1,0 +1,30 @@
+{
+  "project": {
+    "name": "retrovue",
+    "language": "python",
+    "rootDir": ".",
+    "srcDirs": [
+      "src/retrovue",
+      "tests"
+    ]
+  },
+  "context": {
+    "priorityFiles": [
+      "src/retrovue/cli/commands/source.py",
+      "src/retrovue/usecases/",
+      "src/retrovue/domain/entities.py",
+      "tests/contracts/",
+      "pyproject.toml"
+    ],
+    "docs": [
+      "docs/",
+      "README.md",
+      "tests/README_source.md"
+    ]
+  },
+  "preferences": {
+    "testCommand": "pytest -q",
+    "pythonVersion": "3.12",
+    "lineLength": 100
+  }
+}

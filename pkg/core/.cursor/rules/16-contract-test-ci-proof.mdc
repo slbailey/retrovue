@@ -1,0 +1,205 @@
+---
+alwaysApply: false
+match:
+  - "tests/contracts/**"
+  - "docs/contracts/**"
+  - ".cursor/rules/**"
+---
+
+# 🛡️ CI-Proof Contract Test Rules
+
+## 1. CI Safety & Allowed Dependencies
+
+- **All contract tests** (`tests/contracts/**`) MUST run successfully on GitHub Actions **without**:
+  - Developer-local Postgres
+  - Real Plex/media servers
+  - Pre-seeded/proprietary data
+- If a test needs real data/services, **move it to** `tests/integration/**`.
+
+---
+
+## 2. Prefer Function-Level Mocks
+
+- **Patch high-level functions**, e.g. `retrovue.cli.commands.source.source_list`, **not low-level DB sessions**.
+- Rationale: CI databases are empty—_bring your own data_.
+- **Preferred**:
+  ```python
+  @patch("retrovue.cli.commands.source.source_list")
+  def test_source_list__returns_sources(mock_source_list):
+      mock_source_list.return_value = [
+          {"id": "1", "name": "A", "type": "plex", "enabled_collections": 0, "ingestible_collections": 0}
+      ]
+      ...
+  ```
+- **Allowed but less preferred:** patching `.session` **only** for DB-routing contract rules (`--test-db`).
+
+---
+
+## 3. Distinct Query `.count()` Mocks
+
+- If code makes multiple `.query().filter().count()` calls, **return different values**:
+  ```python
+  enabled_q = MagicMock()
+  enabled_q.count.return_value = 2
+  ingestible_q = MagicMock()
+  ingestible_q.count.return_value = 1
+  mock_db.query.return_value.filter.side_effect = [enabled_q, ingestible_q]
+  ```
+- **Do NOT:** reuse or overwrite the same mock.
+
+---
+
+## 4. Normalize Source Objects
+
+- When mocking sources, **always include BOTH** `.type` **and** `.kind`.
+  ```python
+  def make_source(name="Test Source", type_="plex"):
+      m = MagicMock()
+      m.id = "test-id"
+      m.name = name
+      m.type = type_
+      m.kind = type_
+      m.created_at = datetime.fromisoformat("2024-01-01T00:00:00")
+      m.updated_at = datetime.fromisoformat("2024-01-01T01:00:00")
+      m.enabled_collections = 0
+      m.ingestible_collections = 0
+      return m
+  ```
+- **Why?** Prevents CI errors if implementation reads either attribute.
+
+---
+
+## 5. Loosen Human-Readable Assertions
+
+- **Never assert** on exact lines, spacing, or formatting, e.g.:
+  ```
+  "Total: 2 sources configured"
+  ```
+- **Prefer:** Assert key tokens (case-insensitive, substrings), e.g.:
+  ```python
+  out = result.stdout.lower()
+  assert "total" in out
+  assert "source" in out
+  assert "2" in out
+  ```
+- **Exception:** JSON output (`--json`) may be asserted for full structural equality.
+
+---
+
+## 6. Prefer JSON-Mode Structural Tests
+
+- For commands with `--json`, ALWAYS add a JSON-mode test:
+  - Run with `--json`
+  - Parse output and assert on keys/values
+  ```python
+  result = runner.invoke(app, ["source", "list", "--json"])
+  data = json.loads(result.stdout)
+  assert data["status"] == "ok"
+  assert "sources" in data
+  ```
+- **JSON tests = canonical contract.** Human-readable tests = smoke only.
+
+---
+
+## 7. No Real External Calls
+
+- **Patch and assert** that external systems (e.g. Plex importer) are NOT called if the contract is "metadata only":
+  ```python
+  @patch("retrovue.cli.commands.source.source_list", return_value=[...])
+  @patch("retrovue.cli.commands.source.get_importer")
+  def test_source_list__does_not_call_external(mock_get_importer, mock_source_list):
+      ...
+      mock_get_importer.assert_not_called()
+  ```
+
+---
+
+## 8. Clearly Mark DB-Routing Tests
+
+- For commands with `--test-db`/multi-DB, explicitly patch session factory **and** simulate failure:
+  ```python
+  @patch("retrovue.cli.commands.source.session", side_effect=Exception("Test DB failed"))
+  def test_source_list__test_db_failure_exits_1(...):
+      ...
+      assert result.exit_code == 1
+      assert "error" in result.stderr.lower()
+  ```
+- **Note:** Only these tests should patch `.session`.
+
+---
+
+## 9. Keep Tests Repo-Local
+
+- Use only **fixtures and data inside the repo**.
+- **DO NOT depend on:**
+  - local Plex
+  - developer-specific media
+  - env vars not present in CI
+- If sample media needed, **mock the return**.
+
+---
+
+## 10. Don't Block Pipeline for Cleanup
+
+- **Tests must not fail** the workflow if DB cleanup fails.
+- If you add ORM data, clean it up in teardown **or** mark test as integration.
+- CI teardown scripts = **best effort only**.
+
+---
+
+## 11. Use Consistent Patch Surface per File
+
+- **Within each test file,** patch EITHER:
+  - `retrovue.cli.commands.source.source_list` (**CLI-level**)
+  - OR `retrovue.cli.commands.source.session` (**DB-routing**)
+- **Only mix** with clear comments explaining why.
+
+---
+
+## 12. Keep Contract-Doc Test Mappings Up-To-Date
+
+- **Update the relevant contract doc** (`docs/contracts/.../SourceListContract.md`) with all new/changed contract tests:
+  ```
+  ## Tests
+  - [ ] tests/contracts/test_source_list_contract.py::test_source_list_help_flag_exits_zero
+  - [ ] tests/contracts/test_source_list_contract.py::test_source_list_json_output_format
+  - [ ] tests/contracts/test_source_list_contract.py::test_source_list__does_not_call_external
+  ```
+- **If `## Tests` section is missing, create it!**
+
+---
+
+## 13. Stable Dates in Tests
+
+- Never call `datetime.utcnow()` or `datetime.now()` directly in tests.
+- Always use **fixed timestamps** (e.g. `"2024-01-15T10:30:00Z"`).
+
+---
+
+## 14. Ignore Color/ANSI Codes
+
+- **Never assert** on colorized output/ANSI codes.
+- If CLI later adds colors, strip or ignore for assertions.
+
+---
+
+## 15. CI Failures & Missing Data
+
+- If a test fails in CI due to missing data:
+  - **First:** Refactor the test to use mocks or included fixtures.
+  - **Never:** Change the workflow to pull in developer/private data or services.
+
+---
+
+## 16. JSON is the preferred assertion surface
+- If a command supports BOTH human and JSON output, Cursor MUST add/keep the JSON test and MAY downscope the human-mode test to a smoke test.
+- If a human-mode test and a JSON-mode test assert the same rule, prefer the JSON version.
+
+## 17. Do not modify CI workflow to “make the test pass”
+- Cursor MUST NOT change `.github/workflows/*.yml` to add services, secrets, or ports just because a test is failing.
+- Fix the TEST (mock, fixture, JSON) before touching CI.
+- Rationale: GitHub runners don’t have your local Plex or test DB.
+
+## 18. Reuse shared factories if present
+- If `tests/contracts/factories.py` or `tests/contracts/utils.py` exists, Cursor MUST import and use them instead of re-declaring ad-hoc MagicMocks.
+- Goal: keep mock shape consistent across all contract tests so later refactors don’t break CI.

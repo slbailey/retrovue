@@ -1,0 +1,13 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/slbailey/Retrovue/discussions
+    about: Ask questions, share ideas, and discuss Retrovue with the community
+  - name: 📚 Documentation
+    url: https://github.com/slbailey/Retrovue/tree/main/documentation
+    about: Check the documentation for guides, setup instructions, and technical details
+  - name: 🆘 Get Help
+    url: https://github.com/slbailey/Retrovue/discussions/categories/q-a
+    about: Get help with setup, configuration, or usage questions
+
+

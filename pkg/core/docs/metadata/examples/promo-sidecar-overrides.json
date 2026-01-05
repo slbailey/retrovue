@@ -1,0 +1,36 @@
+{
+  "case": "promo-sidecar-overrides",
+  "asset_type": "promo",
+  "inputs": {
+    "plex": {
+      "title": "Retro Hour — New Season Promo",
+      "duration": 30,
+      "air_window_start": "1989-09-05",
+      "air_window_end": "1989-09-25"
+    },
+    "sidecar": {
+      "title": "Retro Hour — New Season Promo",
+      "runtime_seconds": 30,
+      "air_window_start": "1989-09-01",
+      "air_window_end": "1989-10-01",
+      "_meta": { "authoritative_fields": ["air_window_start", "air_window_end"] }
+    }
+  },
+  "expected": {
+    "resolved": {
+      "title": "Retro Hour — New Season Promo",
+      "runtime_seconds": 30,
+      "air_window_start": "1989-09-01",
+      "air_window_end": "1989-10-01"
+    },
+    "provenance": {
+      "title": "plex_or_sidecar_equal",
+      "runtime_seconds": "sidecar",
+      "air_window_start": "sidecar_authoritative",
+      "air_window_end": "sidecar_authoritative"
+    }
+  }
+}
+
+
+

@@ -1,0 +1,6 @@
+# Linux/WSL Shell Rules
+- Development environment: WSL/Ubuntu with bash
+- Use bash for all shell scripts (`.sh` extension)
+- Use standard Unix tools: `grep`, `find`, `awk`, `sed`
+- Scripts should be POSIX-compliant where possible, with bash extensions when needed
+- All scripts must be executable: `chmod +x script.sh`
