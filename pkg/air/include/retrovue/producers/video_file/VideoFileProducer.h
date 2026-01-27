@@ -50,8 +50,8 @@ namespace retrovue::producers::video_file
     double target_fps;           // Target frames per second (e.g., 30.0)
     bool stub_mode;              // If true, generate fake frames instead of decoding
     int tcp_port;                // TCP port for FFmpeg streaming (stub mode)
-    int64_t start_offset_ms;     // Phase 6A.2: seek to this media position (ms) at start
-    int64_t hard_stop_time_ms;   // Phase 6A.2: wall-clock epoch ms; stop at or before this time
+    int64_t start_offset_ms;     // Phase 8.2: media time (ms); first emitted frame has pts_ms >= this
+    int64_t hard_stop_time_ms;   // Phase 8.2: wall-clock epoch ms; stop when MasterClock.now_utc_ms() >= this
 
     ProducerConfig()
         : target_width(1920),
@@ -195,6 +195,9 @@ namespace retrovue::producers::video_file
     int64_t last_decoded_frame_pts_us_;  // PTS of last decoded frame (for EOF pacing)
     int64_t first_frame_pts_us_;  // PTS of first frame (for establishing time mapping)
     int64_t playback_start_utc_us_;  // UTC time when first frame was decoded (for pacing)
+
+    // Phase 8.2: derived segment end (media PTS in us). -1 = not set. Set when segment goes live.
+    int64_t segment_end_pts_us_;
 
     // State for stub frame generation
     std::atomic<int64_t> stub_pts_counter_;

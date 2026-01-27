@@ -7,6 +7,9 @@
 /retrovue_air/
 /retrovue_doc_standards/
 
+# Third-party vendored or downloaded code
+/third_party/
+
 # IDE and editor files
 .vs/
 .vscode/

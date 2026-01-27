@@ -8,8 +8,6 @@
 #include <chrono>
 #include <iostream>
 
-#ifdef RETROVUE_FFMPEG_AVAILABLE
-// FFmpeg C headers
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -20,65 +18,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 }
-#endif
 
 namespace retrovue::decode {
-
-#ifndef RETROVUE_FFMPEG_AVAILABLE
-// Stub implementations when FFmpeg is not available
-
-FFmpegDecoder::FFmpegDecoder(const DecoderConfig& config)
-    : config_(config),
-      format_ctx_(nullptr),
-      codec_ctx_(nullptr),
-      frame_(nullptr),
-      scaled_frame_(nullptr),
-      packet_(nullptr),
-      sws_ctx_(nullptr),
-      video_stream_index_(-1),
-      eof_reached_(false),
-      start_time_(0),
-      time_base_(0.0) {
-}
-
-FFmpegDecoder::~FFmpegDecoder() {
-}
-
-bool FFmpegDecoder::Open() {
-  std::cerr << "[FFmpegDecoder] ERROR: FFmpeg not available. Rebuild with FFmpeg to enable real decoding." << std::endl;
-  return false;
-}
-
-bool FFmpegDecoder::DecodeNextFrame(buffer::FrameRingBuffer& output_buffer) {
-  return false;
-}
-
-bool FFmpegDecoder::DecodeNextAudioFrame(buffer::FrameRingBuffer& output_buffer) {
-  return false;
-}
-
-void FFmpegDecoder::Close() {
-}
-
-int FFmpegDecoder::GetVideoWidth() const { return 0; }
-int FFmpegDecoder::GetVideoHeight() const { return 0; }
-double FFmpegDecoder::GetVideoFPS() const { return 0.0; }
-double FFmpegDecoder::GetVideoDuration() const { return 0.0; }
-
-bool FFmpegDecoder::FindVideoStream() { return false; }
-bool FFmpegDecoder::FindAudioStream() { return false; }
-bool FFmpegDecoder::InitializeCodec() { return false; }
-bool FFmpegDecoder::InitializeAudioCodec() { return false; }
-bool FFmpegDecoder::InitializeScaler() { return false; }
-bool FFmpegDecoder::InitializeResampler() { return false; }
-bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) { return false; }
-bool FFmpegDecoder::ReadAndDecodeAudioFrame(buffer::AudioFrame& output_frame) { return false; }
-bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame) { return false; }
-bool FFmpegDecoder::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame) { return false; }
-void FFmpegDecoder::UpdateStats(double decode_time_ms) {}
-
-#else
-// Real implementations when FFmpeg is available
 
 FFmpegDecoder::FFmpegDecoder(const DecoderConfig& config)
     : config_(config),
@@ -766,8 +707,6 @@ void FFmpegDecoder::UpdateStats(double decode_time_ms) {
     stats_.current_fps = 1000.0 / stats_.average_decode_time_ms;
   }
 }
-
-#endif  // RETROVUE_FFMPEG_AVAILABLE
 
 }  // namespace retrovue::decode
 
