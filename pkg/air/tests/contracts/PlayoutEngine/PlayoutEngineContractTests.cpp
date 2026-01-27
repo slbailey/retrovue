@@ -12,6 +12,7 @@
 #include "retrovue/runtime/PlayoutEngine.h"
 #include "retrovue/runtime/PlayoutController.h"
 #include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/programmatic/ProgrammaticProducer.h"
 #include "playout.grpc.pb.h"
 #include "playout.pb.h"
 #include "../../fixtures/ChannelManagerStub.h"
@@ -884,6 +885,164 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_InvalidPath_LoadPreviewFails)
   bool ok = controller.loadPreviewAsset(
       "/nonexistent/path/video.mp4", "bad", buffer, clock, 0, 0);
   EXPECT_FALSE(ok) << "LoadPreview must return false for invalid/unreadable path (Phase 6A.2)";
+}
+
+// --- Phase 6A.3 ProgrammaticProducer (new tests only) ---
+
+TEST_F(PlayoutEngineContractTest, Phase6A3_LoadPreviewSwitchToLive_ProgrammaticProducer)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        (void)asset_id;
+        producers::programmatic::ProgrammaticProducerConfig config;
+        config.asset_uri = path;
+        config.target_width = 640;
+        config.target_height = 480;
+        config.target_fps = 30.0;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::programmatic::ProgrammaticProducer>(config, rb, clk);
+      });
+
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "programmatic://test", "prog-asset", buffer, clock, 0, 0));
+  const auto& preview = controller.getPreviewSlot();
+  ASSERT_TRUE(preview.loaded);
+  ASSERT_TRUE(preview.producer->isRunning());
+
+  auto* prog = dynamic_cast<producers::programmatic::ProgrammaticProducer*>(preview.producer.get());
+  ASSERT_NE(prog, nullptr) << "Preview must be ProgrammaticProducer (no file/ffmpeg)";
+
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  const auto& live = controller.getLiveSlot();
+  ASSERT_TRUE(live.loaded);
+  ASSERT_TRUE(live.producer->isRunning());
+  ASSERT_NE(dynamic_cast<producers::programmatic::ProgrammaticProducer*>(live.producer.get()), nullptr);
+
+  live.producer->stop();
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A3_ProgrammaticProducer_StopsAtHardStopTime)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  const int64_t start_us = 1'000'000'000'000'000LL;
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>(
+      start_us, retrovue::timing::TestMasterClock::Mode::Deterministic);
+  int64_t hard_stop_ms = (start_us / 1000) + 5000;
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        (void)path;
+        (void)asset_id;
+        producers::programmatic::ProgrammaticProducerConfig config;
+        config.asset_uri = "programmatic://clip";
+        config.target_width = 640;
+        config.target_height = 480;
+        config.target_fps = 30.0;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::programmatic::ProgrammaticProducer>(config, rb, clk);
+      });
+
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "programmatic://clip", "clip", buffer, clock, 0, hard_stop_ms));
+  const auto& preview = controller.getPreviewSlot();
+  ASSERT_TRUE(preview.loaded);
+  ASSERT_TRUE(preview.producer->isRunning());
+
+  auto test_clock = std::static_pointer_cast<retrovue::timing::TestMasterClock>(clock);
+  test_clock->AdvanceMicroseconds(6'000'000);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  EXPECT_FALSE(preview.producer->isRunning())
+      << "ProgrammaticProducer must stop at or before hard_stop_time_ms";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammatic)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  auto file_factory = [](const std::string& path, const std::string& asset_id,
+                         buffer::FrameRingBuffer& rb,
+                         std::shared_ptr<retrovue::timing::MasterClock> clk,
+                         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+      -> std::unique_ptr<retrovue::producers::IProducer> {
+    producers::video_file::ProducerConfig config;
+    config.asset_uri = path;
+    config.target_width = 1920;
+    config.target_height = 1080;
+    config.target_fps = 30.0;
+    config.stub_mode = true;
+    config.start_offset_ms = start_offset_ms;
+    config.hard_stop_time_ms = hard_stop_time_ms;
+    return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+  };
+
+  auto prog_factory = [](const std::string& path, const std::string& asset_id,
+                         buffer::FrameRingBuffer& rb,
+                         std::shared_ptr<retrovue::timing::MasterClock> clk,
+                         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+      -> std::unique_ptr<retrovue::producers::IProducer> {
+    (void)asset_id;
+    producers::programmatic::ProgrammaticProducerConfig config;
+    config.asset_uri = path;
+    config.target_width = 640;
+    config.target_height = 480;
+    config.target_fps = 30.0;
+    config.start_offset_ms = 0;
+    config.hard_stop_time_ms = hard_stop_time_ms;
+    return std::make_unique<producers::programmatic::ProgrammaticProducer>(config, rb, clk);
+  };
+
+  controller.setProducerFactory(file_factory);
+  ASSERT_TRUE(controller.loadPreviewAsset("test://a.mp4", "asset-a", buffer, clock, 0, 0));
+  // VideoFileProducer uses shadow decode; wait for first frame so SwitchToLive can succeed
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  {
+    const auto& live = controller.getLiveSlot();
+    ASSERT_TRUE(live.loaded);
+    ASSERT_TRUE(live.producer->isRunning());
+    ASSERT_NE(dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get()), nullptr);
+    live.producer->stop();
+  }
+
+  controller.setProducerFactory(prog_factory);
+  ASSERT_TRUE(controller.loadPreviewAsset("programmatic://bars", "bars", buffer, clock, 0, 0));
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  {
+    const auto& live = controller.getLiveSlot();
+    ASSERT_TRUE(live.loaded);
+    ASSERT_TRUE(live.producer->isRunning());
+    ASSERT_NE(dynamic_cast<producers::programmatic::ProgrammaticProducer*>(live.producer.get()), nullptr);
+    live.producer->stop();
+  }
+
+  controller.setProducerFactory(file_factory);
+  ASSERT_TRUE(controller.loadPreviewAsset("test://b.mp4", "asset-b", buffer, clock, 0, 0));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  {
+    const auto& live = controller.getLiveSlot();
+    ASSERT_TRUE(live.loaded);
+    ASSERT_NE(dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get()), nullptr);
+    live.producer->stop();
+  }
 }
 
 } // namespace
