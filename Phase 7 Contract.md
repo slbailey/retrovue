@@ -6,6 +6,9 @@ Prove the system works as a **linear channel**: a viewer can “tune in” at an
 
 **Phase 7 is the only HTTP- and real-playout–dependent phase.** Phases 0–6 are testable via the **direct ProgramDirector API** (e.g. `start_channel(channel_id, now)` or `ensure_channel_running(channel_id)`); HTTP is not required there. Phase 7 is where **HTTP tune-in** is required: a “viewer” is simulated by issuing `GET /channels/{channel_id}.ts` against ProgramDirector. Phase 7 also uses real ffmpeg and long-running behaviour.
 
+Phase 7 does not introduce new scheduling logic, timing rules, or playout semantics.
+It only verifies that existing Phases 0–6 compose correctly when exercised through HTTP tune-in.
+
 ## Contract
 
 - **Startup**: Retrovue is started (e.g. `retrovue program-director start` with Phase 0 options); ProgramDirector and ChannelManagerDaemon run; mock channel is available (e.g. `mock` or `retro1`).

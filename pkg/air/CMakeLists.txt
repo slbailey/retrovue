@@ -106,6 +106,20 @@ target_include_directories(retrovue_air_core
     ${PROTO_GEN_DIR}
 )
 
+# ---- gRPC server executable (Phase 8.0: AttachStream/DetachStream over UDS) ----
+add_executable(retrovue_air src/main.cpp)
+target_link_libraries(retrovue_air
+  PRIVATE
+    retrovue_air_core
+    gRPC::grpc++_reflection
+)
+target_include_directories(retrovue_air
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PROTO_GEN_DIR}
+)
+
 # ---- Contract tests (Phase 6A.0: PlayoutEngine + control surface) ----
 add_executable(contracts_playoutengine_tests
   tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp

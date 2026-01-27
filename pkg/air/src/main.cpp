@@ -24,6 +24,7 @@ namespace {
 struct ServerConfig {
   std::string server_address = "0.0.0.0:50051";
   bool enable_reflection = true;
+  bool control_surface_only = false;  // Phase 8.0: no decode/render, AttachStream only
 };
 
 ServerConfig ParseArgs(int argc, char** argv) {
@@ -38,12 +39,15 @@ ServerConfig ParseArgs(int argc, char** argv) {
       if (i + 1 < argc) {
         config.server_address = argv[++i];
       }
+    } else if (arg == "--control-surface-only") {
+      config.control_surface_only = true;
     } else if (arg == "--help" || arg == "-h") {
       std::cout << "RetroVue Playout Engine\n\n"
                 << "Usage: retrovue_playout [OPTIONS]\n\n"
                 << "Options:\n"
                 << "  -p, --port PORT        Listen port (default: 50051)\n"
                 << "  -a, --address ADDRESS  Full listen address (default: 0.0.0.0:50051)\n"
+                << "  --control-surface-only Phase 8.0: no decode/render (StartChannel + AttachStream only)\n"
                 << "  -h, --help             Show this help message\n"
                 << std::endl;
       std::exit(0);
@@ -67,7 +71,7 @@ void RunServer(const ServerConfig& config) {
 
   // Create the domain engine (contains tested domain logic)
   auto engine = std::make_shared<retrovue::runtime::PlayoutEngine>(
-      metrics_exporter, master_clock);
+      metrics_exporter, master_clock, config.control_surface_only);
   
   // Create the controller (thin adapter between gRPC and domain)
   auto controller = std::make_shared<retrovue::runtime::PlayoutController>(engine);
