@@ -41,7 +41,7 @@ namespace retrovue::producers::video_file
     STOPPING
   };
 
-  // ProducerConfig holds configuration for video file producer.
+  // ProducerConfig holds configuration for video file producer (Phase 6A.2 segment params).
   struct ProducerConfig
   {
     std::string asset_uri;       // URI or path to video file
@@ -50,13 +50,17 @@ namespace retrovue::producers::video_file
     double target_fps;           // Target frames per second (e.g., 30.0)
     bool stub_mode;              // If true, generate fake frames instead of decoding
     int tcp_port;                // TCP port for FFmpeg streaming (stub mode)
+    int64_t start_offset_ms;     // Phase 6A.2: seek to this media position (ms) at start
+    int64_t hard_stop_time_ms;   // Phase 6A.2: wall-clock epoch ms; stop at or before this time
 
     ProducerConfig()
         : target_width(1920),
           target_height(1080),
           target_fps(30.0),
           stub_mode(false),
-          tcp_port(12345) {}
+          tcp_port(12345),
+          start_offset_ms(0),
+          hard_stop_time_ms(0) {}
   };
 
   // Event callback for producer events (for test harness)

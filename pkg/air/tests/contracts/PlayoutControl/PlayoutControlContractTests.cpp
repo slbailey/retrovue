@@ -160,11 +160,11 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory (Phase 6A.1: segment params; VideoFileProducer ignores them)
+  // Set up producer factory (Phase 6A.1/6A.2: segment params)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
          buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
-         int64_t /*start_offset_ms*/, int64_t /*hard_stop_time_ms*/)
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
         producers::video_file::ProducerConfig config;
         config.asset_uri = path;
@@ -172,6 +172,8 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
         config.target_height = 1080;
         config.target_fps = 30.0;
         config.stub_mode = true; // Use stub mode for testing
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
 
         return std::make_unique<producers::video_file::VideoFileProducer>(
             config, rb, clk, nullptr);
@@ -249,11 +251,11 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory (Phase 6A.1: segment params)
+  // Set up producer factory (Phase 6A.1/6A.2: segment params)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
          buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
-         int64_t /*start_offset_ms*/, int64_t /*hard_stop_time_ms*/)
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
         producers::video_file::ProducerConfig config;
         config.asset_uri = path;
@@ -261,6 +263,8 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
         config.target_height = 1080;
         config.target_fps = 30.0;
         config.stub_mode = true;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
 
         return std::make_unique<producers::video_file::VideoFileProducer>(
             config, rb, clk, nullptr);

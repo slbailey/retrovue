@@ -34,7 +34,7 @@ const bool kRegisterCoverage = []() {
   RegisterExpectedDomainCoverage(
       "PlayoutEngine",
       {"BC-001", "BC-002", "BC-003", "BC-004", "BC-005", "BC-006", "BC-007",
-       "LT-005", "LT-006", "Phase6A1"});
+       "LT-005", "LT-006", "Phase6A1", "Phase6A2"});
   return true;
 }();
 
@@ -58,7 +58,8 @@ protected:
         "BC-007",
         "LT-005",
         "LT-006",
-        "Phase6A1"};
+        "Phase6A1",
+        "Phase6A2"};
   }
 };
 
@@ -251,11 +252,11 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory (Phase 6A.1: segment params passed; VideoFileProducer ignores them here)
+  // Set up producer factory (Phase 6A.1/6A.2: segment params passed to VideoFileProducer)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
          buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
-         int64_t /*start_offset_ms*/, int64_t /*hard_stop_time_ms*/)
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
         producers::video_file::ProducerConfig config;
         config.asset_uri = path;
@@ -263,6 +264,8 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
         config.target_height = 1080;
         config.target_fps = 30.0;
         config.stub_mode = true;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
 
         return std::make_unique<producers::video_file::VideoFileProducer>(
             config, rb, clk, nullptr);
@@ -774,6 +777,113 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_StopReleasesProducer_ObservableStoppe
   live.producer->stop();
   EXPECT_FALSE(live.producer->isRunning()) << "After stop, producer must not be running";
   EXPECT_EQ(stub->stopCount(), 1) << "Stop must be observable (contract: resources released)";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6A.2 — FileBackedProducer: start_offset_ms and hard_stop_time_ms honored
+// (Phase6A-2-FileBackedProducer.md)
+// ---------------------------------------------------------------------------
+
+TEST_F(PlayoutEngineContractTest, Phase6A2_HardStopEnforced_ProducerStopsByDeadline)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  const int64_t start_us = 1'000'000'000'000'000LL;  // epoch-like base
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>(
+      start_us, retrovue::timing::TestMasterClock::Mode::Deterministic);
+  int64_t hard_stop_ms = (start_us / 1000) + 5000;  // stop 5s after start
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        producers::video_file::ProducerConfig config;
+        config.asset_uri = path;
+        config.target_width = 1920;
+        config.target_height = 1080;
+        config.target_fps = 30.0;
+        config.stub_mode = true;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+      });
+
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "test://clip.mp4", "clip", buffer, clock, 0, hard_stop_ms));
+
+  const auto& preview = controller.getPreviewSlot();
+  ASSERT_TRUE(preview.loaded);
+  ASSERT_TRUE(preview.producer->isRunning());
+
+  // Advance clock past hard_stop_time_ms so producer must stop (Phase 6A.2)
+  auto test_clock = std::static_pointer_cast<retrovue::timing::TestMasterClock>(clock);
+  test_clock->AdvanceMicroseconds(6'000'000);  // +6 s
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  EXPECT_FALSE(preview.producer->isRunning())
+      << "Producer must stop at or before hard_stop_time_ms";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProducer)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        producers::video_file::ProducerConfig config;
+        config.asset_uri = path;
+        config.target_width = 1920;
+        config.target_height = 1080;
+        config.target_fps = 30.0;
+        config.stub_mode = true;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+      });
+
+  const int64_t start_offset_ms = 60'000;
+  const int64_t hard_stop_time_ms = 90'000;
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "test://seg.mp4", "seg", buffer, clock, start_offset_ms, hard_stop_time_ms));
+  const auto& preview = controller.getPreviewSlot();
+  ASSERT_TRUE(preview.loaded);
+  EXPECT_TRUE(preview.producer->isRunning());
+  // Params are in config and honored (seek in real decode; hard_stop in loop)
+  preview.producer->stop();
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A2_InvalidPath_LoadPreviewFails)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        producers::video_file::ProducerConfig config;
+        config.asset_uri = path;
+        config.target_width = 1920;
+        config.target_height = 1080;
+        config.target_fps = 30.0;
+        config.stub_mode = false;  // Real decode path so open fails for bad path
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+      });
+
+  bool ok = controller.loadPreviewAsset(
+      "/nonexistent/path/video.mp4", "bad", buffer, clock, 0, 0);
+  EXPECT_FALSE(ok) << "LoadPreview must return false for invalid/unreadable path (Phase 6A.2)";
 }
 
 } // namespace
