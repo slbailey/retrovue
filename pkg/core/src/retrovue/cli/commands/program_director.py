@@ -15,7 +15,7 @@ app = typer.Typer(help="Retrovue Program Director commands")
 
 @app.command("start")
 def start(
-    schedule_dir: str = typer.Option(None, help="Directory containing schedule.json files (required for Phase 8)"),
+    schedule_dir: str = typer.Option(None, help="Directory containing schedule.json files (Phase 8); if omitted, use mock schedule (channel 'mock', assets/samplecontent.mp4)"),
     port: int = typer.Option(8000, help="Port for ProgramDirector HTTP server"),
     channel_manager_port: int = typer.Option(9000, help="Port for ChannelManager (internal)"),
     # Phase 0 options
@@ -57,11 +57,6 @@ def start(
         if not Path(phase0_filler_asset).exists():
             typer.echo(f"Error: Filler asset not found: {phase0_filler_asset}", err=True)
             raise typer.Exit(1)
-    else:
-        if not schedule_dir:
-            typer.echo("Error: Phase 8 mode requires --schedule-dir", err=True)
-            raise typer.Exit(1)
-    
     # Create RetroVue Core runtime (implements ChannelManagerProvider)
     if phase0:
         channel_manager = ChannelManagerDaemon(
@@ -75,7 +70,7 @@ def start(
         )
     else:
         channel_manager = ChannelManagerDaemon(
-            schedule_dir=Path(schedule_dir),
+            schedule_dir=Path(schedule_dir) if schedule_dir else None,  # None = Phase 8 mock schedule
             port=channel_manager_port,  # Internal port for ChannelManager
         )
     

@@ -67,6 +67,7 @@ struct PlayoutEngine::ChannelState {
   // Phase 6A.0 control-surface-only: preview slot state (no real decode)
   bool preview_loaded = false;
   std::string preview_asset_path;
+  std::string live_asset_path;  // Phase 8.1: set on SwitchToLive for stream TS source
 
   // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
@@ -315,6 +316,7 @@ EngineResult PlayoutEngine::LoadPreview(
     // Create preview producer (shadow decode - doesn't write to buffer yet)
     // Note: FrameProducer doesn't currently support shadow mode directly,
     // so we create it but don't start it writing to buffer until SwitchToLive
+    state->preview_asset_path = asset_path;
     state->preview_producer = std::make_unique<decode::FrameProducer>(
         preview_config, *state->ring_buffer, master_clock_);
     
@@ -349,6 +351,7 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
     if (!state->preview_loaded) {
       return EngineResult(false, "No preview loaded for channel " + std::to_string(channel_id));
     }
+    state->live_asset_path = state->preview_asset_path;
     state->preview_loaded = false;
     state->preview_asset_path.clear();
     EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
@@ -371,9 +374,11 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
       state->live_producer->Stop();
     }
     
+    state->live_asset_path = state->preview_asset_path;
     // Swap preview to live
     state->live_producer = std::move(state->preview_producer);
     state->preview_producer.reset();
+    state->preview_asset_path.clear();
     
     // For PTS continuity, we'd need to align preview PTS to live's next PTS
     // This is simplified - in production, would check PTS alignment
@@ -385,6 +390,17 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception switching to live for channel " + std::to_string(channel_id) + ": " + e.what());
   }
+}
+
+std::optional<std::string> PlayoutEngine::GetLiveAssetPath(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second)
+    return std::nullopt;
+  const std::string& path = it->second->live_asset_path;
+  if (path.empty())
+    return std::nullopt;
+  return path;
 }
 
 EngineResult PlayoutEngine::UpdatePlan(
