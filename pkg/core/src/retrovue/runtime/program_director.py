@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from threading import Thread
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from fastapi import FastAPI, Response, status
 from fastapi.responses import StreamingResponse
@@ -170,6 +170,8 @@ class ProgramDirector:
         # Phase 0: FanoutBuffer (ChannelStream) per channel
         self._fanout_buffers: dict[str, ChannelStream] = {}
         self._fanout_lock = threading.Lock()
+        # Phase 7: Optional factory for tests (channel_id, socket_path) -> ChannelStream
+        self._channel_stream_factory: Optional[Callable[[str, str], ChannelStream]] = None
         
         # Phase 0: HTTP server
         self.host = host
@@ -474,8 +476,11 @@ class ProgramDirector:
             if not socket_path:
                 return None
 
-            # Create ChannelStream as FanoutBuffer
-            fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path)
+            # Create ChannelStream as FanoutBuffer (or use test factory for Phase 7 E2E)
+            if self._channel_stream_factory:
+                fanout = self._channel_stream_factory(channel_id, str(socket_path))
+            else:
+                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path)
             self._fanout_buffers[channel_id] = fanout
             return fanout
 
@@ -612,6 +617,46 @@ class ProgramDirector:
                     "Expires": "0",
                 },
             )
+
+        @self.fastapi_app.get("/debug/channels/{channel_id}/current-segment")
+        async def get_current_segment(channel_id: str, now_utc_ms: Optional[int] = None) -> Any:
+            """
+            Phase 7: Test-only probe for expected asset + offset at tune-in.
+            Returns current segment (asset_id, asset_path, start_offset_ms) when the
+            channel manager supports get_current_segment(now_utc_ms).
+            """
+            if not self._channel_manager_provider:
+                return Response(
+                    content="Channel manager provider not configured",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            try:
+                manager = self._channel_manager_provider.get_channel_manager(channel_id)
+            except Exception:
+                return Response(
+                    content="Channel not found",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            get_segment = getattr(manager, "get_current_segment", None)
+            if not callable(get_segment):
+                return Response(
+                    content="Manager does not support current segment probe",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            try:
+                segment = get_segment(now_utc_ms)
+                if segment is None:
+                    return Response(
+                        content="No current segment",
+                        status_code=status.HTTP_404_NOT_FOUND,
+                    )
+                return segment
+            except Exception as e:
+                self._logger.exception("get_current_segment failed")
+                return Response(
+                    content=str(e),
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
         @self.fastapi_app.post("/admin/emergency")
         async def emergency_override() -> dict[str, Any]:

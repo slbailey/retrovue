@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -17,6 +18,7 @@
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -32,14 +34,21 @@ namespace retrovue
       constexpr size_t kPhase80PayloadLen = 6;
     } // namespace
 
-    // Phase 8.0: per-channel stream writer (UDS client; writes HELLO for 8.0, TS later)
+    // Phase 8.0/8.1: per-channel stream writer (UDS client; HELLO then optional ffmpeg TS)
     struct PlayoutControlImpl::StreamWriterState
     {
       int fd = -1;
       std::atomic<bool> stop{false};
       std::thread writer_thread;
+      bool close_fd_on_exit = true;
+      std::string asset_path;
+#if defined(__linux__) || defined(__APPLE__)
+      pid_t ffmpeg_pid = -1;
+#else
+      int ffmpeg_pid = -1;
+#endif
 
-      void WriterLoop()
+      void HelloLoop()
       {
         while (!stop.load(std::memory_order_acquire) && fd >= 0)
         {
@@ -50,7 +59,7 @@ namespace retrovue
 #endif
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        if (fd >= 0)
+        if (close_fd_on_exit && fd >= 0)
         {
 #if defined(__linux__) || defined(__APPLE__)
           close(fd);
@@ -59,9 +68,45 @@ namespace retrovue
         }
       }
 
+#if defined(__linux__) || defined(__APPLE__)
+      void FfmpegLoop()
+      {
+        const int out_fd = fd;
+        fd = -1;
+        if (out_fd < 0 || asset_path.empty())
+          return;
+        pid_t pid = fork();
+        if (pid < 0)
+          return;
+        if (pid == 0)
+        {
+          dup2(out_fd, STDOUT_FILENO);
+          close(out_fd);
+          execlp("ffmpeg", "ffmpeg", "-re", "-i", asset_path.c_str(),
+                 "-f", "mpegts", "pipe:1", nullptr);
+          _exit(127);
+        }
+        ffmpeg_pid = pid;
+        close(out_fd);
+        int status = 0;
+        waitpid(pid, &status, 0);
+        ffmpeg_pid = -1;
+      }
+#else
+      void FfmpegLoop() {}
+#endif
+
       ~StreamWriterState()
       {
         stop.store(true, std::memory_order_release);
+#if defined(__linux__) || defined(__APPLE__)
+        if (ffmpeg_pid > 0)
+        {
+          kill(ffmpeg_pid, SIGTERM);
+          waitpid(ffmpeg_pid, nullptr, 0);
+          ffmpeg_pid = -1;
+        }
+#endif
         if (writer_thread.joinable())
           writer_thread.join();
         if (fd >= 0)
@@ -242,6 +287,24 @@ namespace retrovue
         std::cout << "[SwitchToLive] Channel " << channel_id << " switch failed" << std::endl;
         return grpc::Status::OK;
       }
+
+      // Phase 8.1: route ffmpeg MPEG-TS to attached stream
+      {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        auto it = stream_writers_.find(channel_id);
+        std::optional<std::string> path = controller_->GetLiveAssetPath(channel_id);
+        if (it != stream_writers_.end() && it->second && path && !path->empty())
+        {
+          StreamWriterState* state = it->second.get();
+          state->close_fd_on_exit = false;
+          state->stop.store(true, std::memory_order_release);
+          if (state->writer_thread.joinable())
+            state->writer_thread.join();
+          state->asset_path = *path;
+          state->writer_thread = std::thread(&StreamWriterState::FfmpegLoop, state);
+          std::cout << "[SwitchToLive] Channel " << channel_id << " streaming TS from " << *path << std::endl;
+        }
+      }
       
       std::cout << "[SwitchToLive] Channel " << channel_id
                 << " switch " << (result.success ? "succeeded" : "failed")
@@ -329,7 +392,7 @@ namespace retrovue
 
       auto state = std::make_unique<StreamWriterState>();
       state->fd = fd;
-      state->writer_thread = std::thread(&StreamWriterState::WriterLoop, state.get());
+      state->writer_thread = std::thread(&StreamWriterState::HelloLoop, state.get());
       stream_writers_[channel_id] = std::move(state);
 
       response->set_success(true);

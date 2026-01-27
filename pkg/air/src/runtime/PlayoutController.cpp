@@ -52,6 +52,10 @@ ControllerResult PlayoutController::SwitchToLive(int32_t channel_id) {
   return controller_result;
 }
 
+std::optional<std::string> PlayoutController::GetLiveAssetPath(int32_t channel_id) {
+  return engine_->GetLiveAssetPath(channel_id);
+}
+
 ControllerResult PlayoutController::UpdatePlan(
     int32_t channel_id,
     const std::string& plan_handle) {

@@ -65,6 +65,9 @@ class PlayoutController {
   // Switch preview slot to live atomically
   ControllerResult SwitchToLive(int32_t channel_id);
   
+  // Phase 8.1: live asset path after SwitchToLive (for stream TS source)
+  std::optional<std::string> GetLiveAssetPath(int32_t channel_id);
+  
   // Update the playout plan for an active channel
   ControllerResult UpdatePlan(
       int32_t channel_id,

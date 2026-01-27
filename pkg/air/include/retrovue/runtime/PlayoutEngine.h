@@ -73,6 +73,9 @@ class PlayoutEngine {
   
   EngineResult SwitchToLive(int32_t channel_id);
   
+  // Phase 8.1: live asset path set after SwitchToLive (for stream TS source)
+  std::optional<std::string> GetLiveAssetPath(int32_t channel_id);
+  
   EngineResult UpdatePlan(
       int32_t channel_id,
       const std::string& plan_handle);
