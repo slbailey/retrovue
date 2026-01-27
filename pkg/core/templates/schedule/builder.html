@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Schedule Builder - RetroVue</title>
+    <!-- Tailwind CSS from CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <!-- Custom TV Guide-inspired styling -->
+    <style>
+        /* TV Guide Color Palette - 80s/90s inspired */
+        :root {
+            --tvg-blue: #1a237e;
+            --tvg-light-blue: #3949ab;
+            --tvg-yellow: #ffc107;
+            --tvg-red: #d32f2f;
+            --tvg-green: #388e3c;
+            --tvg-grid-bg: #f5f5dc;
+            --tvg-time-bg: #263238;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #1a237e 0%, #311b92 100%);
+            min-height: 100vh;
+        }
+
+        /* TV Guide Header Style */
+        .tvg-header {
+            background: linear-gradient(90deg, #1a237e 0%, #4a148c 50%, #1a237e 100%);
+            border-bottom: 4px solid #ffc107;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        .tvg-logo {
+            font-family: 'Impact', sans-serif;
+            font-weight: bold;
+            letter-spacing: -1px;
+            text-shadow: 3px 3px 0 #000, -1px -1px 0 #ffc107;
+        }
+
+        /* Time slots column */
+        .time-column {
+            background: var(--tvg-time-bg);
+            color: #ffc107;
+            font-weight: bold;
+        }
+
+        /* Zone blocks */
+        .zone-block {
+            background: linear-gradient(180deg, #e3f2fd 0%, #bbdefb 100%);
+            border: 2px solid #1565c0;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .zone-block:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .zone-block.morning {
+            background: linear-gradient(180deg, #fff9c4 0%, #fff59d 100%);
+            border-color: #f9a825;
+        }
+
+        .zone-block.prime {
+            background: linear-gradient(180deg, #f3e5f5 0%, #e1bee7 100%);
+            border-color: #8e24aa;
+        }
+
+        .zone-block.late-night {
+            background: linear-gradient(180deg, #37474f 0%, #263238 100%);
+            border-color: #d32f2f;
+            color: #fff;
+        }
+
+        /* Content browser */
+        .content-card {
+            background: #fff;
+            border: 2px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .content-card:hover {
+            background: #e3f2fd;
+            border-color: #1565c0;
+            transform: translateY(-2px);
+        }
+
+        .content-card.cartoon {
+            border-left: 4px solid #f9a825;
+        }
+
+        .content-card.sitcom {
+            border-left: 4px solid #8e24aa;
+        }
+
+        .content-card.movie {
+            border-left: 4px solid #d32f2f;
+        }
+
+        .content-card.horror {
+            border-left: 4px solid #37474f;
+        }
+
+        /* Retro button styling */
+        .btn-retro {
+            background: linear-gradient(180deg, #ffc107 0%, #ff9800 100%);
+            color: #000;
+            font-weight: bold;
+            border: 2px solid #000;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 3px 3px 0 #000;
+            transition: all 0.1s ease;
+        }
+
+        .btn-retro:hover {
+            background: linear-gradient(180deg, #ffca28 0%, #ffb300 100%);
+            transform: translate(1px, 1px);
+            box-shadow: 2px 2px 0 #000;
+        }
+
+        .btn-retro:active {
+            transform: translate(3px, 3px);
+            box-shadow: none;
+        }
+
+        .btn-retro-blue {
+            background: linear-gradient(180deg, #42a5f5 0%, #1976d2 100%);
+            color: #fff;
+        }
+
+        .btn-retro-blue:hover {
+            background: linear-gradient(180deg, #64b5f6 0%, #2196f3 100%);
+        }
+
+        .btn-retro-red {
+            background: linear-gradient(180deg, #ef5350 0%, #c62828 100%);
+            color: #fff;
+        }
+
+        /* Timeline grid */
+        .timeline-grid {
+            display: grid;
+            grid-template-columns: 80px repeat(24, 1fr);
+            gap: 1px;
+            background: #263238;
+        }
+
+        .timeline-hour {
+            background: #37474f;
+            color: #ffc107;
+            padding: 8px 4px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        /* Preset buttons */
+        .preset-btn {
+            background: linear-gradient(180deg, #5c6bc0 0%, #3949ab 100%);
+            color: #fff;
+            border: 2px solid #1a237e;
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .preset-btn:hover {
+            background: linear-gradient(180deg, #7986cb 0%, #5c6bc0 100%);
+            transform: scale(1.05);
+        }
+
+        /* Loading spinner */
+        .htmx-indicator {
+            display: none;
+        }
+
+        .htmx-request .htmx-indicator {
+            display: inline-block;
+        }
+
+        .htmx-request.htmx-indicator {
+            display: inline-block;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .loading-pulse {
+            animation: pulse 1.5s infinite;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'tvg-blue': '#1a237e',
+                        'tvg-yellow': '#ffc107',
+                        'tvg-red': '#d32f2f',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="min-h-screen">
+    <!-- Header -->
+    <header class="tvg-header py-4 px-6">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <h1 class="tvg-logo text-4xl text-white">
+                    <span class="text-yellow-400">RETRO</span>VUE
+                </h1>
+                <span class="text-white text-lg opacity-75">Schedule Builder</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <!-- Channel Selector -->
+                <select id="channel-select"
+                        class="bg-white/10 text-white border-2 border-yellow-400 rounded px-4 py-2"
+                        hx-get="/api/scheduling/channels/{value}/plans"
+                        hx-trigger="change"
+                        hx-target="#plan-list"
+                        hx-swap="innerHTML">
+                    <option value="">Select Channel...</option>
+                </select>
+                <!-- Plan Selector -->
+                <select id="plan-select"
+                        class="bg-white/10 text-white border-2 border-yellow-400 rounded px-4 py-2"
+                        hx-get="/api/scheduling/plans/{value}/zones"
+                        hx-trigger="change"
+                        hx-target="#zone-list"
+                        hx-swap="innerHTML">
+                    <option value="">Select Plan...</option>
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto py-6 px-4">
+        <div class="grid grid-cols-12 gap-6">
+            <!-- Left Panel: Zone Editor -->
+            <div class="col-span-8">
+                <!-- Zone Presets -->
+                <div class="bg-white/10 backdrop-blur rounded-lg p-4 mb-6">
+                    <h3 class="text-yellow-400 font-bold mb-3 text-sm uppercase tracking-wider">
+                        Classic Daypart Presets
+                    </h3>
+                    <div class="flex flex-wrap gap-2" id="preset-buttons">
+                        <button class="preset-btn"
+                                hx-post="/api/scheduling/plans/{plan_id}/zones/preset/saturday-morning-cartoons"
+                                hx-target="#zone-list"
+                                hx-swap="innerHTML"
+                                hx-confirm="Add Saturday Morning Cartoons zone?">
+                            Saturday Morning Cartoons
+                        </button>
+                        <button class="preset-btn"
+                                hx-post="/api/scheduling/plans/{plan_id}/zones/preset/weekday-afternoon-comedy"
+                                hx-target="#zone-list"
+                                hx-swap="innerHTML"
+                                hx-confirm="Add Weekday Afternoon Comedy zone?">
+                            Weekday Afternoon Comedy
+                        </button>
+                        <button class="preset-btn"
+                                hx-post="/api/scheduling/plans/{plan_id}/zones/preset/prime-time"
+                                hx-target="#zone-list"
+                                hx-swap="innerHTML"
+                                hx-confirm="Add Prime Time zone?">
+                            Prime Time
+                        </button>
+                        <button class="preset-btn"
+                                hx-post="/api/scheduling/plans/{plan_id}/zones/preset/late-night-horror"
+                                hx-target="#zone-list"
+                                hx-swap="innerHTML"
+                                hx-confirm="Add Late Night Horror zone?">
+                            Late Night Horror
+                        </button>
+                        <button class="preset-btn"
+                                hx-post="/api/scheduling/plans/{plan_id}/zones/preset/overnight-classics"
+                                hx-target="#zone-list"
+                                hx-swap="innerHTML"
+                                hx-confirm="Add Overnight Classics zone?">
+                            Overnight Classics
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 24-Hour Timeline Preview -->
+                <div class="bg-gray-900 rounded-lg overflow-hidden mb-6">
+                    <div class="bg-gray-800 px-4 py-2 flex items-center justify-between">
+                        <h3 class="text-yellow-400 font-bold text-sm uppercase tracking-wider">
+                            24-Hour Schedule Preview
+                        </h3>
+                        <button class="btn-retro text-xs px-3 py-1"
+                                hx-post="/api/scheduling/plans/{plan_id}/preview?target_date=2026-01-26"
+                                hx-target="#timeline-preview"
+                                hx-swap="innerHTML">
+                            Refresh Preview
+                        </button>
+                    </div>
+                    <div class="timeline-grid text-xs" id="timeline-preview">
+                        <div class="time-column p-2"></div>
+                        <!-- Hour markers -->
+                        <div class="timeline-hour">6AM</div>
+                        <div class="timeline-hour">7AM</div>
+                        <div class="timeline-hour">8AM</div>
+                        <div class="timeline-hour">9AM</div>
+                        <div class="timeline-hour">10AM</div>
+                        <div class="timeline-hour">11AM</div>
+                        <div class="timeline-hour">12PM</div>
+                        <div class="timeline-hour">1PM</div>
+                        <div class="timeline-hour">2PM</div>
+                        <div class="timeline-hour">3PM</div>
+                        <div class="timeline-hour">4PM</div>
+                        <div class="timeline-hour">5PM</div>
+                        <div class="timeline-hour">6PM</div>
+                        <div class="timeline-hour">7PM</div>
+                        <div class="timeline-hour">8PM</div>
+                        <div class="timeline-hour">9PM</div>
+                        <div class="timeline-hour">10PM</div>
+                        <div class="timeline-hour">11PM</div>
+                        <div class="timeline-hour">12AM</div>
+                        <div class="timeline-hour">1AM</div>
+                        <div class="timeline-hour">2AM</div>
+                        <div class="timeline-hour">3AM</div>
+                        <div class="timeline-hour">4AM</div>
+                        <div class="timeline-hour">5AM</div>
+                    </div>
+                </div>
+
+                <!-- Zone List -->
+                <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+                    <div class="bg-tvg-blue px-4 py-3 flex items-center justify-between">
+                        <h2 class="text-white font-bold text-lg">Zones (Dayparts)</h2>
+                        <button class="btn-retro text-sm"
+                                onclick="document.getElementById('zone-modal').classList.remove('hidden')">
+                            + Add Zone
+                        </button>
+                    </div>
+                    <div class="p-4" id="zone-list">
+                        <p class="text-gray-500 text-center py-8">
+                            Select a channel and plan to view zones
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Content Browser -->
+            <div class="col-span-4">
+                <div class="bg-white rounded-lg shadow-lg overflow-hidden sticky top-4">
+                    <div class="bg-tvg-blue px-4 py-3">
+                        <h2 class="text-white font-bold text-lg">Content Browser</h2>
+                    </div>
+
+                    <!-- Filters -->
+                    <div class="p-4 bg-gray-100 border-b">
+                        <div class="grid grid-cols-2 gap-2 mb-3">
+                            <select id="content-class-filter"
+                                    class="text-sm border rounded px-2 py-1"
+                                    hx-get="/api/scheduling/assets"
+                                    hx-trigger="change"
+                                    hx-target="#content-list"
+                                    hx-include="[id^='content-'], [id='daypart-filter'], [id='genre-filter']">
+                                <option value="">All Content Types</option>
+                                <option value="cartoon">Cartoon</option>
+                                <option value="sitcom">Sitcom</option>
+                                <option value="movie">Movie</option>
+                                <option value="drama">Drama</option>
+                                <option value="horror">Horror</option>
+                                <option value="documentary">Documentary</option>
+                            </select>
+                            <select id="daypart-filter"
+                                    class="text-sm border rounded px-2 py-1"
+                                    hx-get="/api/scheduling/assets"
+                                    hx-trigger="change"
+                                    hx-target="#content-list"
+                                    hx-include="[id^='content-'], [id='genre-filter']">
+                                <option value="">All Dayparts</option>
+                                <option value="morning">Morning</option>
+                                <option value="afternoon">Afternoon</option>
+                                <option value="prime">Prime Time</option>
+                                <option value="late_night">Late Night</option>
+                                <option value="overnight">Overnight</option>
+                            </select>
+                        </div>
+                        <input type="text"
+                               id="genre-filter"
+                               placeholder="Filter by genre..."
+                               class="w-full text-sm border rounded px-2 py-1"
+                               hx-get="/api/scheduling/assets"
+                               hx-trigger="keyup changed delay:500ms"
+                               hx-target="#content-list"
+                               hx-include="[id^='content-'], [id='daypart-filter']">
+                    </div>
+
+                    <!-- Content List -->
+                    <div class="overflow-y-auto" style="max-height: 500px;" id="content-list">
+                        <div class="p-4">
+                            <p class="text-gray-500 text-center text-sm">
+                                Use filters to browse available content
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Loading Indicator -->
+                    <div class="htmx-indicator p-4 text-center">
+                        <div class="loading-pulse text-tvg-blue">Loading content...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Add Zone Modal -->
+    <div id="zone-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-2xl w-full max-w-md mx-4">
+            <div class="bg-tvg-blue px-4 py-3 flex items-center justify-between rounded-t-lg">
+                <h3 class="text-white font-bold">Add New Zone</h3>
+                <button onclick="document.getElementById('zone-modal').classList.add('hidden')"
+                        class="text-white hover:text-yellow-400">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <form hx-post="/api/scheduling/plans/{plan_id}/zones"
+                  hx-target="#zone-list"
+                  hx-swap="innerHTML"
+                  hx-on::after-request="document.getElementById('zone-modal').classList.add('hidden')"
+                  class="p-4 space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">Zone Name</label>
+                    <input type="text" name="name" required
+                           placeholder="e.g., Morning Cartoons"
+                           class="w-full border-2 border-gray-300 rounded px-3 py-2 focus:border-tvg-blue focus:outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">Start Time</label>
+                        <input type="time" name="start_time" required
+                               class="w-full border-2 border-gray-300 rounded px-3 py-2 focus:border-tvg-blue focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">End Time</label>
+                        <input type="time" name="end_time" required
+                               class="w-full border-2 border-gray-300 rounded px-3 py-2 focus:border-tvg-blue focus:outline-none">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">Days Active</label>
+                    <div class="flex flex-wrap gap-2">
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="MON"> Mon
+                        </label>
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="TUE"> Tue
+                        </label>
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="WED"> Wed
+                        </label>
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="THU"> Thu
+                        </label>
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="FRI"> Fri
+                        </label>
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="SAT"> Sat
+                        </label>
+                        <label class="flex items-center gap-1 text-sm">
+                            <input type="checkbox" name="day_filters" value="SUN"> Sun
+                        </label>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Leave unchecked for all days</p>
+                </div>
+                <div class="flex justify-end gap-2 pt-4 border-t">
+                    <button type="button"
+                            onclick="document.getElementById('zone-modal').classList.add('hidden')"
+                            class="px-4 py-2 text-gray-600 hover:text-gray-800">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn-retro px-4 py-2">
+                        Create Zone
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JavaScript for dynamic updates -->
+    <script>
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load channels on page load
+            fetch('/api/scheduling/channels')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.channels) {
+                        const select = document.getElementById('channel-select');
+                        data.channels.forEach(ch => {
+                            const opt = document.createElement('option');
+                            opt.value = ch.id;
+                            opt.textContent = ch.name || ch.title;
+                            select.appendChild(opt);
+                        });
+                    }
+                })
+                .catch(() => {
+                    console.log('No channels available yet');
+                });
+        });
+
+        // Update plan selector when channel changes
+        document.getElementById('channel-select').addEventListener('change', function(e) {
+            const channelId = e.target.value;
+            if (!channelId) return;
+
+            fetch(`/api/scheduling/channels/${channelId}/plans`)
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById('plan-select');
+                    select.innerHTML = '<option value="">Select Plan...</option>';
+                    if (data.plans) {
+                        data.plans.forEach(plan => {
+                            const opt = document.createElement('option');
+                            opt.value = plan.id;
+                            opt.textContent = plan.name;
+                            select.appendChild(opt);
+                        });
+                    }
+                });
+        });
+
+        // Update zone list when plan changes
+        document.getElementById('plan-select').addEventListener('change', function(e) {
+            const planId = e.target.value;
+            if (!planId) return;
+
+            // Update preset buttons with current plan ID
+            document.querySelectorAll('[hx-post*="preset"]').forEach(btn => {
+                const url = btn.getAttribute('hx-post');
+                btn.setAttribute('hx-post', url.replace('{plan_id}', planId));
+            });
+
+            // Load zones
+            fetch(`/api/scheduling/plans/${planId}/zones`)
+                .then(r => r.json())
+                .then(data => {
+                    const zoneList = document.getElementById('zone-list');
+                    if (!data.zones || data.zones.length === 0) {
+                        zoneList.innerHTML = `
+                            <p class="text-gray-500 text-center py-8">
+                                No zones defined yet. Add a zone or use a preset above.
+                            </p>
+                        `;
+                        return;
+                    }
+
+                    zoneList.innerHTML = data.zones.map(zone => `
+                        <div class="zone-block p-4 mb-3 ${getZoneClass(zone)}">
+                            <div class="flex items-center justify-between mb-2">
+                                <h4 class="font-bold">${zone.name}</h4>
+                                <span class="text-sm opacity-75">
+                                    ${zone.enabled ? '✓ Active' : '✗ Disabled'}
+                                </span>
+                            </div>
+                            <div class="text-sm">
+                                <span class="font-mono">${zone.start_time} - ${zone.end_time}</span>
+                                ${zone.day_filters ?
+                                    `<span class="ml-2 text-xs opacity-75">(${zone.day_filters.join(', ')})</span>`
+                                    : '<span class="ml-2 text-xs opacity-75">(All days)</span>'}
+                            </div>
+                            <div class="mt-2 flex gap-2">
+                                <button class="text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+                                        onclick="editZone('${zone.id}')">
+                                    Edit
+                                </button>
+                                <button class="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                                        hx-delete="/api/scheduling/plans/${planId}/zones/${zone.id}"
+                                        hx-target="#zone-list"
+                                        hx-swap="innerHTML"
+                                        hx-confirm="Delete zone '${zone.name}'?">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+
+                    // Re-process HTMX content
+                    htmx.process(zoneList);
+                });
+        });
+
+        function getZoneClass(zone) {
+            const start = parseInt(zone.start_time.split(':')[0]);
+            if (start >= 6 && start < 12) return 'morning';
+            if (start >= 19 && start < 22) return 'prime';
+            if (start >= 22 || start < 6) return 'late-night';
+            return '';
+        }
+
+        function editZone(zoneId) {
+            // TODO: Open edit modal
+            alert('Edit zone: ' + zoneId);
+        }
+
+        // Load content with filters
+        function loadContent() {
+            const contentClass = document.getElementById('content-class-filter').value;
+            const daypart = document.getElementById('daypart-filter').value;
+            const genre = document.getElementById('genre-filter').value;
+
+            let url = '/api/scheduling/assets?limit=50';
+            if (contentClass) url += `&content_class=${contentClass}`;
+            if (daypart) url += `&daypart_profile=${daypart}`;
+            if (genre) url += `&genre=${genre}`;
+
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    const list = document.getElementById('content-list');
+                    if (!data.assets || data.assets.length === 0) {
+                        list.innerHTML = `
+                            <p class="text-gray-500 text-center py-8 text-sm">
+                                No matching content found
+                            </p>
+                        `;
+                        return;
+                    }
+
+                    list.innerHTML = data.assets.map(asset => `
+                        <div class="content-card p-3 m-2 ${asset.content_class || ''}">
+                            <div class="font-bold text-sm truncate">${asset.title || 'Untitled'}</div>
+                            <div class="text-xs text-gray-500">
+                                ${asset.duration_ms ? Math.round(asset.duration_ms / 60000) + ' min' : 'Unknown length'}
+                                ${asset.content_class ? ` · ${asset.content_class}` : ''}
+                            </div>
+                            ${asset.genres?.length ?
+                                `<div class="text-xs text-gray-400 mt-1">${asset.genres.join(', ')}</div>`
+                                : ''}
+                        </div>
+                    `).join('');
+                });
+        }
+
+        // Trigger content load on filter change
+        ['content-class-filter', 'daypart-filter'].forEach(id => {
+            document.getElementById(id).addEventListener('change', loadContent);
+        });
+        document.getElementById('genre-filter').addEventListener('input', debounce(loadContent, 500));
+
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+    </script>
+</body>
+</html>

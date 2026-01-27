@@ -1,327 +1,204 @@
-# Unit of Work
+# Unit of Work Contract
 
 ## Purpose
 
-Define the Unit of Work (UoW) paradigm for all RetroVue operations to ensure atomicity, consistency, and data integrity. All operations that modify database state MUST follow this contract.
+Define the observable guarantees for all RetroVue operations that modify database state. This contract specifies **what** the system guarantees (atomicity, consistency, isolation), not how those guarantees are implemented.
 
-## Core Principles
+---
 
-### 1. Atomicity
+## Core Guarantees
 
-- **All-or-Nothing**: Operations either complete successfully or fail completely
-- **No Partial State**: Database must never be left in an inconsistent state
-- **Rollback on Failure**: Any failure must roll back all changes made during the operation
+### UOW-001: Atomicity (All-or-Nothing)
 
-### 2. Consistency
+**Guarantee:** Operations either complete successfully with all changes persisted, or fail completely with no changes persisted.
 
-- **Pre-flight Validation**: Validate all prerequisites before making any changes
-- **Constraint Enforcement**: Ensure all database constraints are satisfied
-- **Business Rule Compliance**: Enforce business rules throughout the operation
+**Observable behavior:**
+- On success: all expected database records exist and are consistent
+- On failure: database state is identical to pre-operation state
+- No partial state is ever observable between operation start and completion
 
-### 3. Isolation
+**Verification:** Query database before and after a failed operation; state must be identical.
 
-- **Transaction Boundaries**: Each operation runs in its own transaction
-- **No Cross-Operation State**: Operations cannot interfere with each other
-- **Clean State**: Each operation starts with a clean, consistent database state
+---
 
-## Contract Requirements
+### UOW-002: Consistency (Valid State Transitions)
 
-### 1. Operation Structure
+**Guarantee:** Operations only transition the database from one valid state to another valid state.
 
-Every operation MUST follow this structure:
+**Observable behavior:**
+- All foreign key constraints are satisfied after operation
+- All business invariants hold after operation
+- No orphaned records exist after operation
 
-```python
-def operation_name(params...) -> OperationResult:
-    """
-    Operation description.
+**Verification:** After any operation, database constraint checks pass and invariant queries return expected results.
 
-    Pre-conditions:
-    - List all prerequisites that must be met
+---
 
-    Post-conditions:
-    - List all guarantees if operation succeeds
+### UOW-003: Isolation (No Cross-Operation Interference)
 
-    Atomicity:
-    - Describe what happens on failure
-    """
-    with session() as db:
-        try:
-            # Phase 1: Pre-flight validation
-            validate_prerequisites(db, params)
+**Guarantee:** Concurrent operations do not interfere with each other.
 
-            # Phase 2: Execute operation
-            result = execute_operation(db, params)
+**Observable behavior:**
+- Each operation sees a consistent snapshot of data
+- Operations do not observe partial results from other in-flight operations
+- No phantom reads or dirty reads occur
 
-            # Phase 3: Post-operation validation
-            validate_result(db, result)
+**Verification:** Run concurrent operations; each completes with consistent results.
 
-            return result
+---
 
-        except Exception as e:
-            # Transaction automatically rolls back
-            logger.error("operation_failed", operation="operation_name", error=str(e))
-            raise OperationError(f"Operation failed: {e}")
-```
+## Pre-Operation Validation
 
-### 2. Pre-flight Validation
+### UOW-010: Prerequisites Checked Before Changes
 
-**MUST validate before any changes:**
+**Guarantee:** All prerequisites are validated before any database modifications occur.
 
-- **Resource Availability**: Ensure all required resources exist
-- **Constraint Satisfaction**: Verify all constraints can be satisfied
-- **Business Rules**: Check all business rules are met
-- **Dependency Integrity**: Ensure all dependencies are valid
+**Observable behavior:**
+- If prerequisites fail, operation exits with validation error
+- No database changes occur when prerequisites fail
+- Error message clearly identifies which prerequisite failed
 
-**Examples:**
+**Exit code:** `1` (validation error)
 
-- Collection exists and is accessible
-- Source is reachable and authenticated
-- Path mappings are valid and accessible
+**Example prerequisites:**
+- Resource exists (collection, source, channel)
+- Resource is in valid state for operation
+- Required relationships exist
 - No conflicting operations in progress
 
-### 3. Post-operation Validation
+---
 
-**MUST validate after changes:**
+## Post-Operation Validation
 
-- **Data Integrity**: Verify all relationships are correct
-- **Constraint Compliance**: Ensure all constraints are satisfied
-- **Business Rule Compliance**: Verify business rules are met
-- **State Consistency**: Confirm database state is consistent
+### UOW-020: Results Verified Before Commit
 
-**Examples:**
+**Guarantee:** Operation results are validated before changes become permanent.
 
-- All created entities have valid relationships
+**Observable behavior:**
+- If post-validation fails, all changes are rolled back
+- Error message clearly identifies what validation failed
+- Database state reverts to pre-operation state
+
+**Exit code:** `1` (validation error)
+
+**Example validations:**
+- All created records have valid relationships
 - No orphaned records exist
-- All foreign key constraints are satisfied
-- Business invariants are maintained
+- Business invariants are satisfied
 
-## Operation-Specific Contracts
-
-### Ingest Operations
-
-#### Collection Ingest Contract
-
-```python
-def ingest_collection(collection_id: str, filters: IngestFilters) -> IngestResult:
-    """
-    Ingest all assets from a collection.
-
-    Pre-conditions:
-    - Collection exists and is enabled
-    - Collection has valid path mappings
-    - Source is reachable and authenticated
-    - No conflicting ingest operations in progress
-
-    Post-conditions:
-    - All discovered assets are processed
-    - All created entities have valid relationships
-    - No orphaned records exist
-    - Collection state is consistent
-
-    Atomicity:
-    - If any asset fails to process, entire operation rolls back
-    - If any enricher fails, entire operation rolls back
-    - If any validation fails, entire operation rolls back
-    """
-    with session() as db:
-        try:
-            # Phase 1: Pre-flight validation
-            collection = validate_collection_exists(db, collection_id)
-            validate_collection_enabled(collection)
-            validate_path_mappings(db, collection)
-            validate_source_connectivity(db, collection.source_id)
-            validate_no_conflicting_operations(db, collection_id)
-
-            # Phase 2: Execute ingest
-            result = execute_collection_ingest(db, collection, filters)
-
-            # Phase 3: Post-operation validation
-            validate_no_orphaned_records(db)
-            validate_all_relationships(db, result.created_entities)
-            validate_business_rules(db, result)
-
-            return result
-
-        except Exception as e:
-            logger.error("collection_ingest_failed", collection_id=collection_id, error=str(e))
-            raise IngestError(f"Collection ingest failed: {e}")
-```
-
-#### Asset Processing Contract
-
-```python
-def process_discovered_item(discovered_item: DiscoveredItem, collection: Collection) -> AssetProcessingResult:
-    """
-    Process a single discovered item through the ingest pipeline.
-
-    Pre-conditions:
-    - DiscoveredItem is valid and complete
-    - Collection exists and is accessible
-    - All required enrichers are available
-
-    Post-conditions:
-    - Asset is created with proper relationships
-    - All enrichers have been applied
-    - No duplicate assets exist
-    - Hierarchy is properly maintained
-
-    Atomicity:
-    - If any step fails, entire asset processing rolls back
-    - If enricher fails, entire asset processing rolls back
-    - If validation fails, entire asset processing rolls back
-    """
-    with session() as db:
-        try:
-            # Phase 1: Pre-flight validation
-            validate_discovered_item(discovered_item)
-            validate_collection_accessible(db, collection)
-            validate_enrichers_available(db, collection)
-
-            # Phase 2: Execute processing
-            result = execute_asset_processing(db, discovered_item, collection)
-
-            # Phase 3: Post-operation validation
-            validate_asset_relationships(db, result.asset)
-            validate_hierarchy_integrity(db, result)
-            validate_no_duplicates(db, result.asset)
-
-            return result
-
-        except Exception as e:
-            logger.error("asset_processing_failed", asset_path=discovered_item.path_uri, error=str(e))
-            raise AssetProcessingError(f"Asset processing failed: {e}")
-```
-
-### Wipe Operations
-
-#### Collection Wipe Contract
-
-```python
-def wipe_collection(collection_id: str, options: WipeOptions) -> WipeResult:
-    """
-    Completely wipe a collection and all associated data.
-
-    Pre-conditions:
-    - Collection exists
-    - No conflicting operations in progress
-    - All dependencies are identified
-
-    Post-conditions:
-    - All collection data is deleted
-    - No orphaned records exist
-    - Collection and path mappings are preserved
-    - Database state is consistent
-
-    Atomicity:
-    - If any deletion step fails, entire operation rolls back
-    - If any validation fails, entire operation rolls back
-    - If any constraint violation occurs, entire operation rolls back
-    """
-    with session() as db:
-        try:
-            # Phase 1: Pre-flight validation
-            collection = validate_collection_exists(db, collection_id)
-            validate_no_conflicting_operations(db, collection_id)
-            validate_wipe_prerequisites(db, collection)
-
-            # Phase 2: Execute wipe
-            result = execute_collection_wipe(db, collection, options)
-
-            # Phase 3: Post-operation validation
-            validate_no_orphaned_records(db)
-            validate_collection_preserved(db, collection)
-            validate_path_mappings_preserved(db, collection)
-            validate_database_consistency(db)
-
-            return result
-
-        except Exception as e:
-            logger.error("collection_wipe_failed", collection_id=collection_id, error=str(e))
-            raise WipeError(f"Collection wipe failed: {e}")
-```
+---
 
 ## Error Handling
 
-### Error Types
+### UOW-030: Error Types and Exit Codes
 
-1. **ValidationError**: Pre-flight validation failed
-2. **ConstraintError**: Database constraint violation
-3. **BusinessRuleError**: Business rule violation
-4. **ResourceError**: Resource not available
-5. **OperationError**: General operation failure
+| Exit Code | Error Type | Meaning |
+|-----------|------------|---------|
+| `0` | Success | Operation completed, all changes persisted |
+| `1` | Validation Error | Prerequisites or post-validation failed; no changes persisted |
+| `2` | Partial Success | Some targets succeeded, others failed (batch operations only) |
+| `3` | External Error | External system unavailable; no changes persisted |
 
-### Error Response
+### UOW-031: Error Messages
 
-All errors MUST:
+**Guarantee:** All errors produce clear, actionable messages.
 
-- Log detailed error information
-- Roll back the transaction
-- Provide clear error messages
-- Preserve database consistency
+**Observable behavior:**
+- Error message identifies the specific failure
+- Error message includes relevant context (IDs, names)
+- JSON output includes structured error information
 
-## Testing Requirements
-
-### Unit Tests
-
-- Test pre-flight validation
-- Test post-operation validation
-- Test error handling and rollback
-- Test atomicity guarantees
-
-### Integration Tests
-
-- Test complete operation workflows
-- Test failure scenarios and recovery
-- Test concurrent operation handling
-- Test database consistency
-
-### Contract Tests
-
-- Verify all operations follow the contract
-- Verify all validation rules are enforced
-- Verify all error conditions are handled
-- Verify all atomicity guarantees are met
-
-## Implementation Guidelines
-
-### 1. Use Context Managers
-
-Always use the `session()` context manager:
-
-```python
-with session() as db:
-    # All database operations
-    # Automatic commit/rollback
+**JSON error format:**
+```json
+{
+  "status": "error",
+  "code": "<ERROR_CODE>",
+  "message": "Human-readable description",
+  "context": {
+    "resource_id": "...",
+    "operation": "..."
+  }
+}
 ```
 
-### 2. Validate Early and Often
+### UOW-032: Rollback on Failure
 
-- Validate inputs before starting
-- Validate state before each major step
-- Validate results before committing
+**Guarantee:** Any failure during operation execution triggers complete rollback.
 
-### 3. Fail Fast
+**Observable behavior:**
+- Database state after failure matches database state before operation
+- No partial records exist
+- No orphaned relationships exist
 
-- Stop at the first validation failure
-- Don't continue if prerequisites aren't met
-- Provide clear error messages
+---
 
-### 4. Log Everything
+## Batch Operation Guarantees
 
-- Log operation start and parameters
-- Log each major step
-- Log validation results
-- Log errors with full context
+### UOW-040: Batch Atomicity Options
+
+**Guarantee:** Batch operations clearly define their atomicity scope.
+
+**Option A — All-or-nothing batch:**
+- All targets succeed, or entire batch fails
+- No partial results
+- Exit code: `0` (all succeeded) or `1` (any failed)
+
+**Option B — Best-effort batch:**
+- Each target processed independently
+- Successful targets committed; failed targets rolled back individually
+- Exit code: `0` (all succeeded), `2` (partial success), or `1` (all failed)
+
+**Observable behavior:**
+- Contract for each operation specifies which option applies
+- Partial success reports which targets succeeded and which failed
+
+---
+
+## Test Database Isolation
+
+### UOW-050: Test Database Guarantees
+
+**Guarantee:** Operations with `--test-db` are completely isolated from production.
+
+**Observable behavior:**
+- No production tables are read or written
+- Test data does not persist between test sessions (unless explicitly configured)
+- Behavior, output format, and exit codes match production mode
+
+---
+
+## Contract Test Requirements
+
+Tests verifying Unit of Work compliance must check:
+
+1. **Atomicity test:** Force failure mid-operation; verify no partial state
+2. **Rollback test:** Trigger validation error; verify state unchanged
+3. **Consistency test:** After operation, verify all constraints satisfied
+4. **Error format test:** On failure, verify error message and exit code
+5. **Batch test (if applicable):** Verify correct handling of mixed success/failure
+
+---
+
+## Behavioral Rules Summary
+
+| Rule | Guarantee |
+|------|-----------|
+| UOW-001 | All-or-nothing execution |
+| UOW-002 | Valid state transitions only |
+| UOW-003 | No cross-operation interference |
+| UOW-010 | Prerequisites checked before changes |
+| UOW-020 | Results verified before commit |
+| UOW-030 | Defined exit codes |
+| UOW-031 | Clear error messages |
+| UOW-032 | Complete rollback on failure |
+| UOW-040 | Batch atomicity clearly defined |
+| UOW-050 | Test database isolation |
+
+---
 
 ## See Also
 
-- [Collection Wipe](../resources/CollectionWipeContract.md)
-- [Ingest pipeline](../../domain/IngestPipeline.md)
-- [Data model](../../data-model/README.md)
-- [Unit of Work implementation](../../../src/retrovue/infra/uow.py)
-
-
-
-
-
-
+- [Collection Wipe Contract](../resources/CollectionWipeContract.md) — applies UOW guarantees
+- [Source Ingest Contract](../resources/SourceIngestContract.md) — applies UOW guarantees
+- [Collection Ingest Contract](../resources/CollectionIngestContract.md) — applies UOW guarantees
+- [Contract Hygiene Checklist](../../../standards/contract-hygiene.md) — authoring guidelines

@@ -4,14 +4,16 @@ _Related: [Architecture](../architecture/ArchitectureOverview.md) • [Runtime](
 
 ## Purpose
 
-A PlayoutRequest is a **message describing the next asset to load into Retrovue Air's PREVIEW buffer**. It provides Retrovue Air with all data needed to prepare an asset for playout. **Important:** A PlayoutRequest represents the next asset to load into **PREVIEW**, not the next stream to output directly.
+PlayoutRequest: A timing-critical instruction issued by ChannelManager to its per-channel playout engine, describing which asset to preload and when it will be presented on-air.
 
-**Note:** Phase 8 implements a simplified one-file playout pipeline for testing. In Phase 8, Air may play the asset directly without preview/live switching. Future phases add PREVIEW/LIVE buffers, continuous playout, signaling, and scheduling logic where PlayoutRequest represents assets loaded into preview for eventual live switching.
+**Note:** Phase 8 implements a simplified one-file playout pipeline for testing. In Phase 8, Air may play the asset directly without preview/live switching. Future phases add PREVIEW/LIVE buffers, continuous playout, signaling, and scheduling logic.
 
 **What PlayoutRequest is:**
 
-- **Preview asset instruction**: Instruction to Retrovue Air to load an asset into the PREVIEW buffer (forward-compatible API, even if Phase 8 simplifies this)
-- **Channel-specific**: Each request targets a specific channel playout instance
+- **Timing-critical instruction**: Issued by ChannelManager to its per-channel playout engine
+- **Asset preload instruction**: Describes which asset to preload
+- **On-air timing**: Describes when the asset will be presented on-air
+- **Channel-specific**: Each request targets a specific channel's playout engine
 - **Time-bound**: Defines presentation timestamp offset for playback
 - **Mode-specific**: Specifies playout mode (LIVE or VOD)
 
@@ -19,15 +21,15 @@ A PlayoutRequest is a **message describing the next asset to load into Retrovue 
 
 Retrovue Air has **two internal players: preview and live**. The correct playout flow (implemented in future phases):
 
-1. ChannelManager sends asset X → Air's **preview** buffer
+1. ChannelManager sends PlayoutRequest → Air's **preview** buffer
 2. Air signals back: **"preview is ready"**
 3. ChannelManager tells Air: **"switch preview → live"**
-4. Once switched, ChannelManager fetches the next asset and loads it into preview
+4. Once switched, ChannelManager sends the next PlayoutRequest and loads it into preview
 5. This repeats forever → a **continuous playout chain**
 
 **Phase 8 Simplification:**
 
-In Phase 8, Air may play assets directly without preview/live switching for testing purposes. However, the PlayoutRequest API structure must remain forward-compatible with Air's true preview/live architecture. Even in Phase 8, PlayoutRequest conceptually represents an asset for preview, not a direct playout command.
+In Phase 8, Air may play assets directly without preview/live switching for testing purposes. However, the PlayoutRequest API structure must remain forward-compatible with Air's true preview/live architecture.
 
 **What PlayoutRequest is not:**
 
@@ -90,10 +92,10 @@ In Phase 8, Channel Manager and Retrovue Air operate with the following limitati
 1. Channel Manager loads schedule.json
 2. Channel Manager selects active ScheduleItem based on current time
 3. Channel Manager generates one PlayoutRequest
-4. Channel Manager launches Retrovue Air process (if not running)
-5. Channel Manager sends PlayoutRequest via stdin and closes stdin
-6. Retrovue Air reads complete JSON and begins playout immediately
-7. Retrovue Air plays the asset until end of file or process termination
+4. ProgramDirector spawns a ChannelManager when one doesn't exist for the requested channel. Channel Manager **spawns Air** to play video. Channel Manager does **not** spawn ProgramDirector or the main retrovue process.
+5. Channel Manager sends PlayoutRequest to the Air process it spawned (e.g. via stdin), then closes stdin.
+6. Air reads complete JSON and begins playout immediately.
+7. Air plays the asset until end of file or process termination.
 
 Future phases will add transition management, follow-up request handling, and operator-triggered changes.
 
@@ -109,8 +111,8 @@ In Phase 8, PlayoutRequest has a simplified scope for testing purposes:
 
 - **PlayoutRequest contains only one asset_path**: Each PlayoutRequest references exactly one media file
 - **Phase 8 simplified playout**: Air may play the file directly without preview/live switching (simplified for Phase 8 testing)
-- **ChannelManager sends exactly one PlayoutRequest during runtime**: ChannelManager sends one PlayoutRequest when launching Air (when `client_count` transitions 0 → 1)
-- **When the file finishes or last viewer disconnects, Air terminates**: Air continues playing until EOF or all clients disconnect (`client_count` drops to 0)
+- **ChannelManager sends exactly one PlayoutRequest during runtime**: ChannelManager (per-channel runtime executor) sends one PlayoutRequest when coordinating with Air for its channel (e.g. when `client_count` transitions 0 → 1). Process hierarchy: User starts `retrovue` → `retrovue` spawns ProgramDirector → ProgramDirector spawns ChannelManager when needed → ChannelManager spawns Air when needed.
+- **When the file finishes or last viewer disconnects, playout stops**: Air continues until EOF or all clients disconnect (`client_count` drops to 0). ChannelManager terminates Air when `client_count` hits 0.
 - **Preview/live architecture not yet active**: Air's preview/live architecture exists but is not actively used in Phase 8
 
 **Important Forward-Compatible Design:**
@@ -128,7 +130,7 @@ Even though Phase 8 simplifies playout, **PlayoutRequest represents the next ass
 - **No preview switching commands**: ChannelManager does not send "switch preview → live" commands (reserved for future phases)
 - **No preview ready signals**: Air does not signal "preview is ready" back to ChannelManager (reserved for future phases)
 - **No continuous chaining**: ChannelManager does not automatically load next assets into preview (reserved for future phases)
-- **Single file per launch**: ChannelManager sends only one PlayoutRequest per Air launch (reserved for future phases: multiple PlayoutRequests for continuous chains)
+- **Single file per request**: ChannelManager sends only one PlayoutRequest per Air spawn (reserved for future phases: multiple PlayoutRequests for continuous chains). ChannelManager spawns Air; it does not spawn ProgramDirector or retrovue.
 
 ### Future Phases PlayoutRequest Scope
 
@@ -175,11 +177,11 @@ PlayoutRequests are generated from [ScheduleItem](ScheduleItem.md) entries when 
 4. **Request Delivery**: Send PlayoutRequest to Retrovue Air for the target channel
 5. **Playout Execution**: Retrovue Air receives the request and begins playout
 
-**Request Timing (Phase 8):** In Phase 8, Channel Manager sends exactly one PlayoutRequest per Retrovue Air process execution:
-- Channel Manager selects the active ScheduleItem based on current time
-- Channel Manager generates one PlayoutRequest and sends it to Retrovue Air via stdin
-- Channel Manager does not manage transitions or send follow-up items in Phase 8
-- Channel Manager does not track when content ends or trigger immediate changes
+**Request Timing (Phase 8):** In Phase 8, ChannelManager (per-channel runtime executor) sends exactly one PlayoutRequest per Retrovue Air process execution:
+- ChannelManager selects the active ScheduleItem based on current time
+- ChannelManager generates one PlayoutRequest and sends it to Retrovue Air via stdin
+- ChannelManager does not manage transitions or send follow-up items in Phase 8
+- ChannelManager does not track when content ends or trigger immediate changes
 
 **Request Timing (Future Phases):** In future phases, PlayoutRequests may be sent:
 - Just before the scheduled start time (typically a few seconds ahead for buffering)
@@ -320,7 +322,7 @@ In this example:
 
 ### PlayoutRequest JSON Contract (stdin)
 
-Channel Manager writes PlayoutRequest JSON to Retrovue Air's stdin. This is the complete contract for the stdin payload:
+ChannelManager (per-channel runtime executor) writes PlayoutRequest JSON to Retrovue Air's stdin. This is the complete contract for the stdin payload:
 
 ```json
 {
@@ -341,8 +343,8 @@ Channel Manager writes PlayoutRequest JSON to Retrovue Air's stdin. This is the 
 
 **Contractual Requirements:**
 
-- **JSON must be complete (no streaming fragments)**: Channel Manager must send the complete JSON object in one write operation. Retrovue Air must read the complete JSON before parsing.
-- **JSON must be sent once, then stdin closed**: After sending the PlayoutRequest JSON, Channel Manager closes stdin. Retrovue Air must read the complete JSON before stdin is closed.
+- **JSON must be complete (no streaming fragments)**: ChannelManager must send the complete JSON object in one write operation. Retrovue Air must read the complete JSON before parsing.
+- **JSON must be sent once, then stdin closed**: After sending the PlayoutRequest JSON, ChannelManager closes stdin. Retrovue Air must read the complete JSON before stdin is closed.
 - **Retrovue Air must begin playout immediately after stdin closes**: Once Retrovue Air has read the complete JSON and stdin is closed, it must begin playout immediately without waiting for additional signals or delays.
 - **Retrovue Air must treat missing required fields as fatal errors**: If any required field (`asset_path`, `start_pts`, `mode`, `channel_id`) is missing, Retrovue Air must fail immediately with an error.
 - **Unknown metadata keys are allowed and ignored**: Retrovue Air may log unknown metadata keys but must not fail if it encounters keys it does not recognize in the `metadata` object.
@@ -399,7 +401,7 @@ If `asset_path` does not exist or cannot be accessed, Retrovue Air must:
 
 The canonical name for this concept in code and documentation is **PlayoutRequest**.
 
-PlayoutRequests represent the interface between the scheduling system and the playout execution engine — they define "what Retrovue Air should play now" with all necessary execution parameters.
+PlayoutRequest: A timing-critical instruction issued by ChannelManager to its per-channel playout engine, describing which asset to preload and when it will be presented on-air.
 
 ## Operator Workflows
 

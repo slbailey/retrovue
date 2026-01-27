@@ -33,9 +33,11 @@ ControllerResult PlayoutController::StopChannel(int32_t channel_id) {
 
 ControllerResult PlayoutController::LoadPreview(
     int32_t channel_id,
-    const std::string& asset_path) {
+    const std::string& asset_path,
+    int64_t start_offset_ms,
+    int64_t hard_stop_time_ms) {
   // Delegate to domain engine
-  auto result = engine_->LoadPreview(channel_id, asset_path);
+  auto result = engine_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
   ControllerResult controller_result(result.success, result.message);
   controller_result.shadow_decode_started = result.shadow_decode_started;
   return controller_result;

@@ -18,4 +18,8 @@ from . import plan_list  # noqa: I001
 from . import plan_show  # noqa: I001  # Depends on plan_add
 from . import plan_delete  # noqa: I001  # Depends on plan_add and plan_show
 from . import plan_update  # noqa: I001  # Depends on plan_add and plan_show
+from . import zone_add  # noqa: I001
+from . import zone_list  # noqa: I001
+from . import zone_update  # noqa: I001
+from . import zone_delete  # noqa: I001
 from . import channel_manager_launch  # noqa: I001

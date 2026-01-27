@@ -23,6 +23,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from retrovue.streaming.ffmpeg_cmd import build_cmd
 from retrovue.streaming.mpegts_stream import MPEGTSStreamer
+from retrovue.web.api.scheduling import router as scheduling_router
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,9 @@ def run_server(port: int = 8000, active_streams: dict | None = None, debug: bool
     # Add custom GZip middleware with exclusion for .ts routes
     app.add_middleware(ConditionalGZipMiddleware, minimum_size=1000)
 
+    # Include scheduling API routes
+    app.include_router(scheduling_router)
+
     @app.middleware("http")
     async def streaming_headers(request: Request, call_next):
         resp: Response = await call_next(request)
@@ -270,8 +274,10 @@ def run_server(port: int = 8000, active_streams: dict | None = None, debug: bool
             resp.headers["Content-Type"] = "application/vnd.apple.mpegurl"
         return resp
 
-    # Set up Jinja2 templates
-    templates = Jinja2Templates(directory="templates")
+    # Set up Jinja2 templates - use package-relative path
+    import pathlib
+    templates_dir = pathlib.Path(__file__).parent.parent.parent.parent.parent / "templates"
+    templates = Jinja2Templates(directory=str(templates_dir))
 
     @app.get("/debug/ts/{channel_id}")
     async def debug_ts_stream(channel_id: str):
@@ -449,5 +455,16 @@ def run_server(port: int = 8000, active_streams: dict | None = None, debug: bool
     @app.get("/")
     async def root():
         return {"message": "Retrovue IPTV Server", "status": "ready"}
+
+    @app.get("/schedule/builder", response_class=HTMLResponse)
+    async def schedule_builder(request: Request):
+        """
+        Schedule Builder UI - TV Guide-inspired interface for creating
+        channel schedules with dayparts (zones) and retro styling.
+        """
+        return templates.TemplateResponse(
+            "schedule/builder.html",
+            {"request": request, "title": "Schedule Builder"}
+        )
 
     uvicorn.run(app, host="0.0.0.0", port=port)

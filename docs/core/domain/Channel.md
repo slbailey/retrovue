@@ -97,7 +97,9 @@ The Grid system provides predictable, consistent scheduling behavior across the 
 
 ## Execution model
 
-ChannelManager uses Channel to know how to interpret 'now' and how to cut the day (rollover). A Channel continues to exist even when nobody is watching and ffmpeg is torn down.
+**Channel (config, identity) → ProgramDirector**: Channel provides configuration and identity to ProgramDirector for system-wide coordination and policy enforcement.
+
+**ChannelRuntime → ChannelManager**: ChannelManager uses Channel configuration to know how to interpret 'now' and how to cut the day (rollover). A Channel continues to exist even when nobody is watching and the playout engine is torn down.
 
 Channel has relationships with schedule data through ScheduleDay, which links channels to plans for specific broadcast dates.
 

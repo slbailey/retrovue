@@ -39,8 +39,8 @@ retrovue source discover <source_id> [--json] [--test-db] [--dry-run]
 - Existing collections are updated with current metadata
 - Duplicate collections are skipped with notification
 - No PathMapping records are created during discovery. The external path (e.g., plex path) is persisted in the collection's config for display purposes. PathMapping rows are only created via `retrovue collection update --path-mapping` and removed via `--path-mapping DELETE`.
-- Importer must be interface compliant (ImporterInterface). Implementations that subclass BaseImporter are considered compliant by construction. Non-compliant importers MUST cause the command to fail with exit code 1.
-- Collection discovery uses importer's discovery capability to enumerate collections
+- Source type MUST be valid and support the discovery operation. Unsupported source types MUST cause the command to fail with exit code 1.
+- Collection discovery retrieves available collections from the source
 
 ---
 
@@ -169,8 +169,8 @@ Discovered collections from 'My Plex Server' (dry-run):
 - **D-5:** On transaction failure, ALL changes MUST be rolled back with no partial persistence.
 - **D-6:** Duplicate external ID checking MUST prevent duplicate collection creation.
 - **D-7:** Collection metadata MUST be updated for existing collections.
-- **D-8:** Collection discovery MUST use the importer-provided discovery capability to enumerate collections.
-- **D-9:** Interface compliance MUST be verified before discovery begins.
+- **D-8:** Collection discovery MUST retrieve available collections from the source.
+- **D-9:** Source validity MUST be verified before discovery begins.
 
 ---
 
@@ -188,8 +188,8 @@ Discovered collections from 'My Plex Server' (dry-run):
 - Source not found: "Error: Source 'invalid-source' not found"
 - Unsupported source type: "Error: Source type 'filesystem' not supported for discovery"
 - Missing configuration: "Error: Plex source 'My Plex' missing base_url or token"
-- Interface violation: "Error: Source's importer does not implement ImporterInterface"
-- Discovery capability failure: "Error: Importer claims to support discovery but failed interface compliance"
+- Unsupported source type: "Error: Source type does not support discovery"
+- Discovery capability failure: "Error: Source discovery failed"
 
 ### Discovery Errors
 

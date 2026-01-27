@@ -6,7 +6,7 @@ _Related: [Playout Engine Domain](PlayoutEngineDomain.md) • [Renderer Contract
 
 ## 📋 Purpose & Role
 
-The **Renderer** is the final stage in the RetroVue Playout Engine's media pipeline, responsible for consuming decoded video frames and preparing them for output. It acts as the bridge between the frame staging buffer and the ultimate destination—whether that's a display device, broadcast hardware, or validation pipeline.
+The **Renderer** is the final stage in the RetroVue Playout Engine's media pipeline, responsible for consuming decoded video frames and preparing them for output. It acts as the bridge between the frame staging buffer and the ultimate destination—whether that's a display device, broadcast hardware, or validation pipeline. Output responsibility is an intentional design boundary: either Air outputs MPEG-TS directly, or Air outputs frames to a Renderer that muxes MPEG-TS; deployments fix one path.
 
 ### Pipeline Position
 

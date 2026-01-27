@@ -101,7 +101,7 @@ The Broadcast Scheduling Domain consists of these primary models:
 
 The scheduling system follows this end-to-end flow:
 
-**Operator creates SchedulePlan → Zones defined with SchedulableAssets → Background daemon generates ScheduleDay 3–4 days in advance → Playlist generated from ScheduleDay → PlaylogEvents generated from Playlist → PlaylogEvents drive playout stream**
+**Operator creates SchedulePlan → Zones defined with SchedulableAssets → SchedulingService generates ScheduleDay 3–4 days in advance → Playlist generated from ScheduleDay → PlaylogEvents generated from Playlist → PlaylogEvents drive playout stream**
 
 1. **Operator creates SchedulePlan**: Operators create [SchedulePlan](SchedulePlan.md) records that define channel programming intent using Zones (time windows with optional day filters) that hold SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets) directly. Plans can be layered (e.g., base plan + holiday overlay) with higher priority plans overriding lower priority plans.
 
@@ -134,7 +134,7 @@ The scheduling system follows this end-to-end flow:
 
 ### Scheduler Process
 
-The Scheduler (ScheduleService) is a background daemon that processes the Broadcast Scheduling Domain models. It follows this end-to-end flow:
+The Scheduler (ScheduleService) processes the Broadcast Scheduling Domain models. It follows this end-to-end flow:
 
 1. **Operator creates SchedulePlan**: Operators create SchedulePlan records that define channel programming intent using Zones (time windows with optional day filters) that hold SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets) directly. Plans can be layered (e.g., base plan + holiday overlay) with higher priority plans overriding lower priority plans.
 

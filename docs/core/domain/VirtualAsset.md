@@ -21,14 +21,14 @@ VirtualAsset is a **SchedulableAsset** subclass that acts as a template or compo
 
 - A physical file or media asset (VirtualAssets have no `canonical_uri`, `source_uri`, or file size)
 - A runtime entity (VirtualAssets do not exist in PlaylogEvent or the playout stream)
-- A Producer (VirtualAssets expand to physical Assets which then feed standard Producers)
+- A Producer (VirtualAssets expand to physical Assets which are then rendered by the per-channel playout engine)
 
 **Examples:**
 
 - **"Movie of the Day"** — A VirtualAsset that selects one movie from a pool of eligible films each day, dynamically resolving to a specific movie asset when the Playlist is generated
 - **"Cartoon Marathon"** — A VirtualAsset that selects multiple cartoon episodes from a collection, creating a themed block that varies each time it's scheduled
 
-**Critical Rule:** VirtualAssets exist only at **design/planning time**. They are SchedulableAssets that can be placed in Zones or referenced in Program asset chains during schedule planning. When a Playlist is generated from a ScheduleDay, VirtualAssets expand into one or more physical Assets (files) which then feed the appropriate Producer (usually AssetProducer). There is no "VirtualProducer" — Producers are output-oriented runtime components that operate on physical Assets.
+**Critical Rule:** VirtualAssets exist only at **design/planning time**. They are SchedulableAssets that can be placed in Zones or referenced in Program asset chains during schedule planning. When a Playlist is generated from a ScheduleDay, VirtualAssets expand into one or more physical Assets (files) which are then rendered by the per-channel playout engine. There is no "VirtualProducer" — VirtualAssets expand to physical Assets which are rendered by the per-channel playout engine.
 
 **Key Characteristics:**
 
@@ -63,8 +63,8 @@ VirtualAsset is a **SchedulableAsset** subclass that enables:
 - VirtualAsset exists only at **design/planning time** — not in PlaylogEvent or the playout stream
 - VirtualAssets can be placed directly in Zones or referenced in Program asset chains during schedule planning
 - At **playlist generation**, VirtualAssets expand into one or more physical Assets (files)
-- Expanded physical Assets feed appropriate Producers (usually AssetProducer)
-- There is no "VirtualProducer" — Producers are output-oriented runtime components that operate on physical Assets
+- Expanded physical Assets are rendered by the per-channel playout engine
+- There is no "VirtualProducer" — VirtualAssets expand to physical Assets which are rendered by the per-channel playout engine
 
 ## Types of VirtualAssets
 
@@ -151,9 +151,8 @@ When [Playlist](../architecture/Playlist.md) is generated from ScheduleDay:
    - **Fixed sequences**: Expand to the predetermined ordered list of Asset UUIDs
    - **Rule-based definitions**: Evaluate rules against the current asset catalog and expand to selected Asset UUIDs
 2. **Physical Asset Resolution**: Expanded physical Assets are included in the Playlist with absolute timecodes
-3. **Producer Assignment**: Physical Assets feed appropriate Producers (usually AssetProducer)
-   - There is no "VirtualProducer" — Producers are output-oriented runtime components
-   - VirtualAssets expand to physical Assets which then render through standard Producers
+3. **Rendering**: Physical Assets are rendered by the per-channel playout engine
+   - There is no "VirtualProducer" — VirtualAssets expand to physical Assets which are then rendered by the per-channel playout engine
 
 **Critical Rule:** After expansion, VirtualAssets no longer exist. Only the concrete physical Assets remain in the Playlist and subsequent runtime layers (PlaylogEvent, playout stream).
 
@@ -219,11 +218,11 @@ When [Playlist](../architecture/Playlist.md) is generated from ScheduleDay, **Vi
 - Only the concrete physical Assets that resulted from VirtualAsset expansion are present in runtime layers
 - VirtualAssets exist only at design/planning time, not in the runtime layer
 
-**Producer Assignment:**
+**Rendering:**
 
-- Physical Assets from VirtualAsset expansion feed appropriate Producers (usually AssetProducer)
-- There is no "VirtualProducer" — Producers are output-oriented runtime components
-- VirtualAssets expand to physical Assets which then render through standard Producers
+- VirtualAssets are rendered by the per-channel playout engine
+- Physical Assets from VirtualAsset expansion are rendered by the per-channel playout engine
+- There is no "VirtualProducer" — VirtualAssets expand to physical Assets which are then rendered by the per-channel playout engine
 
 See [Playlist](../architecture/Playlist.md) for details on how playlists are generated and how VirtualAsset expansion fits into the playout process.
 
@@ -381,7 +380,7 @@ When the [Playlist](../architecture/Playlist.md) is generated from ScheduleDay, 
 - **Episode**: `asset-uuid-2` (Cheers S01E05, selected based on episode policy for this date)
 - **Bumper**: `asset-uuid-3` (station-bumper.mp4) — always the same
 
-The expanded assets are stored in the Playlist with absolute timecodes. Physical Assets feed AssetProducer for playout.
+The expanded assets are stored in the Playlist with absolute timecodes. Physical Assets are rendered by the per-channel playout engine.
 
 **Key Point:** The VirtualAsset expands to physical Assets at playlist generation. Only the concrete Asset references remain in the Playlist.
 
@@ -604,4 +603,4 @@ VirtualAssets are not part of the initial MVP release. The following are deferre
 - [PlaylogEvent](PlaylogEvent.md) - Runtime execution plan aligned to MasterClock (derived from Playlist containing resolved assets from VirtualAssets)
 - [Scheduling](Scheduling.md) - High-level scheduling system
 
-**Note:** VirtualAsset is a future feature that enables packaging and re-use of modular asset bundles. A VirtualAsset is a **SchedulableAsset** subclass that acts as a template or composite wrapper referencing other assets, but is not itself a file. VirtualAssets are reusable containers of asset references and logic (e.g., "Movie of the Day" or "Cartoon Marathon") that can be reused across multiple schedule plans. VirtualAssets support playout hints like shuffle, sequential, and conditional inserts (e.g., rating slates). **VirtualAssets exist only at design/planning time** — they are used during schedule planning and expand to actual physical Assets when Playlists are generated from ScheduleDays. After expansion, only the concrete Asset references remain in Playlists and PlaylogEvent records. VirtualAssets do not exist in the runtime layer (PlaylogEvent or playout stream).
+**Note:** VirtualAsset is a future feature that enables packaging and re-use of modular asset bundles. A VirtualAsset is a **SchedulableAsset** subclass that acts as a template or composite wrapper referencing other assets, but is not itself a file. VirtualAssets are reusable containers of asset references and logic (e.g., "Movie of the Day" or "Cartoon Marathon") that can be reused across multiple schedule plans. VirtualAssets support playout hints like shuffle, sequential, and conditional inserts (e.g., rating slates). **VirtualAssets exist only at design/planning time** — they are used during schedule planning and expand to actual physical Assets when Playlists are generated from ScheduleDays. After expansion, only the concrete Asset references remain in Playlists and PlaylogEvent records. VirtualAssets are rendered by the per-channel playout engine. VirtualAssets do not exist in the runtime layer (PlaylogEvent or playout stream).

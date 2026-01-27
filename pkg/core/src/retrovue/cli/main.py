@@ -22,8 +22,10 @@ from .commands import (
     collection,
     enricher,
     producer,
+    program_director,
     runtime,
     source,
+    zone,
 )
 from .router import get_router
 
@@ -85,8 +87,22 @@ router.register(
 router.register(
     "channel-manager",
     channel_manager.app,
-    help_text="Channel Manager daemon operations",
+    help_text="RetroVue Core runtime operations (internal)",
     doc_path="channel-manager.md",
+)
+
+router.register(
+    "program-director",
+    program_director.app,
+    help_text="Program Director operations (control plane)",
+    doc_path="program-director.md",
+)
+
+router.register(
+    "zone",
+    zone.app,
+    help_text="Zone (daypart) management operations",
+    doc_path="zone.md",
 )
 
 

@@ -6,7 +6,7 @@ _Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [Pla
 
 ## Purpose
 
-Define the responsibilities, interfaces, and timing guarantees of the MasterClock service that coordinates playout timing across `retrovue-air`.
+Define the responsibilities, interfaces, and timing guarantees of the MasterClock. **MasterClock lives in the Python runtime**; Air consumes it for alignment and enforces deadlines (e.g. hard_stop_time_ms) but does not compute schedule time.
 
 ## Role in runtime
 

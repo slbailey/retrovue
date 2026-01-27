@@ -48,13 +48,12 @@ retrovue source add --type <type> --name <name> [options] [--discover] [--test-d
 
 ### Validation Requirements
 
-- Source type must be valid and correspond to a discovered importer
-- Importer must be interface compliant (ImporterInterface). Implementations that subclass BaseImporter are considered compliant by construction. Non-compliant importers MUST cause the command to fail with exit code 1.
-- Required parameters must be provided for each source type according to importer's configuration schema
-- Configuration must be validated against importer's `get_config_schema()` method
+- Source type must be valid and supported by the system
+- Required parameters must be provided for each source type
+- Configuration must be valid for the specified source type
 - External ID must be unique (format: "type-hash")
 - Configuration must be valid before database operations
-- `--discover` option only applies to sources with discoverable collections (as declared by the importer)
+- `--discover` option only applies to sources that support collection discovery
 
 ### Dry-run Behavior
 
@@ -210,9 +209,9 @@ Use 'retrovue collection update <name> --sync-enable' to enable collections for 
 - **B-7:** The `--discover` flag MUST trigger immediate collection discovery if (and only if) the importer for this source type declares that it supports discovery. If discovery is not supported, the flag MUST be ignored with a warning, not treated as an error.
 - **B-8:** When `--discover` is provided with `--json`, output MUST include `"collections_discovered"` and `"collections"` fields.
 - **B-9:** Collection discovery MUST NOT occur unless `--discover` is explicitly provided.
-- **B-10:** Source type MUST correspond to a discovered importer that implements `ImporterInterface`.
-- **B-11:** Configuration parameters MUST be validated against importer's `get_config_schema()` method.
-- **B-12:** Interface compliance MUST be verified before source creation.
+- **B-10:** Source type MUST be valid and supported by the system.
+- **B-11:** Configuration MUST be valid for the specified source type. Invalid configuration MUST cause exit code 1 with descriptive error.
+- **B-12:** All validation MUST complete before source creation.
 
 ---
 
@@ -227,8 +226,8 @@ Use 'retrovue collection update <name> --sync-enable' to enable collections for 
 - **D-7:** Source configuration MUST be validated before database persistence.
 - **D-8:** Enricher validation MUST occur before source creation.
 - **D-9:** Collection discovery MUST NOT occur unless `--discover` is explicitly provided.
-- **D-10:** Importer interface compliance MUST be verified before source creation.
-- **D-11:** Configuration schema validation MUST be performed using importer's `get_config_schema()` method.
+- **D-10:** Source type validity MUST be verified before source creation.
+- **D-11:** Configuration validity MUST be verified before source creation.
 - **D-12:** When `--test-db` is provided, ALL database operations MUST be isolated to a test environment and MUST NOT affect production data.
 - **D-13:** Test database isolation MUST be enforced at the transaction level, ensuring no cross-contamination with production systems.
 
@@ -248,8 +247,8 @@ Use 'retrovue collection update <name> --sync-enable' to enable collections for 
 - Invalid source type: "Unknown source type 'invalid'. Available types: plex, filesystem"
 - Missing required parameters: "Error: --base-url is required for Plex sources"
 - Invalid configuration: "Error: Path does not exist: /invalid/path"
-- Interface violation: "Error: Importer 'plex' does not implement ImporterInterface"
-- Configuration schema error: "Error: Invalid configuration schema for importer 'plex'"
+- Type unsupported: "Error: Source type 'X' is not supported"
+- Configuration error: "Error: Invalid configuration for source type 'plex'"
 
 ### Database Errors
 

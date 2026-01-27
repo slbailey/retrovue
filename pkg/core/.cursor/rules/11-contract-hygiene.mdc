@@ -1,0 +1,46 @@
+---
+alwaysApply: false
+match:
+  - "docs/**/contracts/**/*.md"
+  - "docs/**/contracts/**"
+---
+
+# Contract Hygiene Rules
+
+When authoring or reviewing contract documents, apply the **"what not how"** principle.
+
+## The Rewrite Test
+
+> Could someone rewrite the implementation from scratch, using only this contract, and pass all contract tests?
+
+If no → the contract leaks implementation details.
+
+## Contracts SHOULD specify
+
+- Exit codes and error messages
+- JSON response structure and field semantics
+- Observable side effects (rows created, state changes)
+- Timing guarantees (if any)
+- Atomicity/idempotency guarantees
+- Forbidden behaviors
+
+## Contracts MUST NOT specify
+
+- Internal method/function names (e.g., "MUST call `get_config_schema()`")
+- Internal class/interface names (e.g., "implements `ImporterInterface`")
+- Implementation code snippets
+- IPC mechanisms (stdin, sockets, PIDs)
+- Internal state tracking details
+- Specific CLI flags for internal tool invocations
+
+## Before finalizing a contract
+
+- [ ] All B-# rules describe externally observable outcomes
+- [ ] All D-# rules describe what persists, not how
+- [ ] No internal names in normative rules
+- [ ] No code snippets (move to architecture docs)
+- [ ] Every rule is testable without inspecting internal state
+
+## Reference
+
+Full checklist: `docs/standards/contract-hygiene.md`

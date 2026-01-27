@@ -2,7 +2,9 @@
 
 ## Purpose
 
-Define the behavioral contract for the ChannelManager daemon process (Phase 8). ChannelManager is a long-running system-wide daemon that manages ALL channels. It operates a single HTTP server serving channel discovery and MPEG-TS streams, manages client connections, selects active schedule items, and launches Retrovue Air processes on-demand.
+Define the observable guarantees for the RetroVue Core runtime (channel manager) — a long-running process that serves MPEG-TS streams for all channels via HTTP. This contract specifies **what** the runtime guarantees, not how it is implemented internally.
+
+**Process hierarchy:** ProgramDirector spawns a ChannelManager when one doesn't exist for the user's requested channel. ChannelManager **spawns Air** (playout engine) to play video. ChannelManager must **not** spawn ProgramDirector or the main retrovue process.
 
 ---
 
@@ -18,45 +20,25 @@ retrovue channel-manager start \
 
 ### Parameters
 
-- `--schedule-dir` (optional, default: `/var/retrovue/schedules`): Directory containing per-channel `schedule.json` files. Each channel has one file: `{channel_id}.json`.
-- `--port` (optional, default: `9000`): HTTP server port for serving `/channellist.m3u` and `/channel/<id>.ts` endpoints.
+- `--schedule-dir` (optional, default: `/var/retrovue/schedules`): Directory containing per-channel `schedule.json` files.
+- `--port` (optional, default: `9000`): HTTP server port.
 - `--host` (optional, default: `0.0.0.0`): HTTP server bind address.
-- `--json` (optional): Output startup status in JSON format (daemon continues running after startup).
+- `--json` (optional): Output startup status in JSON format.
 
 ---
 
-## Safety Expectations
+## Exit Codes
 
-### Daemon Process Model
-
-- ChannelManager runs as a persistent daemon process that never terminates automatically.
-- Server MUST remain running even if individual channels have errors (missing schedules, no active items, etc.).
-- ChannelManager exits ONLY on:
-  - Fatal startup errors (cannot bind to port, invalid configuration)
-  - External shutdown (SIGTERM, SIGINT, system-initiated termination)
-
-### Process Isolation
-
-- Air processes are spawned as child processes by ChannelManager.
-- Air processes are mocked in tests (NOT launched in test environment).
-- Each channel has at most one running Air instance at any time.
-
-### Error Handling
-
-- Per-channel errors (missing schedule, no active item, invalid asset) do NOT cause daemon exit.
-- ChannelManager logs errors per channel and continues serving other channels.
-- Missing or malformed `schedule.json` for a channel is logged but does not prevent other channels from operating.
-
-### Test Database Behavior
-
-- `--test-db` flag not applicable (ChannelManager is a runtime daemon, not a database operation).
-- Tests MUST use isolated test schedule directories and mock Air processes.
+| Code | Meaning |
+|------|---------|
+| `0` | Started successfully (daemon continues running) |
+| `1` | Fatal startup error (port unavailable, invalid config) |
 
 ---
 
-## Output Format
+## Startup Output
 
-### Startup (Human-Readable)
+### Human-Readable
 
 ```
 ChannelManager started:
@@ -68,7 +50,7 @@ ChannelManager started:
     - retro2
 ```
 
-### Startup (JSON)
+### JSON
 
 ```json
 {
@@ -81,123 +63,18 @@ ChannelManager started:
 }
 ```
 
-### Runtime
-
-ChannelManager runs indefinitely. Logs are emitted to stdout/stderr for:
-- Channel state changes (Air launch/termination)
-- Schedule loading errors (per channel)
-- Active item selection errors (per channel)
-- Air process errors (per channel)
-
 ---
 
-## Exit Codes
-
-- `0`: ChannelManager started successfully (daemon continues running).
-- `1`: Fatal startup error (cannot bind to port, invalid configuration, missing schedule directory).
-
----
-
-## Behavior Contract Rules (B-#)
-
-### HTTP Server (B-1 to B-4)
-
-- **B-1:** ChannelManager MUST operate exactly one HTTP server serving ALL channels (no per-channel servers).
-- **B-2:** ChannelManager MUST serve `/channellist.m3u` for channel discovery (M3U playlist format).
-- **B-3:** ChannelManager MUST serve `/channel/<id>.ts` endpoints for MPEG-TS streams (one endpoint per channel).
-- **B-4:** HTTP server MUST bind to the specified `--host` and `--port` (default: `0.0.0.0:9000`).
-
-### Schedule Loading (B-5 to B-9)
-
-- **B-5:** ChannelManager MUST load `schedule.json` files from `--schedule-dir` (one file per channel: `{channel_id}.json`).
-- **B-6:** Schedule files MUST be valid JSON with `channel_id` and `schedule` array.
-- **B-7:** Missing `schedule.json` for a channel MUST be logged as error per channel (daemon continues, channel unavailable).
-- **B-8:** Malformed `schedule.json` for a channel MUST be logged as error per channel (daemon continues, channel unavailable).
-- **B-9:** Schedule loading errors MUST NOT cause daemon exit (other channels continue operating).
-
-### Active Item Selection (B-10 to B-14)
-
-- **B-10:** ChannelManager MUST select active ScheduleItem based on current UTC time: `start_time_utc ≤ now < start_time_utc + duration_seconds`.
-- **B-11:** If multiple items are active (overlapping), ChannelManager MUST select the one with earliest `start_time_utc`.
-- **B-12:** If no item is active (schedule gap), ChannelManager MUST log error per channel and NOT launch Air.
-- **B-13:** Active item selection occurs ONLY when launching Air (when `client_count` transitions 0 → 1).
-- **B-14:** Once Air is running, ChannelManager does NOT change content for that channel until Phase 9.
-
-### Client Connection Tracking (B-15 to B-19)
-
-- **B-15:** Each ChannelController MUST track `client_count` (refcount) for its channel (increment on connect, decrement on disconnect).
-- **B-16:** When `client_count` transitions 0 → 1, ChannelController MUST launch Air and send PlayoutRequest.
-- **B-17:** When `client_count` drops to 0, ChannelController MUST terminate Air immediately.
-- **B-18:** Multiple clients connecting to same channel MUST share one Air instance (`client_count` tracks total connections).
-- **B-19:** Each channel MUST have at most one running Air instance at any time.
-
-### PlayoutRequest Generation (B-20 to B-25)
-
-- **B-20:** ChannelManager MUST map ScheduleItem → PlayoutRequest correctly:
-  - `asset_path` → `asset_path` (direct copy)
-  - `start_pts` = `0` (always in Phase 8)
-  - `mode` = `"LIVE"` (always in Phase 8, uppercase)
-  - `channel_id` → `channel_id` (direct copy)
-  - `metadata` → `metadata` (unchanged, opaque passthrough)
-- **B-21:** PlayoutRequest MUST be sent to Air via stdin as JSON-encoded data.
-- **B-22:** ChannelManager MUST close stdin immediately after writing complete PlayoutRequest JSON.
-- **B-23:** ChannelManager MUST validate `asset_path` exists before launching Air (hard error if missing).
-- **B-24:** Required ScheduleItem fields MUST be validated: `id`, `channel_id`, `program_type`, `title`, `asset_path`, `start_time_utc`, `duration_seconds`.
-- **B-25:** Missing required fields MUST cause error per channel (Air not launched, daemon continues).
-
-### Air Process Management (B-26 to B-30)
-
-- **B-26:** ChannelManager MUST launch Air as child process with CLI flags: `--channel-id <id> --mode live --request-json-stdin`.
-- **B-27:** ChannelManager MUST track Air PID per channel while Air is running.
-- **B-28:** ChannelManager MUST terminate Air when `client_count` drops to 0 (dispose of on-demand process).
-- **B-29:** ChannelManager MUST NOT launch Air if no active ScheduleItem (per B-12).
-- **B-30:** ChannelManager MUST NOT launch Air if `asset_path` does not exist (per B-23).
-
-### Error Handling (B-31 to B-35)
-
-- **B-31:** Missing `schedule.json` for a channel MUST be logged and channel marked unavailable (HTTP 503 or 404 for that channel).
-- **B-32:** Malformed `schedule.json` for a channel MUST be logged and channel marked unavailable (HTTP 500 for that channel).
-- **B-33:** No active ScheduleItem (schedule gap) MUST be logged per channel and NOT launch Air (HTTP 503 for that channel).
-- **B-34:** Invalid `asset_path` MUST be logged per channel and NOT launch Air (HTTP 500 for that channel).
-- **B-35:** Per-channel errors MUST NOT cause daemon exit (daemon continues serving other channels).
-
-### Daemon Lifecycle (B-36 to B-38)
-
-- **B-36:** ChannelManager MUST run indefinitely (never terminates automatically).
-- **B-37:** ChannelManager MUST exit only on fatal startup errors (cannot bind to port) or external shutdown.
-- **B-38:** ChannelManager MUST handle SIGTERM/SIGINT gracefully (terminate all Air processes, close HTTP server, exit cleanly).
-
----
-
-## Data Contract Rules (D-#)
-
-### Schedule Data (D-1 to D-5)
-
-- **D-1:** Schedule files MUST be valid JSON with structure: `{"channel_id": "<id>", "schedule": [ScheduleItem, ...]}`.
-- **D-2:** ScheduleItem fields MUST match ScheduleItem domain model (see [ScheduleItem](../../domain/ScheduleItem.md)).
-- **D-3:** All times MUST be UTC (ISO 8601 with Z suffix).
-- **D-4:** Schedule files MUST NOT be modified by ChannelManager (read-only).
-- **D-5:** Schedule validation MUST occur on load (invalid schedules prevent channel operation, but daemon continues).
-
-### Process State (D-6 to D-10)
-
-- **D-6:** ChannelManager MUST track Air PID per channel while Air is running.
-- **D-7:** ChannelManager MUST maintain `client_count` per channel (in-memory state, not persisted).
-- **D-8:** ChannelManager MUST maintain ChannelRegistry mapping channel IDs to ChannelController instances.
-- **D-9:** Air process state (PID, launch time) MUST be tracked per channel (in-memory state, not persisted).
-- **D-10:** No persistent state changes occur (ChannelManager is a runtime daemon, not a database operation).
-
----
-
-## HTTP Endpoints
+## HTTP API Contract
 
 ### GET /channellist.m3u
 
 **Purpose:** Channel discovery playlist.
 
 **Response:**
+- Status: `200 OK`
 - Content-Type: `application/vnd.apple.mpegurl`
-- Body: M3U playlist containing all available channels.
+- Body: M3U playlist listing all available channels
 
 **Example:**
 ```
@@ -208,102 +85,246 @@ http://localhost:9000/channel/retro1.ts
 http://localhost:9000/channel/retro2.ts
 ```
 
-**Error Handling:**
-- Returns 200 with available channels only (missing/malformed schedules excluded from playlist).
-
-### GET /channel/<id>.ts
-
-**Purpose:** MPEG-TS transport stream for a channel.
-
-**Response:**
-- Content-Type: `video/mp2t` or `application/vnd.apple.mpegurl`
-- Body: MPEG-TS stream (piped from Air process).
-
 **Behavior:**
-1. Client connects → `client_count++` for that channel.
-2. If `client_count` transitions 0 → 1:
-   - Select active ScheduleItem.
-   - Launch Air process.
-   - Send PlayoutRequest via stdin.
-3. Serve MPEG-TS stream from Air → client.
-4. When client disconnects → `client_count--`.
-5. If `client_count` drops to 0 → terminate Air.
-
-**Error Handling:**
-- 404: Channel not found (no schedule.json).
-- 500: Schedule error (malformed JSON, missing active item, invalid asset).
-- 503: Channel unavailable (no active schedule item, schedule gap).
+- Only channels with valid schedules are listed
+- Channels with errors are excluded (no partial entries)
 
 ---
 
-## Test Coverage Mapping
+### GET /channel/{id}.ts
 
-Planned tests:
+**Purpose:** MPEG-TS video stream for a channel.
 
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_help_flag_exits_zero`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_channellist_m3u_endpoint`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_channel_ts_endpoint_exists`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_client_refcount_spawns_air`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_client_refcount_kills_air`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_active_item_selection`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_overlapping_items_selects_earliest`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_playout_request_mapping`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_playout_request_sent_via_stdin`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_air_lifecycle_single_instance`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_missing_schedule_json_error`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_malformed_schedule_json_error`
-- `tests/contracts/test_channel_manager_contract.py::test_channel_manager_no_active_item_error`
+**Response (success):**
+- Status: `200 OK`
+- Content-Type: `video/mp2t`
+- Body: Continuous MPEG-TS stream
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `404` | Channel not found (no schedule file) |
+| `500` | Schedule error (malformed JSON, invalid asset) |
+| `503` | No active schedule item (schedule gap) |
 
 ---
 
-## Error Conditions
+## Behavioral Guarantees
 
-### Fatal Startup Errors (Exit Code 1)
+### CM-010: Single Server
 
-- **Port already in use:** "Error: Port 9000 is already in use."
-- **Cannot bind to host/port:** "Error: Cannot bind to 0.0.0.0:9000."
-- **Invalid schedule directory:** "Error: Schedule directory does not exist: <path>."
-- **Invalid port number:** "Error: Invalid port number: <port>."
+**Guarantee:** One HTTP server serves all channels.
+
+**Observable behavior:**
+- All channel endpoints share the same host:port
+- `/channellist.m3u` lists all channels from one server
+
+---
+
+### CM-020: On-Demand Playout
+
+**Guarantee:** Playout only runs when viewers are connected.
+
+**Observable behavior:**
+- First viewer connection to a channel starts playout
+- Last viewer disconnection stops playout
+- No playout resources consumed when no viewers connected
+
+**Verification:** Connect to channel, observe stream; disconnect all clients, observe playout stops.
+
+---
+
+### CM-021: Shared Playout
+
+**Guarantee:** Multiple viewers on the same channel share one playout instance.
+
+**Observable behavior:**
+- All viewers see the same stream (synchronized)
+- Adding viewers does not restart playout
+- Playout continues as long as at least one viewer is connected
+
+---
+
+### CM-030: Schedule-Based Content Selection
+
+**Guarantee:** Active content is determined by schedule and current time.
+
+**Observable behavior:**
+- Content matches the ScheduleItem where `start_time_utc ≤ now < start_time_utc + duration_seconds`
+- If multiple items overlap, earliest start time wins
+- If no item is active, channel returns HTTP 503
+
+**Verification:** Set up schedule with known times; connect at different times; observe correct content.
+
+---
+
+### CM-031: Asset Validation
+
+**Guarantee:** Invalid assets are detected before playout starts.
+
+**Observable behavior:**
+- Missing asset file → HTTP 500, playout does not start
+- Error message identifies the missing asset
+- Other channels are unaffected
+
+---
+
+### CM-040: Channel Isolation
+
+**Guarantee:** Per-channel errors do not affect other channels.
+
+**Observable behavior:**
+- Missing schedule for channel A → channel A returns 404
+- Channel B with valid schedule continues working
+- Runtime does not exit due to per-channel errors
+
+---
+
+### CM-041: Daemon Resilience
+
+**Guarantee:** Runtime runs continuously until explicitly stopped.
+
+**Observable behavior:**
+- Runtime does not exit on per-channel errors
+- Runtime exits only on fatal startup errors or SIGTERM/SIGINT
+- Graceful shutdown terminates all playout and closes connections
+
+---
+
+### CM-042: Spawn Hierarchy
+
+**Guarantee:** ProgramDirector spawns a ChannelManager when one doesn't exist for the requested channel. ChannelManager **spawns Air** (playout engine) to play video. ChannelManager must **not** spawn ProgramDirector or the main retrovue process.
+
+**Observable behavior:**
+- ChannelManager spawns and terminates Air processes for its channel(s); it owns Air lifecycle
+- ChannelManager does not spawn ProgramDirector or the main `retrovue` process
+
+---
+
+## Schedule File Format
+
+### CM-050: Schedule File Structure
+
+**File location:** `{schedule_dir}/{channel_id}.json`
+
+**Required structure:**
+```json
+{
+  "channel_id": "retro1",
+  "schedule": [
+    {
+      "id": "item-1",
+      "channel_id": "retro1",
+      "program_type": "movie",
+      "title": "Example Movie",
+      "asset_path": "/media/movies/example.mp4",
+      "start_time_utc": "2025-01-01T00:00:00Z",
+      "duration_seconds": 7200,
+      "metadata": {}
+    }
+  ]
+}
+```
+
+**Required ScheduleItem fields:**
+- `id` — unique identifier
+- `channel_id` — must match file's channel
+- `program_type` — content type
+- `title` — display name
+- `asset_path` — path to media file
+- `start_time_utc` — ISO 8601 UTC timestamp
+- `duration_seconds` — length in seconds
+
+---
+
+### CM-051: Schedule Validation
+
+**Guarantee:** Schedules are validated on load.
+
+**Observable behavior:**
+- Missing required fields → channel returns HTTP 500
+- Invalid JSON → channel returns HTTP 500
+- Error message identifies the validation failure
+- Daemon continues running; only affected channel is unavailable
+
+---
+
+## Error Messages
+
+### Fatal Startup Errors (Exit 1)
+
+| Condition | Message |
+|-----------|---------|
+| Port in use | "Error: Port 9000 is already in use." |
+| Cannot bind | "Error: Cannot bind to 0.0.0.0:9000." |
+| Missing schedule dir | "Error: Schedule directory does not exist: {path}" |
+| Invalid port | "Error: Invalid port number: {port}" |
 
 ### Per-Channel Errors (Daemon Continues)
 
-- **Missing schedule.json:** Log: "Error: Schedule file not found for channel <id>: <path>", HTTP 404 for that channel.
-- **Malformed schedule.json:** Log: "Error: Invalid JSON in schedule file for channel <id>: <path>", HTTP 500 for that channel.
-- **No active ScheduleItem:** Log: "Error: No active schedule item for channel <id>", HTTP 503 for that channel.
-- **Invalid asset_path:** Log: "Error: Asset path does not exist for channel <id>: <path>", HTTP 500 for that channel.
-- **Missing required fields:** Log: "Error: Missing required field in schedule for channel <id>: <field>", HTTP 500 for that channel.
+| Condition | Log Message | HTTP Status |
+|-----------|-------------|-------------|
+| Missing schedule file | "Schedule file not found for channel {id}" | 404 |
+| Malformed JSON | "Invalid JSON in schedule file for channel {id}" | 500 |
+| No active item | "No active schedule item for channel {id}" | 503 |
+| Missing asset | "Asset path does not exist for channel {id}: {path}" | 500 |
+| Missing field | "Missing required field in schedule for channel {id}: {field}" | 500 |
 
 ---
 
-## Phase 8 Limitations
+## Phase 8 Scope
 
-**NOTE: Phase 8 implements a simplified one-file playout pipeline for testing. Future phases add PREVIEW/LIVE buffers, continuous playout, signaling, and scheduling logic.**
+This contract covers Phase 8 (simplified playout). Future phases will add:
 
-### What Phase 8 Does
+- Preview/live switching
+- Bidirectional communication with playout engine
+- Schedule change detection
+- Continuous 24/7 operation
+- Multi-asset sequencing
 
-- Operates one HTTP server serving all channels.
-- Tracks client connections per channel (refcount).
-- Loads schedule.json files per channel.
-- Selects active ScheduleItem based on current time.
-- Launches Air on-demand (when `client_count` > 0).
-- Terminates Air when unused (`client_count` = 0).
-- Maps ScheduleItem → PlayoutRequest correctly.
+### Phase 8 Limitations
 
-### What Phase 8 Does NOT Do
+- Content selection occurs only when viewer connects (not continuously)
+- No mid-stream content changes
+- No communication back from playout engine
+- Each schedule item is independent (no sequencing)
 
-- **No preview/live switching:** Air's preview/live architecture exists but is not actively used (simplified for testing).
-- **No communication back from Air:** ChannelManager does NOT receive events from Air (no "preview is ready", "asset taken live", "asset finished").
-- **No schedule change handling:** Schedule changes do NOT trigger Air restarts (changes only take effect on next Air launch).
-- **No continuous playout:** Each ScheduleItem is independent; no sequencing across items.
-- **No 24×7 operation:** Air runs only when clients are connected (disposable, on-demand).
+---
+
+## Behavioral Rules Summary
+
+| Rule | Guarantee |
+|------|-----------|
+| CM-010 | Single HTTP server for all channels |
+| CM-020 | On-demand playout (starts with first viewer) |
+| CM-021 | Shared playout for multiple viewers |
+| CM-030 | Schedule-based content selection |
+| CM-031 | Asset validation before playout |
+| CM-040 | Channel isolation (errors don't spread) |
+| CM-041 | Daemon resilience (runs until stopped) |
+| CM-050 | Schedule file structure |
+| CM-051 | Schedule validation on load |
+
+---
+
+## Test Coverage
+
+| Rule | Test |
+|------|------|
+| CM-010 | `test_channel_manager_single_server` |
+| CM-020, CM-021 | `test_channel_manager_viewer_lifecycle` |
+| CM-030 | `test_channel_manager_schedule_selection` |
+| CM-031 | `test_channel_manager_asset_validation` |
+| CM-040 | `test_channel_manager_channel_isolation` |
+| CM-041 | `test_channel_manager_daemon_resilience` |
+| CM-050, CM-051 | `test_channel_manager_schedule_format` |
 
 ---
 
 ## See Also
 
-- [ChannelManager Domain](../../domain/ChannelManager.md) - Core domain model and architecture
-- [ScheduleItem Domain](../../domain/ScheduleItem.md) - Schedule item data model
-- [PlayoutRequest Domain](../../domain/PlayoutRequest.md) - Playout request format
-- [Channel Domain](../../domain/Channel.md) - Channel configuration
-- [MasterClock Domain](../../domain/MasterClock.md) - Time source for schedule selection
-- [CLI Contract](README.md) - General CLI command standards
+- [ScheduleItem Domain](../../domain/ScheduleItem.md) — schedule item data model
+- [Channel Domain](../../domain/Channel.md) — channel configuration
+- [MasterClock Domain](../../domain/MasterClock.md) — time source
+- [Contract Hygiene Checklist](../../../standards/contract-hygiene.md) — authoring guidelines

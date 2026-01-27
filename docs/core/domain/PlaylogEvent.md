@@ -6,7 +6,7 @@ _Related: [Architecture](../architecture/ArchitectureOverview.md) • [Runtime](
 
 ## Purpose
 
-PlaylogEvent is the **"Runtime" layer representation** that records the actual playback of an asset during a broadcast. It represents the runtime execution plan aligned to the MasterClock, providing the definitive "what should play now" instructions for the playout system.
+PlaylogEvent is the **"Runtime" layer representation** that records the actual playback of an asset during a broadcast. Events are emitted when the per-channel playout engine begins playback. It represents the runtime execution plan aligned to the MasterClock, providing the definitive "what should play now" instructions for the playout system.
 
 **What PlaylogEvent is:**
 

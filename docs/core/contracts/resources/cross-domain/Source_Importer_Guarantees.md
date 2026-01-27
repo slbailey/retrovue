@@ -34,7 +34,7 @@ This flow ensures that source operations maintain consistency with importer capa
 
 ### Importer Domain
 
-- **Contract:** `docs/domain/Importer.md` (ImporterInterface protocol)
+- **Contract:** `docs/domain/Importer.md`
 - **Interface:** Content discovery, validation, and retrieval capabilities
 - **Responsibilities:** Importer registry, interface compliance, content enumeration
 
@@ -51,24 +51,24 @@ This flow ensures that source operations maintain consistency with importer capa
 - Importer registry validation MUST occur before any database operations
 - CLI MUST emit clear error message: "Error: Unknown source type '{type}'. Available types: {list}"
 
-### G-2: Importer Interface Compliance
+### G-2: Source Type Compliance
 
-**All importers MUST implement the ImporterInterface protocol correctly.**
+**All source types MUST be valid and supported by the system.**
 
-- Source operations MUST verify importer interface compliance before proceeding
-- Non-compliant importers MUST cause operations to fail with exit code 1
-- Interface compliance MUST be verified at CLI time, not registry time
-- CLI MUST emit clear error message: "Error: Importer '{type}' does not implement ImporterInterface"
+- Source operations MUST verify source type is supported before proceeding
+- Unsupported source types MUST cause operations to fail with exit code 1
+- Source type validation MUST occur before any database operations
+- CLI MUST emit clear error message: "Error: Source type '{type}' is not supported"
 - Every imported entity must include a deterministic, one-to-one reference to its originating Source ID. The mapping must be immutable and verifiable through the import metadata model
 
 ### G-3: Configuration Schema Validation
 
-**Source configuration MUST be validated against importer's configuration schema.**
+**Source configuration MUST be validated against the source type's configuration schema.**
 
-- Source configuration MUST be validated using importer's `get_config_schema()` method
+- Source configuration MUST be valid for the specified source type
 - Invalid configuration MUST cause source creation to fail with exit code 1
 - Configuration validation MUST occur before database persistence
-- CLI MUST emit clear error message: "Error: Invalid configuration schema for importer '{type}'"
+- CLI MUST emit clear error message: "Error: Invalid configuration for source type '{type}'"
 
 ### G-4: Importer Capability Validation
 
@@ -119,10 +119,10 @@ This flow ensures that source operations maintain consistency with importer capa
 
 ### Error Message Standards
 
-- **Registry Errors**: "Error: Unknown source type '{type}'. Available types: {list}"
-- **Interface Errors**: "Error: Importer '{type}' does not implement ImporterInterface"
-- **Configuration Errors**: "Error: Invalid configuration schema for importer '{type}'"
-- **Capability Errors**: "Error: Importer '{type}' does not support {capability}"
+- **Type Errors**: "Error: Unknown source type '{type}'. Available types: {list}"
+- **Support Errors**: "Error: Source type '{type}' is not supported"
+- **Configuration Errors**: "Error: Invalid configuration for source type '{type}'"
+- **Capability Errors**: "Error: Source type '{type}' does not support {capability}"
 - **System Errors**: "Error adding source: {specific_error_message}"
 
 ---
@@ -200,24 +200,24 @@ retrovue source add --type unknown --name "My Source" \
 # Error: Unknown source type 'unknown'. Available types: plex, filesystem
 ```
 
-### Invalid Importer Interface
+### Unsupported Source Type
 
 ```bash
-# Invalid: Non-compliant importer
+# Invalid: Unsupported source type
 retrovue source add --type broken --name "My Source" \
   --base-url "http://test" --token "token"
 # Exit code: 1
-# Error: Importer 'broken' does not implement ImporterInterface
+# Error: Source type 'broken' is not supported
 ```
 
-### Invalid Configuration Schema
+### Invalid Configuration
 
 ```bash
-# Invalid: Configuration doesn't match importer schema
+# Invalid: Configuration doesn't match source type schema
 retrovue source add --type plex --name "My Plex" \
   --invalid-param "value"
 # Exit code: 1
-# Error: Invalid configuration schema for importer 'plex'
+# Error: Invalid configuration for source type 'plex'
 ```
 
 ### Unsupported Capability

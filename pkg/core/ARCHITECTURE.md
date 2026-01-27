@@ -5,6 +5,22 @@
 
 ---
 
+## Product Language
+
+**retrovue is the station. Everything else is internal.**
+
+The system process is `retrovue`. There is no public or user-visible concept of "Air", "ChannelManagerDaemon", or "Phase8ProgramDirector". These remain as internal implementation details only.
+
+- **RetroVue** is the product name
+- **retrovue** is the running process
+- **ProgramDirector** is described as "the control plane inside RetroVue"
+- **ChannelManagerDaemon** is the RetroVue Core runtime (internal)
+- **Air** is the internal playout engine (internal)
+
+The internal playout engine cannot be run independently. The RetroVue Core runtime is not a public daemon. All of these are implementation details of the RetroVue product.
+
+---
+
 ## Overview
 
 RetroVue simulates a **linear broadcast TV network** with strict architectural boundaries that enforce:

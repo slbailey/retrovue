@@ -9,9 +9,11 @@
 #include "retrovue/renderer/FrameRenderer.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/runtime/PlayoutControlStateMachine.h"
+#include "retrovue/runtime/PlayoutEngine.h"
+#include "retrovue/runtime/PlayoutController.h"
 #include "retrovue/producers/video_file/VideoFileProducer.h"
-#include "retrovue/playout.grpc.pb.h"
-#include "retrovue/playout.pb.h"
+#include "playout.grpc.pb.h"
+#include "playout.pb.h"
 #include "../../fixtures/ChannelManagerStub.h"
 #include "timing/TestMasterClock.h"
 #include <grpcpp/grpcpp.h>
@@ -344,6 +346,12 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   // Preview slot should be empty after switch
   const auto &preview_after = controller.getPreviewSlot();
   EXPECT_FALSE(preview_after.loaded) << "Preview slot should be empty after switch";
+
+  // Stop live producer before test teardown so controller destructor does not
+  // destroy a running producer (avoids race/segfault in slot cleanup).
+  if (live2.producer && live2.producer->isRunning()) {
+    live2.producer->stop();
+  }
 }
 
 // Rule: BC-006 Monotonic PTS (PlayoutEngineDomain.md §BC-006)
@@ -377,66 +385,40 @@ TEST_F(PlayoutEngineContractTest, BC_006_FramePtsRemainMonotonic)
 }
 
 // Rule: LT-005 LoadPreview Sequence (PlayoutEngineContract.md §LT-005)
-// Tests the LoadPreview gRPC RPC through the service implementation
+// Tests the LoadPreview gRPC RPC through the service implementation.
+// Uses control-surface-only engine (no media) for deterministic contract testing.
 TEST_F(PlayoutEngineContractTest, LT_005_LoadPreviewSequence)
 {
-  // Enable stub mode for testing
-  setenv("AIR_FAKE_VIDEO", "1", 1);
-  
-  // Setup: Create service with test clock and metrics
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
-  const int64_t start_time = 1'700'000'000'000'000LL;
-  clock->SetEpochUtcUs(start_time);
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);  // control_surface_only
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
 
-  // Create service implementation
-  retrovue::playout::PlayoutControlImpl service(metrics, clock);
-
-  // Setup: Start a channel first (required for LoadPreview)
+  // Start a channel first (required for LoadPreview)
   retrovue::playout::StartChannelRequest start_request;
   start_request.set_channel_id(1);
   start_request.set_plan_handle("test-plan");
   start_request.set_port(8090);
-  
   retrovue::playout::StartChannelResponse start_response;
   grpc::ServerContext start_context;
   grpc::Status start_status = service.StartChannel(&start_context, &start_request, &start_response);
-  
-  // StartChannel may fail if shadow decode isn't ready immediately
-  // In production, this would be handled by retries or waiting
-  if (!start_status.ok() || !start_response.success()) {
-    // Wait a bit and retry once
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    grpc::ServerContext retry_context;
-    grpc::Status retry_status = service.StartChannel(&retry_context, &start_request, &start_response);
-    ASSERT_TRUE(retry_status.ok()) << "StartChannel retry should succeed: " << start_status.error_message();
-    ASSERT_TRUE(start_response.success()) << "StartChannel should return success: " << start_response.message();
-  } else {
-    ASSERT_TRUE(start_status.ok()) << "StartChannel should succeed";
-    ASSERT_TRUE(start_response.success()) << "StartChannel should return success";
-  }
+  ASSERT_TRUE(start_status.ok()) << start_status.error_message();
+  ASSERT_TRUE(start_response.success()) << start_response.message();
 
-  // Wait for channel to be ready
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Execute: LoadPreview RPC
+  // Execute: LoadPreview RPC (proto: asset_path, start_offset_ms, hard_stop_time_ms)
   retrovue::playout::LoadPreviewRequest request;
   request.set_channel_id(1);
-  request.set_path("test://preview.mp4");
-  request.set_asset_id("preview-asset-123");
-
+  request.set_asset_path("test://preview.mp4");
+  request.set_start_offset_ms(0);
+  request.set_hard_stop_time_ms(0);
   retrovue::playout::LoadPreviewResponse response;
   grpc::ServerContext context;
   grpc::Status status = service.LoadPreview(&context, &request, &response);
 
-  // Assertions
   ASSERT_TRUE(status.ok()) << "LoadPreview RPC should succeed";
-  ASSERT_TRUE(response.success()) << "LoadPreview should return success=true";
-  
-  // Verify preview slot contains producer with correct asset_id
-  // (We can't directly access the state machine from service, but we can verify
-  //  the response indicates success and test via SwitchToLive that preview is loaded)
-  
+  EXPECT_TRUE(response.success()) << "LoadPreview should return success=true";
+
   // Cleanup
   retrovue::playout::StopChannelRequest stop_request;
   stop_request.set_channel_id(1);
@@ -446,89 +428,204 @@ TEST_F(PlayoutEngineContractTest, LT_005_LoadPreviewSequence)
 }
 
 // Rule: LT-006 SwitchToLive Sequence (PlayoutEngineContract.md §LT-006)
-// Tests the SwitchToLive gRPC RPC through the service implementation
+// Tests the SwitchToLive gRPC RPC through the service implementation.
+// Uses control-surface-only engine (no media) for deterministic contract testing.
 TEST_F(PlayoutEngineContractTest, LT_006_SwitchToLiveSequence)
 {
-  // Enable stub mode for testing
-  setenv("AIR_FAKE_VIDEO", "1", 1);
-  
-  // Setup: Create service with test clock and metrics
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
-  const int64_t start_time = 1'700'000'000'000'000LL;
-  clock->SetEpochUtcUs(start_time);
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);  // control_surface_only
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
 
-  // Create service implementation
-  retrovue::playout::PlayoutControlImpl service(metrics, clock);
-
-  // Setup: Start a channel first
+  // Start a channel
   retrovue::playout::StartChannelRequest start_request;
   start_request.set_channel_id(1);
   start_request.set_plan_handle("test-plan");
   start_request.set_port(8090);
-  
   retrovue::playout::StartChannelResponse start_response;
   grpc::ServerContext start_context;
   grpc::Status start_status = service.StartChannel(&start_context, &start_request, &start_response);
-  
-  // StartChannel may fail if shadow decode isn't ready immediately
-  // In production, this would be handled by retries or waiting
-  if (!start_status.ok() || !start_response.success()) {
-    // Wait a bit and retry once
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    grpc::ServerContext retry_context;
-    grpc::Status retry_status = service.StartChannel(&retry_context, &start_request, &start_response);
-    ASSERT_TRUE(retry_status.ok()) << "StartChannel retry should succeed: " << start_status.error_message();
-    ASSERT_TRUE(start_response.success()) << "StartChannel should return success: " << start_response.message();
-  } else {
-    ASSERT_TRUE(start_status.ok()) << "StartChannel should succeed";
-    ASSERT_TRUE(start_response.success()) << "StartChannel should return success";
-  }
+  ASSERT_TRUE(start_status.ok() && start_response.success());
 
-  // Wait for channel to be ready
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Setup: Load preview asset
+  // Load preview asset (proto: asset_path)
   retrovue::playout::LoadPreviewRequest load_request;
   load_request.set_channel_id(1);
-  load_request.set_path("test://preview.mp4");
-  load_request.set_asset_id("preview-asset-123");
-
+  load_request.set_asset_path("test://preview.mp4");
+  load_request.set_start_offset_ms(0);
+  load_request.set_hard_stop_time_ms(0);
   retrovue::playout::LoadPreviewResponse load_response;
   grpc::ServerContext load_context;
   grpc::Status load_status = service.LoadPreview(&load_context, &load_request, &load_response);
-  
-  ASSERT_TRUE(load_status.ok()) << "LoadPreview should succeed";
-  ASSERT_TRUE(load_response.success()) << "LoadPreview should return success";
+  ASSERT_TRUE(load_status.ok() && load_response.success());
 
-  // Wait for shadow decode to be ready
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  // Execute: SwitchToLive RPC
+  // Execute: SwitchToLive RPC (proto: channel_id only)
   retrovue::playout::SwitchToLiveRequest request;
   request.set_channel_id(1);
-  request.set_asset_id("preview-asset-123");
-
   retrovue::playout::SwitchToLiveResponse response;
   grpc::ServerContext context;
   grpc::Status status = service.SwitchToLive(&context, &request, &response);
 
-  // Assertions
   ASSERT_TRUE(status.ok()) << "SwitchToLive RPC should succeed";
-  ASSERT_TRUE(response.success()) << "SwitchToLive should return success=true";
-  
-  // Verify seamless switch occurred:
-  // - Ring buffer persists (not flushed)
-  // - Renderer pipeline is NOT reset
-  // - PTS continuity maintained
-  // (These are verified by the service implementation and state machine)
-  
+  EXPECT_TRUE(response.success()) << "SwitchToLive should return success=true";
+
   // Cleanup
   retrovue::playout::StopChannelRequest stop_request;
   stop_request.set_channel_id(1);
   retrovue::playout::StopChannelResponse stop_response;
   grpc::ServerContext stop_context;
   service.StopChannel(&stop_context, &stop_request, &stop_response);
+}
+
+// -----------------------------------------------------------------------------
+// Phase 6A.0 — Air Control Surface (Phase6A-0-ControlSurface.md)
+// Server implements proto; four RPCs accept requests and return valid responses.
+// No media, no producers, no frames; control-surface-only engine.
+// -----------------------------------------------------------------------------
+
+TEST_F(PlayoutEngineContractTest, Phase6A0_ServerAcceptsFourRPCs)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);  // control_surface_only
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
+
+  const int32_t channel_id = 1;
+
+  // StartChannel → response with success set
+  retrovue::playout::StartChannelRequest start_req;
+  start_req.set_channel_id(channel_id);
+  start_req.set_plan_handle("plan-1");
+  start_req.set_port(50051);
+  retrovue::playout::StartChannelResponse start_resp;
+  grpc::ServerContext start_ctx;
+  grpc::Status start_st = service.StartChannel(&start_ctx, &start_req, &start_resp);
+  ASSERT_TRUE(start_st.ok()) << start_st.error_message();
+  EXPECT_TRUE(start_resp.success()) << start_resp.message();
+
+  // LoadPreview → response with success (optional shadow_decode_started)
+  retrovue::playout::LoadPreviewRequest load_req;
+  load_req.set_channel_id(channel_id);
+  load_req.set_asset_path("/fake/asset.mp4");
+  load_req.set_start_offset_ms(0);
+  load_req.set_hard_stop_time_ms(0);
+  retrovue::playout::LoadPreviewResponse load_resp;
+  grpc::ServerContext load_ctx;
+  grpc::Status load_st = service.LoadPreview(&load_ctx, &load_req, &load_resp);
+  ASSERT_TRUE(load_st.ok()) << load_st.error_message();
+  EXPECT_TRUE(load_resp.success()) << load_resp.message();
+
+  // SwitchToLive → response with success (optional pts_contiguous)
+  retrovue::playout::SwitchToLiveRequest switch_req;
+  switch_req.set_channel_id(channel_id);
+  retrovue::playout::SwitchToLiveResponse switch_resp;
+  grpc::ServerContext switch_ctx;
+  grpc::Status switch_st = service.SwitchToLive(&switch_ctx, &switch_req, &switch_resp);
+  ASSERT_TRUE(switch_st.ok()) << switch_st.error_message();
+  EXPECT_TRUE(switch_resp.success()) << switch_resp.message();
+
+  // StopChannel → response with success
+  retrovue::playout::StopChannelRequest stop_req;
+  stop_req.set_channel_id(channel_id);
+  retrovue::playout::StopChannelResponse stop_resp;
+  grpc::ServerContext stop_ctx;
+  grpc::Status stop_st = service.StopChannel(&stop_ctx, &stop_req, &stop_resp);
+  ASSERT_TRUE(stop_st.ok()) << stop_st.error_message();
+  EXPECT_TRUE(stop_resp.success()) << stop_resp.message();
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A0_StartChannelIdempotentSuccess)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
+
+  retrovue::playout::StartChannelRequest req;
+  req.set_channel_id(42);
+  req.set_plan_handle("plan");
+  req.set_port(9999);
+  retrovue::playout::StartChannelResponse resp;
+  grpc::ServerContext ctx;
+
+  grpc::Status st1 = service.StartChannel(&ctx, &req, &resp);
+  ASSERT_TRUE(st1.ok()) << st1.error_message();
+  EXPECT_TRUE(resp.success()) << resp.message();
+
+  resp.Clear();
+  grpc::ServerContext ctx2;
+  grpc::Status st2 = service.StartChannel(&ctx2, &req, &resp);
+  ASSERT_TRUE(st2.ok()) << st2.error_message();
+  EXPECT_TRUE(resp.success()) << "StartChannel on already-started channel must be idempotent success";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A0_LoadPreviewBeforeStartChannel_Error)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
+
+  retrovue::playout::LoadPreviewRequest req;
+  req.set_channel_id(99);
+  req.set_asset_path("/any/path.mp4");
+  retrovue::playout::LoadPreviewResponse resp;
+  grpc::ServerContext ctx;
+  grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
+  ASSERT_TRUE(st.ok()) << st.error_message();
+  EXPECT_FALSE(resp.success()) << "LoadPreview before StartChannel must return success=false";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A0_SwitchToLiveWithNoPreview_Error)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
+
+  retrovue::playout::StartChannelRequest start_req;
+  start_req.set_channel_id(2);
+  start_req.set_plan_handle("p");
+  start_req.set_port(50052);
+  retrovue::playout::StartChannelResponse start_resp;
+  grpc::ServerContext start_ctx;
+  grpc::Status start_st = service.StartChannel(&start_ctx, &start_req, &start_resp);
+  ASSERT_TRUE(start_st.ok() && start_resp.success());
+
+  retrovue::playout::SwitchToLiveRequest req;
+  req.set_channel_id(2);
+  retrovue::playout::SwitchToLiveResponse resp;
+  grpc::ServerContext ctx;
+  grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+  ASSERT_TRUE(st.ok()) << st.error_message();
+  EXPECT_FALSE(resp.success()) << "SwitchToLive with no preview loaded must return success=false";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A0_StopChannelIdempotentSuccess)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
+  auto controller = std::make_shared<runtime::PlayoutController>(engine);
+  retrovue::playout::PlayoutControlImpl service(controller);
+
+  retrovue::playout::StopChannelRequest req;
+  req.set_channel_id(999);  // never started
+  retrovue::playout::StopChannelResponse resp;
+  grpc::ServerContext ctx;
+  grpc::Status st = service.StopChannel(&ctx, &req, &resp);
+  ASSERT_TRUE(st.ok()) << st.error_message();
+  EXPECT_TRUE(resp.success()) << "StopChannel on unknown channel must be idempotent success";
+
+  resp.Clear();
+  grpc::ServerContext ctx2;
+  grpc::Status st2 = service.StopChannel(&ctx2, &req, &resp);
+  ASSERT_TRUE(st2.ok()) << st2.error_message();
+  EXPECT_TRUE(resp.success()) << "StopChannel on already-stopped channel must be idempotent success";
 }
 
 } // namespace
