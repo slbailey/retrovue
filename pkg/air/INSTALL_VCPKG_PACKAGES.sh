@@ -12,14 +12,16 @@ echo ""
 echo "Required packages:"
 echo "  - grpc (for gRPC support)"
 echo "  - gtest (for contract tests)"
+echo "  - ffmpeg (optional; for Phase 8.1.5 libav decode—avcodec, avformat, avutil, swscale)"
 echo ""
 echo "This may take 10-20 minutes as gRPC needs to be compiled..."
 echo ""
 
 cd "$VCPKG_ROOT"
 
-# Install grpc and gtest
+# Install grpc and gtest; ffmpeg optional for Phase 8.1.5 (in-process decode, no ffmpeg binary)
 ./vcpkg install grpc gtest --triplet x64-linux
+./vcpkg install ffmpeg --triplet x64-linux 2>/dev/null || true
 
 echo ""
 echo "=============================================================="

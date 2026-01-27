@@ -69,28 +69,17 @@ namespace retrovue
       }
 
 #if defined(__linux__) || defined(__APPLE__)
+      // Phase 8.1.5: No ffmpeg executable. TS output is stubbed; Producer uses libav only.
+      // FfmpegLoop does nothing so no subprocess is ever spawned.
       void FfmpegLoop()
       {
-        const int out_fd = fd;
-        fd = -1;
-        if (out_fd < 0 || asset_path.empty())
-          return;
-        pid_t pid = fork();
-        if (pid < 0)
-          return;
-        if (pid == 0)
+        (void)asset_path;
+        (void)ffmpeg_pid;
+        if (fd >= 0)
         {
-          dup2(out_fd, STDOUT_FILENO);
-          close(out_fd);
-          execlp("ffmpeg", "ffmpeg", "-re", "-i", asset_path.c_str(),
-                 "-f", "mpegts", "pipe:1", nullptr);
-          _exit(127);
+          close(fd);
+          fd = -1;
         }
-        ffmpeg_pid = pid;
-        close(out_fd);
-        int status = 0;
-        waitpid(pid, &status, 0);
-        ffmpeg_pid = -1;
       }
 #else
       void FfmpegLoop() {}

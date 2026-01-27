@@ -17,6 +17,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(GTest CONFIG REQUIRED)
+# Phase 8.1.5: libav* REQUIRED for in-process decode (no ffmpeg executable). No fallback.
+set(FFMPEG_ROOT /opt/retrovue/third_party/ffmpeg)
+list(APPEND CMAKE_PREFIX_PATH "${FFMPEG_ROOT}")
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBAV REQUIRED
+  libavcodec
+  libavformat
+  libavutil
+  libswscale
+  libswresample
+)
 
 # ---- Proto (canonical path: repo root protos/playout.proto) ----
 set(PLAYOUT_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/../../protos/playout.proto")
@@ -93,17 +105,26 @@ set(AIR_CORE_SOURCES
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
 
-target_link_libraries(retrovue_air_core
-  PUBLIC
-    playout_proto
-    gRPC::grpc++
-)
-
+target_compile_definitions(retrovue_air_core PRIVATE RETROVUE_FFMPEG_AVAILABLE)
+target_include_directories(retrovue_air_core PRIVATE ${LIBAV_INCLUDE_DIRS})
 target_include_directories(retrovue_air_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${PROTO_GEN_DIR}
+)
+target_link_directories(retrovue_air_core PUBLIC "${FFMPEG_ROOT}/lib")
+target_link_libraries(retrovue_air_core
+  PUBLIC
+    playout_proto
+    gRPC::grpc++
+    ${LIBAV_LIBRARIES}
+)
+
+# Lock runtime linking to RetroVue's ffmpeg (no collision with ErsatzTV /ffbuild)
+set_target_properties(retrovue_air_core PROPERTIES
+  BUILD_RPATH "${FFMPEG_ROOT}/lib"
+  INSTALL_RPATH "${FFMPEG_ROOT}/lib"
 )
 
 # ---- gRPC server executable (Phase 8.0: AttachStream/DetachStream over UDS) ----
@@ -123,6 +144,7 @@ target_include_directories(retrovue_air
 # ---- Contract tests (Phase 6A.0: PlayoutEngine + control surface) ----
 add_executable(contracts_playoutengine_tests
   tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp
+  tests/contracts/Phase815VideoFileProducerTests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp

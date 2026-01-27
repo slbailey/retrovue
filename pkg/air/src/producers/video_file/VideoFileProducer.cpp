@@ -12,7 +12,6 @@
 #include <sstream>
 #include <thread>
 
-#ifdef RETROVUE_FFMPEG_AVAILABLE
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -21,7 +20,6 @@ extern "C" {
 #include <libavutil/rational.h>
 #include <libswscale/swscale.h>
 }
-#endif
 
 #include "retrovue/timing/MasterClock.h"
 
@@ -64,6 +62,7 @@ namespace retrovue::producers::video_file
         last_decoded_frame_pts_us_(0),
         first_frame_pts_us_(0),
         playback_start_utc_us_(0),
+        segment_end_pts_us_(-1),
         stub_pts_counter_(0),
         frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
         next_stub_deadline_utc_(0),
@@ -116,6 +115,7 @@ namespace retrovue::producers::video_file
     last_decoded_frame_pts_us_ = 0;
     first_frame_pts_us_ = 0;
     playback_start_utc_us_ = 0;
+    segment_end_pts_us_ = -1;
 
     // Phase 6A.2: non-stub mode — init decoder before starting thread so invalid path fails start()
     if (!config_.stub_mode)
@@ -261,6 +261,15 @@ namespace retrovue::producers::video_file
         continue;
       }
 
+      // Phase 8.2: when segment becomes live, record wall-clock and compute derived segment end (media PTS)
+      if (config_.hard_stop_time_ms > 0 && master_clock_ && segment_end_pts_us_ < 0)
+      {
+        int64_t segment_start_wallclock_ms = master_clock_->now_utc_us() / 1000;
+        int64_t segment_duration_ms = config_.hard_stop_time_ms - segment_start_wallclock_ms;
+        int64_t segment_end_pts_ms = config_.start_offset_ms + segment_duration_ms;
+        segment_end_pts_us_ = segment_end_pts_ms * 1000;
+      }
+
       // Check teardown timeout
       if (teardown_requested_.load(std::memory_order_acquire))
       {
@@ -347,8 +356,7 @@ namespace retrovue::producers::video_file
 
   bool VideoFileProducer::InitializeDecoder()
   {
-#ifdef RETROVUE_FFMPEG_AVAILABLE
-    // Allocate format context
+    // Phase 8.1.5: libav required; no stub. Allocate format context
     format_ctx_ = avformat_alloc_context();
     if (!format_ctx_)
     {
@@ -478,34 +486,15 @@ namespace retrovue::producers::video_file
       return false;
     }
 
-    // Phase 6A.2: seek to start_offset_ms (media-relative) at or before start
-    if (config_.start_offset_ms > 0)
-    {
-      AVStream* seek_stream = format_ctx_->streams[video_stream_index_];
-      // Convert start_offset_ms to stream time_base
-      int64_t start_us = static_cast<int64_t>(config_.start_offset_ms) * 1000;
-      int64_t stream_ts = av_rescale_q(start_us, AVRational{1, 1000000}, seek_stream->time_base);
-      if (av_seek_frame(format_ctx_, video_stream_index_, stream_ts, AVSEEK_FLAG_BACKWARD) < 0)
-      {
-        std::cerr << "[VideoFileProducer] Seek to " << config_.start_offset_ms << " ms failed" << std::endl;
-        CloseDecoder();
-        return false;
-      }
-      std::cout << "[VideoFileProducer] Seek to start_offset_ms=" << config_.start_offset_ms << std::endl;
-    }
+    // Phase 8.2: no container seek. Decode from start; segment start enforced by frame admission in ProduceRealFrame.
 
     decoder_initialized_ = true;
     eof_reached_ = false;
     return true;
-#else
-    std::cerr << "[VideoFileProducer] ERROR: FFmpeg not available. Rebuild with FFmpeg to enable real decoding." << std::endl;
-    return false;
-#endif
   }
 
   void VideoFileProducer::CloseDecoder()
   {
-#ifdef RETROVUE_FFMPEG_AVAILABLE
     if (sws_ctx_)
     {
       sws_freeContext(sws_ctx_);
@@ -549,12 +538,10 @@ namespace retrovue::producers::video_file
     decoder_initialized_ = false;
     video_stream_index_ = -1;
     eof_reached_ = false;
-#endif
   }
 
   bool VideoFileProducer::ProduceRealFrame()
   {
-#ifdef RETROVUE_FFMPEG_AVAILABLE
     if (!decoder_initialized_)
     {
       return false;
@@ -617,15 +604,29 @@ namespace retrovue::producers::video_file
       return false;
     }
 
-    // Extract frame PTS in microseconds for pacing
+    // Extract frame PTS in microseconds (media-relative)
     int64_t base_pts_us = output_frame.metadata.pts;
+    // Phase 8.2: frame admission — discard until presentation_time (media PTS) >= start_offset_ms
+    const int64_t start_offset_us = static_cast<int64_t>(config_.start_offset_ms) * 1000;
+    if (base_pts_us < start_offset_us)
+    {
+      return true;  // Discard frame; continue decoding
+    }
+
+    // Phase 8.2: derived segment end — do not emit frame at or past segment_end_pts_ms
+    if (segment_end_pts_us_ >= 0 && base_pts_us >= segment_end_pts_us_)
+    {
+      eof_reached_ = true;
+      return false;  // Segment end; loop will exit
+    }
+
     // Apply PTS offset for alignment
     int64_t frame_pts_us = base_pts_us + pts_offset_us_;
     output_frame.metadata.pts = frame_pts_us;
     last_decoded_frame_pts_us_ = frame_pts_us;
     last_pts_us_ = frame_pts_us;
 
-    // Establish time mapping on first frame
+    // Establish time mapping on first emitted frame
     if (first_frame_pts_us_ == 0)
     {
       first_frame_pts_us_ = frame_pts_us;
@@ -714,14 +715,10 @@ namespace retrovue::producers::video_file
       // Retry on next iteration
       return true;  // Frame was decoded successfully, just couldn't push
     }
-#else
-    return false;
-#endif
   }
 
   bool VideoFileProducer::ScaleFrame()
   {
-#ifdef RETROVUE_FFMPEG_AVAILABLE
     if (!sws_ctx_ || !frame_ || !scaled_frame_)
     {
       return false;
@@ -731,14 +728,10 @@ namespace retrovue::producers::video_file
               frame_->data, frame_->linesize, 0, codec_ctx_->height,
               scaled_frame_->data, scaled_frame_->linesize);
     return true;
-#else
-    return false;
-#endif
   }
 
   bool VideoFileProducer::AssembleFrame(buffer::Frame& output_frame)
   {
-#ifdef RETROVUE_FFMPEG_AVAILABLE
     if (!scaled_frame_)
     {
       return false;
@@ -810,9 +803,6 @@ namespace retrovue::producers::video_file
     }
 
     return true;
-#else
-    return false;
-#endif
   }
 
   void VideoFileProducer::ProduceStubFrame()
