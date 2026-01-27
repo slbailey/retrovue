@@ -17,6 +17,8 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/rational.h>
 #include <libswscale/swscale.h>
 }
 #endif
@@ -115,6 +117,16 @@ namespace retrovue::producers::video_file
     first_frame_pts_us_ = 0;
     playback_start_utc_us_ = 0;
 
+    // Phase 6A.2: non-stub mode — init decoder before starting thread so invalid path fails start()
+    if (!config_.stub_mode)
+    {
+      if (!InitializeDecoder())
+      {
+        SetState(ProducerState::STOPPED);
+        return false;
+      }
+    }
+
     // Set state to RUNNING before starting thread (so loop sees correct state)
     SetState(ProducerState::RUNNING);
     
@@ -136,26 +148,34 @@ namespace retrovue::producers::video_file
   void VideoFileProducer::stop()
   {
     ProducerState current_state = state_.load(std::memory_order_acquire);
-    if (current_state == ProducerState::STOPPED)
+
+    // No thread: already fully stopped (or never started).
+    if (!producer_thread_ || !producer_thread_->joinable())
     {
-      return; // Already stopped
+      if (current_state == ProducerState::STOPPED)
+        return;
+      CloseDecoder();
+      SetState(ProducerState::STOPPED);
+      std::cout << "[VideoFileProducer] Stopped. Total decoded frames produced: "
+                << frames_produced_.load(std::memory_order_acquire) << std::endl;
+      EmitEvent("stopped", "");
+      return;
     }
 
-    SetState(ProducerState::STOPPING);
-    stop_requested_.store(true, std::memory_order_release);
-    teardown_requested_.store(false, std::memory_order_release);
-
-    // Wait for producer thread to exit
-    if (producer_thread_ && producer_thread_->joinable())
+    // Thread exists and is joinable. If loop exited on its own (hard stop, EOF), state may
+    // already be STOPPED; we must still join to avoid std::terminate() when destroying the thread.
+    if (current_state != ProducerState::STOPPED)
     {
-      producer_thread_->join();
-      producer_thread_.reset();
+      SetState(ProducerState::STOPPING);
+      stop_requested_.store(true, std::memory_order_release);
+      teardown_requested_.store(false, std::memory_order_release);
     }
+    producer_thread_->join();
+    producer_thread_.reset();
 
     CloseDecoder();
-
     SetState(ProducerState::STOPPED);
-    std::cout << "[VideoFileProducer] Stopped. Total decoded frames produced: " 
+    std::cout << "[VideoFileProducer] Stopped. Total decoded frames produced: "
               << frames_produced_.load(std::memory_order_acquire) << std::endl;
     EmitEvent("stopped", "");
   }
@@ -213,22 +233,20 @@ namespace retrovue::producers::video_file
     std::cout << "[VideoFileProducer] Decode loop started (stub_mode=" 
               << (config_.stub_mode ? "true" : "false") << ")" << std::endl;
 
-    // Initialize internal decoder if not in stub mode
-    if (!config_.stub_mode)
+    // Non-stub: decoder already initialized in start() (Phase 6A.2). Init here only if not yet done.
+    if (!config_.stub_mode && !decoder_initialized_)
     {
       if (!InitializeDecoder())
       {
         std::cerr << "[VideoFileProducer] Failed to initialize internal decoder, falling back to stub mode" 
                   << std::endl;
-        config_.stub_mode = true;  // Fallback to stub mode
+        config_.stub_mode = true;
         EmitEvent("error", "Failed to initialize internal decoder, falling back to stub mode");
-        // Emit ready after fallback to stub mode
         EmitEvent("ready", "");
       }
       else
       {
         std::cout << "[VideoFileProducer] Internal decoder initialized successfully" << std::endl;
-        // Emit ready after successful decoder initialization
         EmitEvent("ready", "");
       }
     }
@@ -257,6 +275,20 @@ namespace retrovue::producers::video_file
           std::cout << "[VideoFileProducer] Teardown timeout reached; forcing stop" << std::endl;
           EmitEvent("teardown_timeout", "");
           ForceStop();
+          break;
+        }
+      }
+
+      // Phase 6A.2: hard_stop_time_ms is authoritative — never play past this wall-clock time
+      if (config_.hard_stop_time_ms > 0 && master_clock_)
+      {
+        int64_t now_ms = master_clock_->now_utc_us() / 1000;
+        if (now_ms >= config_.hard_stop_time_ms)
+        {
+          std::cout << "[VideoFileProducer] Hard stop time reached (now_ms=" << now_ms
+                    << ", hard_stop_time_ms=" << config_.hard_stop_time_ms << ")" << std::endl;
+          EmitEvent("hard_stop", "");
+          stop_requested_.store(true, std::memory_order_release);
           break;
         }
       }
@@ -308,6 +340,7 @@ namespace retrovue::producers::video_file
       }
     }
 
+    SetState(ProducerState::STOPPED);
     std::cout << "[VideoFileProducer] Decode loop exited" << std::endl;
     EmitEvent("decode_loop_exited", "");
   }
@@ -443,6 +476,22 @@ namespace retrovue::producers::video_file
       std::cerr << "[VideoFileProducer] Failed to allocate packet" << std::endl;
       CloseDecoder();
       return false;
+    }
+
+    // Phase 6A.2: seek to start_offset_ms (media-relative) at or before start
+    if (config_.start_offset_ms > 0)
+    {
+      AVStream* seek_stream = format_ctx_->streams[video_stream_index_];
+      // Convert start_offset_ms to stream time_base
+      int64_t start_us = static_cast<int64_t>(config_.start_offset_ms) * 1000;
+      int64_t stream_ts = av_rescale_q(start_us, AVRational{1, 1000000}, seek_stream->time_base);
+      if (av_seek_frame(format_ctx_, video_stream_index_, stream_ts, AVSEEK_FLAG_BACKWARD) < 0)
+      {
+        std::cerr << "[VideoFileProducer] Seek to " << config_.start_offset_ms << " ms failed" << std::endl;
+        CloseDecoder();
+        return false;
+      }
+      std::cout << "[VideoFileProducer] Seek to start_offset_ms=" << config_.start_offset_ms << std::endl;
     }
 
     decoder_initialized_ = true;
