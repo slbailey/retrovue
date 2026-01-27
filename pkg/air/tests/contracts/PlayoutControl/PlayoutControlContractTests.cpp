@@ -160,10 +160,11 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory
+  // Set up producer factory (Phase 6A.1: segment params; VideoFileProducer ignores them)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
-         buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk)
+         buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t /*start_offset_ms*/, int64_t /*hard_stop_time_ms*/)
           -> std::unique_ptr<retrovue::producers::IProducer> {
         producers::video_file::ProducerConfig config;
         config.asset_uri = path;
@@ -248,10 +249,11 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory
+  // Set up producer factory (Phase 6A.1: segment params)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
-         buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk)
+         buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t /*start_offset_ms*/, int64_t /*hard_stop_time_ms*/)
           -> std::unique_ptr<retrovue::producers::IProducer> {
         producers::video_file::ProducerConfig config;
         config.asset_uri = path;
