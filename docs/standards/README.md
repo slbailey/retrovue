@@ -11,6 +11,7 @@ This directory defines the shared documentation, testing, and methodology standa
 *   **[repository-conventions.md](repository-conventions.md):** The canonical directory structure, naming rules, and cross-repo alignment.
 *   **[test-methodology.md](test-methodology.md):** The testing strategy, validation workflow, and database usage rules.
 *   **[ai-assistant-methodology.md](ai-assistant-methodology.md):** How ChatGPT and Cursor collaborate on Retrovue work (contract-first, document-first).
+*   **[contract-hygiene.md](contract-hygiene.md):** PR review checklist ensuring contracts specify "what" (outcomes) not "how" (implementation).
 *   **[style-guide.md](style-guide.md):** Deprecated redirect retained for historical references.
 
 ## Templates

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines the exact behavior, safety, idempotence, and data effects of the ingest operation for an entire source. This is an iterative operation that processes all enabled collections within a source, following the same pattern as Source Discover but for asset ingestion rather than collection discovery. All operations must use importers that implement the ImporterInterface correctly. Each collection ingest operates in its own transaction boundary, allowing for partial success when some collections fail.
+Defines the exact behavior, safety, idempotence, and data effects of the ingest operation for an entire source. This is an iterative operation that processes all enabled collections within a source, following the same pattern as Source Discover but for asset ingestion rather than collection discovery. Each collection ingest operates in its own transaction boundary, allowing for partial success when some collections fail.
 
 NOTE: This command operates at the source level and iterates across all enabled collections, processing each collection's ingest operation. Each collection ingest follows the exact same process defined in the Collection Ingest, with each collection operating in its own transaction boundary to allow for partial success when some collections fail.
 
@@ -51,9 +51,8 @@ retrovue source ingest <source_id>|"<source name>" [--dry-run] [--test-db] [--js
 - If `--test-db` is provided, the command MUST operate solely on an isolated, non-production database
 - Partial or failed ingest operations across collections MUST NOT result in orphaned or incomplete database records
 - **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work. If any collection ingest fails fatally, the entire source ingest operation MUST be rolled back. Non-fatal collection ingest failures (e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire operation.
-- Source's importer must be interface compliant (ImporterInterface). Implementations that subclass BaseImporter are considered compliant by construction. Non-compliant importers MUST cause the command to fail with exit code 1.
-- Asset ingestion MUST use importer's enumeration capability for content discovery
-- Interface compliance MUST be verified before ingest attempt
+- Source type MUST be valid and support the ingest operation. Unsupported source types MUST cause the command to fail with exit code 1.
+- Source MUST support asset enumeration for content discovery
 
 ---
 
@@ -155,9 +154,9 @@ Notes:
 - **B-8:** When run with `--test-db`, no changes may affect production or staging databases.
 - **B-9:** When both `--dry-run` and `--test-db` are provided, `--dry-run` takes precedence. The command MUST NOT write to any database (neither production nor test), but MUST still use the test DB context for resolution and validation.
 - **B-10:** **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work. If any collection ingest fails fatally, the entire source ingest operation MUST be rolled back. Non-fatal collection ingest failures (e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire operation.
-- **B-11:** For each eligible collection, the system MUST call the importer's `validate_ingestible()` method BEFORE calling `enumerate_assets()` or any other ingest work. If `validate_ingestible()` returns `false`, the collection MUST be skipped and logged.
-- **B-12:** Source's importer must be interface compliant (ImporterInterface). Implementations that subclass BaseImporter are considered compliant by construction. Non-compliant importers MUST cause the command to fail with exit code 1.
-- **B-13:** Interface compliance MUST be verified before ingest attempt.
+- **B-11:** For each eligible collection, the system MUST verify the collection is ingestible BEFORE processing. If the collection is not ingestible, it MUST be skipped and logged.
+- **B-12:** Source type MUST be valid and support ingest operations. Unsupported source types MUST cause the command to fail with exit code 1.
+- **B-13:** Source and collection validity MUST be verified before ingest attempt.
 - **B-14:** The command MUST aggregate statistics from all collection ingests and report totals for assets discovered, ingested, skipped, updated, and duplicates prevented.
 - **B-15:** The command MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed collections).
 
@@ -169,15 +168,15 @@ Notes:
 
 - **D-1:** **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work, following Unit of Work principles. If a fatal error occurs before successful completion, no assets, relationships, or side effects from any collection ingest may persist.
 - **D-2:** Source ingest MUST only process collections where `sync_enabled=true` AND `ingestible=true`. Collections that do not meet both criteria MUST be skipped and logged.
-- **D-3:** For each eligible collection, the system MUST call the importer's `validate_ingestible()` method BEFORE calling `enumerate_assets()` or any other ingest work. If `validate_ingestible()` returns `false`, the collection MUST be skipped and logged.
+- **D-3:** For each eligible collection, the system MUST verify the collection is ingestible BEFORE processing. If the collection is not ingestible, it MUST be skipped and logged.
 - **D-4:** Source ingest MUST invoke the same underlying ingestion pipeline that collection ingest uses for "full collection" mode (no `--title`/`--season`/`--episode`), but MUST call it in "full collection" scope only.
 - **D-5:** All ingest operations triggered under source ingest MUST be tracked individually per collection in ingest logs/audit trails, distinguishing between bulk source ingest and manual surgical ingest.
 - **D-6:** Duplicate detection logic MUST prevent the creation of duplicate Asset records within each collection, following the Collection Ingest contract rules.
 - **D-7:** Every new Asset MUST begin in lifecycle state `new` and MUST NOT be in `ready` state at creation time. If enrichers are attached to the collection, assets MAY transition through `enriching` state during active enrichment processing, but MUST NOT remain in `enriching` state after enrichment completes.
-- **D-8:** Importer interface compliance MUST be verified before ingest attempt.
-- **D-9:** Asset discovery MUST use the importer's enumeration capability to retrieve the assets belonging to that collection, in full-collection mode. The importer's `enumerate_assets()` method MUST return normalized asset descriptions (normalized Asset data) and MUST NOT perform any database writes or persistence operations.
-- **D-10:** Importers MUST NOT directly persist to authoritative database tables. All database persistence (Asset creation, updates, collection state updates) MUST be performed by the ingest service layer within Unit of Work transaction boundaries. The service layer receives normalized asset data from the importer and is responsible for all database operations.
-- **D-11:** The `ingestible` field MUST be validated by calling the importer's `validate_ingestible()` method before ingesting each collection.
+- **D-8:** Source type validity MUST be verified before ingest attempt.
+- **D-9:** Asset discovery MUST retrieve all assets belonging to the collection. Discovery MUST return normalized asset data and MUST NOT perform any database writes.
+- **D-10:** Asset discovery and database persistence are separate operations. All database persistence (Asset creation, updates, collection state updates) MUST occur within Unit of Work transaction boundaries.
+- **D-11:** The `ingestible` field MUST be verified for each collection before ingesting.
 - **D-12:** If `ingestible=false`, the collection MUST NOT be included in bulk ingest operations, even if `sync_enabled=true`.
 - **D-13:** All operations run with `--test-db` MUST be isolated from production database storage, tables, and triggers.
 - **D-14:** When both `--dry-run` and `--test-db` are provided, `--dry-run` takes precedence. The command MUST NOT write to any database (neither production nor test), but MUST still use the test DB context for resolution and validation.

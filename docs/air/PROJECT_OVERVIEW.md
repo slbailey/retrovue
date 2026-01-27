@@ -6,11 +6,11 @@ _Related: [Architecture overview](architecture/ArchitectureOverview.md) • [Run
 
 ## Purpose
 
-The **RetroVue Playout Engine** implements a native C++ backend that transforms playout plans (from the ChannelManager) into real-time decoded frame streams. It serves as the bridge between high-level Python orchestration and the low-level frame delivery required by the Renderer.
+The **RetroVue Playout Engine** implements a native C++ backend that executes segment-based playout instructions from the ChannelManager. It does not understand schedules or plans; ChannelManager computes PlayoutSegments and sends exact execution instructions via gRPC. Air hosts heterogeneous producers (file-backed and programmatic such as Prevue, weather, community, test patterns) that share a common output contract (decoded frames).
 
-- **Control interface:** Communicates with the RetroVue Python runtime using gRPC (`proto/retrovue/playout.proto`).
-- **Output:** Streams decoded frames to the Renderer, which emits MPEG-TS per virtual channel.
-- **Timing:** Synchronizes all output using the system-wide `MasterClock` for deterministic alignment.
+- **Control interface:** gRPC (`proto/retrovue/playout.proto`). Segment-based control is canonical: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload). Optional: `StartChannel` / `UpdatePlan` with plan handles.
+- **Output:** Either Air outputs MPEG-TS directly, or Air outputs frames to a Renderer that muxes MPEG-TS — an intentional design boundary; deployments fix one path.
+- **Timing:** MasterClock lives in the Python runtime. Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time.
 
 ---
 
@@ -18,11 +18,11 @@ The **RetroVue Playout Engine** implements a native C++ backend that transforms 
 
 | Component             | Language        | Responsibility                                |
 | --------------------- | --------------- | --------------------------------------------- |
-| **RetroVue Core**     | Python          | Scheduling, orchestration, channel management |
-| **RetroVue Renderer** | Python + ffmpeg | MPEG-TS encoding & transport                  |
-| **Playout Engine**    | C++             | Decode, buffer, and align to MasterClock      |
+| **RetroVue Core**     | Python          | Scheduling, PlayoutSegment computation, channel management |
+| **RetroVue Renderer** | Python or C++   | MPEG-TS encoding & transport (or Air outputs TS directly)  |
+| **Playout Engine**    | C++             | Producers (file-backed + programmatic), buffer, output     |
 
-Each component communicates over a documented API surface. The C++ playout engine **does not** implement scheduling logic — this remains in the RetroVue Core.
+Each component communicates over a documented API surface. The C++ playout engine **does not** implement scheduling or plan logic — ChannelManager computes segments and sends execution instructions; Air executes them.
 
 ---
 
@@ -58,8 +58,8 @@ cmake --build build
 
 ## Communication Model
 
-- **Control API (gRPC):** Receives channel start/stop/update commands from the ChannelManager (Python client).
-- **Frame Bus:** Shares decoded frames with the Renderer via a per-channel ring buffer.
+- **Control API (gRPC):** Receives segment-based instructions from the ChannelManager: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only), plus optional `StartChannel` / `UpdatePlan` / `StopChannel`.
+- **Frame Bus:** Producers feed decoded frames into a per-channel ring buffer; Renderer (or direct TS path) consumes them.
 - **Telemetry:** Publishes health and state metrics at the Prometheus `/metrics` endpoint.
 
 ---
@@ -83,11 +83,11 @@ cmake --build build
 
 ### Phase 3: Real Decode + Renderer + Metrics ✅ Complete
 
-- ✅ FFmpegDecoder with libavformat/libavcodec
+- ✅ File-backed producers with real decode (e.g. libav/ffmpeg or equivalent — implementation detail per producer)
 - ✅ Multi-codec support (H.264, HEVC, VP9, AV1)
 - ✅ FrameRenderer (headless + preview modes)
 - ✅ MetricsHTTPServer with native HTTP/1.1 implementation
-- ✅ Complete decode → buffer → render → metrics pipeline
+- ✅ Complete producer → buffer → render → metrics pipeline
 - ✅ Production-grade performance (<10ms decode latency @ 1080p30)
 
 ### Phase 4: Production Hardening 📋 Planned
@@ -104,9 +104,9 @@ cmake --build build
 
 ## Notes & House Rules
 
-- This repository is **not** the owner of scheduling logic. Scheduling is _authoritative_ in the RetroVue Core (Python).
+- This repository is **not** the owner of scheduling or plan logic. ChannelManager (Python) computes PlayoutSegments and sends exact execution instructions; Air executes them and enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. MasterClock lives in the Python runtime.
 - Always treat Python → C++ interactions as client → server.
-- Keep all timing and output strictly deterministic based on the MasterClock.
+- Keep all timing and output strictly deterministic; Air aligns to MasterClock for output pacing.
 - All API and integration changes **must** follow the `docs/contracts/` workflow (contract first, then implementation).
 
 ---

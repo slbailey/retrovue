@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the behavioral contract for listing available source types from the importer registry. This contract ensures consistent enumeration of source types derived from discovered importer implementations that comply with the ImporterInterface runtime contract.
+Define the behavioral contract for listing available source types. This contract ensures consistent enumeration of supported source types.
 
 ---
 
@@ -150,7 +150,7 @@ Would list 3 source types from registry:
 ## Data Contract Rules (D-#)
 
 - **D-1:** Registry MUST maintain mapping from importer identifiers to importer implementations. Registry returns simple identifiers (strings), not rich objects.
-- **D-2:** CLI MUST resolve importer identifiers to classes and validate `ImporterInterface` implementation at CLI time.
+- **D-2:** CLI MUST validate source type availability at command execution time.
 - **D-3:** Source type derivation MUST follow `{source_type}_importer.py` filename pattern, where `{source_type}` becomes the source type identifier.
 - **D-4:** Source type uniqueness MUST be enforced - duplicate source types MUST be detected and reported as errors.
 - **D-5:** Interface compliance validation MUST occur at CLI time, not registry time. Registry is responsible only for identifier enumeration.
@@ -179,7 +179,7 @@ Would list 3 source types from registry:
 
 - Duplicate source types: "Error: Multiple importers claim source type 'plex'"
 - Invalid filename pattern: "Error: Importer file 'plex.py' does not follow naming pattern '{source_type}\_importer.py'"
-- Interface violation: "Error: Importer 'plex' does not implement ImporterInterface"
+- Type unsupported: "Error: Source type 'plex' is not supported"
 - Configuration schema error: "Error: Importer 'plex' has invalid configuration schema"
 
 ---

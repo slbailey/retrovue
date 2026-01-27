@@ -10,7 +10,9 @@ def start(
     port: int = typer.Option(9000, help="Port to serve the HTTP API and TS streams")
 ):
     """
-    Starts the Retrovue Channel Manager daemon.
+    Starts the RetroVue Core runtime.
+    
+    This is an internal command. Most users should use 'retrovue program-director start' instead.
     """
     daemon = ChannelManagerDaemon(
         schedule_dir=Path(schedule_dir),

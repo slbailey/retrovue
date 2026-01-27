@@ -1,10 +1,10 @@
 """
-Channel Manager Daemon (Phase 8).
+RetroVue Core runtime.
 
-System-wide daemon that manages ALL channels using the runtime ChannelManager.
+System-wide runtime that manages ALL channels using the runtime ChannelManager.
 Runs an HTTP server and bridges HTTP requests to ChannelManager instances.
 
-Per ChannelManagerContract.md (Phase 8).
+This is an internal implementation detail. The public-facing product is RetroVue.
 """
 
 from __future__ import annotations
@@ -213,6 +213,12 @@ class ChannelManager:
         self._teardown_timeout_seconds = 5.0
         self._teardown_started_station: float | None = None
         self._teardown_reason: str | None = None
+        
+        # Phase 0 configuration
+        self._phase0_grid_block_minutes = 30  # Fixed 30-minute grid for Phase 0
+        self._phase0_program_asset_path: str | None = None  # Will be set from schedule/config
+        self._phase0_filler_asset_path: str | None = None  # Will be set from schedule/config
+        self._phase0_filler_epoch: datetime | None = None  # Epoch for filler offset calculation
 
     def _get_current_mode(self) -> str:
         """Ask ProgramDirector which mode this channel must be in."""
@@ -231,6 +237,209 @@ class ChannelManager:
             )
 
         return playout_plan
+
+    # Phase 0 Grid Alignment & Offset Calculation -----------------------------------------
+
+    def _floor_to_grid(self, now: datetime) -> datetime:
+        """
+        Phase 0: Calculate the grid block start time (floor to nearest grid boundary).
+        
+        Phase 0 uses a fixed 30-minute grid. Blocks start at HH:00 and HH:30.
+        
+        Args:
+            now: Current UTC time
+            
+        Returns:
+            Grid block start time (floored to nearest :00 or :30)
+        """
+        # Phase 0: Fixed 30-minute grid
+        grid_minutes = self._phase0_grid_block_minutes
+        
+        # Get current minute and second
+        current_minute = now.minute
+        current_second = now.second
+        current_microsecond = now.microsecond
+        
+        # Calculate which grid block we're in
+        # Grid blocks are at :00 and :30 (for 30-minute grid)
+        block_minute = (current_minute // grid_minutes) * grid_minutes
+        
+        # Floor to grid boundary: set minutes to block_minute, seconds/microseconds to 0
+        block_start = now.replace(minute=block_minute, second=0, microsecond=0)
+        
+        return block_start
+
+    def _calculate_join_offset(
+        self,
+        now: datetime,
+        block_start: datetime,
+        program_duration_seconds: float,
+    ) -> tuple[str, float]:
+        """
+        Phase 0: Calculate join-in-progress offset for viewer tuning in mid-block.
+        
+        Per NEXTSTEPS.md:
+        - If elapsed < program_len → seek into program at elapsed
+        - Else → seek into filler at elapsed - program_len
+        
+        Args:
+            now: Current UTC time
+            block_start: Grid block start time (from _floor_to_grid)
+            program_duration_seconds: Program duration in seconds
+            
+        Returns:
+            Tuple of (content_type, start_pts_ms) where:
+            - content_type: "program" or "filler"
+            - start_pts_ms: Presentation timestamp offset in milliseconds
+        """
+        # Calculate elapsed time since block start
+        elapsed = (now - block_start).total_seconds()
+        
+        if elapsed < program_duration_seconds:
+            # We're in the program segment
+            # Seek into program at elapsed time
+            start_pts_ms = int(elapsed * 1000)  # Convert to milliseconds
+            return ("program", start_pts_ms)
+        else:
+            # We're in the filler segment
+            # Seek into filler at (elapsed - program_len)
+            filler_offset = elapsed - program_duration_seconds
+            start_pts_ms = int(filler_offset * 1000)  # Convert to milliseconds
+            return ("filler", start_pts_ms)
+
+    def _calculate_filler_offset(
+        self,
+        master_clock: datetime,
+        filler_epoch: datetime,
+        filler_duration_seconds: float,
+    ) -> float:
+        """
+        Phase 0: Calculate filler offset for continuous virtual stream.
+        
+        Per NEXTSTEPS.md:
+        filler_offset = (master_clock - filler_epoch) % filler_duration
+        
+        Args:
+            master_clock: Current master clock time
+            filler_epoch: Epoch time for filler calculation (when filler "starts")
+            filler_duration_seconds: Filler asset duration in seconds
+            
+        Returns:
+            Filler offset in seconds (0 to filler_duration_seconds)
+        """
+        if filler_epoch is None:
+            # Default epoch: use a fixed reference time (e.g., Unix epoch or channel start)
+            filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        
+        # Calculate time difference
+        time_diff = (master_clock - filler_epoch).total_seconds()
+        
+        # Modulo to get offset within filler duration
+        filler_offset = time_diff % filler_duration_seconds
+        
+        return filler_offset
+
+    def _determine_active_content(
+        self,
+        now: datetime,
+        block_start: datetime,
+        program_duration_seconds: float,
+    ) -> tuple[str, str, float]:
+        """
+        Phase 0: Determine which content is active (program or filler) and calculate join offset.
+        
+        Args:
+            now: Current UTC time
+            block_start: Grid block start time
+            program_duration_seconds: Program duration in seconds
+            
+        Returns:
+            Tuple of (content_type, asset_path, start_pts_ms) where:
+            - content_type: "program" or "filler"
+            - asset_path: Path to the asset to play
+            - start_pts_ms: Presentation timestamp offset in milliseconds
+        """
+        content_type, start_pts_ms = self._calculate_join_offset(
+            now, block_start, program_duration_seconds
+        )
+        
+        if content_type == "program":
+            asset_path = self._phase0_program_asset_path
+        else:
+            asset_path = self._phase0_filler_asset_path
+        
+        if not asset_path:
+            raise ChannelManagerError(
+                f"Phase 0: {content_type} asset path not configured for channel {self.channel_id}"
+            )
+        
+        return (content_type, asset_path, start_pts_ms)
+
+    def _build_phase0_playout_plan(
+        self,
+        now: datetime,
+        program_asset_path: str,
+        program_duration_seconds: float,
+        filler_asset_path: str,
+        filler_duration_seconds: float,
+    ) -> list[dict[str, Any]]:
+        """
+        Phase 0: Build playout plan using grid + filler model.
+        
+        Per NEXTSTEPS.md:
+        - Calculate grid block start (floor to 30-minute grid)
+        - Determine if we're in program or filler segment
+        - Calculate join-in-progress offset
+        - Return playout plan with correct asset and start_pts
+        
+        Args:
+            now: Current UTC time
+            program_asset_path: Path to program asset
+            program_duration_seconds: Program duration in seconds
+            filler_asset_path: Path to filler asset
+            filler_duration_seconds: Filler duration in seconds (typically 3600 for 1-hour filler)
+            
+        Returns:
+            List of playout plan segments (Phase 0: single segment for current content)
+        """
+        # Calculate grid block start (30-minute grid)
+        block_start = self._floor_to_grid(now)
+        
+        # Determine active content and calculate join offset
+        content_type, asset_path, start_pts_ms = self._determine_active_content(
+            now, block_start, program_duration_seconds
+        )
+        
+        # Override asset_path with provided paths
+        if content_type == "program":
+            asset_path = program_asset_path
+        else:
+            asset_path = filler_asset_path
+            # For filler, we need to calculate the filler offset within the filler file
+            # This ensures we don't restart from 00:00 each time
+            if self._phase0_filler_epoch:
+                filler_offset_seconds = self._calculate_filler_offset(
+                    now, self._phase0_filler_epoch, filler_duration_seconds
+                )
+                # Adjust start_pts to account for filler offset
+                # start_pts_ms is already the offset within the current block's filler segment
+                # We need to add the filler epoch offset to get the absolute position in the filler file
+                filler_absolute_offset_ms = int((filler_offset_seconds + (start_pts_ms / 1000.0)) * 1000)
+                start_pts_ms = filler_absolute_offset_ms % int(filler_duration_seconds * 1000)
+        
+        # Build playout plan segment
+        segment = {
+            "asset_path": asset_path,
+            "start_pts": start_pts_ms,  # Join-in-progress offset in milliseconds
+            "content_type": content_type,  # "program" or "filler"
+            "block_start_utc": block_start.isoformat(),
+            "metadata": {
+                "phase": "phase0",
+                "grid_block_minutes": self._phase0_grid_block_minutes,
+            },
+        }
+        
+        return [segment]
 
     def viewer_join(self, session_id: str, session_info: dict[str, Any]) -> None:
         """Called when a viewer starts watching this channel."""
@@ -252,7 +461,7 @@ class ChannelManager:
 
         # Fanout rule: first viewer starts Producer.
         if old_count == 0 and self.runtime_state.viewer_count == 1:
-            self._ensure_producer_running()
+            self.on_first_viewer()
 
         # If we have an active producer, surface its endpoint for new viewers.
         if self.active_producer:
@@ -268,7 +477,54 @@ class ChannelManager:
 
         # Fanout rule: last viewer stops Producer.
         if old_count == 1 and self.runtime_state.viewer_count == 0:
-            self._stop_producer_if_idle()
+            self.on_last_viewer()
+
+    # Phase 0 Contract Methods
+    def tune_in(self, session_id: str, session_info: dict[str, Any] | None = None) -> None:
+        """
+        Phase 0 contract: Called when a viewer tunes in to this channel.
+        
+        Args:
+            session_id: Unique identifier for this viewer session
+            session_info: Optional metadata about the viewer session
+        """
+        if session_info is None:
+            session_info = {}
+        self.viewer_join(session_id, session_info)
+
+    def tune_out(self, session_id: str) -> None:
+        """
+        Phase 0 contract: Called when a viewer tunes out from this channel.
+        
+        Args:
+            session_id: Unique identifier for this viewer session
+        """
+        self.viewer_leave(session_id)
+
+    def on_first_viewer(self) -> None:
+        """
+        Phase 0 contract: Called when the first viewer connects (viewer count goes 0 -> 1).
+        
+        This ensures the Producer is started when the first viewer arrives.
+        """
+        if self.runtime_state.viewer_count == 0:
+            return  # Not actually first viewer
+        
+        # Ensure producer is running for first viewer
+        if self.runtime_state.viewer_count == 1:
+            self._ensure_producer_running()
+
+    def on_last_viewer(self) -> None:
+        """
+        Phase 0 contract: Called when the last viewer disconnects (viewer count goes 1 -> 0).
+        
+        This stops the Producer when no viewers remain.
+        """
+        if self.runtime_state.viewer_count != 0:
+            return  # Not actually last viewer
+        
+        # Stop producer when no viewers remain
+        self._stop_producer_if_idle()
 
     def _ensure_producer_running(self) -> None:
         """Enforce 'channel goes on-air'."""
@@ -340,7 +596,7 @@ class ChannelManager:
         self.runtime_state.stream_endpoint = None
 
     def check_health(self) -> None:
-        """Poll Producer health and update runtime_state."""
+        """Poll Producer health and update runtime_state. Includes segment supervisor loop for Phase 0."""
         self._check_teardown_completion()
 
         if self.active_producer is None:
@@ -355,6 +611,61 @@ class ChannelManager:
         self.runtime_state.producer_status = producer_state.status.value
         self.runtime_state.stream_endpoint = producer_state.output_url
         self.runtime_state.producer_started_at = producer_state.started_at
+        
+        # Phase 0: Segment supervisor loop - treat process exit as normal timeline event
+        if isinstance(self.active_producer, Phase8AirProducer):
+            if self.active_producer.air_process and self.active_producer.air_process.poll() is not None:
+                # Segment process exited - this is normal timeline progression, not a failure
+                exit_code = self.active_producer.air_process.returncode
+                viewer_count = self.runtime_state.viewer_count
+                
+                self._logger.info(
+                    f"Channel {self.channel_id}: segment process exited (code={exit_code}, viewers={viewer_count})"
+                )
+                
+                if viewer_count > 0:
+                    # Active viewers: compute next segment and continue playout
+                    self._logger.info(
+                        f"Channel {self.channel_id}: {viewer_count} active viewers, launching next segment"
+                    )
+                    # Preserve socket path for continuity
+                    saved_socket_path = self.active_producer.socket_path
+                    # Clean up exited process (don't terminate, it already exited)
+                    self.active_producer.air_process = None
+                    self.active_producer.status = ProducerStatus.STOPPED
+                    
+                    # Compute next segment from schedule and restart same producer
+                    station_time = self.clock.now_utc()
+                    playout_plan = self._get_playout_plan()
+                    
+                    # Restart the same producer instance with next segment
+                    started_ok = self.active_producer.start(playout_plan, station_time)
+                    if started_ok:
+                        self.runtime_state.producer_status = "running"
+                        self.runtime_state.producer_started_at = station_time
+                        self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
+                        # Socket path should be reused by start() - verify it's set
+                        if saved_socket_path and isinstance(self.active_producer, Phase8AirProducer):
+                            if self.active_producer.socket_path != saved_socket_path:
+                                self._logger.warning(
+                                    f"Channel {self.channel_id}: socket path changed during restart "
+                                    f"(expected {saved_socket_path}, got {self.active_producer.socket_path})"
+                                )
+                    else:
+                        self._logger.error(
+                            f"Channel {self.channel_id}: failed to restart producer with next segment"
+                        )
+                        self.runtime_state.producer_status = "error"
+                        self.active_producer.status = ProducerStatus.ERROR
+                else:
+                    # No viewers: stop and return to IDLE
+                    self._logger.info(
+                        f"Channel {self.channel_id}: no active viewers, stopping producer and returning to IDLE"
+                    )
+                    self.active_producer.stop()
+                    self.active_producer = None
+                    self.runtime_state.producer_status = "stopped"
+                    self.runtime_state.stream_endpoint = None
 
     def attach_metrics_publisher(self, publisher: "MetricsPublisher") -> None:
         """Register the metrics publisher responsible for this channel."""
@@ -453,10 +764,141 @@ class ChannelManager:
         """
         Factory hook: build the correct Producer implementation for the given mode.
 
-        This method is intentionally a stub here. It will be overridden by ChannelManagerDaemon.
+        This method is intentionally a stub here. It will be overridden by the RetroVue Core runtime.
         """
         _ = mode  # avoid unused var lint
         return None
+
+
+# ----------------------------------------------------------------------
+# Phase 0 Implementations
+# ----------------------------------------------------------------------
+
+
+class Phase0ScheduleService:
+    """ScheduleService implementation for Phase 0 grid + filler model.
+    
+    Implements the ScheduleService protocol using Phase 0's fixed 30-minute grid
+    and program + filler model. This is an internal implementation detail.
+    """
+
+    def __init__(
+        self,
+        clock: MasterClock,
+        program_asset_path: str,
+        program_duration_seconds: float,
+        filler_asset_path: str,
+        filler_duration_seconds: float = 3600.0,  # Default 1-hour filler
+        grid_block_minutes: int = 30,  # Phase 0: fixed 30-minute grid
+    ):
+        self.clock = clock
+        self.program_asset_path = program_asset_path
+        self.program_duration_seconds = program_duration_seconds
+        self.filler_asset_path = filler_asset_path
+        self.filler_duration_seconds = filler_duration_seconds
+        self.grid_block_minutes = grid_block_minutes
+        self.filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
+        """
+        Phase 0: No-op schedule loading (Phase 0 doesn't use schedule files).
+        
+        Returns:
+            (success, error_message) tuple - always (True, None) for Phase 0
+        """
+        # Phase 0 doesn't load schedules from files - it uses grid + filler model
+        return (True, None)
+
+    def _floor_to_grid(self, now: datetime) -> datetime:
+        """Calculate grid block start time (floor to nearest grid boundary)."""
+        current_minute = now.minute
+        block_minute = (current_minute // self.grid_block_minutes) * self.grid_block_minutes
+        return now.replace(minute=block_minute, second=0, microsecond=0)
+
+    def _calculate_join_offset(
+        self,
+        now: datetime,
+        block_start: datetime,
+        program_duration_seconds: float,
+    ) -> tuple[str, float]:
+        """Calculate join-in-progress offset."""
+        elapsed = (now - block_start).total_seconds()
+        
+        if elapsed < program_duration_seconds:
+            # In program segment
+            start_pts_ms = int(elapsed * 1000)
+            return ("program", start_pts_ms)
+        else:
+            # In filler segment
+            filler_offset = elapsed - program_duration_seconds
+            start_pts_ms = int(filler_offset * 1000)
+            return ("filler", start_pts_ms)
+
+    def _calculate_filler_offset(
+        self,
+        master_clock: datetime,
+        filler_epoch: datetime,
+        filler_duration_seconds: float,
+    ) -> float:
+        """Calculate filler offset for continuous virtual stream."""
+        time_diff = (master_clock - filler_epoch).total_seconds()
+        return time_diff % filler_duration_seconds
+
+    def get_playout_plan_now(
+        self,
+        channel_id: str,
+        at_station_time: datetime,
+    ) -> list[dict[str, Any]]:
+        """
+        Phase 0: Return playout plan using grid + filler model.
+        
+        Per NEXTSTEPS.md:
+        - Calculate grid block start (floor to 30-minute grid)
+        - Determine if we're in program or filler segment
+        - Calculate join-in-progress offset
+        - Return playout plan with correct asset and start_pts
+        """
+        now = at_station_time
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        
+        # Calculate grid block start (30-minute grid)
+        block_start = self._floor_to_grid(now)
+        
+        # Determine active content and calculate join offset
+        content_type, start_pts_ms = self._calculate_join_offset(
+            now, block_start, self.program_duration_seconds
+        )
+        
+        # Select asset path
+        if content_type == "program":
+            asset_path = self.program_asset_path
+        else:
+            asset_path = self.filler_asset_path
+            # For filler, calculate absolute offset within filler file
+            filler_offset_seconds = self._calculate_filler_offset(
+                now, self.filler_epoch, self.filler_duration_seconds
+            )
+            # Adjust start_pts to account for filler's continuous virtual stream
+            # start_pts_ms is offset within current block's filler segment
+            # Add filler epoch offset to get absolute position in filler file
+            block_filler_offset_seconds = start_pts_ms / 1000.0
+            filler_absolute_offset_seconds = (filler_offset_seconds + block_filler_offset_seconds) % self.filler_duration_seconds
+            start_pts_ms = int(filler_absolute_offset_seconds * 1000)
+        
+        # Build playout plan segment
+        segment = {
+            "asset_path": asset_path,
+            "start_pts": start_pts_ms,  # Join-in-progress offset in milliseconds
+            "content_type": content_type,  # "program" or "filler"
+            "block_start_utc": block_start.isoformat(),
+            "metadata": {
+                "phase": "phase0",
+                "grid_block_minutes": self.grid_block_minutes,
+            },
+        }
+        
+        return [segment]
 
 
 # ----------------------------------------------------------------------
@@ -465,9 +907,10 @@ class ChannelManager:
 
 
 class Phase8ScheduleService:
-    """Phase 8 ScheduleService implementation that reads from schedule.json files.
+    """ScheduleService implementation that reads from schedule.json files.
     
     Implements the ScheduleService protocol required by runtime ChannelManager.
+    This is an internal implementation detail.
     """
 
     def __init__(self, schedule_dir: Path, clock: MasterClock):
@@ -569,9 +1012,10 @@ class Phase8ScheduleService:
 
 
 class Phase8ProgramDirector:
-    """Phase 8 ProgramDirector implementation (always returns 'normal' mode).
+    """ProgramDirector implementation (always returns 'normal' mode).
     
     Implements the ProgramDirector protocol required by runtime ChannelManager.
+    This is an internal implementation detail.
     """
 
     def get_channel_mode(self, channel_id: str) -> str:
@@ -580,46 +1024,57 @@ class Phase8ProgramDirector:
 
 
 class Phase8AirProducer(Producer):
-    """Phase 8/9 Producer implementation wrapping Retrovue Air processes."""
+    """Producer that spawns an Air process to play video for the schedule.
+
+    ChannelManager spawns Air (playout engine) processes to actually play content.
+    ChannelManager does NOT spawn ProgramDirector or the main retrovue process;
+    ProgramDirector spawns ChannelManager when one doesn't exist for the channel.
+    """
 
     def __init__(self, channel_id: str, configuration: dict[str, Any]):
         super().__init__(channel_id, ProducerMode.NORMAL, configuration)
         self.air_process: channel_manager_launch.ProcessHandle | None = None
-        self.socket_path: Path | None = None  # Phase 9: UDS socket path
+        self.socket_path: Path | None = None
         self._stream_endpoint = f"/channel/{channel_id}.ts"
 
     def start(self, playout_plan: list[dict[str, Any]], start_at_station_time: datetime) -> bool:
-        """Begin output for this channel by launching Retrovue Air.
-        
-        Per ChannelManagerContract.md (Phase 8):
-        - playout_plan contains exactly one segment with asset_path
-        - Builds PlayoutRequest and launches Air via stdin
-        """
+        """Start output by spawning an Air process. Builds PlayoutRequest, launches Air via stdin."""
         if not playout_plan:
             return False
 
-        # Phase 8: First segment contains asset_path
         segment = playout_plan[0]
         asset_path = segment.get("asset_path")
         if not asset_path:
             return False
 
-        # Build PlayoutRequest per PlayoutRequest.md
+        # Use start_pts from playout plan if provided (Phase 0 join-in-progress)
+        # Otherwise default to 0 (Phase 8 behavior)
+        start_pts = segment.get("start_pts", 0)
+        
         playout_request = {
             "asset_path": asset_path,
-            "start_pts": 0,  # Always 0 in Phase 8
-            "mode": "LIVE",  # Always "LIVE" in Phase 8
+            "start_pts": start_pts,  # Phase 0: join-in-progress offset in milliseconds
+            "mode": "LIVE",
             "channel_id": self.channel_id,
             "metadata": segment.get("metadata", {}),
         }
 
         try:
-            # Launch Air (Phase 9: returns process and socket_path)
+            # Phase 0: Always use ffmpeg to simulate Air (Air not needed for Phase 0)
+            # For Phase 0, we use ffmpeg as the playout engine
+            # Can be overridden with RETROVUE_USE_AIR=1 if needed (but Air won't work for Phase 0)
+            use_ffmpeg = True  # Phase 0 always uses ffmpeg
+            
+            # Phase 0: Reuse socket path if available (for continuity across segments)
+            socket_path = self.socket_path if self.socket_path else None
+            
             process, socket_path = channel_manager_launch.launch_air(
-                playout_request=playout_request
+                playout_request=playout_request,
+                use_ffmpeg_fallback=use_ffmpeg,
+                ts_socket_path=socket_path,  # Reuse socket path if provided
             )
             self.air_process = process
-            self.socket_path = socket_path  # Phase 9: Store socket path for ChannelStream
+            self.socket_path = socket_path
             self.status = ProducerStatus.RUNNING
             self.started_at = start_at_station_time
             self.output_url = self._stream_endpoint
@@ -630,22 +1085,25 @@ class Phase8AirProducer(Producer):
             return False
 
     def stop(self) -> bool:
-        """Stop the producer by terminating Retrovue Air."""
+        """Stop the producer by terminating the Air process."""
         if self.air_process:
-            try:
-                channel_manager_launch.terminate_air(self.air_process)
-            except Exception as e:
-                self._logger.error(f"Error terminating Air for {self.channel_id}: {e}")
-            finally:
-                self.air_process = None
+            # Only terminate if process is still running
+            if self.air_process.poll() is None:
+                try:
+                    channel_manager_launch.terminate_air(self.air_process)
+                except Exception as e:
+                    self._logger.error(f"Error terminating Air for {self.channel_id}: {e}")
+            self.air_process = None
 
+        # Phase 0: Don't clear socket_path on stop - we'll reuse it for next segment
+        # self.socket_path = None  # Keep socket path for continuity
         self.status = ProducerStatus.STOPPED
         self.output_url = None
         self._teardown_cleanup()
         return True
 
     def play_content(self, content: ContentSegment) -> bool:
-        """Phase 8: Not used (single file playout)."""
+        """Not used (single file playout)."""
         return True
 
     def get_stream_endpoint(self) -> str | None:
@@ -655,11 +1113,9 @@ class Phase8AirProducer(Producer):
     def health(self) -> str:
         """Report Producer health."""
         if self.status == ProducerStatus.RUNNING and self.air_process:
-            # Check if process is still alive
-            if self.air_process.poll() is None:  # Still running
+            if self.air_process.poll() is None:
                 return "running"
-            else:  # Process terminated
-                return "stopped"
+            return "stopped"
         if self.status == ProducerStatus.ERROR:
             return "degraded"
         return "stopped"
@@ -669,51 +1125,87 @@ class Phase8AirProducer(Producer):
         return f"air_{self.channel_id}"
 
     def on_paced_tick(self, t_now: float, dt: float) -> None:
-        """Advance producer state using pacing ticks (Phase 8: minimal implementation)."""
+        """Advance producer state using pacing ticks (minimal implementation)."""
         self._advance_teardown(dt)
 
 
 class ChannelManagerDaemon:
-    """System-wide daemon managing all channels using runtime ChannelManager instances."""
+    """
+    RetroVue Core runtime managing all channels using runtime ChannelManager instances.
+    
+    Implements ChannelManagerProvider protocol for ProgramDirector integration.
+    This is an internal implementation detail. The public-facing product is RetroVue.
+    """
 
-    def __init__(self, schedule_dir: Path, host: str = "0.0.0.0", port: int = 9000):
+    def __init__(
+        self,
+        schedule_dir: Path,
+        host: str = "0.0.0.0",
+        port: int = 9000,
+        *,
+        phase0_mode: bool = False,
+        phase0_program_asset_path: str | None = None,
+        phase0_program_duration_seconds: float | None = None,
+        phase0_filler_asset_path: str | None = None,
+        phase0_filler_duration_seconds: float = 3600.0,
+    ):
         self.schedule_dir = schedule_dir
         self.host = host
         self.port = port
         self.clock = MasterClock()
         
-        # Phase 8 implementations
-        self.schedule_service = Phase8ScheduleService(schedule_dir, self.clock)
+        # Phase 0 configuration
+        self.phase0_mode = phase0_mode
+        self.phase0_program_asset_path = phase0_program_asset_path
+        self.phase0_program_duration_seconds = phase0_program_duration_seconds
+        self.phase0_filler_asset_path = phase0_filler_asset_path
+        self.phase0_filler_duration_seconds = phase0_filler_duration_seconds
+        
+        # Internal implementations
+        if phase0_mode:
+            if not phase0_program_asset_path or phase0_program_duration_seconds is None:
+                raise ValueError("Phase 0 mode requires program_asset_path and program_duration_seconds")
+            if not phase0_filler_asset_path:
+                raise ValueError("Phase 0 mode requires filler_asset_path")
+            self.schedule_service = Phase0ScheduleService(
+                clock=self.clock,
+                program_asset_path=phase0_program_asset_path,
+                program_duration_seconds=phase0_program_duration_seconds,
+                filler_asset_path=phase0_filler_asset_path,
+                filler_duration_seconds=phase0_filler_duration_seconds,
+            )
+        else:
+            self.schedule_service = Phase8ScheduleService(schedule_dir, self.clock)
         self.program_director = Phase8ProgramDirector()
         
         # Channel registry: channel_id -> ChannelManager instance
         self.managers: dict[str, ChannelManager] = {}
         self.lock = threading.Lock()
         
-        # Phase 9: ChannelStream registry per channel
+        # ChannelStream registry per channel
         self.channel_streams: dict[str, ChannelStream] = {}
         
         # HTTP server
         self.fastapi_app = FastAPI(title="ChannelManager")
         self._register_endpoints()
         
-        # Factory for creating Producers (Phase 8: AirProducer)
+        # Factory for creating Producers
         self._producer_factory = self._create_air_producer
         
-        # Phase 9: Test mode flag (allows fake TS source)
+        # Test mode flag (allows fake TS source)
         self.test_mode = os.getenv("RETROVUE_TEST_MODE") == "1"
 
     def _create_air_producer(self, channel_id: str, mode: str, config: dict[str, Any]) -> Producer | None:
-        """Factory for creating Phase 8 AirProducer."""
+        """Factory for creating Producer instances."""
         if mode != "normal":
-            return None  # Phase 8 only supports normal mode
+            return None  # Only supports normal mode
         return Phase8AirProducer(channel_id, config)
 
     def _get_or_create_manager(self, channel_id: str) -> ChannelManager:
         """Get or create ChannelManager instance for a channel."""
         with self.lock:
             if channel_id not in self.managers:
-                # Load schedule first
+                # Load schedule first (Phase 0: no-op, Phase 8: loads from file)
                 success, error = self.schedule_service.load_schedule(channel_id)
                 if not success:
                     raise ChannelManagerError(f"Failed to load schedule for {channel_id}: {error}")
@@ -725,6 +1217,13 @@ class ChannelManagerDaemon:
                     schedule_service=self.schedule_service,
                     program_director=self.program_director,
                 )
+                
+                # Phase 0: Configure Phase 0 settings if in Phase 0 mode
+                if self.phase0_mode:
+                    manager._phase0_grid_block_minutes = 30
+                    manager._phase0_program_asset_path = self.phase0_program_asset_path
+                    manager._phase0_filler_asset_path = self.phase0_filler_asset_path
+                    manager._phase0_filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
                 
                 # Override _build_producer_for_mode to use our factory
                 # Store original method and replace with our factory
@@ -741,7 +1240,7 @@ class ChannelManagerDaemon:
         self, channel_id: str, manager: ChannelManager
     ) -> ChannelStream | None:
         """
-        Get or create ChannelStream for a channel (Phase 9).
+        Get or create ChannelStream for a channel.
         
         If Producer is running and has socket_path, create ChannelStream.
         If test mode, use FakeTsSource (even if Producer lacks socket_path).
@@ -754,9 +1253,9 @@ class ChannelManagerDaemon:
                 # Stream stopped, remove it
                 self.channel_streams.pop(channel_id, None)
 
-            # Phase 9: Create ChannelStream
+            # Create ChannelStream
             if self.test_mode:
-                # Test mode: use fake TS source (doesn't need real Producer/Air)
+                # Test mode: use fake TS source (doesn't need real Producer/playout engine)
                 def ts_source_factory():
                     return FakeTsSource()
 
@@ -814,7 +1313,7 @@ class ChannelManagerDaemon:
 
         @self.fastapi_app.get("/channel/{channel_id}.ts")
         def get_channel_stream(channel_id: str) -> Response:
-            """Serve MPEG-TS stream for a specific channel (Phase 9: UDS fan-out)."""
+            """Serve MPEG-TS stream for a specific channel (UDS fan-out)."""
             try:
                 manager = self._get_or_create_manager(channel_id)
             except ChannelManagerError as e:
@@ -835,10 +1334,8 @@ class ChannelManagerDaemon:
                     content="No active schedule item",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-            except ProducerStartupError as e:
-                # Producer failed to start - could be Air launch failure in test mode
-                # Still return 200 with placeholder stream for graceful degradation
-                # In production, this would be a real error
+            except ProducerStartupError:
+                # Producer failed to start; still return 200 with placeholder stream
                 pass  # Continue to generate stream response
             except Exception as e:
                 # Other errors - log and return 503
@@ -848,7 +1345,7 @@ class ChannelManagerDaemon:
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
 
-            # Phase 9: Get or create ChannelStream for this channel
+            # Get or create ChannelStream for this channel
             channel_stream = self._get_or_create_channel_stream(channel_id, manager)
             if not channel_stream:
                 # Fallback to placeholder if ChannelStream not available
@@ -927,6 +1424,16 @@ class ChannelManagerDaemon:
                         self.managers[channel_id] = manager
 
         return loaded_channels
+
+    # ChannelManagerProvider protocol implementation
+    def list_channels(self) -> list[str]:
+        """List all available channel IDs (for ProgramDirector integration)."""
+        with self.lock:
+            return list(self.managers.keys())
+
+    def get_channel_manager(self, channel_id: str) -> ChannelManager:
+        """Get or create ChannelManager for a channel (ChannelManagerProvider protocol)."""
+        return self._get_or_create_manager(channel_id)
 
     def start(self) -> None:
         """Start the HTTP server."""

@@ -751,3 +751,88 @@ class SchedulePlanLabel(Base):
 
     def __repr__(self) -> str:
         return f"<SchedulePlanLabel(id={self.id}, name='{self.name}', category={self.category})>"
+
+
+class Zone(Base):
+    """
+    Represents a named time window within the programming day (daypart).
+
+    Zones divide the broadcast day into logical areas (e.g., "Morning Cartoons",
+    "Prime Time", "Late Night") and contain SchedulableAssets that play during
+    those windows. Zones are planning constructs used by ScheduleDay for
+    organization but are not themselves runtime entities.
+
+    Times use broadcast day time (00:00-24:00 relative to programming_day_start).
+    Zones can span midnight (e.g., 22:00-05:00) within the same broadcast day.
+    """
+
+    __tablename__ = "zones"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    plan_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("schedule_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(
+        String(255), nullable=False, comment="Human-readable zone name (e.g., 'Morning Cartoons')"
+    )
+    start_time: Mapped[dt_time] = mapped_column(
+        Time(timezone=False), nullable=False,
+        comment="Zone start in broadcast day time (00:00-24:00)"
+    )
+    end_time: Mapped[dt_time] = mapped_column(
+        Time(timezone=False), nullable=False,
+        comment="Zone end in broadcast day time. 24:00 stored as 23:59:59.999999"
+    )
+    schedulable_assets: Mapped[list[Any]] = mapped_column(
+        PG_JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"),
+        comment="Array of SchedulableAsset UUIDs (Programs, Assets, VirtualAssets)"
+    )
+    day_filters: Mapped[list[str] | None] = mapped_column(
+        PG_JSONB, nullable=True,
+        comment="Day-of-week constraints: ['MON','TUE',...]. Null = all days."
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sa.text("true"),
+        comment="Active flag. Disabled zones are ignored during resolution."
+    )
+    effective_start: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="Start date for zone validity (inclusive)"
+    )
+    effective_end: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="End date for zone validity (inclusive)"
+    )
+    dst_policy: Mapped[str | None] = mapped_column(
+        String(50), nullable=True,
+        comment="DST policy: 'reject', 'shrink_one_block', 'expand_one_block'"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    plan: Mapped[SchedulePlan | None] = relationship("SchedulePlan", passive_deletes=True)
+
+    __table_args__ = (
+        UniqueConstraint("plan_id", "name", name="uq_zones_plan_name"),
+        CheckConstraint(
+            "dst_policy IS NULL OR dst_policy IN ('reject', 'shrink_one_block', 'expand_one_block')",
+            name="chk_zones_dst_policy_valid"
+        ),
+        CheckConstraint(
+            "(effective_start IS NULL AND effective_end IS NULL) OR "
+            "(effective_start IS NULL) OR (effective_end IS NULL) OR "
+            "(effective_start <= effective_end)",
+            name="chk_zones_effective_range"
+        ),
+        Index("ix_zones_plan_id", "plan_id"),
+        Index("ix_zones_enabled", "enabled"),
+        Index("ix_zones_start_time", "start_time"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Zone(id={self.id}, plan_id={self.plan_id}, name='{self.name}', start={self.start_time}, end={self.end_time})>"

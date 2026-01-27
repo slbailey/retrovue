@@ -1,19 +1,10 @@
 # Production Safety Contract
 
-> **This document is part of the RetroVue Contract System.**  
-> For enforcement status, see `tests/CONTRACT_MIGRATION.md`.
-
-This contract defines the standardized production safety model for all destructive operations in RetroVue. It ensures that production environments are protected from accidental data loss while maintaining operational flexibility in non-production environments.
-
 ## Purpose
 
-Production safety prevents destructive operations from causing harm to live systems. This contract standardizes:
+Define the observable guarantees for protecting production environments from accidental data loss during destructive operations. This contract specifies **what** protections exist, not how they are implemented.
 
-- How production environments are identified
-- When production safety checks are required
-- How safety checks are applied and enforced
-- How batch operations handle mixed safe/unsafe targets
-- Resource-specific safety rules and their documentation
+---
 
 ## Scope
 
@@ -23,7 +14,7 @@ This contract applies to ALL destructive CLI commands that:
 - Modify system state in irreversible ways
 - Could impact live operations or historical data
 
-**Examples:**
+**Affected commands:**
 
 - `retrovue source delete`
 - `retrovue collection wipe`
@@ -31,55 +22,87 @@ This contract applies to ALL destructive CLI commands that:
 - `retrovue channel delete`
 - `retrovue playlist delete`
 
-## Production Environment Definition
+---
 
-**Production is determined by environment configuration (e.g. `env.is_production() == true`).**
+## Production Environment Detection
 
-This check MUST be enforced by the removal command before performing any destructive action.
+### PS-001: Environment Determination
 
-**Implementation Requirements:**
+**Guarantee:** Production status is explicitly configured, not inferred.
 
-- Environment detection MUST be explicit and configurable
-- Production status MUST be determinable at runtime
-- Non-production environments remain permissive (no safety checks)
-- Production status MUST NOT be inferred from usage patterns or data state
+**Observable behavior:**
+- Production status is determinable at runtime via configuration
+- Production status does not change based on data state or usage patterns
+- Non-production environments skip all production safety checks
 
-## Production Safety Rules (PS-#)
+**Verification:** Same command with same target produces different behavior in production vs. non-production.
 
-### PS-1: Production Safety Requirement
+---
 
-**Rule:** In production environments, destructive operations MUST apply a safety check before proceeding.
+## Safety Check Guarantees
 
-**Behavior:**
+### PS-010: Safety Checks Before Action
 
-- Safety checks run BEFORE any destructive action
-- Safety checks run BEFORE confirmation prompts
-- Non-production environments skip safety checks entirely
-- Safety check results determine which targets are eligible for operation
+**Guarantee:** In production, safety checks run before any destructive action or confirmation prompt.
 
-### PS-2: Safety Check Enforcement
+**Observable behavior:**
+- Unsafe targets are identified before the user is asked to confirm
+- No data is deleted before safety evaluation completes
+- Safety check results are reported to the operator
 
-**Rule:** A destructive operation MUST refuse to act on any target that fails its safety check. `--force` MUST NOT override this refusal.
+**Verification:** Run destructive command on unsafe target in production; observe rejection before confirmation prompt.
 
-**Behavior:**
+---
 
-- Targets that fail safety checks are skipped
-- Skipped targets are reported to the operator
-- `--force` flag does NOT bypass production safety
-- Operation proceeds only on targets that pass safety checks
+### PS-011: Unsafe Targets Refused
 
-### PS-3: Batch Operation Safety
+**Guarantee:** Targets that fail safety checks are not deleted, regardless of flags.
 
-**Rule:** Batch operations MUST evaluate production safety per target, and MAY proceed with safe targets even if unsafe targets were skipped. Skipped targets MUST be reported.
+**Observable behavior:**
+- `--force` does NOT bypass production safety
+- Unsafe targets produce clear error messages explaining why
+- Exit code reflects the refusal
 
-**Behavior:**
+**Exit code:** `1` if all targets are unsafe; `2` if some targets are unsafe (batch)
 
-- Each target is evaluated independently
-- Safe targets can be processed even if unsafe targets exist
-- Clear reporting of which targets were skipped and why
-- Operation is considered successful if any targets were processed
+**Verification:** Run `source delete <unsafe-source> --force` in production; observe refusal.
 
-**Example Output:**
+---
+
+### PS-012: Safe Targets Proceed
+
+**Guarantee:** Targets that pass safety checks may proceed (subject to confirmation).
+
+**Observable behavior:**
+- Safe targets are offered for confirmation
+- Confirmation prompt shows what will be deleted
+- After confirmation, deletion proceeds normally
+
+---
+
+## Batch Operation Guarantees
+
+### PS-020: Per-Target Evaluation
+
+**Guarantee:** Batch operations evaluate each target independently.
+
+**Observable behavior:**
+- Each target is classified as safe or unsafe
+- Results are reported per target before any action
+- Safe targets can proceed even if unsafe targets exist in the same batch
+
+---
+
+### PS-021: Batch Reporting
+
+**Guarantee:** Batch operations clearly report which targets were skipped and why.
+
+**Observable behavior:**
+- Skipped targets are listed with their safety failure reason
+- Proceeding targets are listed with their impact summary
+- Final summary shows counts: processed, skipped
+
+**Example output:**
 
 ```
 ⚠️  Production safety check results:
@@ -90,211 +113,167 @@ This check MUST be enforced by the removal command before performing any destruc
 Proceeding with 2 safe sources, skipping 1 protected source.
 ```
 
-### PS-4: Resource-Specific Safety Documentation
+---
 
-**Rule:** The safety check for a given resource type MUST be documented in that resource's specific contract.
+### PS-022: Batch Exit Codes
 
-**Behavior:**
+| Exit Code | Meaning |
+|-----------|---------|
+| `0` | All targets processed successfully |
+| `1` | Validation error or all targets failed safety |
+| `2` | Partial success: some targets processed, some skipped |
+| `3` | External dependency error |
 
-- Each resource type defines its own safety criteria
-- Safety rules are documented in the resource's contract
-- Safety rules reference this contract for enforcement
-- Resource contracts cannot redefine production environment detection
+---
 
 ## Resource-Specific Safety Rules
 
-### Sources (SourceDelete Contract)
+Each resource type defines its own safety criteria. This contract defines the enforcement mechanism; resource contracts define the criteria.
 
-**Reference:** `docs/contracts/resources/SourceDeleteContract.md` (D-5)
+### Sources
 
-**Safety Rule:** A Source fails production safety if any Asset from that Source has appeared in PlaylogEvent or AsRunLog.
+**Contract:** [SourceDeleteContract.md](../resources/SourceDeleteContract.md)
 
-**Rationale:** Sources with aired assets have historical significance and operational dependencies that make them unsafe to delete in production.
+**Safety rule:** A Source fails production safety if any Asset from that Source has appeared in PlaylogEvent or AsRunLog.
 
-### Enrichers (EnricherRemove Contract)
+**Rationale:** Sources with aired assets have historical and compliance significance.
 
-**Reference:** `docs/contracts/resources/EnricherRemoveContract.md` (D-5)
+---
 
-**Safety Rule:** An Enricher fails production safety if removing it would cause harm. Harm is defined as either:
+### Enrichers
 
-- (a) It is currently in active use by an ingest or playout operation
-- (b) It is flagged `protected_from_removal = true`
+**Contract:** [EnricherRemoveContract.md](../resources/EnricherRemoveContract.md)
 
-**Rationale:** Enrichers that are actively processing content or explicitly protected are critical to operations and cannot be safely removed.
+**Safety rule:** An Enricher fails production safety if:
+- It is currently in active use by an ingest or playout operation, OR
+- It is flagged `protected_from_removal = true`
 
-### Collections (CollectionWipe Contract)
+**Rationale:** Active enrichers are critical to ongoing operations.
 
-**Reference:** `docs/contracts/resources/CollectionWipeContract.md` (TBD)
+---
 
-**Safety Rule:** [To be defined when CollectionWipe contract is created]
+### Collections
 
-### Channels (ChannelDelete Contract)
+**Contract:** [CollectionWipeContract.md](../resources/CollectionWipeContract.md)
 
-**Reference:** `docs/contracts/resources/ChannelContract.md` (TBD)
+**Safety rule:** TBD
 
-**Safety Rule:** [To be defined when ChannelDelete contract is created]
+---
 
-## Command Integration Pattern
+### Channels
 
-### Contract Reference Format
+**Contract:** [ChannelDeleteContract.md](../resources/ChannelDeleteContract.md)
 
-Each destructive command contract MUST include:
+**Safety rule:** TBD
+
+---
+
+## Non-Production Behavior
+
+### PS-030: No Safety Checks in Non-Production
+
+**Guarantee:** Non-production environments skip safety checks entirely.
+
+**Observable behavior:**
+- Destructive operations proceed directly to confirmation
+- No "safe/unsafe" evaluation occurs
+- All targets are eligible for deletion (subject to confirmation)
+
+**Verification:** Run `source delete <any-source>` in non-production; observe no safety check output.
+
+---
+
+## JSON Output Format
+
+### PS-040: Structured Safety Results
+
+**Guarantee:** With `--json`, safety check results are machine-readable.
+
+**Success format:**
+```json
+{
+  "status": "ok",
+  "targets_processed": 2,
+  "targets_skipped": 1,
+  "skipped": [
+    {
+      "id": "...",
+      "name": "live-plex-server",
+      "reason": "has aired assets"
+    }
+  ]
+}
+```
+
+**Failure format (all unsafe):**
+```json
+{
+  "status": "error",
+  "code": "PRODUCTION_SAFETY_FAILED",
+  "message": "All targets failed production safety checks",
+  "targets_skipped": 1,
+  "skipped": [
+    {
+      "id": "...",
+      "name": "live-plex-server",
+      "reason": "has aired assets"
+    }
+  ]
+}
+```
+
+---
+
+## Contract Integration
+
+Destructive command contracts MUST reference this contract and define:
+
+1. **Resource-specific safety rule** — what makes a target unsafe
+2. **Safety failure message** — what the operator sees when target is unsafe
+
+Example reference in a command contract:
 
 ```markdown
 ## Production Safety
 
-This command MUST comply with ProductionSafety (PS-1 through PS-4).
+This command complies with ProductionSafety (PS-010 through PS-022).
 
-**Resource-Specific Safety Rule:**
-[Specific safety criteria for this resource type]
+**Resource-specific safety rule:** A Source is unsafe if any of its Assets appear in PlaylogEvent or AsRunLog.
 
-**Safety Check Implementation:**
-[How the safety check is implemented for this resource]
+**Safety failure message:** "Source has aired assets and cannot be deleted in production"
 ```
-
-### Implementation Pattern
-
-```python
-def destructive_operation(targets: List[Target], force: bool = False):
-    # 1. Check if we're in production
-    if env.is_production():
-        # 2. Apply safety checks per target
-        safe_targets = []
-        skipped_targets = []
-
-        for target in targets:
-            if passes_safety_check(target):
-                safe_targets.append(target)
-            else:
-                skipped_targets.append(target)
-
-        # 3. Report skipped targets
-        if skipped_targets:
-            report_skipped_targets(skipped_targets)
-
-        # 4. Proceed only with safe targets
-        targets = safe_targets
-
-    # 5. Apply confirmation (if not --force)
-    if not force:
-        if not require_confirmation(targets):
-            return  # User cancelled
-
-    # 6. Execute operation
-    execute_operation(targets)
-```
-
-## Exit Codes
-
-| Code | Meaning                   | Usage                                               |
-| ---- | ------------------------- | --------------------------------------------------- |
-| `0`  | Success                   | Operation completed successfully                    |
-| `1`  | Validation Error          | Invalid arguments, missing required flags           |
-| `2`  | Partial Success           | Some targets succeeded, others failed safety checks |
-| `3`  | External Dependency Error | Database unavailable, network issues                |
-
-## Examples
-
-### Single Target with Safety Check
-
-```bash
-# Production environment - unsafe target
-$ retrovue source delete live-plex-server
-❌ Production safety check failed:
-   Source "live-plex-server" has aired assets and cannot be deleted in production.
-Operation cancelled.
-
-# Production environment - safe target
-$ retrovue source delete test-plex-server
-⚠️  WARNING: This will permanently delete:
-   • Source: "test-plex-server" (ID: abc-123)
-   • Collections: 5 collections
-   • Assets: ~500 assets
-This action cannot be undone. Type "yes" to confirm: yes
-Successfully deleted source: test-plex-server
-```
-
-### Batch Operation with Mixed Safety
-
-```bash
-# Production environment - mixed targets
-$ retrovue source delete "plex-*"
-⚠️  Production safety check results:
-   ✅ Source: "plex-dev-1" - Safe to delete
-   ❌ Source: "plex-live" - Skipped (has aired assets)
-   ✅ Source: "plex-test-2" - Safe to delete
-
-⚠️  WARNING: This will permanently delete 2 sources:
-   • Source: "plex-dev-1" (ID: abc-123) - 3 collections, ~300 assets
-   • Source: "plex-test-2" (ID: def-456) - 2 collections, ~200 assets
-Total impact: 5 collections, ~500 assets
-This action cannot be undone. Type "yes" to confirm: yes
-Successfully deleted 2 sources, skipped 1 protected source.
-```
-
-### Non-Production Environment
-
-```bash
-# Non-production environment - no safety checks
-$ retrovue source delete live-plex-server
-⚠️  WARNING: This will permanently delete:
-   • Source: "live-plex-server" (ID: abc-123)
-   • Collections: 15 collections
-   • Assets: ~2,500 assets
-This action cannot be undone. Type "yes" to confirm: yes
-Successfully deleted source: live-plex-server
-```
-
-## Implementation Guidance
-
-### Environment Detection
-
-```python
-def is_production() -> bool:
-    """Determine if we're running in a production environment."""
-    return os.getenv('RETROVUE_ENVIRONMENT') == 'production'
-```
-
-### Safety Check Interface
-
-```python
-def passes_safety_check(target: Target) -> bool:
-    """Check if target passes production safety requirements."""
-    # Resource-specific implementation
-    pass
-
-def report_skipped_targets(skipped: List[Target]):
-    """Report targets that were skipped due to safety checks."""
-    for target in skipped:
-        print(f"❌ {target.name} - Skipped ({target.safety_reason})")
-```
-
-## Test Coverage Mapping
-
-| Rule Range   | Enforced By             | Test File                                 |
-| ------------ | ----------------------- | ----------------------------------------- |
-| `PS-1..PS-2` | Production safety tests | `test_production_safety_contract.py`      |
-| `PS-3..PS-4` | Integration tests       | `test_production_safety_data_contract.py` |
-
-## Dependencies
-
-- **DestructiveOperationConfirmation Contract**: Confirmation flow for destructive operations
-- **Unit of Work Contract**: Transaction management for atomic operations
-- **Resource-Specific Contracts**: SourceDelete, EnricherRemove, CollectionWipe, etc.
-
-## See Also
-
-- [DestructiveOperationConfirmation Contract](DestructiveOperationConfirmation.md) - Confirmation flow
-- [Unit of Work Contract](UnitOfWorkContract.md) - Transaction management
-- [Source Delete Contract](../resources/SourceDeleteContract.md) - Source safety rules
-- [Enricher Remove Contract](../resources/EnricherRemoveContract.md) - Enricher safety rules
-- [CLI Change Policy](../resources/CLI_CHANGE_POLICY.md) - Governance rules
 
 ---
 
-## Traceability
+## Behavioral Rules Summary
 
-- **Linked Tests:** `tests/contracts/_ops/test_production_safety_contract.py`
-- **Dependencies:** All destructive command contracts
-- **Last Audit:** 2025-10-28
-- **Status:** DRAFT (not yet ENFORCED)
+| Rule | Guarantee |
+|------|-----------|
+| PS-001 | Production status is explicit configuration |
+| PS-010 | Safety checks run before action and confirmation |
+| PS-011 | Unsafe targets are refused, even with `--force` |
+| PS-012 | Safe targets proceed normally |
+| PS-020 | Batch targets evaluated independently |
+| PS-021 | Skipped targets reported with reasons |
+| PS-022 | Exit codes reflect partial success |
+| PS-030 | Non-production skips safety checks |
+| PS-040 | JSON output includes structured safety results |
+
+---
+
+## Test Coverage
+
+| Rule | Test File |
+|------|-----------|
+| PS-001, PS-010, PS-011 | `test_production_safety_contract.py` |
+| PS-020, PS-021, PS-022 | `test_production_safety_contract.py` |
+| PS-030 | `test_production_safety_contract.py` |
+| PS-040 | `test_production_safety_contract.py` |
+
+---
+
+## See Also
+
+- [DestructiveOperationConfirmation Contract](DestructiveOperationConfirmation.md) — confirmation flow (separate from safety)
+- [Unit of Work Contract](UnitOfWorkContract.md) — atomicity guarantees
+- [Contract Hygiene Checklist](../../../standards/contract-hygiene.md) — authoring guidelines

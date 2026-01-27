@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/producers/IProducer.h"
 #include "retrovue/decode/FrameProducer.h"
 #include "retrovue/renderer/FrameRenderer.h"
 #include "retrovue/runtime/OrchestrationLoop.h"
@@ -63,8 +64,11 @@ struct PlayoutEngine::ChannelState {
   std::string plan_handle;
   int32_t port;
   std::optional<std::string> uds_path;
-  
-  // Core components
+  // Phase 6A.0 control-surface-only: preview slot state (no real decode)
+  bool preview_loaded = false;
+  std::string preview_asset_path;
+
+  // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
   std::unique_ptr<decode::FrameProducer> live_producer;
   std::unique_ptr<decode::FrameProducer> preview_producer;  // For shadow decode/preview
@@ -79,14 +83,19 @@ struct PlayoutEngine::ChannelState {
 
 PlayoutEngine::PlayoutEngine(
     std::shared_ptr<telemetry::MetricsExporter> metrics_exporter,
-    std::shared_ptr<timing::MasterClock> master_clock)
+    std::shared_ptr<timing::MasterClock> master_clock,
+    bool control_surface_only)
     : metrics_exporter_(std::move(metrics_exporter)),
-      master_clock_(std::move(master_clock)) {
+      master_clock_(std::move(master_clock)),
+      control_surface_only_(control_surface_only) {
 }
 
 PlayoutEngine::~PlayoutEngine() {
-  // Stop all channels on destruction
   std::lock_guard<std::mutex> lock(channels_mutex_);
+  if (control_surface_only_) {
+    channels_.clear();
+    return;
+  }
   for (auto& [channel_id, state] : channels_) {
     if (state) {
       StopChannel(channel_id);
@@ -102,7 +111,7 @@ EngineResult PlayoutEngine::StartChannel(
     const std::optional<std::string>& uds_path) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
   
-  // Check if channel already exists
+  // Check if channel already exists (idempotent success)
   if (channels_.find(channel_id) != channels_.end()) {
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " already started");
   }
@@ -110,6 +119,12 @@ EngineResult PlayoutEngine::StartChannel(
   try {
     // Create channel state
     auto state = std::make_unique<ChannelState>(channel_id, plan_handle, port, uds_path);
+    
+    if (control_surface_only_) {
+      // Phase 6A.0: no media, no producers, no frames — channel state only
+      channels_[channel_id] = std::move(state);
+      return EngineResult(true, "Channel " + std::to_string(channel_id) + " started (control surface only)");
+    }
     
     // Create ring buffer
     state->ring_buffer = std::make_unique<buffer::FrameRingBuffer>(kDefaultBufferSize);
@@ -185,12 +200,18 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   
   auto it = channels_.find(channel_id);
   if (it == channels_.end()) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
+    // Phase 6A.0: idempotent success — broadcast systems favor safe, idempotent stop
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " already stopped or unknown");
   }
   
   auto& state = it->second;
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+  }
+  
+  if (control_surface_only_) {
+    channels_.erase(it);
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " stopped successfully");
   }
   
   try {
@@ -249,7 +270,11 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
 
 EngineResult PlayoutEngine::LoadPreview(
     int32_t channel_id,
-    const std::string& asset_path) {
+    const std::string& asset_path,
+    int64_t start_offset_ms,
+    int64_t hard_stop_time_ms) {
+  (void)start_offset_ms;
+  (void)hard_stop_time_ms;
   std::lock_guard<std::mutex> lock(channels_mutex_);
   
   auto it = channels_.find(channel_id);
@@ -260,6 +285,14 @@ EngineResult PlayoutEngine::LoadPreview(
   auto& state = it->second;
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+  }
+  
+  if (control_surface_only_) {
+    state->preview_loaded = true;
+    state->preview_asset_path = asset_path;
+    EngineResult result(true, "Preview loaded for channel " + std::to_string(channel_id));
+    result.shadow_decode_started = false;  // No actual decode in 6A.0
+    return result;
   }
   
   try {
@@ -300,6 +333,18 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   auto& state = it->second;
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+  }
+  
+  if (control_surface_only_) {
+    if (!state->preview_loaded) {
+      return EngineResult(false, "No preview loaded for channel " + std::to_string(channel_id));
+    }
+    state->preview_loaded = false;
+    state->preview_asset_path.clear();
+    EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
+    result.pts_contiguous = true;
+    result.live_start_pts = 0;
+    return result;
   }
   
   if (!state->preview_producer) {

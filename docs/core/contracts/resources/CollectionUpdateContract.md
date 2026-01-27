@@ -62,7 +62,7 @@ retrovue collection update <collection_id> [--sync-enable] [--sync-disable] [--a
 - **Enricher Duplication**: Adding an enricher that is already attached to the collection MUST be treated as idempotent (no error, but may update priority if different priority is provided).
 - **Enricher Removal**: Removing an enricher that is not attached to the collection MUST be treated as idempotent (no error, operation succeeds with no changes).
 - **Path Mapping Validation**: `--path-mapping` MUST validate that the provided local path exists and is accessible before updating the PathMapping record. If the path does not exist or is not accessible, the command MUST exit with code 1 and emit: "Error: Local path '<local_path>' does not exist or is not accessible."
-- **Ingestible Revalidation**: After updating a path mapping, the collection's `ingestible` status MUST be revalidated by calling the importer's `validate_ingestible()` method. This revalidation determines whether the collection meets all prerequisites for ingestion.
+- **Ingestible Revalidation**: After updating a path mapping, the collection's `ingestible` status MUST be revalidated. This revalidation determines whether the collection meets all prerequisites for ingestion.
 - **Path Mapping Requirement**: A collection MUST have a PathMapping record before `--path-mapping` or `--path-mapping-plex` can be used. If no PathMapping exists for the collection, the command MUST exit with code 1 and emit: "Error: Collection 'X' does not have a path mapping. Path mappings are created during source discovery."
 
 ### Update Model
@@ -358,7 +358,7 @@ ingest-scope pipeline to existing assets that need enrichment (state='new' or ou
 6. **Set Path Mapping** (`--path-mapping`):
    - PathMapping record's `local_path` field updated
    - Path validation performed (path must exist and be accessible)
-   - Collection's `ingestible` status revalidated via importer's `validate_ingestible()` method
+   - Collection's `ingestible` status revalidated
    - Updated timestamp refreshed
 
 ### Side Effects
@@ -391,7 +391,7 @@ ingest-scope pipeline to existing assets that need enrichment (state='new' or ou
 - **B-13:** When `--list-enrichers` is provided, the output MUST display all enrichers attached to the collection, ordered by priority, even if no other operations are performed.
 - **B-14:** When `--path-mapping` is provided, the collection MUST have an existing PathMapping record. If no PathMapping exists, the command MUST exit with code 1 and emit: "Error: Collection 'X' does not have a path mapping. Path mappings are created during source discovery."
 - **B-15:** When `--path-mapping` is provided, the local path MUST exist and be accessible before updating the PathMapping record. If the path does not exist or is not accessible, the command MUST exit with code 1 and emit: "Error: Local path '<local_path>' does not exist or is not accessible."
-- **B-16:** After successfully updating a path mapping, the collection's `ingestible` status MUST be revalidated by calling the importer's `validate_ingestible()` method. The output MUST reflect the updated `ingestible` status.
+- **B-16:** After successfully updating a path mapping, the collection's `ingestible` status MUST be revalidated. The output MUST reflect the updated `ingestible` status.
 - **B-17:** When `--json` is supplied, output MUST include fields: `"id"`, `"external_id"`, `"name"`, `"operation"` (indicating which operation was performed), `"sync_enabled"`, `"ingestible"`, `"updated"` (boolean indicating if database was modified), `"updated_at"`, and optionally `"message"` for idempotent operations. For enricher operations, include `"enricher_id"`, `"enricher_type"`, and `"priority"`. For `--list-enrichers`, include `"enrichers"` array. For `--path-mapping`, include `"path_mapping"` object with `"external_path"` and `"local_path"`.
 - **B-18:** The `--dry-run` flag MUST show current and proposed state without executing. In dry-run mode, no database writes MAY occur. On valid input, exit code MUST be 0 and output MUST match the normal `--json` shape.
 - **B-19:** When run with `--test-db`, no changes may affect production or staging databases.
@@ -416,7 +416,7 @@ ingest-scope pipeline to existing assets that need enrichment (state='new' or ou
 - **D-14:** `--list-enrichers` is a read-only operation and MUST NOT modify any database state.
 - **D-15:** For `--path-mapping`, the PathMapping record MUST exist before the local_path can be updated. If no PathMapping exists, the operation MUST NOT proceed.
 - **D-16:** Path validation MUST occur before updating the PathMapping record. The local path MUST exist and be accessible at the time of update.
-- **D-17:** After updating a path mapping, the collection's `ingestible` status MUST be revalidated by calling the importer's `validate_ingestible()` method, and the collection's `ingestible` field MUST be updated to reflect the validation result.
+- **D-17:** After updating a path mapping, the collection's `ingestible` status MUST be revalidated, and the collection's `ingestible` field MUST be updated to reflect the validation result.
 - **D-18:** Path mapping updates and `ingestible` revalidation MUST occur within the same transaction boundary, ensuring atomicity.
 - **D-19:** On transaction failure, ALL changes MUST be rolled back with no partial state updates.
  - **D-20:** The enrichment helper MUST NOT commit; the CLI command commits after successful application.

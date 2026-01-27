@@ -6,13 +6,13 @@ Status: Enforced
 
 ## 1. Overview
 
-The **Video File Producer** is a self-contained component in the RetroVue Air playout pipeline responsible for reading local video files, decoding them into raw YUV420 frames, and staging those decoded frames in a `FrameRingBuffer` for consumption by the Renderer.
+The **Video File Producer** is one kind of execution producer in the RetroVue Air playout pipeline: it reads local video files, decodes them into raw YUV420 frames (e.g. via libav/ffmpeg — decoding is an implementation detail of file-backed producers), and stages those decoded frames in a `FrameRingBuffer` for consumption by the Renderer or direct TS path. Programmatic producers (Prevue, weather, community, test patterns) share the same output contract but differ internally.
 
 ### Purpose
 
 The Video File Producer exists to:
 
-- **Read and decode video assets**: Transform encoded video files (MP4, MKV, MOV, etc.) into raw YUV420 frames in a single, integrated operation
+- **Read and decode video assets**: Transform encoded video files (MP4, MKV, MOV, etc.) into raw YUV420 frames; implementation may use libav/ffmpeg or equivalent — decoding is an implementation detail
 - **Maintain decode pacing**: Produce frames at the correct rate to keep the Renderer fed without buffer overflow
 - **Handle backpressure**: Back off when the downstream buffer is full, preventing memory exhaustion
 - **Provide timing metadata**: Attach PTS/DTS timestamps and duration information to each decoded frame
@@ -71,7 +71,7 @@ The Video File Producer is a **standalone, self-contained decoder** that sits be
 ### What VideoFileProducer DOES
 
 - ✅ **Read video files**: Opens and reads encoded video files (MP4, MKV, MOV, etc.) from local storage
-- ✅ **Decode frames internally**: Uses FFmpeg (libavformat/libavcodec) internally to decode H.264, HEVC, and other supported codecs into raw YUV420 frames
+- ✅ **Decode frames internally**: May use libav/ffmpeg or equivalent to decode H.264, HEVC, and other supported codecs into raw YUV420 frames; implementation detail of this producer type
 - ✅ **Produce decoded frames at target FPS**: Maintains decode rate aligned with `target_fps` configuration (default: 30.0)
 - ✅ **Push decoded frames to FrameRingBuffer**: Non-blocking push operations that respect buffer capacity
 - ✅ **Attach timing metadata**: Sets PTS, DTS, duration, and asset_uri on each decoded frame

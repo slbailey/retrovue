@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 
+#include "retrovue/producers/IProducer.h"
 #include "retrovue/producers/video_file/VideoFileProducer.h"
 
 namespace retrovue::runtime

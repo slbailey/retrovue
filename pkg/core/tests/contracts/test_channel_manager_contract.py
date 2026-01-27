@@ -3,13 +3,18 @@
 Contract tests for ChannelManager command.
 
 Tests the behavioral contract defined in ChannelManager.md (Phase 8).
-ChannelManager is a long-running system-wide daemon that manages ALL channels.
+ChannelManager is part of the RetroVue Core runtime that manages ALL channels.
 These tests verify CLI behavior, HTTP server endpoints, client refcount logic,
-schedule loading, active item selection, PlayoutRequest generation, and Air lifecycle.
+schedule loading, active item selection, and PlayoutRequest handling.
+
+Process hierarchy: ProgramDirector spawns a ChannelManager when one doesn't exist
+for the requested channel. ChannelManager spawns Air (playout engine) to play video.
+ChannelManager does NOT spawn ProgramDirector or the main retrovue process.
 
 NOTE:
-- ChannelManager runs as a real HTTP server (tested as subprocess)
-- Air processes are mocked (NOT launched)
+- Test harness invokes `retrovue channel-manager start` (or program-director start)
+- Channel manager runs as a real HTTP server (tested as subprocess)
+- In test mode (RETROVUE_TEST_MODE=1), Air is not spawned; FakeTsSource is used. In production, ChannelManager spawns Air.
 - ScheduleItem and PlayoutRequest are tested implicitly through ChannelManager
 """
 
@@ -152,13 +157,13 @@ class TestChannelManagerContract:
             # Wait for server to be ready
             time.sleep(1)
             
-            # Make request to channel endpoint (should trigger Air launch)
+            # Make request to channel endpoint (triggers playout; in test mode FakeTsSource, no Air spawned)
             response = requests.get(
                 f"http://localhost:{self.port}/channel/retro1.ts",
                 timeout=5,
                 stream=True
             )
-            # Status should be 200 (even if Air is mocked, server should accept connection)
+            # Status should be 200 (test mode uses FakeTsSource; production would spawn Air)
             assert response.status_code == 200
             response.close()
         finally:
@@ -171,7 +176,8 @@ class TestChannelManagerContract:
 
     def test_channel_manager_client_refcount_spawns_air(self):
         """
-        Contract: When client_count transitions 0→1, ChannelManager MUST launch Air.
+        Contract: When client_count transitions 0→1, ChannelManager spawns Air (or uses FakeTsSource in test mode).
+        ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
         """
         # Create schedule with active item (started 30 minutes ago, 60 minute duration)
         schedule_items = [{
@@ -201,7 +207,7 @@ class TestChannelManagerContract:
             )
             assert response1.status_code == 200
             
-            # Wait a bit for Air launch (if it happens)
+            # Wait a bit for playout coordination
             time.sleep(0.5)
             
         finally:
@@ -211,7 +217,8 @@ class TestChannelManagerContract:
 
     def test_channel_manager_client_refcount_kills_air(self):
         """
-        Contract: When client_count drops to 0, ChannelManager MUST terminate Air.
+        Contract: When client_count drops to 0, ChannelManager terminates Air (or stops FakeTsSource in test mode).
+        ChannelManager spawns and terminates Air; it does NOT spawn or terminate ProgramDirector or retrovue.
         """
         # Create schedule with active item (started 30 minutes ago, 60 minute duration)
         schedule_items = [{
@@ -246,7 +253,7 @@ class TestChannelManagerContract:
             response.close()
             time.sleep(0.5)
             
-            # Verify server still responds (Air termination is internal)
+            # Verify server still responds (playout stop is internal)
             # For now, just verify connection/disconnection works
             assert True
             
@@ -412,7 +419,8 @@ class TestChannelManagerContract:
 
     def test_channel_manager_playout_request_sent_via_stdin(self):
         """
-        Contract: ChannelManager MUST send PlayoutRequest to Air via stdin as JSON.
+        Contract: ChannelManager sends PlayoutRequest as JSON (e.g. via stdin) to the Air process it spawned.
+        ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
         """
         # Create schedule with active item
         schedule_items = [{
@@ -454,7 +462,8 @@ class TestChannelManagerContract:
 
     def test_channel_manager_air_lifecycle_single_instance(self):
         """
-        Contract: Each channel MUST have at most one Air instance at any time.
+        Contract: Each channel has at most one Air process at a time (spawned by ChannelManager).
+        ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
         """
         # Create schedule with active item
         schedule_items = [{
@@ -484,7 +493,7 @@ class TestChannelManagerContract:
             assert response1.status_code == 200
             time.sleep(0.5)
             
-            # Second client connects (should NOT spawn new Air, just increment refcount)
+            # Second client connects (same playout, just increment refcount)
             response2 = requests.get(
                 f"http://localhost:{self.port}/channel/retro1.ts",
                 timeout=5,
@@ -493,7 +502,7 @@ class TestChannelManagerContract:
             assert response2.status_code == 200
             time.sleep(0.5)
             
-            # Both clients should get same stream (single Air instance)
+            # Both clients share same stream (single playout per channel)
             # This is verified by both getting 200 responses
             assert True
             
@@ -505,7 +514,8 @@ class TestChannelManagerContract:
 
     def test_channel_manager_missing_schedule_json_error(self):
         """
-        Contract: If schedule.json is missing, ChannelManager MUST log error and not start Air.
+        Contract: If schedule.json is missing, ChannelManager MUST log error and not start playout for that channel.
+        ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
         """
         # Don't create schedule.json file
         
@@ -530,7 +540,8 @@ class TestChannelManagerContract:
 
     def test_channel_manager_malformed_schedule_json_error(self):
         """
-        Contract: If schedule.json is malformed, ChannelManager MUST log error and not start Air.
+        Contract: If schedule.json is malformed, ChannelManager MUST log error and not start playout for that channel.
+        ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
         """
         # Create malformed JSON file
         schedule_file = self.schedule_dir / "retro1.json"

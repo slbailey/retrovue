@@ -6,22 +6,39 @@ _Related: [Architecture](../architecture/ArchitectureOverview.md) • [ScheduleP
 
 ## Purpose
 
-Zone is a **named time window within the programming day** that organizes the broadcast schedule into logical areas. Zones divide the broadcast day into meaningful segments (e.g., "Morning Cartoons," "Prime Time," "Overnight") and contain one or more SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets) that define what content plays during those windows.
+Zone is a **scheduling abstraction** — a named time window within the programming day that organizes the broadcast schedule into logical areas. Zones divide the broadcast day into meaningful segments (e.g., "Morning Cartoons," "Prime Time," "Overnight") and contain one or more SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets) that define what content plays during those windows.
+
+**Zones are NOT a runtime construct.** They are a scheduling abstraction that helps humans and the scheduler:
+- Reason about dayparts
+- Express constraints
+- Choose appropriate content
 
 **What a Zone is:**
 
+- A **scheduling abstraction** used during planning and schedule compilation
 - A **logical organizer** that divides the broadcast day into named time segments
 - A **time window** declaring when content should play (e.g., `06:00–12:00`, `19:00–22:00`, `22:00–05:00`)
 - A **container** for SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets) that play during the Zone's window
-- A **planning construct** used by ScheduleDay for readability and organization — Zones themselves are not runtime entities
+- A **planning construct** used by ScheduleDay for readability and organization
 
 **What a Zone is not:**
 
-- Not a runtime execution entity — Zones exist only during planning and resolution
-- Not directly executed by the playout system — only the resolved content in ScheduleDay is executed
-- Not visible in the final playout stream — Zones are organizational aids for operators
+- **NOT a runtime execution entity** — Zones exist only during planning and resolution
+- **NOT executed by the playout system** — only the resolved content in ScheduleDay is executed
+- **NOT seen by ChannelManager** — Zones are never sent to runtime components
+- **NOT sent to Air** — Zones are never sent to the playout engine
+- **NOT visible in the final playout stream** — Zones are organizational aids for operators
 
-Zones are components of [SchedulePlan](SchedulePlan.md). When a SchedulePlan is resolved into a [ScheduleDay](ScheduleDay.md), the Zones and their SchedulableAssets are placed with wall-clock times. At this point, Zones serve their organizational purpose and are no longer needed for runtime execution.
+**Compilation Flow:**
+
+Once a schedule is compiled:
+```
+Zone → SchedulePlan → ScheduleItems → PlaylogSegments
+```
+
+From that point on, Zones disappear. They have no runtime presence.
+
+Zones are components of [SchedulePlan](SchedulePlan.md). When a SchedulePlan is compiled into a [ScheduleDay](ScheduleDay.md), the Zones and their SchedulableAssets are placed with wall-clock times. At this point, Zones disappear — they are never seen by ChannelManager, never sent to Air, and have no runtime presence.
 
 ## Core Model / Scope
 
@@ -36,10 +53,14 @@ Zone enables:
 
 **Key Points:**
 
-- Zones are **planning constructs** — they help organize schedules but are not themselves runtime entities
+- Zones are **scheduling abstractions** — they help organize schedules but are NOT runtime entities
+- Zones are **never executed** — they exist only during planning and compilation
+- Zones are **never seen by ChannelManager** — they are not sent to runtime components
+- Zones are **never sent to Air** — they are not sent to the playout engine
 - Zones divide the day into **logical areas** for operator clarity (e.g., "Morning Cartoons," "Prime Time")
 - Each Zone contains **one or more Program or VirtualAsset blocks** that define content
-- Zones are used by ScheduleDay for **readability and planning** but disappear in the final runtime execution
+- Zones are used by ScheduleDay for **readability and planning** but disappear after compilation
+- **Compilation flow:** Zone → SchedulePlan → ScheduleItems → PlaylogSegments (Zones disappear after this)
 - Zones use broadcast day time (00:00–24:00 relative to `programming_day_start`), not calendar day time
 - Zones can span midnight (e.g., `22:00–05:00`) within the same broadcast day
 - Test pattern or idle zones exist internally for system use but don't need to appear in human-facing EPGs
@@ -79,7 +100,7 @@ Here's an example showing how Zones organize a broadcast day:
 - The "Test Pattern" in Zone 3 is a system placeholder that may not appear in human-facing EPGs
 - All times are in broadcast day time (relative to `programming_day_start`)
 - Zone 3 spans midnight, covering from 22:00 on one calendar day to 05:00 the next
-- When this plan is resolved into a ScheduleDay, the Zones organize the content, but only the resolved SchedulableAssets with wall-clock times are stored for execution
+- When this plan is compiled into a ScheduleDay, the Zones organize the content, but only the resolved SchedulableAssets with wall-clock times are stored. Zones disappear after compilation — they are never seen by ChannelManager, never sent to Air.
 
 ## Persistence Model
 
@@ -140,7 +161,7 @@ Zone is a named time window within the programming day that organizes the broadc
 - **Day-of-week filtering** (day_filters) - optional constraints that restrict when the Zone is active
 - **Name** (name) - human-readable identifier for operator reference
 
-Zones declare **when** content should play and **which SchedulableAssets** are placed in the Zone. Zones are used by ScheduleDay for readability and planning but are not themselves runtime entities. When a SchedulePlan is resolved into a ScheduleDay, Zones organize the content, but only the resolved SchedulableAssets with wall-clock times are stored for execution.
+Zones declare **when** content should play and **which SchedulableAssets** are placed in the Zone. Zones are used by ScheduleDay for readability and planning but are NOT runtime entities. When a SchedulePlan is compiled into a ScheduleDay, Zones organize the content, but only the resolved SchedulableAssets with wall-clock times are stored. Zones disappear after compilation — they are never seen by ChannelManager, never sent to Air.
 
 **Zone Alignment:**
 
@@ -156,16 +177,23 @@ Zones declare **when** content should play and **which SchedulableAssets** are p
 - Test pattern zones don't need to appear in human-facing EPGs — they are system placeholders
 - Human-readable views can omit test pattern zones, while JSON outputs may include them for system operations
 
-## Execution Model
+## Compilation Model (NOT Execution)
 
-Zones are consumed during schedule generation:
+Zones are consumed during schedule compilation (NOT runtime execution):
 
 1. **Plan Resolution**: ScheduleService identifies active SchedulePlans for a channel and date
 2. **Zone Identification**: For each active plan, identify its Zones (time windows) that apply to the date (considering `enabled`, `effective_start`/`effective_end`, `day_filters`, and time window)
 3. **Layering Resolution**: When multiple plans match, priority resolves overlapping Zones. Higher-priority plans' Zones override lower-priority plans' Zones for overlapping time windows
 4. **SchedulableAsset Resolution**: For each Zone, retrieve its SchedulableAssets and resolve them to concrete content selections
 5. **Time Calculation**: Zone time windows are combined with the Channel's Grid boundaries to produce real-world wall-clock times
-6. **ScheduleDay Generation**: Resolved Zones and their SchedulableAssets are used to create [ScheduleDay](ScheduleDay.md) records (resolved 3-4 days in advance). Zones serve their organizational purpose and are no longer needed for runtime execution
+6. **ScheduleDay Generation**: Resolved Zones and their SchedulableAssets are used to create [ScheduleDay](ScheduleDay.md) records (resolved 3-4 days in advance)
+
+**Compilation Flow:**
+```
+Zone → SchedulePlan → ScheduleItems → PlaylogSegments
+```
+
+After compilation, Zones disappear. They are never seen by ChannelManager, never sent to Air, and have no runtime presence.
 
 **Time Resolution:** Zone time windows are combined with the Channel's Grid boundaries to produce real-world wall-clock times. Zones declare when they apply (e.g., base 00:00–24:00, or Overnight 22:00–05:00), and the plan engine places SchedulableAssets in Zones, snapping to Grid boundaries.
 
@@ -173,7 +201,7 @@ Zones are consumed during schedule generation:
 
 ## Relationship to ScheduleDay
 
-Zones flow into [ScheduleDay](ScheduleDay.md) via resolution during schedule generation:
+Zones flow into [ScheduleDay](ScheduleDay.md) via compilation during schedule generation:
 
 1. **Zone Identification**: Zones from active SchedulePlans are identified for the channel and date
 2. **Priority Resolution**: When multiple plans match, priority resolves overlapping Zones
@@ -181,16 +209,22 @@ Zones flow into [ScheduleDay](ScheduleDay.md) via resolution during schedule gen
 4. **Time Calculation**: Zone time windows are combined with Grid boundaries to produce real-world wall-clock times
 5. **ScheduleDay Creation**: Resolved SchedulableAssets with wall-clock times become the resolved asset selections in ScheduleDay
 
-**Key Point:** Zones are **planning constructs** that organize the schedule for readability and planning. Once a ScheduleDay is generated, Zones have served their purpose. The ScheduleDay contains only the resolved SchedulableAssets with wall-clock times — Zones themselves are not stored in ScheduleDay and are not needed for runtime execution.
+**Compilation Flow:**
+```
+Zone → SchedulePlan → ScheduleItems → PlaylogSegments
+```
+
+**Key Point:** Zones are **scheduling abstractions** that organize the schedule for readability and planning. Once a ScheduleDay is generated, Zones have served their purpose and disappear. The ScheduleDay contains only the resolved SchedulableAssets with wall-clock times — Zones themselves are not stored in ScheduleDay, are never seen by ChannelManager, are never sent to Air, and have no runtime presence.
 
 **Example Flow:**
 
-- Zone: 19:00–22:00 (Prime Time)
+- Zone: 19:00–22:00 (Prime Time) — **scheduling abstraction only**
 - SchedulableAssets: [Cheers (series Program), Movie Block (composite Program)]
-- Resolution at ScheduleDay time: System resolves Programs to specific episodes/assets and places them with wall-clock times
+- Compilation at ScheduleDay time: System resolves Programs to specific episodes/assets and places them with wall-clock times
 - ScheduleDay: Contains resolved asset UUIDs with wall-clock times (e.g., 2025-12-25 19:00:00 UTC for Cheers episode S11E05)
+- **Zones disappear** — they are not in ScheduleDay, not seen by ChannelManager, not sent to Air
 
-ScheduleDays are resolved 3-4 days in advance for EPG and playout purposes, based on the Zones and SchedulableAssets in the active SchedulePlan.
+ScheduleDays are resolved 3-4 days in advance for EPG and playout purposes, based on the Zones and SchedulableAssets in the active SchedulePlan. After compilation, Zones have no further role.
 
 ## Day-of-Week Filtering
 
@@ -322,9 +356,9 @@ Zones are often referred to as "dayparts" or "time windows" in operator workflow
 - **DST policy**: On DST transition dates, Zone duration is validated per `dst_policy`: "reject" (fail validation), "shrink_one_block" (reduce duration by one grid block), or "expand_one_block" (increase duration by one grid block)
 - **Enable/disable**: enabled defaults to true; disabled Zones are ignored during resolution
 
-## Runtime & Validation Notes
+## Validation Notes
 
-This section defines critical runtime behavior and validation requirements that apply when Zones are used within SchedulePlan sessions or other operational contexts.
+This section defines critical validation requirements that apply when Zones are used within SchedulePlan sessions or other planning/compilation contexts. **Note:** Zones are NOT a runtime construct — they are only used during planning and compilation.
 
 ### Single Source of Truth
 
@@ -392,4 +426,8 @@ This section defines critical runtime behavior and validation requirements that 
 - [Scheduling](Scheduling.md) - High-level scheduling system
 - [Operator CLI](../cli/README.md) - Operational procedures
 
-Zone is a **named time window within the programming day** that organizes the broadcast schedule into logical areas. Zones divide the broadcast day into meaningful segments (e.g., "Morning Cartoons," "Prime Time," "Overnight") and contain one or more SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets). Zones are used by ScheduleDay for readability and planning but are not themselves runtime entities. When a SchedulePlan is resolved into a ScheduleDay, Zones organize the content, but only the resolved SchedulableAssets with wall-clock times are stored for execution. Zones use broadcast day time (00:00–24:00 relative to `programming_day_start`), not calendar day time. Zones can span midnight (e.g., `22:00–05:00`) within the same broadcast day and support optional day-of-week filters for recurring patterns. Test pattern or idle zones exist internally for system use but don't need to appear in human-facing EPGs.
+Zone is a **scheduling abstraction** — a named time window within the programming day that organizes the broadcast schedule into logical areas. Zones divide the broadcast day into meaningful segments (e.g., "Morning Cartoons," "Prime Time," "Overnight") and contain one or more SchedulableAssets (Programs, Assets, VirtualAssets, SyntheticAssets). 
+
+**Zones are NOT a runtime construct.** They are never executed, never seen by ChannelManager, and never sent to Air. Once a schedule is compiled (Zone → SchedulePlan → ScheduleItems → PlaylogSegments), Zones disappear. They exist only to help humans and the scheduler reason about dayparts, express constraints, and choose appropriate content during planning.
+
+Zones use broadcast day time (00:00–24:00 relative to `programming_day_start`), not calendar day time. Zones can span midnight (e.g., `22:00–05:00`) within the same broadcast day and support optional day-of-week filters for recurring patterns. Test pattern or idle zones exist internally for system use but don't need to appear in human-facing EPGs.

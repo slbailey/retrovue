@@ -8,20 +8,20 @@ Explain the execution model, threading, timing rules, and operational safeguards
 
 ## Channel lifecycle
 
-- **Start:** ChannelManager calls `StartChannel`, providing the initial playout plan and TCP port allocation.
-- **Update:** Delta schedules trigger `UpdatePlan`, which hot-swaps the decode graph without interrupting output.
+- **Segment-based (canonical):** ChannelManager computes PlayoutSegments and sends execution instructions via `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms) and `SwitchToLive` (control-only). Air does not understand schedules or plans.
+- **Start:** ChannelManager may call `StartChannel` with initial plan and TCP port allocation where used.
+- **Update:** `UpdatePlan` may hot-swap the active plan without interrupting output where plan-based control is used.
 - **Stop:** Planned maintenance or fatal errors invoke `StopChannel`, draining buffers before releasing resources.
 
 ## Threading model
 
-- **Demux thread:** Reads packets via libavformat and pushes them into codec-specific queues.
-- **Decode pool:** Configurable worker threads per codec profile (defaults: H.264 = 2, HEVC = 3) convert packets into frames.
-- **Staging thread:** Packages frames with PTS/DTS, asset IDs, and duration before enqueuing to the Renderer ring buffer.
-- **Telemetry loop:** Emits metrics and structured logs without blocking the decode path.
+- **Producers:** Heterogeneous — file-backed producers may use demux/decode threads (e.g. libav/ffmpeg); programmatic producers (Prevue, weather, community, test patterns) have their own threading. All produce decoded frames meeting the common output contract.
+- **Staging:** Frames are packaged with PTS/DTS, asset IDs, and duration before enqueuing to the Renderer ring buffer (or direct TS path).
+- **Telemetry loop:** Emits metrics and structured logs without blocking the producer/output path.
 
 ## Timing guarantees
 
-- All timing decisions reference the RetroVue MasterClock delivered over the control API.
+- MasterClock lives in the Python runtime. Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. Timing decisions that need wall-clock reference use the MasterClock delivered over the control/runtime boundary.
 - Minimum frame lead time: 150 ms. Soft maximum: 500 ms. Exceeding the ceiling triggers buffer trimming.
 - Slate insertion occurs when available frames drop below 30, preventing Renderer starvation.
 - Renderer consumption is intentionally decoupled from decode timing, keeping output aligned with the MasterClock.

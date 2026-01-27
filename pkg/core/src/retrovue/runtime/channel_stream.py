@@ -1,14 +1,14 @@
 """
-Channel TS Stream Consumer (Phase 9).
+Channel TS Stream Consumer.
 
-Per-channel Unix Domain Socket (UDS) reader that consumes TS streams from Air
+Per-channel Unix Domain Socket (UDS) reader that consumes TS streams from the internal playout engine
 and fans out to multiple HTTP clients.
 
 Responsibilities:
-- Connect to Air UDS socket per channel
+- Connect to playout engine UDS socket per channel
 - Read TS data in a loop
 - Fan-out TS chunks to all active HTTP clients
-- Handle Air disconnect/reconnect transparently
+- Handle playout engine disconnect/reconnect transparently
 - Support test mode with injectable fake TS source
 """
 
@@ -80,7 +80,7 @@ class UdsTsSource:
         try:
             data = self.sock.recv(size)
             if not data:  # EOF
-                _logger.warning("UDS socket closed by Air (EOF)")
+                _logger.warning("UDS socket closed by playout engine (EOF)")
                 self._connected = False
                 return b""
             return data
@@ -180,8 +180,15 @@ class ChannelStream:
         """Get the UDS socket path for this channel."""
         if self.socket_path:
             return self.socket_path
-        # Default path: /var/run/retrovue/air/channel_{channel_id}.sock
-        return Path(f"/var/run/retrovue/air/channel_{self.channel_id}.sock")
+        # Use same logic as channel_manager_launch.get_uds_socket_path
+        import os
+        from pathlib import Path
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime_dir:
+            socket_dir = Path(runtime_dir) / "retrovue" / "air"
+        else:
+            socket_dir = Path("/tmp/retrovue/air")
+        return socket_dir / f"channel_{self.channel_id}.sock"
 
     def _create_ts_source(self) -> TsSource:
         """Create TS source (UDS or fake for tests)."""
@@ -287,9 +294,13 @@ class ChannelStream:
                         # Non-blocking put; if queue is full, drop this client
                         queue.put_nowait(chunk)
                     except Exception as e:
-                        self._logger.warning(
-                            "Failed to deliver chunk to client %s: %s", client_id, e
-                        )
+                        # Only log if it's not a QueueFull (which is expected when client is slow)
+                        from queue import Full
+                        if not isinstance(e, Full):
+                            self._logger.warning(
+                                "Failed to deliver chunk to client %s: %s", client_id, e
+                            )
+                        # Remove client if queue is full (client is too slow or disconnected)
                         subscribers_to_remove.append(client_id)
 
                 # Remove failed subscribers

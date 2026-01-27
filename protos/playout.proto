@@ -91,10 +91,16 @@ message ApiVersion {
   string version = 1;        // Semantic version string of the playout control API.
 }
 
-// LoadPreviewRequest identifies the channel and asset to load into the preview slot.
+// LoadPreviewRequest carries the next PlayoutSegment into the preview slot.
+// Segment semantics (see Phase 4 contract):
+//   - start_offset_ms: media-relative only, never wall-clock. Air seeks by offset.
+//   - hard_stop_time_ms: authoritative. If present, end_offset/duration never overrides it. Air may stop at or before this time, but must never play past it (encoder latency, PTS rounding, real hardware). Broadcast: <= boundary only.
+// SwitchToLive remains unchanged (no segment payload).
 message LoadPreviewRequest {
-  int32 channel_id = 1;     // Target channel.
-  string asset_path = 2;    // Fully-qualified media file path.
+  int32 channel_id = 1;           // Target channel.
+  string asset_path = 2;          // Fully-qualified media file path.
+  int64 start_offset_ms = 3;      // Media-relative start position within the asset (milliseconds). Never wall-clock. Join-in-progress.
+  int64 hard_stop_time_ms = 4;    // Wall-clock time when this segment must stop (epoch milliseconds). Authoritative. Engine may stop at or before this time; must never play past it.
 }
 
 // LoadPreviewResponse reports the result of loading the preview asset.

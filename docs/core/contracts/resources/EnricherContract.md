@@ -2,34 +2,19 @@
 
 ## Purpose
 
-This document provides an overview of all Enricher domain testing contracts. Individual Enricher operations are covered by specific behavioral contracts that define exact CLI syntax, safety expectations, and data effects.
+Define the observable guarantees for the Enricher domain in RetroVue. This contract specifies **what** enrichers guarantee, not how they are implemented.
 
 ---
 
 ## Scope
 
-The Enricher domain is covered by the following specific contracts:
+The Enricher domain is covered by the following operation contracts:
 
 - **[Enricher List Types](EnricherListTypesContract.md)**: Listing available enricher types
 - **[Enricher Add](EnricherAddContract.md)**: Creating new enricher instances
 - **[Enricher List](EnricherListContract.md)**: Listing configured enricher instances
 - **[Enricher Update](EnricherUpdateContract.md)**: Updating enricher configurations
 - **[Enricher Remove](EnricherRemoveContract.md)**: Removing enricher instances
-
----
-
-## Contract Structure
-
-Each Enricher operation follows the standard contract pattern:
-
-1. **Command Shape**: Exact CLI syntax and required flags
-2. **Safety Expectations**: Confirmation prompts, dry-run behavior, force flags
-3. **Output Format**: Human-readable and JSON output structure
-4. **Exit Codes**: Success and failure exit codes
-5. **Data Effects**: What changes in the database and registry
-6. **Behavior Contract Rules (B-#)**: Operator-facing behavior guarantees
-7. **Data Contract Rules (D-#)**: Persistence, lifecycle, and integrity guarantees
-8. **Test Coverage Mapping**: Explicit mapping from rule IDs to test files
 
 ---
 
@@ -43,102 +28,108 @@ Each Enricher operation follows the standard contract pattern:
 
 ---
 
+## Core Guarantees
+
+### EN-010: Type Validation
+
+**Guarantee:** Enrichers are validated by type before use.
+
+**Observable behavior:**
+- Invalid enricher type → error
+- Enricher type determines valid attachment targets
+- Type mismatch prevents misconfiguration
+
+---
+
+### EN-011: Configuration Validation
+
+**Guarantee:** Enricher configuration validated before persistence.
+
+**Observable behavior:**
+- Invalid configuration → error with descriptive message
+- Configuration schema enforced per enricher type
+- Database unchanged on validation failure
+
+---
+
+### EN-020: Graceful Failure
+
+**Guarantee:** Individual enricher failures don't block operations.
+
+**Observable behavior:**
+- Enricher failure logged but operation continues
+- Per-enricher failure isolation
+- Partial success possible in batch operations
+
+---
+
+### EN-030: Metadata Domains
+
+**Guarantee:** Enrichers write to designated metadata domains only.
+
+| Enricher Type | Target Domain |
+|---------------|---------------|
+| Technical (ffprobe) | `probed` |
+| Editorial (TMDB, IMDB) | `editorial` |
+| Station/packaging | `station_ops` |
+
+**Observable behavior:**
+- Enricher does not overwrite domains it doesn't own
+- Existing values in target domain are merged (not replaced)
+- `sidecar` field preserved unless explicitly extended
+
+---
+
+### EN-031: Metadata Merge Behavior
+
+**Guarantee:** Metadata updates use merge semantics.
+
+**Observable behavior:**
+- Deep merge for nested objects
+- Last-writer-wins for scalar values
+- No data loss from overwrites
+
+---
+
 ## Common Safety Patterns
 
-All Enricher contracts follow these safety patterns:
+All Enricher operations follow these patterns:
 
-### Type Validation
-
-- Enrichers are identified by their type (ingest or playout)
-- Type validation prevents misconfiguration
-- Different types have different attachment targets
-
-### Configuration Management
-
-- Each enricher type defines its own configuration schema
-- Configuration validation before persistence
-- Type-specific parameter validation
-
-### Error Handling
-
-- Graceful failure handling with detailed error messages
-- Per-enricher failure isolation
-- Fallback behavior for failed enrichments
+| Pattern | Behavior |
+|---------|----------|
+| Type validation | Enricher type verified before operation |
+| Config validation | Configuration validated before persistence |
+| Error isolation | Single enricher failure doesn't block others |
+| Dry-run support | All operations support `--dry-run` |
+| Test-db support | All operations support `--test-db` |
 
 ---
 
-## EnricherInterface Specification
+## Test Coverage
 
-All enrichers MUST implement the `Enricher` protocol:
+Each Enricher operation has two test files:
 
-```python
-class Enricher(Protocol):
-    name: str
-
-    def enrich(self, discovered_item: DiscoveredItem) -> DiscoveredItem:
-        """Enrich a discovered item with additional metadata."""
-        ...
-```
-
-### Method Responsibilities
-
-- **enrich()**: Transforms input objects by adding metadata
-- **Type Declaration**: Enrichers are identified by their type (ingest or playout)
-- **Configuration Schema**: Each enricher type defines its configuration requirements
-
-### Configuration Schema
-
-Enricher-specific configuration is stored in the Enricher `config` field:
-
-```json
-{
-  "ffprobe_path": "/usr/bin/ffprobe",
-  "timeout": 30,
-  "sources": ["imdb", "tmdb"]
-}
-```
+| Test Type | File Pattern |
+|-----------|--------------|
+| CLI Contract | `tests/contracts/test_enricher_{verb}_contract.py` |
+| Data Contract | `tests/contracts/test_enricher_{verb}_data_contract.py` |
 
 ---
 
-## Metadata domains
+## Behavioral Rules Summary
 
-E-10. Enrichers MUST NOT overwrite domains they don’t own.
-
-- If an enricher provides **technical** metadata (ffprobe), it MUST write to `probed`.
-- If an enricher provides **editorial** metadata (e.g. TMDB), it MUST write to `editorial`.
-- If an enricher provides station-level or packaging metadata, it MUST write to `station_ops`.
-
-E-11. When an enricher attaches metadata to an item, and the item already has a value at that domain,
-the enricher MUST perform a deep merge (object/object recursive merge, last-writer-wins on scalars)
-instead of replacement.
-
-E-12. Enrichers MUST leave `sidecar` intact unless they specifically extend it. (Sidecar is the canonical
-merge surface for importer + enrichers.)
-
----
-
-## Contract Test Requirements
-
-Each Enricher contract must have exactly two test files:
-
-1. **CLI Contract Test**: `tests/contracts/test_enricher_{verb}_contract.py`
-
-   - CLI syntax validation
-   - Flag behavior verification
-   - Output format validation
-   - Error message handling
-
-2. **Data Contract Test**: `tests/contracts/test_enricher_{verb}_data_contract.py`
-   - Database state changes
-   - Registry state changes
-   - Configuration validation
-   - Error propagation validation
+| Rule | Guarantee |
+|------|-----------|
+| EN-010 | Type validation before use |
+| EN-011 | Configuration validation before persistence |
+| EN-020 | Graceful failure isolation |
+| EN-030 | Metadata written to designated domains |
+| EN-031 | Merge semantics for metadata updates |
 
 ---
 
 ## See Also
 
-- [Enricher Domain Documentation](../../domain/Enricher.md) - Core domain model and operations
-- [Enricher Development Guide](../../developer/Enricher.md) - Implementation details and development guide
-- [Source Contracts](SourceContract.md) - Source-level operations that use enrichers
-- [CLI Contract](README.md) - General CLI command standards
+- [Source Contract](SourceContract.md) — source-level operations using enrichers
+- [CLI Contract](README.md) — general CLI command standards
+- [Contract Hygiene Checklist](../../../standards/contract-hygiene.md) — authoring guidelines

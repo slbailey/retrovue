@@ -6,6 +6,8 @@ _Related: [Architecture](../architecture/ArchitectureOverview.md) • [Runtime: 
 
 Define how RetroVue turns scheduled programming into an actual MPEG-TS stream for viewers. This includes producer selection, playout plan assembly, playout enrichers, and ffmpeg launch.
 
+**Important:** The pipeline is executed inside the per-channel playout engine process spawned by ChannelManager. ChannelManager does not touch A/V bytes.
+
 ## Core model / scope
 
 A Channel is a continuously programmed virtual linear feed.
@@ -86,11 +88,13 @@ If a playout enricher fails, RetroVue logs the failure and continues with the mo
 
 After playout enrichment, the final playout plan is given to the Renderer for FFmpeg execution.
 
-The ChannelManager manages the Renderer lifecycle, which owns the live FFmpeg process.
+**Pipeline Execution:** The pipeline is executed inside the per-channel playout engine process (Air) spawned by ChannelManager. ChannelManager does not touch A/V bytes.
 
-When the first viewer tunes in, ChannelManager asks for "what should be airing right now + offset", generates the playout plan via Producer + playout enrichers, selects the Producer's input source, and starts the Renderer to execute FFmpeg.
+ChannelManager (per-channel runtime controller) spawns and supervises the playout engine process for its channel. ProgramDirector manages multiple ChannelManager instances and provides system-wide coordination and policy enforcement.
 
-When the last viewer leaves, ChannelManager stops the Renderer (which tears down FFmpeg). The Channel itself still logically "continues to air" on the master schedule.
+When the first viewer tunes in, ChannelManager asks for "what should be airing right now + offset", generates the playout plan via Producer + playout enrichers, selects the Producer's input source, and spawns the playout engine process to execute FFmpeg.
+
+When the last viewer leaves, ChannelManager stops the playout engine process (which tears down FFmpeg). The Channel itself still logically "continues to air" on the master schedule.
 
 ## Failure / fallback behavior
 

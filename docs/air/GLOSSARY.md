@@ -12,10 +12,13 @@ Record canonical terms used across RetroVue playout documentation so teams share
 Logical playout worker responsible for decoding and rendering a single broadcast stream. Identified by `channel_id`.
 
 **ChannelManager**  
-Python service in RetroVue Core that issues playout plans and orchestrates channels through the gRPC control plane.
+Python service in RetroVue Core that computes PlayoutSegments and sends exact execution instructions to Air via gRPC. Orchestrates channels through the gRPC control plane. Air does not understand schedules or plans.
+
+**Execution producer**  
+Component that produces decoded frames into `FrameRingBuffer`. Heterogeneous: file-backed producers (may use ffmpeg/libav or equivalent) and programmatic producers (Prevue, weather, community, test patterns). Common output contract; internal implementation may differ.
 
 **FrameProducer**  
-Component that decodes media assets (FFmpeg-backed or stub) and pushes frames into `FrameRingBuffer`.
+Legacy/alternate term for a producer that decodes media assets (e.g. file-backed with libav/ffmpeg or stub) and supplies frames into the staging path.
 
 **FrameRingBuffer**  
 Lock-free circular buffer staging decoded frames for Renderer consumption while enforcing depth invariants.
@@ -30,13 +33,16 @@ Telemetry layer responsible for aggregating channel metrics and exposing Prometh
 Lightweight HTTP endpoint (`/metrics`) serving telemetry data to Prometheus/Grafana.
 
 **MasterClock**  
-Authoritative timing source from RetroVue Core that ensures channels remain synchronized.
+Authoritative timing source; lives in the Python runtime. Ensures channels remain synchronized. Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time.
 
 **PlayoutControl**  
-gRPC service defined in `proto/retrovue/playout.proto` for managing channel lifecycle.
+gRPC service defined in `proto/retrovue/playout.proto` for channel lifecycle and segment-based execution. Canonical calls: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload).
+
+**PlayoutSegment**  
+Executable instruction computed by ChannelManager: asset_path, start_offset_ms (media-relative), hard_stop_time_ms (wall-clock, authoritative). Sent to Air via `LoadPreview`; Air does not understand schedules or plans.
 
 **Playout plan**  
-Opaque handle referencing scheduled media assets; supplied by ChannelManager via gRPC requests.
+Opaque handle (optional path) referencing scheduled media; may be supplied by ChannelManager via `StartChannel`/`UpdatePlan`. Segment-based control is canonical.
 
 ## See also
 

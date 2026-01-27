@@ -1,27 +1,23 @@
-_Related: [Playout Engine Domain](../domain/PlayoutEngineDomain.md) • [Proto Schema](../../proto/retrovue/playout.proto) • [Renderer Contract](RendererContract.md) • [Metrics and Timing Contract](MetricsAndTimingContract.md) • [Architecture Overview](../architecture/ArchitectureOverview.md)_
+# Playout Engine Contract
 
-# Contract — Playout Engine
+_Related: [Proto Schema](../../protos/playout.proto) · [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](Phase6A-Overview.md) · [Phase6A-0 Control Surface](Phase6A-0-ControlSurface.md) · [Renderer Contract](RendererContract.md) · [Metrics Contract](MetricsAndTimingContract.md)_
 
-Status: Enforced
+**Applies starting in:** Phase 6A.0 (control plane); many guarantees Deferred (Applies Phase 7+)  
+**Status:** Enforced for Phase 6A–compatible sections; Deferred (Applies Phase 7+) for performance/TS/Renderer
+
+**Principle:** Air must be correct before it is fast. Performance guarantees are explicitly deferred until correctness is contractually proven.
 
 ## Purpose
 
-This document defines the **complete behavioral contract** for the RetroVue Playout Engine. It establishes:
-
-1. **Control Plane API**: gRPC service specification for channel lifecycle management
-2. **Testing Requirements**: Mandatory test coverage and validation criteria
-3. **Performance Targets**: Latency, throughput, and resource utilization expectations
-4. **CI Enforcement**: Continuous integration rules and quality gates
-
-This contract ensures the playout engine operates deterministically, maintains clock alignment with MasterClock, and provides observable telemetry for all operational states.
+Define the observable guarantees for the RetroVue Playout Engine's gRPC control plane and telemetry. This contract specifies **what** the engine guarantees, not how it is implemented internally. **Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Segment-based control** is canonical: execution is driven by LoadPreview (segment payload) + SwitchToLive (control-only); StartChannel initializes channel state and does not imply media playback.
 
 ---
 
-## Part 1: Control Plane API
+## Part 1: gRPC Control Plane
 
-### gRPC Service Overview
+**Phase applicability:** Part 1 is enforced from Phase 6A.0 onward, with Phase 6A–specific semantics below. Deferred guarantees are listed in [Deferred (Applies Phase 7+)](#deferred-applies-phase-7) and remain institutional knowledge for future phases.
 
-The playout engine implements a single gRPC service defined in [`proto/retrovue/playout.proto`](../../proto/retrovue/playout.proto):
+### Service Definition
 
 ```proto
 service PlayoutControl {
@@ -34,1071 +30,301 @@ service PlayoutControl {
 }
 ```
 
-> **Note:**  
-> Each method manages a specific channel lifecycle operation and **must be idempotent**.
+**Idempotency (per-RPC):**
+
+- **StartChannel:** Duplicate calls with the same `channel_id` (already-started channel) → **idempotent success** (same result as first start). No requirement that payload (plan_handle, port) match; broadcast systems favor safe, idempotent start.
+- **StopChannel:** Unknown or already-stopped channel → **idempotent success** (same result as first stop). Safe, idempotent stop.
+- **LoadPreview:** Not idempotent by argument; loading new preview replaces any existing preview. Duplicate LoadPreview with same segment is defined as “replace” — acceptable but not required to be no-op.
+- **SwitchToLive:** No segment payload; idempotency is by channel state (e.g. switching when already on that content may be no-op or success; see Phase 6A.0 for “no preview loaded” → error).
+- **UpdatePlan:** Treated as optional/legacy in Phase 6A; idempotency rules deferred with plan semantics.
 
 ---
 
 ### StartChannel
 
-**Purpose:**  
-Boot a new playout worker for a channel and begin decoding from the provided playout plan.
+**Purpose:** Initialize channel state for playout. Does **not** imply media playback or frame availability. **Execution begins only after LoadPreview + SwitchToLive.**
 
-**Request**
+| Request Field | Type | Description |
+|---------------|------|-------------|
+| `channel_id` | int32 | Unique channel identifier |
+| `plan_handle` | string | Opaque reference (accepted for proto compatibility; not interpreted in Phase 6A) |
+| `port` | int32 | Port for frame output (reserved for future use) |
 
-| Field         | Type   | Description                                        |
-| ------------- | ------ | -------------------------------------------------- |
-| `channel_id`  | int32  | Unique numeric identifier for the channel          |
-| `plan_handle` | string | Opaque reference to a serialized playout plan      |
-| `port`        | int32  | Port number where the Renderer will consume output |
+| Response Field | Type | Description |
+|----------------|------|-------------|
+| `success` | bool | Whether startup succeeded |
+| `error_message` | string | (optional) Failure reason |
 
-**Response**
+**Guarantees (Phase 6A):**
 
-| Field           | Type   | Description                              |
-| --------------- | ------ | ---------------------------------------- |
-| `success`       | bool   | Indicates whether startup succeeded      |
-| `error_message` | string | (optional) Human-readable failure reason |
+- On success, **channel state is initialized** and ready to accept LoadPreview for that channel.
+- On failure, `success=false` with descriptive error message.
+- Duplicate calls with same `channel_id` (already-started) → idempotent success.
 
-**Behavior:**
-
-- Allocate decode threads, initialize ring buffer, and transition channel state to `ready`.
-- On failure, emit `retrovue_playout_channel_state{channel="N"} = "error"` and return `success=false`.
+**Deferred (Applies Phase 7+) (see [Deferred (Applies Phase 7+)](#deferred-applies-phase-7)):** “Channel ready within 2s”, “frames available within 2s”, and any metric indicating “ready == outputting frames” apply only after Phase 6A when Renderer/TS path exists.
 
 ---
 
 ### UpdatePlan
 
-**Purpose:**  
-Hot-swap the currently running playout plan without restarting the worker.
+**Purpose:** Hot-swap playout plan without stopping the channel. **Optional/legacy for Phase 6A;** plans are not the canonical execution path; segment-based control (LoadPreview + SwitchToLive) is.
 
-**Request**
-
-| Field         | Type   | Description                |
-| ------------- | ------ | -------------------------- |
-| `channel_id`  | int32  | Existing channel worker ID |
+| Request Field | Type | Description |
+|---------------|------|-------------|
+| `channel_id` | int32 | Existing channel identifier |
 | `plan_handle` | string | New playout plan reference |
 
-**Response**
+| Response Field | Type | Description |
+|----------------|------|-------------|
+| `success` | bool | Whether update succeeded |
+| `error_message` | string | (optional) Failure reason |
 
-| Field           | Type   | Description                                 |
-| --------------- | ------ | ------------------------------------------- |
-| `success`       | bool   | True if swap completed successfully         |
-| `error_message` | string | (optional) Diagnostic text if update failed |
-
-**Behavior:**
-
-- Drain the current decode queue.
-- Reload asset map and resume decoding from the next valid timestamp.
-- **Note**: `resetPipeline()` may be called by PlayoutEngine during plan updates to reset renderer state, but this is NOT done during seamless producer switching (`SwitchToLive`).
-- _Expected downtime: ≤ 500 ms._
+**Phase 6A:** Air may accept and return; no requirement to drive behavior from `plan_handle`.  
+**Deferred (Applies Phase 7+):** Plan swap timing (e.g. 500ms), no frame loss, error state transitions — see [Deferred (Applies Phase 7+)](#deferred-applies-phase-7).
 
 ---
 
 ### StopChannel
 
-**Purpose:**  
-Gracefully shut down an active channel worker.
+**Purpose:** Gracefully stop playout for a channel.
 
-**Request**
+| Request Field | Type | Description |
+|---------------|------|-------------|
+| `channel_id` | int32 | Channel to stop |
 
-| Field        | Type  | Description                |
-| ------------ | ----- | -------------------------- |
-| `channel_id` | int32 | Channel identifier to stop |
+| Response Field | Type | Description |
+|----------------|------|-------------|
+| `success` | bool | Whether shutdown succeeded |
+| `error_message` | string | (optional) Failure reason |
 
-**Response**
+**Guarantees (Phase 6A):**
 
-| Field           | Type   | Description                                |
-| --------------- | ------ | ------------------------------------------ |
-| `success`       | bool   | True if teardown completed cleanly         |
-| `error_message` | string | (optional) Description if failure occurred |
+- Channel state becomes stopped; all producers for that channel are stopped and resources released.
+- Stopping an already-stopped or unknown channel → **idempotent success**.
 
-**Behavior:**
-
-- Flush frame queue, stop decode threads, release all `libav*` resources.
-- Set channel state as `retrovue_playout_channel_state{channel="N"} = "stopped"`.
+**Deferred (Applies Phase 7+):** “Stopped within 1 second” timing SLA — see [Deferred (Applies Phase 7+)](#deferred-applies-phase-7).
 
 ---
 
 ### LoadPreview
 
-**Purpose:**  
-Load a producer into the preview slot in **shadow decode mode**. The producer decodes frames internally but does not write to the ring buffer until switched to live. This enables seamless switching with PTS continuity.
+**Purpose:** Load the next segment into the **preview slot**. This is the **primary execution instruction** for segment-based control. Segment payload: `asset_path`, `start_offset_ms` (media-relative), `hard_stop_time_ms` (wall-clock epoch ms, authoritative). Air may stop at or before `hard_stop_time_ms` but must never play past it.
 
-**Request**
+| Request Field | Type | Description |
+|---------------|------|-------------|
+| `channel_id` | int32 | Target channel |
+| `asset_path` | string | Fully-qualified media file path (or asset reference) |
+| `start_offset_ms` | int64 | Media-relative start position (ms). Join-in-progress. |
+| `hard_stop_time_ms` | int64 | Wall-clock time (epoch ms) when this segment must stop. Authoritative. |
 
-| Field        | Type   | Description                                    |
-| ------------ | ------ | ---------------------------------------------- |
-| `channel_id` | int32  | Target channel identifier                      |
-| `path`       | string | File path to the asset                         |
-| `asset_id`   | string | Unique identifier for the asset                |
+| Response Field | Type | Description |
+|----------------|------|-------------|
+| `success` | bool | Whether preview loaded |
+| `message` | string | (optional) Status message |
+| `shadow_decode_started` | bool | True if producer entered shadow decode mode (optional in 6A) |
 
-**Response**
+**Guarantees (Phase 6A):**
 
-| Field           | Type   | Description                              |
-| --------------- | ------ | ---------------------------------------- |
-| `success`       | bool   | Indicates whether preview load succeeded |
-| `message`       | string | (optional) Human-readable status message  |
+- LoadPreview **before** StartChannel for that channel → **error** (`success=false`).
+- On success, preview slot holds the segment for the channel; loading new preview replaces any existing preview.
+- Invalid path (or unreadable file when file-backed producer is used) returns `success=false` with error.
 
-**Behavior:**
-- Producer is created and started in **shadow decode mode** (decodes frames but does not write to buffer)
-- Producer decodes first frame and caches it for seamless switching
-- Preview slot is ready for switching once shadow decode is complete (first frame decoded)
-- Live slot remains unchanged (continues outputting frames)
-- Ring buffer persists (not flushed during preview load)
-- If a preview producer already exists, it is destroyed before loading the new one
-- On failure, returns `success=false` with error message
+**Deferred (Applies Phase 7+):** “Preview ready for switching” (first frame decoded), “live playout continues uninterrupted” — enforced when producers and Renderer/TS path exist; see [Deferred (Applies Phase 7+)](#deferred-applies-phase-7).
 
 ---
 
 ### SwitchToLive
 
-**Purpose:**  
-Seamlessly switch the preview slot producer to the live slot at ring buffer boundary with **perfect PTS continuity**. This implements the seamless switch algorithm: aligns PTS, swaps writer, and activates preview as live without flushing buffers or resetting renderer.
+**Purpose:** Promote the current preview to live atomically. **Control-only;** no segment payload.
 
-**Request**
+| Request Field | Type | Description |
+|---------------|------|-------------|
+| `channel_id` | int32 | Target channel |
 
-| Field        | Type   | Description                                          |
-| ------------ | ------ | ---------------------------------------------------- |
-| `channel_id` | int32  | Target channel identifier                            |
-| `asset_id`   | string | Asset ID that should be switched to live (must match preview slot) |
+| Response Field | Type | Description |
+|----------------|------|-------------|
+| `success` | bool | Whether switch succeeded |
+| `message` | string | (optional) Status message |
+| `pts_contiguous` | bool | (optional) Continuity hint (not required in 6A) |
+| `live_start_pts` | uint64 | (optional) Continuity details |
 
-**Response**
+**Guarantees (Phase 6A):**
 
-| Field           | Type   | Description                              |
-| --------------- | ------ | ---------------------------------------- |
-| `success`       | bool   | Indicates whether switch succeeded       |
-| `message`       | string | (optional) Human-readable status message |
+- **SwitchToLive** with no preview loaded for that channel → **error** (`success=false`).
+- On success, preview content is promoted to live; old live producer is stopped or recycled; preview slot is cleared or ready for next LoadPreview.
 
-**Behavior:**
-- **Seamless Switch Algorithm**:
-  1. Verify preview producer has decoded first frame (shadow decode ready)
-  2. Get last PTS from live producer: `last_live_pts`
-  3. Align preview producer PTS: `preview_first_pts = last_live_pts + frame_duration`
-  4. Exit shadow mode (preview producer begins writing to buffer)
-  5. Stop live producer gracefully (wind down)
-  6. Move preview producer to live slot
-- **Critical Requirements**:
-  - Ring buffer is **NOT flushed** (persists through switch)
-  - Renderer pipeline is **NOT reset** (continues reading seamlessly)
-  - PTS continuity is **mandatory** (no jumps, no resets to zero)
-  - Last live frame and first preview frame appear back-to-back in buffer
-  - No visual discontinuity, no black frames, no stutter
-- **Expected switch time**: ≤ 100ms for seamless playout
-- On failure, returns `success=false` with error message
+**Deferred (Applies Phase 7+):** “Switch completes within 100ms”, “PTS continuity maintained”, “no visual discontinuity”, “no black frames, no stutter” — see [Deferred (Applies Phase 7+)](#deferred-applies-phase-7). Phase 6A does not enforce output continuity or Renderer/TS semantics.
 
 ---
 
-## Pipeline Reset Behavior
+## Part 2: Telemetry
 
-**Critical Clarification**: `resetPipeline()` is **NOT** called during seamless producer switching. The renderer continues reading seamlessly from the ring buffer during `SwitchToLive` operations.
+**Phase applicability:** Metric **definitions** and **names** are preserved. **Deferred (Applies Phase 7+).** Validated when metrics pipeline and output path exist.
 
-### When `resetPipeline()` IS Called
+### Metrics Endpoint
 
-`resetPipeline()` is called by PlayoutEngine in the following scenarios:
+**URL:** `GET /metrics`
 
-1. **Plan Updates** (`UpdatePlan`): When a new playout plan is loaded, the renderer pipeline may be reset to clear stale frames and reset timestamp state.
-2. **Channel Restart**: When a channel is restarted after an error or manual restart.
-3. **Major Error Recovery**: When a hard reset is required due to unrecoverable errors.
+**Response:** Content-Type: `text/plain; version=0.0.4`; Prometheus exposition format.  
+**Deferred (Applies Phase 7+):** “Response time ≤ 100ms”.
 
-### When `resetPipeline()` is NOT Called
+### Required Metrics (definition only; enforcement Phase 7+)
 
-`resetPipeline()` is **explicitly NOT called** during:
+| Metric | Type | Description |
+|--------|------|-------------|
+| `retrovue_playout_channel_state{channel}` | Gauge | Channel state: 0=stopped, 1=buffering, 2=ready, 3=error |
+| `retrovue_playout_buffer_depth_frames{channel}` | Gauge | Frames currently buffered (0-60) |
+| `retrovue_playout_frame_gap_seconds{channel}` | Gauge | Deviation from scheduled time |
+| `retrovue_playout_decode_failure_count{channel}` | Counter | Decode errors |
+| `retrovue_playout_frames_decoded_total{channel}` | Counter | Total frames decoded |
+| `retrovue_playout_frames_dropped_total{channel}` | Counter | Frames dropped |
+| `retrovue_playout_buffer_underrun_total{channel}` | Counter | Buffer underrun events |
+| `retrovue_playout_decode_latency_seconds{channel}` | Histogram | Decode latency distribution |
+| `retrovue_playout_channel_uptime_seconds{channel}` | Gauge | Time in ready state |
 
-1. **Seamless Producer Switching** (`SwitchToLive`): 
-   - FrameRouter handles the switch by pulling the last frame from the live producer and the first frame from the preview producer
-   - Both frames are written consecutively into the ring buffer with continuous PTS
-   - Renderer continues reading seamlessly without any pipeline reset
-   - This ensures no visual discontinuity, no black frames, and perfect PTS continuity
+### Channel State Values
 
-**Architecture Rationale**:
-- Seamless switching is handled upstream by FrameRouter
-- FrameRouter ensures the ring buffer contains the last LIVE frame and first PREVIEW frame consecutively
-- Renderer continues reading from the buffer without interruption
-- `resetPipeline()` would break seamless switching by clearing the buffer and resetting timestamps
+| Value | State | Meaning |
+|-------|-------|---------|
+| 0 | stopped | Channel not running |
+| 1 | buffering | Building buffer, not ready for output |
+| 2 | ready | Normal operation, outputting frames |
+| 3 | error | Error condition, may be recovering |
 
----
+**Note:** During Phase 6A, “ready” may mean “channel initialized and may have live producer”; exact semantics align with Phase 7 when Renderer/TS exist.
 
-### Telemetry Requirements
+### Metric Guarantees (Phase 7+)
 
-The playout engine **must** expose Prometheus metrics at `/metrics`:
-
-| Metric                                    | Type  | Description                                         |
-| ----------------------------------------- | ----- | --------------------------------------------------- |
-| `retrovue_playout_channel_state{channel}` | Gauge | Reports `ready`, `buffering`, `error`, or `stopped` |
-| `retrovue_playout_frame_gap_seconds`      | Gauge | Deviation from scheduled MasterClock timestamps     |
-| `retrovue_playout_buffer_depth_frames`    | Gauge | Number of frames currently staged per channel       |
-
----
-
-### Versioning Rules
-
-- API versioning is governed by the `PLAYOUT_API_VERSION` constant in the proto file options.
-- Any **backward-incompatible** change (field removal, name/semantic changes, etc.) **must** bump this version and require synchronized releases of:
-  - `retrovue-core`
-- `retrovue-air`
+- **PE-TEL-001:** All metrics include `channel` label
+- **PE-TEL-002:** Counters never decrease (reset to 0 on channel restart)
+- **PE-TEL-003:** State transitions reflected in metrics
+- **PE-TEL-004:** Histogram includes `_bucket`, `_sum`, `_count` suffixes
 
 ---
 
-### Error Handling
+## Part 3: Performance Targets
 
-- All methods return a `success` flag and an optional `error_message`.
-- **Critical errors** (decoder crash, invalid plan):
-  - Set channel state to `error`.
-  - Attempt restart up to **5 times per minute** with exponential backoff.
-  - If recovery fails, fall back to slate output and notify ChannelManager via health metric.
+**Phase applicability:** **Not enforced during Phase 6A.** Targets are **retained** as future intent for Phase 7+.
 
----
+### Latency Targets (future enforcement)
 
-### Example Lifecycle
+| Operation | Target |
+|-----------|--------|
+| StartChannel → first frame | ≤ 2 seconds |
+| UpdatePlan downtime | ≤ 500ms |
+| StopChannel → stopped | ≤ 1 second |
+| SwitchToLive | ≤ 100ms |
+| Frame decode (p95) | ≤ 25ms |
+| Frame decode (p99) | ≤ 50ms |
 
-```mermaid
-sequenceDiagram
-    participant CM as ChannelManager
-    participant PE as Playout Engine
-    participant RD as Renderer
+### Throughput Targets (future enforcement)
 
-    CM->>PE: StartChannel(channel_id=1, plan_handle="morning_block")
-    PE-->>CM: success=true
-    PE->>RD: Stream decoded frames (YUV420)
-    CM->>PE: UpdatePlan(channel_id=1, plan_handle="noon_block")
-    PE-->>CM: success=true
-    CM->>PE: StopChannel(channel_id=1)
-    PE-->>CM: success=true
-```
+| Metric | Target |
+|--------|--------|
+| Channels per 4-core CPU | ≥ 4 @ 1080p30 |
+| Frame rate per channel | ≥ 30 fps sustained |
+| Memory per channel | ≤ 100 MB |
 
----
+### Timing Targets (future enforcement)
 
-## Part 2: Testing & Validation
-
-### Scope
-
-This contract enforces testing requirements for the entire playout engine subsystem, validating:
-
-1. **Unit Tests**: Individual component behavior (buffer, decoder, metrics)
-2. **Integration Tests**: Multi-component interactions (decode → buffer → render)
-3. **Lifecycle Tests**: Channel state transitions and control plane operations
-4. **End-to-End Tests**: Full pipeline validation with Python runtime integration
-5. **Performance Tests**: Latency, throughput, and resource utilization benchmarks
-
-### Test Principles
-
-- **Deterministic**: Tests produce repeatable results; no flaky tests allowed
-- **Isolated**: Tests run independently; no shared state between tests
-- **Fast**: Unit tests complete in < 1s; integration tests in < 10s
-- **Observable**: Test failures provide actionable diagnostics
-- **Comprehensive**: All domain contracts have test coverage
+| Metric | Target |
+|--------|--------|
+| Clock skew (p99) | ≤ 50ms |
+| Frame gap (normal) | ≤ 16ms |
+| PTS continuity during switch | No gaps or resets |
 
 ---
 
-### Test Matrix
+## Part 4: Error Handling
 
-The following table defines mandatory test coverage for each subsystem:
+### Error Responses (Phase 6A)
 
-| Subsystem         | Component            | Unit Tests | Integration Tests | Lifecycle Tests | E2E Tests | Performance Tests |
-| ----------------- | -------------------- | ---------- | ----------------- | --------------- | --------- | ----------------- |
-| **Buffer**        | FrameRingBuffer      | ✅ Required | ✅ Required        | N/A             | ✅ Required | ✅ Required        |
-| **Decode**        | FrameProducer        | ✅ Required | ✅ Required        | ✅ Required      | ✅ Required | ✅ Required        |
-| **Renderer**      | FrameRenderer        | ✅ Required | ✅ Required        | ✅ Required      | ✅ Required | ⚠️ Optional       |
-| **Telemetry**     | MetricsExporter      | ✅ Required | ✅ Required        | N/A             | ✅ Required | ⚠️ Optional       |
-| **Control Plane** | gRPC Service         | ✅ Required | ✅ Required        | ✅ Required      | ✅ Required | ⚠️ Optional       |
-| **State Machine** | Channel States       | ✅ Required | ✅ Required        | ✅ Required      | ✅ Required | N/A               |
-| **Clock Sync**    | MasterClock          | ✅ Required | ✅ Required        | N/A             | ✅ Required | ✅ Required        |
-| **Error Recovery**| Retry/Fallback       | ✅ Required | ✅ Required        | ✅ Required      | ✅ Required | N/A               |
+All gRPC methods return structured responses:
 
-### Test File Mapping
+| Field | Description |
+|-------|-------------|
+| `success` | `false` on error |
+| `error_message` | Human-readable description |
 
-| Test File                        | Subsystem Covered          | Test Type    | Stub Mode | Real Mode |
-| -------------------------------- | -------------------------- | ------------ | --------- | --------- |
-| `tests/test_buffer.cpp`          | FrameRingBuffer            | Unit         | ✅         | ✅         |
-| `tests/test_decode.cpp`          | FrameProducer              | Unit         | ✅         | ✅         |
-| `tests/test_metrics.cpp`         | MetricsExporter            | Unit         | ✅         | ✅         |
-| `tests/test_lifecycle.cpp`       | Channel State Machine      | Integration  | ✅         | ✅         |
-| `tests/test_grpc_service.cpp`    | gRPC Control Plane         | Integration  | ✅         | ✅         |
-| `tests/test_renderer.cpp`        | FrameRenderer              | Integration  | ✅         | ✅         |
-| `tests/test_clock_sync.cpp`      | MasterClock Integration    | Integration  | ✅         | ✅         |
-| `tests/test_error_recovery.cpp`  | Retry and Fallback Logic   | Integration  | ✅         | ✅         |
-| `tests/test_e2e_pipeline.cpp`    | Full Decode Pipeline       | E2E          | ❌         | ✅         |
-| `tests/test_performance.cpp`     | Latency and Throughput     | Performance  | ❌         | ✅         |
-| `tests/contract/test_*.py`       | Python ↔ C++ Contract      | Contract     | ✅         | ✅         |
+gRPC status codes: `NOT_FOUND` (invalid channel_id), `INVALID_ARGUMENT` (invalid parameters), `INTERNAL` (resource/decode failure).
+
+### Error Recovery (Deferred — Phase 7+)
+
+The following are **not required for Phase 6A** but are **retained** as institutional knowledge:
+
+- **PE-ERR-001:** Critical errors (decode crash) trigger automatic retry
+- **PE-ERR-002:** Retry follows exponential backoff: 1s, 2s, 4s, 8s, 16s
+- **PE-ERR-003:** Max 5 retries per minute
+- **PE-ERR-004:** After max retries, channel falls back to slate output
+- **PE-ERR-005:** Other channels unaffected by single-channel errors
 
 ---
 
-## Lifecycle Tests
+## Part 5: Versioning
 
-Lifecycle tests validate channel state transitions and control plane operations.
-
-### LT-001: Startup Sequence
-
-**Scenario**: `StartChannel` → Channel reaches `ready` state
-
-**Setup**:
-1. Initialize playout service
-2. Prepare valid plan_handle
-3. Set channel_id = 1
-
-**Execution**:
-```cpp
-StartChannelRequest request;
-request.set_channel_id(1);
-request.set_plan_handle("test_plan");
-request.set_port(8090);
-
-StartChannelResponse response = service->StartChannel(request);
-```
-
-**Assertions**:
-- `response.success() == true`
-- Channel state transitions: `[*] → buffering → ready`
-- `retrovue_playout_channel_state{channel="1"} == 2` (ready)
-- Buffer depth reaches ≥ 30 frames within 2s
-- First frame delivered within 2s of request
-
-**Failure Cases**:
-- Invalid plan_handle → `success=false`, error message present
-- Duplicate channel_id → Idempotent (returns success, no-op)
+- **PE-VER-001:** API version is defined in proto file options
+- **PE-VER-002:** Breaking changes require version bump
+- **PE-VER-003:** Version changes require synchronized Core and Air releases
 
 ---
 
-### LT-002: Plan Update
+## Behavioral Rules Summary
 
-**Scenario**: `UpdatePlan` during active playback
+### Phase 6A–Enforced
 
-**Setup**:
-1. Start channel with plan "morning_block"
-2. Wait for `ready` state
-3. Prepare new plan "noon_block"
+| Category | Rule | Guarantee |
+|----------|------|-----------|
+| Startup | PE-START-001 | Channel state initialized; execution only after LoadPreview + SwitchToLive |
+| Startup | PE-START-002 | StartChannel idempotent on already-started channel |
+| Stop | PE-STOP-001 | Stopped state; resources released |
+| Stop | PE-STOP-002 | StopChannel idempotent on unknown/stopped channel |
+| Control | PE-CTL-001 | LoadPreview before StartChannel → error |
+| Control | PE-CTL-002 | SwitchToLive with no preview loaded → error |
 
-**Execution**:
-```cpp
-UpdatePlanRequest request;
-request.set_channel_id(1);
-request.set_plan_handle("noon_block");
+### Deferred (Applies Phase 7+)
 
-UpdatePlanResponse response = service->UpdatePlan(request);
-```
-
-**Assertions**:
-- `response.success() == true`
-- Channel state transitions: `ready → buffering → ready`
-- Downtime ≤ 500ms (measured via telemetry)
-- No frames lost (continuity maintained)
-- Buffer rebuilds to ≥ 30 frames
-- PTS resets correctly for new plan
-
-**Failure Cases**:
-- Invalid plan_handle → `success=false`, channel enters `error` state
-- Update during error state → Retry after recovery
+| Category | Rule | Guarantee (future) |
+|----------|------|--------------------|
+| Startup | PE-START-D | Channel ready within 2s; frames available within 2s |
+| Update | PE-UPDATE-001 | Plan swap within 500ms |
+| Update | PE-UPDATE-002 | No frame loss during swap |
+| Stop | PE-STOP-D | Stopped within 1s |
+| Switch | PE-SWITCH-001 | SwitchToLive completes within 100ms |
+| Switch | PE-SWITCH-002 | PTS continuity maintained |
+| Switch | PE-SWITCH-003 | No visual discontinuity |
+| Telemetry | PE-TEL-001–004 | Metric presence and guarantees |
+| Error | PE-ERR-001–005 | Auto-retry, backoff, slate, isolation |
 
 ---
 
-### LT-003: Graceful Shutdown
+## Deferred (Applies Phase 7+)
 
-**Scenario**: `StopChannel` during active playback
+The following guarantees are **intentionally deferred** until Phase 7+ (see [Phase Model](../../contracts/PHASE_MODEL.md)) when MPEG-TS serving, Renderer placement, and/or performance validation are in scope. **Nothing below is deleted;** it is re-scoped so Phase 6A tests do not conflict.
 
-**Setup**:
-1. Start channel and reach `ready` state
-2. Decode at least 100 frames
-
-**Execution**:
-```cpp
-StopChannelRequest request;
-request.set_channel_id(1);
-
-StopChannelResponse response = service->StopChannel(request);
-```
-
-**Assertions**:
-- `response.success() == true`
-- Channel state transitions: `ready → stopped`
-- Decode thread joins within 5s
-- All resources released (memory, file handles)
-- Buffer drained completely
-- `retrovue_playout_channel_state{channel="1"} == 0` (stopped)
-- No memory leaks (valgrind clean)
-
-**Failure Cases**:
-- Stop already-stopped channel → Idempotent (returns success)
-- Stop during buffering → Cancels buffering, proceeds to stopped
+- **StartChannel:** “Channel ready within 2 seconds”, “frames available for consumption within 2 seconds”, and any definition of “ready == outputting frames”. **Why deferred:** Phase 6A does not require real media playback or frame output; execution begins only after LoadPreview + SwitchToLive.
+- **UpdatePlan:** Hot-swap timing (500ms), no frame loss, error state semantics. **Why deferred:** Plans are optional/legacy in 6A; segment-based control is canonical.
+- **StopChannel:** “Stopped within 1 second” timing. **Why deferred:** Phase 6A validates clean stop and idempotency; strict wall-clock timing is Phase 7.
+- **SwitchToLive:** “Completes within 100ms”, “PTS continuity maintained”, “no visual discontinuity”, “no black frames, no stutter”. **Why deferred:** No Renderer or TS path in 6A; continuity is enforced when output path exists.
+- **Telemetry:** Full metrics presence, response time ≤ 100ms. **Why deferred:** Phase 6A.0 may use stub implementations; metrics validated in Phase 7.
+- **Performance targets:** All latency, throughput, and timing targets in Part 3. **Why deferred:** Phase 6A defers performance tuning and latency guarantees.
+- **Error recovery:** PE-ERR-001 through PE-ERR-005 (retry, backoff, slate, isolation). **Why deferred:** Validation in Phase 7; 6A focuses on control surface and producer lifecycle.
 
 ---
 
-### LT-004: Error Recovery
+## Test Coverage
 
-**Scenario**: Decode error triggers retry sequence
+**Phase 6A:** Tests verify control-plane behavior and Phase 6A semantics (e.g. StartChannel → initialized; LoadPreview before StartChannel → error; SwitchToLive with no preview → error; idempotent Start/Stop). See [Phase6A-0 Control Surface](Phase6A-0-ControlSurface.md).
 
-**Setup**:
-1. Start channel with plan referencing corrupted asset
-2. Force decode error
-
-**Execution**:
-- Producer encounters decode error
-- Automatic retry initiated
-
-**Assertions**:
-- Channel state transitions: `ready → error → ready` (after successful retry)
-- Retry attempts follow exponential backoff (1s, 2s, 4s, 8s, 16s)
-- `retrovue_playout_decode_failure_count` increments on each failure
-- If retries exhausted: slate loop activated
-- Other channels unaffected (cross-channel isolation)
-
-**Failure Cases**:
-- Max retries exceeded → Channel remains in `error` state, slate active
-- Slate fallback tested separately
-
----
-
-### LT-005: LoadPreview Sequence
-
-**Scenario**: `LoadPreview` → Preview slot loaded, ready for switching
-
-**Setup**:
-1. Start channel with initial asset
-2. Channel reaches `ready` state
-3. Prepare new asset for preview
-
-**Execution**:
-```cpp
-LoadPreviewRequest request;
-request.set_channel_id(1);
-request.set_path("/path/to/preview.mp4");
-request.set_asset_id("preview-asset-123");
-
-LoadPreviewResponse response = service->LoadPreview(request);
-```
-
-**Assertions**:
-- `response.success() == true`
-- Preview slot contains producer with correct asset_id
-- Preview producer is running in **shadow decode mode** (decodes frames but FrameRouter does not pull from it)
-- Preview producer has decoded first frame (shadow decode ready, frames available via pull API)
-- Live slot remains unchanged (FrameRouter continues pulling from live producer)
-- Ring buffer persists (not flushed during preview load)
-- FrameRouter continues pulling from live producer and writing to buffer
-
-**Failure Cases**:
-- Invalid channel_id → `success=false`, `NOT_FOUND` status
-- Invalid path → `success=false`, `INTERNAL` status
-- Producer factory not set → `success=false`, error message
-
----
-
-### LT-006: SwitchToLive Sequence
-
-**Scenario**: `SwitchToLive` → Preview becomes live, seamless transition
-
-**Setup**:
-1. Channel with live producer running
-2. Preview asset loaded via `LoadPreview`
-3. Channel in `Playing` state
-
-**Execution**:
-```cpp
-SwitchToLiveRequest request;
-request.set_channel_id(1);
-request.set_asset_id("preview-asset-123");
-
-SwitchToLiveResponse response = service->SwitchToLive(request);
-```
-
-**Assertions**:
-- `response.success() == true`
-- Preview producer shadow decode is ready (first frame decoded)
-- Preview producer PTS is aligned: `preview_first_pts = live_last_pts + frame_duration`
-- **Slot switching occurs at a frame boundary, and the engine guarantees that the final LIVE frame and first PREVIEW frame are placed consecutively in the output ring buffer with no discontinuity in timing or PTS.**
-- FrameRouter pulls last frame from live producer via `nextFrame()` and writes to buffer
-- FrameRouter switches which producer it pulls from (atomic switch: `router.active_producer = preview`)
-- Preview producer exits shadow mode and begins exposing frames via pull API
-- Old live producer is stopped gracefully
-- Preview producer moved to live slot
-- Preview slot is reset (empty)
-- **Ring buffer persists** (not flushed during switch)
-- **Renderer pipeline is NOT reset** (continues reading seamlessly)
-- FrameRingBuffer contains: `[last_live_frame][first_preview_frame][...]` with continuous PTS
-- **PTS continuity maintained** (no jumps, no resets to zero, no negative deltas)
-- No visual discontinuity, no black frames, no stutter
-- Switch completes within 100ms
-
-**Failure Cases**:
-- Invalid channel_id → `success=false`, `NOT_FOUND` status
-- Asset ID mismatch → `success=false`, `INVALID_ARGUMENT` status
-- No preview loaded → `success=false`, error message
-- Producer start fails → `success=false`, `INTERNAL` status
-
----
-
-### LT-007: Buffer Underrun Recovery
-
-**Scenario**: Consumer outpaces producer, buffer underruns
-
-**Setup**:
-1. Start channel with slow decode (throttled)
-2. Consumer pulls frames at full rate
-
-**Execution**:
-- Buffer depth drops below 30 frames
-
-**Assertions**:
-- Channel state transitions: `ready → buffering`
-- `retrovue_playout_buffer_underrun_total` increments
-- Slate injection activates
-- Once buffer rebuilds to 30 frames: `buffering → ready`
-- Normal playback resumes
-
----
-
-### LT-006: Multi-Channel Isolation
-
-**Scenario**: One channel failure does not affect others
-
-**Setup**:
-1. Start 3 channels (IDs: 1, 2, 3)
-2. All reach `ready` state
-
-**Execution**:
-- Force channel 2 into `error` state (invalid asset)
-
-**Assertions**:
-- Channel 1: remains `ready`, decode continues
-- Channel 2: enters `error`, retries or slate
-- Channel 3: remains `ready`, decode continues
-- Channel 1 and 3 metrics unaffected
-- No shared state corruption
-
----
-
-## Telemetry Validation
-
-All telemetry tests validate metrics against the schema defined in the domain contract.
-
-### Required Metrics Tests
-
-#### TV-001: Metrics Endpoint Availability
-
-**Test**: HTTP GET to `/metrics` returns Prometheus text format
-
-**Assertions**:
-- Response code: 200 OK
-- Content-Type: `text/plain; version=0.0.4`
-- Response time ≤ 100ms
-- All required metrics present
-
----
-
-#### TV-002: Required Metrics Presence
-
-**Test**: All 9 core metrics are exported
-
-**Required Metrics**:
-1. `retrovue_playout_channel_state`
-2. `retrovue_playout_buffer_depth_frames`
-3. `retrovue_playout_frame_gap_seconds`
-4. `retrovue_playout_decode_failure_count`
-5. `retrovue_playout_frames_decoded_total`
-6. `retrovue_playout_frames_dropped_total`
-7. `retrovue_playout_buffer_underrun_total`
-8. `retrovue_playout_decode_latency_seconds` (histogram)
-9. `retrovue_playout_channel_uptime_seconds`
-
-**Assertions**:
-- Each metric has `# HELP` and `# TYPE` comments
-- Each metric includes `channel` label
-- Histogram includes `_bucket`, `_sum`, `_count` suffixes
-
----
-
-#### TV-003: Channel State Encoding
-
-**Test**: State metric values match encoding
-
-**State Values**:
-- `0` = stopped
-- `1` = buffering
-- `2` = ready
-- `3` = error
-
-**Assertions**:
-- State transitions reflected immediately in metric
-- No invalid state values (e.g., negative, > 3)
-- State persists until next transition
-
----
-
-#### TV-004: Buffer Depth Bounds
-
-**Test**: Buffer depth metric respects capacity
-
-**Assertions**:
-- `0 ≤ buffer_depth_frames ≤ buffer_capacity`
-- Default capacity: 60 frames
-- Underrun warning: `buffer_depth_frames < 30`
-- Overflow: `buffer_depth_frames == capacity` → frames dropped
-
----
-
-#### TV-005: Frame Gap Accuracy
-
-**Test**: Frame gap metric reflects PTS deviation
-
-**Assertions**:
-- `frame_gap_seconds` updated on every frame
-- Positive value: frame ahead of schedule
-- Negative value: frame behind schedule
-- Target range: `|frame_gap_seconds| ≤ 0.016` (16ms)
-- Threshold violation logged if > 5 seconds
-
----
-
-#### TV-006: Counter Monotonicity
-
-**Test**: Counters only increase
-
-**Counters**:
-- `frames_decoded_total`
-- `frames_dropped_total`
-- `decode_failure_count`
-- `buffer_underrun_total`
-
-**Assertions**:
-- Counters never decrease
-- Reset to 0 on channel restart
-- Increment atomically (no race conditions)
-
----
-
-#### TV-007: Histogram Buckets
-
-**Test**: Decode latency histogram buckets are correct
-
-**Expected Buckets** (seconds):
-- 0.01 (10ms)
-- 0.025 (25ms)
-- 0.05 (50ms)
-- +Inf
-
-**Assertions**:
-- All buckets present
-- Bucket counts monotonically increasing: `count(le=0.01) ≤ count(le=0.025) ≤ count(le=0.05) ≤ count(le=+Inf)`
-- `_sum` / `_count` = mean latency
-
----
-
-#### TV-008: Channel Uptime
-
-**Test**: Uptime metric tracks time in `ready` state
-
-**Assertions**:
-- Uptime starts at 0 when entering `ready`
-- Increases monotonically while in `ready`
-- Stops increasing when leaving `ready` (buffering, error, stopped)
-- Resets to 0 on re-entering `ready` after non-ready state
-
----
-
-## Performance & Timing
-
-Performance tests validate latency, throughput, and resource utilization targets.
-
-### PT-001: Frame Decode Latency
-
-**Target**: p95 ≤ 25ms, p99 ≤ 50ms
-
-**Test Procedure**:
-1. Decode 1000 frames from H.264 1080p30 video
-2. Measure time from `av_read_frame()` to `push()` completion
-3. Calculate percentiles
-
-**Assertions**:
-- p50 ≤ 15ms
-- p95 ≤ 25ms
-- p99 ≤ 50ms
-- No outliers > 100ms
-
-**Test Environment**:
-- CPU: 4-core @ 3.0 GHz
-- No CPU throttling
-- Isolated test (no other channels)
-
----
-
-### PT-002: Buffer Operations
-
-**Target**: Push/Pop ≤ 1ms
-
-**Test Procedure**:
-1. Allocate FrameRingBuffer (capacity: 60)
-2. Execute 10,000 push operations
-3. Execute 10,000 pop operations
-4. Measure individual operation latency
-
-**Assertions**:
-- Mean push latency ≤ 0.5ms
-- p99 push latency ≤ 1ms
-- Mean pop latency ≤ 0.5ms
-- p99 pop latency ≤ 1ms
-- No allocations in hot path (pre-allocated buffer)
-
----
-
-### PT-003: Control Plane Latency
-
-**Target**: StartChannel ≤ 2s, UpdatePlan ≤ 500ms, StopChannel ≤ 1s
-
-**Test Procedure**:
-1. Measure gRPC request to completion time
-
-**Assertions**:
-- `StartChannel`: ≤ 2s to first frame delivered
-- `UpdatePlan`: ≤ 500ms downtime (measured via telemetry)
-- `StopChannel`: ≤ 1s to thread joined
-
----
-
-### PT-004: Multi-Channel Throughput
-
-**Target**: ≥ 4 channels @ 30fps on 4-core CPU
-
-**Test Procedure**:
-1. Start 4 channels simultaneously
-2. Each channel decodes 1080p30 H.264
-3. Run for 60 seconds
-
-**Assertions**:
-- All channels maintain ≥ 30fps decode rate
-- No frame drops (`frames_dropped_total == 0` for all channels)
-- CPU usage ≤ 100% (< 1 core per channel)
-- Memory usage ≤ 400 MB total (< 100 MB per channel)
-
----
-
-### PT-005: Clock Synchronization Tolerance
-
-**Target**: Clock skew ≤ 50ms between runtime and engine
-
-**Test Procedure**:
-1. Compare `MasterClock.now_utc_us()` with system time
-2. Sample 1000 times over 60 seconds
-
-**Assertions**:
-- Mean skew ≤ 10ms
-- p99 skew ≤ 50ms
-- No backward time jumps (monotonicity)
-
----
-
-### PT-006: Memory Stability
-
-**Target**: No memory leaks over 1000 start/stop cycles
-
-**Test Procedure**:
-1. Loop 1000 times:
-   - StartChannel
-   - Decode 100 frames
-   - StopChannel
-2. Measure memory usage via valgrind
-
-**Assertions**:
-- Memory usage stable (no unbounded growth)
-- Valgrind reports 0 leaks
-- All FFmpeg contexts released
-
----
-
-## Stub vs Real Mode Rules
-
-The playout engine supports two operational modes for testing purposes:
-
-### Stub Mode (`RETROVUE_STUB_DECODE` defined)
-
-**Purpose**: Fast unit tests without FFmpeg dependencies
-
-**Enabled When**:
-- FFmpeg libraries not available
-- Fast iteration during development
-- CI environments without media codecs
-
-**Behavior**:
-- FrameProducer generates synthetic frames (colored test patterns)
-- PTS increments by fixed duration (33.33ms for 30fps)
-- No actual decoding; instant frame generation
-- Asset URIs ignored; plan resolution skipped
-
-**Tests That Run in Stub Mode**:
-- Buffer operations (push/pop)
-- State machine transitions
-- Metrics export
-- Control plane (gRPC)
-- Error recovery (simulated errors)
-
-**Tests That Skip in Stub Mode**:
-- Real decode latency benchmarks
-- FFmpeg error handling
-- Codec-specific behavior
-- Performance tests requiring real decode
-
----
-
-### Real Mode (FFmpeg enabled)
-
-**Purpose**: Validate actual decode pipeline
-
-**Enabled When**:
-- FFmpeg libraries detected at build time
-- Integration and E2E tests
-- Performance benchmarks
-
-**Behavior**:
-- FrameProducer uses libavformat/libavcodec
-- Real media assets decoded
-- Plan resolution from ChannelManager
-- Actual PTS/DTS from media
-
-**Required Tests**:
-- Decode latency (PT-001)
-- Multi-channel throughput (PT-004)
-- E2E pipeline
-- Codec compatibility
-
----
-
-### Mode Detection
-
-**CMake Configuration**:
-
-```cmake
-# Detect FFmpeg availability
-find_package(FFmpeg COMPONENTS avformat avcodec avutil)
-
-if(FFmpeg_FOUND)
-    target_compile_definitions(retrovue_playout PRIVATE RETROVUE_REAL_DECODE)
-else()
-    target_compile_definitions(retrovue_playout PRIVATE RETROVUE_STUB_DECODE)
-endif()
-```
-
-**Test Conditional**:
-
-```cpp
-#ifdef RETROVUE_REAL_DECODE
-TEST(DecodeLatency, MeasureH264Performance) {
-    // Real FFmpeg decode latency test
-}
-#else
-GTEST_SKIP() << "Real decode required";
-#endif
-```
-
----
-
-### Mode Requirements Matrix
-
-| Test Category       | Stub Mode | Real Mode | Notes                              |
-| ------------------- | --------- | --------- | ---------------------------------- |
-| Buffer Unit Tests   | ✅         | ✅         | Mode-agnostic                      |
-| State Machine       | ✅         | ✅         | Mode-agnostic                      |
-| Metrics Export      | ✅         | ✅         | Mode-agnostic                      |
-| Control Plane       | ✅         | ✅         | Mode-agnostic                      |
-| Decode Unit Tests   | ✅         | ✅         | Stub uses synthetic frames         |
-| Decode Performance  | ❌         | ✅         | Requires real FFmpeg               |
-| E2E Pipeline        | ❌         | ✅         | Requires real decode               |
-| Codec Compatibility | ❌         | ✅         | Requires real FFmpeg               |
-| Error Recovery      | ✅         | ✅         | Stub simulates errors              |
-
----
-
-## CI Enforcement
-
-Continuous Integration must enforce test coverage and prevent regressions.
-
-### CE-001: All Tests Must Pass
-
-**Rule**: CI fails if any test fails
-
-**Enforcement**:
-- Run all tests on every commit
-- No flaky tests tolerated (fix or disable)
-- Test failures block merge
-
----
-
-### CE-002: Coverage Thresholds
-
-**Rule**: Minimum line coverage enforced
-
-**Thresholds**:
-- FrameRingBuffer: 100% line coverage
-- FrameProducer: ≥ 90% line coverage
-- State machine: 100% branch coverage
-- Error handling: All error codes covered
-
-**Enforcement**:
-- Generate coverage report via lcov/gcov
-- CI fails if below threshold
-- Coverage report published as artifact
-
----
-
-### CE-003: Required Tests Cannot Be Disabled
-
-**Rule**: Core test files must be present and enabled
-
-**Required Test Files**:
-- `test_buffer.cpp`
-- `test_decode.cpp`
-- `test_metrics.cpp`
-- `test_lifecycle.cpp`
-- `test_grpc_service.cpp`
-
-**Enforcement**:
-- CI scans for `DISABLED_` prefix in test names
-- CI fails if required test is disabled without justification
-- Justification: Comment with issue tracker link
-
----
-
-### CE-004: Performance Regression Detection
-
-**Rule**: Performance tests run on every PR
-
-**Benchmarks**:
-- Frame decode latency (PT-001)
-- Buffer operations (PT-002)
-- Control plane latency (PT-003)
-
-**Enforcement**:
-- Compare results against baseline
-- Warn if performance degrades > 10%
-- Fail if performance degrades > 25%
-- Baseline updated on release branches
-
----
-
-### CE-005: Memory Leak Detection
-
-**Rule**: Valgrind runs on integration tests
-
-**Enforcement**:
-- Run valgrind on `test_lifecycle.cpp`
-- Fail if any leaks detected
-- Suppression file allowed for FFmpeg false positives
-
----
-
-### CE-006: Thread Safety Validation
-
-**Rule**: ThreadSanitizer runs on multi-threaded tests
-
-**Enforcement**:
-- Compile with `-fsanitize=thread`
-- Run buffer and lifecycle tests
-- Fail if any data races detected
-
----
-
-### CE-007: Stub Mode Must Pass
-
-**Rule**: All stub-compatible tests pass without FFmpeg
-
-**Enforcement**:
-- CI job runs with `RETROVUE_STUB_DECODE`
-- Validates CI can run in restricted environments
-- Ensures developer iteration without FFmpeg dependencies
-
----
-
-### CI Pipeline Stages
-
-**Stage 1: Fast Unit Tests (Stub Mode)**
-- Duration: < 30s
-- Coverage: Buffer, state machine, metrics
-- Fail fast on basic regressions
-
-**Stage 2: Integration Tests (Real Mode)**
-- Duration: < 5 minutes
-- Coverage: Full pipeline with FFmpeg
-- Requires test media assets
-
-**Stage 3: Performance Benchmarks**
-- Duration: < 10 minutes
-- Coverage: Latency and throughput tests
-- Generates comparison report
-
-**Stage 4: Sanitizers & Coverage**
-- Duration: < 10 minutes
-- Coverage: ThreadSanitizer, valgrind, coverage report
-- Generates artifacts for review
-
----
-
-## Test Checklist
-
-Before merging any playout engine changes, verify:
-
-### Unit Tests
-- [ ] Buffer operations tested (push, pop, full, empty)
-- [ ] Decode thread lifecycle tested (start, stop, join)
-- [ ] Metrics export format validated
-- [ ] State transitions tested (all edges)
-
-### Integration Tests
-- [ ] Multi-component interactions validated
-- [ ] Error recovery sequences tested
-- [ ] Buffer underrun/overflow handling verified
-- [ ] Cross-channel isolation confirmed
-
-### Lifecycle Tests
-- [ ] StartChannel success and failure cases
-- [ ] UpdatePlan hot-swap validated
-- [ ] StopChannel cleanup verified
-- [ ] Idempotency tested for all operations
-
-### Telemetry Tests
-- [ ] All 9 required metrics present
-- [ ] Metric values within expected ranges
-- [ ] Prometheus format compliance verified
-- [ ] Metrics endpoint responds < 100ms
-
-### Performance Tests
-- [ ] Decode latency ≤ 25ms (p95)
-- [ ] Buffer operations ≤ 1ms
-- [ ] Multi-channel capacity ≥ 4 channels
-- [ ] Memory stability (no leaks)
-
-### CI Validation
-- [ ] All tests pass in CI
-- [ ] Coverage thresholds met
-- [ ] No disabled required tests
-- [ ] Sanitizers clean (no races, no leaks)
-- [ ] Stub mode tests pass
-
----
-
-## Test Data Requirements
-
-### Test Media Assets
-
-**Required Test Files**:
-
-| File                    | Format          | Resolution | FPS | Duration | Purpose                    |
-| ----------------------- | --------------- | ---------- | --- | -------- | -------------------------- |
-| `test_h264_1080p.mp4`   | H.264/AAC       | 1920x1080  | 30  | 10s      | Standard decode test       |
-| `test_hevc_1080p.mp4`   | HEVC/AAC        | 1920x1080  | 30  | 10s      | HEVC codec test            |
-| `test_corrupt.mp4`      | Corrupted H.264 | 1920x1080  | 30  | 5s       | Error recovery test        |
-| `test_variable_fps.mp4` | H.264/AAC       | 1920x1080  | VFR | 10s      | Variable framerate test    |
-| `test_slate.png`        | PNG             | 1920x1080  | N/A | N/A      | Slate fallback test        |
-
-**Storage Location**: `tests/fixtures/media/`
-
-**Licensing**: All test media must be freely distributable or synthetically generated
+**Phase 7+:** Tests for timing, metrics, switch seamlessness, and error recovery as in original contract (PE-START-D, PE-UPDATE-*, PE-SWITCH-*, PE-TEL-*, PE-ERR-*).
 
 ---
 
 ## See Also
 
-- [Playout Engine Domain](../domain/PlayoutEngineDomain.md) — Entity relationships and behavior
-- [Proto Schema](../../proto/retrovue/playout.proto) — gRPC service definition
-- [Renderer Contract](RendererContract.md) — Frame consumption and rendering contracts
-- [Metrics and Timing Contract](MetricsAndTimingContract.md) — Time synchronization and telemetry
-- [Architecture Overview](../architecture/ArchitectureOverview.md) — System context and integration
-- [Development Standards](../developer/DevelopmentStandards.md) — C++ project structure conventions
-- [Phase 2 Plan](../milestones/Phase2_Plan.md) — Implementation milestones
-
+- [Proto Schema](../../protos/playout.proto) — gRPC service definition
+- [Phase Model](../../contracts/PHASE_MODEL.md) — phase taxonomy
+- [Phase 6A Overview](Phase6A-Overview.md) — segment-based control and deferrals
+- [Phase6A-0 Control Surface](Phase6A-0-ControlSurface.md) — 6A.0 RPC semantics
+- [Renderer Contract](RendererContract.md) — frame consumption (post-6A)
+- [Metrics Contract](MetricsAndTimingContract.md) — telemetry details
+- [Contract Hygiene Checklist](../../standards/contract-hygiene.md) — authoring guidelines

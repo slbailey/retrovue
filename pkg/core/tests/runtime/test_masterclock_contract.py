@@ -6,7 +6,23 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import MasterClock, SteppedMasterClock
+
+# -----------------------------------------------------------------------------
+# Phase 0: Clock contract — deterministic under test, injectable and mockable
+# -----------------------------------------------------------------------------
+
+
+def test_phase0_stepped_clock_deterministic():
+    """Phase 0: Clock returns deterministic value under test (injected/stepped clock)."""
+    clock = SteppedMasterClock(start=100.0)
+    assert clock.now() == 100.0
+    clock.advance(10.0)
+    assert clock.now() == 110.0
+    clock.advance(0.5)
+    assert clock.now() == 110.5
+    # Same time until advance
+    assert clock.now() == 110.5
 
 
 def test_mc_001_timezone_awareness():

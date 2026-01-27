@@ -135,26 +135,22 @@ namespace retrovue
     {
       const int32_t channel_id = request->channel_id();
       const std::string &asset_path = request->asset_path();
+      const int64_t start_offset_ms = request->start_offset_ms();
+      const int64_t hard_stop_time_ms = request->hard_stop_time_ms();
 
       std::cout << "[LoadPreview] Request received: channel_id=" << channel_id
                 << ", asset_path=" << asset_path << std::endl;
 
-      // Delegate to controller
-      auto result = controller_->LoadPreview(channel_id, asset_path);
+      // Delegate to controller (start_offset_ms, hard_stop_time_ms accepted for proto/Phase 4; not interpreted in 6A.0)
+      auto result = controller_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
       
       response->set_success(result.success);
       response->set_message(result.message);
       response->set_shadow_decode_started(result.shadow_decode_started);
-      
+      // Phase 6A.0: error semantics via response success=false, not gRPC Status
       if (!result.success) {
-        grpc::StatusCode code = grpc::StatusCode::INTERNAL;
-        if (result.message.find("not found") != std::string::npos) {
-          code = grpc::StatusCode::NOT_FOUND;
-        } else if (result.message.find("not initialized") != std::string::npos ||
-                   result.message.find("not available") != std::string::npos) {
-          code = grpc::StatusCode::FAILED_PRECONDITION;
-        }
-        return grpc::Status(code, result.message);
+        std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed" << std::endl;
+        return grpc::Status::OK;
       }
       
       std::cout << "[LoadPreview] Channel " << channel_id
@@ -178,16 +174,10 @@ namespace retrovue
       response->set_message(result.message);
       response->set_pts_contiguous(result.pts_contiguous);
       response->set_live_start_pts(result.live_start_pts);
-      
+      // Phase 6A.0: error semantics via response success=false, not gRPC Status
       if (!result.success) {
-        grpc::StatusCode code = grpc::StatusCode::INTERNAL;
-        if (result.message.find("not found") != std::string::npos) {
-          code = grpc::StatusCode::NOT_FOUND;
-        } else if (result.message.find("not initialized") != std::string::npos ||
-                   result.message.find("not running") != std::string::npos) {
-          code = grpc::StatusCode::FAILED_PRECONDITION;
-        }
-        return grpc::Status(code, result.message);
+        std::cout << "[SwitchToLive] Channel " << channel_id << " switch failed" << std::endl;
+        return grpc::Status::OK;
       }
       
       std::cout << "[SwitchToLive] Channel " << channel_id

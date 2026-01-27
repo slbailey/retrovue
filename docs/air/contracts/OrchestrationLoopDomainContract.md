@@ -1,12 +1,25 @@
+# Contract - Orchestration Loop Domain
+
 _Metadata: Status=Draft; Scope=Contract; Owner=@runtime-platform_
 
-_Related: [Orchestration Loop Domain](../domain/OrchestrationLoopDomain.md); [Playout Control Domain](../domain/PlayoutControlDomain.md); [MasterClock Domain](../domain/MasterClockDomain.md)_
+_Related: [Orchestration Loop Domain](../domain/OrchestrationLoopDomain.md) · [Playout Control Domain](../domain/PlayoutControlDomain.md) · [MasterClock Domain](../domain/MasterClockDomain.md) · [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](Phase6A-Overview.md)_
 
-# Contract - Orchestration Loop Domain
+**Applies starting in:** Phase 7+ (full producer → renderer → metrics loop)  
+**Status:** Deferred (Applies Phase 7+); Enforced when orchestration loop is in scope
+
+**Principle:** Air must be correct before it is fast. Performance guarantees are explicitly deferred until correctness is contractually proven.
+
+## Phase 6A Deferral
+
+**This contract is not enforced during Phase 6A.** Phase 6A validates control surface, producer lifecycle, preview/live slots, and minimal file-backed/programmatic producers **without** requiring a full orchestration loop (tick discipline, producer→renderer latency budget, back-pressure recovery, starvation detection). During 6A, orchestration is minimal: engine owns preview/live slots and calls producer Start/Stop; no requirement for a paced tick loop or renderer. All guarantees below are **preserved** as institutional knowledge and **future intent**; they apply when the full orchestration loop (producer, renderer, metrics under MasterClock pacing) is implemented (e.g. Phase 7). Nothing is deleted — only re-scoped to post-6A enforcement.
+
+---
 
 ## Purpose
 
-Specify the real-time guarantees for coordinating producer, renderer, and metrics tasks under MasterClock pacing.
+Specify the real-time guarantees for coordinating producer, renderer, and metrics tasks under MasterClock pacing. These apply when the full pipeline (decode → buffer → render/TS) and tick-based orchestration exist.
+
+---
 
 ## ORCH_001: Tick Discipline & Latency Budget
 
@@ -27,13 +40,15 @@ Drive ticks at 30 fps for 5 minutes, injecting ±0.2 ms jitter into MasterClock 
 **Failure Semantics**  
 Exceeding thresholds increments `orchestration_tick_violation_total` and promotes channel to `Error`, prompting Playout Control intervention.
 
+---
+
 ## ORCH_002: Back-Pressure Handling
 
 **Intent**  
 Validate that buffer underrun/overrun events resolve within three ticks and emit telemetry.
 
 **Setup**  
-Loop instrumented with `orchestration_backpressure_events_total{type}` and `orchestration_backpressure_recovery_ms`. FrameProducer/Renderer configured with shallow buffers to provoke events.
+Loop instrumented with `orchestration_backpressure_events_total{type}` and `orchestration_backpressure_recovery_ms`. Producer/Renderer configured with shallow buffers to provoke events.
 
 **Stimulus**  
 Force an underrun (producer stalls) followed by an overrun (renderer throttled) while tick rate remains 30 fps.
@@ -45,6 +60,8 @@ Force an underrun (producer stalls) followed by an overrun (renderer throttled) 
 
 **Failure Semantics**  
 If recovery exceeds bounds, loop raises `orchestration_backpressure_unresolved` alert and escalates to Playout Control for channel downgrade.
+
+---
 
 ## ORCH_003: Starvation & Teardown Safety
 
@@ -64,4 +81,3 @@ Block loop thread for 150 ms to simulate starvation, then issue `Stop()` command
 
 **Failure Semantics**  
 If starvation goes undetected or teardown exceeds 500 ms, channel enters `Error`, raising `orchestration_teardown_violation` for operator response.
-

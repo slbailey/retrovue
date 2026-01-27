@@ -43,9 +43,12 @@ struct EngineResult {
 // This is the authoritative implementation that has been tested via contract tests.
 class PlayoutEngine {
  public:
+  // When control_surface_only is true, no media/decode/frames are used (Phase 6A.0).
+  // StartChannel only initializes channel state; LoadPreview/SwitchToLive update state only.
   PlayoutEngine(
       std::shared_ptr<telemetry::MetricsExporter> metrics_exporter,
-      std::shared_ptr<timing::MasterClock> master_clock);
+      std::shared_ptr<timing::MasterClock> master_clock,
+      bool control_surface_only = false);
   
   ~PlayoutEngine();
   
@@ -64,7 +67,9 @@ class PlayoutEngine {
   
   EngineResult LoadPreview(
       int32_t channel_id,
-      const std::string& asset_path);
+      const std::string& asset_path,
+      int64_t start_offset_ms = 0,
+      int64_t hard_stop_time_ms = 0);
   
   EngineResult SwitchToLive(int32_t channel_id);
   
@@ -75,7 +80,8 @@ class PlayoutEngine {
  private:
   std::shared_ptr<telemetry::MetricsExporter> metrics_exporter_;
   std::shared_ptr<timing::MasterClock> master_clock_;
-  
+  bool control_surface_only_;
+
   // Forward declaration for internal channel state
   struct ChannelState;
   

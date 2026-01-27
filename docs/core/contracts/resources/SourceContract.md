@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document provides an overview of all Source domain testing contracts. Individual Source operations are covered by specific behavioral contracts that define exact CLI syntax, safety expectations, and data effects. All source operations must use importers that implement the ImporterInterface correctly.
+This document provides an overview of all Source domain testing contracts. Individual Source operations are covered by specific behavioral contracts that define exact CLI syntax, safety expectations, and data effects.
 
 ---
 
@@ -41,8 +41,8 @@ Each Source operation follows the standard contract pattern:
 - **Mock-first validation:** All operations must first be tested using mock/test databases
 - **Idempotent operations:** Source operations should be safely repeatable
 - **Clear error handling:** Failed operations must provide clear diagnostic information
-- **Importer interface compliance:** All source operations must use importers that implement ImporterInterface correctly
-- **Configuration schema validation:** Source configurations must be validated against importer's get_config_schema() method
+- **Source type validity:** All source operations must use valid, supported source types
+- **Configuration validation:** Source configurations must be valid for the specified source type
 
 ---
 

@@ -58,7 +58,9 @@ class PlayoutController {
   // Load a preview asset into shadow decode mode
   ControllerResult LoadPreview(
       int32_t channel_id,
-      const std::string& asset_path);
+      const std::string& asset_path,
+      int64_t start_offset_ms = 0,
+      int64_t hard_stop_time_ms = 0);
   
   // Switch preview slot to live atomically
   ControllerResult SwitchToLive(int32_t channel_id);

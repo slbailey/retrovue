@@ -128,6 +128,9 @@ celerybeat.pid
 .pytype/
 cython_debug/
 
+# Assets directory (media files; users supply their own)
+/assets/
+
 # Retrovue specific media (users should add their own)
 # Commented out to avoid ignoring sample.mp4
 # *.mp4
