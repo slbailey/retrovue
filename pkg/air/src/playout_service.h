@@ -62,9 +62,26 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
                             const SwitchToLiveRequest* request,
                             SwitchToLiveResponse* response) override;
 
+  // Phase 8.0: byte transport (Python UDS server, Air writes bytes)
+  grpc::Status AttachStream(grpc::ServerContext* context,
+                            const AttachStreamRequest* request,
+                            AttachStreamResponse* response) override;
+
+  grpc::Status DetachStream(grpc::ServerContext* context,
+                            const DetachStreamRequest* request,
+                            DetachStreamResponse* response) override;
+
  private:
   // Controller that manages all channel lifecycle operations
   std::shared_ptr<runtime::PlayoutController> controller_;
+
+  // Phase 8.0: per-channel stream writer (UDS client, writes HELLO or TS bytes)
+  struct StreamWriterState;
+  std::mutex stream_mutex_;
+  std::unordered_map<int32_t, std::unique_ptr<StreamWriterState>> stream_writers_;
+
+  // Call with stream_mutex_ held or from destructor.
+  void DetachStreamLocked(int32_t channel_id, bool force);
 };
 
 }  // namespace playout

@@ -59,6 +59,26 @@ class PlayoutControlStub(object):
                 request_serializer=retrovue_dot_playout__pb2.ApiVersionRequest.SerializeToString,
                 response_deserializer=retrovue_dot_playout__pb2.ApiVersion.FromString,
                 _registered_method=True)
+        self.LoadPreview = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/LoadPreview',
+                request_serializer=retrovue_dot_playout__pb2.LoadPreviewRequest.SerializeToString,
+                response_deserializer=retrovue_dot_playout__pb2.LoadPreviewResponse.FromString,
+                _registered_method=True)
+        self.SwitchToLive = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/SwitchToLive',
+                request_serializer=retrovue_dot_playout__pb2.SwitchToLiveRequest.SerializeToString,
+                response_deserializer=retrovue_dot_playout__pb2.SwitchToLiveResponse.FromString,
+                _registered_method=True)
+        self.AttachStream = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/AttachStream',
+                request_serializer=retrovue_dot_playout__pb2.AttachStreamRequest.SerializeToString,
+                response_deserializer=retrovue_dot_playout__pb2.AttachStreamResponse.FromString,
+                _registered_method=True)
+        self.DetachStream = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/DetachStream',
+                request_serializer=retrovue_dot_playout__pb2.DetachStreamRequest.SerializeToString,
+                response_deserializer=retrovue_dot_playout__pb2.DetachStreamResponse.FromString,
+                _registered_method=True)
 
 
 class PlayoutControlServicer(object):
@@ -97,6 +117,38 @@ class PlayoutControlServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def LoadPreview(self, request, context):
+        """Phase 9: Dual-producer control
+
+        LoadPreview loads a new asset into the preview slot for the given channel.
+        The engine will begin shadow decoding immediately, but will NOT switch live.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SwitchToLive(self, request, context):
+        """SwitchToLive promotes the current preview slot to the live slot atomically.
+        Switching must be seamless: PTS continuity is preserved and the playout
+        sink cannot detect the switch.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AttachStream(self, request, context):
+        """Phase 8: byte transport attachment (Python owns stream sink, Air writes bytes)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DetachStream(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PlayoutControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -119,6 +171,26 @@ def add_PlayoutControlServicer_to_server(servicer, server):
                     servicer.GetVersion,
                     request_deserializer=retrovue_dot_playout__pb2.ApiVersionRequest.FromString,
                     response_serializer=retrovue_dot_playout__pb2.ApiVersion.SerializeToString,
+            ),
+            'LoadPreview': grpc.unary_unary_rpc_method_handler(
+                    servicer.LoadPreview,
+                    request_deserializer=retrovue_dot_playout__pb2.LoadPreviewRequest.FromString,
+                    response_serializer=retrovue_dot_playout__pb2.LoadPreviewResponse.SerializeToString,
+            ),
+            'SwitchToLive': grpc.unary_unary_rpc_method_handler(
+                    servicer.SwitchToLive,
+                    request_deserializer=retrovue_dot_playout__pb2.SwitchToLiveRequest.FromString,
+                    response_serializer=retrovue_dot_playout__pb2.SwitchToLiveResponse.SerializeToString,
+            ),
+            'AttachStream': grpc.unary_unary_rpc_method_handler(
+                    servicer.AttachStream,
+                    request_deserializer=retrovue_dot_playout__pb2.AttachStreamRequest.FromString,
+                    response_serializer=retrovue_dot_playout__pb2.AttachStreamResponse.SerializeToString,
+            ),
+            'DetachStream': grpc.unary_unary_rpc_method_handler(
+                    servicer.DetachStream,
+                    request_deserializer=retrovue_dot_playout__pb2.DetachStreamRequest.FromString,
+                    response_serializer=retrovue_dot_playout__pb2.DetachStreamResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -234,6 +306,114 @@ class PlayoutControl(object):
             '/retrovue.playout.PlayoutControl/GetVersion',
             retrovue_dot_playout__pb2.ApiVersionRequest.SerializeToString,
             retrovue_dot_playout__pb2.ApiVersion.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def LoadPreview(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/LoadPreview',
+            retrovue_dot_playout__pb2.LoadPreviewRequest.SerializeToString,
+            retrovue_dot_playout__pb2.LoadPreviewResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SwitchToLive(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/SwitchToLive',
+            retrovue_dot_playout__pb2.SwitchToLiveRequest.SerializeToString,
+            retrovue_dot_playout__pb2.SwitchToLiveResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AttachStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/AttachStream',
+            retrovue_dot_playout__pb2.AttachStreamRequest.SerializeToString,
+            retrovue_dot_playout__pb2.AttachStreamResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DetachStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/DetachStream',
+            retrovue_dot_playout__pb2.DetachStreamRequest.SerializeToString,
+            retrovue_dot_playout__pb2.DetachStreamResponse.FromString,
             options,
             channel_credentials,
             insecure,

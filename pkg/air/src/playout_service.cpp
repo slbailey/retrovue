@@ -5,10 +5,20 @@
 
 #include "playout_service.h"
 
+#include <cerrno>
+#include <chrono>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 
 namespace retrovue
 {
@@ -18,7 +28,51 @@ namespace retrovue
     namespace
     {
       constexpr char kApiVersion[] = "1.0.0";
+      constexpr char kPhase80Payload[] = "HELLO\n";
+      constexpr size_t kPhase80PayloadLen = 6;
     } // namespace
+
+    // Phase 8.0: per-channel stream writer (UDS client; writes HELLO for 8.0, TS later)
+    struct PlayoutControlImpl::StreamWriterState
+    {
+      int fd = -1;
+      std::atomic<bool> stop{false};
+      std::thread writer_thread;
+
+      void WriterLoop()
+      {
+        while (!stop.load(std::memory_order_acquire) && fd >= 0)
+        {
+#if defined(__linux__) || defined(__APPLE__)
+          ssize_t n = write(fd, kPhase80Payload, kPhase80PayloadLen);
+          if (n < 0 || static_cast<size_t>(n) != kPhase80PayloadLen)
+            break;
+#endif
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (fd >= 0)
+        {
+#if defined(__linux__) || defined(__APPLE__)
+          close(fd);
+#endif
+          fd = -1;
+        }
+      }
+
+      ~StreamWriterState()
+      {
+        stop.store(true, std::memory_order_release);
+        if (writer_thread.joinable())
+          writer_thread.join();
+        if (fd >= 0)
+        {
+#if defined(__linux__) || defined(__APPLE__)
+          close(fd);
+#endif
+          fd = -1;
+        }
+      }
+    };
 
     PlayoutControlImpl::PlayoutControlImpl(
         std::shared_ptr<runtime::PlayoutController> controller)
@@ -30,7 +84,10 @@ namespace retrovue
     PlayoutControlImpl::~PlayoutControlImpl()
     {
       std::cout << "[PlayoutControlImpl] Service shutting down" << std::endl;
-      // Controller handles cleanup
+      std::lock_guard<std::mutex> lock(stream_mutex_);
+      for (auto it = stream_writers_.begin(); it != stream_writers_.end(); ++it)
+        it->second.reset();
+      stream_writers_.clear();
     }
 
     grpc::Status PlayoutControlImpl::StartChannel(grpc::ServerContext *context,
@@ -100,6 +157,12 @@ namespace retrovue
     {
       const int32_t channel_id = request->channel_id();
       std::cout << "[StopChannel] Request received: channel_id=" << channel_id << std::endl;
+
+      // Phase 8.0: StopChannel implies detach
+      {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        DetachStreamLocked(channel_id, true);
+      }
       
       // Delegate to controller
       auto result = controller_->StopChannel(channel_id);
@@ -183,6 +246,127 @@ namespace retrovue
       std::cout << "[SwitchToLive] Channel " << channel_id
                 << " switch " << (result.success ? "succeeded" : "failed")
                 << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous << std::endl;
+      return grpc::Status::OK;
+    }
+
+    void PlayoutControlImpl::DetachStreamLocked(int32_t channel_id, bool force)
+    {
+      (void)force;
+      auto it = stream_writers_.find(channel_id);
+      if (it == stream_writers_.end())
+        return;
+      it->second.reset();
+      stream_writers_.erase(it);
+      std::cout << "[Phase8] Detached stream for channel " << channel_id << std::endl;
+    }
+
+    grpc::Status PlayoutControlImpl::AttachStream(grpc::ServerContext* context,
+                                                  const AttachStreamRequest* request,
+                                                  AttachStreamResponse* response)
+    {
+      (void)context;
+      const int32_t channel_id = request->channel_id();
+      const auto transport = request->transport();
+      const std::string endpoint = request->endpoint();
+      const bool replace_existing = request->replace_existing();
+
+      std::cout << "[AttachStream] Request received: channel_id=" << channel_id
+                << ", transport=" << static_cast<int>(transport)
+                << ", endpoint=" << endpoint << std::endl;
+
+#if defined(__linux__) || defined(__APPLE__)
+      if (transport != StreamTransport::STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET)
+      {
+        response->set_success(false);
+        response->set_message("Phase 8.0: only UNIX_DOMAIN_SOCKET transport is supported");
+        return grpc::Status::OK;
+      }
+
+      std::lock_guard<std::mutex> lock(stream_mutex_);
+      auto it = stream_writers_.find(channel_id);
+      if (it != stream_writers_.end())
+      {
+        if (!replace_existing)
+        {
+          response->set_success(false);
+          response->set_message("Already attached; set replace_existing=true to replace");
+          return grpc::Status::OK;
+        }
+        it->second.reset();
+        stream_writers_.erase(it);
+      }
+
+      int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+      if (fd < 0)
+      {
+        response->set_success(false);
+        response->set_message("socket(AF_UNIX) failed");
+        return grpc::Status::OK;
+      }
+
+      struct sockaddr_un addr;
+      std::memset(&addr, 0, sizeof(addr));
+      addr.sun_family = AF_UNIX;
+      if (endpoint.size() >= sizeof(addr.sun_path))
+      {
+        close(fd);
+        response->set_success(false);
+        response->set_message("Endpoint path too long");
+        return grpc::Status::OK;
+      }
+      std::strncpy(addr.sun_path, endpoint.c_str(), sizeof(addr.sun_path) - 1);
+      addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
+
+      socklen_t len = sizeof(addr);
+      if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), len) < 0)
+      {
+        int e = errno;
+        close(fd);
+        response->set_success(false);
+        response->set_message("connect() failed: " + std::string(strerror(e)));
+        return grpc::Status::OK;
+      }
+
+      auto state = std::make_unique<StreamWriterState>();
+      state->fd = fd;
+      state->writer_thread = std::thread(&StreamWriterState::WriterLoop, state.get());
+      stream_writers_[channel_id] = std::move(state);
+
+      response->set_success(true);
+      response->set_message("Attached");
+      response->set_negotiated_transport(StreamTransport::STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET);
+      response->set_negotiated_endpoint(endpoint);
+      std::cout << "[AttachStream] Channel " << channel_id << " attached to " << endpoint << std::endl;
+      return grpc::Status::OK;
+#else
+      (void)endpoint;
+      (void)replace_existing;
+      response->set_success(false);
+      response->set_message("Phase 8.0 UDS not implemented on this platform");
+      return grpc::Status::OK;
+#endif
+    }
+
+    grpc::Status PlayoutControlImpl::DetachStream(grpc::ServerContext* context,
+                                                  const DetachStreamRequest* request,
+                                                  DetachStreamResponse* response)
+    {
+      (void)context;
+      const int32_t channel_id = request->channel_id();
+      const bool force = request->force();
+      std::cout << "[DetachStream] Request received: channel_id=" << channel_id << ", force=" << force << std::endl;
+
+      std::lock_guard<std::mutex> lock(stream_mutex_);
+      auto it = stream_writers_.find(channel_id);
+      if (it == stream_writers_.end())
+      {
+        response->set_success(true);
+        response->set_message("Not attached (idempotent)");
+        return grpc::Status::OK;
+      }
+      DetachStreamLocked(channel_id, force);
+      response->set_success(true);
+      response->set_message("Detached");
       return grpc::Status::OK;
     }
 

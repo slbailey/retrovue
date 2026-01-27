@@ -29,6 +29,7 @@ Thumbs.db
 
 # Build outputs
 /build/
+/build_proto/
 /dist/
 /target/
 /site/

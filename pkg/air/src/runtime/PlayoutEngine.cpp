@@ -172,6 +172,16 @@ EngineResult PlayoutEngine::StartChannel(
         metrics.state = telemetry::ChannelState::BUFFERING;
         metrics.buffer_depth_frames = state->ring_buffer->Size();
         metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
+        // Stop producer and renderer before returning so ~ChannelState does not destroy
+        // running threads that then call virtuals (e.g. Cleanup()) on a partially destroyed object.
+        if (state->renderer) state->renderer->Stop();
+        if (state->live_producer) {
+          state->live_producer->RequestTeardown(std::chrono::milliseconds(200));
+          while (state->live_producer->IsRunning()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+          state->live_producer->Stop();
+        }
         return EngineResult(false, "Timeout waiting for buffer depth on channel " + std::to_string(channel_id));
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));

@@ -45,6 +45,10 @@ service PlayoutControl {
   // Switching must be seamless: PTS continuity is preserved and the playout
   // sink cannot detect the switch.
   rpc SwitchToLive(SwitchToLiveRequest) returns (SwitchToLiveResponse);
+
+  // Phase 8: byte transport attachment (Python owns stream sink, Air writes bytes)
+  rpc AttachStream(AttachStreamRequest) returns (AttachStreamResponse);
+  rpc DetachStream(DetachStreamRequest) returns (DetachStreamResponse);
 }
 
 // StartChannelRequest provides the context required to initialize a playout channel.
@@ -122,5 +126,50 @@ message SwitchToLiveResponse {
   // Optional: engine may report continuity details for debugging.
   bool pts_contiguous = 3;
   uint64 live_start_pts = 4;
+}
+
+// Phase 8: stream transport (Python creates sink, Air connects and writes bytes)
+
+enum StreamTransport {
+  STREAM_TRANSPORT_UNSPECIFIED = 0;
+  STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET = 1;  // recommended on Linux
+  STREAM_TRANSPORT_TCP_LOOPBACK = 2;        // optional fallback (127.0.0.1:port)
+}
+
+message AttachStreamRequest {
+  int32 channel_id = 1;
+
+  // Where Air should write its output bytes.
+  StreamTransport transport = 2;
+
+  // For UNIX_DOMAIN_SOCKET: filesystem path like "/tmp/retrovue/ch_1.sock"
+  // For TCP_LOOPBACK: host:port like "127.0.0.1:15001"
+  string endpoint = 3;
+
+  // If true, replacing an existing attachment is allowed.
+  // If false, attaching when already attached is an error.
+  bool replace_existing = 4;
+}
+
+message AttachStreamResponse {
+  bool success = 1;
+  string message = 2;
+
+  // Optional: what Air actually used (in case of normalization).
+  StreamTransport negotiated_transport = 3;
+  string negotiated_endpoint = 4;
+}
+
+message DetachStreamRequest {
+  int32 channel_id = 1;
+
+  // If true, stop writing immediately even if live producer running.
+  // Otherwise, detach happens at next safe boundary (optional policy).
+  bool force = 2;
+}
+
+message DetachStreamResponse {
+  bool success = 1;
+  string message = 2;
 }
 
