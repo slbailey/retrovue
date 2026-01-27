@@ -15,6 +15,7 @@
 #include "playout.grpc.pb.h"
 #include "playout.pb.h"
 #include "../../fixtures/ChannelManagerStub.h"
+#include "../../fixtures/StubProducer.h"
 #include "timing/TestMasterClock.h"
 #include <grpcpp/grpcpp.h>
 #include <cstdlib>
@@ -33,7 +34,7 @@ const bool kRegisterCoverage = []() {
   RegisterExpectedDomainCoverage(
       "PlayoutEngine",
       {"BC-001", "BC-002", "BC-003", "BC-004", "BC-005", "BC-006", "BC-007",
-       "LT-005", "LT-006"});
+       "LT-005", "LT-006", "Phase6A1"});
   return true;
 }();
 
@@ -56,7 +57,8 @@ protected:
         "BC-006",
         "BC-007",
         "LT-005",
-        "LT-006"};
+        "LT-006",
+        "Phase6A1"};
   }
 };
 
@@ -249,10 +251,11 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory
+  // Set up producer factory (Phase 6A.1: segment params passed; VideoFileProducer ignores them here)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
-         buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk)
+         buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t /*start_offset_ms*/, int64_t /*hard_stop_time_ms*/)
           -> std::unique_ptr<retrovue::producers::IProducer> {
         producers::video_file::ProducerConfig config;
         config.asset_uri = path;
@@ -626,6 +629,151 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_StopChannelIdempotentSuccess)
   grpc::Status st2 = service.StopChannel(&ctx2, &req, &resp);
   ASSERT_TRUE(st2.ok()) << st2.error_message();
   EXPECT_TRUE(resp.success()) << "StopChannel on already-stopped channel must be idempotent success";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6A.1 — ExecutionProducer lifecycle and preview/live slot semantics
+// (Phase6A-1-ExecutionProducer.md)
+// ---------------------------------------------------------------------------
+
+TEST_F(PlayoutEngineContractTest, Phase6A1_LoadPreviewInstallsIntoPreviewSlot_LiveUnchanged)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer&, std::shared_ptr<retrovue::timing::MasterClock>,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        return std::make_unique<StubProducer>(StubProducer::SegmentParams{
+            path, asset_id, start_offset_ms, hard_stop_time_ms});
+      });
+
+  EXPECT_FALSE(controller.getPreviewSlot().loaded);
+  EXPECT_FALSE(controller.getLiveSlot().loaded);
+
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "test://segment.mp4", "seg-1", buffer, clock, 100, 60'000));
+
+  const auto& preview = controller.getPreviewSlot();
+  EXPECT_TRUE(preview.loaded) << "LoadPreview must install segment into preview slot";
+  EXPECT_EQ(preview.asset_id, "seg-1");
+  EXPECT_EQ(preview.file_path, "test://segment.mp4");
+  ASSERT_NE(preview.producer, nullptr);
+  EXPECT_TRUE(preview.producer->isRunning());
+
+  const auto& live = controller.getLiveSlot();
+  EXPECT_FALSE(live.loaded) << "Live must be unchanged until SwitchToLive";
+
+  auto* stub = dynamic_cast<StubProducer*>(preview.producer.get());
+  ASSERT_NE(stub, nullptr);
+  EXPECT_EQ(stub->segmentParams().start_offset_ms, 100);
+  EXPECT_EQ(stub->segmentParams().hard_stop_time_ms, 60'000);
+  EXPECT_EQ(stub->startCount(), 1);
+  EXPECT_EQ(stub->stopCount(), 0);
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A1_SwitchToLivePromotesPreview_StopsOldLive_ClearsPreview)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer&, std::shared_ptr<retrovue::timing::MasterClock>,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        return std::make_unique<StubProducer>(
+            StubProducer::SegmentParams{path, asset_id, start_offset_ms, hard_stop_time_ms});
+      });
+
+  ASSERT_TRUE(controller.loadPreviewAsset("test://a.mp4", "asset-a", buffer, clock, 0, 0));
+  ASSERT_TRUE(controller.activatePreviewAsLive());
+
+  const auto& live1 = controller.getLiveSlot();
+  ASSERT_TRUE(live1.loaded);
+  ASSERT_EQ(live1.asset_id, "asset-a");
+  EXPECT_TRUE(live1.producer->isRunning());
+  EXPECT_FALSE(controller.getPreviewSlot().loaded);
+
+  ASSERT_TRUE(controller.loadPreviewAsset("test://b.mp4", "asset-b", buffer, clock, 0, 0));
+  const auto& preview2 = controller.getPreviewSlot();
+  ASSERT_TRUE(preview2.loaded);
+  ASSERT_EQ(preview2.asset_id, "asset-b");
+
+  ASSERT_TRUE(controller.activatePreviewAsLive());
+  // Contract: old live is stopped before swap; preview slot cleared.
+
+
+  const auto& live2 = controller.getLiveSlot();
+  EXPECT_TRUE(live2.loaded);
+  EXPECT_EQ(live2.asset_id, "asset-b");
+  EXPECT_TRUE(live2.producer->isRunning());
+
+  const auto& preview_after = controller.getPreviewSlot();
+  EXPECT_FALSE(preview_after.loaded) << "Preview slot must be cleared after SwitchToLive";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A1_ProducerReceivesSegmentParams_HardStopRecorded)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer&, std::shared_ptr<retrovue::timing::MasterClock>,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        return std::make_unique<StubProducer>(
+            StubProducer::SegmentParams{path, asset_id, start_offset_ms, hard_stop_time_ms});
+      });
+
+  const int64_t start_offset_ms = 5'000;
+  const int64_t hard_stop_time_ms = 90'000;
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "test://seg.mp4", "seg-id", buffer, clock, start_offset_ms, hard_stop_time_ms));
+
+  const auto& preview = controller.getPreviewSlot();
+  auto* stub = dynamic_cast<StubProducer*>(preview.producer.get());
+  ASSERT_NE(stub, nullptr);
+  EXPECT_EQ(stub->segmentParams().asset_path, "test://seg.mp4");
+  EXPECT_EQ(stub->segmentParams().asset_id, "seg-id");
+  EXPECT_EQ(stub->segmentParams().start_offset_ms, start_offset_ms);
+  EXPECT_EQ(stub->segmentParams().hard_stop_time_ms, hard_stop_time_ms)
+      << "Segment hard_stop_time_ms must be passed to producer for 6A.2 enforcement";
+}
+
+TEST_F(PlayoutEngineContractTest, Phase6A1_StopReleasesProducer_ObservableStoppedState)
+{
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer&, std::shared_ptr<retrovue::timing::MasterClock>,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        return std::make_unique<StubProducer>(
+            StubProducer::SegmentParams{path, asset_id, start_offset_ms, hard_stop_time_ms});
+      });
+
+  ASSERT_TRUE(controller.loadPreviewAsset("test://x.mp4", "x", buffer, clock, 0, 0));
+  ASSERT_TRUE(controller.activatePreviewAsLive());
+  const auto& live = controller.getLiveSlot();
+  ASSERT_TRUE(live.loaded);
+  ASSERT_TRUE(live.producer->isRunning());
+  auto* stub = dynamic_cast<StubProducer*>(live.producer.get());
+  ASSERT_NE(stub, nullptr);
+  EXPECT_EQ(stub->stopCount(), 0);
+
+  live.producer->stop();
+  EXPECT_FALSE(live.producer->isRunning()) << "After stop, producer must not be running";
+  EXPECT_EQ(stub->stopCount(), 1) << "Stop must be observable (contract: resources released)";
 }
 
 } // namespace

@@ -385,8 +385,12 @@ namespace retrovue::runtime
   bool PlayoutControlStateMachine::loadPreviewAsset(const std::string& path,
                                                    const std::string& assetId,
                                                    buffer::FrameRingBuffer& ringBuffer,
-                                                   std::shared_ptr<timing::MasterClock> clock)
+                                                   std::shared_ptr<timing::MasterClock> clock,
+                                                   int64_t start_offset_ms,
+                                                   int64_t hard_stop_time_ms)
   {
+    (void)start_offset_ms;
+    (void)hard_stop_time_ms;
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Destroy any existing preview producer before loading a new one
@@ -414,8 +418,8 @@ namespace retrovue::runtime
       return false;
     }
 
-    // Create producer using factory
-    auto producer = producer_factory_(path, assetId, ringBuffer, clock);
+    // Create producer using factory (Phase 6A.1: segment params passed for hard_stop enforcement)
+    auto producer = producer_factory_(path, assetId, ringBuffer, clock, start_offset_ms, hard_stop_time_ms);
     if (!producer)
     {
       std::cerr << "[PlayoutControlStateMachine] Failed to create producer for path: " << path << std::endl;
@@ -460,10 +464,19 @@ namespace retrovue::runtime
     }
 
     auto* preview_video_producer = dynamic_cast<producers::video_file::VideoFileProducer*>(previewSlot.producer.get());
+
+    // Phase 6A.1: Simple producer path (e.g. StubProducer) — no shadow decode or PTS alignment
     if (!preview_video_producer)
     {
-      std::cerr << "[PlayoutControlStateMachine] Preview producer is not a VideoFileProducer" << std::endl;
-      return false;
+      std::cout << "[PlayoutControlStateMachine] Activate preview as live (simple producer)" << std::endl;
+      if (liveSlot.loaded && liveSlot.producer && liveSlot.producer->isRunning())
+        liveSlot.producer->stop();
+      liveSlot.producer = std::move(previewSlot.producer);
+      liveSlot.loaded = true;
+      liveSlot.asset_id = previewSlot.asset_id;
+      liveSlot.file_path = previewSlot.file_path;
+      previewSlot.reset();
+      return true;
     }
 
     // Check if shadow decode is ready (first frame decoded and cached)
@@ -475,7 +488,7 @@ namespace retrovue::runtime
 
     std::cout << "[PlayoutControlStateMachine] Seamless switch: preview to live..." << std::endl;
 
-    // Seamless Switch Algorithm:
+    // Seamless Switch Algorithm (VideoFileProducer):
     // 1. Get last PTS from live producer
     int64_t last_live_pts = 0;
     int64_t frame_duration_us = 0;

@@ -102,24 +102,27 @@ class PlayoutControlStateMachine {
   [[nodiscard]] State state() const;
   [[nodiscard]] MetricsSnapshot Snapshot() const;
 
-  // Dual-producer slot management
-  // Sets a factory function for creating producers (must be called before loadPreviewAsset).
-  // The factory receives (path, assetId, ringBuffer, clock) and returns a producer.
+  // Dual-producer slot management (Phase 6A.1 ExecutionProducer)
+  // Factory creates a producer for the given segment; segment params are passed for hard_stop enforcement.
   using ProducerFactory = std::function<std::unique_ptr<producers::IProducer>(
       const std::string& path,
       const std::string& assetId,
       buffer::FrameRingBuffer& ringBuffer,
-      std::shared_ptr<timing::MasterClock> clock)>;
+      std::shared_ptr<timing::MasterClock> clock,
+      int64_t start_offset_ms,
+      int64_t hard_stop_time_ms)>;
   
   void setProducerFactory(ProducerFactory factory);
 
-  // Loads a producer into the preview slot.
+  // Loads a producer into the preview slot with segment params (Phase 6A.1).
   // Requires: setProducerFactory() must be called first, and ringBuffer/clock must be provided.
   // Returns true on success, false on failure.
   bool loadPreviewAsset(const std::string& path,
                        const std::string& assetId,
                        buffer::FrameRingBuffer& ringBuffer,
-                       std::shared_ptr<timing::MasterClock> clock);
+                       std::shared_ptr<timing::MasterClock> clock,
+                       int64_t start_offset_ms = 0,
+                       int64_t hard_stop_time_ms = 0);
 
   // Switches preview slot to live slot.
   // Stops live producer, flushes renderer, resets timestamps, and swaps producers.
