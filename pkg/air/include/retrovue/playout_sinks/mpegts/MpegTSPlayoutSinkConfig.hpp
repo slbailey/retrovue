@@ -27,6 +27,7 @@ struct MpegTSPlayoutSinkConfig {
   int bitrate = 5000000;              // Encoding bitrate (5 Mbps)
   int gop_size = 30;                  // GOP size (1 second at 30fps)
   bool stub_mode = false;             // Use stub mode (no real encoding)
+  bool persistent_mux = false;        // Phase 8.4: if true, do not set resend_headers (no continuity reset)
   UnderflowPolicy underflow_policy = UnderflowPolicy::FRAME_FREEZE;
   bool enable_audio = false;          // Enable silent AAC audio
   size_t max_output_queue_packets = 100;  // Max packets in output queue before dropping

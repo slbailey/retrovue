@@ -9,7 +9,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -116,6 +118,11 @@ class FrameRenderer {
   // Called when switching producers to ensure clean state.
   void resetPipeline();
 
+  // Phase 8.4: Optional callback invoked for each rendered frame (e.g. to feed TS mux).
+  // Called from render thread after RenderFrame(); callee may copy frame and queue for encoding.
+  void SetSideSink(std::function<void(const buffer::Frame&)> fn);
+  void ClearSideSink();
+
   // Factory method to create appropriate renderer based on mode.
   static std::unique_ptr<FrameRenderer> Create(
       const RenderConfig& config,
@@ -162,6 +169,9 @@ class FrameRenderer {
   std::atomic<bool> running_;
   std::atomic<bool> stop_requested_;
   std::unique_ptr<std::thread> render_thread_;
+
+  mutable std::mutex side_sink_mutex_;
+  std::function<void(const buffer::Frame&)> side_sink_;
   
   int64_t last_pts_;
   int64_t last_frame_time_utc_;

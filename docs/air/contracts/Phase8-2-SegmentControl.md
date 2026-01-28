@@ -79,7 +79,7 @@ This is where the system separates itself from “ffmpeg-based” playout: guara
 ## Explicitly out of scope (8.2)
 
 - No preview/live switching; no seamless SwitchToLive in the TS path (8.3).
-- No fan-out or last-viewer teardown semantics (8.4)—single viewer sufficient for 8.2.
+- No fan-out or last-viewer teardown semantics (8.5)—single viewer sufficient for 8.2.
 - No VLC requirement for 8.2 (manual observation OK); strict PTS/frame-count assertions in tests define correctness.
 
 ## Exit criteria

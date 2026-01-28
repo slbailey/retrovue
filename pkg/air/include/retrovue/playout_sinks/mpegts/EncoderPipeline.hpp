@@ -12,7 +12,6 @@
 #include <memory>
 #include <vector>
 #include <functional>
-#include <map>
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 extern "C" {
@@ -108,67 +107,23 @@ class EncoderPipeline {
   
   // Flag to track if header has been written
   bool header_written_;
+
+  // True only after avcodec_open2 succeeds; avoid flush in close() when codec never opened.
+  bool codec_opened_;
   
   // Muxer options for PCR cadence configuration (FE-019)
   AVDictionary* muxer_opts_;
   
   // Custom AVIO write callback (for nonblocking mode)
-  void* avio_opaque_;  // Opaque pointer passed to write callback
-  int (*avio_write_callback_)(void* opaque, uint8_t* buf, int buf_size);  // C-style callback
+  void* avio_opaque_;
+  int (*avio_write_callback_)(void* opaque, uint8_t* buf, int buf_size);
   AVIOContext* custom_avio_ctx_;
-  
-  struct ContinuityState {
-    uint8_t last_cc = 0;
-    bool initialized = false;
-  };
-  struct ContinuityTestState {
-    uint8_t last_cc = 0;
-    bool initialized = false;
-  };
 
-  // TS packet tracking and validation
-  // Continuity counter per PID (video PID typically 256)
-  std::map<uint16_t, ContinuityState> continuity_counters_;
-  uint64_t continuity_corrections_ = 0;
-  std::map<uint16_t, ContinuityTestState> continuity_test_counters_;
-  uint64_t continuity_test_packets_ = 0;
-  uint64_t continuity_test_mismatches_ = 0;
-  std::map<uint16_t, uint64_t> continuity_test_pid_packets_;
-  std::map<uint16_t, uint64_t> continuity_test_pid_mismatches_;
-  
-  // Last PTS/DTS for monotonicity validation
-  int64_t last_pts_90k_;
-  int64_t last_dts_90k_;
-  bool last_pts_valid_;
-  bool last_dts_valid_;
-  
-  // PCR tracking (last PCR value and time)
-  int64_t last_pcr_90k_;
-  int64_t last_pcr_packet_time_us_;
-  bool last_pcr_valid_;
-  
-  // Packet alignment buffer (for ensuring 188-byte TS packet boundaries)
-  std::vector<uint8_t> packet_alignment_buffer_;
-  
-  // Stall detection
-  int64_t last_write_time_us_;
-  int64_t last_packet_time_us_;
-  static constexpr int64_t kStallTimeoutUs = 1'000'000;  // 1 second
-  
-  // Helper methods for TS packet parsing and validation
-  void ProcessTSPackets(uint8_t* data, size_t size);
-  uint8_t ExtractContinuityCounter(const uint8_t* ts_packet);
-  uint16_t ExtractPID(const uint8_t* ts_packet);
-  bool ExtractPCR(const uint8_t* ts_packet, int64_t& pcr_90k);
-  bool ValidatePacketAlignment(const uint8_t* data, size_t size);
-  
-  // Write callback wrapper that ensures packet alignment
-  bool WriteWithAlignment(const uint8_t* data, size_t size);
   static int AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size);
   int HandleAVIOWrite(uint8_t* buf, int buf_size);
 #endif
 
-  const MpegTSPlayoutSinkConfig& config_;
+  MpegTSPlayoutSinkConfig config_;
   bool initialized_;
 };
 

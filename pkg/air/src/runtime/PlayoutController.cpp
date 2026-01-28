@@ -56,6 +56,15 @@ std::optional<std::string> PlayoutController::GetLiveAssetPath(int32_t channel_i
   return engine_->GetLiveAssetPath(channel_id);
 }
 
+void PlayoutController::RegisterMuxFrameCallback(int32_t channel_id,
+                                                 std::function<void(const buffer::Frame&)> callback) {
+  engine_->RegisterMuxFrameCallback(channel_id, std::move(callback));
+}
+
+void PlayoutController::UnregisterMuxFrameCallback(int32_t channel_id) {
+  engine_->UnregisterMuxFrameCallback(channel_id);
+}
+
 ControllerResult PlayoutController::UpdatePlan(
     int32_t channel_id,
     const std::string& plan_handle) {

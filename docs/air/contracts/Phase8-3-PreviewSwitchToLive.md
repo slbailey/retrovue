@@ -1,6 +1,6 @@
 # Phase 8.3 — Preview / SwitchToLive (TS continuity)
 
-_Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-4 Fan-out & Teardown](Phase8-4-FanoutTeardown.md) · [Phase6A-1 ExecutionProducer](Phase6A-1-ExecutionProducer.md) · [Phase6A-2 FileBackedProducer](Phase6A-2-FileBackedProducer.md)_
+_Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-4 Persistent MPEG-TS Mux](Phase8-4-PersistentMpegTsMux.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [Phase6A-1 ExecutionProducer](Phase6A-1-ExecutionProducer.md) · [Phase6A-2 FileBackedProducer](Phase6A-2-FileBackedProducer.md)_
 
 **Principle:** Add seamless switching to the TS pipeline. Shadow decode and PTS continuity from Phase 6A become real in the byte stream: no discontinuity, no PID reset, no timestamp jump.
 
@@ -45,9 +45,18 @@ There is **exactly one TS muxer per channel**. It is created once and persists a
 - SwitchToLive → Air switches the single TS mux to consume from the preview producer at the scheduled frame boundary; stops the previous live producer’s admission; TS mux continues with no restart.
 - Python keeps reading the same FD; it sees one continuous byte stream.
 
+## Test assets
+
+For switch sequences (e.g. program → filler → program, or A → B → A):
+
+- **SampleA.mp4**, **SampleB.mp4** — `assets/SampleA.mp4`, `assets/SampleB.mp4` (for LoadPreview/SwitchToLive sequences).
+- **filler.mp4** — `assets/filler.mp4` (optional middle segment).
+
+Paths are relative to repo root; tests may use `RETROVUE_TEST_VIDEO_PATH` or equivalent for override.
+
 ## Tests
 
-- **Run program → filler → program** (or equivalent sequence that triggers two switches).
+- **Run program → filler → program** (or equivalent sequence that triggers two switches; e.g. LoadPreview(SampleA) → SwitchToLive → LoadPreview(SampleB) → SwitchToLive).
 - **VLC** (or automated TS parser):
   - **No black frame** at the switch (or at most one acceptable frame).
   - **No audible pop** (audio continuity).
@@ -55,7 +64,7 @@ There is **exactly one TS muxer per channel**. It is created once and persists a
 
 ## Explicitly out of scope (8.3)
 
-- Fan-out and “last viewer disconnects → stop” (8.4).
+- Fan-out and “last viewer disconnects → stop” (8.5).
 - Performance and latency targets.
 
 ## Exit criteria

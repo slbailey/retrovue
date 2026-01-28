@@ -20,6 +20,7 @@
 #include "timing/TestMasterClock.h"
 #include <grpcpp/grpcpp.h>
 #include <cstdlib>
+#include <fstream>
 #include "playout_service.h"
 
 using namespace retrovue;
@@ -1043,6 +1044,83 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammati
     ASSERT_NE(dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get()), nullptr);
     live.producer->stop();
   }
+}
+
+// Phase 8.3 — Use real SampleA.mp4 / SampleB.mp4 for LoadPreview/SwitchToLive when present.
+static std::string GetPhase83SamplePath(const char* env_var, const char* default_path) {
+  const char* env = std::getenv(env_var);
+  if (env && env[0] != '\0') return env;
+  return default_path;
+}
+static bool FileExists(const std::string& path) {
+  std::ifstream f(path);
+  return f.good();
+}
+
+TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAssets)
+{
+  std::string path_a = GetPhase83SamplePath("RETROVUE_TEST_VIDEO_PATH_A", "/opt/retrovue/assets/SampleA.mp4");
+  std::string path_b = GetPhase83SamplePath("RETROVUE_TEST_VIDEO_PATH_B", "/opt/retrovue/assets/SampleB.mp4");
+  if (!FileExists(path_a) || !FileExists(path_b)) {
+    GTEST_SKIP() << "Phase 8.3 sample assets not found (SampleA.mp4, SampleB.mp4). Set RETROVUE_TEST_VIDEO_PATH_A/B or add assets/SampleA.mp4 and assets/SampleB.mp4.";
+  }
+
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb,
+         std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        producers::video_file::ProducerConfig config;
+        config.asset_uri = path;
+        config.target_width = 1920;
+        config.target_height = 1080;
+        config.target_fps = 30.0;
+        config.stub_mode = false;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+      });
+
+  // LoadPreview(SampleA) → SwitchToLive
+  ASSERT_TRUE(controller.loadPreviewAsset(path_a, "sample-a", buffer, clock, 0, 0));
+  const auto& preview_a = controller.getPreviewSlot();
+  ASSERT_TRUE(preview_a.loaded);
+  auto* video_a = dynamic_cast<producers::video_file::VideoFileProducer*>(preview_a.producer.get());
+  ASSERT_NE(video_a, nullptr);
+  EXPECT_TRUE(video_a->IsShadowDecodeMode());
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  if (!video_a->IsShadowDecodeReady()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  }
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  const auto& live_a = controller.getLiveSlot();
+  ASSERT_TRUE(live_a.loaded);
+  EXPECT_EQ(live_a.file_path, path_a);
+  ASSERT_TRUE(live_a.producer->isRunning());
+  live_a.producer->stop();
+
+  // LoadPreview(SampleB) → SwitchToLive
+  ASSERT_TRUE(controller.loadPreviewAsset(path_b, "sample-b", buffer, clock, 0, 0));
+  const auto& preview_b = controller.getPreviewSlot();
+  ASSERT_TRUE(preview_b.loaded);
+  auto* video_b = dynamic_cast<producers::video_file::VideoFileProducer*>(preview_b.producer.get());
+  ASSERT_NE(video_b, nullptr);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  const auto& live_b = controller.getLiveSlot();
+  ASSERT_TRUE(live_b.loaded);
+  EXPECT_EQ(live_b.file_path, path_b);
+  ASSERT_TRUE(live_b.producer->isRunning());
+  live_b.producer->stop();
+
+  const auto& preview_after = controller.getPreviewSlot();
+  EXPECT_FALSE(preview_after.loaded);
 }
 
 } // namespace
