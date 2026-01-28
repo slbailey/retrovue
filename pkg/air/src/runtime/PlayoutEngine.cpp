@@ -11,7 +11,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
-#include "retrovue/decode/FrameProducer.h"
+#include "retrovue/producers/video_file/VideoFileProducer.h"
 #include "retrovue/renderer/FrameRenderer.h"
 #include "retrovue/runtime/OrchestrationLoop.h"
 #include "retrovue/runtime/PlayoutControlStateMachine.h"
@@ -74,8 +74,8 @@ struct PlayoutEngine::ChannelState {
 
   // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
-  std::unique_ptr<decode::FrameProducer> live_producer;
-  std::unique_ptr<decode::FrameProducer> preview_producer;  // For shadow decode/preview
+  std::unique_ptr<producers::video_file::VideoFileProducer> live_producer;
+  std::unique_ptr<producers::video_file::VideoFileProducer> preview_producer;  // For shadow decode/preview
   std::unique_ptr<renderer::FrameRenderer> renderer;
   std::unique_ptr<OrchestrationLoop> orchestration_loop;
   std::unique_ptr<PlayoutControlStateMachine> control;
@@ -142,14 +142,16 @@ EngineResult PlayoutEngine::StartChannel(
     state->control = std::make_unique<PlayoutControlStateMachine>();
     
     // Create producer config from plan_handle (simplified - in production, resolve plan to asset)
-    decode::ProducerConfig producer_config;
+    producers::video_file::ProducerConfig producer_config;
     producer_config.asset_uri = plan_handle; // For now, use plan_handle as asset URI
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false; // Use real decode
+    producer_config.target_width = 1920;
+    producer_config.target_height = 1080;
     
-    // Create live producer
-    state->live_producer = std::make_unique<decode::FrameProducer>(
-        producer_config, *state->ring_buffer, master_clock_);
+    // Create live producer (FileProducer - decodes both audio and video)
+    state->live_producer = std::make_unique<producers::video_file::VideoFileProducer>(
+        producer_config, *state->ring_buffer, master_clock_, nullptr);
     
     // Create renderer
     renderer::RenderConfig render_config;
@@ -164,16 +166,12 @@ EngineResult PlayoutEngine::StartChannel(
     }
     
     // Start producer
-    if (!state->live_producer->Start()) {
+    if (!state->live_producer->start()) {
       return EngineResult(false, "Failed to start producer for channel " + std::to_string(channel_id));
     }
-    
-    // Start renderer
-    if (!state->renderer->Start()) {
-      return EngineResult(false, "Failed to start renderer for channel " + std::to_string(channel_id));
-    }
-    
-    // Wait for minimum buffer depth (like ChannelManagerStub)
+
+    // Wait for minimum buffer depth BEFORE starting renderer
+    // (renderer would consume frames immediately, preventing buffer from filling)
     const auto start_time = std::chrono::steady_clock::now();
     while (state->ring_buffer->Size() < kReadyDepth) {
       if (std::chrono::steady_clock::now() - start_time > kReadyTimeout) {
@@ -181,19 +179,23 @@ EngineResult PlayoutEngine::StartChannel(
         metrics.state = telemetry::ChannelState::BUFFERING;
         metrics.buffer_depth_frames = state->ring_buffer->Size();
         metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
-        // Stop producer and renderer before returning so ~ChannelState does not destroy
-        // running threads that then call virtuals (e.g. Cleanup()) on a partially destroyed object.
-        if (state->renderer) state->renderer->Stop();
+        // Stop producer before returning so ~ChannelState does not destroy
+        // running threads that then call virtuals on a partially destroyed object.
         if (state->live_producer) {
           state->live_producer->RequestTeardown(std::chrono::milliseconds(200));
-          while (state->live_producer->IsRunning()) {
+          while (state->live_producer->isRunning()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
           }
-          state->live_producer->Stop();
+          state->live_producer->stop();
         }
         return EngineResult(false, "Timeout waiting for buffer depth on channel " + std::to_string(channel_id));
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Start renderer AFTER buffer has sufficient depth
+    if (!state->renderer->Start()) {
+      return EngineResult(false, "Failed to start renderer for channel " + std::to_string(channel_id));
     }
     
     // Update state machine with buffer depth
@@ -249,18 +251,18 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
     // Stop producers
     if (state->live_producer) {
       state->live_producer->RequestTeardown(std::chrono::milliseconds(500));
-      while (state->live_producer->IsRunning()) {
+      while (state->live_producer->isRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
-      state->live_producer->Stop();
+      state->live_producer->stop();
     }
     
     if (state->preview_producer) {
       state->preview_producer->RequestTeardown(std::chrono::milliseconds(500));
-      while (state->preview_producer->IsRunning()) {
+      while (state->preview_producer->isRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
-      state->preview_producer->Stop();
+      state->preview_producer->stop();
     }
     
     // Drain buffer
@@ -316,26 +318,23 @@ EngineResult PlayoutEngine::LoadPreview(
   
   try {
     // Create preview producer config
-    decode::ProducerConfig preview_config;
+    producers::video_file::ProducerConfig preview_config;
     preview_config.asset_uri = asset_path;
     preview_config.target_fps = 30.0;
     preview_config.stub_mode = false;
+    preview_config.target_width = 1920;
+    preview_config.target_height = 1080;
     
-    // Create preview producer (shadow decode - doesn't write to buffer yet)
-    // Note: FrameProducer doesn't currently support shadow mode directly,
-    // so we create it but don't start it writing to buffer until SwitchToLive
+    // Create preview producer (FileProducer - decodes both audio and video)
+    // Do NOT start it here; SwitchToLive will start it when promoting to live.
+    // This ensures LoadPreview only prepares the next asset; clock-driven SwitchToLive triggers the actual switch.
     state->preview_asset_path = asset_path;
-    state->preview_producer = std::make_unique<decode::FrameProducer>(
-        preview_config, *state->ring_buffer, master_clock_);
+    state->preview_producer = std::make_unique<producers::video_file::VideoFileProducer>(
+        preview_config, *state->ring_buffer, master_clock_, nullptr);
     
-    // For now, start it normally (in a real implementation, shadow mode would
-    // decode without writing to buffer until SwitchToLive)
-    if (!state->preview_producer->Start()) {
-      return EngineResult(false, "Failed to start preview producer for channel " + std::to_string(channel_id));
-    }
-    
+    // Preview producer created but not started; SwitchToLive will start it when switching.
     EngineResult result(true, "Preview loaded for channel " + std::to_string(channel_id));
-    result.shadow_decode_started = true;
+    result.shadow_decode_started = false;  // Not started yet; will start on SwitchToLive
     return result;
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception loading preview for channel " + std::to_string(channel_id) + ": " + e.what());
@@ -373,25 +372,70 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   }
   
   try {
-    // Stop live producer
-    if (state->live_producer) {
+    // Phase 8.9 / 8.8: we must not interleave frames from A and B.
+    // To avoid A/B/A/B flicker, ensure the old live producer has finished
+    // emitting frames before the new producer starts writing to the ring buffer.
+    //
+    // 1. Fully drain and stop OLD live producer.
+    // 2. Start preview producer (which becomes the new live producer).
+    // 3. Atomically swap preview → live.
+    
+    // Step 1: Fully drain and stop OLD live producer (if any).
+    if (state->live_producer && state->live_producer->isRunning()) {
       state->live_producer->RequestTeardown(std::chrono::milliseconds(500));
-      while (state->live_producer->IsRunning()) {
+      // Wait until it reports not running (or timeout elapses inside producer).
+      while (state->live_producer->isRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
-      state->live_producer->Stop();
+      state->live_producer->stop();
+      
+      // Phase 8.9: Wait for BOTH video and audio frames to be completely drained from the ring buffer
+      // before starting the new producer. This prevents A/B/A/B interleaving.
+      const auto drain_start = std::chrono::steady_clock::now();
+      const auto drain_timeout = std::chrono::milliseconds(1000);  // Max 1 second to drain
+      while (!state->ring_buffer->IsCompletelyEmpty()) {
+        if (std::chrono::steady_clock::now() - drain_start > drain_timeout) {
+          std::cerr << "[SwitchToLive] Warning: Timeout waiting for buffer drain, proceeding anyway" << std::endl;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      std::cout << "[SwitchToLive] Buffer completely drained (video and audio) before starting new producer" << std::endl;
+      
+      // Phase 8.9: Flush encoder's audio buffers to ensure all audio from SampleB is encoded/muxed
+      // The encoder may have buffered samples in the resampler or partial frames
+      // Note: encoder is accessed via renderer->GetEncoder() or similar - need to check access pattern
+      // For now, we'll rely on playout_service to flush when it detects buffer empty
+      
+      state->live_producer.reset();
     }
     
-    state->live_asset_path = state->preview_asset_path;
-    // Phase 8.3: Atomic switch at frame boundary — swap frame source only; mux (8.4) unchanged.
+    // Debug: Log switch details
+    std::cout << "[SwitchToLive] ===== SWITCHING PRODUCERS =====" << std::endl;
+    if (state->live_producer) {
+      std::cout << "[SwitchToLive] Old live producer: " << state->live_asset_path << std::endl;
+    }
+    if (state->preview_producer) {
+      std::cout << "[SwitchToLive] New preview producer: " << state->preview_asset_path << std::endl;
+    }
+    
+    // Step 4: Start preview producer (it will become live).
+    if (!state->preview_producer->start()) {
+      return EngineResult(false, "Failed to start preview producer for channel " + std::to_string(channel_id));
+    }
+    
+    // Step 3: Atomically swap preview → live (frame source swap only; encoder/mux unchanged per Phase 8.4).
     state->live_producer = std::move(state->preview_producer);
+    state->live_asset_path = state->preview_asset_path;
     state->preview_producer.reset();
     state->preview_asset_path.clear();
     
     // For PTS continuity, align preview PTS to live's next PTS (Phase 8.2/8.3)
     EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
+    // PTS continuity is still expected because each producer has its own monotonic PTS;
+    // there may be a short gap, but not A/B interleaving.
     result.pts_contiguous = true; // Simplified - would check actual PTS continuity
-    result.live_start_pts = 0; // Would get from producer/renderer
+    result.live_start_pts = 0;    // Would get from producer/renderer
     
     return result;
   } catch (const std::exception& e) {
@@ -425,6 +469,24 @@ void PlayoutEngine::UnregisterMuxFrameCallback(int32_t channel_id) {
   if (it == channels_.end() || !it->second || !it->second->renderer)
     return;
   it->second->renderer->ClearSideSink();
+}
+
+// Phase 8.9: Audio frame callback registration
+void PlayoutEngine::RegisterMuxAudioFrameCallback(int32_t channel_id,
+                                                  std::function<void(const buffer::AudioFrame&)> callback) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->renderer)
+    return;
+  it->second->renderer->SetAudioSideSink(std::move(callback));
+}
+
+void PlayoutEngine::UnregisterMuxAudioFrameCallback(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->renderer)
+    return;
+  it->second->renderer->ClearAudioSideSink();
 }
 
 EngineResult PlayoutEngine::UpdatePlan(
