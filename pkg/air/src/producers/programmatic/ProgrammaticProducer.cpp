@@ -95,17 +95,7 @@ namespace retrovue::producers::programmatic
         continue;
       }
 
-      if (config_.hard_stop_time_ms > 0 && master_clock_)
-      {
-        int64_t now_ms = master_clock_->now_utc_us() / 1000;
-        if (now_ms >= config_.hard_stop_time_ms)
-        {
-          std::cout << "[ProgrammaticProducer] Hard stop time reached (now_ms=" << now_ms
-                    << ", hard_stop_time_ms=" << config_.hard_stop_time_ms << ")" << std::endl;
-          stop_requested_.store(true, std::memory_order_release);
-          break;
-        }
-      }
+      // Phase 8.6: segment end = natural EOF only; hard_stop_time_ms not used to stop process.
 
       buffer::Frame frame;
       frame.width = config_.target_width;

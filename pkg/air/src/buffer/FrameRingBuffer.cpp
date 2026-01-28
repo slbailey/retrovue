@@ -87,6 +87,15 @@ bool FrameRingBuffer::IsEmpty() const {
          write_index_.load(std::memory_order_acquire);
 }
 
+bool FrameRingBuffer::IsAudioEmpty() const {
+  return audio_read_index_.load(std::memory_order_acquire) == 
+         audio_write_index_.load(std::memory_order_acquire);
+}
+
+bool FrameRingBuffer::IsCompletelyEmpty() const {
+  return IsEmpty() && IsAudioEmpty();
+}
+
 bool FrameRingBuffer::IsFull() const {
   const uint32_t write = write_index_.load(std::memory_order_acquire);
   const uint32_t read = read_index_.load(std::memory_order_acquire);

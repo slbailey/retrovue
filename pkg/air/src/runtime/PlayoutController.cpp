@@ -65,6 +65,16 @@ void PlayoutController::UnregisterMuxFrameCallback(int32_t channel_id) {
   engine_->UnregisterMuxFrameCallback(channel_id);
 }
 
+// Phase 8.9: Audio frame callback registration
+void PlayoutController::RegisterMuxAudioFrameCallback(int32_t channel_id,
+                                                      std::function<void(const buffer::AudioFrame&)> callback) {
+  engine_->RegisterMuxAudioFrameCallback(channel_id, std::move(callback));
+}
+
+void PlayoutController::UnregisterMuxAudioFrameCallback(int32_t channel_id) {
+  engine_->UnregisterMuxAudioFrameCallback(channel_id);
+}
+
 ControllerResult PlayoutController::UpdatePlan(
     int32_t channel_id,
     const std::string& plan_handle) {

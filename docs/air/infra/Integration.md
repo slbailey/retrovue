@@ -14,7 +14,7 @@ Document infrastructure requirements, supported deployment models, and operation
 ## Dependencies
 
 - **Runtime libraries:** libavcodec, libavformat, libswscale, and their transitive FFmpeg dependencies.
-- **gRPC toolchain:** `protoc` compiler with C++ and Python plugins for generating bindings from `proto/retrovue/playout.proto`.
+- **gRPC toolchain:** `protoc` compiler with C++ and Python plugins for generating bindings from `protos/playout.proto` (repo root).
 - **Telemetry:** Prometheus scraper configured against the playout engine’s `/metrics` endpoint (default port `9308`).
 
 ## Process orchestration

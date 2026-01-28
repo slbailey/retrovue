@@ -30,7 +30,9 @@ namespace playout {
 class PlayoutControlImpl final : public PlayoutControl::Service {
  public:
   // Constructs the service with a controller that manages channel lifecycle.
-  PlayoutControlImpl(std::shared_ptr<runtime::PlayoutController> controller);
+  // control_surface_only: when true, AttachStream writes HELLO (Phase 8.0 tests); when false, stream stays silent until SwitchToLive writes real MPEG-TS (Phase 8.6).
+  PlayoutControlImpl(std::shared_ptr<runtime::PlayoutController> controller,
+                     bool control_surface_only = false);
   ~PlayoutControlImpl() override;
 
   // Disable copy and move
@@ -75,7 +77,8 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
   // Controller that manages all channel lifecycle operations
   std::shared_ptr<runtime::PlayoutController> controller_;
 
-  // Phase 8.0: per-channel stream writer (UDS client, writes HELLO or TS bytes)
+  // Phase 8.0/8.6: per-channel stream writer (UDS client). When control_surface_only_, writes HELLO; else no writer until SwitchToLive (real TS only).
+  bool control_surface_only_ = false;
   struct StreamWriterState;
   std::mutex stream_mutex_;
   std::unordered_map<int32_t, std::unique_ptr<StreamWriterState>> stream_writers_;

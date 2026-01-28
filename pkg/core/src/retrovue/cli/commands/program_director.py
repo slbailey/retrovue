@@ -5,6 +5,7 @@ Provides commands to start the ProgramDirector which serves as the
 control plane inside RetroVue, routing viewer requests to ChannelManagers.
 """
 
+import logging
 import typer
 from pathlib import Path
 from retrovue.runtime.channel_manager_daemon import ChannelManagerDaemon
@@ -18,12 +19,17 @@ def start(
     schedule_dir: str = typer.Option(None, help="Directory containing schedule.json files (Phase 8); if omitted, use mock schedule (channel 'mock', assets/samplecontent.mp4)"),
     port: int = typer.Option(8000, help="Port for ProgramDirector HTTP server"),
     channel_manager_port: int = typer.Option(9000, help="Port for ChannelManager (internal)"),
-    # Phase 0 options
-    phase0: bool = typer.Option(False, help="Enable Phase 0 mode (grid + filler model)"),
-    phase0_program_asset: str = typer.Option(None, help="Phase 0: Path to program asset (MP4 file)"),
-    phase0_program_duration: float = typer.Option(None, help="Phase 0: Program duration in seconds"),
-    phase0_filler_asset: str = typer.Option(None, help="Phase 0: Path to filler asset (MP4 file)"),
-    phase0_filler_duration: float = typer.Option(3600.0, help="Phase 0: Filler duration in seconds (default: 3600)"),
+    # Mock schedule: grid + filler (no real schedule)
+    mock_schedule_grid: bool = typer.Option(False, help="Use mock grid schedule (program + filler on 30-minute grid)"),
+    program_asset: str = typer.Option(None, help="Mock grid: Path to program asset (MP4 file)"),
+    program_duration: float = typer.Option(None, help="Mock grid: Program duration in seconds"),
+    filler_asset: str = typer.Option(None, help="Mock grid: Path to filler asset (MP4 file)"),
+    filler_duration: float = typer.Option(3600.0, help="Mock grid: Filler duration in seconds (default: 3600)"),
+    # Mock schedule: A/B alternating (Air harness; channel test-1)
+    mock_schedule_ab: bool = typer.Option(False, help="Use mock A/B schedule: alternating asset A and B every N seconds, 24/7 (channel test-1)"),
+    asset_a: str = typer.Option(None, help="Mock A/B: Path to asset A (e.g. SampleA.mp4)"),
+    asset_b: str = typer.Option(None, help="Mock A/B: Path to asset B (e.g. SampleB.mp4)"),
+    segment_seconds: float = typer.Option(10.0, help="Mock A/B: Segment length in seconds (default: 10)"),
 ):
     """
     Starts RetroVue with ProgramDirector as the control plane.
@@ -34,43 +40,82 @@ def start(
     - Owns and manages FanoutBuffers per channel
     - Stops playout engine pipelines when last viewer disconnects
     
-    Phase 0 mode:
+    Mock grid (--mock-schedule-grid):
     - Uses fixed 30-minute grid with program + filler model
-    - Requires --phase0-program-asset, --phase0-program-duration, and --phase0-filler-asset
+    - Requires --program-asset, --program-duration, and --filler-asset
     - Does not require schedule_dir (uses grid-based scheduling)
+
+    Mock A/B (--mock-schedule-ab): Air harness for channel test-1
+    - Alternating asset A and B every N seconds, 24/7
+    - Requires --asset-a and --asset-b; optional --segment-seconds (default 10)
+    - Mutually exclusive with --mock-schedule-grid.
     """
-    # Validate Phase 0 configuration
-    if phase0:
-        if not phase0_program_asset:
-            typer.echo("Error: Phase 0 mode requires --phase0-program-asset", err=True)
+    if mock_schedule_ab and mock_schedule_grid:
+        typer.echo("Error: Use either --mock-schedule-ab or --mock-schedule-grid, not both", err=True)
+        raise typer.Exit(1)
+
+    # Ensure INFO logs (channel create/destroy, subscriber count) are visible in the console
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:     %(message)s",
+        force=True,
+    )
+
+    # Validate mock A/B configuration
+    if mock_schedule_ab:
+        if not asset_a:
+            typer.echo("Error: Mock A/B requires --asset-a", err=True)
             raise typer.Exit(1)
-        if phase0_program_duration is None:
-            typer.echo("Error: Phase 0 mode requires --phase0-program-duration", err=True)
+        if not asset_b:
+            typer.echo("Error: Mock A/B requires --asset-b", err=True)
             raise typer.Exit(1)
-        if not phase0_filler_asset:
-            typer.echo("Error: Phase 0 mode requires --phase0-filler-asset", err=True)
+        if not Path(asset_a).exists():
+            typer.echo(f"Error: Asset A not found: {asset_a}", err=True)
+            raise typer.Exit(1)
+        if not Path(asset_b).exists():
+            typer.echo(f"Error: Asset B not found: {asset_b}", err=True)
+            raise typer.Exit(1)
+    # Validate mock grid configuration
+    if mock_schedule_grid:
+        if not program_asset:
+            typer.echo("Error: Mock grid requires --program-asset", err=True)
+            raise typer.Exit(1)
+        if program_duration is None:
+            typer.echo("Error: Mock grid requires --program-duration", err=True)
+            raise typer.Exit(1)
+        if not filler_asset:
+            typer.echo("Error: Mock grid requires --filler-asset", err=True)
             raise typer.Exit(1)
         # Verify asset files exist
-        if not Path(phase0_program_asset).exists():
-            typer.echo(f"Error: Program asset not found: {phase0_program_asset}", err=True)
+        if not Path(program_asset).exists():
+            typer.echo(f"Error: Program asset not found: {program_asset}", err=True)
             raise typer.Exit(1)
-        if not Path(phase0_filler_asset).exists():
-            typer.echo(f"Error: Filler asset not found: {phase0_filler_asset}", err=True)
+        if not Path(filler_asset).exists():
+            typer.echo(f"Error: Filler asset not found: {filler_asset}", err=True)
             raise typer.Exit(1)
     # Create RetroVue Core runtime (implements ChannelManagerProvider)
-    if phase0:
+    if mock_schedule_ab:
         channel_manager = ChannelManagerDaemon(
-            schedule_dir=Path("/tmp"),  # Dummy path for Phase 0 (not used)
+            schedule_dir=Path("/tmp"),  # Dummy path for mock A/B (not used)
             port=channel_manager_port,
-            phase0_mode=True,
-            phase0_program_asset_path=phase0_program_asset,
-            phase0_program_duration_seconds=phase0_program_duration,
-            phase0_filler_asset_path=phase0_filler_asset,
-            phase0_filler_duration_seconds=phase0_filler_duration,
+            mock_schedule_ab_mode=True,
+            asset_a_path=asset_a,
+            asset_b_path=asset_b,
+            segment_seconds=segment_seconds,
+        )
+    elif mock_schedule_grid:
+        channel_manager = ChannelManagerDaemon(
+            schedule_dir=Path("/tmp"),  # Dummy path for mock grid (not used)
+            port=channel_manager_port,
+            mock_schedule_grid_mode=True,
+            program_asset_path=program_asset,
+            program_duration_seconds=program_duration,
+            filler_asset_path=filler_asset,
+            filler_duration_seconds=filler_duration,
         )
     else:
         channel_manager = ChannelManagerDaemon(
-            schedule_dir=Path(schedule_dir) if schedule_dir else None,  # None = Phase 8 mock schedule
+            schedule_dir=Path(schedule_dir) if schedule_dir else None,  # None = built-in mock schedule
             port=channel_manager_port,  # Internal port for ChannelManager
         )
     

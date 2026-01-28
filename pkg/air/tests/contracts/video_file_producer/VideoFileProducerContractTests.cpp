@@ -323,7 +323,7 @@ namespace
     producer_->stop();
   }
 
-  // Rule: FE-009 End of File Handling
+  // Rule: FE-009 End of File Handling (Phase 8.8: EOF does NOT stop the producer)
   TEST_F(VideoFileProducerContractTest, FE_009_EndOfFileHandling)
   {
     ProducerConfig config;
@@ -333,25 +333,25 @@ namespace
     producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
-    // Wait for file to be decoded completely (EOF)
-    // For a short sample file, this should happen quickly
+    // Wait for file to be decoded completely (EOF). Phase 8.8: producer stays running after EOF
+    // (no more frames to produce, but does not exit until explicit stop).
     int wait_count = 0;
-    while (producer_->isRunning() && wait_count < 100)
+    while (wait_count < 50)
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       wait_count++;
+      // Once we've waited enough for EOF, producer must still be running (Phase 8.8 invariant)
+      if (wait_count >= 20)
+        break;
     }
 
-    // Producer should stop gracefully when EOF is reached
-    // (may have already stopped, or we stop it manually)
-    if (producer_->isRunning())
-    {
-      producer_->stop();
-    }
-    
+    // Phase 8.8: Producer must still be running after EOF (no implicit exit on EOF).
+    ASSERT_TRUE(producer_->isRunning()) << "Phase 8.8: producer must not stop on EOF alone";
+    ASSERT_GT(producer_->GetFramesProduced(), 0u);
+
+    producer_->stop();
     ASSERT_FALSE(producer_->isRunning());
     ASSERT_EQ(producer_->GetState(), ProducerState::STOPPED);
-    ASSERT_GT(producer_->GetFramesProduced(), 0u);
   }
 
   // Rule: FE-010 Teardown Operation (Phase 1: stop() is equivalent to teardown)

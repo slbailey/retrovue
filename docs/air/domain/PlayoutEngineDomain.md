@@ -674,7 +674,7 @@ retrovue_playout_channel_uptime_seconds{channel="1"} 514.23
 
 ### API Versioning
 
-**Version Constant**: `PLAYOUT_API_VERSION` (defined in `proto/retrovue/playout.proto`)
+**Version Constant**: `PLAYOUT_API_VERSION` (defined in `protos/playout.proto`)
 
 **Current Version**: `1.0`
 
@@ -703,12 +703,12 @@ retrovue_playout_channel_uptime_seconds{channel="1"} 514.23
 
 ### Proto Schema Contract
 
-**Authoritative Source**: `proto/retrovue/playout.proto`
+**Authoritative Source**: `protos/playout.proto` (repo root)
 
 **Generation**:
 
 - C++ stubs: `protoc --cpp_out=src/proto/`
-- Python stubs: `protoc --python_out=src/retrovue/proto/`
+- Python stubs: `sh scripts/air/generate_proto.sh` → `pkg/core/core/proto/retrovue/`
 
 **Synchronized Releases**:
 

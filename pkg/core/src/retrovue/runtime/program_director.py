@@ -23,7 +23,9 @@ Design Principles:
 - Resource coordination and health monitoring
 """
 
+import asyncio
 import logging
+import queue
 import threading
 import time
 import uuid
@@ -33,13 +35,13 @@ from enum import Enum
 from threading import Thread
 from typing import Any, Callable, Optional, Protocol
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse
 from uvicorn import Config, Server
 
 from retrovue.runtime.clock import MasterClock, RealTimeMasterClock
 from retrovue.runtime.pace import PaceController
-from retrovue.runtime.channel_stream import ChannelStream, generate_ts_stream
+from retrovue.runtime.channel_stream import ChannelStream, SocketTsSource, generate_ts_stream
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -98,6 +100,10 @@ class ChannelManagerProvider(Protocol):
 
     def list_channels(self) -> list[str]:
         """List all available channel IDs."""
+        ...
+
+    def stop_channel(self, channel_id: str) -> None:
+        """Stop channel when last viewer disconnects (channel enters STOPPED; health/reconnect does nothing)."""
         ...
 
 
@@ -472,12 +478,44 @@ class ProgramDirector:
             if not producer:
                 return None
 
-            # Get socket path from Producer
+            # Phase 8 Air: we are the UDS server; the already-accepted socket is in reader_socket_queue.
+            # Use that socket (do not connect to the path — the listener is closed after Air connects).
+            reader_queue = getattr(producer, "reader_socket_queue", None)
+            if reader_queue is not None:
+                self._logger.info(
+                    "Using reader_socket_queue for channel %s (socket from Air)",
+                    channel_id,
+                )
+
+                def ts_source_factory() -> Any:
+                    # Producer may have just started; allow a short wait for socket to appear
+                    for attempt in range(6):
+                        try:
+                            sock = reader_queue.get(timeout=2.0)
+                            self._logger.info(
+                                "Got socket from queue for channel %s",
+                                channel_id,
+                            )
+                            return SocketTsSource(sock)
+                        except queue.Empty:
+                            self._logger.debug(
+                                "Reader queue empty for channel %s (attempt %d/6), waiting for socket",
+                                channel_id,
+                                attempt + 1,
+                            )
+                    raise RuntimeError(
+                        "Timed out waiting for socket from reader_socket_queue for channel %s"
+                        % channel_id
+                    )
+
+                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory)
+                self._fanout_buffers[channel_id] = fanout
+                return fanout
+
+            # Fallback: Producer exposes only socket_path (legacy/test); connect as client (may fail if server closed).
             socket_path = getattr(producer, "socket_path", None)
             if not socket_path:
                 return None
-
-            # Create ChannelStream as FanoutBuffer (or use test factory for Phase 7 E2E)
             if self._channel_stream_factory:
                 fanout = self._channel_stream_factory(channel_id, str(socket_path))
             else:
@@ -509,14 +547,47 @@ class ProgramDirector:
             
             return {"channels": channels}
 
+        def _run_stream_cleanup(
+            channel_id: str,
+            session_id: str,
+            manager: Any,
+            fanout: Optional[Any],
+        ) -> None:
+            """Phase 8.5/8.7: Unsubscribe viewer and tear down channel when last subscriber leaves. Idempotent."""
+            to_stop = None
+            with self._fanout_lock:
+                if fanout:
+                    fanout.unsubscribe(session_id)
+                if channel_id in self._fanout_buffers:
+                    f = self._fanout_buffers[channel_id]
+                    if f.get_subscriber_count() == 0:
+                        self._fanout_buffers.pop(channel_id, None)
+                        to_stop = f
+            try:
+                manager.tune_out(session_id)
+            except Exception as e:
+                self._logger.debug("tune_out on cleanup: %s", e)
+            if to_stop:
+                if hasattr(self._channel_manager_provider, "stop_channel"):
+                    self._channel_manager_provider.stop_channel(channel_id)
+                to_stop.stop()
+
+        async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
+            """When client disconnects, ASGI receive() returns; run cleanup so viewer_count and teardown run (Phase 8.7)."""
+            try:
+                await request.receive()
+            except Exception:
+                pass
+            cleanup()
+
         @self.fastapi_app.get("/channels/{channel_id}.ts")
-        async def stream_channel(channel_id: str) -> StreamingResponse:
+        async def stream_channel(request: Request, channel_id: str) -> StreamingResponse:
             """
             Phase 0 contract: Live stream endpoint for a channel.
             
             - Joins mid-stream (no restart)
             - Emits continuous MPEG-TS bytes
-            - Stops playout engine pipeline when last viewer disconnects
+            - Stops playout engine pipeline when last viewer disconnects (Phase 8.7: disconnect triggers teardown)
             """
             if not self._channel_manager_provider:
                 return Response(
@@ -551,41 +622,35 @@ class ProgramDirector:
             fanout = self._get_or_create_fanout_buffer(channel_id, manager)
             if not fanout:
                 # Producer not ready yet, wait for it to start
+                cleaned = []
+
+                def cleanup_placeholder() -> None:
+                    if cleaned:
+                        return
+                    cleaned.append(1)
+                    fanout_buffer = getattr(cleanup_placeholder, "_fanout", None)
+                    _run_stream_cleanup(channel_id, session_id, manager, fanout_buffer)
+
                 def generate_placeholder():
                     fanout_buffer = None
                     try:
-                        # Wait a bit for Producer to start
-                        import time
-                        for _ in range(10):  # Wait up to 10 seconds
+                        for _ in range(10):
                             time.sleep(1)
                             fanout_buffer = self._get_or_create_fanout_buffer(channel_id, manager)
                             if fanout_buffer:
+                                cleanup_placeholder._fanout = fanout_buffer
                                 break
-                        
                         if not fanout_buffer:
-                            # Still no fanout, send error
                             yield b""
                             return
-                        
-                        # Subscribe to fanout
                         client_queue = fanout_buffer.subscribe(session_id)
+                        asyncio.create_task(_wait_disconnect_then_cleanup(request, cleanup_placeholder))
                         for chunk in generate_ts_stream(client_queue):
                             yield chunk
                     except GeneratorExit:
                         pass
                     finally:
-                        to_stop = None
-                        with self._fanout_lock:
-                            if fanout_buffer:
-                                fanout_buffer.unsubscribe(session_id)
-                            if channel_id in self._fanout_buffers:
-                                f = self._fanout_buffers[channel_id]
-                                if f.get_subscriber_count() == 0:
-                                    self._fanout_buffers.pop(channel_id, None)
-                                    to_stop = f
-                        if to_stop:
-                            to_stop.stop()
-                        manager.tune_out(session_id)
+                        cleanup_placeholder()
 
                 return StreamingResponse(
                     generate_placeholder(),
@@ -599,8 +664,17 @@ class ProgramDirector:
 
             # Subscribe to FanoutBuffer
             client_queue = fanout.subscribe(session_id)
+            cleaned = []
 
-            # Generate stream from FanoutBuffer
+            def cleanup_stream() -> None:
+                if cleaned:
+                    return
+                cleaned.append(1)
+                _run_stream_cleanup(channel_id, session_id, manager, fanout)
+
+            # Phase 8.7: When client disconnects, receive() returns; run cleanup so viewer_count→0 triggers teardown.
+            asyncio.create_task(_wait_disconnect_then_cleanup(request, cleanup_stream))
+
             def generate_stream():
                 try:
                     for chunk in generate_ts_stream(client_queue):
@@ -608,19 +682,7 @@ class ProgramDirector:
                 except GeneratorExit:
                     pass
                 finally:
-                    # Phase 8.5: under lock unsubscribe and if last viewer pop from cache (so
-                    # a concurrent GET cannot get this fanout), then stop and tune_out.
-                    to_stop = None
-                    with self._fanout_lock:
-                        fanout.unsubscribe(session_id)
-                        if channel_id in self._fanout_buffers:
-                            f = self._fanout_buffers[channel_id]
-                            if f.get_subscriber_count() == 0:
-                                self._fanout_buffers.pop(channel_id, None)
-                                to_stop = f
-                    if to_stop:
-                        to_stop.stop()
-                    manager.tune_out(session_id)
+                    cleanup_stream()
 
             return StreamingResponse(
                 generate_stream(),

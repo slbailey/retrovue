@@ -13,6 +13,9 @@
 
 namespace retrovue::telemetry {
 
+// Set to true to get [MetricsExporter] stdout debug lines (enqueues, snapshots, etc.)
+static constexpr bool kMetricsExporterVerbose = false;
+
 const char* ChannelStateToString(ChannelState state) {
   switch (state) {
     case ChannelState::STOPPED:
@@ -100,8 +103,10 @@ bool MetricsExporter::Start(bool start_http_server) {
       return false;
     }
 
-    std::cout << "[MetricsExporter] Started HTTP server on port " << port_
-              << " - metrics at http://localhost:" << port_ << "/metrics" << std::endl;
+    if (kMetricsExporterVerbose) {
+      std::cout << "[MetricsExporter] Started HTTP server on port " << port_
+                << " - metrics at http://localhost:" << port_ << "/metrics" << std::endl;
+    }
   }
 
   worker_thread_ = std::thread(&MetricsExporter::WorkerLoop, this);
@@ -131,8 +136,10 @@ bool MetricsExporter::SubmitChannelMetrics(int32_t channel_id,
   if (!running_.load(std::memory_order_acquire)) {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     channel_metrics_[channel_id] = metrics;
-    std::cout << "[MetricsExporter] (sync) snapshot written for channel "
-              << channel_id << std::endl;
+    if (kMetricsExporterVerbose) {
+      std::cout << "[MetricsExporter] (sync) snapshot written for channel "
+                << channel_id << std::endl;
+    }
     return true;
   }
 
@@ -148,8 +155,10 @@ bool MetricsExporter::SubmitChannelMetrics(int32_t channel_id,
     return false;
   }
 
-  std::cout << "[MetricsExporter] Enqueued metrics update for channel "
-            << channel_id << std::endl;
+  if (kMetricsExporterVerbose) {
+    std::cout << "[MetricsExporter] Enqueued metrics update for channel "
+              << channel_id << std::endl;
+  }
   submitted_events_.fetch_add(1, std::memory_order_acq_rel);
   queue_cv_.notify_one();
   return true;
@@ -159,8 +168,10 @@ void MetricsExporter::SubmitChannelRemoval(int32_t channel_id) {
   if (!running_.load(std::memory_order_acquire)) {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     channel_metrics_.erase(channel_id);
-    std::cout << "[MetricsExporter] (sync) channel " << channel_id
-              << " removed from metrics" << std::endl;
+    if (kMetricsExporterVerbose) {
+      std::cout << "[MetricsExporter] (sync) channel " << channel_id
+                << " removed from metrics" << std::endl;
+    }
     return;
   }
 
@@ -175,8 +186,10 @@ void MetricsExporter::SubmitChannelRemoval(int32_t channel_id) {
     return;
   }
 
-  std::cout << "[MetricsExporter] Enqueued metrics removal for channel "
-            << channel_id << std::endl;
+  if (kMetricsExporterVerbose) {
+    std::cout << "[MetricsExporter] Enqueued metrics removal for channel "
+              << channel_id << std::endl;
+  }
   submitted_events_.fetch_add(1, std::memory_order_acq_rel);
   queue_cv_.notify_one();
 }
@@ -187,8 +200,10 @@ void MetricsExporter::RegisterMetricDescriptor(const std::string& name,
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     descriptor_versions_[name] = version;
     descriptor_deprecated_[name] = false;
-    std::cout << "[MetricsExporter] (sync) registered descriptor "
-              << name << " version " << version << std::endl;
+    if (kMetricsExporterVerbose) {
+      std::cout << "[MetricsExporter] (sync) registered descriptor "
+                << name << " version " << version << std::endl;
+    }
     return;
   }
 
@@ -212,7 +227,9 @@ void MetricsExporter::DeprecateMetricDescriptor(const std::string& name) {
   if (!running_.load(std::memory_order_acquire)) {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     descriptor_deprecated_[name] = true;
-    std::cout << "[MetricsExporter] (sync) deprecated descriptor " << name << std::endl;
+    if (kMetricsExporterVerbose) {
+      std::cout << "[MetricsExporter] (sync) deprecated descriptor " << name << std::endl;
+    }
     return;
   }
 
@@ -243,9 +260,11 @@ void MetricsExporter::RecordDeliveryStatus(Transport transport,
     } else {
       data.failures++;
     }
-    std::cout << "[MetricsExporter] (sync) recorded transport delivery (transport="
-              << static_cast<int>(transport) << ", success=" << std::boolalpha << success
-              << ", latency_ms=" << latency_ms << ")" << std::endl;
+    if (kMetricsExporterVerbose) {
+      std::cout << "[MetricsExporter] (sync) recorded transport delivery (transport="
+                << static_cast<int>(transport) << ", success=" << std::boolalpha << success
+                << ", latency_ms=" << latency_ms << ")" << std::endl;
+    }
     return;
   }
 
@@ -268,8 +287,10 @@ void MetricsExporter::RecordDeliveryStatus(Transport transport,
 
 bool MetricsExporter::GetChannelMetrics(int32_t channel_id,
                                         ChannelMetrics& metrics) const {
-  std::cout << "[MetricsExporter] GetChannelMetrics requested for channel "
-            << channel_id << std::endl;
+  if (kMetricsExporterVerbose) {
+    std::cout << "[MetricsExporter] GetChannelMetrics requested for channel "
+              << channel_id << std::endl;
+  }
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   auto it = channel_metrics_.find(channel_id);
   if (it == channel_metrics_.end()) {
@@ -333,25 +354,33 @@ void MetricsExporter::ProcessEvent(const Event& event) {
   switch (event.type) {
     case Event::Type::kUpdateChannel:
       channel_metrics_[event.channel_id] = event.channel_metrics;
-      std::cout << "[MetricsExporter] Snapshot written for channel "
-                << event.channel_id << std::endl;
+      if (kMetricsExporterVerbose) {
+        std::cout << "[MetricsExporter] Snapshot written for channel "
+                  << event.channel_id << std::endl;
+      }
       break;
     case Event::Type::kRemoveChannel:
       channel_metrics_.erase(event.channel_id);
-      std::cout << "[MetricsExporter] Channel " << event.channel_id
-                << " removed from metrics" << std::endl;
+      if (kMetricsExporterVerbose) {
+        std::cout << "[MetricsExporter] Channel " << event.channel_id
+                  << " removed from metrics" << std::endl;
+      }
       break;
     case Event::Type::kRegisterDescriptor:
       descriptor_versions_[event.descriptor_name] = event.descriptor_version;
       descriptor_deprecated_[event.descriptor_name] = false;
-      std::cout << "[MetricsExporter] Registered descriptor "
-                << event.descriptor_name << " version "
-                << event.descriptor_version << std::endl;
+      if (kMetricsExporterVerbose) {
+        std::cout << "[MetricsExporter] Registered descriptor "
+                  << event.descriptor_name << " version "
+                  << event.descriptor_version << std::endl;
+      }
       break;
     case Event::Type::kDeprecateDescriptor:
       descriptor_deprecated_[event.descriptor_name] = true;
-      std::cout << "[MetricsExporter] Deprecated descriptor "
-                << event.descriptor_name << std::endl;
+      if (kMetricsExporterVerbose) {
+        std::cout << "[MetricsExporter] Deprecated descriptor "
+                  << event.descriptor_name << std::endl;
+      }
       break;
     case Event::Type::kRecordTransport: {
       auto& data = transport_data_[event.transport];
@@ -361,10 +390,12 @@ void MetricsExporter::ProcessEvent(const Event& event) {
       } else {
         data.failures++;
       }
-      std::cout << "[MetricsExporter] Recorded transport delivery (transport="
-                << static_cast<int>(event.transport)
-                << ", success=" << std::boolalpha << event.transport_success
-                << ", latency_ms=" << event.transport_latency_ms << ")" << std::endl;
+      if (kMetricsExporterVerbose) {
+        std::cout << "[MetricsExporter] Recorded transport delivery (transport="
+                  << static_cast<int>(event.transport)
+                  << ", success=" << std::boolalpha << event.transport_success
+                  << ", latency_ms=" << event.transport_latency_ms << ")" << std::endl;
+      }
       break;
     }
   }

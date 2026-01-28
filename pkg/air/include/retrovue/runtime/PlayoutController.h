@@ -14,6 +14,7 @@
 
 namespace retrovue::buffer {
 struct Frame;
+struct AudioFrame;
 }
 namespace retrovue::runtime {
 
@@ -76,6 +77,11 @@ class PlayoutController {
   void RegisterMuxFrameCallback(int32_t channel_id,
                                 std::function<void(const buffer::Frame&)> callback);
   void UnregisterMuxFrameCallback(int32_t channel_id);
+
+  // Phase 8.9: Register/unregister callback to receive each audio frame (for TS mux).
+  void RegisterMuxAudioFrameCallback(int32_t channel_id,
+                                     std::function<void(const buffer::AudioFrame&)> callback);
+  void UnregisterMuxAudioFrameCallback(int32_t channel_id);
   
   // Update the playout plan for an active channel
   ControllerResult UpdatePlan(

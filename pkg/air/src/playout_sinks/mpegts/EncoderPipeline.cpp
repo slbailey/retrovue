@@ -1365,26 +1365,24 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     return false;
   }
   
-  // Prepend any buffered samples from previous call (only if sample rate hasn't changed)
+  // Prepend any buffered samples from previous call, then append new samples
   // If sample rate changed, buffer was already cleared above
   std::vector<int16_t> combined_samples;
-  if (audio_resample_buffer_samples_ > 0 && last_input_sample_rate_ == input_sample_rate) {
-    combined_samples.reserve(audio_resample_buffer_samples_ + src_nb_samples);
+  const int16_t* new_samples = reinterpret_cast<const int16_t*>(src_data);
+
+  if (audio_resample_buffer_samples_ > 0) {
+    // We have buffered samples from previous call - prepend them
+    combined_samples.reserve((audio_resample_buffer_samples_ + src_nb_samples) * nb_channels);
     combined_samples.insert(combined_samples.end(),
                             audio_resample_buffer_.begin(),
                             audio_resample_buffer_.begin() + audio_resample_buffer_samples_ * nb_channels);
-    audio_resample_buffer_samples_ = 0;  // Clear buffer
-  }
-  
-  // Append new samples
-  const int16_t* new_samples = reinterpret_cast<const int16_t*>(src_data);
-  if (audio_resample_buffer_samples_ > 0 && last_input_sample_rate_ == input_sample_rate) {
-    // We prepended buffered samples above
     combined_samples.insert(combined_samples.end(),
                             new_samples,
                             new_samples + src_nb_samples * nb_channels);
+    audio_resample_buffer_samples_ = 0;  // Clear buffer after prepending
   } else {
-    // No buffered samples (or sample rate changed), just use new samples directly
+    // No buffered samples, just use new samples directly
+    combined_samples.reserve(src_nb_samples * nb_channels);
     combined_samples.insert(combined_samples.end(),
                             new_samples,
                             new_samples + src_nb_samples * nb_channels);
@@ -1576,10 +1574,14 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       }
     }
     
-    // Advance pointer for next chunk
-    // Note: PTS is handled by encoder_audio_pts_ counter (already incremented above)
+    // Advance pointer and PTS for next chunk
     samples_ptr += samples_this_frame * nb_channels;
     samples_remaining -= samples_this_frame;
+
+    // Advance PTS by the duration of the chunk we just encoded
+    // Duration in 90kHz units = (samples * 90000) / sample_rate
+    int64_t chunk_duration_90k = (static_cast<int64_t>(samples_this_frame) * 90000) / encoder_sample_rate;
+    current_pts90k += chunk_duration_90k;
   }
   
   // Buffer any remaining samples (< frame_size) for the next call

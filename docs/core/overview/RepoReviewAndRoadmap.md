@@ -38,7 +38,7 @@ Authoritative boundaries are described in:
 
 ### Air (C++)
 
-- **Control plane**: gRPC surface (`proto/retrovue/playout.proto`) for channel lifecycle operations.
+- **Control plane**: gRPC surface (`protos/playout.proto`) for channel lifecycle operations.
 - **Playout pipeline**: decode → frame staging/ring buffer → renderer → MPEG-TS output.
 - **Telemetry**: Prometheus metrics surface for state/timing/health.
 

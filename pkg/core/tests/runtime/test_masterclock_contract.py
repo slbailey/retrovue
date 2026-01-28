@@ -13,7 +13,7 @@ from retrovue.runtime.clock import MasterClock, SteppedMasterClock
 # -----------------------------------------------------------------------------
 
 
-def test_phase0_stepped_clock_deterministic():
+def test_stepped_clock_deterministic():
     """Phase 0: Clock returns deterministic value under test (injected/stepped clock)."""
     clock = SteppedMasterClock(start=100.0)
     assert clock.now() == 100.0

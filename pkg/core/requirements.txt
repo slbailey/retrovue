@@ -19,3 +19,5 @@ rich>=13.0.0
 jsonschema>=4.0.0
 requests>=2.0.0
 prometheus-client>=0.17.0
+grpcio>=1.60.0
+protobuf>=4.25.0

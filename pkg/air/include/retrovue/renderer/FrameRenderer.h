@@ -123,6 +123,11 @@ class FrameRenderer {
   void SetSideSink(std::function<void(const buffer::Frame&)> fn);
   void ClearSideSink();
 
+  // Phase 8.9: Optional callback invoked for each audio frame (e.g. to feed TS mux).
+  // Called from render thread when audio frames are available; callee may copy frame and queue for encoding.
+  void SetAudioSideSink(std::function<void(const buffer::AudioFrame&)> fn);
+  void ClearAudioSideSink();
+
   // Factory method to create appropriate renderer based on mode.
   static std::unique_ptr<FrameRenderer> Create(
       const RenderConfig& config,
@@ -172,6 +177,10 @@ class FrameRenderer {
 
   mutable std::mutex side_sink_mutex_;
   std::function<void(const buffer::Frame&)> side_sink_;
+  
+  // Phase 8.9: Audio side sink callback
+  mutable std::mutex audio_side_sink_mutex_;
+  std::function<void(const buffer::AudioFrame&)> audio_side_sink_;
   
   int64_t last_pts_;
   int64_t last_frame_time_utc_;

@@ -88,20 +88,19 @@ bool FrameProducer::Start() {
 }
 
 void FrameProducer::Stop() {
-  if (!running_.load(std::memory_order_acquire)) {
-    return;  // Not running
-  }
-
-  std::cout << "[FrameProducer] Stopping..." << std::endl;
+  // Always signal stop (idempotent)
   stop_requested_.store(true, std::memory_order_release);
 
+  // Always join thread if joinable, regardless of running_ flag.
+  // This prevents std::terminate if ProduceLoop sets running_=false before exiting.
   if (producer_thread_ && producer_thread_->joinable()) {
+    std::cout << "[FrameProducer] Stopping..." << std::endl;
     producer_thread_->join();
+    std::cout << "[FrameProducer] Stopped. Total frames produced: "
+              << frames_produced_.load() << std::endl;
   }
 
   running_.store(false, std::memory_order_release);
-  std::cout << "[FrameProducer] Stopped. Total frames produced: " 
-            << frames_produced_.load() << std::endl;
 }
 
 void FrameProducer::RequestTeardown(std::chrono::milliseconds drain_timeout) {
@@ -182,6 +181,10 @@ void FrameProducer::ProduceLoop() {
     decoder_->Close();
     decoder_.reset();
   }
+
+  // Mark as not running so IsRunning() returns false
+  // (allows SwitchToLive busy-wait to complete)
+  running_.store(false, std::memory_order_release);
 
   std::cout << "[FrameProducer] Decode loop exited" << std::endl;
 }
@@ -269,9 +272,11 @@ void FrameProducer::ProduceRealFrame() {
   // Frame successfully decoded and pushed
   frames_produced_.fetch_add(1, std::memory_order_relaxed);
 
-  // Try to decode audio frame (audio may not be available or may be at different rate)
+  // Phase 8.9: Try to decode audio frame (audio may not be available or may be at different rate)
   // Audio decoding is non-blocking - if buffer is full or no audio, just continue
-  decoder_->DecodeNextAudioFrame(output_buffer_);
+  if (decoder_->DecodeNextAudioFrame(output_buffer_)) {
+    // Audio frame decoded and pushed to buffer (logged in FFmpegDecoder if needed)
+  }
 
   // Log progress periodically
   const auto& stats = decoder_->GetStats();

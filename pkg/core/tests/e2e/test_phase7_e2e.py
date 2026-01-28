@@ -42,14 +42,14 @@ def _segment_at_utc_ms(now_utc_ms: int) -> dict:
     if elapsed_sec < PROGRAM_DURATION_SECONDS:
         return {
             "asset_id": "samplecontent",
-            "asset_path": "/phase0/program",
+            "asset_path": "/mock/program",
             "content_type": "program",
             "start_offset_ms": int(elapsed_sec * 1000),
         }
     filler_elapsed_sec = elapsed_sec - PROGRAM_DURATION_SECONDS
     return {
         "asset_id": "filler",
-        "asset_path": "/phase0/filler",
+        "asset_path": "/mock/filler",
         "content_type": "filler",
         "start_offset_ms": int(filler_elapsed_sec * 1000),
     }

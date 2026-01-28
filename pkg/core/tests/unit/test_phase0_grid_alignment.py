@@ -1,8 +1,8 @@
 """
-Unit tests for Phase 0 grid alignment and offset calculation.
+Unit tests for mock grid alignment and offset calculation.
 
 Tests the grid alignment logic, join-in-progress calculations, and filler offset
-calculations used in Phase 0's fixed 30-minute grid + filler model.
+calculations used in the mock grid + filler model (--mock-schedule-grid).
 
 These are unit tests that test the logic in isolation without requiring
 full ChannelManager or ScheduleService setup.
@@ -13,14 +13,14 @@ import pytest
 
 from retrovue.runtime.channel_manager_daemon import (
     ChannelManager,
-    Phase0ScheduleService,
+    MockGridScheduleService,
     Phase8ProgramDirector,
 )
 from retrovue.runtime.clock import MasterClock
 
 
-class TestPhase0GridAlignment:
-    """Test Phase 0 grid alignment methods."""
+class TestMockGridAlignment:
+    """Test mock grid alignment methods."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -34,10 +34,10 @@ class TestPhase0GridAlignment:
             schedule_service=None,  # Will be set per test
             program_director=self.program_director,
         )
-        self.channel_manager._phase0_grid_block_minutes = 30
-        self.channel_manager._phase0_program_asset_path = "/path/to/program.mp4"
-        self.channel_manager._phase0_filler_asset_path = "/path/to/filler.mp4"
-        self.channel_manager._phase0_filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self.channel_manager._mock_grid_block_minutes = 30
+        self.channel_manager._mock_grid_program_asset_path = "/path/to/program.mp4"
+        self.channel_manager._mock_grid_filler_asset_path = "/path/to/filler.mp4"
+        self.channel_manager._mock_grid_filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
     def test_floor_to_grid_at_boundary(self):
         """Test floor_to_grid when time is exactly at grid boundary."""
@@ -217,7 +217,7 @@ class TestPhase0GridAlignment:
 
     def test_determine_active_content_missing_asset_path(self):
         """Test determine_active_content raises error when asset path not configured."""
-        self.channel_manager._phase0_program_asset_path = None
+        self.channel_manager._mock_grid_program_asset_path = None
         block_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=timezone.utc)
         program_duration = 1200.0
         
@@ -227,8 +227,8 @@ class TestPhase0GridAlignment:
         assert "asset path not configured" in str(exc_info.value).lower()
 
 
-class TestPhase0ScheduleService:
-    """Test Phase0ScheduleService playout plan generation."""
+class TestMockGridScheduleService:
+    """Test MockGridScheduleService playout plan generation."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -238,7 +238,7 @@ class TestPhase0ScheduleService:
         self.filler_asset_path = "/path/to/filler.mp4"
         self.filler_duration = 3600.0  # 1 hour
         
-        self.service = Phase0ScheduleService(
+        self.service = MockGridScheduleService(
             clock=self.clock,
             program_asset_path=self.program_asset_path,
             program_duration_seconds=self.program_duration,
@@ -260,7 +260,7 @@ class TestPhase0ScheduleService:
         assert segment["asset_path"] == self.program_asset_path
         assert segment["content_type"] == "program"
         assert segment["start_pts"] == 300000  # 5 minutes = 300000 ms
-        assert segment["metadata"]["phase"] == "phase0"
+        assert segment["metadata"]["phase"] == "mock_grid"
         assert segment["metadata"]["grid_block_minutes"] == 30
 
     def test_get_playout_plan_filler_segment(self):
@@ -277,7 +277,7 @@ class TestPhase0ScheduleService:
         assert segment["content_type"] == "filler"
         # start_pts should account for filler offset calculation
         assert segment["start_pts"] >= 0
-        assert segment["metadata"]["phase"] == "phase0"
+        assert segment["metadata"]["phase"] == "mock_grid"
 
     def test_get_playout_plan_at_grid_boundary(self):
         """Test playout plan generation exactly at grid boundary."""

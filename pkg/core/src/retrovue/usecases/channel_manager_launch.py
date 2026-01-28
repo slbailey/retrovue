@@ -5,21 +5,53 @@ ChannelManager spawns Air processes to play video for the schedule. ChannelManag
 must NOT spawn ProgramDirector or the main retrovue process; ProgramDirector
 spawns ChannelManager when one doesn't exist for the requested channel. This
 module is used by ChannelManager to launch and terminate Air processes.
+
+Air logging (stdout/stderr):
+  Air output is written to pkg/air/logs/air.log (path is hardcoded).
 """
 
 from __future__ import annotations
 
 import collections
+import importlib.util
 import json
 import os
 import queue
+import socket
 import subprocess
+import sys
+import threading
 import time
+import types
 from pathlib import Path
 from typing import Any
 
 # Type alias for subprocess.Process
 ProcessHandle = subprocess.Popen[bytes]
+
+# Air stdout/stderr go here (hardcoded for now)
+_AIR_LOG_PATH = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs" / "air.log"
+
+
+def _open_air_log():
+    """Open Air log file (append, line-buffered). Caller closes after Popen."""
+    _AIR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return open(_AIR_LOG_PATH, "a", buffering=1, encoding="utf-8", errors="replace")
+
+
+def _find_air_binary() -> Path | None:
+    """Locate retrovue_air executable. Returns None if not found."""
+    # __file__ is .../pkg/core/src/retrovue/usecases/channel_manager_launch.py -> parents[5] = repo root
+    repo_root = Path(__file__).resolve().parents[5]
+    candidates = [
+        Path(os.environ.get("RETROVUE_AIR_EXE", "")),
+        repo_root / "pkg" / "air" / "build" / "retrovue_air",
+        repo_root / "pkg" / "air" / "out" / "build" / "linux-debug" / "retrovue_air",
+    ]
+    for p in candidates:
+        if p and p.is_file() and os.access(p, os.X_OK):
+            return p
+    return None
 
 
 def get_uds_socket_path(channel_id: str) -> Path:
@@ -61,6 +93,241 @@ def ensure_socket_dir_exists(socket_path: Path) -> None:
     os.chmod(socket_dir, 0o755)
 
 
+def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
+    """Load playout_pb2 and playout_pb2_grpc from pkg/core/core/proto/retrovue. Returns (playout_pb2, playout_pb2_grpc)."""
+    _core_root = Path(__file__).resolve().parents[3]
+    _proto_retrovue_dir = _core_root / "core" / "proto" / "retrovue"
+    if not _proto_retrovue_dir.is_dir():
+        raise RuntimeError(
+            f"Proto stubs not found at {_proto_retrovue_dir}. "
+            "Run scripts/air/generate_proto.sh or equivalent to generate playout_pb2(_grpc).py."
+        )
+    _spec_pb2 = importlib.util.spec_from_file_location(
+        "playout_pb2", _proto_retrovue_dir / "playout_pb2.py"
+    )
+    _spec_grpc = importlib.util.spec_from_file_location(
+        "playout_pb2_grpc", _proto_retrovue_dir / "playout_pb2_grpc.py"
+    )
+    if _spec_pb2 is None or _spec_grpc is None:
+        raise RuntimeError("Failed to create spec for proto stubs")
+    playout_pb2 = importlib.util.module_from_spec(_spec_pb2)
+    playout_pb2_grpc = importlib.util.module_from_spec(_spec_grpc)
+    _retrovue_saved = sys.modules.get("retrovue")
+    _playout_pb2_saved = sys.modules.get("playout_pb2")
+    _proto_retrovue = types.ModuleType("retrovue")
+    _proto_retrovue.playout_pb2 = playout_pb2
+    sys.modules["retrovue"] = _proto_retrovue
+    try:
+        _spec_pb2.loader.exec_module(playout_pb2)
+        sys.modules["playout_pb2"] = playout_pb2
+        _spec_grpc.loader.exec_module(playout_pb2_grpc)
+        return (playout_pb2, playout_pb2_grpc)
+    finally:
+        if _retrovue_saved is not None:
+            sys.modules["retrovue"] = _retrovue_saved
+        else:
+            sys.modules.pop("retrovue", None)
+        if _playout_pb2_saved is not None:
+            sys.modules["playout_pb2"] = _playout_pb2_saved
+        else:
+            sys.modules.pop("playout_pb2", None)
+
+
+def air_load_preview(
+    grpc_addr: str,
+    channel_id_int: int,
+    asset_path: str,
+    start_offset_ms: int = 0,
+    hard_stop_time_ms: int = 0,
+    timeout_s: int = 90,
+) -> bool:
+    """Call Air LoadPreview RPC. Returns success. Raises on connection/RPC error."""
+    import grpc
+
+    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+    with grpc.insecure_channel(grpc_addr) as ch:
+        stub = playout_pb2_grpc.PlayoutControlStub(ch)
+        r = stub.LoadPreview(
+            playout_pb2.LoadPreviewRequest(
+                channel_id=channel_id_int,
+                asset_path=asset_path,
+                start_offset_ms=start_offset_ms,
+                hard_stop_time_ms=hard_stop_time_ms,
+            ),
+            timeout=timeout_s,
+        )
+    return r.success
+
+
+def air_switch_to_live(grpc_addr: str, channel_id_int: int, timeout_s: int = 30) -> bool:
+    """Call Air SwitchToLive RPC. Returns success. Raises on connection/RPC error."""
+    import grpc
+
+    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+    with grpc.insecure_channel(grpc_addr) as ch:
+        stub = playout_pb2_grpc.PlayoutControlStub(ch)
+        r = stub.SwitchToLive(
+            playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
+            timeout=timeout_s,
+        )
+    return r.success
+
+
+def _launch_air_binary(
+    *,
+    air_bin: Path,
+    asset_path: str,
+    start_pts_ms: int,
+    socket_path: Path,
+    channel_id: str,
+    stdout: Any = subprocess.PIPE,
+    stderr: Any = subprocess.PIPE,
+) -> tuple[ProcessHandle, Path, queue.Queue[Any], str]:
+    """Start retrovue_air, drive gRPC (StartChannel, LoadPreview, SwitchToLive, AttachStream), return process, socket path, reader queue, and grpc_addr."""
+    import grpc
+
+    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+
+    reader_socket_queue: queue.Queue[Any] = queue.Queue()
+
+    if socket_path.exists():
+        socket_path.unlink()
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(socket_path))
+    server.listen(1)
+
+    def accept_once() -> None:
+        conn, _ = server.accept()
+        reader_socket_queue.put(conn)
+        try:
+            server.close()  # Only Air should connect; viewers use HTTP (e.g. http://localhost:PORT/channel/ID.ts)
+        except Exception:
+            pass
+
+    threading.Thread(target=accept_once, daemon=True).start()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        grpc_port = s.getsockname()[1]
+
+    # Redirect Air stdout/stderr to log file (hardcoded path)
+    air_log = _open_air_log()
+    try:
+        proc = subprocess.Popen(
+            [str(air_bin), "--port", str(grpc_port)],
+            cwd=str(air_bin.parent),
+            stdout=air_log,
+            stderr=air_log,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        air_log.close()
+
+    # Timeouts: Air can be slow on first start (decode init, file open). Override via env if needed.
+    def _timeout_s(name: str, default: int) -> int:
+        key = f"RETROVUE_AIR_TIMEOUT_{name}"
+        val = os.environ.get(key, "")
+        return int(val) if val.isdigit() else default
+
+    _GRPC_READY_WAIT_S = _timeout_s("GRPC_READY_WAIT", 45)
+    _GRPC_READY_POLL_S = _timeout_s("GRPC_READY_POLL", 5)
+    _RPC_CONTROL_S = _timeout_s("RPC_CONTROL", 30)
+    _RPC_LOAD_PREVIEW_S = _timeout_s("RPC_LOAD_PREVIEW", 90)
+    _UDS_ACCEPT_S = _timeout_s("UDS_ACCEPT", 20)
+
+    def _rpc(step: str, fn, timeout: int):
+        try:
+            return fn(timeout=timeout)
+        except grpc.RpcError as e:
+            d = getattr(e, "details", None)
+            detail = d() if callable(d) else (d if isinstance(d, str) else str(e))
+            raise RuntimeError(
+                f"Air gRPC {step} timed out or failed (timeout={timeout}s): {detail}. "
+                f"Check Air logs; increase timeout with RETROVUE_AIR_TIMEOUT_* env if needed."
+            ) from e
+
+    grpc_addr = f"127.0.0.1:{grpc_port}"
+    for _ in range(max(1, int(_GRPC_READY_WAIT_S / 0.2))):
+        try:
+            with grpc.insecure_channel(grpc_addr) as ch:
+                stub = playout_pb2_grpc.PlayoutControlStub(ch)
+                stub.GetVersion(playout_pb2.ApiVersionRequest(), timeout=_GRPC_READY_POLL_S)
+            break
+        except grpc.RpcError:
+            if proc.poll() is not None:
+                raise RuntimeError(f"Air process exited with code {proc.returncode} before gRPC ready")
+            time.sleep(0.2)
+    else:
+        proc.terminate()
+        proc.wait(timeout=3)
+        raise RuntimeError("Air gRPC server did not become ready")
+
+    channel_id_int = 1
+    with grpc.insecure_channel(grpc_addr) as ch:
+        stub = playout_pb2_grpc.PlayoutControlStub(ch)
+        r = _rpc(
+            "StartChannel",
+            lambda timeout: stub.StartChannel(
+                playout_pb2.StartChannelRequest(channel_id=channel_id_int, plan_handle="mock", port=0),
+                timeout=timeout,
+            ),
+            _RPC_CONTROL_S,
+        )
+        if not r.success:
+            raise RuntimeError(f"StartChannel failed: {r.message}")
+        r = _rpc(
+            "LoadPreview",
+            lambda timeout: stub.LoadPreview(
+                playout_pb2.LoadPreviewRequest(
+                    channel_id=channel_id_int,
+                    asset_path=asset_path,
+                    start_offset_ms=start_pts_ms,
+                    hard_stop_time_ms=0,
+                ),
+                timeout=timeout,
+            ),
+            _RPC_LOAD_PREVIEW_S,
+        )
+        if not r.success:
+            raise RuntimeError(f"LoadPreview failed: {r.message}")
+        # AttachStream before SwitchToLive: Air must have the UDS fd in stream_writers_
+        # so that SwitchToLive can start FfmpegLoop and write TS to that fd.
+        r = _rpc(
+            "AttachStream",
+            lambda timeout: stub.AttachStream(
+                playout_pb2.AttachStreamRequest(
+                    channel_id=channel_id_int,
+                    transport=playout_pb2.STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET,
+                    endpoint=str(socket_path),
+                    replace_existing=True,
+                ),
+                timeout=timeout,
+            ),
+            _RPC_CONTROL_S,
+        )
+        if not r.success:
+            raise RuntimeError(f"AttachStream failed: {r.message}")
+        r = _rpc(
+            "SwitchToLive",
+            lambda timeout: stub.SwitchToLive(
+                playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
+                timeout=timeout,
+            ),
+            _RPC_CONTROL_S,
+        )
+        if not r.success:
+            raise RuntimeError(f"SwitchToLive failed: {r.message}")
+
+    try:
+        conn = reader_socket_queue.get(timeout=_UDS_ACCEPT_S)
+    except queue.Empty:
+        proc.terminate()
+        proc.wait(timeout=3)
+        raise RuntimeError(f"Air did not connect to UDS within {_UDS_ACCEPT_S}s")
+    reader_socket_queue.put(conn)
+    return proc, socket_path, reader_socket_queue, grpc_addr
+
+
 def launch_air(
     *,
     playout_request: dict[str, Any],
@@ -68,61 +335,52 @@ def launch_air(
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
     ts_socket_path: str | Path | None = None,
-    use_ffmpeg_fallback: bool = False,  # Deprecated: Phase 0 always uses ffmpeg
-) -> tuple[ProcessHandle, Path]:
+) -> tuple[ProcessHandle, Path, queue.Queue[Any], str]:
     """
-    Launch the internal playout engine process for a channel.
-    
-    - Launches the playout engine as child process (or ffmpeg fallback)
-    - Sends PlayoutRequest JSON via stdin (Air only)
-    - Closes stdin immediately after sending (Air only)
-    - Passes --ts-socket-path for UDS TS output
-    
-    Args:
-        playout_request: PlayoutRequest dictionary (asset_path, start_pts, mode, channel_id, metadata)
-        stdin: stdin pipe (default: subprocess.PIPE)
-        stdout: stdout pipe (default: subprocess.PIPE)
-        stderr: stderr pipe (default: subprocess.PIPE)
-        ts_socket_path: UDS socket path for TS output. If None, auto-generated.
-        use_ffmpeg_fallback: Deprecated - Phase 0 always uses ffmpeg (ignored)
-    
+    Launch the Air (C++) playout engine process for a channel.
+
+    Air is the only playout engine. There is no ffmpeg fallback. If Air cannot be
+    found, started, or attached, this function raises and the caller must return
+    HTTP 503 (e.g. "Air playout engine unavailable").
+
     Returns:
-        Tuple of (process handle, socket path) for the launched playout engine process
-    
-    Example:
-        ```python
-        playout_request = {
-            "asset_path": "/path/to/video.mp4",
-            "start_pts": 0,
-            "mode": "LIVE",
-            "channel_id": "retro1",
-            "metadata": {}
-        }
-        process, socket_path = launch_air(playout_request=playout_request, use_ffmpeg_fallback=True)
-        ```
+        (process, socket_path, reader_socket_queue, grpc_addr). The reader_socket_queue
+        receives the one accepted UDS connection from Air after AttachStream; the caller
+        passes it to ChannelStream. grpc_addr (e.g. "127.0.0.1:port") is for later
+        LoadPreview/SwitchToLive RPCs (clock-driven segment switching).
+
+    Raises:
+        RuntimeError: If Air binary not found, not executable, gRPC connect fails,
+            or StartChannel/LoadPreview/AttachStream/SwitchToLive times out or fails.
     """
     channel_id = playout_request.get("channel_id", "unknown")
     asset_path = playout_request.get("asset_path", "")
     start_pts_ms = playout_request.get("start_pts", 0)
-    
-    # Generate or use provided UDS socket path
+
     if ts_socket_path is None:
         socket_path = get_uds_socket_path(channel_id)
     else:
         socket_path = Path(ts_socket_path)
-    
-    # Ensure socket directory exists
+
     ensure_socket_dir_exists(socket_path)
-    
-    # Phase 0: always use ffmpeg fallback (never spawn retrovue_air)
-    # For Phase 0, we use ffmpeg to simulate Air
-    return _launch_ffmpeg_fallback(
+
+    air_bin = _find_air_binary()
+    if air_bin is None:
+        raise RuntimeError(
+            "Air playout engine unavailable: retrovue_air binary not found. "
+            "Build pkg/air (retrovue_air target) or set RETROVUE_AIR_EXE."
+        )
+
+    proc, socket_path, reader_socket_queue, grpc_addr = _launch_air_binary(
+        air_bin=air_bin,
         asset_path=asset_path,
         start_pts_ms=start_pts_ms,
         socket_path=socket_path,
+        channel_id=channel_id,
         stdout=stdout,
         stderr=stderr,
     )
+    return proc, socket_path, reader_socket_queue, grpc_addr
 
 
 def _launch_ffmpeg_fallback(
@@ -132,226 +390,11 @@ def _launch_ffmpeg_fallback(
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
 ) -> tuple[ProcessHandle, Path]:
-    """
-    Launch ffmpeg as a fallback to simulate Air playout engine.
-    
-    Core rule: ffmpeg is a dumb tape deck. RetroVue is the clock.
-    
-    - Uses input seek (-ss before -i) to reset timestamps and prevent non-monotonic DTS
-    - Uses -re for real-time pacing (wall-clock speed output)
-    - Never loops media (continuity handled by ChannelManager)
-    - Outputs infinite-TS compatible stream to stdout
-    - Bridge thread forwards stdout to UDS socket
-    
-    Args:
-        asset_path: Path to video file
-        start_pts_ms: Start position in milliseconds (computed by ChannelManager: offset = now - grid_start)
-        socket_path: Path to Unix Domain Socket for TS output
-        stdout: stdout pipe (default: subprocess.PIPE)
-        stderr: stderr pipe (ignored, we always capture stderr)
-    
-    Returns:
-        Tuple of (process handle, socket path)
-        
-    Note:
-        When ffmpeg exits, that segment is complete. ChannelManager will launch the next segment.
-    """
-    import shutil
-    import subprocess
-    import socket
-    import threading
-    
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg not found")
-    
-    start_pts_seconds = start_pts_ms / 1000.0
-    
-    socket_path.parent.mkdir(parents=True, exist_ok=True)
-    if socket_path.exists():
-        socket_path.unlink()
-    
-    # Create UDS server FIRST
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(socket_path))
-    server.listen(1)
-    
-    cmd = [
-        ffmpeg,
-        "-nostdin",
-        "-re",  # Real-time pacing (required for wall-clock speed output)
-        "-ss", str(start_pts_seconds),  # Input seek (MUST be before -i to reset timestamps)
-        "-i", asset_path,
-        "-c:v", "copy",
-        "-c:a", "copy",
-        "-bsf:v", "h264_mp4toannexb",
-        "-f", "mpegts",
-        "-mpegts_flags", "resend_headers+initial_discontinuity",  # Exact order as specified
-        "-muxdelay", "0",
-        "-muxpreload", "0",
-        "-flush_packets", "1",
-        "-avoid_negative_ts", "make_zero",
-        "-",  # stdout (bridge handles UDS fanout)
-    ]
-    
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
+    """FFmpeg fallback removed. Air is the only playout engine. Fail fast instead."""
+    raise RuntimeError(
+        "ffmpeg fallback removed. Air is the only playout engine. "
+        "Build retrovue_air (pkg/air) or set RETROVUE_AIR_EXE. Do not use RETROVUE_USE_FFMPEG."
     )
-    
-    def log_stderr():
-        for line in iter(proc.stderr.readline, b""):
-            print("[ffmpeg]", line.decode("utf-8", "replace").rstrip(), flush=True)
-    
-    threading.Thread(target=log_stderr, daemon=True).start()
-    
-    def bridge():
-        conn = None
-        try:
-            print(f"[bridge] waiting for UDS client: {socket_path}", flush=True)
-            
-            # Helper to extract PID from TS packet (188 bytes)
-            def get_ts_pid(packet: bytes) -> int | None:
-                """Extract PID from TS packet header. Returns None if invalid sync byte."""
-                if len(packet) < 4:
-                    return None
-                if packet[0] != 0x47:  # TS sync byte
-                    return None
-                # PID is 13 bits: bits 3-7 of byte 1, bits 0-7 of byte 2
-                pid = ((packet[1] & 0x1F) << 8) | packet[2]
-                return pid
-            
-            # Startup buffer: capture ~1 second of TS after first PAT (PID 0)
-            startup_buffer = bytearray()
-            startup_complete = threading.Event()
-            pat_seen = threading.Event()
-            
-            # Ring buffer: keep last ~2MB of TS output (approximately 1593 chunks of 1316 bytes)
-            ring_buffer_size = (2 * 1024 * 1024) // 1316  # ~1593 chunks
-            ring_buffer = collections.deque(maxlen=ring_buffer_size)
-            
-            # Queue for live data forwarding (reader -> main thread)
-            live_queue = queue.Queue()
-            client_connected = threading.Event()
-            
-            # Reader thread: continuously read from ffmpeg, build startup buffer, fill ring buffer
-            def reader():
-                capturing_startup = True
-                startup_start_time = None
-                
-                while proc.poll() is None:
-                    data = proc.stdout.read(1316)
-                    if not data:
-                        print("[bridge] ffmpeg stdout EOF", flush=True)
-                        break
-                    
-                    # Check for PAT (PID 0) in TS packets
-                    # Each chunk is 1316 bytes = 7 TS packets (1316 / 188 = 7)
-                    for i in range(0, len(data), 188):
-                        packet = data[i:i+188]
-                        if len(packet) == 188:
-                            pid = get_ts_pid(packet)
-                            if pid == 0:  # PAT found
-                                pat_seen.set()
-                                if capturing_startup and startup_start_time is None:
-                                    startup_start_time = time.time()
-                                    print("[bridge] PAT detected, starting startup buffer capture", flush=True)
-                    
-                    # Build startup buffer: capture ~1 second after first PAT
-                    if capturing_startup and pat_seen.is_set():
-                        if startup_start_time is None:
-                            startup_start_time = time.time()
-                        startup_buffer.extend(data)
-                        # Capture for ~1 second (at ~1.5Mbps typical, that's ~188KB)
-                        if time.time() - startup_start_time >= 1.0:
-                            capturing_startup = False
-                            startup_complete.set()
-                            print(f"[bridge] startup buffer complete ({len(startup_buffer)} bytes)", flush=True)
-                    
-                    # Add to ring buffer (automatically discards oldest when full)
-                    ring_buffer.append(data)
-                    
-                    # If client is connected, queue for immediate forwarding
-                    if client_connected.is_set():
-                        try:
-                            live_queue.put(data, timeout=0.1)
-                        except queue.Full:
-                            pass  # Drop if queue full (client can't keep up)
-                
-                # Signal EOF
-                live_queue.put(None)
-            
-            reader_thread = threading.Thread(target=reader, daemon=True)
-            reader_thread.start()
-            
-            # Wait for startup buffer to be ready (or timeout after 5 seconds)
-            if not startup_complete.wait(timeout=5.0):
-                print("[bridge] warning: startup buffer not ready after 5s, proceeding anyway", flush=True)
-            
-            # Wait for client connection
-            conn, _ = server.accept()
-            print("[bridge] UDS client connected", flush=True)
-            client_connected.set()
-            
-            total = 0
-            
-            # 1. Send startup buffer first (contains PAT/PMT and initial sync)
-            if len(startup_buffer) > 0:
-                conn.sendall(startup_buffer)
-                total += len(startup_buffer)
-                print(f"[bridge] sent {len(startup_buffer)} bytes from startup buffer", flush=True)
-            
-            # 2. Send last 256-512KB of ring buffer (recent history, not full 2MB)
-            # Target: 256-512KB = ~195-390 chunks of 1316 bytes
-            ring_send_size = min(len(ring_buffer), 512 * 1024 // 1316)  # ~390 chunks max
-            if ring_send_size > 0:
-                # Get last N chunks from ring buffer
-                ring_chunks = list(ring_buffer)[-ring_send_size:]
-                ring_total = 0
-                for chunk in ring_chunks:
-                    conn.sendall(chunk)
-                    ring_total += len(chunk)
-                total += ring_total
-                print(f"[bridge] sent {ring_total} bytes from ring buffer (last {ring_send_size} chunks)", flush=True)
-            
-            # 3. Continue streaming live: forward data from queue
-            while True:
-                try:
-                    data = live_queue.get(timeout=1.0)
-                    if data is None:  # EOF signal
-                        break
-                    conn.sendall(data)
-                    total += len(data)
-                except queue.Empty:
-                    # Check if process exited
-                    if proc.poll() is not None:
-                        break
-                    continue
-            
-            print(f"[bridge] total sent {total} bytes", flush=True)
-            
-            # Check if ffmpeg exited
-            if proc.poll() is not None:
-                print(f"[bridge] ffmpeg process exited with code {proc.returncode}", flush=True)
-        finally:
-            try:
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-            try:
-                server.close()
-            except Exception:
-                pass
-            # Phase 0: Don't unlink socket - ChannelManager will reuse it for next segment
-            # The next process will unlink and recreate it
-    
-    threading.Thread(target=bridge, daemon=True).start()
-    
-    return proc, socket_path
 
 
 def terminate_air(process: ProcessHandle) -> None:

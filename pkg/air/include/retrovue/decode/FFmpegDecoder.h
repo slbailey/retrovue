@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <queue>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 
@@ -173,6 +174,9 @@ class FFmpegDecoder {
   double time_base_;
   int64_t audio_start_time_;
   double audio_time_base_;
+
+  // Phase 8.9: Queue for audio frames decoded during video packet processing
+  std::queue<buffer::AudioFrame> pending_audio_frames_;
 };
 
 }  // namespace retrovue::decode

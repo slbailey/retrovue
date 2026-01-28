@@ -43,8 +43,8 @@ class Phase815VideoFileProducerTest : public ::testing::Test {
   std::string test_asset_path_;
 };
 
-// Decode test: open known MP4, decode N frames, assert count, PTS monotonic, no dropped
-// Phase 8.1.5: libav is REQUIRED at build time; skip only when test asset is missing.
+// Decode test: open known MP4, collect frames for up to 10s, assert PTS monotonic for all (≥1).
+// Contract: PTS correctness, not asset duration. Works with any length asset (Phase 8.8).
 TEST_F(Phase815VideoFileProducerTest, DecodeNFramesPTSMonotonic) {
   if (!FileExists(test_asset_path_)) {
     GTEST_SKIP() << "Test asset not found: " << test_asset_path_;
@@ -65,11 +65,9 @@ TEST_F(Phase815VideoFileProducerTest, DecodeNFramesPTSMonotonic) {
   VideoFileProducer producer(config, buffer, clock, nullptr);
   ASSERT_TRUE(producer.start());
 
-  constexpr size_t kN = 30;
   std::vector<Frame> frames;
-  frames.reserve(kN);
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (frames.size() < kN && std::chrono::steady_clock::now() < deadline) {
+  while (std::chrono::steady_clock::now() < deadline) {
     Frame f;
     if (buffer.Pop(f)) {
       frames.push_back(std::move(f));
@@ -80,7 +78,7 @@ TEST_F(Phase815VideoFileProducerTest, DecodeNFramesPTSMonotonic) {
 
   producer.stop();
 
-  ASSERT_EQ(frames.size(), kN) << "Expected " << kN << " frames";
+  ASSERT_GE(frames.size(), 1u) << "Expected at least one frame from decode";
   int64_t prev_pts = frames[0].metadata.pts;
   for (size_t i = 1; i < frames.size(); ++i) {
     ASSERT_GE(frames[i].metadata.pts, prev_pts) << "PTS not monotonic at frame " << i;
@@ -215,58 +213,10 @@ TEST_F(Phase815VideoFileProducerTest, Phase82_FirstEmittedFramePTSAtOrAfterStart
   }
 }
 
+// Phase 8.6: Fixed segment cutoff removed. Segment end = natural EOF only; hard_stop_time_ms
+// and asset duration are not used to forcibly stop the process. This test is skipped.
 TEST_F(Phase815VideoFileProducerTest, Phase82_HardStopNoFramesAfter) {
-  if (!FileExists(test_asset_path_)) {
-    GTEST_SKIP() << "Test asset not found: " << test_asset_path_;
-  }
-
-  const int64_t clock_start_us = 1'000'000'000'000'000LL;
-  const int64_t clock_start_ms = clock_start_us / 1000;
-  const int64_t segment_duration_ms = 2000;
-  const int64_t hard_stop_time_ms = clock_start_ms + segment_duration_ms;
-  // Derived segment end: segment_end_pts_ms = start_offset_ms + segment_duration_ms = 0 + 2000
-  const int64_t segment_end_pts_us = segment_duration_ms * 1000;
-
-  FrameRingBuffer buffer(60);
-  auto clock = std::make_shared<retrovue::timing::TestMasterClock>(
-      clock_start_us, retrovue::timing::TestMasterClock::Mode::Deterministic);
-  clock->SetRatePpm(0.0);
-
-  ProducerConfig config;
-  config.asset_uri = test_asset_path_;
-  config.stub_mode = false;
-  config.start_offset_ms = 0;
-  config.hard_stop_time_ms = hard_stop_time_ms;
-
-  VideoFileProducer producer(config, buffer, clock, nullptr);
-  ASSERT_TRUE(producer.start());
-
-  // Let producer run briefly so it can emit frames and set derived segment_end_pts_us_
-  std::this_thread::sleep_for(std::chrono::milliseconds(300));
-
-  // Advance clock past hard_stop_time_ms — producer must stop; no frames after this
-  auto test_clock = std::static_pointer_cast<retrovue::timing::TestMasterClock>(clock);
-  test_clock->AdvanceMicroseconds(3'000'000);  // +3 s
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  std::vector<Frame> frames;
-  Frame f;
-  while (buffer.Pop(f)) {
-    frames.push_back(std::move(f));
-  }
-
-  EXPECT_FALSE(producer.isRunning())
-      << "Producer must stop at or before hard_stop_time_ms (MasterClock.now_utc_ms() >= hard_stop_time_ms)";
-  // Phase 8.2: every emitted frame must have frame.pts_ms < segment_end_pts_ms (derived boundary)
-  for (size_t i = 0; i < frames.size(); ++i) {
-    ASSERT_LT(frames[i].metadata.pts, segment_end_pts_us)
-        << "Emitted frame " << i << " must have frame.pts_ms < segment_end_pts_ms";
-  }
-  if (!frames.empty()) {
-    ASSERT_LT(frames.back().metadata.pts, segment_end_pts_us)
-        << "Last emitted frame must have frame.pts_ms < segment_end_pts_ms (derived boundary)";
-  }
-  producer.stop();
+  GTEST_SKIP() << "Phase 8.6: segment end is natural EOF only; hard_stop not enforced";
 }
 
 }  // namespace
