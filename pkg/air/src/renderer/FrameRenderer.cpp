@@ -264,6 +264,14 @@ void FrameRenderer::RenderLoop() {
 
     RenderFrame(frame);
 
+    // Phase 8.4: Feed frame to optional mux side-sink (TS encoder).
+    {
+      std::lock_guard<std::mutex> lock(side_sink_mutex_);
+      if (side_sink_) {
+        side_sink_(frame);
+      }
+    }
+
     int64_t frame_end_utc = 0;
     std::chrono::steady_clock::time_point frame_end_fallback;
     if (clock_) {
@@ -358,6 +366,16 @@ void FrameRenderer::resetPipeline() {
   }
   
   std::cout << "[FrameRenderer] Pipeline reset complete" << std::endl;
+}
+
+void FrameRenderer::SetSideSink(std::function<void(const buffer::Frame&)> fn) {
+  std::lock_guard<std::mutex> lock(side_sink_mutex_);
+  side_sink_ = std::move(fn);
+}
+
+void FrameRenderer::ClearSideSink() {
+  std::lock_guard<std::mutex> lock(side_sink_mutex_);
+  side_sink_ = nullptr;
 }
 
 // ============================================================================

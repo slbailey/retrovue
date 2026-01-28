@@ -11,9 +11,14 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <queue>
 #include <string>
 #include <thread>
 #include <utility>
+
+#include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
+#include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/socket.h>
@@ -34,7 +39,9 @@ namespace retrovue
       constexpr size_t kPhase80PayloadLen = 6;
     } // namespace
 
-    // Phase 8.0/8.1: per-channel stream writer (UDS client; HELLO then optional ffmpeg TS)
+    // Phase 8.0/8.3/8.4: per-channel stream writer (UDS client).
+    // One TS mux per channel per active stream session. Session = AttachStream → DetachStream/StopChannel.
+    // Within a session: mux created once, FD fixed, no restart on segment boundaries. SwitchToLive swaps frame source only.
     struct PlayoutControlImpl::StreamWriterState
     {
       int fd = -1;
@@ -42,11 +49,38 @@ namespace retrovue
       std::thread writer_thread;
       bool close_fd_on_exit = true;
       std::string asset_path;
+      int32_t channel_id = -1;
+      std::shared_ptr<runtime::PlayoutController> controller;
 #if defined(__linux__) || defined(__APPLE__)
       pid_t ffmpeg_pid = -1;
 #else
       int ffmpeg_pid = -1;
 #endif
+
+      // Phase 8.4: frame queue for TS mux (renderer thread enqueues, FfmpegLoop dequeues).
+      std::mutex mux_queue_mutex;
+      std::queue<buffer::Frame> mux_frame_queue;
+      static constexpr size_t kMuxQueueMax = 30;
+
+      void EnqueueFrameForMux(const buffer::Frame& frame)
+      {
+        std::lock_guard<std::mutex> lock(mux_queue_mutex);
+        if (mux_frame_queue.size() >= kMuxQueueMax)
+          mux_frame_queue.pop();
+        mux_frame_queue.push(frame);
+      }
+
+      bool DequeueFrameForMux(buffer::Frame* out)
+      {
+        if (!out)
+          return false;
+        std::lock_guard<std::mutex> lock(mux_queue_mutex);
+        if (mux_frame_queue.empty())
+          return false;
+        *out = std::move(mux_frame_queue.front());
+        mux_frame_queue.pop();
+        return true;
+      }
 
       void HelloLoop()
       {
@@ -69,17 +103,52 @@ namespace retrovue
       }
 
 #if defined(__linux__) || defined(__APPLE__)
-      // Phase 8.1.5: No ffmpeg executable. TS output is stubbed; Producer uses libav only.
-      // FfmpegLoop does nothing so no subprocess is ever spawned.
+      // Phase 8.4: Persistent TS mux per session — one mux per channel per session, same FD; no PID/continuity reset within session.
+      static int WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size)
+      {
+        auto* s = static_cast<StreamWriterState*>(opaque);
+        if (!s || s->fd < 0)
+          return -1;
+        ssize_t n = write(s->fd, buf, buf_size);
+        return (n == static_cast<ssize_t>(buf_size)) ? buf_size : -1;
+      }
+
       void FfmpegLoop()
       {
         (void)asset_path;
         (void)ffmpeg_pid;
-        if (fd >= 0)
+        if (fd < 0)
+          return;
+        playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
+        config.stub_mode = false;
+        config.persistent_mux = true;
+        config.target_fps = 30.0;
+        config.bitrate = 5000000;
+        config.gop_size = 30;
+        auto encoder = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config);
+        if (!encoder->open(config, this, &StreamWriterState::WriteToFdCallback))
         {
-          close(fd);
-          fd = -1;
+          std::cerr << "[Phase8.4] Encoder open failed for channel " << channel_id << std::endl;
+          return;
         }
+        std::cout << "[Phase8.4] Persistent TS mux started for channel " << channel_id << std::endl;
+        while (!stop.load(std::memory_order_acquire) && fd >= 0)
+        {
+          buffer::Frame frame;
+          if (DequeueFrameForMux(&frame))
+          {
+            // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
+            const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
+            if (!encoder->encodeFrame(frame, pts90k))
+              break;
+          }
+          else
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        encoder->close();
+        encoder.reset();
+        if (controller && channel_id >= 0)
+          controller->UnregisterMuxFrameCallback(channel_id);
       }
 #else
       void FfmpegLoop() {}
@@ -277,7 +346,8 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
-      // Phase 8.1: route ffmpeg MPEG-TS to attached stream
+      // Phase 8.3/8.4: Switch is frame-source only. Same stream FD and same TS mux within session;
+      // no PID/continuity reset, no mux restart. Engine has already promoted preview → live producer.
       {
         std::lock_guard<std::mutex> lock(stream_mutex_);
         auto it = stream_writers_.find(channel_id);
@@ -290,6 +360,11 @@ namespace retrovue
           if (state->writer_thread.joinable())
             state->writer_thread.join();
           state->asset_path = *path;
+          state->controller = controller_;
+          controller_->RegisterMuxFrameCallback(channel_id, [state](const buffer::Frame& f) {
+            state->EnqueueFrameForMux(f);
+          });
+          state->stop.store(false, std::memory_order_release);
           state->writer_thread = std::thread(&StreamWriterState::FfmpegLoop, state);
           std::cout << "[SwitchToLive] Channel " << channel_id << " streaming TS from " << *path << std::endl;
         }
@@ -379,8 +454,11 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
+      // Phase 8.4: This FD is the single write side for the channel; when TS mux exists, it
+      // uses this FD for its lifetime (no FD swap on SwitchToLive).
       auto state = std::make_unique<StreamWriterState>();
       state->fd = fd;
+      state->channel_id = channel_id;
       state->writer_thread = std::thread(&StreamWriterState::HelloLoop, state.get());
       stream_writers_[channel_id] = std::move(state);
 

@@ -7,13 +7,12 @@
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 
+#include <cassert>
+#include <cstdlib>
 #include <iostream>
 #include <iomanip>
-#include <chrono>
-#include <ctime>
 #include <sstream>
 #include <cstring>
-#include <algorithm>
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 #include <libavutil/dict.h>
@@ -25,6 +24,8 @@
 namespace retrovue::playout_sinks::mpegts {
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
+// Set to true to log buffer addresses and allocation sizes (debug builds).
+static constexpr bool kEncoderPipelineDebugAlloc = false;
 
 EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
     : config_(config),
@@ -41,22 +42,11 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       input_pix_fmt_(AV_PIX_FMT_YUV420P),
       sws_ctx_valid_(false),
       header_written_(false),
+      codec_opened_(false),
       muxer_opts_(nullptr),
       avio_opaque_(nullptr),
       avio_write_callback_(nullptr),
-      custom_avio_ctx_(nullptr),
-      last_pts_90k_(0),
-      last_dts_90k_(0),
-      last_pts_valid_(false),
-      last_dts_valid_(false),
-      last_pcr_90k_(0),
-      last_pcr_packet_time_us_(0),
-      last_pcr_valid_(false),
-      last_write_time_us_(0),
-      last_packet_time_us_(0),
-      continuity_corrections_(0),
-      continuity_test_packets_(0),
-      continuity_test_mismatches_(0) {
+      custom_avio_ctx_(nullptr) {
   time_base_.num = 1;
   time_base_.den = 90000;  // MPEG-TS timebase is 90kHz
 }
@@ -82,37 +72,29 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     return true;
   }
 
-  continuity_counters_.clear();
-  continuity_corrections_ = 0;
-  continuity_test_counters_.clear();
-  continuity_test_packets_ = 0;
-  continuity_test_mismatches_ = 0;
-  continuity_test_pid_packets_.clear();
-  continuity_test_pid_mismatches_.clear();
-  continuity_test_pid_packets_.clear();
-  continuity_test_pid_mismatches_.clear();
+  // All-or-nothing: require libx264 so open() fails before allocating when encoder unavailable.
+  const AVCodec* codec = avcodec_find_encoder_by_name("libx264");
+  if (!codec) {
+    std::cerr << "[EncoderPipeline] libx264 not found (required for Phase 8.4)" << std::endl;
+    return false;
+  }
 
-  // Suppress FFmpeg warnings (e.g., "dts < pcr, TS is invalid") but keep errors visible
   av_log_set_level(AV_LOG_ERROR);
 
-  // Store write callback and opaque pointer if provided
-  avio_opaque_ = opaque;
+  avio_opaque_ = opaque ? opaque : this;
   avio_write_callback_ = write_callback;
 
   std::string url;
   if (avio_write_callback_) {
-    // Custom AVIO mode - use callback instead of URL
-    url = "dummy://";  // Dummy URL for format context
-    std::cout << "[EncoderPipeline] Opening encoder pipeline with custom AVIO (nonblocking mode)" << std::endl;
+    url = "dummy://";
+    std::cout << "[EncoderPipeline] Opening encoder pipeline with custom AVIO" << std::endl;
   } else {
-    // Traditional URL mode - use TCP socket directly
     std::ostringstream url_stream;
     url_stream << "tcp://" << config.bind_host << ":" << config.port << "?listen=1";
     url = url_stream.str();
     std::cout << "[EncoderPipeline] Opening encoder pipeline: " << url << std::endl;
   }
 
-  // Allocate format context
   int ret = avformat_alloc_output_context2(&format_ctx_, nullptr, "mpegts", url.c_str());
   if (ret < 0 || !format_ctx_) {
     char errbuf[AV_ERROR_MAX_STRING_SIZE];
@@ -120,30 +102,16 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     std::cerr << "[EncoderPipeline] Failed to allocate output context: " << errbuf << std::endl;
     return false;
   }
-  
-  // Configure MPEG-TS muxer for proper PCR cadence (FE-019: >= 19.4ms intervals, ~1750 in 90kHz)
-  // FFmpeg's mpegts muxer inserts PCR automatically based on muxrate and max_delay
-  // max_delay: maximum delay in microseconds (AV_TIME_BASE units) between PCR insertions
-  // Setting max_delay to 100ms (100000 microseconds) ensures PCR is inserted at least every 100ms
-  // This helps meet the >= 19.4ms requirement (PCR won't be too frequent)
-  // muxrate: bitrate in bits per second (0 = VBR mode, PCR follows timestamps instead of bit clock)
-  // Use AVDictionary to set muxer options (more reliable than av_opt_set)
+
   AVDictionary* muxer_opts = nullptr;
-  // max_delay: maximum delay in microseconds (AV_TIME_BASE = 1,000,000)
-  // 100ms = 100000 microseconds - ensures PCR at least every 100ms
-  av_dict_set(&muxer_opts, "max_delay", "100000", 0);  // 100ms max delay
-  // muxrate: Set to 0 for VBR mode - PCR will follow timestamps (PTS/DTS) instead of fixed bitrate clock
-  av_dict_set(&muxer_opts, "muxrate", "0", 0);  // VBR mode
-  // Store options for use in avformat_write_header
+  av_dict_set(&muxer_opts, "max_delay", "100000", 0);
+  av_dict_set(&muxer_opts, "muxrate", "0", 0);
   muxer_opts_ = muxer_opts;
-  
-  // FE-017: Set MPEG-TS flags to reset continuity counters on each new stream
-  // This ensures continuity counters start at 0 for each client connection
-  // These flags ensure PAT/PMT are sent at start and continuity counters reset
-  av_dict_set(&muxer_opts_, "mpegts_flags", "resend_headers", 0);
-  av_dict_set(&muxer_opts_, "mpegts_flags", "+pat_pmt_at_frames", 0);
-  
-  // If using custom AVIO, set up custom write callback
+
+  if (!config.persistent_mux) {
+    av_dict_set(&muxer_opts_, "mpegts_flags", "resend_headers+pat_pmt_at_frames", 0);
+  }
+
   if (avio_write_callback_) {
     // Allocate smaller buffer for AVIO (16KB buffer) to reduce blocking risk
     // Smaller buffer means less data can accumulate before backpressure is felt
@@ -174,15 +142,7 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     format_ctx_->flags |= AVFMT_FLAG_CUSTOM_IO;
   }
 
-  // Find H.264 encoder
-  const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
-  if (!codec) {
-    std::cerr << "[EncoderPipeline] H.264 encoder not found" << std::endl;
-    close();
-    return false;
-  }
-
-  // Create video stream
+  // Create video stream (codec already validated at start of open())
   video_stream_ = avformat_new_stream(format_ctx_, codec);
   if (!video_stream_) {
     std::cerr << "[EncoderPipeline] Failed to create video stream" << std::endl;
@@ -241,6 +201,28 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     close();
     return false;
   }
+  assert(packet_ != reinterpret_cast<AVPacket*>(frame_) && "packet_ must not alias frame_");
+  assert(packet_ != reinterpret_cast<AVPacket*>(input_frame_) && "packet_ must not alias input_frame_");
+  std::cerr << "ALLOC frame_=" << frame_
+            << " input_frame_=" << input_frame_
+            << " packet_=" << packet_ << "\n";
+  if (packet_ == reinterpret_cast<AVPacket*>(input_frame_)) {
+    std::cerr << "FATAL: packet_ == input_frame_ immediately after alloc\n";
+    std::abort();
+  }
+  // Single ownership: frame_ allocated here, freed exactly once in close(). No manual metadata/side-data free (av_frame_unref/av_frame_free own it).
+  frame_->metadata = nullptr;
+  frame_->opaque = nullptr;
+  frame_->buf[0] = nullptr;  // Explicit: never unref a freshly allocated frame until get_buffer has run.
+  // Explicitly null buffer pointers (av_frame_alloc may not zero them on all builds).
+  input_frame_->data[0] = input_frame_->data[1] = input_frame_->data[2] = nullptr;
+  input_frame_->linesize[0] = input_frame_->linesize[1] = input_frame_->linesize[2] = 0;
+  if (kEncoderPipelineDebugAlloc) {
+    std::cerr << "[EncoderPipeline] open: frame_=" << static_cast<void*>(frame_)
+              << " input_frame_=" << static_cast<void*>(input_frame_)
+              << " packet_=" << static_cast<void*>(packet_)
+              << " muxer_opts_=" << static_cast<void*>(muxer_opts_) << std::endl;
+  }
 
   initialized_ = true;
   std::cout << "[EncoderPipeline] Encoder pipeline initialized (will set dimensions from first frame)" << std::endl;
@@ -248,45 +230,71 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
 }
 
 bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t pts90k) {
+  std::cerr << "ALLOC frame_=" << frame_
+            << " input_frame_=" << input_frame_
+            << " packet_=" << packet_ << "\n";
+  if (packet_ == reinterpret_cast<AVPacket*>(input_frame_)) {
+    std::cerr << "FATAL: packet_ == input_frame_ at encodeFrame entry (corruption before frame data touched)\n";
+    std::abort();
+  }
+  std::cerr << "[EncoderPipeline] encodeFrame enter codec_ctx_=" << codec_ctx_
+            << " format_ctx_=" << format_ctx_
+            << " pb=" << (format_ctx_ ? format_ctx_->pb : nullptr)
+            << " cb=" << reinterpret_cast<void*>(avio_write_callback_)
+            << " opaque=" << avio_opaque_
+            << std::endl;
   if (!initialized_) {
     return false;
   }
 
   if (config_.stub_mode) {
-    // Stub mode: just log
     std::cout << "[EncoderPipeline] encodeFrame() - stub mode | PTS_us=" << frame.metadata.pts
               << " | size=" << frame.width << "x" << frame.height << std::endl;
     return true;
   }
 
-  // Stall detection: check if encoder/muxer has stalled
-  auto now = std::chrono::steady_clock::now();
-  int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
-      now.time_since_epoch()).count();
-  
-  if (last_packet_time_us_ > 0 && 
-      (now_us - last_packet_time_us_) > kStallTimeoutUs) {
-    std::cerr << "[EncoderPipeline] WARNING: Encoder/muxer stall detected | "
-              << "time_since_last_packet=" << ((now_us - last_packet_time_us_) / 1000) << "ms" << std::endl;
-    // Don't return false - allow recovery attempt
+  // Early validity guard: ignore invalid/control frames (no dereference, no fail).
+  if (frame.width <= 0 || frame.height <= 0) {
+    std::cerr << "[EncoderPipeline] encodeFrame: ignoring invalid frame "
+              << frame.width << "x" << frame.height << std::endl;
+    return true;  // Not an error; just ignore
   }
-  
-  // Also check write callback stall
-  if (last_write_time_us_ > 0 && 
-      (now_us - last_write_time_us_) > kStallTimeoutUs) {
-    std::cerr << "[EncoderPipeline] WARNING: Write callback stall detected | "
-              << "time_since_last_write=" << ((now_us - last_write_time_us_) / 1000) << "ms" << std::endl;
+  if (frame.data.empty()) {
+    std::cerr << "[EncoderPipeline] encodeFrame: ignoring empty frame data"
+              << std::endl;
+    return true;
   }
+#ifndef NDEBUG
+  assert(frame.width > 0 && frame.height > 0 &&
+         "encodeFrame called with invalid frame dimensions");
+#endif
 
   // Check if codec needs to be opened (first frame or dimensions changed)
   if (!codec_ctx_->width || !codec_ctx_->height || 
       codec_ctx_->width != frame.width || codec_ctx_->height != frame.height) {
     
-    // Close existing codec if already open
+    // Re-create codec context when dimensions change (avcodec_close is deprecated in FFmpeg 6.x).
     if (codec_ctx_->width > 0 && codec_ctx_->height > 0) {
-      avcodec_close(codec_ctx_);
-      if (frame_->data[0]) {
-        av_freep(&frame_->data[0]);
+      avcodec_free_context(&codec_ctx_);
+      codec_ctx_ = avcodec_alloc_context3(codec);
+      if (!codec_ctx_) {
+        std::cerr << "[EncoderPipeline] Failed to re-allocate codec context" << std::endl;
+        return false;
+      }
+      codec_ctx_->codec_id = AV_CODEC_ID_H264;
+      codec_ctx_->codec_type = AVMEDIA_TYPE_VIDEO;
+      codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
+      codec_ctx_->bit_rate = config_.bitrate;
+      codec_ctx_->gop_size = config_.gop_size;
+      codec_ctx_->max_b_frames = 0;
+      codec_ctx_->time_base.num = 1;
+      codec_ctx_->time_base.den = static_cast<int>(config_.target_fps);
+      codec_ctx_->framerate.num = static_cast<int>(config_.target_fps);
+      codec_ctx_->framerate.den = 1;
+      codec_opened_ = false;
+      // Only unref if this frame ever had buffers (av_frame_get_buffer sets buf[0]); never unref freshly alloc'd frame.
+      if (frame_->buf[0] != nullptr) {
+        av_frame_unref(frame_);
       }
       // Invalidate swscale context (will be recreated with new dimensions)
       if (sws_ctx_) {
@@ -296,10 +304,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       sws_ctx_valid_ = false;
     }
     
-    // Free input frame buffer if it exists
-    if (input_frame_->data[0]) {
-      av_freep(&input_frame_->data[0]);
-    }
+    // We do not allocate input_frame_->data in this pipeline; only frame_ is used for encode.
 
     // Set dimensions
     codec_ctx_->width = frame.width;
@@ -320,10 +325,9 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       return false;
     }
 
-    // Find encoder
-    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+    const AVCodec* codec = avcodec_find_encoder_by_name("libx264");
     if (!codec) {
-      std::cerr << "[EncoderPipeline] H.264 encoder not found" << std::endl;
+      std::cerr << "[EncoderPipeline] libx264 not found" << std::endl;
       return false;
     }
 
@@ -342,22 +346,49 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       av_dict_free(&opts);
       return false;
     }
-    
+    codec_opened_ = true;
+
     // Free options dictionary (options are now applied to codec context)
     // Note: avcodec_open2 consumes the options, so we free the dictionary
     av_dict_free(&opts);
 
-    // Allocate frame buffer
-    ret = av_image_alloc(frame_->data, frame_->linesize,
-                         frame.width, frame.height, AV_PIX_FMT_YUV420P, 32);
-    if (ret < 0) {
-      std::cerr << "[EncoderPipeline] Failed to allocate frame buffer" << std::endl;
+    // Sanity check: avoid allocation with invalid dimensions (can cause get_buffer to fail or corrupt).
+    if (frame.width <= 0 || frame.height <= 0 ||
+        frame.width > 32767 || frame.height > 32767) {
+      std::cerr << "[EncoderPipeline] Invalid frame dimensions: " << frame.width << "x" << frame.height << std::endl;
+      avcodec_close(codec_ctx_);
+      codec_opened_ = false;
       return false;
     }
-
+    // Only unref if frame_ ever had buffers; never call av_frame_unref on a freshly allocated frame (buf[0] set in open()).
+    if (frame_->buf[0] != nullptr) {
+      av_frame_unref(frame_);
+    }
+    // Allocate frame buffer via av_frame_get_buffer so FFmpeg owns all buffer memory (no test-owned pointers).
+    frame_->format = AV_PIX_FMT_YUV420P;
     frame_->width = frame.width;
     frame_->height = frame.height;
-    frame_->format = AV_PIX_FMT_YUV420P;
+    ret = av_frame_get_buffer(frame_, 32);
+    if (ret < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+      std::cerr << "[EncoderPipeline] Failed to allocate frame buffer (" << frame.width << "x" << frame.height
+                << "): " << errbuf << std::endl;
+      if (kEncoderPipelineDebugAlloc) {
+        std::cerr << "[EncoderPipeline] frame_=" << static_cast<void*>(frame_)
+                  << " input_frame_=" << static_cast<void*>(input_frame_)
+                  << " packet_=" << static_cast<void*>(packet_)
+                  << " expected_YUV420P_bytes=" << (frame.width * frame.height * 3 / 2) << std::endl;
+      }
+      avcodec_close(codec_ctx_);
+      codec_opened_ = false;
+      return false;  // Do not touch frame_->data; caller may call close() next.
+    }
+    if (kEncoderPipelineDebugAlloc) {
+      std::cerr << "[EncoderPipeline] get_buffer ok frame_=" << static_cast<void*>(frame_)
+                << " linesize[0]=" << frame_->linesize[0] << " [1]=" << frame_->linesize[1]
+                << " [2]=" << frame_->linesize[2] << std::endl;
+    }
 
     // Invalidate swscale context (will be recreated after input_frame_ is allocated)
     if (sws_ctx_) {
@@ -398,6 +429,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         std::cerr << "[EncoderPipeline] Failed to write header: " << errbuf << std::endl;
         return false;
       }
+      av_dict_free(&muxer_opts_);
+      muxer_opts_ = nullptr;
       header_written_ = true;
       std::cout << "[EncoderPipeline] Header written successfully" << std::endl;
     }
@@ -405,45 +438,59 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     std::cout << "[EncoderPipeline] Codec opened: " << frame.width << "x" << frame.height << std::endl;
   }
 
-  // Map frame data directly into AVFrame without copying (per instructions)
-  // Frame.data is YUV420 planar (Y, U, V planes stored contiguously)
-  // We need to copy planes into frame_->data[] with proper linesize
-  // since AVFrame expects separate plane pointers
-  
-  // Verify frame data size
-  size_t y_size = frame.width * frame.height;
+  // Treat input frame as ephemeral: copy pixel data only into FFmpeg-owned buffers (no pointers to test-owned data).
+  // frame.data is YUV420 planar (Y, U, V planes stored contiguously); copy row-by-row using linesize.
+  // Verify frame data size (YUV420P: width*height*3/2)
+  size_t y_size = static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height);
   size_t uv_size = (frame.width / 2) * (frame.height / 2);
   size_t expected_size = y_size + 2 * uv_size;
-  
+
   if (frame.data.size() < expected_size) {
     std::cerr << "[EncoderPipeline] Frame data too small: got " << frame.data.size()
               << " bytes, expected " << expected_size << " bytes" << std::endl;
     return false;
   }
+  // Do not write to frame_->data unless all planes are valid (prevents heap smash).
+  if (!frame_->data[0] || !frame_->data[1] || !frame_->data[2]) {
+    std::cerr << "[EncoderPipeline] Frame data planes not allocated" << std::endl;
+    return false;
+  }
+  if (frame_->linesize[0] < frame.width ||
+      frame_->linesize[1] < frame.width / 2 ||
+      frame_->linesize[2] < frame.width / 2) {
+    std::cerr << "[EncoderPipeline] Invalid linesize: "
+              << frame_->linesize[0] << "," << frame_->linesize[1] << "," << frame_->linesize[2]
+              << " for " << frame.width << "x" << frame.height << "\n";
+    return false;
+  }
+  int wr = av_frame_make_writable(frame_);
+  if (wr < 0) {
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(wr, errbuf, AV_ERROR_MAX_STRING_SIZE);
+    std::cerr << "[EncoderPipeline] av_frame_make_writable failed: " << errbuf << std::endl;
+    return false;
+  }
 
-  // Copy Y, U, V planes directly from frame.data into frame_->data[]
-  // Y plane: width * height bytes
+  // YUV420P copy: use linesize[] for destination stride, width/2 for U/V; source is contiguous row-length.
   const uint8_t* y_plane = frame.data.data();
-  for (int y = 0; y < frame.height; y++) {
+  for (int y = 0; y < frame.height; ++y) {
     memcpy(frame_->data[0] + y * frame_->linesize[0],
            y_plane + y * frame.width,
-           frame.width);
+           static_cast<size_t>(frame.width));
   }
-
-  // U plane: (width/2) * (height/2) bytes
   const uint8_t* u_plane = frame.data.data() + y_size;
-  for (int y = 0; y < frame.height / 2; y++) {
+  int uv_w = frame.width / 2;
+  int uv_h = frame.height / 2;
+  for (int y = 0; y < uv_h; ++y) {
     memcpy(frame_->data[1] + y * frame_->linesize[1],
-           u_plane + y * (frame.width / 2),
-           frame.width / 2);
+           u_plane + y * uv_w,
+           static_cast<size_t>(uv_w));
   }
-
-  // V plane: (width/2) * (height/2) bytes
   const uint8_t* v_plane = frame.data.data() + y_size + uv_size;
-  for (int y = 0; y < frame.height / 2; y++) {
+  for (int y = 0; y < uv_h; ++y) {
     memcpy(frame_->data[2] + y * frame_->linesize[2],
-           v_plane + y * (frame.width / 2),
-           frame.width / 2);
+           v_plane + y * uv_w,
+           static_cast<size_t>(uv_w));
   }
 
   // Set frame format explicitly (already YUV420P)
@@ -454,6 +501,10 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
   // Convert from 90kHz timebase to codec timebase
   AVRational tb90k = {1, 90000};  // 90kHz timebase
   frame_->pts = av_rescale_q(pts90k, tb90k, codec_ctx_->time_base);
+
+  // Do not manually free frame_->metadata (av_frame_unref/av_frame_free own it). Clear pointers so codec never sees stale refs.
+  frame_->metadata = nullptr;
+  frame_->opaque = nullptr;
 
   // Send frame to encoder
   int send_ret = avcodec_send_frame(codec_ctx_, frame_);
@@ -484,30 +535,16 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         // Write drained packet
         packet_->stream_index = video_stream_->index;
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
-        
-        // Debug: Log DTS/PTS for drained packets (throttled)
-        static uint64_t drain_debug_count = 0;
-        if (drain_debug_count++ % 100 == 0) {
-          std::cerr << "[DEBUG] [drain] dts_90k=" << packet_->dts
-                    << " pts_90k=" << packet_->pts << std::endl;
-        }
-        
+        // av_interleaved_write_frame takes ownership and unrefs the packet.
         int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
-        if (write_ret < 0) {
-          if (write_ret == AVERROR(EAGAIN)) {
-            // Muxer backpressure - drop packet and break to prevent blocking
-            std::cerr << "[EncoderPipeline] Muxer backpressure during drain - dropping packet" << std::endl;
-            av_packet_unref(packet_);
-            break;  // Stop draining to prevent blocking
-          } else {
-            // Log error but continue
-            char write_errbuf[AV_ERROR_MAX_STRING_SIZE];
-            av_strerror(write_ret, write_errbuf, AV_ERROR_MAX_STRING_SIZE);
-            std::cerr << "[EncoderPipeline] Error writing drained packet: " << write_errbuf << std::endl;
-          }
+        if (write_ret == AVERROR(EAGAIN)) {
+          break;
         }
-        
-        av_packet_unref(packet_);
+        if (write_ret < 0) {
+          char write_errbuf[AV_ERROR_MAX_STRING_SIZE];
+          av_strerror(write_ret, write_errbuf, AV_ERROR_MAX_STRING_SIZE);
+          std::cerr << "[EncoderPipeline] Error writing drained packet: " << write_errbuf << std::endl;
+        }
       }
       
       // Try sending frame again after draining
@@ -556,197 +593,65 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     packets_processed++;
 
     // Packet received successfully
-    // Set packet stream index and timestamp
     packet_->stream_index = video_stream_->index;
-    
-    // Convert PTS from codec timebase to stream timebase (90kHz)
     av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
-    
-    // Validate and enforce PTS/DTS strict monotonicity (FE-017)
-    if (packet_->pts != AV_NOPTS_VALUE) {
-      int64_t pts_90k = packet_->pts;
-      
-      if (last_pts_valid_) {
-        if (pts_90k <= last_pts_90k_) {
-          // Enforce strict monotonicity: increment PTS to be > last_pts
-          pts_90k = last_pts_90k_ + 1;
-          packet_->pts = pts_90k;
-          static uint64_t pts_warning_count = 0;
-          if (pts_warning_count++ % 100 == 0) {
-            std::cerr << "[EncoderPipeline] PTS non-monotonic - adjusted to " << pts_90k << std::endl;
-          }
-        }
-      }
-      
-      last_pts_90k_ = pts_90k;
-      last_pts_valid_ = true;
-    }
-    
-    if (packet_->dts != AV_NOPTS_VALUE) {
-      int64_t dts_90k = packet_->dts;
-      
-      // Ensure DTS <= PTS (if both present)
-      if (packet_->pts != AV_NOPTS_VALUE && dts_90k > packet_->pts) {
-        // Adjust DTS to be <= PTS
-        dts_90k = packet_->pts;
-        packet_->dts = dts_90k;
-        static uint64_t dts_warning_count = 0;
-        if (dts_warning_count++ % 100 == 0) {
-          std::cerr << "[EncoderPipeline] DTS > PTS - adjusted to " << dts_90k << std::endl;
-        }
-      }
-      
-      if (last_dts_valid_) {
-        if (dts_90k <= last_dts_90k_) {
-          // Enforce strict monotonicity: increment DTS to be > last_dts
-          dts_90k = last_dts_90k_ + 1;
-          packet_->dts = dts_90k;
-          // Re-check DTS <= PTS after adjustment
-          if (packet_->pts != AV_NOPTS_VALUE && dts_90k > packet_->pts) {
-            dts_90k = packet_->pts;
-            packet_->dts = dts_90k;
-          }
-          static uint64_t dts_warning_count = 0;
-          if (dts_warning_count++ % 100 == 0) {
-            std::cerr << "[EncoderPipeline] DTS non-monotonic - adjusted to " << dts_90k << std::endl;
-          }
-        }
-      }
-      
-      last_dts_90k_ = dts_90k;
-      last_dts_valid_ = true;
-    }
-    
-    // Update packet time for stall detection
-    auto now = std::chrono::steady_clock::now();
-    last_packet_time_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
-        now.time_since_epoch()).count();
 
-    // Debug: Log DTS/PTS before writing (throttled to avoid spam)
-    static uint64_t debug_log_count = 0;
-    if (debug_log_count++ % 100 == 0) {
-      std::cerr << "[DEBUG] dts_90k=" << packet_->dts
-                << " pts_90k=" << packet_->pts << std::endl;
-    }
-
-    // Write packet to muxer
-    // Note: Even though our callback always returns buf_size, av_interleaved_write_frame
-    // might still block internally. However, with our callback implementation,
-    // it should not block since we always pretend success.
+    // Write packet to muxer.
+    // av_interleaved_write_frame takes ownership and unrefs the packet.
     int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
-    
+
+    if (write_ret == AVERROR(EAGAIN)) {
+      break;
+    }
     if (write_ret < 0) {
       char errbuf[AV_ERROR_MAX_STRING_SIZE];
       av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      
-      // Handle muxer backpressure
-      if (write_ret == AVERROR(EAGAIN)) {
-        // Muxer would block - drop this packet and break to prevent infinite loop
-        // The packet will be lost, but we can't block the timing loop
-        std::cerr << "[EncoderPipeline] Muxer backpressure (EAGAIN) - dropping packet to prevent blocking" << std::endl;
-        av_packet_unref(packet_);
-        // Break out of loop to prevent infinite retry
-        break;
-      }
-      
-      // Other errors - log but continue (non-fatal)
       std::cerr << "[EncoderPipeline] Error writing packet: " << errbuf << std::endl;
-      av_packet_unref(packet_);
-      // Non-fatal: continue to next packet
       continue;
     }
-
-    // Packet written successfully
-    av_packet_unref(packet_);
-  }
-  
-  if (packets_processed >= max_packets_per_frame) {
-    std::cerr << "[EncoderPipeline] WARNING: Processed " << packets_processed 
-              << " packets (limit reached) - may have more packets to process" << std::endl;
   }
 
   return true;
 }
 
 void EncoderPipeline::close() {
-  if (!initialized_) {
-    return;
-  }
-
+  if (!initialized_) return;
   if (config_.stub_mode) {
-    std::cout << "[EncoderPipeline] close() - stub mode" << std::endl;
     initialized_ = false;
+    std::cout << "[EncoderPipeline] close() - stub mode" << std::endl;
     return;
   }
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
-  // Free muxer options
+  // Idempotent: prevent double-close (e.g. from destructor) from re-running teardown.
+  initialized_ = false;
+
   if (muxer_opts_) {
     av_dict_free(&muxer_opts_);
     muxer_opts_ = nullptr;
   }
   
-  // Flush encoder
-  if (codec_ctx_ && codec_ctx_->width > 0) {
-    // Send NULL frame to flush
+  if (codec_ctx_ && codec_opened_ && packet_ &&
+      reinterpret_cast<void*>(packet_) != reinterpret_cast<void*>(frame_) &&
+      reinterpret_cast<void*>(packet_) != reinterpret_cast<void*>(input_frame_)) {
     avcodec_send_frame(codec_ctx_, nullptr);
-    
-    // Receive remaining packets
     while (true) {
       int ret = avcodec_receive_packet(codec_ctx_, packet_);
-      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        break;
-      }
+      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
       if (ret >= 0) {
         packet_->stream_index = video_stream_->index;
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
-        
-        // Validate and enforce PTS/DTS monotonicity for flushed packets
-        if (packet_->pts != AV_NOPTS_VALUE) {
-          int64_t pts_90k = packet_->pts;
-          if (last_pts_valid_ && pts_90k <= last_pts_90k_) {
-            // Enforce strict monotonicity
-            pts_90k = last_pts_90k_ + 1;
-            packet_->pts = pts_90k;
-          }
-          last_pts_90k_ = pts_90k;
-          last_pts_valid_ = true;
-        }
-        
-        if (packet_->dts != AV_NOPTS_VALUE) {
-          int64_t dts_90k = packet_->dts;
-          // Ensure DTS <= PTS
-          if (packet_->pts != AV_NOPTS_VALUE && dts_90k > packet_->pts) {
-            dts_90k = packet_->pts;
-            packet_->dts = dts_90k;
-          }
-          if (last_dts_valid_ && dts_90k <= last_dts_90k_) {
-            dts_90k = last_dts_90k_ + 1;
-            packet_->dts = dts_90k;
-            // Re-check DTS <= PTS
-            if (packet_->pts != AV_NOPTS_VALUE && dts_90k > packet_->pts) {
-              dts_90k = packet_->pts;
-              packet_->dts = dts_90k;
-            }
-          }
-          last_dts_90k_ = dts_90k;
-          last_dts_valid_ = true;
-        }
-        
-        // Write flushed packet (check for errors)
+        // av_interleaved_write_frame takes ownership and unrefs the packet.
         int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
         if (write_ret < 0 && write_ret != AVERROR(EAGAIN)) {
           char errbuf[AV_ERROR_MAX_STRING_SIZE];
           av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
           std::cerr << "[EncoderPipeline] Error writing flushed packet: " << errbuf << std::endl;
         }
-        
-        av_packet_unref(packet_);
       }
     }
   }
 
-  // Write trailer (finalizes TS stream, writes final PCR if needed)
   if (format_ctx_ && header_written_) {
     int ret = av_write_trailer(format_ctx_);
     if (ret < 0) {
@@ -757,148 +662,48 @@ void EncoderPipeline::close() {
       std::cout << "[EncoderPipeline] Trailer written successfully" << std::endl;
     }
   }
-  
-  // Flush any remaining complete TS packets in alignment buffer (FE-020)
-  // This ensures output ends on 188-byte packet boundary
-  const size_t ts_packet_size = 188;
-  if (!packet_alignment_buffer_.empty()) {
-    size_t complete_packets = (packet_alignment_buffer_.size() / ts_packet_size) * ts_packet_size;
-    
-    if (complete_packets > 0) {
-      // Fix continuity counters before writing
-      ProcessTSPackets(packet_alignment_buffer_.data(), complete_packets);
-      // Write complete packets
-      if (avio_write_callback_ && avio_opaque_) {
-        avio_write_callback_(avio_opaque_, packet_alignment_buffer_.data(), complete_packets);
-      }
-      packet_alignment_buffer_.erase(
-          packet_alignment_buffer_.begin(),
-          packet_alignment_buffer_.begin() + complete_packets);
-    }
-    
-    // Pad remaining partial packet to 188-byte boundary (FE-020 requirement)
-    if (!packet_alignment_buffer_.empty()) {
-      size_t remaining = packet_alignment_buffer_.size();
-      size_t padding_needed = ts_packet_size - remaining;
-      
-      // Pad with null bytes to complete the TS packet
-      packet_alignment_buffer_.resize(ts_packet_size, 0);
-      
-      // Mark as null packet (PID 0x1FFF, sync byte 0x47)
-      if (packet_alignment_buffer_.size() >= 4) {
-        packet_alignment_buffer_[0] = 0x47;  // Sync byte
-        packet_alignment_buffer_[1] = 0x1F;  // PID high byte (0x1FFF = null packet)
-        packet_alignment_buffer_[2] = 0xFF;  // PID low byte
-        packet_alignment_buffer_[3] = 0x10;  // Payload unit start indicator + adaptation field control
-      }
-      
-      // Fix continuity counters before writing padded packet
-      ProcessTSPackets(packet_alignment_buffer_.data(), ts_packet_size);
-      // Write the padded complete packet
-      if (avio_write_callback_ && avio_opaque_) {
-        avio_write_callback_(avio_opaque_, packet_alignment_buffer_.data(), ts_packet_size);
-      }
-      
-      packet_alignment_buffer_.clear();
-    }
-  }
-  
-  // FE-020: Ensure final output is aligned to 188-byte boundary
-  // Since AVIO callback writes directly, we need to write a padding null packet
-  // if the total output size is not a multiple of 188 bytes
-  // Note: We can't easily track total bytes written through the callback,
-  // so we write a null packet to ensure alignment (it will be ignored if already aligned)
-  if (avio_write_callback_ && avio_opaque_) {
-    // Write a null TS packet (188 bytes) to ensure alignment
-    // Null packets (PID 0x1FFF) are valid and will be ignored by decoders
-    uint8_t null_packet[188] = {0};
-    null_packet[0] = 0x47;  // Sync byte
-    null_packet[1] = 0x1F;  // PID high byte (0x1FFF = null packet)
-    null_packet[2] = 0xFF;  // PID low byte
-    null_packet[3] = 0x10;  // Payload unit start indicator + adaptation field control
-    // Rest is zeros (null packet payload)
-    
-    avio_write_callback_(avio_opaque_, null_packet, 188);
-  }
 
-  // Close AVIO
+  // Close AVIO (do not free custom_avio_ctx_->buffer manually; avio_context_free owns it).
   if (custom_avio_ctx_) {
-    // Custom AVIO - free it
-    if (custom_avio_ctx_->buffer) {
-      av_freep(&custom_avio_ctx_->buffer);
-    }
     avio_context_free(&custom_avio_ctx_);
-    format_ctx_->pb = nullptr;
+    custom_avio_ctx_ = nullptr;
+    if (format_ctx_) format_ctx_->pb = nullptr;
   } else if (format_ctx_ && format_ctx_->pb && !(format_ctx_->oformat->flags & AVFMT_NOFILE)) {
-    // URL-based AVIO - close it
     avio_closep(&format_ctx_->pb);
   }
-  
+  // Null only after AVIO is freed so AVIOWriteThunk (if still called during teardown) sees valid callback/opaque.
   avio_opaque_ = nullptr;
   avio_write_callback_ = nullptr;
 
-  // Free resources
-  if (frame_ && frame_->data[0]) {
-    av_freep(&frame_->data[0]);
+  // Free frame_ and input_frame_ exactly once (allocated once in open()). Do not call av_frame_unref after this.
+  // Avoid double-free if pointer corruption made packet_ equal to frame_ or input_frame_ (GDB has shown this).
+  void* const save_frame = frame_;
+  void* const save_input_frame = input_frame_;
+  if (frame_) {
+    av_frame_free(&frame_);
+    frame_ = nullptr;
   }
-  av_frame_free(&frame_);
-  
-  if (input_frame_ && input_frame_->data[0]) {
-    av_freep(&input_frame_->data[0]);
+  if (input_frame_) {
+    av_frame_free(&input_frame_);
+    input_frame_ = nullptr;
   }
-  av_frame_free(&input_frame_);
-  
-  av_packet_free(&packet_);
-  avcodec_free_context(&codec_ctx_);
-  avformat_free_context(format_ctx_);
-  format_ctx_ = nullptr;
-
-  if (continuity_corrections_ > 0) {
-    std::cout << "[EncoderPipeline] Continuity corrections applied: "
-              << continuity_corrections_ << std::endl;
-  }
-  if (continuity_test_packets_ > 0) {
-    double rate = static_cast<double>(continuity_test_mismatches_) /
-                  static_cast<double>(continuity_test_packets_);
-    std::cout << "[EncoderPipeline] Continuity mismatches observed (raw): "
-              << continuity_test_mismatches_ << "/" << continuity_test_packets_
-              << " (" << rate * 100.0 << "%)" << std::endl;
-
-    std::vector<std::pair<uint16_t, double>> pid_rates;
-    pid_rates.reserve(continuity_test_pid_packets_.size());
-    for (const auto& entry : continuity_test_pid_packets_) {
-      uint16_t pid = entry.first;
-      uint64_t total = entry.second;
-      uint64_t mism = continuity_test_pid_mismatches_[pid];
-      if (mism == 0 || total == 0) {
-        continue;
-      }
-      double pid_rate = static_cast<double>(mism) / static_cast<double>(total);
-      pid_rates.emplace_back(pid, pid_rate);
+  if (packet_) {
+    if (reinterpret_cast<void*>(packet_) == save_frame || reinterpret_cast<void*>(packet_) == save_input_frame) {
+      std::cerr << "[EncoderPipeline] FATAL: packet_ aliased frame memory" << std::endl;
+    } else {
+      av_packet_free(&packet_);
     }
-    std::sort(pid_rates.begin(), pid_rates.end(),
-              [](const auto& a, const auto& b) {
-                return a.second > b.second;
-              });
-    if (!pid_rates.empty()) {
-      std::cout << "[EncoderPipeline] Top continuity mismatch PIDs:" << std::endl;
-      size_t limit = std::min<size_t>(pid_rates.size(), 5);
-      for (size_t i = 0; i < limit; ++i) {
-        uint16_t pid = pid_rates[i].first;
-        uint64_t total = continuity_test_pid_packets_[pid];
-        uint64_t mism = continuity_test_pid_mismatches_[pid];
-        std::cout << "  PID " << pid << ": " << mism << "/" << total
-                  << " (" << pid_rates[i].second * 100.0 << "%)" << std::endl;
-      }
-    }
+    packet_ = nullptr;
+  }
+  if (codec_ctx_) {
+    avcodec_free_context(&codec_ctx_);
+    codec_ctx_ = nullptr;
+  }
+  if (format_ctx_) {
+    avformat_free_context(format_ctx_);
+    format_ctx_ = nullptr;
   }
 
-  continuity_counters_.clear();
-  continuity_corrections_ = 0;
-  continuity_test_counters_.clear();
-  continuity_test_packets_ = 0;
-  continuity_test_mismatches_ = 0;
-  
   if (sws_ctx_) {
     sws_freeContext(sws_ctx_);
     sws_ctx_ = nullptr;
@@ -911,7 +716,6 @@ void EncoderPipeline::close() {
   header_written_ = false;
 #endif
 
-  initialized_ = false;
   std::cout << "[EncoderPipeline] Encoder pipeline closed" << std::endl;
 }
 
@@ -920,305 +724,20 @@ bool EncoderPipeline::IsInitialized() const {
 }
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
-// Note: avioWriteCallback is no longer used - we use the callback directly
-
-// Extract PID from TS packet (bytes 1-2)
-uint16_t EncoderPipeline::ExtractPID(const uint8_t* ts_packet) {
-  if (!ts_packet || ts_packet[0] != 0x47) {
-    return 0xFFFF;  // Invalid
-  }
-  return ((ts_packet[1] & 0x1F) << 8) | ts_packet[2];
-}
-
-// Extract continuity counter from TS packet (byte 3, lower 4 bits)
-uint8_t EncoderPipeline::ExtractContinuityCounter(const uint8_t* ts_packet) {
-  if (!ts_packet || ts_packet[0] != 0x47) {
-    return 0xFF;  // Invalid
-  }
-  return ts_packet[3] & 0x0F;
-}
-
-// Extract PCR from TS packet adaptation field (if present)
-bool EncoderPipeline::ExtractPCR(const uint8_t* ts_packet, int64_t& pcr_90k) {
-  if (!ts_packet || ts_packet[0] != 0x47) {
-    return false;
-  }
-  
-  // Check if adaptation field is present (bit 4 of byte 3)
-  if (!(ts_packet[3] & 0x20)) {
-    return false;  // No adaptation field
-  }
-  
-  // Byte 4: adaptation_field_length
-  uint8_t adaptation_field_length = ts_packet[4];
-  if (adaptation_field_length == 0) {
-    return false;  // No adaptation field data
-  }
-  
-  // Byte 5: adaptation_field_control flags (bit 4 = PCR flag)
-  if (!(ts_packet[5] & 0x10)) {
-    return false;  // No PCR flag set
-  }
-  
-  // PCR is 6 bytes starting at byte 6 (after adaptation_field_length and flags)
-  // PCR = (33-bit base) * 300 + (9-bit extension)
-  // PCR base ticks at 90kHz (each unit is 1/90000 second)
-  // PCR extension refines that base to 27MHz resolution
-  int64_t pcr_base = ((int64_t)ts_packet[6] << 25) |
-                     ((int64_t)ts_packet[7] << 17) |
-                     ((int64_t)ts_packet[8] << 9) |
-                     ((int64_t)ts_packet[9] << 1) |
-                     ((ts_packet[10] >> 7) & 0x01);
-  int64_t pcr_ext = ((ts_packet[10] & 0x01) << 8) | ts_packet[11];
-  
-  // pcr_base is already in 90kHz units; keep integer precision in that domain.
-  // (pcr_ext provides 27MHz sub-ticks; we ignore it for coarse 90kHz analysis.)
-  (void)pcr_ext;
-  pcr_90k = pcr_base;
-  
-  return true;
-}
-
-// Process TS packets and validate continuity counters
-void EncoderPipeline::ProcessTSPackets(uint8_t* data, size_t size) {
-  const size_t ts_packet_size = 188;
-  size_t offset = 0;
-  
-  while (offset + ts_packet_size <= size) {
-    uint8_t* ts_packet = data + offset;
-    
-    // Validate sync byte
-    if (ts_packet[0] != 0x47) {
-      std::cerr << "[EncoderPipeline] Invalid TS sync byte at offset " << offset << std::endl;
-      offset += 1;  // Skip one byte and try to resync
-      continue;
-    }
-    
-    // Extract PID and continuity counter
-    uint16_t pid = ExtractPID(ts_packet);
-    uint8_t cc = ExtractContinuityCounter(ts_packet);
-    uint8_t adaptation_field_control = (ts_packet[3] >> 4) & 0x03;
-    bool has_adaptation = (adaptation_field_control & 0x02) != 0;
-    bool has_payload = (adaptation_field_control & 0x01) != 0;
-    
-    // Null packets (PID 0x1FFF) do not participate in continuity tracking
-    bool is_null_packet = (pid == 0x1FFF);
-    
-    // Check discontinuity indicator in adaptation field
-    bool discontinuity_flag = false;
-    if (has_adaptation && !is_null_packet) {
-      size_t adaptation_offset = 4;
-      if (adaptation_offset < ts_packet_size) {
-        uint8_t adaptation_length = ts_packet[adaptation_offset];
-        if (adaptation_length > 0 && adaptation_offset + 1 < ts_packet_size) {
-          uint8_t adaptation_flags = ts_packet[adaptation_offset + 1];
-          discontinuity_flag = (adaptation_flags & 0x80) != 0;
-        }
-      }
-    }
-    
-    auto& test_state = continuity_test_counters_[pid];
-    continuity_test_pid_packets_[pid]++;
-    if (test_state.initialized) {
-      uint8_t expected = (test_state.last_cc + 1) & 0x0F;
-      if (cc != expected) {
-        continuity_test_mismatches_++;
-        continuity_test_pid_mismatches_[pid]++;
-      }
-      test_state.last_cc = cc;
-    } else {
-      test_state.last_cc = cc;
-      test_state.initialized = true;
-    }
-    continuity_test_packets_++;
-
-    if (!is_null_packet) {
-      auto& state = continuity_counters_[pid];
-      
-      if (discontinuity_flag) {
-        state.initialized = false;
-      }
-      
-      if (!state.initialized) {
-        state.last_cc = cc;
-        state.initialized = true;
-      } else if (has_payload) {
-        uint8_t expected_cc = (state.last_cc + 1) & 0x0F;
-        if (cc != expected_cc) {
-          ts_packet[3] = (ts_packet[3] & 0xF0) | expected_cc;
-          cc = expected_cc;
-          continuity_corrections_++;
-        }
-        state.last_cc = cc;
-      } else {
-        // Adaptation-only packets must repeat the previous CC
-        if (cc != state.last_cc) {
-          ts_packet[3] = (ts_packet[3] & 0xF0) | state.last_cc;
-          continuity_corrections_++;
-        }
-        // No change to last_cc when no payload
-      }
-    }
-    
-    // Check if payload unit start indicator is set (bit 6 of byte 1)
-    bool payload_start = (ts_packet[1] & 0x40) != 0;
-    
-    // Track continuity counter
-    if (!is_null_packet && payload_start) {
-      // Logging for diagnostics when continuity had to be corrected repeatedly
-      static uint64_t continuity_warning_count = 0;
-      if (continuity_corrections_ > 0 && (continuity_warning_count++ % 500 == 0)) {
-        std::cout << "[EncoderPipeline] Continuity correction applied | PID=" << pid
-                  << " | CC=" << static_cast<int>(cc) << std::endl;
-      }
-    }
-    
-    // Extract and track PCR if present
-    int64_t pcr_90k = 0;
-    if (ExtractPCR(ts_packet, pcr_90k)) {
-      // Debug: Log PCR values and differences
-      static int64_t last_pcr_debug = -1;
-      if (last_pcr_debug >= 0) {
-        int64_t pcr_diff = pcr_90k - last_pcr_debug;
-        static uint64_t pcr_debug_count = 0;
-        if (pcr_debug_count++ % 100 == 0) {
-          std::cerr << "[DEBUG] PCR_90k=" << pcr_90k
-                    << " diff=" << pcr_diff
-                    << " (~" << (pcr_diff / 90.0) << " ms)" << std::endl;
-        }
-      }
-      last_pcr_debug = pcr_90k;
-      
-      auto now = std::chrono::steady_clock::now();
-      int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
-          now.time_since_epoch()).count();
-      
-      if (last_pcr_valid_) {
-        // Validate PCR cadence (should be ~40ms apart, allow 20-60ms range)
-        int64_t pcr_diff = pcr_90k - last_pcr_90k_;
-        int64_t time_diff_us = now_us - last_pcr_packet_time_us_;
-        int64_t expected_pcr_diff = (time_diff_us * 90) / 1000;  // Convert us to 90kHz
-        
-        // Allow some tolerance (20-60ms)
-        if (pcr_diff < (expected_pcr_diff * 20 / 40) || 
-            pcr_diff > (expected_pcr_diff * 60 / 40)) {
-          static uint64_t pcr_warning_count = 0;
-          if (pcr_warning_count++ % 100 == 0) {
-            std::cout << "[EncoderPipeline] PCR cadence warning | "
-                      << "PCR_diff=" << pcr_diff << " | "
-                      << "time_diff=" << (time_diff_us / 1000) << "ms" << std::endl;
-          }
-        }
-      }
-      
-      last_pcr_90k_ = pcr_90k;
-      last_pcr_packet_time_us_ = now_us;
-      last_pcr_valid_ = true;
-    }
-    
-    offset += ts_packet_size;
-  }
-}
-
-// Validate that data is aligned on 188-byte TS packet boundaries
-bool EncoderPipeline::ValidatePacketAlignment(const uint8_t* data, size_t size) {
-  const size_t ts_packet_size = 188;
-  
-  // Check if size is multiple of 188
-  if (size % ts_packet_size != 0) {
-    return false;
-  }
-  
-  // Check sync bytes at expected positions
-  for (size_t i = 0; i < size; i += ts_packet_size) {
-    if (data[i] != 0x47) {
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-// Write with packet alignment - ensures TS packets (188 bytes) are never split
-bool EncoderPipeline::WriteWithAlignment(const uint8_t* data, size_t size) {
-  const size_t ts_packet_size = 188;
-  const size_t max_buffer_size = 1024 * 1024;  // 1MB max buffer size
-  
-  // Check if buffer would exceed max size
-  if (packet_alignment_buffer_.size() + size > max_buffer_size) {
-    // Buffer too large - drop oldest data to make room
-    // This prevents unbounded growth when writes keep failing
-    size_t drop_size = (packet_alignment_buffer_.size() + size) - max_buffer_size;
-    drop_size = (drop_size / ts_packet_size + 1) * ts_packet_size;  // Round up to packet boundary
-    if (drop_size < packet_alignment_buffer_.size()) {
-      packet_alignment_buffer_.erase(
-          packet_alignment_buffer_.begin(),
-          packet_alignment_buffer_.begin() + drop_size);
-      std::cerr << "[EncoderPipeline] Alignment buffer overflow - dropped " 
-                << drop_size << " bytes" << std::endl;
-    } else {
-      packet_alignment_buffer_.clear();
-    }
-  }
-  
-  // Add to alignment buffer
-  packet_alignment_buffer_.insert(packet_alignment_buffer_.end(), data, data + size);
-  
-  // Process complete TS packets
-  size_t complete_packets = (packet_alignment_buffer_.size() / ts_packet_size) * ts_packet_size;
-  
-  if (complete_packets > 0) {
-    // Fix continuity counters and validate before writing
-    ProcessTSPackets(packet_alignment_buffer_.data(), complete_packets);
-    
-    // Write complete packets
-    // Call the C-style callback directly (it always returns buf_size)
-    if (avio_write_callback_ && avio_opaque_) {
-      int result = avio_write_callback_(avio_opaque_, packet_alignment_buffer_.data(), complete_packets);
-      (void)result;
-      // Callback always returns buf_size (never blocks, never returns < buf_size)
-      // So we can always proceed
-    } else {
-      // No callback - can't write
-      return false;
-    }
-    
-    // Remove written packets from buffer
-    packet_alignment_buffer_.erase(
-        packet_alignment_buffer_.begin(),
-        packet_alignment_buffer_.begin() + complete_packets);
-  }
-  
-  return true;
-}
-
 int EncoderPipeline::AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size) {
-  if (opaque == nullptr) {
-    return -1;
-  }
+  std::cerr << "[EncoderPipeline] AVIOWriteThunk opaque=" << opaque
+            << " buf_size=" << buf_size << std::endl;
+  if (opaque == nullptr) return -1;
   auto* pipeline = reinterpret_cast<EncoderPipeline*>(opaque);
   return pipeline->HandleAVIOWrite(buf, buf_size);
 }
 
 int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
-#ifdef RETROVUE_FFMPEG_AVAILABLE
-  if (buf_size <= 0) {
-    return 0;
-  }
-
-  if (!WriteWithAlignment(buf, static_cast<size_t>(buf_size))) {
-    return -1;
-  }
-
-  last_write_time_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
-      std::chrono::steady_clock::now().time_since_epoch()).count();
-
-  return buf_size;
-#else
-  (void)buf;
-  (void)buf_size;
-  return 0;
-#endif
+  std::cerr << "[EncoderPipeline] HandleAVIOWrite cb=" << reinterpret_cast<void*>(avio_write_callback_)
+            << " opaque=" << avio_opaque_ << " buf_size=" << buf_size << std::endl;
+  if (!avio_write_callback_) return -1;
+  int ret = avio_write_callback_(avio_opaque_, buf, buf_size);
+  return (ret == buf_size) ? buf_size : -1;
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
 

@@ -7,16 +7,19 @@
 #define RETROVUE_RUNTIME_PLAYOUT_ENGINE_H_
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <optional>
 #include <unordered_map>
 
+namespace retrovue::buffer {
+struct Frame;
+}
 namespace retrovue::timing {
 class MasterClock;
 }
-
 namespace retrovue::telemetry {
 class MetricsExporter;
 }
@@ -75,6 +78,12 @@ class PlayoutEngine {
   
   // Phase 8.1: live asset path set after SwitchToLive (for stream TS source)
   std::optional<std::string> GetLiveAssetPath(int32_t channel_id);
+
+  // Phase 8.4: Register/unregister callback to receive each rendered frame (for TS mux).
+  // Callback is invoked from render thread; callee should copy and queue for encoding.
+  void RegisterMuxFrameCallback(int32_t channel_id,
+                                std::function<void(const buffer::Frame&)> callback);
+  void UnregisterMuxFrameCallback(int32_t channel_id);
   
   EngineResult UpdatePlan(
       int32_t channel_id,

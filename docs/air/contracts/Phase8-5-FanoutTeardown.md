@@ -1,4 +1,4 @@
-# Phase 8.4 — Fan-out & Teardown
+# Phase 8.5 — Fan-out & Teardown
 
 _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md)_
 
@@ -32,14 +32,14 @@ Shared invariants (one logical stream per channel, clean shutdown) are in the [O
 ### No leaked FDs; no zombie ffmpeg
 
 - After last viewer disconnect and Air stop:
-  - No open FD left for that channel’s stream (except any explicitly retained for reuse by design).
+  - No open FD left for that channel's stream (except any explicitly retained for reuse by design).
   - No ffmpeg (or child) process still running for that channel.
 - Clean startup: a new tune-in can create a new transport and AttachStream again.
 
 ## Execution
 
-- ProgramDirector (or ChannelManager) tracks viewer count per channel. On tune_in: create transport and AttachStream if first viewer; subscribe HTTP response to the read side. On tune_out: unsubscribe; if count becomes 0, call Air “stop writing” / StopChannel or equivalent and close the write path.
-- Air: when told “last viewer gone,” stop ffmpeg, close stream FD, release resources. No background writer still attached to the FD.
+- ProgramDirector (or ChannelManager) tracks viewer count per channel. On tune_in: create transport and AttachStream if first viewer; subscribe HTTP response to the read side. On tune_out: unsubscribe; if count becomes 0, call Air "stop writing" / StopChannel or equivalent and close the write path.
+- Air: when told "last viewer gone," stop ffmpeg, close stream FD, release resources. No background writer still attached to the FD.
 
 ## Tests
 

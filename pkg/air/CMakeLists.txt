@@ -18,16 +18,52 @@ find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 # Phase 8.1.5: libav* REQUIRED for in-process decode (no ffmpeg executable). No fallback.
-set(FFMPEG_ROOT /opt/retrovue/third_party/ffmpeg)
-list(APPEND CMAKE_PREFIX_PATH "${FFMPEG_ROOT}")
+# All C++ and Air build assets live under pkg/air (multiplatform repo invariant).
+set(AIR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+# FFmpeg: static build from pkg/air/scripts/build_ffmpeg_static.sh → pkg/air/third_party/ffmpeg/install
+set(FFMPEG_INSTALL "${AIR_ROOT}/third_party/ffmpeg/install")
+set(FFMPEG_INCLUDE_DIR "${FFMPEG_INSTALL}/include")
+set(FFMPEG_LIB_DIR "${FFMPEG_INSTALL}/lib")
+# x264: private third-party dependency; only pkg/air/third_party/x264/install (never src tree).
+set(X264_ROOT "${AIR_ROOT}/third_party/x264/install")
+set(X264_LIB_DIR "${X264_ROOT}/lib")
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBAV REQUIRED
-  libavcodec
-  libavformat
-  libavutil
-  libswscale
-  libswresample
+# Locate x264 only under third_party/x264/install/lib. Prefer static (libx264.a).
+find_library(X264_LIB
+  NAMES libx264.a libx264.so libx264.so.165
+  PATHS "${X264_LIB_DIR}"
+  NO_DEFAULT_PATH
+)
+if(NOT X264_LIB)
+  message(FATAL_ERROR "x264 not found in ${X264_LIB_DIR}. Build and install x264 into pkg/air/third_party/x264/install (lib/libx264.a or lib/libx264.so). If FFmpeg was built with shared libx264, install must contain lib/libx264.so (or libx264.so.165).")
+endif()
+if(X264_LIB MATCHES "\\.a$")
+  add_library(x264 STATIC IMPORTED)
+else()
+  add_library(x264 SHARED IMPORTED)
+endif()
+set_target_properties(x264 PROPERTIES
+  IMPORTED_LOCATION "${X264_LIB}"
+  INTERFACE_INCLUDE_DIRECTORIES "${X264_ROOT}/include"
+)
+
+# Static FFmpeg libs from pkg/air/third_party/ffmpeg/install (build via pkg/air/scripts/build_ffmpeg_static.sh).
+find_library(FFMPEG_avformat NAMES libavformat.a PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(FFMPEG_avcodec NAMES libavcodec.a PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(FFMPEG_swscale NAMES libswscale.a PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(FFMPEG_swresample NAMES libswresample.a PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(FFMPEG_avutil NAMES libavutil.a PATHS "${FFMPEG_LIB_DIR}" NO_DEFAULT_PATH)
+foreach(LIB avformat avcodec swscale swresample avutil)
+  if(NOT FFMPEG_${LIB})
+    message(FATAL_ERROR "FFmpeg static lib ${LIB} not found in ${FFMPEG_LIB_DIR}. Run pkg/air/scripts/build_ffmpeg_static.sh first.")
+  endif()
+endforeach()
+set(LIBAV_LIBRARIES_STATIC
+  ${FFMPEG_avformat}
+  ${FFMPEG_avcodec}
+  ${FFMPEG_swscale}
+  ${FFMPEG_swresample}
+  ${FFMPEG_avutil}
 )
 
 # ---- Proto (canonical path: repo root protos/playout.proto) ----
@@ -101,30 +137,39 @@ set(AIR_CORE_SOURCES
   src/timing/SystemMasterClock.cpp
   src/producers/video_file/VideoFileProducer.cpp
   src/producers/programmatic/ProgrammaticProducer.cpp
+  src/playout_sinks/mpegts/EncoderPipeline.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
 
-target_compile_definitions(retrovue_air_core PRIVATE RETROVUE_FFMPEG_AVAILABLE)
-target_include_directories(retrovue_air_core PRIVATE ${LIBAV_INCLUDE_DIRS})
+target_compile_definitions(retrovue_air_core PUBLIC RETROVUE_FFMPEG_AVAILABLE)
+target_include_directories(retrovue_air_core PUBLIC "${FFMPEG_INCLUDE_DIR}")
 target_include_directories(retrovue_air_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${PROTO_GEN_DIR}
 )
-target_link_directories(retrovue_air_core PUBLIC "${FFMPEG_ROOT}/lib")
+target_link_directories(retrovue_air_core PUBLIC "${FFMPEG_LIB_DIR}" "${X264_LIB_DIR}")
+# FFmpeg static libs first, then x264 so avcodec's x264 refs resolve. Then deps FFmpeg needs.
 target_link_libraries(retrovue_air_core
   PUBLIC
     playout_proto
     gRPC::grpc++
-    ${LIBAV_LIBRARIES}
+    ${LIBAV_LIBRARIES_STATIC}
+    x264
+    Threads::Threads
+    m
+    z
+    lzma
+    bz2
 )
-
-# Lock runtime linking to RetroVue's ffmpeg (no collision with ErsatzTV /ffbuild)
-set_target_properties(retrovue_air_core PROPERTIES
-  BUILD_RPATH "${FFMPEG_ROOT}/lib"
-  INSTALL_RPATH "${FFMPEG_ROOT}/lib"
+# RPATH for any shared deps (binaries under pkg/air/build); harmless when everything is static.
+set(X264_RPATH "\$ORIGIN/../third_party/x264/install/lib")
+set(FFMPEG_RPATH "\$ORIGIN/../third_party/ffmpeg/install/lib")
+target_link_options(retrovue_air_core PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
 )
 
 # ---- gRPC server executable (Phase 8.0: AttachStream/DetachStream over UDS) ----
@@ -133,6 +178,10 @@ target_link_libraries(retrovue_air
   PRIVATE
     retrovue_air_core
     gRPC::grpc++_reflection
+)
+target_link_options(retrovue_air PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
 )
 target_include_directories(retrovue_air
   PRIVATE
@@ -145,6 +194,7 @@ target_include_directories(retrovue_air
 add_executable(contracts_playoutengine_tests
   tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp
   tests/contracts/Phase815VideoFileProducerTests.cpp
+  tests/contracts/Phase84PersistentMpegTsMuxTests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp
@@ -155,6 +205,10 @@ target_link_libraries(contracts_playoutengine_tests
     retrovue_air_core
     GTest::gtest
     GTest::gtest_main
+)
+target_link_options(contracts_playoutengine_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
 )
 
 target_include_directories(contracts_playoutengine_tests

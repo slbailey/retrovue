@@ -7,10 +7,14 @@
 #define RETROVUE_RUNTIME_PLAYOUT_CONTROLLER_H_
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <optional>
 
+namespace retrovue::buffer {
+struct Frame;
+}
 namespace retrovue::runtime {
 
 // Forward declaration
@@ -67,6 +71,11 @@ class PlayoutController {
   
   // Phase 8.1: live asset path after SwitchToLive (for stream TS source)
   std::optional<std::string> GetLiveAssetPath(int32_t channel_id);
+
+  // Phase 8.4: Register/unregister callback to receive each rendered frame (for TS mux).
+  void RegisterMuxFrameCallback(int32_t channel_id,
+                                std::function<void(const buffer::Frame&)> callback);
+  void UnregisterMuxFrameCallback(int32_t channel_id);
   
   // Update the playout plan for an active channel
   ControllerResult UpdatePlan(

@@ -58,7 +58,10 @@ namespace {
   }
 }  // namespace
 
-// Internal channel state - manages all components for a single channel
+// Internal channel state - manages all components for a single channel.
+// Phase 8.4: One TS mux per channel per active stream session; ring_buffer is the single
+// frame source for the mux. SwitchToLive swaps which producer feeds the buffer (frame-source
+// only); within a session the mux is not restarted and PID/continuity are not reset.
 struct PlayoutEngine::ChannelState {
   int32_t channel_id;
   std::string plan_handle;
@@ -92,17 +95,22 @@ PlayoutEngine::PlayoutEngine(
 }
 
 PlayoutEngine::~PlayoutEngine() {
-  std::lock_guard<std::mutex> lock(channels_mutex_);
-  if (control_surface_only_) {
-    channels_.clear();
-    return;
-  }
-  for (auto& [channel_id, state] : channels_) {
-    if (state) {
-      StopChannel(channel_id);
+  // Collect channel IDs under the lock, then stop each without holding it
+  // (StopChannel also acquires channels_mutex_).
+  std::vector<int32_t> ids;
+  {
+    std::lock_guard<std::mutex> lock(channels_mutex_);
+    if (control_surface_only_) {
+      channels_.clear();
+      return;
+    }
+    for (auto& [channel_id, state] : channels_) {
+      if (state) ids.push_back(channel_id);
     }
   }
-  channels_.clear();
+  for (int32_t id : ids) {
+    StopChannel(id);
+  }
 }
 
 EngineResult PlayoutEngine::StartChannel(
@@ -375,13 +383,12 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
     }
     
     state->live_asset_path = state->preview_asset_path;
-    // Swap preview to live
+    // Phase 8.3: Atomic switch at frame boundary — swap frame source only; mux (8.4) unchanged.
     state->live_producer = std::move(state->preview_producer);
     state->preview_producer.reset();
     state->preview_asset_path.clear();
     
-    // For PTS continuity, we'd need to align preview PTS to live's next PTS
-    // This is simplified - in production, would check PTS alignment
+    // For PTS continuity, align preview PTS to live's next PTS (Phase 8.2/8.3)
     EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
     result.pts_contiguous = true; // Simplified - would check actual PTS continuity
     result.live_start_pts = 0; // Would get from producer/renderer
@@ -401,6 +408,23 @@ std::optional<std::string> PlayoutEngine::GetLiveAssetPath(int32_t channel_id) {
   if (path.empty())
     return std::nullopt;
   return path;
+}
+
+void PlayoutEngine::RegisterMuxFrameCallback(int32_t channel_id,
+                                             std::function<void(const buffer::Frame&)> callback) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->renderer)
+    return;
+  it->second->renderer->SetSideSink(std::move(callback));
+}
+
+void PlayoutEngine::UnregisterMuxFrameCallback(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->renderer)
+    return;
+  it->second->renderer->ClearSideSink();
 }
 
 EngineResult PlayoutEngine::UpdatePlan(

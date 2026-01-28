@@ -32,17 +32,17 @@ mypy pkg/core/src/
 
 ```bash
 # Install vcpkg dependencies
-sh scripts/air/INSTALL_VCPKG_PACKAGES.sh
+sh pkg/air/INSTALL_VCPKG_PACKAGES.sh
 
-# Generate protobuf code
+# Generate protobuf code (from repo root)
 sh scripts/air/generate_proto.sh
 
 # Configure and build
-cmake -S pkg/air -B build -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j$(nproc)
+cmake -S pkg/air -B pkg/air/build -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build pkg/air/build -j$(nproc)
 
 # Run tests
-ctest --test-dir build --output-on-failure
+ctest --test-dir pkg/air/build --output-on-failure
 
 # Note: The playout engine is an internal component and should not be run independently
 ```

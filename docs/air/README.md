@@ -36,6 +36,7 @@ Guide contributors and operators to the correct documentation based on their goa
 ## Developer guides
 
 - [Quick Start](developer/QuickStart.md) - Build and run instructions.
+- [Build invariants](build.md) - Codec and FFmpeg build rules (Air owns codecs; static build; no LD_LIBRARY_PATH).
 - [Build and Debug](developer/BuildAndDebug.md) - Toolchain setup and troubleshooting.
 - [Development Standards](developer/DevelopmentStandards.md) - C++ layout and naming rules.
 

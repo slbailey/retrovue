@@ -1,10 +1,12 @@
-_Related: [Playout runtime](../runtime/PlayoutRuntime.md) • [Deployment integration](../infra/Integration.md)_
+_Related: [Playout runtime](../runtime/PlayoutRuntime.md) • [Deployment integration](../infra/Integration.md) • [Build invariants](../build.md)_
 
 # Developer guide
 
 ## Purpose
 
 Provide build, testing, and debugging guidance for engineers working on the RetroVue playout engine.
+
+**Build invariants:** See [Build invariants](../build.md) for non‑negotiable rules (Air owns codecs, FFmpeg static, no LD_LIBRARY_PATH, `pkg/air/scripts/build_ffmpeg_static.sh` is authoritative).
 
 ## Prerequisites
 

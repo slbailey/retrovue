@@ -75,7 +75,7 @@ Before you begin, ensure you have the following installed:
     Use the provided script to install the C++ dependencies via vcpkg.
     ```bash
     # Ensure vcpkg is correctly set up in your environment
-    sh scripts/air/INSTALL_VCPKG_PACKAGES.sh
+    sh pkg/air/INSTALL_VCPKG_PACKAGES.sh
     ```
 
 ## How to Build
@@ -95,11 +95,9 @@ _(Note: A unified `scripts/build.sh` script is recommended to orchestrate these 
     Use CMake to configure and build the `retrovue_air` application.
 
     ```bash
-    # Create a build directory
-    cmake -B build -S pkg/air
-
-    # Compile the code
-    cmake --build build
+    # Configure and build (output under pkg/air/build)
+    cmake -S pkg/air -B pkg/air/build -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    cmake --build pkg/air/build -j$(nproc)
     ```
 
 ## How to Test
