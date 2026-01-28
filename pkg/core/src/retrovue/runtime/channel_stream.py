@@ -80,7 +80,10 @@ class UdsTsSource:
         try:
             data = self.sock.recv(size)
             if not data:  # EOF
-                _logger.warning("UDS socket closed by playout engine (EOF)")
+                _logger.warning(
+                    "UDS socket closed by playout engine (EOF) for %s",
+                    self.socket_path,
+                )
                 self._connected = False
                 return b""
             return data
@@ -103,6 +106,40 @@ class UdsTsSource:
     @property
     def is_connected(self) -> bool:
         """Check if connected to UDS."""
+        return self._connected and self.sock is not None
+
+
+class SocketTsSource:
+    """TS source that reads from an already-connected socket (e.g. Air connected to our server)."""
+
+    def __init__(self, sock: socket.socket):
+        self.sock = sock
+        self._connected = True
+
+    def read(self, size: int) -> bytes:
+        if not self.sock or not self._connected:
+            raise IOError("Socket not connected")
+        try:
+            data = self.sock.recv(size)
+            if not data:
+                self._connected = False
+                return b""
+            return data
+        except (OSError, socket.error) as e:
+            self._connected = False
+            raise IOError(f"Socket read error: {e}") from e
+
+    def close(self) -> None:
+        self._connected = False
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+
+    @property
+    def is_connected(self) -> bool:
         return self._connected and self.sock is not None
 
 
@@ -174,6 +211,9 @@ class ChannelStream:
         self._reconnect_delays = [1.0, 2.0, 5.0, 10.0]
         self._current_reconnect_delay_index = 0
 
+        # Debug: log first 16 bytes once per connection to verify TS sync 0x47
+        self._first_chunk_logged = False
+
         self._logger = logging.getLogger(f"{__name__}.{channel_id}")
 
     def get_socket_path(self) -> Path:
@@ -217,7 +257,12 @@ class ChannelStream:
                     self._current_reconnect_delay_index = 0
                     return True
             else:
-                # Fake source doesn't need connect
+                # SocketTsSource (Air) or FakeTsSource: already connected / no connect
+                self._logger.info(
+                    "TS source ready for channel %s (socket from queue)",
+                    self.channel_id,
+                )
+                self._current_reconnect_delay_index = 0
                 return True
 
             if attempt < max_attempts - 1:
@@ -243,51 +288,53 @@ class ChannelStream:
         chunk_size = 188 * 10  # Read 10 TS packets at a time (188 bytes each)
 
         while not self._stop_event.is_set():
-            # Connect if needed
+            # Connect if needed (initial connection only - no reconnect after streaming starts)
             if not self.ts_source:
                 if not self._connect_with_backoff():
-                    if self._stop_event.is_set():
-                        break
-                    # Failed to connect, wait before retrying
-                    time.sleep(1.0)
-                    continue
+                    # Phase 8.7: if initial connection fails, don't keep retrying forever
+                    self._logger.info(
+                        "Initial UDS connection failed for channel %s, stopping",
+                        self.channel_id,
+                    )
+                    break
 
             # Check if source is connected (for UDS)
+            # Phase 8.7: no reconnect loops - if disconnected after initial connect, stop
             if isinstance(self.ts_source, UdsTsSource) and not self.ts_source.is_connected:
                 self._logger.warning(
-                    "UDS source disconnected, attempting reconnect for channel %s", self.channel_id
+                    "UDS source disconnected for channel %s, stopping (no reconnect per Phase 8.7)",
+                    self.channel_id,
                 )
-                if not self._connect_with_backoff():
-                    if self._stop_event.is_set():
-                        break
-                    time.sleep(1.0)
-                    continue
+                break
 
             # Read TS chunk
             try:
                 chunk = self.ts_source.read(chunk_size)
                 if not chunk:
-                    # EOF or disconnect
-                    with self.subscribers_lock:
-                        if len(self.subscribers) == 0:
-                            break  # Phase 8.5: no subscribers, exit without reconnecting
-                    if isinstance(self.ts_source, UdsTsSource):
-                        self._logger.warning(
-                            "TS source closed, attempting reconnect for channel %s", self.channel_id
-                        )
-                        self.ts_source.close()
-                        self.ts_source = None
-                        continue
-                    else:
-                        # Fake source EOF, stop
-                        break
+                    # EOF or disconnect: playout engine closed the write side.
+                    # Phase 8.7: no reconnect loops - stop reader.
+                    self._logger.warning(
+                        "TS source EOF for channel %s, stopping reader (no reconnect per Phase 8.7)",
+                        self.channel_id,
+                    )
+                    break
+                # Debug: log first 16 bytes once per connection (verify TS sync 0x47, not HELLO)
+                if not self._first_chunk_logged and len(chunk) >= 16:
+                    self._logger.info(
+                        "First TS chunk for channel %s (%d bytes, starts 0x47): %s",
+                        self.channel_id,
+                        len(chunk),
+                        chunk[:16].hex(),
+                    )
+                    self._first_chunk_logged = True
             except IOError as e:
-                self._logger.error("TS read error for channel %s: %s", self.channel_id, e)
-                if isinstance(self.ts_source, UdsTsSource):
-                    self.ts_source.close()
-                    self.ts_source = None
-                time.sleep(1.0)
-                continue
+                # Phase 8.7: no reconnect loops - read error means stop
+                self._logger.warning(
+                    "TS read error for channel %s: %s, stopping (no reconnect per Phase 8.7)",
+                    self.channel_id,
+                    e,
+                )
+                break
 
             # Fan-out to all subscribers
             with self.subscribers_lock:
@@ -326,11 +373,11 @@ class ChannelStream:
         self._logger.info("ChannelStream started for channel %s", self.channel_id)
 
     def stop(self) -> None:
-        """Stop the UDS reader thread and clean up (Phase 8.5: no ongoing work when no viewers)."""
+        """Stop the UDS reader thread and clean up (Phase 8.5/8.7: no ongoing work when no viewers). No wait for external I/O."""
         if self._stopped:
             return
 
-        self._logger.info("Stopping ChannelStream for channel %s", self.channel_id)
+        self._logger.info("[teardown] stopping reader loop for channel %s", self.channel_id)
         self._stop_event.set()
 
         # Close source first so reader thread unblocks from read() and can exit
@@ -376,10 +423,10 @@ class ChannelStream:
 
         subscriber_count = len(self.subscribers)
         self._logger.info(
-            "HTTP client %s connected to channel %s (total subscribers: %d)",
-            client_id,
+            "[channel %s] subscribers: %d (client %s connected)",
             self.channel_id,
             subscriber_count,
+            client_id,
         )
 
         # Start reader if not already running
@@ -396,10 +443,10 @@ class ChannelStream:
 
         if removed is not None:
             self._logger.info(
-                "HTTP client %s disconnected from channel %s (remaining subscribers: %d)",
-                client_id,
+                "[channel %s] subscribers: %d (client %s disconnected)",
                 self.channel_id,
                 subscriber_count,
+                client_id,
             )
 
         # Phase 8.5: when last subscriber leaves, stop reader so no ongoing work until next tune-in

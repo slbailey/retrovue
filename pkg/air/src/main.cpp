@@ -77,7 +77,7 @@ void RunServer(const ServerConfig& config) {
   auto controller = std::make_shared<retrovue::runtime::PlayoutController>(engine);
   
   // Create the gRPC service (thin adapter between gRPC and controller)
-  retrovue::playout::PlayoutControlImpl service(controller);
+  retrovue::playout::PlayoutControlImpl service(controller, config.control_surface_only);
 
   // Enable health checking and reflection
   grpc::EnableDefaultHealthCheckService(true);

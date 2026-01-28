@@ -328,7 +328,8 @@ void MpegTSPlayoutSink::workerLoop() {
     // Note: PTS mapping will be initialized when we process the frame below
 
     if (next_frame == nullptr) {
-      // Buffer is empty - handle underflow
+      // Buffer is empty - handle underflow. Phase 8.8: must NOT exit the loop on buffer empty;
+      // only stop_requested_ (explicit Stop) ends the loop. Producer EOF does not stop the sink.
       handleBufferUnderflow(now_us);
 
       // Check stop_requested_ before sleeping

@@ -124,6 +124,12 @@ namespace retrovue::buffer
     // Returns true if the buffer is empty.
     bool IsEmpty() const;
 
+    // Returns true if the audio buffer is empty.
+    bool IsAudioEmpty() const;
+
+    // Returns true if both video and audio buffers are empty.
+    bool IsCompletelyEmpty() const;
+
     // Returns true if the buffer is full.
     bool IsFull() const;
 

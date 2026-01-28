@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Callable, Protocol, runtime_checkable
 
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 
 import time
@@ -83,6 +83,37 @@ class SteppedMasterClock:
         with self._lock:
             self._current += seconds
             return self._current
+
+
+class ControllableMasterClock:
+    """Deterministic UTC clock for tests. now_utc() returns a fixed time; advance(seconds) moves it forward."""
+
+    def __init__(self, epoch: datetime | None = None) -> None:
+        if epoch is None:
+            epoch = datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self._epoch = epoch
+        self._seconds = 0.0
+        self._lock = Lock()
+
+    def now_utc(self) -> datetime:
+        with self._lock:
+            return self._epoch + timedelta(seconds=self._seconds)
+
+    def advance(self, seconds: float) -> datetime:
+        """Advance the clock by ``seconds`` (must be non-negative). Returns new now_utc()."""
+        if seconds < 0.0:
+            raise ValueError("seconds must be non-negative")
+        with self._lock:
+            self._seconds += seconds
+            return self._epoch + timedelta(seconds=self._seconds)
+
+    def advance_to(self, seconds_since_epoch: float) -> datetime:
+        """Set clock to exactly seconds since epoch (must be >= current). Returns new now_utc()."""
+        with self._lock:
+            if seconds_since_epoch < self._seconds:
+                raise ValueError("advance_to must not go backwards")
+            self._seconds = seconds_since_epoch
+            return self._epoch + timedelta(seconds=self._seconds)
 
 
 class MasterClock:

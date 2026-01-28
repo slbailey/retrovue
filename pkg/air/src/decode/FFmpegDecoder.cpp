@@ -86,17 +86,23 @@ bool FFmpegDecoder::Open() {
 
   // Initialize audio codec (if audio stream found)
   if (audio_stream_index_ >= 0) {
+    std::cout << "[FFmpegDecoder] Audio stream found at index " << audio_stream_index_ << ", initializing audio decoder..." << std::endl;
     if (!InitializeAudioCodec()) {
       std::cerr << "[FFmpegDecoder] Failed to initialize audio codec" << std::endl;
       // Continue without audio
       audio_stream_index_ = -1;
     } else {
+      std::cout << "[FFmpegDecoder] Audio decoder initialized successfully" << std::endl;
       if (!InitializeResampler()) {
         std::cerr << "[FFmpegDecoder] Failed to initialize audio resampler" << std::endl;
         // Continue without audio
         audio_stream_index_ = -1;
+      } else {
+        std::cout << "[FFmpegDecoder] Audio resampler initialized successfully" << std::endl;
       }
     }
+  } else {
+    std::cout << "[FFmpegDecoder] No audio stream found in file" << std::endl;
   }
 
   // Initialize scaler
@@ -406,14 +412,14 @@ bool FFmpegDecoder::InitializeResampler() {
     }
     src_nb_channels = src_ch_layout.nb_channels;
   } else {
-    // Fallback: use deprecated channels field and create default layout
-    src_nb_channels = audio_codec_ctx_->channels;
+    // Fallback: use ch_layout.nb_channels (modern API)
+    src_nb_channels = audio_codec_ctx_->ch_layout.nb_channels;
     if (src_nb_channels <= 0) {
       std::cerr << "[FFmpegDecoder] Invalid channel count" << std::endl;
       return false;
     }
-    // Create default channel layout based on channel count
-    av_channel_layout_default(&src_ch_layout, src_nb_channels);
+    // Copy the existing channel layout
+    av_channel_layout_copy(&src_ch_layout, &audio_codec_ctx_->ch_layout);
     if (src_ch_layout.nb_channels == 0) {
       std::cerr << "[FFmpegDecoder] Failed to create default channel layout" << std::endl;
       return false;
@@ -473,16 +479,45 @@ bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) {
   while (true) {
     // Read packet
     int ret = av_read_frame(format_ctx_, packet_);
-    
+
     if (ret == AVERROR_EOF) {
       eof_reached_ = true;
+      audio_eof_reached_ = true;
       return false;
     }
-    
+
     if (ret < 0) {
       stats_.decode_errors++;
       av_packet_unref(packet_);
       return false;
+    }
+
+    // Phase 8.9: Dispatch packet based on stream index
+    // If it's an audio packet, send to audio decoder (don't discard!)
+    if (packet_->stream_index == audio_stream_index_ && audio_codec_ctx_ != nullptr && audio_frame_ != nullptr) {
+      ret = avcodec_send_packet(audio_codec_ctx_, packet_);
+      av_packet_unref(packet_);
+
+      // Drain all available audio frames immediately to prevent decoder backup
+      // Convert and queue them for later retrieval by DecodeNextAudioFrame()
+      if (ret >= 0 || ret == AVERROR(EAGAIN)) {
+        while (true) {
+          int drain_ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
+          if (drain_ret == AVERROR(EAGAIN) || drain_ret == AVERROR_EOF) {
+            break;  // No more frames available
+          }
+          if (drain_ret < 0) {
+            break;  // Error
+          }
+          // Phase 8.9: Convert and queue the audio frame
+          buffer::AudioFrame converted_audio;
+          if (ConvertAudioFrame(audio_frame_, converted_audio)) {
+            pending_audio_frames_.push(std::move(converted_audio));
+          }
+          av_frame_unref(audio_frame_);
+        }
+      }
+      continue;  // Continue reading packets (looking for video)
     }
 
     // Check if packet is from video stream
@@ -494,7 +529,7 @@ bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) {
     // Send packet to decoder
     ret = avcodec_send_packet(codec_ctx_, packet_);
     av_packet_unref(packet_);
-    
+
     if (ret < 0) {
       stats_.decode_errors++;
       return false;
@@ -502,11 +537,11 @@ bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) {
 
     // Receive decoded frame
     ret = avcodec_receive_frame(codec_ctx_, frame_);
-    
+
     if (ret == AVERROR(EAGAIN)) {
       continue;  // Need more packets
     }
-    
+
     if (ret < 0) {
       stats_.decode_errors++;
       return false;
@@ -531,8 +566,13 @@ bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame)
   int64_t pts = av_frame->pts != AV_NOPTS_VALUE ? av_frame->pts : av_frame->best_effort_timestamp;
   output_frame.metadata.pts = pts;
   output_frame.metadata.dts = av_frame->pkt_dts;
-  // Use duration field (preferred) or fallback to pkt_duration for older FFmpeg versions
-  int64_t frame_duration = av_frame->duration != AV_NOPTS_VALUE ? av_frame->duration : av_frame->pkt_duration;
+  // Use duration field (pkt_duration is deprecated in newer FFmpeg)
+  int64_t frame_duration = av_frame->duration != AV_NOPTS_VALUE ? av_frame->duration : 0;
+  if (frame_duration == 0) {
+    // If duration is not available, estimate from frame rate or use default
+    // This is a fallback - ideally duration should always be set
+    frame_duration = 1;  // Default to 1 timebase unit if unknown
+  }
   output_frame.metadata.duration = static_cast<double>(frame_duration) * time_base_;
   output_frame.metadata.asset_uri = config_.input_uri;
 
@@ -594,55 +634,35 @@ bool FFmpegDecoder::DecodeNextAudioFrame(buffer::FrameRingBuffer& output_buffer)
 }
 
 bool FFmpegDecoder::ReadAndDecodeAudioFrame(buffer::AudioFrame& output_frame) {
-  if (audio_stream_index_ < 0) {
+  // Phase 8.9: Audio packets are dispatched by ReadAndDecodeFrame().
+  // This function only receives frames that were already sent to the decoder.
+  // It does NOT read packets (that would compete with the video demux loop).
+  if (audio_stream_index_ < 0 || !audio_codec_ctx_ || audio_eof_reached_) {
     return false;
   }
 
-  while (true) {
-    // Read packet
-    int ret = av_read_frame(format_ctx_, packet_);
-    
-    if (ret == AVERROR_EOF) {
-      audio_eof_reached_ = true;
-      return false;
-    }
-    
-    if (ret < 0) {
-      stats_.decode_errors++;
-      av_packet_unref(packet_);
-      return false;
-    }
+  // Try to receive a decoded audio frame (non-blocking)
+  int ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
 
-    // Check if packet is from audio stream
-    if (packet_->stream_index != audio_stream_index_) {
-      av_packet_unref(packet_);
-      continue;
-    }
-
-    // Send packet to decoder
-    ret = avcodec_send_packet(audio_codec_ctx_, packet_);
-    av_packet_unref(packet_);
-    
-    if (ret < 0) {
-      stats_.decode_errors++;
-      return false;
-    }
-
-    // Receive decoded frame
-    ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
-    
-    if (ret == AVERROR(EAGAIN)) {
-      continue;  // Need more packets
-    }
-    
-    if (ret < 0) {
-      stats_.decode_errors++;
-      return false;
-    }
-
-    // Successfully decoded an audio frame
-    return ConvertAudioFrame(audio_frame_, output_frame);
+  if (ret == AVERROR(EAGAIN)) {
+    // No audio frame available yet - this is normal
+    return false;
   }
+
+  if (ret == AVERROR_EOF) {
+    audio_eof_reached_ = true;
+    return false;
+  }
+
+  if (ret < 0) {
+    stats_.decode_errors++;
+    return false;
+  }
+
+  // Successfully decoded an audio frame
+  bool result = ConvertAudioFrame(audio_frame_, output_frame);
+  av_frame_unref(audio_frame_);
+  return result;
 }
 
 bool FFmpegDecoder::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame) {

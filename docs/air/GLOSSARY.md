@@ -36,7 +36,7 @@ Lightweight HTTP endpoint (`/metrics`) serving telemetry data to Prometheus/Graf
 Authoritative timing source; lives in the Python runtime. Ensures channels remain synchronized. Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time.
 
 **PlayoutControl**  
-gRPC service defined in `proto/retrovue/playout.proto` for channel lifecycle and segment-based execution. Canonical calls: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload).
+gRPC service defined in `protos/playout.proto` for channel lifecycle and segment-based execution. Canonical calls: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload).
 
 **PlayoutSegment**  
 Executable instruction computed by ChannelManager: asset_path, start_offset_ms (media-relative), hard_stop_time_ms (wall-clock, authoritative). Sent to Air via `LoadPreview`; Air does not understand schedules or plans.

@@ -272,6 +272,32 @@ void FrameRenderer::RenderLoop() {
       }
     }
 
+    // Phase 8.9: Consume and forward audio frames (non-blocking, timing-independent)
+    // Audio frames are consumed whenever available and forwarded to mux queue
+    int audio_frames_consumed = 0;
+    while (true) {
+      buffer::AudioFrame audio_frame;
+      if (!input_buffer_.PopAudioFrame(audio_frame)) {
+        break;  // No more audio frames available
+      }
+      audio_frames_consumed++;
+      
+      // Forward audio frame to optional mux side-sink
+      {
+        std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
+        if (audio_side_sink_) {
+          audio_side_sink_(audio_frame);
+        } else {
+          // Audio callback not registered - audio frames will be dropped
+          // This is expected if audio encoder failed or wasn't initialized
+        }
+      }
+    }
+    if (audio_frames_consumed > 0 && stats_.frames_rendered % 100 == 0) {
+      std::cout << "[FrameRenderer] Consumed " << audio_frames_consumed 
+                << " audio frames for video frame #" << stats_.frames_rendered << std::endl;
+    }
+
     int64_t frame_end_utc = 0;
     std::chrono::steady_clock::time_point frame_end_fallback;
     if (clock_) {
@@ -376,6 +402,17 @@ void FrameRenderer::SetSideSink(std::function<void(const buffer::Frame&)> fn) {
 void FrameRenderer::ClearSideSink() {
   std::lock_guard<std::mutex> lock(side_sink_mutex_);
   side_sink_ = nullptr;
+}
+
+// Phase 8.9: Audio side sink methods
+void FrameRenderer::SetAudioSideSink(std::function<void(const buffer::AudioFrame&)> fn) {
+  std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
+  audio_side_sink_ = std::move(fn);
+}
+
+void FrameRenderer::ClearAudioSideSink() {
+  std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
+  audio_side_sink_ = nullptr;
 }
 
 // ============================================================================

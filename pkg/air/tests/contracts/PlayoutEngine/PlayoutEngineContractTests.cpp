@@ -784,47 +784,12 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_StopReleasesProducer_ObservableStoppe
 // ---------------------------------------------------------------------------
 // Phase 6A.2 — FileBackedProducer: start_offset_ms and hard_stop_time_ms honored
 // (Phase6A-2-FileBackedProducer.md)
+// Phase 8.6: hard_stop removed; segment end = natural EOF only. This test skipped.
 // ---------------------------------------------------------------------------
 
 TEST_F(PlayoutEngineContractTest, Phase6A2_HardStopEnforced_ProducerStopsByDeadline)
 {
-  runtime::PlayoutControlStateMachine controller;
-  buffer::FrameRingBuffer buffer(60);
-  const int64_t start_us = 1'000'000'000'000'000LL;  // epoch-like base
-  auto clock = std::make_shared<retrovue::timing::TestMasterClock>(
-      start_us, retrovue::timing::TestMasterClock::Mode::Deterministic);
-  int64_t hard_stop_ms = (start_us / 1000) + 5000;  // stop 5s after start
-
-  controller.setProducerFactory(
-      [](const std::string& path, const std::string& asset_id,
-         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
-         int64_t start_offset_ms, int64_t hard_stop_time_ms)
-          -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
-        config.asset_uri = path;
-        config.target_width = 1920;
-        config.target_height = 1080;
-        config.target_fps = 30.0;
-        config.stub_mode = true;
-        config.start_offset_ms = start_offset_ms;
-        config.hard_stop_time_ms = hard_stop_time_ms;
-        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
-      });
-
-  ASSERT_TRUE(controller.loadPreviewAsset(
-      "test://clip.mp4", "clip", buffer, clock, 0, hard_stop_ms));
-
-  const auto& preview = controller.getPreviewSlot();
-  ASSERT_TRUE(preview.loaded);
-  ASSERT_TRUE(preview.producer->isRunning());
-
-  // Advance clock past hard_stop_time_ms so producer must stop (Phase 6A.2)
-  auto test_clock = std::static_pointer_cast<retrovue::timing::TestMasterClock>(clock);
-  test_clock->AdvanceMicroseconds(6'000'000);  // +6 s
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  EXPECT_FALSE(preview.producer->isRunning())
-      << "Producer must stop at or before hard_stop_time_ms";
+  GTEST_SKIP() << "Phase 8.6: segment end is natural EOF only; hard_stop not enforced";
 }
 
 TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProducer)
@@ -933,42 +898,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_LoadPreviewSwitchToLive_ProgrammaticP
 
 TEST_F(PlayoutEngineContractTest, Phase6A3_ProgrammaticProducer_StopsAtHardStopTime)
 {
-  runtime::PlayoutControlStateMachine controller;
-  buffer::FrameRingBuffer buffer(60);
-  const int64_t start_us = 1'000'000'000'000'000LL;
-  auto clock = std::make_shared<retrovue::timing::TestMasterClock>(
-      start_us, retrovue::timing::TestMasterClock::Mode::Deterministic);
-  int64_t hard_stop_ms = (start_us / 1000) + 5000;
-
-  controller.setProducerFactory(
-      [](const std::string& path, const std::string& asset_id,
-         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
-         int64_t start_offset_ms, int64_t hard_stop_time_ms)
-          -> std::unique_ptr<retrovue::producers::IProducer> {
-        (void)path;
-        (void)asset_id;
-        producers::programmatic::ProgrammaticProducerConfig config;
-        config.asset_uri = "programmatic://clip";
-        config.target_width = 640;
-        config.target_height = 480;
-        config.target_fps = 30.0;
-        config.start_offset_ms = start_offset_ms;
-        config.hard_stop_time_ms = hard_stop_time_ms;
-        return std::make_unique<producers::programmatic::ProgrammaticProducer>(config, rb, clk);
-      });
-
-  ASSERT_TRUE(controller.loadPreviewAsset(
-      "programmatic://clip", "clip", buffer, clock, 0, hard_stop_ms));
-  const auto& preview = controller.getPreviewSlot();
-  ASSERT_TRUE(preview.loaded);
-  ASSERT_TRUE(preview.producer->isRunning());
-
-  auto test_clock = std::static_pointer_cast<retrovue::timing::TestMasterClock>(clock);
-  test_clock->AdvanceMicroseconds(6'000'000);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  EXPECT_FALSE(preview.producer->isRunning())
-      << "ProgrammaticProducer must stop at or before hard_stop_time_ms";
+  GTEST_SKIP() << "Phase 8.6: segment end is natural EOF only; hard_stop not enforced";
 }
 
 TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammatic)
@@ -1121,6 +1051,59 @@ TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAsse
 
   const auto& preview_after = controller.getPreviewSlot();
   EXPECT_FALSE(preview_after.loaded);
+}
+
+// Phase 8.8 — Frame Lifecycle: producer EOF must NOT stop the producer or channel.
+// The producer stays running (Exhausted state) until explicit stop; render path drains buffer.
+TEST_F(PlayoutEngineContractTest, Phase88_ProducerEofDoesNotStopProducer)
+{
+  std::string path = GetPhase83SamplePath("RETROVUE_TEST_VIDEO_PATH_A", "/opt/retrovue/assets/SampleA.mp4");
+  if (!FileExists(path)) {
+    GTEST_SKIP() << "Phase 8.8 requires a sample asset (e.g. SampleA.mp4). Set RETROVUE_TEST_VIDEO_PATH_A or add assets.";
+  }
+
+  runtime::PlayoutControlStateMachine controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  controller.setProducerFactory(
+      [](const std::string& p, const std::string&,
+         buffer::FrameRingBuffer& rb,
+         std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        producers::video_file::ProducerConfig config;
+        config.asset_uri = p;
+        config.target_width = 1920;
+        config.target_height = 1080;
+        config.target_fps = 30.0;
+        config.stub_mode = false;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+      });
+
+  ASSERT_TRUE(controller.loadPreviewAsset(path, "phase88", buffer, clock, 0, 0));
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
+  const auto& live = controller.getLiveSlot();
+  ASSERT_TRUE(live.loaded);
+  auto* video = dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get());
+  ASSERT_NE(video, nullptr);
+
+  // Run long enough for a short file to hit EOF (demux faster than real time). Phase 8.8: producer
+  // must still be running after EOF (no exit on EOF alone).
+  for (int i = 0; i < 40; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    if (!live.producer->isRunning()) break;
+  }
+  EXPECT_TRUE(live.producer->isRunning())
+      << "Phase 8.8: producer must not stop on EOF; it remains running until explicit stop";
+  EXPECT_GT(video->GetFramesProduced(), 0u);
+
+  live.producer->stop();
+  ASSERT_FALSE(live.producer->isRunning());
 }
 
 } // namespace

@@ -52,6 +52,7 @@ Core concepts RetroVue is built on. These define what the system is, not how it 
 
 How RetroVue behaves at runtime. ChannelManager, ffmpeg lifecycle, timing.
 
+- [Running the Program Director](runtime/RunningProgramDirector.md) — how to run `program-director start` (Phase 0 A/B, Phase 8.8 note)
 - [Channel manager](runtime/channel_manager.md)
 - [Producer lifecycle](runtime/ProducerLifecycle.md)
 - [MasterClock](domain/MasterClock.md)

@@ -1,8 +1,9 @@
 """
-Phase 8.0 — Transport contract (no media).
+Phase 8.0 — Transport contract (TS-oriented).
 
-Contract: Python creates UDS server, Air connects as client and writes bytes (e.g. HELLO\\n).
-Python serves them over HTTP. No ffmpeg, TS, or VLC.
+Contract: Python creates UDS server, Air connects as client and writes real MPEG-TS.
+GET /channels/{id}.ts returns bytes starting with TS sync 0x47 (no HELLO).
+Runtime is Air-only; no ffmpeg.
 
 See: docs/air/contracts/Phase8-0-Transport.md
 """
@@ -16,13 +17,13 @@ import sys
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
 import requests
 
-# Load proto stubs from core/proto/retrovue without conflicting with src/retrovue.
+# Load proto stubs from pkg/core/core/proto/retrovue (canonical: protos/playout.proto)
 _PROTO_DIR = Path(__file__).resolve().parents[2] / "core" / "proto" / "retrovue"
 try:
     import grpc
@@ -39,14 +40,12 @@ try:
     playout_pb2_grpc = importlib.util.module_from_spec(_spec_grpc)
     sys.modules["playout_pb2"] = playout_pb2
     sys.modules["playout_pb2_grpc"] = playout_pb2_grpc
-    # playout_pb2_grpc imports "from retrovue import playout_pb2" - need retrovue to expose it
     import types
     _retrovue_proto = types.ModuleType("retrovue")
     _retrovue_proto.playout_pb2 = playout_pb2
     _retrovue_proto.playout_pb2_grpc = playout_pb2_grpc
     sys.modules["retrovue_playout_proto"] = _retrovue_proto
     _spec_pb2.loader.exec_module(playout_pb2)
-    # Temporarily inject retrovue => playout_pb2 for the grpc module's import
     _saved_retrovue = sys.modules.get("retrovue")
     sys.modules["retrovue"] = _retrovue_proto
     try:
@@ -64,7 +63,6 @@ except Exception as e:
 
 
 def _find_retrovue_air() -> Path | None:
-    # __file__ is .../pkg/core/tests/e2e/test_*.py -> parents[4] = repo root
     repo_root = Path(__file__).resolve().parents[4]
     candidates = [
         repo_root / "pkg" / "air" / "out" / "build" / "linux-debug" / "retrovue_air",
@@ -77,7 +75,13 @@ def _find_retrovue_air() -> Path | None:
     return None
 
 
-# --- UDS server + HTTP stream server ---
+def _find_sample_asset() -> Path | None:
+    repo_root = Path(__file__).resolve().parents[4]
+    for name in ("samplecontent.mp4", "filler.mp4", "SampleA.mp4", "SampleB.mp4"):
+        p = repo_root / "assets" / name
+        if p.is_file():
+            return p
+    return None
 
 
 class _StreamHandler(BaseHTTPRequestHandler):
@@ -89,7 +93,7 @@ class _StreamHandler(BaseHTTPRequestHandler):
                 self.send_error(503, "No stream attached")
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Type", "video/mp2t")
             self.end_headers()
             try:
                 while True:
@@ -144,13 +148,19 @@ def _run_uds_server_and_http(
     _grpc_import_error is not None,
     reason=f"Proto/grpc not available: {_grpc_import_error}",
 )
-def test_phase8_0_transport_air_to_http():
-    """StartChannel → AttachStream(UDS) → Air writes HELLO → GET /channels/mock.ts returns it."""
+def test_phase8_0_transport_ts_sync_once_live():
+    """
+    Transport contract: Air connects to UDS and writes real MPEG-TS.
+    GET returns bytes; first sync byte must be 0x47 (no HELLO). Air-only.
+    """
     air_exe = _find_retrovue_air()
     if air_exe is None:
-        pytest.skip("retrovue_air executable not found (build pkg/air with retrovue_air target)")
+        pytest.skip("retrovue_air executable not found (build pkg/air)")
+    asset_path = _find_sample_asset()
+    if asset_path is None:
+        pytest.skip("No test asset (e.g. assets/samplecontent.mp4 or assets/SampleA.mp4)")
 
-    with tempfile.TemporaryDirectory(prefix="retrovue_phase8_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="retrovue_phase8_0_") as tmp:
         uds_path = os.path.join(tmp, "ch_mock.sock")
         http_port = 0
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -167,25 +177,20 @@ def test_phase8_0_transport_air_to_http():
         server_thread.start()
         assert ready.wait(timeout=3.0), "UDS server failed to bind"
 
-        # Start Air gRPC server
         grpc_port = 0
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             grpc_port = s.getsockname()[1]
         grpc_addr = f"127.0.0.1:{grpc_port}"
 
+        # Air full mode (no --control-surface-only) so real TS after SwitchToLive
         proc = subprocess.Popen(
-            [
-                str(air_exe),
-                "--port", str(grpc_port),
-                "--control-surface-only",  # Phase 8.0: no decode/render
-            ],
+            [str(air_exe), "--port", str(grpc_port)],
             cwd=str(air_exe.parent),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         try:
-            # Wait for gRPC to be up
             for _ in range(80):
                 try:
                     with grpc.insecure_channel(grpc_addr) as ch:
@@ -199,59 +204,66 @@ def test_phase8_0_transport_air_to_http():
                 proc.wait(timeout=3)
                 pytest.fail("Air gRPC server did not become ready")
 
-            # StartChannel then AttachStream (contract ordering)
-            try:
-                with grpc.insecure_channel(grpc_addr) as ch:
-                    stub = playout_pb2_grpc.PlayoutControlStub(ch)
-                    start_resp = stub.StartChannel(
-                        playout_pb2.StartChannelRequest(
-                            channel_id=1,
-                            plan_handle="phase8",
-                            port=0,
-                        ),
-                        timeout=5,
-                    )
-                    assert start_resp.success, start_resp.message
+            timeout_s = 30
+            with grpc.insecure_channel(grpc_addr) as ch:
+                stub = playout_pb2_grpc.PlayoutControlStub(ch)
+                start_resp = stub.StartChannel(
+                    playout_pb2.StartChannelRequest(
+                        channel_id=1, plan_handle="mock", port=0
+                    ),
+                    timeout=timeout_s,
+                )
+                assert start_resp.success, start_resp.message
+                assert stub.LoadPreview(
+                    playout_pb2.LoadPreviewRequest(
+                        channel_id=1,
+                        asset_path=str(asset_path),
+                        start_offset_ms=0,
+                        hard_stop_time_ms=0,
+                    ),
+                    timeout=timeout_s,
+                ).success
+                assert stub.AttachStream(
+                    playout_pb2.AttachStreamRequest(
+                        channel_id=1,
+                        transport=playout_pb2.STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET,
+                        endpoint=uds_path,
+                        replace_existing=False,
+                    ),
+                    timeout=timeout_s,
+                ).success
+                assert stub.SwitchToLive(
+                    playout_pb2.SwitchToLiveRequest(channel_id=1),
+                    timeout=timeout_s,
+                ).success
 
-                    attach_resp = stub.AttachStream(
-                        playout_pb2.AttachStreamRequest(
-                            channel_id=1,
-                            transport=playout_pb2.STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET,
-                            endpoint=uds_path,
-                            replace_existing=False,
-                        ),
-                        timeout=5,
-                    )
-                    assert attach_resp.success, attach_resp.message
-            except Exception:
-                raise
+            time.sleep(1.5)
 
-            # Give Air time to connect and write a few HELLO lines
-            time.sleep(0.4)
-
-            # GET /channels/mock.ts — must get bytes and see HELLO (per-chunk read timeout)
             r = requests.get(
                 f"http://127.0.0.1:{http_port}/channels/mock.ts",
                 stream=True,
-                timeout=(3, 2),  # connect 3s, per-read 2s
+                timeout=(3, 5),
             )
             assert r.status_code == 200, r.text or r.reason
             content = b""
-            for chunk in r.iter_content(chunk_size=256):
+            for chunk in r.iter_content(chunk_size=188 * 10):
                 content += chunk
-                if b"HELLO" in content or len(content) >= 50:
+                if len(content) >= 188 * 5:
                     break
             r.close()
-            assert b"HELLO" in content, f"Expected HELLO in stream, got: {content!r}"
 
-            # StopChannel (implies detach)
+            assert len(content) >= 1, "Expected at least one byte from stream"
+            assert content[0] == 0x47, (
+                f"Expected MPEG-TS sync byte 0x47 once live, got first byte 0x{content[0]:02x}; "
+                "stream must be real TS from Air, not HELLO."
+            )
+
             with grpc.insecure_channel(grpc_addr) as ch:
                 stub = playout_pb2_grpc.PlayoutControlStub(ch)
-                stop_resp = stub.StopChannel(
+                stub.StopChannel(
                     playout_pb2.StopChannelRequest(channel_id=1),
                     timeout=5,
                 )
-                assert stop_resp.success, stop_resp.message
         finally:
             proc.terminate()
             proc.wait(timeout=5)

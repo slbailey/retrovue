@@ -16,6 +16,7 @@
 
 namespace retrovue::buffer {
 struct Frame;
+struct AudioFrame;
 }
 namespace retrovue::timing {
 class MasterClock;
@@ -84,6 +85,12 @@ class PlayoutEngine {
   void RegisterMuxFrameCallback(int32_t channel_id,
                                 std::function<void(const buffer::Frame&)> callback);
   void UnregisterMuxFrameCallback(int32_t channel_id);
+
+  // Phase 8.9: Register/unregister callback to receive each audio frame (for TS mux).
+  // Callback is invoked from render thread; callee should copy and queue for encoding.
+  void RegisterMuxAudioFrameCallback(int32_t channel_id,
+                                     std::function<void(const buffer::AudioFrame&)> callback);
+  void UnregisterMuxAudioFrameCallback(int32_t channel_id);
   
   EngineResult UpdatePlan(
       int32_t channel_id,

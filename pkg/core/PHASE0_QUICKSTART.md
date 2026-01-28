@@ -34,22 +34,22 @@ Phase 0 provides a simple linear streaming setup with:
 **Using ffmpeg (recommended for testing):**
 ```bash
 RETROVUE_USE_FFMPEG=1 retrovue program-director start \
-  --phase0 \
-  --phase0-program-asset /opt/retrovue/assets/samplecontent.mp4 \
+  --mock-schedule-grid \
+  --program-asset /opt/retrovue/assets/samplecontent.mp4 \
   --phase0-program-duration 1500 \
-  --phase0-filler-asset /opt/retrovue/assets/filler.mp4 \
-  --phase0-filler-duration 3650 \
+  --filler-asset /opt/retrovue/assets/filler.mp4 \
+  --filler-duration 3650 \
   --port 8000
 ```
 
 **Or without the environment variable (will auto-detect if Air is not available):**
 ```bash
 retrovue program-director start \
-  --phase0 \
-  --phase0-program-asset /opt/retrovue/assets/samplecontent.mp4 \
+  --mock-schedule-grid \
+  --program-asset /opt/retrovue/assets/samplecontent.mp4 \
   --phase0-program-duration 1500 \
-  --phase0-filler-asset /opt/retrovue/assets/filler.mp4 \
-  --phase0-filler-duration 3650 \
+  --filler-asset /opt/retrovue/assets/filler.mp4 \
+  --filler-duration 3650 \
   --port 8000
 ```
 
@@ -143,11 +143,11 @@ To test join-in-progress behavior:
 cd /opt/retrovue/pkg/core
 source .venv/bin/activate
 retrovue program-director start \
-  --phase0 \
-  --phase0-program-asset /opt/retrovue/assets/samplecontent.mp4 \
+  --mock-schedule-grid \
+  --program-asset /opt/retrovue/assets/samplecontent.mp4 \
   --phase0-program-duration 1500 \
-  --phase0-filler-asset /opt/retrovue/assets/filler.mp4 \
-  --phase0-filler-duration 3650
+  --filler-asset /opt/retrovue/assets/filler.mp4 \
+  --filler-duration 3650
 
 # Terminal 2: Connect to stream
 curl http://localhost:8000/channels/test-1.ts | vlc -

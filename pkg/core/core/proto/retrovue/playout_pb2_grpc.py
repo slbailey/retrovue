@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from retrovue import playout_pb2 as retrovue_dot_playout__pb2
+import playout_pb2 as playout__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in retrovue/playout_pb2_grpc.py depends on'
+        + ' but the generated code in playout_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -41,43 +41,43 @@ class PlayoutControlStub(object):
         """
         self.StartChannel = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/StartChannel',
-                request_serializer=retrovue_dot_playout__pb2.StartChannelRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.StartChannelResponse.FromString,
+                request_serializer=playout__pb2.StartChannelRequest.SerializeToString,
+                response_deserializer=playout__pb2.StartChannelResponse.FromString,
                 _registered_method=True)
         self.UpdatePlan = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/UpdatePlan',
-                request_serializer=retrovue_dot_playout__pb2.UpdatePlanRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.UpdatePlanResponse.FromString,
+                request_serializer=playout__pb2.UpdatePlanRequest.SerializeToString,
+                response_deserializer=playout__pb2.UpdatePlanResponse.FromString,
                 _registered_method=True)
         self.StopChannel = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/StopChannel',
-                request_serializer=retrovue_dot_playout__pb2.StopChannelRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.StopChannelResponse.FromString,
+                request_serializer=playout__pb2.StopChannelRequest.SerializeToString,
+                response_deserializer=playout__pb2.StopChannelResponse.FromString,
                 _registered_method=True)
         self.GetVersion = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/GetVersion',
-                request_serializer=retrovue_dot_playout__pb2.ApiVersionRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.ApiVersion.FromString,
+                request_serializer=playout__pb2.ApiVersionRequest.SerializeToString,
+                response_deserializer=playout__pb2.ApiVersion.FromString,
                 _registered_method=True)
         self.LoadPreview = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/LoadPreview',
-                request_serializer=retrovue_dot_playout__pb2.LoadPreviewRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.LoadPreviewResponse.FromString,
+                request_serializer=playout__pb2.LoadPreviewRequest.SerializeToString,
+                response_deserializer=playout__pb2.LoadPreviewResponse.FromString,
                 _registered_method=True)
         self.SwitchToLive = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/SwitchToLive',
-                request_serializer=retrovue_dot_playout__pb2.SwitchToLiveRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.SwitchToLiveResponse.FromString,
+                request_serializer=playout__pb2.SwitchToLiveRequest.SerializeToString,
+                response_deserializer=playout__pb2.SwitchToLiveResponse.FromString,
                 _registered_method=True)
         self.AttachStream = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/AttachStream',
-                request_serializer=retrovue_dot_playout__pb2.AttachStreamRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.AttachStreamResponse.FromString,
+                request_serializer=playout__pb2.AttachStreamRequest.SerializeToString,
+                response_deserializer=playout__pb2.AttachStreamResponse.FromString,
                 _registered_method=True)
         self.DetachStream = channel.unary_unary(
                 '/retrovue.playout.PlayoutControl/DetachStream',
-                request_serializer=retrovue_dot_playout__pb2.DetachStreamRequest.SerializeToString,
-                response_deserializer=retrovue_dot_playout__pb2.DetachStreamResponse.FromString,
+                request_serializer=playout__pb2.DetachStreamRequest.SerializeToString,
+                response_deserializer=playout__pb2.DetachStreamResponse.FromString,
                 _registered_method=True)
 
 
@@ -154,43 +154,43 @@ def add_PlayoutControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'StartChannel': grpc.unary_unary_rpc_method_handler(
                     servicer.StartChannel,
-                    request_deserializer=retrovue_dot_playout__pb2.StartChannelRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.StartChannelResponse.SerializeToString,
+                    request_deserializer=playout__pb2.StartChannelRequest.FromString,
+                    response_serializer=playout__pb2.StartChannelResponse.SerializeToString,
             ),
             'UpdatePlan': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdatePlan,
-                    request_deserializer=retrovue_dot_playout__pb2.UpdatePlanRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.UpdatePlanResponse.SerializeToString,
+                    request_deserializer=playout__pb2.UpdatePlanRequest.FromString,
+                    response_serializer=playout__pb2.UpdatePlanResponse.SerializeToString,
             ),
             'StopChannel': grpc.unary_unary_rpc_method_handler(
                     servicer.StopChannel,
-                    request_deserializer=retrovue_dot_playout__pb2.StopChannelRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.StopChannelResponse.SerializeToString,
+                    request_deserializer=playout__pb2.StopChannelRequest.FromString,
+                    response_serializer=playout__pb2.StopChannelResponse.SerializeToString,
             ),
             'GetVersion': grpc.unary_unary_rpc_method_handler(
                     servicer.GetVersion,
-                    request_deserializer=retrovue_dot_playout__pb2.ApiVersionRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.ApiVersion.SerializeToString,
+                    request_deserializer=playout__pb2.ApiVersionRequest.FromString,
+                    response_serializer=playout__pb2.ApiVersion.SerializeToString,
             ),
             'LoadPreview': grpc.unary_unary_rpc_method_handler(
                     servicer.LoadPreview,
-                    request_deserializer=retrovue_dot_playout__pb2.LoadPreviewRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.LoadPreviewResponse.SerializeToString,
+                    request_deserializer=playout__pb2.LoadPreviewRequest.FromString,
+                    response_serializer=playout__pb2.LoadPreviewResponse.SerializeToString,
             ),
             'SwitchToLive': grpc.unary_unary_rpc_method_handler(
                     servicer.SwitchToLive,
-                    request_deserializer=retrovue_dot_playout__pb2.SwitchToLiveRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.SwitchToLiveResponse.SerializeToString,
+                    request_deserializer=playout__pb2.SwitchToLiveRequest.FromString,
+                    response_serializer=playout__pb2.SwitchToLiveResponse.SerializeToString,
             ),
             'AttachStream': grpc.unary_unary_rpc_method_handler(
                     servicer.AttachStream,
-                    request_deserializer=retrovue_dot_playout__pb2.AttachStreamRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.AttachStreamResponse.SerializeToString,
+                    request_deserializer=playout__pb2.AttachStreamRequest.FromString,
+                    response_serializer=playout__pb2.AttachStreamResponse.SerializeToString,
             ),
             'DetachStream': grpc.unary_unary_rpc_method_handler(
                     servicer.DetachStream,
-                    request_deserializer=retrovue_dot_playout__pb2.DetachStreamRequest.FromString,
-                    response_serializer=retrovue_dot_playout__pb2.DetachStreamResponse.SerializeToString,
+                    request_deserializer=playout__pb2.DetachStreamRequest.FromString,
+                    response_serializer=playout__pb2.DetachStreamResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -223,8 +223,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/StartChannel',
-            retrovue_dot_playout__pb2.StartChannelRequest.SerializeToString,
-            retrovue_dot_playout__pb2.StartChannelResponse.FromString,
+            playout__pb2.StartChannelRequest.SerializeToString,
+            playout__pb2.StartChannelResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -250,8 +250,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/UpdatePlan',
-            retrovue_dot_playout__pb2.UpdatePlanRequest.SerializeToString,
-            retrovue_dot_playout__pb2.UpdatePlanResponse.FromString,
+            playout__pb2.UpdatePlanRequest.SerializeToString,
+            playout__pb2.UpdatePlanResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -277,8 +277,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/StopChannel',
-            retrovue_dot_playout__pb2.StopChannelRequest.SerializeToString,
-            retrovue_dot_playout__pb2.StopChannelResponse.FromString,
+            playout__pb2.StopChannelRequest.SerializeToString,
+            playout__pb2.StopChannelResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -304,8 +304,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/GetVersion',
-            retrovue_dot_playout__pb2.ApiVersionRequest.SerializeToString,
-            retrovue_dot_playout__pb2.ApiVersion.FromString,
+            playout__pb2.ApiVersionRequest.SerializeToString,
+            playout__pb2.ApiVersion.FromString,
             options,
             channel_credentials,
             insecure,
@@ -331,8 +331,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/LoadPreview',
-            retrovue_dot_playout__pb2.LoadPreviewRequest.SerializeToString,
-            retrovue_dot_playout__pb2.LoadPreviewResponse.FromString,
+            playout__pb2.LoadPreviewRequest.SerializeToString,
+            playout__pb2.LoadPreviewResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -358,8 +358,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/SwitchToLive',
-            retrovue_dot_playout__pb2.SwitchToLiveRequest.SerializeToString,
-            retrovue_dot_playout__pb2.SwitchToLiveResponse.FromString,
+            playout__pb2.SwitchToLiveRequest.SerializeToString,
+            playout__pb2.SwitchToLiveResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -385,8 +385,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/AttachStream',
-            retrovue_dot_playout__pb2.AttachStreamRequest.SerializeToString,
-            retrovue_dot_playout__pb2.AttachStreamResponse.FromString,
+            playout__pb2.AttachStreamRequest.SerializeToString,
+            playout__pb2.AttachStreamResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -412,8 +412,8 @@ class PlayoutControl(object):
             request,
             target,
             '/retrovue.playout.PlayoutControl/DetachStream',
-            retrovue_dot_playout__pb2.DetachStreamRequest.SerializeToString,
-            retrovue_dot_playout__pb2.DetachStreamResponse.FromString,
+            playout__pb2.DetachStreamRequest.SerializeToString,
+            playout__pb2.DetachStreamResponse.FromString,
             options,
             channel_credentials,
             insecure,

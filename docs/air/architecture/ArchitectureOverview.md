@@ -15,7 +15,7 @@ Describe how the native C++ playout engine fits into the RetroVue architecture a
 
 ## Core subsystems
 
-- **Control plane:** gRPC service defined in `proto/retrovue/playout.proto` that receives channel lifecycle and segment instructions (e.g. `LoadPreview`, `SwitchToLive`). Segment-based control is canonical: `LoadPreview` carries asset path, `start_offset_ms`, and `hard_stop_time_ms`; `SwitchToLive` is control-only with no payload.
+- **Control plane:** gRPC service defined in `protos/playout.proto` that receives channel lifecycle and segment instructions (e.g. `LoadPreview`, `SwitchToLive`). Segment-based control is canonical: `LoadPreview` carries asset path, `start_offset_ms`, and `hard_stop_time_ms`; `SwitchToLive` is control-only with no payload.
 - **Producers:** Execution units that produce decoded frames. File-backed producers may use demux/decode threads (e.g. libav/ffmpeg); programmatic producers generate frames without file decode. All feed a common frame contract into staging.
 - **Frame staging:** Lock-free ring buffers that guarantee minimum and maximum buffer depths for each channel.
 - **Telemetry:** Metrics and structured logs emitted for monitoring, debugging, and operator visibility.

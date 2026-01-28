@@ -1,6 +1,6 @@
 # RetroVue Playout Engine – Developer Overview
 
-_Related: [Architecture overview](architecture/ArchitectureOverview.md) • [Runtime model](runtime/PlayoutRuntime.md) • [Proto schema](../proto/retrovue/playout.proto)_
+_Related: [Architecture overview](architecture/ArchitectureOverview.md) • [Runtime model](runtime/PlayoutRuntime.md) • [Proto schema](../../protos/playout.proto)_
 
 ---
 
@@ -8,7 +8,7 @@ _Related: [Architecture overview](architecture/ArchitectureOverview.md) • [Run
 
 The **RetroVue Playout Engine** implements a native C++ backend that executes segment-based playout instructions from the ChannelManager. It does not understand schedules or plans; ChannelManager computes PlayoutSegments and sends exact execution instructions via gRPC. Air hosts heterogeneous producers (file-backed and programmatic such as Prevue, weather, community, test patterns) that share a common output contract (decoded frames).
 
-- **Control interface:** gRPC (`proto/retrovue/playout.proto`). Segment-based control is canonical: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload). Optional: `StartChannel` / `UpdatePlan` with plan handles.
+- **Control interface:** gRPC (`protos/playout.proto`). Segment-based control is canonical: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload). Optional: `StartChannel` / `UpdatePlan` with plan handles.
 - **Output:** Either Air outputs MPEG-TS directly, or Air outputs frames to a Renderer that muxes MPEG-TS — an intentional design boundary; deployments fix one path.
 - **Timing:** MasterClock lives in the Python runtime. Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time.
 
@@ -30,12 +30,12 @@ Each component communicates over a documented API surface. The C++ playout engin
 
 | Type    | Path/Location                  | Description                                      |
 | ------- | ------------------------------ | ------------------------------------------------ |
-| gRPC    | `proto/retrovue/playout.proto` | Control API: ChannelManager ↔ Playout (required) |
+| gRPC    | `protos/playout.proto` | Control API: ChannelManager ↔ Playout (required) |
 | Metrics | Prometheus `/metrics` endpoint | Channel state, frame gap telemetry               |
 | Build   | `CMakeLists.txt`               | Defines `retrovue_playout` and dependencies      |
 
 **Workflow:**  
-_New features start by updating the contract_ (proto, metrics, etc.) in `docs/contracts/` and `proto/`, **before** implementing new functionality.
+_New features start by updating the contract_ (proto, metrics, etc.) in `docs/contracts/` and `protos/`, **before** implementing new functionality.
 
 ---
 
