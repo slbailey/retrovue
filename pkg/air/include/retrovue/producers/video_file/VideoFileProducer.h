@@ -158,6 +158,10 @@ namespace retrovue::producers::video_file
     bool ScaleFrame();
     bool AssembleFrame(buffer::Frame& frame);
 
+    // Phase 8.9: Audio decoding operations.
+    bool ReceiveAudioFrames();  // Receive decoded audio frames (packets dispatched by ProduceRealFrame)
+    bool ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame);
+
     // Emits producer event through callback.
     void EmitEvent(const std::string &event_type, const std::string &message = "");
 
@@ -190,11 +194,20 @@ namespace retrovue::producers::video_file
     int video_stream_index_;
     bool decoder_initialized_;
     bool eof_reached_;
+    bool eof_event_emitted_;  // Phase 8.8: emit "eof" only once; producer stays running until explicit stop
     double time_base_;  // Stream time base for PTS/DTS conversion
     int64_t last_pts_us_;  // For PTS monotonicity enforcement
     int64_t last_decoded_frame_pts_us_;  // PTS of last decoded frame (for EOF pacing)
     int64_t first_frame_pts_us_;  // PTS of first frame (for establishing time mapping)
     int64_t playback_start_utc_us_;  // UTC time when first frame was decoded (for pacing)
+
+    // Phase 8.9: Audio decoder subsystem
+    AVCodecContext* audio_codec_ctx_;
+    AVFrame* audio_frame_;
+    int audio_stream_index_;
+    double audio_time_base_;  // Audio stream time base for PTS conversion
+    bool audio_eof_reached_;
+    int64_t last_audio_pts_us_;  // Last audio frame PTS (for monotonicity)
 
     // Phase 8.2: derived segment end (media PTS in us). -1 = not set. Set when segment goes live.
     int64_t segment_end_pts_us_;

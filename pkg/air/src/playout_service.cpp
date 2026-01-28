@@ -51,6 +51,10 @@ namespace retrovue
       std::string asset_path;
       int32_t channel_id = -1;
       std::shared_ptr<runtime::PlayoutController> controller;
+      
+      // Phase 8.9: Encoder pipeline persists for the entire channel lifetime
+      // Created once when channel starts, destroyed only when channel stops
+      std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder;
 #if defined(__linux__) || defined(__APPLE__)
       pid_t ffmpeg_pid = -1;
 #else
@@ -61,6 +65,11 @@ namespace retrovue
       std::mutex mux_queue_mutex;
       std::queue<buffer::Frame> mux_frame_queue;
       static constexpr size_t kMuxQueueMax = 30;
+
+      // Phase 8.9: audio frame queue for TS mux
+      std::mutex mux_audio_queue_mutex;
+      std::queue<buffer::AudioFrame> mux_audio_frame_queue;
+      static constexpr size_t kMuxAudioQueueMax = 30;
 
       void EnqueueFrameForMux(const buffer::Frame& frame)
       {
@@ -79,6 +88,27 @@ namespace retrovue
           return false;
         *out = std::move(mux_frame_queue.front());
         mux_frame_queue.pop();
+        return true;
+      }
+
+      // Phase 8.9: Audio frame enqueue/dequeue
+      void EnqueueAudioFrameForMux(const buffer::AudioFrame& audio_frame)
+      {
+        std::lock_guard<std::mutex> lock(mux_audio_queue_mutex);
+        if (mux_audio_frame_queue.size() >= kMuxAudioQueueMax)
+          mux_audio_frame_queue.pop();
+        mux_audio_frame_queue.push(audio_frame);
+      }
+
+      bool DequeueAudioFrameForMux(buffer::AudioFrame* out)
+      {
+        if (!out)
+          return false;
+        std::lock_guard<std::mutex> lock(mux_audio_queue_mutex);
+        if (mux_audio_frame_queue.empty())
+          return false;
+        *out = std::move(mux_audio_frame_queue.front());
+        mux_audio_frame_queue.pop();
         return true;
       }
 
@@ -119,36 +149,100 @@ namespace retrovue
         (void)ffmpeg_pid;
         if (fd < 0)
           return;
-        playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
-        config.stub_mode = false;
-        config.persistent_mux = true;
-        config.target_fps = 30.0;
-        config.bitrate = 5000000;
-        config.gop_size = 30;
-        auto encoder = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config);
-        if (!encoder->open(config, this, &StreamWriterState::WriteToFdCallback))
+        
+        // Encoder should already be created and opened before this thread starts
+        if (!encoder || !encoder->IsInitialized())
         {
-          std::cerr << "[Phase8.4] Encoder open failed for channel " << channel_id << std::endl;
+          std::cerr << "[Phase8.4] Encoder not initialized for channel " << channel_id << std::endl;
           return;
         }
-        std::cout << "[Phase8.4] Persistent TS mux started for channel " << channel_id << std::endl;
+        
+        std::cout << "[Phase8.4] Encoder loop started for channel " << channel_id << std::endl;
+        bool had_frames_before = false;  // Track if we had frames before to detect switch
         while (!stop.load(std::memory_order_acquire) && fd >= 0)
         {
+          // Phase 8.9: Process both video and audio frames
+          bool processed_any = false;
+
+          // Process video frame
           buffer::Frame frame;
           if (DequeueFrameForMux(&frame))
           {
             // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
             const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
             if (!encoder->encodeFrame(frame, pts90k))
-              break;
+            {
+              // Encode failures are non-fatal - log and continue
+              std::cerr << "[Phase8.4] Video encode failed for channel " << channel_id 
+                        << ", continuing..." << std::endl;
+            }
+            processed_any = true;
+            had_frames_before = true;
+          }
+
+          // Phase 8.9: Process audio frame
+          buffer::AudioFrame audio_frame;
+          if (DequeueAudioFrameForMux(&audio_frame))
+          {
+            // AudioFrame.pts_us is in microseconds; encoder expects 90kHz.
+            const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
+            if (!encoder->encodeAudioFrame(audio_frame, audio_pts90k))
+            {
+              // Encode failures are non-fatal - log and continue
+              std::cerr << "[Phase8.4] Audio encode failed for channel " << channel_id 
+                        << ", continuing..." << std::endl;
+            }
+            processed_any = true;
+            had_frames_before = true;
+          }
+          
+          // Phase 8.9: If we had frames before but now both queues are empty,
+          // we're likely switching producers. Flush encoder buffers to ensure
+          // all audio from the previous producer is encoded.
+          // Use a static counter to avoid flushing too frequently
+          static int empty_iterations = 0;
+          if (had_frames_before && !processed_any)
+          {
+            // Check if both queues are empty
+            bool video_empty = mux_frame_queue.empty();
+            bool audio_empty = false;
+            {
+              std::lock_guard<std::mutex> lock(mux_audio_queue_mutex);
+              audio_empty = mux_audio_frame_queue.empty();
+            }
+            
+            if (video_empty && audio_empty)
+            {
+              empty_iterations++;
+              // Wait for several iterations to ensure it's really a switch, not just a brief gap
+              if (empty_iterations >= 10) {  // ~50ms at 5ms sleep intervals
+                std::cout << "[Phase8.4] Queues empty for " << empty_iterations 
+                          << " iterations - flushing encoder buffers" << std::endl;
+                encoder->flushAudio();
+                had_frames_before = false;  // Reset after flush
+                empty_iterations = 0;
+              }
+            }
+            else
+            {
+              empty_iterations = 0;  // Reset if frames arrive
+            }
           }
           else
+          {
+            empty_iterations = 0;  // Reset if we processed frames
+          }
+
+          if (!processed_any)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        encoder->close();
-        encoder.reset();
-        if (controller && channel_id >= 0)
+        
+        // Encoder is closed in destructor, not here
+        std::cout << "[Phase8.4] Encoder loop stopped for channel " << channel_id << std::endl;
+        if (controller && channel_id >= 0) {
           controller->UnregisterMuxFrameCallback(channel_id);
+          controller->UnregisterMuxAudioFrameCallback(channel_id);
+        }
       }
 #else
       void FfmpegLoop() {}
@@ -167,6 +261,15 @@ namespace retrovue
 #endif
         if (writer_thread.joinable())
           writer_thread.join();
+        
+        // Phase 8.9: Close encoder only when StreamWriterState is destroyed (channel teardown)
+        if (encoder)
+        {
+          encoder->close();
+          encoder.reset();
+          std::cout << "[Phase8.4] Encoder closed for channel " << channel_id << std::endl;
+        }
+        
         if (fd >= 0)
         {
 #if defined(__linux__) || defined(__APPLE__)
@@ -178,10 +281,13 @@ namespace retrovue
     };
 
     PlayoutControlImpl::PlayoutControlImpl(
-        std::shared_ptr<runtime::PlayoutController> controller)
-        : controller_(std::move(controller))
+        std::shared_ptr<runtime::PlayoutController> controller,
+        bool control_surface_only)
+        : controller_(std::move(controller)),
+          control_surface_only_(control_surface_only)
     {
-      std::cout << "[PlayoutControlImpl] Service initialized (API version: " << kApiVersion << ")" << std::endl;
+      std::cout << "[PlayoutControlImpl] Service initialized (API version: " << kApiVersion
+                << ", control_surface_only=" << control_surface_only_ << ")" << std::endl;
     }
 
     PlayoutControlImpl::~PlayoutControlImpl()
@@ -315,13 +421,13 @@ namespace retrovue
       response->set_shadow_decode_started(result.shadow_decode_started);
       // Phase 6A.0: error semantics via response success=false, not gRPC Status
       if (!result.success) {
-        std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed" << std::endl;
+        std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message << std::endl;
         return grpc::Status::OK;
       }
       
       std::cout << "[LoadPreview] Channel " << channel_id
-                << " preview load " << (result.shadow_decode_started ? "succeeded" : "failed")
-                << std::endl;
+                << " preview loaded successfully (shadow_decode_started="
+                << std::boolalpha << result.shadow_decode_started << ")" << std::endl;
       return grpc::Status::OK;
     }
 
@@ -346,8 +452,9 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
-      // Phase 8.3/8.4: Switch is frame-source only. Same stream FD and same TS mux within session;
-      // no PID/continuity reset, no mux restart. Engine has already promoted preview → live producer.
+      // Phase 8.3/8.4: Switch is frame-source only. Encoder and TS mux stay alive across switches.
+      // Engine has already stopped the old FrameProducer and atomically promoted preview → live.
+      // Do NOT stop/join/restart the writer thread or reinitialize encoder/AVFormatContext/PTS.
       {
         std::lock_guard<std::mutex> lock(stream_mutex_);
         auto it = stream_writers_.find(channel_id);
@@ -355,18 +462,46 @@ namespace retrovue
         if (it != stream_writers_.end() && it->second && path && !path->empty())
         {
           StreamWriterState* state = it->second.get();
-          state->close_fd_on_exit = false;
-          state->stop.store(true, std::memory_order_release);
-          if (state->writer_thread.joinable())
-            state->writer_thread.join();
           state->asset_path = *path;
           state->controller = controller_;
-          controller_->RegisterMuxFrameCallback(channel_id, [state](const buffer::Frame& f) {
-            state->EnqueueFrameForMux(f);
-          });
-          state->stop.store(false, std::memory_order_release);
-          state->writer_thread = std::thread(&StreamWriterState::FfmpegLoop, state);
-          std::cout << "[SwitchToLive] Channel " << channel_id << " streaming TS from " << *path << std::endl;
+          if (!state->writer_thread.joinable()) {
+            // First switch: create encoder once, then start writer thread (one per channel/session).
+            state->close_fd_on_exit = false;
+            state->stop.store(false, std::memory_order_release);
+            
+            // Phase 8.9: Create encoder once when channel starts (fixed audio/video profile)
+            playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
+            config.stub_mode = false;
+            config.persistent_mux = true;
+            config.target_fps = 30.0;
+            config.target_width = 640;   // Phase 8.6: per-channel fixed resolution
+            config.target_height = 480;
+            config.bitrate = 5000000;
+            config.gop_size = 30;
+            
+            state->encoder = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config);
+            if (!state->encoder->open(config, state, &StreamWriterState::WriteToFdCallback))
+            {
+              std::cerr << "[Phase8.4] Encoder open failed for channel " << channel_id << std::endl;
+              state->encoder.reset();
+              return grpc::Status::OK;
+            }
+            std::cout << "[Phase8.4] Encoder created and opened for channel " << channel_id << std::endl;
+            
+            controller_->RegisterMuxFrameCallback(channel_id, [state](const buffer::Frame& f) {
+              state->EnqueueFrameForMux(f);
+            });
+            // Phase 8.9: Register audio frame callback
+            controller_->RegisterMuxAudioFrameCallback(channel_id, [state](const buffer::AudioFrame& af) {
+              state->EnqueueAudioFrameForMux(af);
+            });
+            state->writer_thread = std::thread(&StreamWriterState::FfmpegLoop, state);
+            std::cout << "[SwitchToLive] Channel " << channel_id << " streaming TS from " << *path << std::endl;
+          } else {
+            // Already running: encoder persists; engine already swapped producer. No PAT/PMT reset, same PCR/PTS.
+            std::cout << "[SwitchToLive] Channel " << channel_id << " now streaming TS from " << *path 
+                      << " (encoder persists)" << std::endl;
+          }
         }
       }
       
@@ -454,12 +589,14 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
-      // Phase 8.4: This FD is the single write side for the channel; when TS mux exists, it
-      // uses this FD for its lifetime (no FD swap on SwitchToLive).
+      // Phase 8.4/8.6: This FD is the single write side for the channel. Phase 8.6: do not write
+      // dummy bytes (HELLO) in normal mode; stream stays silent until SwitchToLive writes real MPEG-TS.
+      // Phase 8.0 contract tests use --control-surface-only so we still start HelloLoop in that mode.
       auto state = std::make_unique<StreamWriterState>();
       state->fd = fd;
       state->channel_id = channel_id;
-      state->writer_thread = std::thread(&StreamWriterState::HelloLoop, state.get());
+      if (control_surface_only_)
+        state->writer_thread = std::thread(&StreamWriterState::HelloLoop, state.get());
       stream_writers_[channel_id] = std::move(state);
 
       response->set_success(true);

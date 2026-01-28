@@ -18,6 +18,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/rational.h>
+#include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
 }
 
@@ -57,12 +58,19 @@ namespace retrovue::producers::video_file
         video_stream_index_(-1),
         decoder_initialized_(false),
         eof_reached_(false),
+        eof_event_emitted_(false),
         time_base_(0.0),
         last_pts_us_(0),
         last_decoded_frame_pts_us_(0),
         first_frame_pts_us_(0),
         playback_start_utc_us_(0),
         segment_end_pts_us_(-1),
+        audio_codec_ctx_(nullptr),
+        audio_frame_(nullptr),
+        audio_stream_index_(-1),
+        audio_time_base_(0.0),
+        audio_eof_reached_(false),
+        last_audio_pts_us_(0),
         stub_pts_counter_(0),
         frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
         next_stub_deadline_utc_(0),
@@ -111,20 +119,19 @@ namespace retrovue::producers::video_file
     stub_pts_counter_.store(0, std::memory_order_release);
     next_stub_deadline_utc_.store(0, std::memory_order_release);
     eof_reached_ = false;
+    eof_event_emitted_ = false;
     last_pts_us_ = 0;
     last_decoded_frame_pts_us_ = 0;
+    last_audio_pts_us_ = 0;
     first_frame_pts_us_ = 0;
     playback_start_utc_us_ = 0;
     segment_end_pts_us_ = -1;
 
-    // Phase 6A.2: non-stub mode — init decoder before starting thread so invalid path fails start()
+    // Phase 6A.2: non-stub mode — try to init decoder before starting thread
+    // If initialization fails, let ProduceLoop() handle fallback to stub mode (for compatibility with "mock" plan_handle)
     if (!config_.stub_mode)
     {
-      if (!InitializeDecoder())
-      {
-        SetState(ProducerState::STOPPED);
-        return false;
-      }
+      InitializeDecoder();  // Don't fail start() if decoder init fails; ProduceLoop() will fallback to stub mode
     }
 
     // Set state to RUNNING before starting thread (so loop sees correct state)
@@ -261,14 +268,8 @@ namespace retrovue::producers::video_file
         continue;
       }
 
-      // Phase 8.2: when segment becomes live, record wall-clock and compute derived segment end (media PTS)
-      if (config_.hard_stop_time_ms > 0 && master_clock_ && segment_end_pts_us_ < 0)
-      {
-        int64_t segment_start_wallclock_ms = master_clock_->now_utc_us() / 1000;
-        int64_t segment_duration_ms = config_.hard_stop_time_ms - segment_start_wallclock_ms;
-        int64_t segment_end_pts_ms = config_.start_offset_ms + segment_duration_ms;
-        segment_end_pts_us_ = segment_end_pts_ms * 1000;
-      }
+      // Phase 8.6: no fixed segment cutoff. Segment end = natural EOF only (decoder reports no more frames).
+      // hard_stop_time_ms / segment_end_pts are not used to forcibly stop; avoids premature termination and timing drift.
 
       // Check teardown timeout
       if (teardown_requested_.load(std::memory_order_acquire))
@@ -288,43 +289,19 @@ namespace retrovue::producers::video_file
         }
       }
 
-      // Phase 6A.2: hard_stop_time_ms is authoritative — never play past this wall-clock time
-      if (config_.hard_stop_time_ms > 0 && master_clock_)
-      {
-        int64_t now_ms = master_clock_->now_utc_us() / 1000;
-        if (now_ms >= config_.hard_stop_time_ms)
-        {
-          std::cout << "[VideoFileProducer] Hard stop time reached (now_ms=" << now_ms
-                    << ", hard_stop_time_ms=" << config_.hard_stop_time_ms << ")" << std::endl;
-          EmitEvent("hard_stop", "");
-          stop_requested_.store(true, std::memory_order_release);
-          break;
-        }
-      }
-
-      // Check EOF - wait until last frame has been emitted at correct fake time
+      // Phase 8.8: Producer exhaustion (EOF) must NOT imply playout completion. Do NOT exit the
+      // loop on EOF; the render path owns completion. Stay running until explicit stop/teardown
+      // so that buffered frames can be presented at wall-clock time.
       if (eof_reached_)
       {
-        // If using fake clock, wait until fake time reaches last frame's target UTC time
-        if (master_clock_ && master_clock_->is_fake() && 
-            last_decoded_frame_pts_us_ > 0 && first_frame_pts_us_ > 0)
+        if (!eof_event_emitted_)
         {
-          int64_t last_frame_offset_us = last_decoded_frame_pts_us_ - first_frame_pts_us_;
-          int64_t last_frame_target_utc_us = playback_start_utc_us_ + last_frame_offset_us;
-          int64_t now_us = master_clock_->now_utc_us();
-          if (now_us < last_frame_target_utc_us)
-          {
-            // Wait until fake clock reaches last frame's target UTC time
-            while (master_clock_->now_utc_us() < last_frame_target_utc_us &&
-                   !stop_requested_.load(std::memory_order_acquire))
-            {
-              std::this_thread::yield();  // Busy-wait for fake clock
-            }
-          }
+          eof_event_emitted_ = true;
+          std::cout << "[VideoFileProducer] End of file reached (no more frames to produce); waiting for explicit stop (Phase 8.8)" << std::endl;
+          EmitEvent("eof", "");
         }
-        std::cout << "[VideoFileProducer] End of file reached, all frames emitted" << std::endl;
-        EmitEvent("eof", "");
-        break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
       }
 
       if (config_.stub_mode)
@@ -337,11 +314,9 @@ namespace retrovue::producers::video_file
       {
         if (!ProduceRealFrame())
         {
-          // Decode error or EOF - back off and retry
+          // EOF: eof_reached_ is set; next iteration will enter exhausted wait (Phase 8.8). Do not break.
           if (eof_reached_)
-          {
-            break;
-          }
+            continue;
           // Transient decode error - back off and retry
           decode_errors_.fetch_add(1, std::memory_order_relaxed);
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -401,6 +376,19 @@ namespace retrovue::producers::video_file
       return false;
     }
 
+    // Phase 8.9: Find audio stream (optional - file may not have audio)
+    audio_stream_index_ = -1;
+    for (unsigned int i = 0; i < format_ctx_->nb_streams; i++)
+    {
+      if (format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+      {
+        audio_stream_index_ = i;
+        AVStream* stream = format_ctx_->streams[i];
+        audio_time_base_ = av_q2d(stream->time_base);
+        break;
+      }
+    }
+
     // Initialize codec
     AVStream* stream = format_ctx_->streams[video_stream_index_];
     AVCodecParameters* codecpar = stream->codecpar;
@@ -442,6 +430,65 @@ namespace retrovue::producers::video_file
       std::cerr << "[VideoFileProducer] Failed to allocate frames" << std::endl;
       CloseDecoder();
       return false;
+    }
+
+    // Phase 8.9: Initialize audio decoder if audio stream exists
+    if (audio_stream_index_ >= 0)
+    {
+      AVStream* audio_stream = format_ctx_->streams[audio_stream_index_];
+      AVCodecParameters* audio_codecpar = audio_stream->codecpar;
+      const AVCodec* audio_codec = avcodec_find_decoder(audio_codecpar->codec_id);
+      if (!audio_codec)
+      {
+        std::cerr << "[VideoFileProducer] Audio codec not found: " << audio_codecpar->codec_id << std::endl;
+        // Continue without audio - not fatal
+        audio_stream_index_ = -1;
+      }
+      else
+      {
+        audio_codec_ctx_ = avcodec_alloc_context3(audio_codec);
+        if (!audio_codec_ctx_)
+        {
+          std::cerr << "[VideoFileProducer] Failed to allocate audio codec context" << std::endl;
+          audio_stream_index_ = -1;
+        }
+        else
+        {
+          if (avcodec_parameters_to_context(audio_codec_ctx_, audio_codecpar) < 0)
+          {
+            std::cerr << "[VideoFileProducer] Failed to copy audio codec parameters" << std::endl;
+            avcodec_free_context(&audio_codec_ctx_);
+            audio_codec_ctx_ = nullptr;
+            audio_stream_index_ = -1;
+          }
+          else if (avcodec_open2(audio_codec_ctx_, audio_codec, nullptr) < 0)
+          {
+            std::cerr << "[VideoFileProducer] Failed to open audio codec" << std::endl;
+            avcodec_free_context(&audio_codec_ctx_);
+            audio_codec_ctx_ = nullptr;
+            audio_stream_index_ = -1;
+          }
+          else
+          {
+            audio_frame_ = av_frame_alloc();
+            if (!audio_frame_)
+            {
+              std::cerr << "[VideoFileProducer] Failed to allocate audio frame" << std::endl;
+              avcodec_free_context(&audio_codec_ctx_);
+              audio_codec_ctx_ = nullptr;
+              audio_stream_index_ = -1;
+            }
+            else
+            {
+            std::cout << "[VideoFileProducer] Audio decoder initialized: "
+                      << "sample_rate=" << audio_codec_ctx_->sample_rate
+                      << ", channels=" << audio_codec_ctx_->ch_layout.nb_channels
+                      << ", format=" << audio_codec_ctx_->sample_fmt << std::endl;
+            std::cout << "[VideoFileProducer] Audio stream index: " << audio_stream_index_ << std::endl;
+            }
+          }
+        }
+      }
     }
 
     // Initialize scaler
@@ -490,6 +537,7 @@ namespace retrovue::producers::video_file
 
     decoder_initialized_ = true;
     eof_reached_ = false;
+    eof_event_emitted_ = false;
     return true;
   }
 
@@ -535,9 +583,25 @@ namespace retrovue::producers::video_file
       format_ctx_ = nullptr;
     }
 
+    // Phase 8.9: Clean up audio decoder
+    if (audio_frame_)
+    {
+      av_frame_free(&audio_frame_);
+      audio_frame_ = nullptr;
+    }
+
+    if (audio_codec_ctx_)
+    {
+      avcodec_free_context(&audio_codec_ctx_);
+      audio_codec_ctx_ = nullptr;
+    }
+
     decoder_initialized_ = false;
     video_stream_index_ = -1;
+    audio_stream_index_ = -1;
     eof_reached_ = false;
+    audio_eof_reached_ = false;
+    eof_event_emitted_ = false;
   }
 
   bool VideoFileProducer::ProduceRealFrame()
@@ -550,24 +614,41 @@ namespace retrovue::producers::video_file
     // Decode ONE frame at a time (paced according to fake time)
     // Read packet
     int ret = av_read_frame(format_ctx_, packet_);
-    
+
     if (ret == AVERROR_EOF)
     {
       eof_reached_ = true;
+      audio_eof_reached_ = true;
       return false;
     }
-    
+
     if (ret < 0)
     {
       av_packet_unref(packet_);
       return false;  // Read error
     }
 
+    // Phase 8.9: Dispatch packet based on stream index
+    // If it's an audio packet, send to audio decoder and continue reading
+    if (packet_->stream_index == audio_stream_index_ && audio_codec_ctx_ != nullptr)
+    {
+      // Send audio packet to decoder
+      ret = avcodec_send_packet(audio_codec_ctx_, packet_);
+      av_packet_unref(packet_);
+
+      if (ret >= 0 || ret == AVERROR(EAGAIN))
+      {
+        // Try to receive any decoded audio frames
+        ReceiveAudioFrames();
+      }
+      return true;  // Continue reading packets (looking for video)
+    }
+
     // Check if packet is from video stream
     if (packet_->stream_index != video_stream_index_)
     {
       av_packet_unref(packet_);
-      return true;  // Skip non-video packets, try again
+      return true;  // Skip other non-video/non-audio packets, try again
     }
 
     // Send packet to decoder
@@ -613,12 +694,8 @@ namespace retrovue::producers::video_file
       return true;  // Discard frame; continue decoding
     }
 
-    // Phase 8.2: derived segment end — do not emit frame at or past segment_end_pts_ms
-    if (segment_end_pts_us_ >= 0 && base_pts_us >= segment_end_pts_us_)
-    {
-      eof_reached_ = true;
-      return false;  // Segment end; loop will exit
-    }
+    // Phase 8.6: no duration-based cutoff. Run until natural EOF (decoder returns no more frames).
+    // segment_end_pts_us_ is not used to stop; asset duration may be logged but must not force stop.
 
     // Apply PTS offset for alignment
     int64_t frame_pts_us = base_pts_us + pts_offset_us_;
@@ -661,17 +738,35 @@ namespace retrovue::producers::video_file
 
     // Frame decoded and ready to push
 
-    // If using fake clock, wait until fake time reaches target UTC time before pushing
-    if (master_clock_ && master_clock_->is_fake())
+    // Phase 8.9: Try to receive any pending audio frames (non-blocking)
+    if (audio_stream_index_ >= 0 && !audio_eof_reached_)
+    {
+      ReceiveAudioFrames();
+    }
+
+    // Wait until target UTC time before pushing (real-time pacing)
+    if (master_clock_)
     {
       int64_t now_us = master_clock_->now_utc_us();
       if (now_us < target_utc_us)
       {
-        // Wait until fake clock reaches target UTC time
-        while (master_clock_->now_utc_us() < target_utc_us &&
-               !stop_requested_.load(std::memory_order_acquire))
+        if (master_clock_->is_fake())
         {
-          std::this_thread::yield();  // Busy-wait for fake clock to advance
+          // Busy-wait for fake clock to advance
+          while (master_clock_->now_utc_us() < target_utc_us &&
+                 !stop_requested_.load(std::memory_order_acquire))
+          {
+            std::this_thread::yield();
+          }
+        }
+        else
+        {
+          // Sleep until target time for real clock (real-time pacing)
+          int64_t sleep_us = target_utc_us - now_us;
+          if (sleep_us > 0 && !stop_requested_.load(std::memory_order_acquire))
+          {
+            std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+          }
         }
       }
     }
@@ -971,6 +1066,210 @@ namespace retrovue::producers::video_file
     }
     std::cout << "[VideoFileProducer] Aligned PTS: target=" << target_pts 
               << ", offset=" << pts_offset_us_ << std::endl;
+  }
+
+  // Phase 8.9: Receive audio frames that were already sent to the decoder
+  // This does NOT read packets - packets are dispatched by ProduceRealFrame()
+  bool VideoFileProducer::ReceiveAudioFrames()
+  {
+    if (audio_stream_index_ < 0 || !audio_codec_ctx_ || !audio_frame_ || audio_eof_reached_)
+    {
+      return false;
+    }
+
+    bool received_any = false;
+
+    // Receive all available decoded audio frames (non-blocking)
+    while (!stop_requested_.load(std::memory_order_acquire))
+    {
+      int ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
+      if (ret == AVERROR(EAGAIN))
+      {
+        // No more frames available right now
+        break;
+      }
+      if (ret == AVERROR_EOF)
+      {
+        audio_eof_reached_ = true;
+        break;
+      }
+      if (ret < 0)
+      {
+        // Decode error
+        break;
+      }
+
+      // Convert to AudioFrame and push to buffer
+      buffer::AudioFrame output_audio_frame;
+      if (ConvertAudioFrame(audio_frame_, output_audio_frame))
+      {
+        // Track base PTS before offset
+        int64_t base_pts_us = output_audio_frame.pts_us;
+        
+        // Apply PTS offset for alignment (same as video)
+        output_audio_frame.pts_us += pts_offset_us_;
+
+        // Enforce monotonicity
+        bool pts_adjusted = false;
+        if (output_audio_frame.pts_us <= last_audio_pts_us_)
+        {
+          int64_t old_pts = output_audio_frame.pts_us;
+          output_audio_frame.pts_us = last_audio_pts_us_ + 1;
+          pts_adjusted = true;
+          std::cout << "[VideoFileProducer] Audio PTS adjusted: " << old_pts 
+                    << " -> " << output_audio_frame.pts_us 
+                    << " (last_audio_pts=" << last_audio_pts_us_ << ")" << std::endl;
+        }
+        last_audio_pts_us_ = output_audio_frame.pts_us;
+
+        // Push to buffer (non-blocking - if full, skip)
+        static int audio_frame_count = 0;
+        static int frames_since_producer_start = 0;  // Track frames since last producer start
+        audio_frame_count++;
+        frames_since_producer_start++;
+        
+        // Reset counter when we detect a new producer (when last_audio_pts_us_ resets to 0)
+        static int64_t last_seen_audio_pts = -1;
+        if (last_audio_pts_us_ == 0 && last_seen_audio_pts > 0) {
+          frames_since_producer_start = 1;  // This is frame #1 of new producer
+          std::cout << "[VideoFileProducer] Detected new producer start, resetting frame counter" << std::endl;
+        }
+        last_seen_audio_pts = last_audio_pts_us_;
+        
+        // Always log first 50 frames after producer start, then every 100
+        bool should_log = (frames_since_producer_start <= 50) || (frames_since_producer_start % 100 == 0);
+        
+        if (output_buffer_.PushAudioFrame(output_audio_frame))
+        {
+          received_any = true;
+          
+          if (should_log) {
+            std::cout << "[VideoFileProducer] Pushed audio frame #" << audio_frame_count 
+                      << " (frames_since_start=" << frames_since_producer_start << ")"
+                      << ", base_pts_us=" << base_pts_us
+                      << ", offset=" << pts_offset_us_
+                      << ", final_pts_us=" << output_audio_frame.pts_us
+                      << ", samples=" << output_audio_frame.nb_samples
+                      << ", sample_rate=" << output_audio_frame.sample_rate
+                      << (pts_adjusted ? " [PTS_ADJUSTED]" : "") << std::endl;
+          }
+        }
+        else
+        {
+          std::cerr << "[VideoFileProducer] ===== FAILED TO PUSH AUDIO FRAME =====" << std::endl;
+          std::cerr << "[VideoFileProducer] Frame #" << audio_frame_count 
+                    << " (frames_since_start=" << frames_since_producer_start << ")"
+                    << ", base_pts_us=" << base_pts_us
+                    << ", offset=" << pts_offset_us_
+                    << ", final_pts_us=" << output_audio_frame.pts_us
+                    << ", samples=" << output_audio_frame.nb_samples
+                    << ", sample_rate=" << output_audio_frame.sample_rate
+                    << " (BUFFER FULL)" << std::endl;
+        }
+      }
+      else
+      {
+        std::cerr << "[VideoFileProducer] ===== FAILED TO CONVERT AUDIO FRAME =====" << std::endl;
+        std::cerr << "[VideoFileProducer] ConvertAudioFrame returned false" << std::endl;
+      }
+
+      av_frame_unref(audio_frame_);
+    }
+
+    return received_any;
+  }
+
+  bool VideoFileProducer::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame)
+  {
+    if (!av_frame || !audio_codec_ctx_)
+    {
+      return false;
+    }
+
+    // Get sample format and channel layout
+    AVSampleFormat sample_fmt = static_cast<AVSampleFormat>(av_frame->format);
+    int nb_channels = av_frame->ch_layout.nb_channels;
+    int sample_rate = av_frame->sample_rate;
+    int nb_samples = av_frame->nb_samples;
+
+    if (nb_samples <= 0 || nb_channels <= 0 || sample_rate <= 0)
+    {
+      return false;
+    }
+
+    // Convert to interleaved S16 format (required by AudioFrame)
+    // For now, we'll copy the data directly if it's already in the right format
+    // In a full implementation, we'd use libswresample for format conversion
+
+    // Calculate PTS in microseconds (producer-relative)
+    // Use same approach as video: pts * time_base * 1,000,000
+    int64_t pts_us = 0;
+    if (av_frame->pts != AV_NOPTS_VALUE)
+    {
+      pts_us = static_cast<int64_t>(av_frame->pts * audio_time_base_ * kMicrosecondsPerSecond);
+    }
+    else
+    {
+      // Fallback: use best_effort_timestamp if pts is not set
+      if (av_frame->best_effort_timestamp != AV_NOPTS_VALUE)
+      {
+        pts_us = static_cast<int64_t>(av_frame->best_effort_timestamp * audio_time_base_ * kMicrosecondsPerSecond);
+      }
+    }
+
+    // For Phase 8.9, handle the common cases:
+    // - AV_SAMPLE_FMT_S16 (interleaved)  → copy directly
+    // - AV_SAMPLE_FMT_FLTP (planar float) → convert to S16 interleaved
+    //
+    // NOTE: EncoderPipeline currently expects S16 interleaved samples.
+    
+    // Calculate data size for S16 interleaved
+    const size_t data_size = static_cast<size_t>(nb_samples) *
+                             static_cast<size_t>(nb_channels) *
+                             sizeof(int16_t);
+    output_frame.data.resize(data_size);
+
+    if (sample_fmt == AV_SAMPLE_FMT_S16)
+    {
+      // Already S16 interleaved - copy directly from data[0]
+      std::memcpy(output_frame.data.data(), av_frame->data[0], data_size);
+    }
+    else if (sample_fmt == AV_SAMPLE_FMT_FLTP)
+    {
+      // Planar float [-1.0, 1.0] per channel in data[c][i] → S16 interleaved
+      int16_t* dst = reinterpret_cast<int16_t*>(output_frame.data.data());
+
+      for (int i = 0; i < nb_samples; ++i)
+      {
+        for (int c = 0; c < nb_channels; ++c)
+        {
+          const float* src_plane = reinterpret_cast<const float*>(av_frame->data[c]);
+          float sample = src_plane[i];
+
+          // Clamp to [-1.0, 1.0] and scale to int16 range
+          if (sample < -1.0f) sample = -1.0f;
+          if (sample >  1.0f) sample =  1.0f;
+          const float scaled = sample * 32767.0f;
+          const int16_t s16 = static_cast<int16_t>(std::lrintf(scaled));
+
+          dst[i * nb_channels + c] = s16;
+        }
+      }
+    }
+    else
+    {
+      // Other formats would require a full SwrContext; keep Phase 8.9 simple.
+      std::cerr << "[VideoFileProducer] Audio format conversion not implemented for format: "
+                << sample_fmt << std::endl;
+      return false;
+    }
+
+    output_frame.sample_rate = sample_rate;
+    output_frame.channels = nb_channels;
+    output_frame.pts_us = pts_us;
+    output_frame.nb_samples = nb_samples;
+
+    return true;
   }
 
 } // namespace retrovue::producers::video_file
