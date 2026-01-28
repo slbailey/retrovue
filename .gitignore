@@ -41,6 +41,10 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+# Log directories
+**/logs/
+pkg/air/logs/
+pkg/core/logs/
 # FFmpeg concat files from retrovue-core
 *.txt
 !requirements.txt
@@ -173,6 +177,10 @@ cmake_install.cmake
 *.sln
 Makefile
 compile_commands.json
+
+# Build directories (including ASAN builds)
+**/build-asan/
+pkg/air/build-asan/
 
 # CTest artifacts
 Testing/
