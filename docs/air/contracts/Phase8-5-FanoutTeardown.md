@@ -20,7 +20,14 @@ Shared invariants (one logical stream per channel, clean shutdown) are in the [O
 
 ### Multiple HTTP readers
 
-- Python may maintain multiple subscribers (e.g. one queue or reader per HTTP client) all fed from the same read end of the transport. Each `GET /channels/{id}.ts` gets the same byte stream (or a logical copy).
+- Python maintains multiple subscribers fed from the same read end of the transport. Fan-out is best-effort: no per-client buffering or flow control is required. A slow or blocked client may be disconnected without affecting others. Each `GET /channels/{id}.ts` gets the same byte stream (or a logical copy).
+
+### Backpressure and slow clients
+
+- RetroVue uses broadcast-style delivery.
+- Python is not required to buffer per client.
+- If a client cannot consume data in real time, it may be disconnected.
+- One slow or blocked client MUST NOT stall delivery to other clients.
 
 ### Last viewer disconnect → Air stops
 

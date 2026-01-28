@@ -268,6 +268,9 @@ class ChannelStream:
                 chunk = self.ts_source.read(chunk_size)
                 if not chunk:
                     # EOF or disconnect
+                    with self.subscribers_lock:
+                        if len(self.subscribers) == 0:
+                            break  # Phase 8.5: no subscribers, exit without reconnecting
                     if isinstance(self.ts_source, UdsTsSource):
                         self._logger.warning(
                             "TS source closed, attempting reconnect for channel %s", self.channel_id
@@ -288,24 +291,15 @@ class ChannelStream:
 
             # Fan-out to all subscribers
             with self.subscribers_lock:
-                subscribers_to_remove = []
                 for client_id, queue in self.subscribers.items():
                     try:
-                        # Non-blocking put; if queue is full, drop this client
+                        # Non-blocking put; if queue is full, drop this chunk for
+                        # that client (backpressure: slow client misses data but
+                        # stays subscribed — contract says no per-client buffering
+                        # required and slow clients must not stall others).
                         queue.put_nowait(chunk)
-                    except Exception as e:
-                        # Only log if it's not a QueueFull (which is expected when client is slow)
-                        from queue import Full
-                        if not isinstance(e, Full):
-                            self._logger.warning(
-                                "Failed to deliver chunk to client %s: %s", client_id, e
-                            )
-                        # Remove client if queue is full (client is too slow or disconnected)
-                        subscribers_to_remove.append(client_id)
-
-                # Remove failed subscribers
-                for client_id in subscribers_to_remove:
-                    self.subscribers.pop(client_id, None)
+                    except Exception:
+                        pass  # Queue full or other error — drop chunk, keep subscriber
 
         # Cleanup
         if self.ts_source:
@@ -332,18 +326,14 @@ class ChannelStream:
         self._logger.info("ChannelStream started for channel %s", self.channel_id)
 
     def stop(self) -> None:
-        """Stop the UDS reader thread and clean up."""
+        """Stop the UDS reader thread and clean up (Phase 8.5: no ongoing work when no viewers)."""
         if self._stopped:
             return
 
         self._logger.info("Stopping ChannelStream for channel %s", self.channel_id)
         self._stop_event.set()
 
-        if self.reader_thread and self.reader_thread.is_alive():
-            self.reader_thread.join(timeout=5.0)
-            if self.reader_thread.is_alive():
-                self._logger.warning("ChannelStream reader thread did not stop cleanly for channel %s", self.channel_id)
-
+        # Close source first so reader thread unblocks from read() and can exit
         if self.ts_source:
             try:
                 self.ts_source.close()
@@ -351,11 +341,15 @@ class ChannelStream:
                 pass
             self.ts_source = None
 
+        if self.reader_thread and self.reader_thread.is_alive():
+            self.reader_thread.join(timeout=5.0)
+            if self.reader_thread.is_alive():
+                self._logger.warning("ChannelStream reader thread did not stop cleanly for channel %s", self.channel_id)
+
         # Clear all subscribers and signal EOF
         with self.subscribers_lock:
             for queue in self.subscribers.values():
                 try:
-                    # Signal EOF to remaining clients
                     queue.put_nowait(b"")
                 except Exception:
                     pass
@@ -398,9 +392,9 @@ class ChannelStream:
         """Unsubscribe an HTTP client."""
         with self.subscribers_lock:
             removed = self.subscribers.pop(client_id, None)
+            subscriber_count = len(self.subscribers)
 
         if removed is not None:
-            subscriber_count = len(self.subscribers)
             self._logger.info(
                 "HTTP client %s disconnected from channel %s (remaining subscribers: %d)",
                 client_id,
@@ -408,9 +402,10 @@ class ChannelStream:
                 subscriber_count,
             )
 
-            # If no more subscribers and stopped, cleanup
-            if subscriber_count == 0 and self._stopped:
-                self.stop()
+        # Phase 8.5: when last subscriber leaves, stop reader so no ongoing work until next tune-in
+        # Check regardless of whether client was found (it may have been evicted by reader thread)
+        if subscriber_count == 0:
+            self.stop()
 
     def get_subscriber_count(self) -> int:
         """Get current number of active subscribers."""

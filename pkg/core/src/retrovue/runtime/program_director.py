@@ -459,15 +459,16 @@ class ProgramDirector:
             ChannelStream instance or None if Producer not available
         """
         with self._fanout_lock:
-            if channel_id in self._fanout_buffers:
-                fanout = self._fanout_buffers[channel_id]
-                if fanout.is_running():
-                    return fanout
-                # Remove stopped fanout
-                self._fanout_buffers.pop(channel_id, None)
-
             # Check if Producer is running and has socket_path
             producer = getattr(manager, "active_producer", None)
+
+            if channel_id in self._fanout_buffers:
+                fanout = self._fanout_buffers[channel_id]
+                if fanout.is_running() and producer:
+                    return fanout
+                # Remove stopped or orphaned fanout (producer gone)
+                self._fanout_buffers.pop(channel_id, None)
+
             if not producer:
                 return None
 
@@ -573,8 +574,17 @@ class ProgramDirector:
                     except GeneratorExit:
                         pass
                     finally:
-                        if fanout_buffer:
-                            fanout_buffer.unsubscribe(session_id)
+                        to_stop = None
+                        with self._fanout_lock:
+                            if fanout_buffer:
+                                fanout_buffer.unsubscribe(session_id)
+                            if channel_id in self._fanout_buffers:
+                                f = self._fanout_buffers[channel_id]
+                                if f.get_subscriber_count() == 0:
+                                    self._fanout_buffers.pop(channel_id, None)
+                                    to_stop = f
+                        if to_stop:
+                            to_stop.stop()
                         manager.tune_out(session_id)
 
                 return StreamingResponse(
@@ -598,15 +608,19 @@ class ProgramDirector:
                 except GeneratorExit:
                     pass
                 finally:
-                    # Phase 0: Stop playout engine pipeline when last viewer disconnects
-                    fanout.unsubscribe(session_id)
+                    # Phase 8.5: under lock unsubscribe and if last viewer pop from cache (so
+                    # a concurrent GET cannot get this fanout), then stop and tune_out.
+                    to_stop = None
+                    with self._fanout_lock:
+                        fanout.unsubscribe(session_id)
+                        if channel_id in self._fanout_buffers:
+                            f = self._fanout_buffers[channel_id]
+                            if f.get_subscriber_count() == 0:
+                                self._fanout_buffers.pop(channel_id, None)
+                                to_stop = f
+                    if to_stop:
+                        to_stop.stop()
                     manager.tune_out(session_id)
-                    
-                    # Check if this was the last viewer
-                    if fanout.get_subscriber_count() == 0:
-                        # Last viewer disconnected - ChannelManager will stop Producer
-                        # via on_last_viewer() callback
-                        pass
 
             return StreamingResponse(
                 generate_stream(),
