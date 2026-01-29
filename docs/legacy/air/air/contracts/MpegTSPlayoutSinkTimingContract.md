@@ -1,4 +1,4 @@
-_Related: [MpegTSPlayoutSink Domain](../../domain/MpegTSPlayoutSinkDomain.md) • [File Producer Contract](../../contracts/FileProducerDomainContract.md) • [Playout Engine Contract](../../contracts/PlayoutEngineContract.md) • [Architecture Overview](../../architecture/ArchitectureOverview.md)_
+_Related: [MpegTSPlayoutSink Domain](../../domain/MpegTSPlayoutSinkDomain.md) • [File Producer Contract](../../contracts/FileProducerContract.md) • [Playout Engine Contract](../../contracts/PlayoutEngineContract.md) • [Architecture Overview](../../architecture/ArchitectureOverview.md)_
 
 # Contract — MpegTSPlayoutSink Timing
 
@@ -204,7 +204,7 @@ Timing tests should live alongside existing sink contract tests, for example:
 ## See Also
 
 - [MpegTSPlayoutSink Domain](../../domain/MpegTSPlayoutSinkDomain.md) — Domain model and architecture
-- [File Producer Contract](../../contracts/FileProducerDomainContract.md) — Producer timing contract
+- [File Producer Contract](../../contracts/FileProducerContract.md) — Producer timing contract
 - [Playout Engine Contract](../../contracts/PlayoutEngineContract.md) — Overall playout engine contract
 - [Architecture Overview](../../architecture/ArchitectureOverview.md) — System-wide architecture
 

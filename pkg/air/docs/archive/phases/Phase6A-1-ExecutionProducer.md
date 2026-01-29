@@ -1,4 +1,4 @@
-<!-- ⚠️ Historical document. Superseded by: [PlayoutEngineContract](../../contracts/architecture/PlayoutEngineContract.md) and [PlayoutControlDomainContract](../../contracts/architecture/PlayoutControlDomainContract.md) -->
+<!-- ⚠️ Historical document. Superseded by: [PlayoutEngineContract](../../contracts/architecture/PlayoutEngineContract.md) and [PlayoutControlContract](../../contracts/architecture/PlayoutControlContract.md) -->
 
 # Phase 6A.1 — ExecutionProducer Interface
 

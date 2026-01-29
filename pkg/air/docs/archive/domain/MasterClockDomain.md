@@ -1,6 +1,6 @@
 _Metadata: Status=Draft; Scope=Domain; Owner=@runtime-platform_
 
-<!-- ⚠️ Historical document. Superseded by: [MasterClockDomainContract](../../contracts/architecture/MasterClockDomainContract.md) -->
+<!-- ⚠️ Historical document. Superseded by: [MasterClockContract](../../contracts/architecture/MasterClockContract.md) -->
 
 _Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
 
@@ -53,4 +53,4 @@ Define the responsibilities, interfaces, and timing guarantees of the MasterCloc
 
 - [Metrics and Timing Domain](MetricsAndTimingDomain.md)
 - [Playout Runtime](../runtime/PlayoutRuntime.md)
-- [MasterClock contract](../contracts/MasterClockDomainContract.md)
+- [MasterClock contract](../contracts/MasterClockContract.md)

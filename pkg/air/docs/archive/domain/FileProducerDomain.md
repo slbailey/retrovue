@@ -1,4 +1,4 @@
-<!-- ⚠️ Historical document. Superseded by: [FileProducerDomainContract](../../contracts/architecture/FileProducerDomainContract.md) -->
+<!-- ⚠️ Historical document. Superseded by: [FileProducerContract](../../contracts/architecture/FileProducerContract.md) -->
 
 _Related: [Playout Engine Domain](PlayoutEngineDomain.md) • [Renderer Domain](RendererDomain.md) • [Architecture Overview](../architecture/ArchitectureOverview.md) • [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
 

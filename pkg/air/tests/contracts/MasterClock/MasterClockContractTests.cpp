@@ -250,7 +250,7 @@ namespace retrovue::tests
       }
     };
 
-    // Rule: MC-001 Monotonic now() (MasterClockDomainContract.md §MC_001)
+    // Rule: MC-001 Monotonic now() (MasterClockContract.md §MC_001)
     TEST_F(MasterClockContractTest, MC_001_MonotonicNow)
     {
       SCOPED_TRACE("MC-001: monotonic now() must never regress");
@@ -276,7 +276,7 @@ namespace retrovue::tests
           << "Jitter p95 should remain under 1 ms for deterministic pacing";
     }
 
-    // Rule: MC-002 Stable PTS to UTC mapping (MasterClockDomainContract.md §MC_002)
+    // Rule: MC-002 Stable PTS to UTC mapping (MasterClockContract.md §MC_002)
     TEST_F(MasterClockContractTest, MC_002_StablePtsToUtcMapping)
     {
       SCOPED_TRACE("MC-002: PTS to UTC mapping must remain stable");
@@ -315,7 +315,7 @@ namespace retrovue::tests
       }
     }
 
-    // Rule: MC-003 Pace controller convergence (MasterClockDomainContract.md §MC_003)
+    // Rule: MC-003 Pace controller convergence (MasterClockContract.md §MC_003)
     TEST_F(MasterClockContractTest, MC_003_PaceControllerConvergence)
     {
       SCOPED_TRACE("MC-003: Pace controller should shrink frame gap");

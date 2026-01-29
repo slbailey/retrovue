@@ -1,6 +1,6 @@
 _Metadata: Status=Draft; Scope=Domain; Owner=@runtime-platform_
 
-<!-- ⚠️ Historical document. Superseded by: [MetricsExportDomainContract](../../contracts/architecture/MetricsExportDomainContract.md) -->
+<!-- ⚠️ Historical document. Superseded by: [MetricsExportContract](../../contracts/architecture/MetricsExportContract.md) -->
 
 _Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [Metrics and Timing Domain](MetricsAndTimingDomain.md); [Telemetry Guidelines](../standards/documentation-standards.md)_
 

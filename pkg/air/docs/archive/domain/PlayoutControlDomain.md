@@ -1,6 +1,6 @@
 _Metadata: Status=Draft; Scope=Domain; Owner=@runtime-platform_
 
-<!-- ⚠️ Historical document. Superseded by: [PlayoutControlDomainContract](../../contracts/architecture/PlayoutControlDomainContract.md) -->
+<!-- ⚠️ Historical document. Superseded by: [PlayoutControlContract](../../contracts/architecture/PlayoutControlContract.md) -->
 
 _Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [MasterClock Domain](MasterClockDomain.md); [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
 

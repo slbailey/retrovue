@@ -2,7 +2,7 @@ _Metadata: Status=Draft; Scope=Contract; Owner=@runtime-platform_
 
 _Related: [MasterClock Domain](../../domain/MasterClockDomain.md); [Architecture Overview](../../architecture/ArchitectureOverview.md)_
 
-# Contract - MasterClock Domain
+# MasterClock Contract
 
 ## Purpose
 

@@ -1,4 +1,4 @@
-<!-- ⚠️ Historical document. Superseded by: [FileProducerDomainContract](../../contracts/architecture/FileProducerDomainContract.md) -->
+<!-- ⚠️ Historical document. Superseded by: [FileProducerContract](../../contracts/architecture/FileProducerContract.md) -->
 
 # Phase 6A.2 — FileBackedProducer (minimal)
 
