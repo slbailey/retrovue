@@ -10,11 +10,13 @@
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/producers/IProducer.h"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/renderer/FrameRenderer.h"
-#include "retrovue/runtime/OrchestrationLoop.h"
-#include "retrovue/runtime/PlayoutControlStateMachine.h"
+#include "retrovue/runtime/TimingLoop.h"
+#include "retrovue/runtime/PlayoutControl.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/timing/MasterClock.h"
 
@@ -38,50 +40,53 @@ namespace {
     return std::string(prefix) + "-" + std::to_string(channel_id);
   }
   
-  telemetry::ChannelState ToChannelState(PlayoutControlStateMachine::State state) {
-    using State = PlayoutControlStateMachine::State;
-    switch (state) {
-      case State::kIdle:
+  telemetry::ChannelState ToChannelState(PlayoutControl::RuntimePhase phase) {
+    using RuntimePhase = PlayoutControl::RuntimePhase;
+    switch (phase) {
+      case RuntimePhase::kIdle:
         return telemetry::ChannelState::STOPPED;
-      case State::kBuffering:
+      case RuntimePhase::kBuffering:
         return telemetry::ChannelState::BUFFERING;
-      case State::kReady:
-      case State::kPlaying:
-      case State::kPaused:
+      case RuntimePhase::kReady:
+      case RuntimePhase::kPlaying:
+      case RuntimePhase::kPaused:
         return telemetry::ChannelState::READY;
-      case State::kStopping:
+      case RuntimePhase::kStopping:
         return telemetry::ChannelState::BUFFERING;
-      case State::kError:
+      case RuntimePhase::kError:
         return telemetry::ChannelState::ERROR_STATE;
     }
     return telemetry::ChannelState::STOPPED;
   }
 }  // namespace
 
-// Internal channel state - manages all components for a single channel.
-// Phase 8.4: One TS mux per channel per active stream session; ring_buffer is the single
+// Internal playout session - runtime components for one Air instance.
+// Phase 8.4: One TS mux per active stream session; ring_buffer is the single
 // frame source for the mux. SwitchToLive swaps which producer feeds the buffer (frame-source
 // only); within a session the mux is not restarted and PID/continuity are not reset.
-struct PlayoutEngine::ChannelState {
-  int32_t channel_id;
+struct PlayoutEngine::PlayoutSession {
+  int32_t channel_id;  // External identifier (for gRPC correlation; channel ownership is in Core)
   std::string plan_handle;
   int32_t port;
   std::optional<std::string> uds_path;
-  // Phase 6A.0 control-surface-only: preview slot state (no real decode)
+  // Phase 6A.0 control-surface-only: preview bus state (no real decode)
   bool preview_loaded = false;
   std::string preview_asset_path;
   std::string live_asset_path;  // Phase 8.1: set on SwitchToLive for stream TS source
 
   // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
-  std::unique_ptr<producers::video_file::VideoFileProducer> live_producer;
-  std::unique_ptr<producers::video_file::VideoFileProducer> preview_producer;  // For shadow decode/preview
+  std::unique_ptr<producers::file::FileProducer> live_producer;
+  std::unique_ptr<producers::file::FileProducer> preview_producer;  // For shadow decode/preview
   std::unique_ptr<renderer::FrameRenderer> renderer;
-  std::unique_ptr<OrchestrationLoop> orchestration_loop;
-  std::unique_ptr<PlayoutControlStateMachine> control;
-  
-  ChannelState(int32_t id, const std::string& plan, int32_t p, 
-               const std::optional<std::string>& uds)
+  std::unique_ptr<TimingLoop> timing_loop;
+  std::unique_ptr<PlayoutControl> control;
+
+  // Phase 9.0: OutputBus for frame routing to sinks
+  std::unique_ptr<output::OutputBus> output_bus;
+
+  PlayoutSession(int32_t id, const std::string& plan, int32_t p,
+                 const std::optional<std::string>& uds)
       : channel_id(id), plan_handle(plan), port(p), uds_path(uds) {}
 };
 
@@ -119,15 +124,19 @@ EngineResult PlayoutEngine::StartChannel(
     int32_t port,
     const std::optional<std::string>& uds_path) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  
-  // Check if channel already exists (idempotent success)
-  if (channels_.find(channel_id) != channels_.end()) {
-    return EngineResult(true, "Channel " + std::to_string(channel_id) + " already started");
+
+  // Air supports exactly one active playout session at a time.
+  // Channel identity is external and used only for correlation.
+  if (!channels_.empty()) {
+    if (channels_.find(channel_id) != channels_.end()) {
+      return EngineResult(true, "Channel " + std::to_string(channel_id) + " already started");
+    }
+    return EngineResult(false, "PlayoutEngine already has an active session");
   }
-  
+
   try {
     // Create channel state
-    auto state = std::make_unique<ChannelState>(channel_id, plan_handle, port, uds_path);
+    auto state = std::make_unique<PlayoutSession>(channel_id, plan_handle, port, uds_path);
     
     if (control_surface_only_) {
       // Phase 6A.0: no media, no producers, no frames — channel state only
@@ -139,10 +148,13 @@ EngineResult PlayoutEngine::StartChannel(
     state->ring_buffer = std::make_unique<buffer::FrameRingBuffer>(kDefaultBufferSize);
     
     // Create control state machine
-    state->control = std::make_unique<PlayoutControlStateMachine>();
-    
+    state->control = std::make_unique<PlayoutControl>();
+
+    // Phase 9.0: Create OutputBus with state machine validation
+    state->output_bus = std::make_unique<output::OutputBus>(state->control.get());
+
     // Create producer config from plan_handle (simplified - in production, resolve plan to asset)
-    producers::video_file::ProducerConfig producer_config;
+    producers::file::ProducerConfig producer_config;
     producer_config.asset_uri = plan_handle; // For now, use plan_handle as asset URI
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false; // Use real decode
@@ -150,7 +162,7 @@ EngineResult PlayoutEngine::StartChannel(
     producer_config.target_height = 1080;
     
     // Create live producer (FileProducer - decodes both audio and video)
-    state->live_producer = std::make_unique<producers::video_file::VideoFileProducer>(
+    state->live_producer = std::make_unique<producers::file::FileProducer>(
         producer_config, *state->ring_buffer, master_clock_, nullptr);
     
     // Create renderer
@@ -179,7 +191,7 @@ EngineResult PlayoutEngine::StartChannel(
         metrics.state = telemetry::ChannelState::BUFFERING;
         metrics.buffer_depth_frames = state->ring_buffer->Size();
         metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
-        // Stop producer before returning so ~ChannelState does not destroy
+        // Stop producer before returning so ~PlayoutSession does not destroy
         // running threads that then call virtuals on a partially destroyed object.
         if (state->live_producer) {
           state->live_producer->RequestTeardown(std::chrono::milliseconds(200));
@@ -242,7 +254,12 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
     if (state->control) {
       state->control->Stop(MakeCommandId("stop", channel_id), now, now);
     }
-    
+
+    // Phase 9.0: Detach any attached output sink (forced detach)
+    if (state->output_bus) {
+      state->output_bus->DetachSink(true);
+    }
+
     // Stop renderer first (consumer before producer)
     if (state->renderer) {
       state->renderer->Stop();
@@ -318,7 +335,7 @@ EngineResult PlayoutEngine::LoadPreview(
   
   try {
     // Create preview producer config
-    producers::video_file::ProducerConfig preview_config;
+    producers::file::ProducerConfig preview_config;
     preview_config.asset_uri = asset_path;
     preview_config.target_fps = 30.0;
     preview_config.stub_mode = false;
@@ -329,7 +346,7 @@ EngineResult PlayoutEngine::LoadPreview(
     // Do NOT start it here; SwitchToLive will start it when promoting to live.
     // This ensures LoadPreview only prepares the next asset; clock-driven SwitchToLive triggers the actual switch.
     state->preview_asset_path = asset_path;
-    state->preview_producer = std::make_unique<producers::video_file::VideoFileProducer>(
+    state->preview_producer = std::make_unique<producers::file::FileProducer>(
         preview_config, *state->ring_buffer, master_clock_, nullptr);
     
     // Preview producer created but not started; SwitchToLive will start it when switching.
@@ -493,26 +510,125 @@ EngineResult PlayoutEngine::UpdatePlan(
     int32_t channel_id,
     const std::string& plan_handle) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  
+
   auto it = channels_.find(channel_id);
   if (it == channels_.end()) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
-  
+
   auto& state = it->second;
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
   }
-  
+
   try {
     // Update plan handle
     state->plan_handle = plan_handle;
-    
+
     // In production, would restart producer with new plan
     // For now, just update the handle
     return EngineResult(true, "Plan updated for channel " + std::to_string(channel_id));
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception updating plan for channel " + std::to_string(channel_id) + ": " + e.what());
+  }
+}
+
+// Phase 9.0: OutputBus/OutputSink methods
+
+EngineResult PlayoutEngine::AttachOutputSink(
+    int32_t channel_id,
+    std::unique_ptr<output::IOutputSink> sink,
+    bool replace_existing) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end()) {
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
+  }
+
+  auto& state = it->second;
+  if (!state) {
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+  }
+
+  if (!state->output_bus) {
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " has no OutputBus");
+  }
+
+  auto result = state->output_bus->AttachSink(std::move(sink), replace_existing);
+  return EngineResult(result.success, result.message);
+}
+
+EngineResult PlayoutEngine::DetachOutputSink(int32_t channel_id, bool force) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end()) {
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " not found (idempotent)");
+  }
+
+  auto& state = it->second;
+  if (!state) {
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " state is null (idempotent)");
+  }
+
+  if (!state->output_bus) {
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " has no OutputBus (idempotent)");
+  }
+
+  auto result = state->output_bus->DetachSink(force);
+  return EngineResult(result.success, result.message);
+}
+
+bool PlayoutEngine::IsOutputSinkAttached(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->output_bus) {
+    return false;
+  }
+
+  return it->second->output_bus->IsAttached();
+}
+
+output::OutputBus* PlayoutEngine::GetOutputBus(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second) {
+    return nullptr;
+  }
+
+  return it->second->output_bus.get();
+}
+
+void PlayoutEngine::ConnectRendererToOutputBus(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second) {
+    return;
+  }
+
+  auto& state = it->second;
+  if (state->renderer && state->output_bus) {
+    state->renderer->SetOutputBus(state->output_bus.get());
+    std::cout << "[PlayoutEngine] Renderer connected to OutputBus for channel " << channel_id << std::endl;
+  }
+}
+
+void PlayoutEngine::DisconnectRendererFromOutputBus(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second) {
+    return;
+  }
+
+  auto& state = it->second;
+  if (state->renderer) {
+    state->renderer->ClearOutputBus();
+    std::cout << "[PlayoutEngine] Renderer disconnected from OutputBus for channel " << channel_id << std::endl;
   }
 }
 

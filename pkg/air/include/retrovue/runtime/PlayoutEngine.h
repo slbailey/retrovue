@@ -1,10 +1,27 @@
 // Repository: Retrovue-playout
 // Component: Playout Engine Domain
-// Purpose: Domain-level engine that manages channel lifecycle operations.
+// Purpose: Root execution unit of Air; single-session runtime enforcement.
 // Copyright (c) 2025 RetroVue
 
 #ifndef RETROVUE_RUNTIME_PLAYOUT_ENGINE_H_
 #define RETROVUE_RUNTIME_PLAYOUT_ENGINE_H_
+
+// PlayoutEngine
+//
+// PlayoutEngine is the root execution unit of Air.
+// It runs a single playout session at a time and owns:
+//
+// - runtime graph (producer → buffer → renderer → encoder)
+// - clock coordination
+// - engine-level state enforcement
+//
+// PlayoutEngine does NOT:
+// - own channel lifecycle
+// - interpret schedules
+// - manage multiple channels
+//
+// Channel identity is external and supplied by Core.
+// PlayoutEngine enforces only runtime execution correctness.
 
 #include <cstdint>
 #include <functional>
@@ -23,6 +40,10 @@ class MasterClock;
 }
 namespace retrovue::telemetry {
 class MetricsExporter;
+}
+namespace retrovue::output {
+class IOutputSink;
+class OutputBus;
 }
 
 namespace retrovue::runtime {
@@ -43,8 +64,6 @@ struct EngineResult {
       : success(s), message(msg) {}
 };
 
-// PlayoutEngine provides domain-level channel lifecycle management.
-// This is the authoritative implementation that has been tested via contract tests.
 class PlayoutEngine {
  public:
   // When control_surface_only is true, no media/decode/frames are used (Phase 6A.0).
@@ -91,7 +110,33 @@ class PlayoutEngine {
   void RegisterMuxAudioFrameCallback(int32_t channel_id,
                                      std::function<void(const buffer::AudioFrame&)> callback);
   void UnregisterMuxAudioFrameCallback(int32_t channel_id);
-  
+
+  // Phase 9.0: OutputBus/OutputSink architecture
+  // Attaches an output sink to the channel's OutputBus.
+  // The sink will receive frames routed through the bus.
+  // If replace_existing is true and a sink is already attached, replaces it.
+  EngineResult AttachOutputSink(int32_t channel_id,
+                                std::unique_ptr<output::IOutputSink> sink,
+                                bool replace_existing = false);
+
+  // Detaches the output sink from the channel's OutputBus.
+  // If force is true, detaches immediately without waiting for graceful shutdown.
+  EngineResult DetachOutputSink(int32_t channel_id, bool force = false);
+
+  // Returns true if an output sink is attached to the channel's OutputBus.
+  bool IsOutputSinkAttached(int32_t channel_id);
+
+  // Gets the OutputBus for a channel (for direct access if needed).
+  // Returns nullptr if channel not found.
+  output::OutputBus* GetOutputBus(int32_t channel_id);
+
+  // Connects the renderer to the OutputBus for frame routing.
+  // Call this after attaching a sink to start frame flow.
+  void ConnectRendererToOutputBus(int32_t channel_id);
+
+  // Disconnects the renderer from the OutputBus (reverts to legacy callbacks).
+  void DisconnectRendererFromOutputBus(int32_t channel_id);
+
   EngineResult UpdatePlan(
       int32_t channel_id,
       const std::string& plan_handle);
@@ -101,12 +146,12 @@ class PlayoutEngine {
   std::shared_ptr<timing::MasterClock> master_clock_;
   bool control_surface_only_;
 
-  // Forward declaration for internal channel state
-  struct ChannelState;
-  
-  // Channel management (thread-safe)
+  // Forward declaration for internal playout runtime (one per Air instance).
+  struct PlayoutSession;
+
+  // TODO: Legacy/transitional. Air runs one playout session; channel identity is external (Core).
   mutable std::mutex channels_mutex_;
-  std::unordered_map<int32_t, std::unique_ptr<ChannelState>> channels_;
+  std::unordered_map<int32_t, std::unique_ptr<PlayoutSession>> channels_;
 };
 
 }  // namespace retrovue::runtime

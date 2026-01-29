@@ -25,6 +25,7 @@ extern "C" {
 }
 #endif
 
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/timing/MasterClock.h"
 
@@ -264,11 +265,18 @@ void FrameRenderer::RenderLoop() {
 
     RenderFrame(frame);
 
-    // Phase 8.4: Feed frame to optional mux side-sink (TS encoder).
+    // Phase 9.0: Route frames through OutputBus if available, else use legacy callbacks
     {
-      std::lock_guard<std::mutex> lock(side_sink_mutex_);
-      if (side_sink_) {
-        side_sink_(frame);
+      std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
+      if (output_bus_) {
+        // Route video frame through OutputBus
+        output_bus_->RouteVideo(frame);
+      } else {
+        // Phase 8.4 legacy: Feed frame to optional mux side-sink (TS encoder).
+        std::lock_guard<std::mutex> lock(side_sink_mutex_);
+        if (side_sink_) {
+          side_sink_(frame);
+        }
       }
     }
 
@@ -281,20 +289,23 @@ void FrameRenderer::RenderLoop() {
         break;  // No more audio frames available
       }
       audio_frames_consumed++;
-      
-      // Forward audio frame to optional mux side-sink
+
+      // Phase 9.0: Route audio through OutputBus if available, else use legacy callback
       {
-        std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
-        if (audio_side_sink_) {
-          audio_side_sink_(audio_frame);
+        std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
+        if (output_bus_) {
+          output_bus_->RouteAudio(audio_frame);
         } else {
-          // Audio callback not registered - audio frames will be dropped
-          // This is expected if audio encoder failed or wasn't initialized
+          // Forward audio frame to optional mux side-sink
+          std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
+          if (audio_side_sink_) {
+            audio_side_sink_(audio_frame);
+          }
         }
       }
     }
     if (audio_frames_consumed > 0 && stats_.frames_rendered % 100 == 0) {
-      std::cout << "[FrameRenderer] Consumed " << audio_frames_consumed 
+      std::cout << "[FrameRenderer] Consumed " << audio_frames_consumed
                 << " audio frames for video frame #" << stats_.frames_rendered << std::endl;
     }
 
@@ -413,6 +424,21 @@ void FrameRenderer::SetAudioSideSink(std::function<void(const buffer::AudioFrame
 void FrameRenderer::ClearAudioSideSink() {
   std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
   audio_side_sink_ = nullptr;
+}
+
+// Phase 9.0: OutputBus integration
+void FrameRenderer::SetOutputBus(output::OutputBus* bus) {
+  std::lock_guard<std::mutex> lock(output_bus_mutex_);
+  output_bus_ = bus;
+  if (bus) {
+    std::cout << "[FrameRenderer] OutputBus set (frames will route through bus)" << std::endl;
+  }
+}
+
+void FrameRenderer::ClearOutputBus() {
+  std::lock_guard<std::mutex> lock(output_bus_mutex_);
+  output_bus_ = nullptr;
+  std::cout << "[FrameRenderer] OutputBus cleared (frames will use legacy callbacks)" << std::endl;
 }
 
 // ============================================================================

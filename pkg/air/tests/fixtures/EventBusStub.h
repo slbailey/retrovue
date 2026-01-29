@@ -76,7 +76,7 @@ namespace retrovue::tests::fixtures
       return GetEventCount(type) > 0;
     }
 
-    // Emits an event (called by VideoFileProducer callback).
+    // Emits an event (called by FileProducer callback).
     void Emit(TestEventType type, const std::string &message = "", int exit_code = 0)
     {
       std::lock_guard<std::mutex> lock(mutex_);

@@ -1,5 +1,5 @@
-#ifndef RETROVUE_RUNTIME_PLAYOUT_CONTROL_STATE_MACHINE_H_
-#define RETROVUE_RUNTIME_PLAYOUT_CONTROL_STATE_MACHINE_H_
+#ifndef RETROVUE_RUNTIME_PLAYOUT_CONTROL_H_
+#define RETROVUE_RUNTIME_PLAYOUT_CONTROL_H_
 
 #include <cstdint>
 #include <map>
@@ -13,8 +13,8 @@
 
 #include <functional>
 
-#include "retrovue/runtime/OrchestrationLoop.h"
-#include "retrovue/runtime/ProducerSlot.h"
+#include "retrovue/runtime/TimingLoop.h"
+#include "retrovue/runtime/ProducerBus.h"
 
 namespace retrovue {
 namespace buffer {
@@ -33,20 +33,38 @@ namespace renderer {
 
 namespace retrovue::runtime {
 
-class PlayoutControlStateMachine {
+// PlayoutControl
+//
+// Enforces valid sequencing of runtime operations inside a single Air
+// playout engine instance.
+//
+// This control plane exists to protect timing, buffer, and encoder
+// invariants (PTS continuity, buffer priming, decode/render ordering).
+//
+// It does NOT represent:
+// - channel lifecycle
+// - scheduling state
+// - business logic
+// - multi-channel coordination
+//
+// Channel identity and lifecycle are owned by Core.
+// This control plane only governs internal engine physics.
+class PlayoutControl {
  public:
-  enum class State {
-    kIdle = 0,
-    kBuffering = 1,
-    kReady = 2,
-    kPlaying = 3,
-    kPaused = 4,
-    kStopping = 5,
-    kError = 6,
+  // RuntimePhase represents the current execution phase
+  // of the playout pipeline, not channel lifecycle state.
+  enum class RuntimePhase {
+    kIdle,       // No active playout graph
+    kBuffering,  // Priming decode/render buffers
+    kReady,      // Buffers primed, safe to start output
+    kPlaying,    // Actively emitting frames
+    kPaused,     // Pipeline halted, state retained
+    kStopping,   // Graceful shutdown in progress
+    kError       // Fatal runtime invariant violation
   };
 
   struct MetricsSnapshot {
-    std::map<std::pair<State, State>, uint64_t> transitions;
+    std::map<std::pair<RuntimePhase, RuntimePhase>, uint64_t> transitions;
     uint64_t illegal_transition_total = 0;
     uint64_t latency_violation_total = 0;
     uint64_t timeout_total = 0;
@@ -64,13 +82,13 @@ class PlayoutControlStateMachine {
     double last_seek_latency_ms = 0.0;
     double last_stop_latency_ms = 0.0;
     double last_pause_deviation_ms = 0.0;
-    State state = State::kIdle;
+    RuntimePhase state = RuntimePhase::kIdle;
   };
 
-  PlayoutControlStateMachine();
+  PlayoutControl();
 
-  PlayoutControlStateMachine(const PlayoutControlStateMachine&) = delete;
-  PlayoutControlStateMachine& operator=(const PlayoutControlStateMachine&) = delete;
+  PlayoutControl(const PlayoutControl&) = delete;
+  PlayoutControl& operator=(const PlayoutControl&) = delete;
 
   bool BeginSession(const std::string& command_id, int64_t request_utc_us);
   bool Pause(const std::string& command_id,
@@ -92,14 +110,14 @@ class PlayoutControlStateMachine {
   void OnBufferDepth(std::size_t depth,
                      std::size_t capacity,
                      int64_t event_utc_us);
-  void OnBackPressureEvent(OrchestrationLoop::BackPressureEvent event,
+  void OnBackPressureEvent(TimingLoop::BackPressureEvent event,
                            int64_t event_utc_us);
   void OnBackPressureCleared(int64_t event_utc_us);
 
   void OnExternalTimeout(int64_t event_utc_us);
   void OnQueueOverflow();
 
-  [[nodiscard]] State state() const;
+  [[nodiscard]] RuntimePhase state() const;
   [[nodiscard]] MetricsSnapshot Snapshot() const;
 
   // Dual-producer slot management (Phase 6A.1 ExecutionProducer)
@@ -114,7 +132,7 @@ class PlayoutControlStateMachine {
   
   void setProducerFactory(ProducerFactory factory);
 
-  // Loads a producer into the preview slot with segment params (Phase 6A.1).
+  // Loads a producer into the preview bus with segment params (Phase 6A.1).
   // Requires: setProducerFactory() must be called first, and ringBuffer/clock must be provided.
   // Returns true on success, false on failure.
   bool loadPreviewAsset(const std::string& path,
@@ -124,25 +142,45 @@ class PlayoutControlStateMachine {
                        int64_t start_offset_ms = 0,
                        int64_t hard_stop_time_ms = 0);
 
-  // Switches preview slot to live slot.
+  // Switches preview bus to live bus.
   // Stops live producer, flushes renderer, resets timestamps, and swaps producers.
   // Requires: renderer pointer for flushing (can be nullptr if not available).
   // Returns true on success, false on failure.
   bool activatePreviewAsLive(renderer::FrameRenderer* renderer = nullptr);
 
-  // Gets the preview slot (const access).
-  const ProducerSlot& getPreviewSlot() const;
+  // Gets the preview bus (const access).
+  const ProducerBus& getPreviewBus() const;
 
-  // Gets the live slot (const access).
-  const ProducerSlot& getLiveSlot() const;
+  // Gets the live bus (const access).
+  const ProducerBus& getLiveBus() const;
+
+  // OutputBus integration (Phase 9.0: OutputBus/OutputSink architecture)
+  // Returns true if a sink can be attached in the current phase.
+  // Valid phases for attach: kReady, kPlaying, kPaused
+  [[nodiscard]] bool CanAttachSink() const;
+
+  // Returns true if a sink can be detached in the current phase.
+  // Detach is allowed in any phase (forced detach always allowed).
+  [[nodiscard]] bool CanDetachSink() const;
+
+  // Called when a sink is attached.
+  // Updates internal sink tracking state.
+  void OnSinkAttached();
+
+  // Called when a sink is detached.
+  // Updates internal sink tracking state.
+  void OnSinkDetached();
+
+  // Returns true if a sink is currently attached.
+  [[nodiscard]] bool IsSinkAttached() const;
 
  private:
-  void TransitionLocked(State to, int64_t event_utc_us);
-  void RecordTransitionLocked(State from, State to);
+  void TransitionLocked(RuntimePhase to, int64_t event_utc_us);
+  void RecordTransitionLocked(RuntimePhase from, RuntimePhase to);
   void RecordLatencyLocked(std::vector<double>& samples, double value_ms);
   double PercentileLocked(const std::vector<double>& samples, double percentile) const;
   bool RegisterCommandLocked(const std::string& command_id);
-  void RecordIllegalTransitionLocked(State from, State attempted_to);
+  void RecordIllegalTransitionLocked(RuntimePhase from, RuntimePhase attempted_to);
 
   constexpr static double kPauseLatencyThresholdMs = 33.0;
   constexpr static double kResumeLatencyThresholdMs = 50.0;
@@ -152,10 +190,10 @@ class PlayoutControlStateMachine {
 
   mutable std::mutex mutex_;
 
-  State state_;
+  RuntimePhase state_;
   std::unordered_map<std::string, int64_t> processed_commands_;
   int64_t current_pts_us_;
-  std::map<std::pair<State, State>, uint64_t> transitions_;
+  std::map<std::pair<RuntimePhase, RuntimePhase>, uint64_t> transitions_;
   uint64_t illegal_transition_total_;
   uint64_t latency_violation_total_;
   uint64_t timeout_total_;
@@ -169,15 +207,17 @@ class PlayoutControlStateMachine {
   std::vector<double> stop_latencies_ms_;
   std::vector<double> pause_deviation_ms_;
 
-  // Dual-producer slots
-  ProducerSlot previewSlot;
-  ProducerSlot liveSlot;
+  // Dual-producer buses
+  ProducerBus previewBus;
+  ProducerBus liveBus;
 
   // Producer factory (set by playout_service)
   ProducerFactory producer_factory_;
+
+  // Sink attachment tracking (Phase 9.0: OutputBus/OutputSink)
+  bool sink_attached_ = false;
 };
 
 }  // namespace retrovue::runtime
 
-#endif  // RETROVUE_RUNTIME_PLAYOUT_CONTROL_STATE_MACHINE_H_
-
+#endif  // RETROVUE_RUNTIME_PLAYOUT_CONTROL_H_

@@ -2,7 +2,7 @@ import argparse
 import threading
 from datetime import datetime, timezone
 from .frame_ring_buffer import FrameRingBuffer
-from .video_file_decoder import VideoFileDecoder
+from .file_decoder import FileDecoder
 from .renderer_stub import RendererStub
 from .station_time_mapper import StationTimeMapper
 from .master_clock import MasterClock
@@ -25,7 +25,7 @@ def main():
     mapper = StationTimeMapper(datetime.now(timezone.utc))
 
     # Start the decoder in its own thread
-    decoder = VideoFileDecoder(args.video, ring, mapper, stop_event)
+    decoder = FileDecoder(args.video, ring, mapper, stop_event)
     decoder.start()
 
     # Run the renderer in the main thread

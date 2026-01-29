@@ -19,8 +19,6 @@
 #include "playout.grpc.pb.h"
 #include "playout.pb.h"
 #include "retrovue/runtime/PlayoutController.h"
-#include "retrovue/telemetry/MetricsExporter.h"
-#include "retrovue/timing/MasterClock.h"
 
 namespace retrovue {
 namespace playout {
@@ -77,11 +75,22 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
   // Controller that manages all channel lifecycle operations
   std::shared_ptr<runtime::PlayoutController> controller_;
 
-  // Phase 8.0/8.6: per-channel stream writer (UDS client). When control_surface_only_, writes HELLO; else no writer until SwitchToLive (real TS only).
+  // Phase 9.0: OutputBus/OutputSink architecture
+  // control_surface_only_: when true, uses legacy HelloLoop; when false, uses MpegTSOutputSink
   bool control_surface_only_ = false;
-  struct StreamWriterState;
+
+  // Phase 9.0: gRPC layer owns only transport state (FD), not output runtime state.
+  // Output runtime (encoder, queues, mux thread) is owned by MpegTSOutputSink in OutputBus.
+  struct StreamState {
+    int fd = -1;                    // UDS file descriptor (owned by gRPC layer)
+    std::thread hello_thread;       // Legacy HelloLoop thread (control_surface_only_ mode only)
+    std::atomic<bool> stop{false};  // Stop flag for HelloLoop
+  };
   std::mutex stream_mutex_;
-  std::unordered_map<int32_t, std::unique_ptr<StreamWriterState>> stream_writers_;
+  std::unordered_map<int32_t, std::unique_ptr<StreamState>> stream_states_;
+
+  // Legacy HelloLoop for control_surface_only_ mode
+  static void HelloLoop(StreamState* state);
 
   // Call with stream_mutex_ held or from destructor.
   void DetachStreamLocked(int32_t channel_id, bool force);

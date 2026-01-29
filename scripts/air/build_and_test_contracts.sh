@@ -57,7 +57,6 @@ cmake --build build -j$(nproc) --target \
     contracts_orchestrationloop_tests \
     contracts_playoutengine_tests \
     contracts_renderer_tests \
-    contracts_videofileproducer_tests \
     2>&1 | tail -20
 echo "[OK] Contract tests built"
 echo ""

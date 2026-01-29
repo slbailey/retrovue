@@ -3,7 +3,7 @@ import cv2
 from datetime import datetime, timezone, timedelta
 
 
-class VideoFileDecoder(threading.Thread):
+class FileDecoder(threading.Thread):
     def __init__(self, path, ring, mapper, stop_event):
         super().__init__(daemon=True)
         self.path = path
@@ -15,10 +15,10 @@ class VideoFileDecoder(threading.Thread):
     def run(self):
         cap = cv2.VideoCapture(self.path)
         if not cap.isOpened():
-            print(f"[VideoFileDecoder] Failed to open {self.path}")
+            print(f"[FileDecoder] Failed to open {self.path}")
             return
 
-        print(f"[VideoFileDecoder] Started decoding {self.path}")
+        print(f"[FileDecoder] Started decoding {self.path}")
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         frame_period_s = 1.0 / fps
         next_station_ts = datetime.now(timezone.utc)
@@ -26,7 +26,7 @@ class VideoFileDecoder(threading.Thread):
         while not self.stop_event.is_set():
             ret, frame = cap.read()
             if not ret:
-                print("[VideoFileDecoder] End of stream or read failed.")
+                print("[FileDecoder] End of stream or read failed.")
                 break
 
             self.decoded += 1
@@ -49,4 +49,4 @@ class VideoFileDecoder(threading.Thread):
             )
 
         cap.release()
-        print(f"[VideoFileDecoder] Finished decoding. Total frames: {self.decoded}")
+        print(f"[FileDecoder] Finished decoding. Total frames: {self.decoded}")

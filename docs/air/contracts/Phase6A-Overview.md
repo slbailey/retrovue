@@ -31,7 +31,7 @@ These apply across all Phase 6A sub-contracts:
 | Phase   | Focus                         | Media / ffmpeg      | Exit criterion                          |
 |---------|-------------------------------|---------------------|----------------------------------------|
 | 6A.0    | gRPC control surface          | No                  | Server compiles; 4 RPCs accept & return |
-| 6A.1    | ExecutionProducer + slots     | No                  | Lifecycle & stop semantics tested       |
+| 6A.1    | ExecutionProducer + buses     | No                  | Lifecycle & stop semantics tested       |
 | 6A.2    | FileBackedProducer (minimal)  | Yes (ffmpeg, fix out) | start_offset_ms & hard_stop_time_ms honored |
 | 6A.3    | ProgrammaticProducer          | No decode           | Heterogeneous producers work            |
 
@@ -43,4 +43,4 @@ Only after **6A.0–6A.3** pass:
 
 - **MPEG-TS serving:** Real TS output, tune-in, byte-level checks (e.g. Phase 7).
 - **Renderer placement:** Where frames become TS (inside Air vs separate Renderer); see [ArchitectureOverview](../architecture/ArchitectureOverview.md).
-- **Performance:** Latency targets, buffer depth, throughput (see [PlayoutEngineContract](PlayoutEngineContract.md), [VideoFileProducerDomainContract](VideoFileProducerDomainContract.md)).
+- **Performance:** Latency targets, buffer depth, throughput (see [PlayoutEngineContract](PlayoutEngineContract.md), [FileProducerDomainContract](FileProducerDomainContract.md)).

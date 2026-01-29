@@ -1,11 +1,11 @@
-#include "retrovue/runtime/PlayoutControlStateMachine.h"
+#include "retrovue/runtime/PlayoutControl.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 
 #include "retrovue/producers/IProducer.h"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 
 namespace retrovue::runtime
 {
@@ -20,8 +20,8 @@ namespace retrovue::runtime
 
   } // namespace
 
-  PlayoutControlStateMachine::PlayoutControlStateMachine()
-      : state_(State::kIdle),
+  PlayoutControl::PlayoutControl()
+      : state_(RuntimePhase::kIdle),
         current_pts_us_(0),
         illegal_transition_total_(0),
         latency_violation_total_(0),
@@ -31,7 +31,7 @@ namespace retrovue::runtime
         consistency_failure_total_(0),
         late_seek_total_(0) {}
 
-  bool PlayoutControlStateMachine::BeginSession(const std::string &command_id,
+  bool PlayoutControl::BeginSession(const std::string &command_id,
                                                 int64_t request_utc_us)
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -40,17 +40,17 @@ namespace retrovue::runtime
       return true; // Duplicate command is acknowledged.
     }
 
-    if (state_ != State::kIdle)
+    if (state_ != RuntimePhase::kIdle)
     {
-      RecordIllegalTransitionLocked(state_, State::kBuffering);
+      RecordIllegalTransitionLocked(state_, RuntimePhase::kBuffering);
       return false;
     }
 
-    TransitionLocked(State::kBuffering, request_utc_us);
+    TransitionLocked(RuntimePhase::kBuffering, request_utc_us);
     return true;
   }
 
-  bool PlayoutControlStateMachine::Pause(const std::string &command_id,
+  bool PlayoutControl::Pause(const std::string &command_id,
                                          int64_t request_utc_us,
                                          int64_t effective_utc_us,
                                          double boundary_deviation_ms)
@@ -61,9 +61,9 @@ namespace retrovue::runtime
       return true;
     }
 
-    if (state_ != State::kPlaying)
+    if (state_ != RuntimePhase::kPlaying)
     {
-      RecordIllegalTransitionLocked(state_, State::kPaused);
+      RecordIllegalTransitionLocked(state_, RuntimePhase::kPaused);
       return false;
     }
 
@@ -77,11 +77,11 @@ namespace retrovue::runtime
       ++latency_violation_total_;
     }
 
-    TransitionLocked(State::kPaused, effective_utc_us);
+    TransitionLocked(RuntimePhase::kPaused, effective_utc_us);
     return true;
   }
 
-  bool PlayoutControlStateMachine::Resume(const std::string &command_id,
+  bool PlayoutControl::Resume(const std::string &command_id,
                                           int64_t request_utc_us,
                                           int64_t effective_utc_us)
   {
@@ -91,9 +91,9 @@ namespace retrovue::runtime
       return true;
     }
 
-    if (state_ != State::kPaused)
+    if (state_ != RuntimePhase::kPaused)
     {
-      RecordIllegalTransitionLocked(state_, State::kPlaying);
+      RecordIllegalTransitionLocked(state_, RuntimePhase::kPlaying);
       return false;
     }
 
@@ -105,11 +105,11 @@ namespace retrovue::runtime
       ++latency_violation_total_;
     }
 
-    TransitionLocked(State::kPlaying, effective_utc_us);
+    TransitionLocked(RuntimePhase::kPlaying, effective_utc_us);
     return true;
   }
 
-  bool PlayoutControlStateMachine::Seek(const std::string &command_id,
+  bool PlayoutControl::Seek(const std::string &command_id,
                                         int64_t request_utc_us,
                                         int64_t target_pts_us,
                                         int64_t effective_utc_us)
@@ -126,9 +126,9 @@ namespace retrovue::runtime
       return false;
     }
 
-    if (state_ != State::kPlaying && state_ != State::kPaused)
+    if (state_ != RuntimePhase::kPlaying && state_ != RuntimePhase::kPaused)
     {
-      RecordIllegalTransitionLocked(state_, State::kBuffering);
+      RecordIllegalTransitionLocked(state_, RuntimePhase::kBuffering);
       return false;
     }
 
@@ -140,14 +140,14 @@ namespace retrovue::runtime
       ++latency_violation_total_;
     }
 
-    TransitionLocked(State::kBuffering, request_utc_us);
-    TransitionLocked(State::kReady, effective_utc_us);
-    TransitionLocked(State::kPlaying, effective_utc_us);
+    TransitionLocked(RuntimePhase::kBuffering, request_utc_us);
+    TransitionLocked(RuntimePhase::kReady, effective_utc_us);
+    TransitionLocked(RuntimePhase::kPlaying, effective_utc_us);
     current_pts_us_ = target_pts_us;
     return true;
   }
 
-  bool PlayoutControlStateMachine::Stop(const std::string &command_id,
+  bool PlayoutControl::Stop(const std::string &command_id,
                                         int64_t request_utc_us,
                                         int64_t effective_utc_us)
   {
@@ -157,9 +157,9 @@ namespace retrovue::runtime
       return true;
     }
 
-    if (state_ == State::kIdle)
+    if (state_ == RuntimePhase::kIdle)
     {
-      RecordIllegalTransitionLocked(state_, State::kStopping);
+      RecordIllegalTransitionLocked(state_, RuntimePhase::kStopping);
       return false;
     }
 
@@ -171,12 +171,12 @@ namespace retrovue::runtime
       ++latency_violation_total_;
     }
 
-    TransitionLocked(State::kStopping, request_utc_us);
-    TransitionLocked(State::kIdle, effective_utc_us);
+    TransitionLocked(RuntimePhase::kStopping, request_utc_us);
+    TransitionLocked(RuntimePhase::kIdle, effective_utc_us);
     return true;
   }
 
-  bool PlayoutControlStateMachine::Recover(const std::string &command_id,
+  bool PlayoutControl::Recover(const std::string &command_id,
                                            int64_t request_utc_us)
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -185,18 +185,18 @@ namespace retrovue::runtime
       return true;
     }
 
-    if (state_ != State::kError)
+    if (state_ != RuntimePhase::kError)
     {
-      RecordIllegalTransitionLocked(state_, State::kBuffering);
+      RecordIllegalTransitionLocked(state_, RuntimePhase::kBuffering);
       return false;
     }
 
-    TransitionLocked(State::kBuffering, request_utc_us);
+    TransitionLocked(RuntimePhase::kBuffering, request_utc_us);
     ++recover_total_;
     return true;
   }
 
-  void PlayoutControlStateMachine::OnBufferDepth(std::size_t depth,
+  void PlayoutControl::OnBufferDepth(std::size_t depth,
                                                  std::size_t capacity,
                                                  int64_t event_utc_us)
   {
@@ -206,66 +206,66 @@ namespace retrovue::runtime
       return;
     }
 
-    if (state_ == State::kBuffering && depth >= kReadinessThresholdFrames)
+    if (state_ == RuntimePhase::kBuffering && depth >= kReadinessThresholdFrames)
     {
-      TransitionLocked(State::kReady, event_utc_us);
-      TransitionLocked(State::kPlaying, event_utc_us);
+      TransitionLocked(RuntimePhase::kReady, event_utc_us);
+      TransitionLocked(RuntimePhase::kPlaying, event_utc_us);
     }
-    else if (state_ == State::kPlaying && depth == 0)
+    else if (state_ == RuntimePhase::kPlaying && depth == 0)
     {
-      TransitionLocked(State::kBuffering, event_utc_us);
+      TransitionLocked(RuntimePhase::kBuffering, event_utc_us);
     }
   }
 
-  void PlayoutControlStateMachine::OnBackPressureEvent(
-      OrchestrationLoop::BackPressureEvent event,
+  void PlayoutControl::OnBackPressureEvent(
+      TimingLoop::BackPressureEvent event,
       int64_t event_utc_us)
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (event == OrchestrationLoop::BackPressureEvent::kUnderrun)
+    if (event == TimingLoop::BackPressureEvent::kUnderrun)
     {
-      if (state_ == State::kPlaying)
+      if (state_ == RuntimePhase::kPlaying)
       {
-        TransitionLocked(State::kBuffering, event_utc_us);
+        TransitionLocked(RuntimePhase::kBuffering, event_utc_us);
       }
     }
-    else if (event == OrchestrationLoop::BackPressureEvent::kOverrun)
+    else if (event == TimingLoop::BackPressureEvent::kOverrun)
     {
       // Currently treated as informational; no state change but recorded.
       ++queue_overflow_total_;
     }
   }
 
-  void PlayoutControlStateMachine::OnBackPressureCleared(int64_t event_utc_us)
+  void PlayoutControl::OnBackPressureCleared(int64_t event_utc_us)
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ == State::kBuffering)
+    if (state_ == RuntimePhase::kBuffering)
     {
-      TransitionLocked(State::kReady, event_utc_us);
-      TransitionLocked(State::kPlaying, event_utc_us);
+      TransitionLocked(RuntimePhase::kReady, event_utc_us);
+      TransitionLocked(RuntimePhase::kPlaying, event_utc_us);
     }
   }
 
-  void PlayoutControlStateMachine::OnExternalTimeout(int64_t event_utc_us)
+  void PlayoutControl::OnExternalTimeout(int64_t event_utc_us)
   {
     std::lock_guard<std::mutex> lock(mutex_);
     ++timeout_total_;
-    TransitionLocked(State::kError, event_utc_us);
+    TransitionLocked(RuntimePhase::kError, event_utc_us);
   }
 
-  void PlayoutControlStateMachine::OnQueueOverflow()
+  void PlayoutControl::OnQueueOverflow()
   {
     std::lock_guard<std::mutex> lock(mutex_);
     ++queue_overflow_total_;
   }
 
-  PlayoutControlStateMachine::State PlayoutControlStateMachine::state() const
+  PlayoutControl::RuntimePhase PlayoutControl::state() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
     return state_;
   }
 
-  PlayoutControlStateMachine::MetricsSnapshot PlayoutControlStateMachine::Snapshot()
+  PlayoutControl::MetricsSnapshot PlayoutControl::Snapshot()
       const
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -307,7 +307,7 @@ namespace retrovue::runtime
     return snapshot;
   }
 
-  void PlayoutControlStateMachine::TransitionLocked(State to, int64_t event_utc_us)
+  void PlayoutControl::TransitionLocked(RuntimePhase to, int64_t event_utc_us)
   {
     if (state_ == to)
     {
@@ -318,18 +318,18 @@ namespace retrovue::runtime
     (void)event_utc_us;
   }
 
-  void PlayoutControlStateMachine::RecordTransitionLocked(State from, State to)
+  void PlayoutControl::RecordTransitionLocked(RuntimePhase from, RuntimePhase to)
   {
     transitions_[{from, to}]++;
   }
 
-  void PlayoutControlStateMachine::RecordLatencyLocked(std::vector<double> &samples,
+  void PlayoutControl::RecordLatencyLocked(std::vector<double> &samples,
                                                        double value_ms)
   {
     samples.push_back(value_ms);
   }
 
-  double PlayoutControlStateMachine::PercentileLocked(
+  double PlayoutControl::PercentileLocked(
       const std::vector<double> &samples,
       double percentile) const
   {
@@ -354,7 +354,7 @@ namespace retrovue::runtime
     return lower + (upper - lower) * fraction;
   }
 
-  bool PlayoutControlStateMachine::RegisterCommandLocked(
+  bool PlayoutControl::RegisterCommandLocked(
       const std::string &command_id)
   {
     if (command_id.empty())
@@ -369,20 +369,20 @@ namespace retrovue::runtime
     return true;
   }
 
-  void PlayoutControlStateMachine::RecordIllegalTransitionLocked(State from,
-                                                                 State attempted_to)
+  void PlayoutControl::RecordIllegalTransitionLocked(RuntimePhase from,
+                                                                RuntimePhase attempted_to)
   {
     ++illegal_transition_total_;
     transitions_[{from, attempted_to}]++;
   }
 
-  void PlayoutControlStateMachine::setProducerFactory(ProducerFactory factory)
+  void PlayoutControl::setProducerFactory(ProducerFactory factory)
   {
     std::lock_guard<std::mutex> lock(mutex_);
     producer_factory_ = std::move(factory);
   }
 
-  bool PlayoutControlStateMachine::loadPreviewAsset(const std::string& path,
+  bool PlayoutControl::loadPreviewAsset(const std::string& path,
                                                    const std::string& assetId,
                                                    buffer::FrameRingBuffer& ringBuffer,
                                                    std::shared_ptr<timing::MasterClock> clock,
@@ -394,27 +394,27 @@ namespace retrovue::runtime
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Destroy any existing preview producer before loading a new one
-    // This resets shadow decode readiness state (ProducerSlot::reset() stops producer)
-    if (previewSlot.loaded)
+    // This resets shadow decode readiness state (ProducerBus::reset() stops producer)
+    if (previewBus.loaded)
     {
       // Reset shadow decode readiness when clearing preview slot
-      if (previewSlot.producer)
+      if (previewBus.producer)
       {
-        auto* video_producer = dynamic_cast<producers::video_file::VideoFileProducer*>(
-            previewSlot.producer.get());
+        auto* video_producer = dynamic_cast<producers::file::FileProducer*>(
+            previewBus.producer.get());
         if (video_producer)
         {
           // Reset shadow decode state before destroying producer
           video_producer->SetShadowDecodeMode(false); // Clear readiness state
         }
       }
-      previewSlot.reset();
+      previewBus.reset();
     }
 
     // Check if factory is set
     if (!producer_factory_)
     {
-      std::cerr << "[PlayoutControlStateMachine] Producer factory not set" << std::endl;
+      std::cerr << "[PlayoutControl] Producer factory not set" << std::endl;
       return false;
     }
 
@@ -422,131 +422,175 @@ namespace retrovue::runtime
     auto producer = producer_factory_(path, assetId, ringBuffer, clock, start_offset_ms, hard_stop_time_ms);
     if (!producer)
     {
-      std::cerr << "[PlayoutControlStateMachine] Failed to create producer for path: " << path << std::endl;
+      std::cerr << "[PlayoutControl] Failed to create producer for path: " << path << std::endl;
       return false;
     }
 
     // Enable shadow decode mode for preview producer
-    auto* video_producer = dynamic_cast<producers::video_file::VideoFileProducer*>(producer.get());
+    auto* video_producer = dynamic_cast<producers::file::FileProducer*>(producer.get());
     if (video_producer)
     {
       video_producer->SetShadowDecodeMode(true);
-      std::cout << "[PlayoutControlStateMachine] Enabled shadow decode mode for preview producer" << std::endl;
+      std::cout << "[PlayoutControl] Enabled shadow decode mode for preview producer" << std::endl;
     }
 
     // Start producer in shadow mode (decodes but doesn't write to buffer)
     if (!producer->start())
     {
-      std::cerr << "[PlayoutControlStateMachine] Failed to start preview producer" << std::endl;
+      std::cerr << "[PlayoutControl] Failed to start preview producer" << std::endl;
       return false;
     }
 
     // Store in preview slot
-    previewSlot.producer = std::move(producer);
-    previewSlot.loaded = true;
-    previewSlot.asset_id = assetId;
-    previewSlot.file_path = path;
+    previewBus.producer = std::move(producer);
+    previewBus.loaded = true;
+    previewBus.asset_id = assetId;
+    previewBus.file_path = path;
 
-    std::cout << "[PlayoutControlStateMachine] Loaded preview asset: " << assetId 
+    std::cout << "[PlayoutControl] Loaded preview asset: " << assetId 
               << " from path: " << path << " (shadow decode mode)" << std::endl;
     return true;
   }
 
-  bool PlayoutControlStateMachine::activatePreviewAsLive(renderer::FrameRenderer* renderer)
+  bool PlayoutControl::activatePreviewAsLive(renderer::FrameRenderer* renderer)
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Check if preview is loaded
-    if (!previewSlot.loaded || !previewSlot.producer)
+    if (!previewBus.loaded || !previewBus.producer)
     {
-      std::cerr << "[PlayoutControlStateMachine] No preview asset loaded to activate" << std::endl;
+      std::cerr << "[PlayoutControl] No preview asset loaded to activate" << std::endl;
       return false;
     }
 
-    auto* preview_video_producer = dynamic_cast<producers::video_file::VideoFileProducer*>(previewSlot.producer.get());
+    auto* preview_video_producer = dynamic_cast<producers::file::FileProducer*>(previewBus.producer.get());
 
     // Phase 6A.1: Simple producer path (e.g. StubProducer) — no shadow decode or PTS alignment
     if (!preview_video_producer)
     {
-      std::cout << "[PlayoutControlStateMachine] Activate preview as live (simple producer)" << std::endl;
-      if (liveSlot.loaded && liveSlot.producer && liveSlot.producer->isRunning())
-        liveSlot.producer->stop();
-      liveSlot.producer = std::move(previewSlot.producer);
-      liveSlot.loaded = true;
-      liveSlot.asset_id = previewSlot.asset_id;
-      liveSlot.file_path = previewSlot.file_path;
-      previewSlot.reset();
+      std::cout << "[PlayoutControl] Activate preview as live (simple producer)" << std::endl;
+      if (liveBus.loaded && liveBus.producer && liveBus.producer->isRunning())
+        liveBus.producer->stop();
+      liveBus.producer = std::move(previewBus.producer);
+      liveBus.loaded = true;
+      liveBus.asset_id = previewBus.asset_id;
+      liveBus.file_path = previewBus.file_path;
+      previewBus.reset();
       return true;
     }
 
     // Check if shadow decode is ready (first frame decoded and cached)
     if (!preview_video_producer->IsShadowDecodeReady())
     {
-      std::cerr << "[PlayoutControlStateMachine] Preview producer shadow decode not ready" << std::endl;
+      std::cerr << "[PlayoutControl] Preview producer shadow decode not ready" << std::endl;
       return false;
     }
 
-    std::cout << "[PlayoutControlStateMachine] Seamless switch: preview to live..." << std::endl;
+    std::cout << "[PlayoutControl] Seamless switch: preview to live..." << std::endl;
 
-    // Seamless Switch Algorithm (VideoFileProducer):
+    // Seamless Switch Algorithm (FileProducer):
     // 1. Get last PTS from live producer
     int64_t last_live_pts = 0;
     int64_t frame_duration_us = 0;
-    if (liveSlot.loaded && liveSlot.producer && liveSlot.producer->isRunning())
+    if (liveBus.loaded && liveBus.producer && liveBus.producer->isRunning())
     {
-      auto* live_video_producer = dynamic_cast<producers::video_file::VideoFileProducer*>(liveSlot.producer.get());
+      auto* live_video_producer = dynamic_cast<producers::file::FileProducer*>(liveBus.producer.get());
       if (live_video_producer)
       {
         last_live_pts = live_video_producer->GetNextPTS();
         // Calculate frame duration (assuming 30fps for now, should get from producer config)
         frame_duration_us = 33'366; // ~30fps in microseconds
-        std::cout << "[PlayoutControlStateMachine] Live producer last PTS: " << last_live_pts << std::endl;
+        std::cout << "[PlayoutControl] Live producer last PTS: " << last_live_pts << std::endl;
       }
     }
 
     // 2. Align preview producer PTS to continue from live
     int64_t target_pts = last_live_pts + frame_duration_us;
     preview_video_producer->AlignPTS(target_pts);
-    std::cout << "[PlayoutControlStateMachine] Aligned preview PTS to: " << target_pts << std::endl;
+    std::cout << "[PlayoutControl] Aligned preview PTS to: " << target_pts << std::endl;
 
     // 3. Exit shadow mode (preview producer will now write to buffer)
     preview_video_producer->SetShadowDecodeMode(false);
-    std::cout << "[PlayoutControlStateMachine] Preview producer exited shadow mode" << std::endl;
+    std::cout << "[PlayoutControl] Preview producer exited shadow mode" << std::endl;
 
     // 4. Stop the live producer gracefully (wind down)
-    if (liveSlot.loaded && liveSlot.producer && liveSlot.producer->isRunning())
+    if (liveBus.loaded && liveBus.producer && liveBus.producer->isRunning())
     {
-      std::cout << "[PlayoutControlStateMachine] Stopping current live producer gracefully" << std::endl;
-      liveSlot.producer->stop();
+      std::cout << "[PlayoutControl] Stopping current live producer gracefully" << std::endl;
+      liveBus.producer->stop();
     }
 
     // 5. Move preview → live (ring buffer writer swap is implicit - preview now writes)
-    liveSlot.producer = std::move(previewSlot.producer);
-    liveSlot.loaded = true;
-    liveSlot.asset_id = previewSlot.asset_id;
-    liveSlot.file_path = previewSlot.file_path;
+    liveBus.producer = std::move(previewBus.producer);
+    liveBus.loaded = true;
+    liveBus.asset_id = previewBus.asset_id;
+    liveBus.file_path = previewBus.file_path;
 
     // 6. Reset preview slot as empty
-    previewSlot.reset();
+    previewBus.reset();
 
     // Note: Renderer does NOT reset - it continues reading seamlessly
     // Ring buffer persists through switch with continuous frame stream
 
-    std::cout << "[PlayoutControlStateMachine] Seamless switch complete. Asset: " 
-              << liveSlot.asset_id << " (PTS continuous)" << std::endl;
+    std::cout << "[PlayoutControl] Seamless switch complete. Asset: " 
+              << liveBus.asset_id << " (PTS continuous)" << std::endl;
     return true;
   }
 
-  const ProducerSlot& PlayoutControlStateMachine::getPreviewSlot() const
+  const ProducerBus& PlayoutControl::getPreviewBus() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    return previewSlot;
+    return previewBus;
   }
 
-  const ProducerSlot& PlayoutControlStateMachine::getLiveSlot() const
+  const ProducerBus& PlayoutControl::getLiveBus() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    return liveSlot;
+    return liveBus;
+  }
+
+  // OutputBus/OutputSink integration (Phase 9.0)
+  bool PlayoutControl::CanAttachSink() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Valid states for attach: kReady, kPlaying, kPaused
+    // Not valid: kIdle (channel not started), kBuffering (not stable),
+    //            kStopping (shutting down), kError (broken)
+    switch (state_) {
+      case RuntimePhase::kReady:
+      case RuntimePhase::kPlaying:
+      case RuntimePhase::kPaused:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool PlayoutControl::CanDetachSink() const
+  {
+    // Detach is always allowed (forced detach semantics)
+    // The contract says: "Detaching a sink leaves OutputBus valid but silent"
+    return true;
+  }
+
+  void PlayoutControl::OnSinkAttached()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sink_attached_ = true;
+    std::cout << "[PlayoutControl] Sink attached notification received" << std::endl;
+  }
+
+  void PlayoutControl::OnSinkDetached()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sink_attached_ = false;
+    std::cout << "[PlayoutControl] Sink detached notification received" << std::endl;
+  }
+
+  bool PlayoutControl::IsSinkAttached() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return sink_attached_;
   }
 
 } // namespace retrovue::runtime

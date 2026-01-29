@@ -1,6 +1,6 @@
-// Phase 8.1.5 — VideoFileProducer libav-only contract tests.
+// Phase 8.1.5 — FileProducer libav-only contract tests.
 // No ffmpeg executable; Producer uses libavformat/libavcodec only.
-// Decode test, Stop test, Restart test per Phase8-1-5-VideoFileProducerInternalRefactor.md
+// Decode test, Stop test, Restart test per Phase8-1-5-FileProducerInternalRefactor.md
 // Phase 8.2 — Segment control tests (frame-admission start_offset, hard_stop) per Phase8-2-SegmentControl.md
 
 #include <chrono>
@@ -12,7 +12,7 @@
 
 #include <gtest/gtest.h>
 #include "retrovue/buffer/FrameRingBuffer.h"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/timing/MasterClock.h"
 #include "timing/TestMasterClock.h"
 
@@ -20,8 +20,8 @@ namespace {
 
 using retrovue::buffer::Frame;
 using retrovue::buffer::FrameRingBuffer;
-using retrovue::producers::video_file::ProducerConfig;
-using retrovue::producers::video_file::VideoFileProducer;
+using retrovue::producers::file::ProducerConfig;
+using retrovue::producers::file::FileProducer;
 
 std::string GetPhase815TestAssetPath() {
   const char* env = std::getenv("RETROVUE_TEST_VIDEO_PATH");
@@ -34,7 +34,7 @@ bool FileExists(const std::string& path) {
   return f.good();
 }
 
-class Phase815VideoFileProducerTest : public ::testing::Test {
+class Phase815FileProducerTest : public ::testing::Test {
  protected:
   void SetUp() override {
     test_asset_path_ = GetPhase815TestAssetPath();
@@ -45,7 +45,7 @@ class Phase815VideoFileProducerTest : public ::testing::Test {
 
 // Decode test: open known MP4, collect frames for up to 10s, assert PTS monotonic for all (≥1).
 // Contract: PTS correctness, not asset duration. Works with any length asset (Phase 8.8).
-TEST_F(Phase815VideoFileProducerTest, DecodeNFramesPTSMonotonic) {
+TEST_F(Phase815FileProducerTest, DecodeNFramesPTSMonotonic) {
   if (!FileExists(test_asset_path_)) {
     GTEST_SKIP() << "Test asset not found: " << test_asset_path_;
   }
@@ -62,7 +62,7 @@ TEST_F(Phase815VideoFileProducerTest, DecodeNFramesPTSMonotonic) {
   config.start_offset_ms = 0;
   config.hard_stop_time_ms = 0;
 
-  VideoFileProducer producer(config, buffer, clock, nullptr);
+  FileProducer producer(config, buffer, clock, nullptr);
   ASSERT_TRUE(producer.start());
 
   std::vector<Frame> frames;
@@ -87,7 +87,7 @@ TEST_F(Phase815VideoFileProducerTest, DecodeNFramesPTSMonotonic) {
 }
 
 // Stop test: start decoding, issue stop() after K frames, assert exactly K (or at most K+1) emitted
-TEST_F(Phase815VideoFileProducerTest, StopAfterKFrames) {
+TEST_F(Phase815FileProducerTest, StopAfterKFrames) {
   if (!FileExists(test_asset_path_)) {
     GTEST_SKIP() << "Test asset not found: " << test_asset_path_;
   }
@@ -102,7 +102,7 @@ TEST_F(Phase815VideoFileProducerTest, StopAfterKFrames) {
   config.asset_uri = test_asset_path_;
   config.stub_mode = false;
 
-  VideoFileProducer producer(config, buffer, clock, nullptr);
+  FileProducer producer(config, buffer, clock, nullptr);
   ASSERT_TRUE(producer.start());
 
   constexpr size_t kK = 15;
@@ -125,7 +125,7 @@ TEST_F(Phase815VideoFileProducerTest, StopAfterKFrames) {
 }
 
 // Restart test: start → stop → destroy → create again → start; no crashes, no leaks
-TEST_F(Phase815VideoFileProducerTest, RestartNoCrashOrLeak) {
+TEST_F(Phase815FileProducerTest, RestartNoCrashOrLeak) {
   if (!FileExists(test_asset_path_)) {
     GTEST_SKIP() << "Test asset not found: " << test_asset_path_;
   }
@@ -141,7 +141,7 @@ TEST_F(Phase815VideoFileProducerTest, RestartNoCrashOrLeak) {
 
   {
     FrameRingBuffer buffer1(60);
-    VideoFileProducer producer1(config, buffer1, clock, nullptr);
+    FileProducer producer1(config, buffer1, clock, nullptr);
     ASSERT_TRUE(producer1.start());
     Frame f;
     (void)buffer1.Pop(f);
@@ -150,7 +150,7 @@ TEST_F(Phase815VideoFileProducerTest, RestartNoCrashOrLeak) {
 
   {
     FrameRingBuffer buffer2(60);
-    VideoFileProducer producer2(config, buffer2, clock, nullptr);
+    FileProducer producer2(config, buffer2, clock, nullptr);
     ASSERT_TRUE(producer2.start());
     Frame f;
     (void)buffer2.Pop(f);
@@ -163,7 +163,7 @@ TEST_F(Phase815VideoFileProducerTest, RestartNoCrashOrLeak) {
 // First emitted frame PTS >= start_offset_ms; hard_stop respected.
 // ---------------------------------------------------------------------------
 
-TEST_F(Phase815VideoFileProducerTest, Phase82_FirstEmittedFramePTSAtOrAfterStartOffset) {
+TEST_F(Phase815FileProducerTest, Phase82_FirstEmittedFramePTSAtOrAfterStartOffset) {
   if (!FileExists(test_asset_path_)) {
     GTEST_SKIP() << "Test asset not found: " << test_asset_path_;
   }
@@ -183,7 +183,7 @@ TEST_F(Phase815VideoFileProducerTest, Phase82_FirstEmittedFramePTSAtOrAfterStart
   config.start_offset_ms = start_offset_ms;
   config.hard_stop_time_ms = 0;
 
-  VideoFileProducer producer(config, buffer, clock, nullptr);
+  FileProducer producer(config, buffer, clock, nullptr);
   ASSERT_TRUE(producer.start());
 
   std::vector<Frame> frames;
@@ -215,7 +215,7 @@ TEST_F(Phase815VideoFileProducerTest, Phase82_FirstEmittedFramePTSAtOrAfterStart
 
 // Phase 8.6: Fixed segment cutoff removed. Segment end = natural EOF only; hard_stop_time_ms
 // and asset duration are not used to forcibly stop the process. This test is skipped.
-TEST_F(Phase815VideoFileProducerTest, Phase82_HardStopNoFramesAfter) {
+TEST_F(Phase815FileProducerTest, Phase82_HardStopNoFramesAfter) {
   GTEST_SKIP() << "Phase 8.6: segment end is natural EOF only; hard_stop not enforced";
 }
 

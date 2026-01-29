@@ -29,6 +29,10 @@ namespace retrovue::producers {
 class IProducer;
 }  // namespace retrovue::producers
 
+namespace retrovue::output {
+class OutputBus;
+}  // namespace retrovue::output
+
 namespace retrovue::renderer {
 
 // RenderMode specifies the rendering output type.
@@ -128,6 +132,13 @@ class FrameRenderer {
   void SetAudioSideSink(std::function<void(const buffer::AudioFrame&)> fn);
   void ClearAudioSideSink();
 
+  // Phase 9.0: OutputBus integration
+  // Sets the OutputBus to route frames to (replaces side_sink_ callbacks).
+  // When OutputBus is set, frames are routed through it instead of via callbacks.
+  // OutputBus pointer is NOT owned by renderer.
+  void SetOutputBus(output::OutputBus* bus);
+  void ClearOutputBus();
+
   // Factory method to create appropriate renderer based on mode.
   static std::unique_ptr<FrameRenderer> Create(
       const RenderConfig& config,
@@ -181,7 +192,11 @@ class FrameRenderer {
   // Phase 8.9: Audio side sink callback
   mutable std::mutex audio_side_sink_mutex_;
   std::function<void(const buffer::AudioFrame&)> audio_side_sink_;
-  
+
+  // Phase 9.0: OutputBus for frame routing (replaces side_sink_ when set)
+  mutable std::mutex output_bus_mutex_;
+  output::OutputBus* output_bus_ = nullptr;  // Not owned
+
   int64_t last_pts_;
   int64_t last_frame_time_utc_;
   std::chrono::steady_clock::time_point fallback_last_frame_time_;

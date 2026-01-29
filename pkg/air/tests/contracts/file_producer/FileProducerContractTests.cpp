@@ -1,6 +1,6 @@
 // Repository: Retrovue-playout
-// Component: Video File Producer Contract Tests
-// Purpose: Contract tests for VideoFileProducer domain.
+// Component: File Producer Contract Tests
+// Purpose: Contract tests for FileProducer domain.
 // Copyright (c) 2025 RetroVue
 
 #include "../../BaseContractTest.h"
@@ -11,13 +11,13 @@
 #include <vector>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/timing/MasterClock.h"
 #include "../../fixtures/EventBusStub.h"
 #include "timing/TestMasterClock.h"
 
 using namespace retrovue;
-using namespace retrovue::producers::video_file;
+using namespace retrovue::producers::file;
 using namespace retrovue::tests;
 using namespace retrovue::tests::fixtures;
 
@@ -29,18 +29,18 @@ namespace
   const bool kRegisterCoverage = []()
   {
     RegisterExpectedDomainCoverage(
-        "VideoFileProducer",
+        "FileProducer",
         {"FE-001", "FE-002", "FE-003", "FE-004", "FE-005", "FE-006", 
          "FE-007", "FE-008", "FE-009", "FE-010", "FE-011", "FE-012"});
     return true;
   }();
 
-  class VideoFileProducerContractTest : public BaseContractTest
+  class FileProducerContractTest : public BaseContractTest
   {
   protected:
     [[nodiscard]] std::string DomainName() const override
     {
-      return "VideoFileProducer";
+      return "FileProducer";
     }
 
     [[nodiscard]] std::vector<std::string> CoveredRuleIds() const override
@@ -102,17 +102,17 @@ namespace
     std::unique_ptr<EventBusStub> event_bus_;
     std::shared_ptr<retrovue::timing::TestMasterClock> clock_;
     std::unique_ptr<buffer::FrameRingBuffer> buffer_;
-    std::unique_ptr<VideoFileProducer> producer_;
+    std::unique_ptr<FileProducer> producer_;
   };
 
-  // Rule: FE-001 Producer Lifecycle (VideoFileProducerDomainContract.md §FE-001)
-  TEST_F(VideoFileProducerContractTest, FE_001_ProducerLifecycle)
+  // Rule: FE-001 Producer Lifecycle (FileProducerDomainContract.md §FE-001)
+  TEST_F(FileProducerContractTest, FE_001_ProducerLifecycle)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_FALSE(producer_->isRunning());
     ASSERT_EQ(producer_->GetFramesProduced(), 0u);
     ASSERT_EQ(producer_->GetState(), ProducerState::STOPPED);
@@ -132,27 +132,27 @@ namespace
     ASSERT_FALSE(producer_->isRunning());
   }
 
-  TEST_F(VideoFileProducerContractTest, FE_001_DestructorStopsProducer)
+  TEST_F(FileProducerContractTest, FE_001_DestructorStopsProducer)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
     ASSERT_TRUE(producer_->isRunning());
     producer_.reset();
   }
 
   // Rule: FE-002 Frame Production Rate
-  TEST_F(VideoFileProducerContractTest, FE_002_FrameProductionRate)
+  TEST_F(FileProducerContractTest, FE_002_FrameProductionRate)
   {
     ProducerConfig config;
     config.asset_uri = GetTestMediaPath("sample.mp4");
     config.target_fps = 30.0;
     config.stub_mode = false;  // Use real decoding with sample file
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -163,7 +163,7 @@ namespace
   }
 
   // Rule: FE-003 Frame Metadata Validity
-  TEST_F(VideoFileProducerContractTest, FE_003_FrameMetadataValidity)
+  TEST_F(FileProducerContractTest, FE_003_FrameMetadataValidity)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
@@ -172,7 +172,7 @@ namespace
     config.target_fps = 30.0;
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -201,7 +201,7 @@ namespace
   }
 
   // Rule: FE-004 Frame Format Validity
-  TEST_F(VideoFileProducerContractTest, FE_004_FrameFormatValidity)
+  TEST_F(FileProducerContractTest, FE_004_FrameFormatValidity)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
@@ -209,7 +209,7 @@ namespace
     config.target_height = 1080;
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -230,7 +230,7 @@ namespace
   }
 
   // Rule: FE-005 Backpressure Handling
-  TEST_F(VideoFileProducerContractTest, FE_005_BackpressureHandling)
+  TEST_F(FileProducerContractTest, FE_005_BackpressureHandling)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
@@ -238,7 +238,7 @@ namespace
     config.stub_mode = true;
 
     buffer_ = std::make_unique<buffer::FrameRingBuffer>(3); // Very small buffer
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     // Wait for buffer to fill (3 frames at 120fps = ~25ms, wait 200ms to be safe)
@@ -269,13 +269,13 @@ namespace
   }
 
   // Rule: FE-006 Buffer Filling
-  TEST_F(VideoFileProducerContractTest, FE_006_BufferFilling)
+  TEST_F(FileProducerContractTest, FE_006_BufferFilling)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -285,13 +285,13 @@ namespace
   }
 
   // Rule: FE-007 Decoder Fallback
-  TEST_F(VideoFileProducerContractTest, FE_007_DecoderFallback)
+  TEST_F(FileProducerContractTest, FE_007_DecoderFallback)
   {
     ProducerConfig config;
     config.asset_uri = "nonexistent.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -302,13 +302,13 @@ namespace
   }
 
   // Rule: FE-008 Decode Error Recovery
-  TEST_F(VideoFileProducerContractTest, FE_008_DecodeErrorRecovery)
+  TEST_F(FileProducerContractTest, FE_008_DecodeErrorRecovery)
   {
     ProducerConfig config;
     config.asset_uri = GetTestMediaPath("sample.mp4");
     config.stub_mode = false;  // Use real decoding
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -324,13 +324,13 @@ namespace
   }
 
   // Rule: FE-009 End of File Handling (Phase 8.8: EOF does NOT stop the producer)
-  TEST_F(VideoFileProducerContractTest, FE_009_EndOfFileHandling)
+  TEST_F(FileProducerContractTest, FE_009_EndOfFileHandling)
   {
     ProducerConfig config;
     config.asset_uri = GetTestMediaPath("sample.mp4");
     config.stub_mode = false;  // Use real decoding to test EOF
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     // Wait for file to be decoded completely (EOF). Phase 8.8: producer stays running after EOF
@@ -355,13 +355,13 @@ namespace
   }
 
   // Rule: FE-010 Teardown Operation (Phase 1: stop() is equivalent to teardown)
-  TEST_F(VideoFileProducerContractTest, FE_010_TeardownOperation)
+  TEST_F(FileProducerContractTest, FE_010_TeardownOperation)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     // Fill buffer with some frames
@@ -378,13 +378,13 @@ namespace
   }
 
   // Rule: FE-011 Statistics Accuracy
-  TEST_F(VideoFileProducerContractTest, FE_011_StatisticsAccuracy)
+  TEST_F(FileProducerContractTest, FE_011_StatisticsAccuracy)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -396,14 +396,14 @@ namespace
   }
 
   // Rule: FE-012 MasterClock Alignment (Stub Mode)
-  TEST_F(VideoFileProducerContractTest, FE_012_MasterClockAlignment)
+  TEST_F(FileProducerContractTest, FE_012_MasterClockAlignment)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.target_fps = 30.0;
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     // Advance clock and verify frame production aligns
@@ -435,13 +435,13 @@ namespace
   }
 
   // Contract requirement: Ready event emitted
-  TEST_F(VideoFileProducerContractTest, ReadyEventEmitted)
+  TEST_F(FileProducerContractTest, ReadyEventEmitted)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -451,14 +451,14 @@ namespace
   }
 
   // Contract requirement: Child exit propagated
-  TEST_F(VideoFileProducerContractTest, ChildExitPropagated)
+  TEST_F(FileProducerContractTest, ChildExitPropagated)
   {
     ProducerConfig config;
     config.asset_uri = "/nonexistent/path/video.mp4";
     config.stub_mode = false;
     config.tcp_port = 12347;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     
     bool started = producer_->start();
     if (started)
@@ -480,13 +480,13 @@ namespace
   }
 
   // Contract requirement: Stop terminates cleanly
-  TEST_F(VideoFileProducerContractTest, StopTerminatesCleanly)
+  TEST_F(FileProducerContractTest, StopTerminatesCleanly)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -498,14 +498,14 @@ namespace
   }
 
   // Contract requirement: Bad input path triggers error
-  TEST_F(VideoFileProducerContractTest, BadInputPathTriggersError)
+  TEST_F(FileProducerContractTest, BadInputPathTriggersError)
   {
     ProducerConfig config;
     config.asset_uri = "/nonexistent/path/to/video.mp4";
     config.stub_mode = false;
     config.tcp_port = 12348;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     
     bool started = producer_->start();
     if (started)
@@ -516,13 +516,13 @@ namespace
   }
 
   // Contract requirement: No crash on rapid start/stop
-  TEST_F(VideoFileProducerContractTest, NoCrashOnRapidStartStop)
+  TEST_F(FileProducerContractTest, NoCrashOnRapidStartStop)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     
     // Rapid start/stop cycles - should not crash
     for (int i = 0; i < 10; ++i)
@@ -541,14 +541,14 @@ namespace
   }
 
   // Contract requirement: READY event always precedes frame events
-  TEST_F(VideoFileProducerContractTest, ReadyEventPrecedesFrameEvents)
+  TEST_F(FileProducerContractTest, ReadyEventPrecedesFrameEvents)
   {
     ProducerConfig config;
     config.asset_uri = "test.mp4";
     config.stub_mode = true;
 
     event_bus_->Clear();
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     producer_->start();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -563,14 +563,14 @@ namespace
   }
 
   // Contract requirement: stderr is captured
-  TEST_F(VideoFileProducerContractTest, StderrIsCaptured)
+  TEST_F(FileProducerContractTest, StderrIsCaptured)
   {
     ProducerConfig config;
     config.asset_uri = "/nonexistent/path/video.mp4";
     config.stub_mode = false;
     config.tcp_port = 12349;
 
-    producer_ = std::make_unique<VideoFileProducer>(config, *buffer_, clock_, MakeEventCallback());
+    producer_ = std::make_unique<FileProducer>(config, *buffer_, clock_, MakeEventCallback());
     
     bool started = producer_->start();
     if (started)

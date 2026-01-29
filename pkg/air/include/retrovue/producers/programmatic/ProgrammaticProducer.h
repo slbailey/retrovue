@@ -1,5 +1,7 @@
-// Phase 6A.3 — ProgrammaticProducer: synthetic frames, no ffmpeg/file I/O.
-// Same lifecycle as ExecutionProducer/VideoFileProducer; honors start_offset_ms and hard_stop_time_ms.
+// Phase 6A.3 — ProgrammaticProducer: TEMPORARY / test-only / non-domain.
+// Scaffolding producer for synthetic frames; no ffmpeg/file I/O.
+// Same lifecycle as FileProducer; honors start_offset_ms and hard_stop_time_ms.
+// Will be replaced by domain-specific producers in the future. Do not expand its role.
 
 #ifndef RETROVUE_PRODUCERS_PROGRAMMATIC_PROGRAMMATIC_PRODUCER_H_
 #define RETROVUE_PRODUCERS_PROGRAMMATIC_PROGRAMMATIC_PRODUCER_H_

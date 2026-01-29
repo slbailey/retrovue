@@ -9,7 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "BaseContractTest.h"
-#include "retrovue/runtime/OrchestrationLoop.h"
+#include "retrovue/runtime/TimingLoop.h"
 #include "retrovue/timing/MasterClock.h"
 
 namespace retrovue::tests::contracts {
@@ -44,25 +44,25 @@ double PercentileAbs(const std::vector<double>& samples, double percentile) {
 
 }  // namespace
 
-class OrchestrationLoopContractTest : public BaseContractTest {
+class TimingLoopContractTest : public BaseContractTest {
  protected:
-  [[nodiscard]] std::string DomainName() const override { return "OrchestrationLoop"; }
+  [[nodiscard]] std::string DomainName() const override { return "TimingLoop"; }
 
   [[nodiscard]] std::vector<std::string> CoveredRuleIds() const override {
     return {"ORCH_001", "ORCH_002", "ORCH_003"};
   }
 };
 
-TEST_F(OrchestrationLoopContractTest, ORCH_001_TickDisciplineAndLatencyBudget) {
+TEST_F(TimingLoopContractTest, ORCH_001_TickDisciplineAndLatencyBudget) {
   auto clock = timing::MakeSystemMasterClock(1'700'000'000'000'000LL, 0.0);
 
-  runtime::OrchestrationLoop::Config config;
+  runtime::TimingLoop::Config config;
   config.target_fps = 30.0;
   config.max_tick_skew_ms = 1.5;
 
-  runtime::OrchestrationLoop loop(config, clock,
-                                  [](const runtime::OrchestrationLoop::TickContext&) {
-                                    runtime::OrchestrationLoop::TickResult result;
+  runtime::TimingLoop loop(config, clock,
+                                  [](const runtime::TimingLoop::TickContext&) {
+                                    runtime::TimingLoop::TickResult result;
                                     result.producer_to_renderer_latency_ms = 8.0;
                                     return result;
                                   });
@@ -82,14 +82,14 @@ TEST_F(OrchestrationLoopContractTest, ORCH_001_TickDisciplineAndLatencyBudget) {
   EXPECT_FALSE(stats.starvation_detected) << "Unexpected starvation detected during steady state";
 }
 
-TEST_F(OrchestrationLoopContractTest, ORCH_002_BackPressureResolvesWithinThreeTicks) {
+TEST_F(TimingLoopContractTest, ORCH_002_BackPressureResolvesWithinThreeTicks) {
   auto clock = timing::MakeSystemMasterClock(1'700'000'000'000'000LL, 0.0);
 
-  runtime::OrchestrationLoop::Config config;
+  runtime::TimingLoop::Config config;
   config.target_fps = 30.0;
   config.max_backpressure_ticks = 3;
 
-  auto loop = std::make_unique<runtime::OrchestrationLoop>(config, clock, nullptr);
+  auto loop = std::make_unique<runtime::TimingLoop>(config, clock, nullptr);
   auto* loop_ptr = loop.get();
 
   std::atomic<std::uint64_t> tick_counter{0};
@@ -98,15 +98,15 @@ TEST_F(OrchestrationLoopContractTest, ORCH_002_BackPressureResolvesWithinThreeTi
 
   loop->SetTickCallback(
       [loop_ptr, &tick_counter, &underrun_tick, &overrun_tick](
-          const runtime::OrchestrationLoop::TickContext& ctx) {
-        runtime::OrchestrationLoop::TickResult result;
+          const runtime::TimingLoop::TickContext& ctx) {
+        runtime::TimingLoop::TickResult result;
         result.producer_to_renderer_latency_ms = 12.0;
 
         const auto tick = tick_counter.fetch_add(1);
 
         if (tick == 20) {
           loop_ptr->ReportBackPressureEvent(
-              runtime::OrchestrationLoop::BackPressureEvent::kUnderrun);
+              runtime::TimingLoop::BackPressureEvent::kUnderrun);
           underrun_tick.store(tick);
         }
 
@@ -117,7 +117,7 @@ TEST_F(OrchestrationLoopContractTest, ORCH_002_BackPressureResolvesWithinThreeTi
 
         if (tick == 60) {
           loop_ptr->ReportBackPressureEvent(
-              runtime::OrchestrationLoop::BackPressureEvent::kOverrun);
+              runtime::TimingLoop::BackPressureEvent::kOverrun);
           overrun_tick.store(tick);
         }
 
@@ -136,40 +136,40 @@ TEST_F(OrchestrationLoopContractTest, ORCH_002_BackPressureResolvesWithinThreeTi
   const auto stats = loop->Snapshot();
 
   ASSERT_EQ(stats.backpressure_events
-                .at(runtime::OrchestrationLoop::BackPressureEvent::kUnderrun),
+                .at(runtime::TimingLoop::BackPressureEvent::kUnderrun),
             1u);
   ASSERT_EQ(stats.backpressure_events
-                .at(runtime::OrchestrationLoop::BackPressureEvent::kOverrun),
+                .at(runtime::TimingLoop::BackPressureEvent::kOverrun),
             1u);
 
   ASSERT_FALSE(stats.backpressure_unresolved)
       << "Back-pressure was not resolved inside expected tick window";
 
   const auto& underrun_recovery =
-      stats.backpressure_recovery_ms.at(runtime::OrchestrationLoop::BackPressureEvent::kUnderrun);
+      stats.backpressure_recovery_ms.at(runtime::TimingLoop::BackPressureEvent::kUnderrun);
   ASSERT_FALSE(underrun_recovery.empty());
   EXPECT_LT(underrun_recovery.front(), 150.0);
 
   const auto& overrun_recovery =
-      stats.backpressure_recovery_ms.at(runtime::OrchestrationLoop::BackPressureEvent::kOverrun);
+      stats.backpressure_recovery_ms.at(runtime::TimingLoop::BackPressureEvent::kOverrun);
   ASSERT_FALSE(overrun_recovery.empty());
   EXPECT_LT(overrun_recovery.front(), 150.0);
 }
 
-TEST_F(OrchestrationLoopContractTest, ORCH_003_StarvationDetectionAndGracefulTeardown) {
+TEST_F(TimingLoopContractTest, ORCH_003_StarvationDetectionAndGracefulTeardown) {
   auto clock = timing::MakeSystemMasterClock(1'700'000'000'000'000LL, 0.0);
 
-  runtime::OrchestrationLoop::Config config;
+  runtime::TimingLoop::Config config;
   config.target_fps = 30.0;
   config.starvation_threshold_ms = 100.0;
   config.graceful_stop_timeout_ms = 500.0;
 
   std::atomic<bool> starvation_triggered{false};
 
-  runtime::OrchestrationLoop loop(
+  runtime::TimingLoop loop(
       config, clock,
-      [&starvation_triggered](const runtime::OrchestrationLoop::TickContext& ctx) {
-        runtime::OrchestrationLoop::TickResult result;
+      [&starvation_triggered](const runtime::TimingLoop::TickContext& ctx) {
+        runtime::TimingLoop::TickResult result;
         result.producer_to_renderer_latency_ms = 6.0;
         if (ctx.tick_index == 30 && !starvation_triggered.exchange(true)) {
           std::this_thread::sleep_for(std::chrono::milliseconds(150));

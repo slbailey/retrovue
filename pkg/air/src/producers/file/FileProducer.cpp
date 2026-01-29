@@ -1,9 +1,9 @@
 // Repository: Retrovue-playout
-// Component: Video File Producer
+// Component: File Producer
 // Purpose: Self-contained decoder that reads and decodes video files, producing decoded YUV420 frames.
 // Copyright (c) 2025 RetroVue
 
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 
 #include <chrono>
 #include <cmath>
@@ -24,7 +24,7 @@ extern "C" {
 
 #include "retrovue/timing/MasterClock.h"
 
-namespace retrovue::producers::video_file
+namespace retrovue::producers::file
 {
 
   namespace
@@ -33,7 +33,7 @@ namespace retrovue::producers::video_file
     constexpr int64_t kMicrosecondsPerSecond = 1'000'000;
   }
 
-  VideoFileProducer::VideoFileProducer(
+  FileProducer::FileProducer(
       const ProducerConfig &config,
       buffer::FrameRingBuffer &output_buffer,
       std::shared_ptr<timing::MasterClock> clock,
@@ -80,13 +80,13 @@ namespace retrovue::producers::video_file
   {
   }
 
-  VideoFileProducer::~VideoFileProducer()
+  FileProducer::~FileProducer()
   {
     stop();
     CloseDecoder();
   }
 
-  void VideoFileProducer::SetState(ProducerState new_state)
+  void FileProducer::SetState(ProducerState new_state)
   {
     ProducerState old_state = state_.exchange(new_state, std::memory_order_acq_rel);
     if (old_state != new_state)
@@ -97,7 +97,7 @@ namespace retrovue::producers::video_file
     }
   }
 
-  void VideoFileProducer::EmitEvent(const std::string &event_type, const std::string &message)
+  void FileProducer::EmitEvent(const std::string &event_type, const std::string &message)
   {
     if (event_callback_)
     {
@@ -105,7 +105,7 @@ namespace retrovue::producers::video_file
     }
   }
 
-  bool VideoFileProducer::start()
+  bool FileProducer::start()
   {
     ProducerState current_state = state_.load(std::memory_order_acquire);
     if (current_state != ProducerState::STOPPED)
@@ -144,15 +144,15 @@ namespace retrovue::producers::video_file
     }
     
     // Start producer thread
-    producer_thread_ = std::make_unique<std::thread>(&VideoFileProducer::ProduceLoop, this);
+    producer_thread_ = std::make_unique<std::thread>(&FileProducer::ProduceLoop, this);
     
-    std::cout << "[VideoFileProducer] Started for asset: " << config_.asset_uri << std::endl;
+    std::cout << "[FileProducer] Started for asset: " << config_.asset_uri << std::endl;
     EmitEvent("started", "");
     
     return true;
   }
 
-  void VideoFileProducer::stop()
+  void FileProducer::stop()
   {
     ProducerState current_state = state_.load(std::memory_order_acquire);
 
@@ -163,7 +163,7 @@ namespace retrovue::producers::video_file
         return;
       CloseDecoder();
       SetState(ProducerState::STOPPED);
-      std::cout << "[VideoFileProducer] Stopped. Total decoded frames produced: "
+      std::cout << "[FileProducer] Stopped. Total decoded frames produced: "
                 << frames_produced_.load(std::memory_order_acquire) << std::endl;
       EmitEvent("stopped", "");
       return;
@@ -182,12 +182,12 @@ namespace retrovue::producers::video_file
 
     CloseDecoder();
     SetState(ProducerState::STOPPED);
-    std::cout << "[VideoFileProducer] Stopped. Total decoded frames produced: "
+    std::cout << "[FileProducer] Stopped. Total decoded frames produced: "
               << frames_produced_.load(std::memory_order_acquire) << std::endl;
     EmitEvent("stopped", "");
   }
 
-  void VideoFileProducer::RequestTeardown(std::chrono::milliseconds drain_timeout)
+  void FileProducer::RequestTeardown(std::chrono::milliseconds drain_timeout)
   {
     if (!isRunning())
     {
@@ -197,47 +197,47 @@ namespace retrovue::producers::video_file
     drain_timeout_ = drain_timeout;
     teardown_deadline_ = std::chrono::steady_clock::now() + drain_timeout_;
     teardown_requested_.store(true, std::memory_order_release);
-    std::cout << "[VideoFileProducer] Teardown requested (timeout="
+    std::cout << "[FileProducer] Teardown requested (timeout="
               << drain_timeout_.count() << " ms)" << std::endl;
     EmitEvent("teardown_requested", "");
   }
 
-  void VideoFileProducer::ForceStop()
+  void FileProducer::ForceStop()
   {
     stop_requested_.store(true, std::memory_order_release);
-    std::cout << "[VideoFileProducer] Force stop requested" << std::endl;
+    std::cout << "[FileProducer] Force stop requested" << std::endl;
     EmitEvent("force_stop", "");
   }
 
-  bool VideoFileProducer::isRunning() const
+  bool FileProducer::isRunning() const
   {
     ProducerState current_state = state_.load(std::memory_order_acquire);
     return current_state == ProducerState::RUNNING;
   }
 
-  uint64_t VideoFileProducer::GetFramesProduced() const
+  uint64_t FileProducer::GetFramesProduced() const
   {
     return frames_produced_.load(std::memory_order_acquire);
   }
 
-  uint64_t VideoFileProducer::GetBufferFullCount() const
+  uint64_t FileProducer::GetBufferFullCount() const
   {
     return buffer_full_count_.load(std::memory_order_acquire);
   }
 
-  uint64_t VideoFileProducer::GetDecodeErrors() const
+  uint64_t FileProducer::GetDecodeErrors() const
   {
     return decode_errors_.load(std::memory_order_acquire);
   }
 
-  ProducerState VideoFileProducer::GetState() const
+  ProducerState FileProducer::GetState() const
   {
     return state_.load(std::memory_order_acquire);
   }
 
-  void VideoFileProducer::ProduceLoop()
+  void FileProducer::ProduceLoop()
   {
-    std::cout << "[VideoFileProducer] Decode loop started (stub_mode=" 
+    std::cout << "[FileProducer] Decode loop started (stub_mode=" 
               << (config_.stub_mode ? "true" : "false") << ")" << std::endl;
 
     // Non-stub: decoder already initialized in start() (Phase 6A.2). Init here only if not yet done.
@@ -245,7 +245,7 @@ namespace retrovue::producers::video_file
     {
       if (!InitializeDecoder())
       {
-        std::cerr << "[VideoFileProducer] Failed to initialize internal decoder, falling back to stub mode" 
+        std::cerr << "[FileProducer] Failed to initialize internal decoder, falling back to stub mode" 
                   << std::endl;
         config_.stub_mode = true;
         EmitEvent("error", "Failed to initialize internal decoder, falling back to stub mode");
@@ -253,7 +253,7 @@ namespace retrovue::producers::video_file
       }
       else
       {
-        std::cout << "[VideoFileProducer] Internal decoder initialized successfully" << std::endl;
+        std::cout << "[FileProducer] Internal decoder initialized successfully" << std::endl;
         EmitEvent("ready", "");
       }
     }
@@ -276,13 +276,13 @@ namespace retrovue::producers::video_file
       {
         if (output_buffer_.IsEmpty())
         {
-          std::cout << "[VideoFileProducer] Buffer drained; completing teardown" << std::endl;
+          std::cout << "[FileProducer] Buffer drained; completing teardown" << std::endl;
           EmitEvent("buffer_drained", "");
           break;
         }
         if (std::chrono::steady_clock::now() >= teardown_deadline_)
         {
-          std::cout << "[VideoFileProducer] Teardown timeout reached; forcing stop" << std::endl;
+          std::cout << "[FileProducer] Teardown timeout reached; forcing stop" << std::endl;
           EmitEvent("teardown_timeout", "");
           ForceStop();
           break;
@@ -297,7 +297,7 @@ namespace retrovue::producers::video_file
         if (!eof_event_emitted_)
         {
           eof_event_emitted_ = true;
-          std::cout << "[VideoFileProducer] End of file reached (no more frames to produce); waiting for explicit stop (Phase 8.8)" << std::endl;
+          std::cout << "[FileProducer] End of file reached (no more frames to produce); waiting for explicit stop (Phase 8.8)" << std::endl;
           EmitEvent("eof", "");
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -325,24 +325,24 @@ namespace retrovue::producers::video_file
     }
 
     SetState(ProducerState::STOPPED);
-    std::cout << "[VideoFileProducer] Decode loop exited" << std::endl;
+    std::cout << "[FileProducer] Decode loop exited" << std::endl;
     EmitEvent("decode_loop_exited", "");
   }
 
-  bool VideoFileProducer::InitializeDecoder()
+  bool FileProducer::InitializeDecoder()
   {
     // Phase 8.1.5: libav required; no stub. Allocate format context
     format_ctx_ = avformat_alloc_context();
     if (!format_ctx_)
     {
-      std::cerr << "[VideoFileProducer] Failed to allocate format context" << std::endl;
+      std::cerr << "[FileProducer] Failed to allocate format context" << std::endl;
       return false;
     }
 
     // Open input file
     if (avformat_open_input(&format_ctx_, config_.asset_uri.c_str(), nullptr, nullptr) < 0)
     {
-      std::cerr << "[VideoFileProducer] Failed to open input: " << config_.asset_uri << std::endl;
+      std::cerr << "[FileProducer] Failed to open input: " << config_.asset_uri << std::endl;
       avformat_free_context(format_ctx_);
       format_ctx_ = nullptr;
       return false;
@@ -351,7 +351,7 @@ namespace retrovue::producers::video_file
     // Retrieve stream information
     if (avformat_find_stream_info(format_ctx_, nullptr) < 0)
     {
-      std::cerr << "[VideoFileProducer] Failed to find stream info" << std::endl;
+      std::cerr << "[FileProducer] Failed to find stream info" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -371,7 +371,7 @@ namespace retrovue::producers::video_file
 
     if (video_stream_index_ < 0)
     {
-      std::cerr << "[VideoFileProducer] No video stream found" << std::endl;
+      std::cerr << "[FileProducer] No video stream found" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -395,7 +395,7 @@ namespace retrovue::producers::video_file
     const AVCodec* codec = avcodec_find_decoder(codecpar->codec_id);
     if (!codec)
     {
-      std::cerr << "[VideoFileProducer] Codec not found: " << codecpar->codec_id << std::endl;
+      std::cerr << "[FileProducer] Codec not found: " << codecpar->codec_id << std::endl;
       CloseDecoder();
       return false;
     }
@@ -403,21 +403,21 @@ namespace retrovue::producers::video_file
     codec_ctx_ = avcodec_alloc_context3(codec);
     if (!codec_ctx_)
     {
-      std::cerr << "[VideoFileProducer] Failed to allocate codec context" << std::endl;
+      std::cerr << "[FileProducer] Failed to allocate codec context" << std::endl;
       CloseDecoder();
       return false;
     }
 
     if (avcodec_parameters_to_context(codec_ctx_, codecpar) < 0)
     {
-      std::cerr << "[VideoFileProducer] Failed to copy codec parameters" << std::endl;
+      std::cerr << "[FileProducer] Failed to copy codec parameters" << std::endl;
       CloseDecoder();
       return false;
     }
 
     if (avcodec_open2(codec_ctx_, codec, nullptr) < 0)
     {
-      std::cerr << "[VideoFileProducer] Failed to open codec" << std::endl;
+      std::cerr << "[FileProducer] Failed to open codec" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -427,7 +427,7 @@ namespace retrovue::producers::video_file
     scaled_frame_ = av_frame_alloc();
     if (!frame_ || !scaled_frame_)
     {
-      std::cerr << "[VideoFileProducer] Failed to allocate frames" << std::endl;
+      std::cerr << "[FileProducer] Failed to allocate frames" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -440,7 +440,7 @@ namespace retrovue::producers::video_file
       const AVCodec* audio_codec = avcodec_find_decoder(audio_codecpar->codec_id);
       if (!audio_codec)
       {
-        std::cerr << "[VideoFileProducer] Audio codec not found: " << audio_codecpar->codec_id << std::endl;
+        std::cerr << "[FileProducer] Audio codec not found: " << audio_codecpar->codec_id << std::endl;
         // Continue without audio - not fatal
         audio_stream_index_ = -1;
       }
@@ -449,21 +449,21 @@ namespace retrovue::producers::video_file
         audio_codec_ctx_ = avcodec_alloc_context3(audio_codec);
         if (!audio_codec_ctx_)
         {
-          std::cerr << "[VideoFileProducer] Failed to allocate audio codec context" << std::endl;
+          std::cerr << "[FileProducer] Failed to allocate audio codec context" << std::endl;
           audio_stream_index_ = -1;
         }
         else
         {
           if (avcodec_parameters_to_context(audio_codec_ctx_, audio_codecpar) < 0)
           {
-            std::cerr << "[VideoFileProducer] Failed to copy audio codec parameters" << std::endl;
+            std::cerr << "[FileProducer] Failed to copy audio codec parameters" << std::endl;
             avcodec_free_context(&audio_codec_ctx_);
             audio_codec_ctx_ = nullptr;
             audio_stream_index_ = -1;
           }
           else if (avcodec_open2(audio_codec_ctx_, audio_codec, nullptr) < 0)
           {
-            std::cerr << "[VideoFileProducer] Failed to open audio codec" << std::endl;
+            std::cerr << "[FileProducer] Failed to open audio codec" << std::endl;
             avcodec_free_context(&audio_codec_ctx_);
             audio_codec_ctx_ = nullptr;
             audio_stream_index_ = -1;
@@ -473,18 +473,18 @@ namespace retrovue::producers::video_file
             audio_frame_ = av_frame_alloc();
             if (!audio_frame_)
             {
-              std::cerr << "[VideoFileProducer] Failed to allocate audio frame" << std::endl;
+              std::cerr << "[FileProducer] Failed to allocate audio frame" << std::endl;
               avcodec_free_context(&audio_codec_ctx_);
               audio_codec_ctx_ = nullptr;
               audio_stream_index_ = -1;
             }
             else
             {
-            std::cout << "[VideoFileProducer] Audio decoder initialized: "
+            std::cout << "[FileProducer] Audio decoder initialized: "
                       << "sample_rate=" << audio_codec_ctx_->sample_rate
                       << ", channels=" << audio_codec_ctx_->ch_layout.nb_channels
                       << ", format=" << audio_codec_ctx_->sample_fmt << std::endl;
-            std::cout << "[VideoFileProducer] Audio stream index: " << audio_stream_index_ << std::endl;
+            std::cout << "[FileProducer] Audio stream index: " << audio_stream_index_ << std::endl;
             }
           }
         }
@@ -506,7 +506,7 @@ namespace retrovue::producers::video_file
 
     if (!sws_ctx_)
     {
-      std::cerr << "[VideoFileProducer] Failed to create scaler context" << std::endl;
+      std::cerr << "[FileProducer] Failed to create scaler context" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -515,7 +515,7 @@ namespace retrovue::producers::video_file
     if (av_image_alloc(scaled_frame_->data, scaled_frame_->linesize,
                        dst_width, dst_height, dst_format, 32) < 0)
     {
-      std::cerr << "[VideoFileProducer] Failed to allocate scaled frame buffer" << std::endl;
+      std::cerr << "[FileProducer] Failed to allocate scaled frame buffer" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -528,7 +528,7 @@ namespace retrovue::producers::video_file
     packet_ = av_packet_alloc();
     if (!packet_)
     {
-      std::cerr << "[VideoFileProducer] Failed to allocate packet" << std::endl;
+      std::cerr << "[FileProducer] Failed to allocate packet" << std::endl;
       CloseDecoder();
       return false;
     }
@@ -541,7 +541,7 @@ namespace retrovue::producers::video_file
     return true;
   }
 
-  void VideoFileProducer::CloseDecoder()
+  void FileProducer::CloseDecoder()
   {
     if (sws_ctx_)
     {
@@ -604,7 +604,7 @@ namespace retrovue::producers::video_file
     eof_event_emitted_ = false;
   }
 
-  bool VideoFileProducer::ProduceRealFrame()
+  bool FileProducer::ProduceRealFrame()
   {
     if (!decoder_initialized_)
     {
@@ -723,7 +723,7 @@ namespace retrovue::producers::video_file
       {
         cached_first_frame_ = std::make_unique<buffer::Frame>(output_frame);
         shadow_decode_ready_.store(true, std::memory_order_release);
-        std::cout << "[VideoFileProducer] Shadow decode: first frame cached, PTS=" 
+        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS=" 
                   << frame_pts_us << std::endl;
         // Emit ShadowDecodeReady event
         EmitEvent("ShadowDecodeReady", "");
@@ -812,7 +812,7 @@ namespace retrovue::producers::video_file
     }
   }
 
-  bool VideoFileProducer::ScaleFrame()
+  bool FileProducer::ScaleFrame()
   {
     if (!sws_ctx_ || !frame_ || !scaled_frame_)
     {
@@ -825,7 +825,7 @@ namespace retrovue::producers::video_file
     return true;
   }
 
-  bool VideoFileProducer::AssembleFrame(buffer::Frame& output_frame)
+  bool FileProducer::AssembleFrame(buffer::Frame& output_frame)
   {
     if (!scaled_frame_)
     {
@@ -900,7 +900,7 @@ namespace retrovue::producers::video_file
     return true;
   }
 
-  void VideoFileProducer::ProduceStubFrame()
+  void FileProducer::ProduceStubFrame()
   {
     // Wait until deadline (aligned to master clock if available)
     if (master_clock_)
@@ -969,7 +969,7 @@ namespace retrovue::producers::video_file
       {
         cached_first_frame_ = std::make_unique<buffer::Frame>(frame);
         shadow_decode_ready_.store(true, std::memory_order_release);
-        std::cout << "[VideoFileProducer] Shadow decode: first frame cached, PTS=" 
+        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS=" 
                   << frame.metadata.pts << std::endl;
         // Emit ShadowDecodeReady event
         EmitEvent("ShadowDecodeReady", "");
@@ -1005,7 +1005,7 @@ namespace retrovue::producers::video_file
     }
   }
 
-  void VideoFileProducer::SetShadowDecodeMode(bool enabled)
+  void FileProducer::SetShadowDecodeMode(bool enabled)
   {
     shadow_decode_mode_.store(enabled, std::memory_order_release);
     if (!enabled)
@@ -1024,17 +1024,17 @@ namespace retrovue::producers::video_file
     }
   }
 
-  bool VideoFileProducer::IsShadowDecodeMode() const
+  bool FileProducer::IsShadowDecodeMode() const
   {
     return shadow_decode_mode_.load(std::memory_order_acquire);
   }
 
-  bool VideoFileProducer::IsShadowDecodeReady() const
+  bool FileProducer::IsShadowDecodeReady() const
   {
     return shadow_decode_ready_.load(std::memory_order_acquire);
   }
 
-  int64_t VideoFileProducer::GetNextPTS() const
+  int64_t FileProducer::GetNextPTS() const
   {
     // Return the PTS that the next frame will have
     // This is last_pts_us_ + frame_interval_us_ + pts_offset_us_
@@ -1049,7 +1049,7 @@ namespace retrovue::producers::video_file
     return next_pts + frame_interval_us_ + pts_offset_us_;
   }
 
-  void VideoFileProducer::AlignPTS(int64_t target_pts)
+  void FileProducer::AlignPTS(int64_t target_pts)
   {
     // Calculate offset needed to align next frame to target_pts
     // Note: last_pts_us_ is not atomic, but this is called from state machine which holds a lock
@@ -1064,13 +1064,13 @@ namespace retrovue::producers::video_file
       // Calculate offset: target_pts - (next_pts_without_offset + frame_interval_us_)
       pts_offset_us_ = target_pts - (next_pts_without_offset + frame_interval_us_);
     }
-    std::cout << "[VideoFileProducer] Aligned PTS: target=" << target_pts 
+    std::cout << "[FileProducer] Aligned PTS: target=" << target_pts 
               << ", offset=" << pts_offset_us_ << std::endl;
   }
 
   // Phase 8.9: Receive audio frames that were already sent to the decoder
   // This does NOT read packets - packets are dispatched by ProduceRealFrame()
-  bool VideoFileProducer::ReceiveAudioFrames()
+  bool FileProducer::ReceiveAudioFrames()
   {
     if (audio_stream_index_ < 0 || !audio_codec_ctx_ || !audio_frame_ || audio_eof_reached_)
     {
@@ -1116,7 +1116,7 @@ namespace retrovue::producers::video_file
           int64_t old_pts = output_audio_frame.pts_us;
           output_audio_frame.pts_us = last_audio_pts_us_ + 1;
           pts_adjusted = true;
-          std::cout << "[VideoFileProducer] Audio PTS adjusted: " << old_pts 
+          std::cout << "[FileProducer] Audio PTS adjusted: " << old_pts 
                     << " -> " << output_audio_frame.pts_us 
                     << " (last_audio_pts=" << last_audio_pts_us_ << ")" << std::endl;
         }
@@ -1132,7 +1132,7 @@ namespace retrovue::producers::video_file
         static int64_t last_seen_audio_pts = -1;
         if (last_audio_pts_us_ == 0 && last_seen_audio_pts > 0) {
           frames_since_producer_start = 1;  // This is frame #1 of new producer
-          std::cout << "[VideoFileProducer] Detected new producer start, resetting frame counter" << std::endl;
+          std::cout << "[FileProducer] Detected new producer start, resetting frame counter" << std::endl;
         }
         last_seen_audio_pts = last_audio_pts_us_;
         
@@ -1144,7 +1144,7 @@ namespace retrovue::producers::video_file
           received_any = true;
           
           if (should_log) {
-            std::cout << "[VideoFileProducer] Pushed audio frame #" << audio_frame_count 
+            std::cout << "[FileProducer] Pushed audio frame #" << audio_frame_count 
                       << " (frames_since_start=" << frames_since_producer_start << ")"
                       << ", base_pts_us=" << base_pts_us
                       << ", offset=" << pts_offset_us_
@@ -1156,8 +1156,8 @@ namespace retrovue::producers::video_file
         }
         else
         {
-          std::cerr << "[VideoFileProducer] ===== FAILED TO PUSH AUDIO FRAME =====" << std::endl;
-          std::cerr << "[VideoFileProducer] Frame #" << audio_frame_count 
+          std::cerr << "[FileProducer] ===== FAILED TO PUSH AUDIO FRAME =====" << std::endl;
+          std::cerr << "[FileProducer] Frame #" << audio_frame_count 
                     << " (frames_since_start=" << frames_since_producer_start << ")"
                     << ", base_pts_us=" << base_pts_us
                     << ", offset=" << pts_offset_us_
@@ -1169,8 +1169,8 @@ namespace retrovue::producers::video_file
       }
       else
       {
-        std::cerr << "[VideoFileProducer] ===== FAILED TO CONVERT AUDIO FRAME =====" << std::endl;
-        std::cerr << "[VideoFileProducer] ConvertAudioFrame returned false" << std::endl;
+        std::cerr << "[FileProducer] ===== FAILED TO CONVERT AUDIO FRAME =====" << std::endl;
+        std::cerr << "[FileProducer] ConvertAudioFrame returned false" << std::endl;
       }
 
       av_frame_unref(audio_frame_);
@@ -1179,7 +1179,7 @@ namespace retrovue::producers::video_file
     return received_any;
   }
 
-  bool VideoFileProducer::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame)
+  bool FileProducer::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame)
   {
     if (!av_frame || !audio_codec_ctx_)
     {
@@ -1259,7 +1259,7 @@ namespace retrovue::producers::video_file
     else
     {
       // Other formats would require a full SwrContext; keep Phase 8.9 simple.
-      std::cerr << "[VideoFileProducer] Audio format conversion not implemented for format: "
+      std::cerr << "[FileProducer] Audio format conversion not implemented for format: "
                 << sample_fmt << std::endl;
       return false;
     }
@@ -1272,4 +1272,4 @@ namespace retrovue::producers::video_file
     return true;
   }
 
-} // namespace retrovue::producers::video_file
+} // namespace retrovue::producers::file

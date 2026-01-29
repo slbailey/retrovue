@@ -50,7 +50,7 @@ std::map<std::string, std::vector<std::string>> ExpectedCoverage()
         "FE-003",
         "FE-004",
         "FE-005"}},
-      {"VideoFileProducer",
+      {"FileProducer",
        {"FE-001",
         "FE-002",
         "FE-003",

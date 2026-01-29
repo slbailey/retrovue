@@ -67,8 +67,8 @@ PlayoutControlImpl → PlayoutController → PlayoutEngine
 │  │         ▼                                          │  │
 │  │ OutputSink (MpegTSOutputSink: encode, mux, stream) │  │
 │  └───────────────────────────────────────────────────┘  │
-│  EngineStateMachine (RuntimePhase, bus switching)       │  │
-│  OrchestrationLoop (timing, backpressure)               │  │
+│  PlayoutControl (RuntimePhase, bus switching)            │  │
+│  TimingLoop (timing, backpressure)               │  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -104,11 +104,11 @@ PlayoutControlImpl → PlayoutController → PlayoutEngine
 |-----------|--------|----------------|
 | **PlayoutEngine** | `runtime/PlayoutEngine.h` | Root execution unit. Single playout session at a time. Owns runtime graph (producer → buffer → renderer → OutputBus → OutputSink), clock, and engine-level state. Provides AttachOutputSink/DetachOutputSink, ConnectRendererToOutputBus methods. Does *not* own channel lifecycle or schedules. |
 | **PlayoutController** | `runtime/PlayoutController.h` | Thin adapter: gRPC layer → PlayoutEngine. Delegates all ops to engine. Provides AttachOutputSink/DetachOutputSink, GetOutputBus, ConnectRendererToOutputBus wrappers. |
-| **EngineStateMachine** | `runtime/EngineStateMachine.h` | Enforces valid sequencing of runtime ops (PTS, buffer priming, decode/render order). Uses **RuntimePhase** (kIdle, kBuffering, kReady, kPlaying, kPaused, kStopping, kError). Governs OutputBus attach/detach transitions via CanAttachSink/CanDetachSink. Tracks sink attachment state. Does *not* represent channel lifecycle or scheduling. |
-| **ProducerBus** | `runtime/ProducerBus.h` | Routed producer input path (LIVE or PREVIEW). Not storage; may be empty, primed, or active. Switched atomically by EngineStateMachine. |
-| **OrchestrationLoop** | `runtime/OrchestrationLoop.h` | Tick loop, backpressure events, timing/coordination with MasterClock. |
+| **PlayoutControl** | `runtime/PlayoutControl.h` | Enforces valid sequencing of runtime ops (PTS, buffer priming, decode/render order). Uses **RuntimePhase** (kIdle, kBuffering, kReady, kPlaying, kPaused, kStopping, kError). Governs OutputBus attach/detach transitions via CanAttachSink/CanDetachSink. Tracks sink attachment state. Does *not* represent channel lifecycle or scheduling. |
+| **ProducerBus** | `runtime/ProducerBus.h` | Routed producer input path (LIVE or PREVIEW). Not storage; may be empty, primed, or active. Switched atomically by PlayoutControl. |
+| **TimingLoop** | `runtime/TimingLoop.h` | Tick loop, backpressure events, timing/coordination with MasterClock. |
 
-**PlayoutSession** (internal struct in `PlayoutEngine.cpp`): Holds one session’s runtime: `channel_id` (external), `plan_handle`, ring_buffer, live_producer, preview_producer, renderer, orchestration_loop, EngineStateMachine (control), OutputBus. One session per active “channel” slot; Air enforces at most one active session.
+**PlayoutSession** (internal struct in `PlayoutEngine.cpp`): Holds one session’s runtime: `channel_id` (external), `plan_handle`, ring_buffer, live_producer, preview_producer, renderer, timing_loop, PlayoutControl (control), OutputBus. One session per active “channel” slot; Air enforces at most one active session.
 
 ### Producers
 
@@ -129,7 +129,7 @@ PlayoutControlImpl → PlayoutController → PlayoutEngine
 
 | Component | Header | Responsibility |
 |-----------|--------|----------------|
-| **OutputBus** | `output/OutputBus.h` | Signal path for program output. Routes frames to currently attached OutputSink. Governed by EngineStateMachine. Does not own transport, threads, or encoding. Validates attach/detach via EngineStateMachine. |
+| **OutputBus** | `output/OutputBus.h` | Signal path for program output. Routes frames to currently attached OutputSink. Governed by PlayoutControl. Does not own transport, threads, or encoding. Validates attach/detach via PlayoutControl. |
 | **IOutputSink** | `output/IOutputSink.h` | Interface for output sinks. Consumes frames from OutputBus; performs encoding, muxing, and transport. Defines Start(), Stop(), ConsumeVideo(), ConsumeAudio(), status reporting. |
 | **MpegTSOutputSink** | `output/MpegTSOutputSink.h` | Concrete OutputSink implementation. Encodes to H.264, muxes to MPEG-TS, streams over UDS/TCP. Owns EncoderPipeline, frame queues, and MuxLoop worker thread. Uses playout_sinks::mpegts::EncoderPipeline internally. |
 
@@ -156,18 +156,18 @@ PlayoutControlImpl → PlayoutController → PlayoutEngine
 - **PlayoutControlImpl** → **PlayoutController** → **PlayoutEngine**.  
   PlayoutEngine owns **PlayoutSession** (or sessions map, one active); each session owns:
   - **FrameRingBuffer**
-  - **EngineStateMachine** (control), **ProducerBus**es (preview, live)
+  - **PlayoutControl** (control), **ProducerBus**es (preview, live)
   - **FileProducer** (live, optional preview), **FrameRenderer**
   - **OutputBus** (signal path; routes frames to attached OutputSink)
-  - **OrchestrationLoop** (if used)
-- **EngineStateMachine** owns preview/live **ProducerBus**es; loads/switches producers via factory and **activatePreviewAsLive**. Governs OutputBus attach/detach transitions.
+  - **TimingLoop** (if used)
+- **PlayoutControl** owns preview/live **ProducerBus**es; loads/switches producers via factory and **activatePreviewAsLive**. Governs OutputBus attach/detach transitions.
 - **FileProducer** / **ProgrammaticProducer** implement **IProducer**; push into **FrameRingBuffer**.
 - **FrameRenderer** reads **FrameRingBuffer**; routes frames to **OutputBus** when connected (via `SetOutputBus()`), else uses legacy side_sink_ callbacks. Supports both modes during transition.
-- **OutputBus** routes frames to currently attached **OutputSink** (e.g. MpegTSOutputSink). Attachment/detachment validated by EngineStateMachine. OutputBus does not own transport, threads, or encoding.
+- **OutputBus** routes frames to currently attached **OutputSink** (e.g. MpegTSOutputSink). Attachment/detachment validated by PlayoutControl. OutputBus does not own transport, threads, or encoding.
 - **MpegTSOutputSink** implements **IOutputSink**; consumes frames from OutputBus via ConsumeVideo/ConsumeAudio; enqueues to internal queues; MuxLoop thread drains queues and encodes via EncoderPipeline; writes TS packets to file descriptor (UDS/TCP). Created by PlayoutControlImpl on SwitchToLive when stream attached.
 - **MasterClock** and **MetricsExporter** are shared into PlayoutEngine and passed into session components.
 - **One-session rule:** `PlayoutEngine::StartChannel` returns error if a session already exists for a *different* channel_id; idempotent for same channel_id.
-- **OutputBus invariant:** At most one OutputSink attached per OutputBus (enforced by EngineStateMachine). OutputBus does not perform attach/detach autonomously; all operations validated by EngineStateMachine.
+- **OutputBus invariant:** At most one OutputSink attached per OutputBus (enforced by PlayoutControl). OutputBus does not perform attach/detach autonomously; all operations validated by PlayoutControl.
 - **PlayoutControlImpl** creates MpegTSOutputSink on SwitchToLive (if AttachStream was called); attaches to OutputBus via PlayoutController; connects renderer to OutputBus to start frame flow.
 
 ---
@@ -183,7 +183,7 @@ pkg/air/
 │   ├── playout_sinks/   IPlayoutSink.h, mpegts/* (legacy MpegTSPlayoutSink, EncoderPipeline, TSMuxer, TsOutputSink - used by MpegTSOutputSink)
 │   ├── producers/       IProducer.h, file/FileProducer.h, programmatic/ProgrammaticProducer.h
 │   ├── renderer/        FrameRenderer.h
-│   ├── runtime/         PlayoutEngine, PlayoutController, EngineStateMachine, ProducerBus, OrchestrationLoop
+│   ├── runtime/         PlayoutEngine, PlayoutController, PlayoutControl, ProducerBus, TimingLoop
 │   ├── sinks/           Legacy IPlayoutSink.h, mpegts/* (legacy MpegTSPlayoutSink - being phased out)
 │   ├── telemetry/       MetricsExporter, MetricsHTTPServer
 │   └── timing/          MasterClock.h
@@ -194,7 +194,7 @@ pkg/air/
 │   ├── playout_sinks/   mpegts/* (EncoderPipeline, TSMuxer, MpegTSEncoder, TsOutputSink - used by MpegTSOutputSink)
 │   ├── producers/       file/FileProducer, programmatic/ProgrammaticProducer
 │   ├── renderer/        FrameRenderer.cpp
-│   ├── runtime/         PlayoutEngine, PlayoutController, EngineStateMachine, ProducerBus, OrchestrationLoop
+│   ├── runtime/         PlayoutEngine, PlayoutController, PlayoutControl, ProducerBus, TimingLoop
 │   ├── playout_service.cpp, playout_service.h   PlayoutControlImpl
 │   ├── main.cpp
 │   ├── telemetry/       MetricsExporter, MetricsHTTPServer

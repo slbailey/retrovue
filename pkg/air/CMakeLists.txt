@@ -125,9 +125,9 @@ set(AIR_CORE_SOURCES
   src/playout_service.cpp
   src/runtime/PlayoutController.cpp
   src/runtime/PlayoutEngine.cpp
-  src/runtime/PlayoutControlStateMachine.cpp
-  src/runtime/OrchestrationLoop.cpp
-  src/runtime/ProducerSlot.cpp
+  src/runtime/PlayoutControl.cpp
+  src/runtime/TimingLoop.cpp
+  src/runtime/ProducerBus.cpp
   src/buffer/FrameRingBuffer.cpp
   src/decode/FrameProducer.cpp
   src/decode/FFmpegDecoder.cpp
@@ -135,9 +135,12 @@ set(AIR_CORE_SOURCES
   src/telemetry/MetricsExporter.cpp
   src/telemetry/MetricsHTTPServer.cpp
   src/timing/SystemMasterClock.cpp
-  src/producers/video_file/VideoFileProducer.cpp
+  src/producers/file/FileProducer.cpp
   src/producers/programmatic/ProgrammaticProducer.cpp
   src/playout_sinks/mpegts/EncoderPipeline.cpp
+  # Phase 9.0: OutputBus/OutputSink architecture
+  src/output/OutputBus.cpp
+  src/output/MpegTSOutputSink.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
@@ -193,7 +196,7 @@ target_include_directories(retrovue_air
 # ---- Contract tests (Phase 6A.0: PlayoutEngine + control surface) ----
 add_executable(contracts_playoutengine_tests
   tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp
-  tests/contracts/Phase815VideoFileProducerTests.cpp
+  tests/contracts/Phase815FileProducerTests.cpp
   tests/contracts/Phase84PersistentMpegTsMuxTests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp

@@ -3,10 +3,10 @@
 #include <chrono>
 
 #include "BaseContractTest.h"
-#include "retrovue/runtime/PlayoutControlStateMachine.h"
-#include "retrovue/runtime/ProducerSlot.h"
+#include "retrovue/runtime/PlayoutControl.h"
+#include "retrovue/runtime/ProducerBus.h"
 #include "retrovue/buffer/FrameRingBuffer.h"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 #include "timing/TestMasterClock.h"
 
 namespace retrovue::tests::contracts {
@@ -29,34 +29,34 @@ class PlayoutControlContractTest : public BaseContractTest {
 };
 
 TEST_F(PlayoutControlContractTest, CTL_001_DeterministicStateTransitions) {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   const int64_t start_time = 1'700'000'000'000'000LL;
 
   ASSERT_TRUE(controller.BeginSession("begin", start_time));
   controller.OnBufferDepth(5, 60, start_time + MsToUs(10));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kPlaying);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kPlaying);
 
   ASSERT_TRUE(controller.Pause("pause",
                                start_time + MsToUs(50),
                                start_time + MsToUs(70),
                                0.2));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kPaused);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kPaused);
 
   ASSERT_TRUE(controller.Resume("resume",
                                 start_time + MsToUs(100),
                                 start_time + MsToUs(130)));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kPlaying);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kPlaying);
 
   ASSERT_TRUE(controller.Seek("seek-forward",
                               start_time + MsToUs(150),
                               start_time + MsToUs(500),
                               start_time + MsToUs(200)));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kPlaying);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kPlaying);
 
   ASSERT_TRUE(controller.Stop("stop",
                               start_time + MsToUs(400),
                               start_time + MsToUs(500)));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kIdle);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kIdle);
 
   // Attempt illegal transition - resume while idle.
   EXPECT_FALSE(controller.Resume("illegal-resume",
@@ -64,14 +64,14 @@ TEST_F(PlayoutControlContractTest, CTL_001_DeterministicStateTransitions) {
                                  start_time + MsToUs(515)));
 
   const auto snapshot = controller.Snapshot();
-  EXPECT_EQ(snapshot.transitions.at({runtime::PlayoutControlStateMachine::State::kIdle,
-                                     runtime::PlayoutControlStateMachine::State::kBuffering}),
+  EXPECT_EQ(snapshot.transitions.at({runtime::PlayoutControl::RuntimePhase::kIdle,
+                                     runtime::PlayoutControl::RuntimePhase::kBuffering}),
             1u);
   EXPECT_EQ(snapshot.illegal_transition_total, 1u);
 }
 
 TEST_F(PlayoutControlContractTest, CTL_002_ControlActionLatencyCompliance) {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   const int64_t start_time = 1'700'000'100'000'000LL;
 
   ASSERT_TRUE(controller.BeginSession("begin", start_time));
@@ -111,7 +111,7 @@ TEST_F(PlayoutControlContractTest, CTL_002_ControlActionLatencyCompliance) {
 }
 
 TEST_F(PlayoutControlContractTest, CTL_003_CommandIdempotencyAndFailureTelemetry) {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   const int64_t base_time = 1'700'000'200'000'000LL;
 
   ASSERT_TRUE(controller.BeginSession("begin", base_time));
@@ -130,14 +130,14 @@ TEST_F(PlayoutControlContractTest, CTL_003_CommandIdempotencyAndFailureTelemetry
 
   // External timeout forces error state.
   controller.OnExternalTimeout(base_time + MsToUs(260));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kError);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kError);
   auto snapshot = controller.Snapshot();
   EXPECT_EQ(snapshot.timeout_total, 1u);
 
   // Recovery returns to buffering.
   ASSERT_TRUE(controller.Recover("recover",
                                  base_time + MsToUs(270)));
-  EXPECT_EQ(controller.state(), runtime::PlayoutControlStateMachine::State::kBuffering);
+  EXPECT_EQ(controller.state(), runtime::PlayoutControl::RuntimePhase::kBuffering);
 
   controller.OnQueueOverflow();
   snapshot = controller.Snapshot();
@@ -153,8 +153,8 @@ TEST_F(PlayoutControlContractTest, CTL_003_CommandIdempotencyAndFailureTelemetry
 }
 
 // Rule: CTL_004 Dual-Producer Preview/Live Slot Management
-TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
-  runtime::PlayoutControlStateMachine controller;
+TEST_F(PlayoutControlContractTest, CTL_004_DualProducerBusManagement) {
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   const int64_t start_time = 1'700'000'000'000'000LL;
@@ -166,7 +166,7 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
          buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = path;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -175,13 +175,13 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
 
-        return std::make_unique<producers::video_file::VideoFileProducer>(
+        return std::make_unique<producers::file::FileProducer>(
             config, rb, clk, nullptr);
       });
 
   // Initially, both slots should be empty
-  const auto &preview_before = controller.getPreviewSlot();
-  const auto &live_before = controller.getLiveSlot();
+  const auto &preview_before = controller.getPreviewBus();
+  const auto &live_before = controller.getLiveBus();
   EXPECT_FALSE(preview_before.loaded);
   EXPECT_FALSE(live_before.loaded);
 
@@ -189,7 +189,7 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://preview.mp4", "preview-asset-1", buffer, clock));
   
-  const auto &preview_after = controller.getPreviewSlot();
+  const auto &preview_after = controller.getPreviewBus();
   EXPECT_TRUE(preview_after.loaded);
   EXPECT_EQ(preview_after.asset_id, "preview-asset-1");
   EXPECT_EQ(preview_after.file_path, "test://preview.mp4");
@@ -197,7 +197,7 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
   
   // Verify preview producer is in shadow decode mode
   // (FrameRouter does not pull from it until switch)
-  auto* preview_video_producer = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  auto* preview_video_producer = dynamic_cast<producers::file::FileProducer*>(
       preview_after.producer.get());
   if (preview_video_producer) {
     EXPECT_TRUE(preview_video_producer->IsShadowDecodeMode());
@@ -212,18 +212,18 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
   }
 
   // Live slot should still be empty
-  const auto &live_after = controller.getLiveSlot();
+  const auto &live_after = controller.getLiveBus();
   EXPECT_FALSE(live_after.loaded);
 
   // Activate preview as live (now that shadow decode is ready)
   ASSERT_TRUE(controller.activatePreviewAsLive());
 
   // Preview slot should now be empty
-  const auto &preview_switched = controller.getPreviewSlot();
+  const auto &preview_switched = controller.getPreviewBus();
   EXPECT_FALSE(preview_switched.loaded);
 
   // Live slot should now have the producer
-  const auto &live_switched = controller.getLiveSlot();
+  const auto &live_switched = controller.getLiveBus();
   EXPECT_TRUE(live_switched.loaded);
   EXPECT_EQ(live_switched.asset_id, "preview-asset-1");
   EXPECT_EQ(live_switched.file_path, "test://preview.mp4");
@@ -233,19 +233,19 @@ TEST_F(PlayoutControlContractTest, CTL_004_DualProducerSlotManagement) {
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://preview2.mp4", "preview-asset-2", buffer, clock));
 
-  const auto &preview_new = controller.getPreviewSlot();
+  const auto &preview_new = controller.getPreviewBus();
   EXPECT_TRUE(preview_new.loaded);
   EXPECT_EQ(preview_new.asset_id, "preview-asset-2");
 
   // Live slot should still have the first asset
-  const auto &live_still = controller.getLiveSlot();
+  const auto &live_still = controller.getLiveBus();
   EXPECT_TRUE(live_still.loaded);
   EXPECT_EQ(live_still.asset_id, "preview-asset-1");
 }
 
 // Rule: CTL_005 Producer Switching Seamlessness
 TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   const int64_t start_time = 1'700'000'000'000'000LL;
@@ -257,7 +257,7 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
          buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = path;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -266,7 +266,7 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
 
-        return std::make_unique<producers::video_file::VideoFileProducer>(
+        return std::make_unique<producers::file::FileProducer>(
             config, rb, clk, nullptr);
       });
 
@@ -275,8 +275,8 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
       "test://asset1.mp4", "asset-1", buffer, clock));
   
   // Verify preview producer is in shadow decode mode
-  const auto &preview1 = controller.getPreviewSlot();
-  auto* preview1_video = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  const auto &preview1 = controller.getPreviewBus();
+  auto* preview1_video = dynamic_cast<producers::file::FileProducer*>(
       preview1.producer.get());
   if (preview1_video) {
     EXPECT_TRUE(preview1_video->IsShadowDecodeMode());
@@ -287,7 +287,7 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
   
   ASSERT_TRUE(controller.activatePreviewAsLive());
 
-  const auto &live1 = controller.getLiveSlot();
+  const auto &live1 = controller.getLiveBus();
   ASSERT_TRUE(live1.loaded);
   ASSERT_NE(live1.producer, nullptr);
 
@@ -300,8 +300,8 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
       "test://asset2.mp4", "asset-2", buffer, clock));
   
   // Verify preview producer is in shadow decode mode
-  const auto &preview2 = controller.getPreviewSlot();
-  auto* preview2_video = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  const auto &preview2 = controller.getPreviewBus();
+  auto* preview2_video = dynamic_cast<producers::file::FileProducer*>(
       preview2.producer.get());
   if (preview2_video) {
     EXPECT_TRUE(preview2_video->IsShadowDecodeMode());
@@ -312,7 +312,7 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
   // Switch to new asset (FrameRouter switches which producer it pulls from)
   ASSERT_TRUE(controller.activatePreviewAsLive());
 
-  const auto &live2 = controller.getLiveSlot();
+  const auto &live2 = controller.getLiveBus();
   EXPECT_TRUE(live2.loaded);
   EXPECT_EQ(live2.asset_id, "asset-2");
   EXPECT_NE(live2.producer, nullptr);
@@ -323,7 +323,7 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
   EXPECT_GE(buffer.Size(), 0u) << "Ring buffer should contain frames after switch";
   
   // New live producer should be running (preview was moved to live slot)
-  const auto &live2_after = controller.getLiveSlot();
+  const auto &live2_after = controller.getLiveBus();
   EXPECT_TRUE(live2_after.loaded);
   EXPECT_NE(live2_after.producer, nullptr);
   // Note: live1.producer is now invalid (moved), so we check live2 instead

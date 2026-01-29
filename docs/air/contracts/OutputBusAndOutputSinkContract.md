@@ -34,7 +34,7 @@ OutputBus is a **signal path**, not a transport.
 - Receives rendered video and audio frames
 - Routes frames to currently attached output sinks
 - Manages attachment and detachment of sinks
-- Is governed by EngineStateMachine
+- Is governed by PlayoutControl
 
 #### OutputBus explicitly does NOT:
 
@@ -75,7 +75,7 @@ An OutputSink converts frames into an external representation (e.g. MPEG-TS over
 |-----------|-------|
 | OutputBus | PlayoutSession (inside PlayoutEngine) |
 | OutputSink | OutputBus (attached/detached) |
-| EngineStateMachine | PlayoutSession |
+| PlayoutControl | PlayoutSession |
 | gRPC Attach/Detach | Requests only (no ownership) |
 
 **gRPC never owns output state.**
@@ -84,7 +84,7 @@ An OutputSink converts frames into an external representation (e.g. MPEG-TS over
 
 - OutputBus may have zero or more sinks conceptually
 - **Current enforced invariant:** Air allows at most one attached sink per OutputBus
-- Policy is enforced by EngineStateMachine, not by OutputBus itself
+- Policy is enforced by PlayoutControl, not by OutputBus itself
 
 #### Attachment rules (current)
 
@@ -95,18 +95,18 @@ An OutputSink converts frames into an external representation (e.g. MPEG-TS over
 
 ---
 
-## 4. EngineStateMachine Integration (Normative)
+## 4. PlayoutControl Integration (Normative)
 
-All OutputBus attach/detach operations are runtime transitions and must be validated by EngineStateMachine.
+All OutputBus attach/detach operations are runtime transitions and must be validated by PlayoutControl.
 
-The state machine enforces:
+The control plane enforces:
 
 - Safe attachment timing
 - Safe detachment timing
 - Prohibition of attach/detach during illegal phases (e.g. stopping)
 - Deterministic transition order
 
-**OutputSink implementations must not bypass EngineStateMachine.**
+**OutputSink implementations must not bypass PlayoutControl.**
 
 OutputBus must not perform attach/detach operations autonomously.
 
@@ -190,7 +190,7 @@ Those may be introduced later without violating this contract.
 1. Air models output as bus + sinks
 2. OutputBus exists independent of attachment
 3. gRPC does not own output runtime state
-4. EngineStateMachine governs output transitions
+4. PlayoutControl governs output transitions
 5. Transport details never leak into engine control logic
 
 ---

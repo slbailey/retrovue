@@ -7,13 +7,13 @@ All modules here are self-contained and can be deleted or rebuilt freely.
 from .master_clock import MasterClock
 from .frame_ring_buffer import FrameRingBuffer
 from .station_time_mapper import StationTimeMapper
-from .video_file_decoder import VideoFileDecoder
+from .file_decoder import FileDecoder
 from .renderer_stub import RendererStub
 
 __all__ = [
     "MasterClock",
     "FrameRingBuffer",
     "StationTimeMapper",
-    "VideoFileDecoder",
+    "FileDecoder",
     "RendererStub",
 ]
