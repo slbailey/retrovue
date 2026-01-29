@@ -123,15 +123,16 @@ target_include_directories(playout_proto
 # Core service + runtime
 set(AIR_CORE_SOURCES
   src/playout_service.cpp
-  src/runtime/PlayoutController.cpp
+  src/runtime/PlayoutInterface.cpp
   src/runtime/PlayoutEngine.cpp
+  src/runtime/ProgramFormat.cpp
   src/runtime/PlayoutControl.cpp
   src/runtime/TimingLoop.cpp
   src/runtime/ProducerBus.cpp
   src/buffer/FrameRingBuffer.cpp
   src/decode/FrameProducer.cpp
   src/decode/FFmpegDecoder.cpp
-  src/renderer/FrameRenderer.cpp
+  src/renderer/ProgramOutput.cpp
   src/telemetry/MetricsExporter.cpp
   src/telemetry/MetricsHTTPServer.cpp
   src/timing/SystemMasterClock.cpp

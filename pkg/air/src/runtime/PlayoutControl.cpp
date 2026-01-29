@@ -452,7 +452,7 @@ namespace retrovue::runtime
     return true;
   }
 
-  bool PlayoutControl::activatePreviewAsLive(renderer::FrameRenderer* renderer)
+  bool PlayoutControl::activatePreviewAsLive(renderer::ProgramOutput* program_output)
   {
     std::lock_guard<std::mutex> lock(mutex_);
 

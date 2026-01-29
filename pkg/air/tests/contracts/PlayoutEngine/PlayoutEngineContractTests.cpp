@@ -6,11 +6,11 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/decode/FrameProducer.h"
-#include "retrovue/renderer/FrameRenderer.h"
+#include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/runtime/PlayoutControl.h"
 #include "retrovue/runtime/PlayoutEngine.h"
-#include "retrovue/runtime/PlayoutController.h"
+#include "retrovue/runtime/PlayoutInterface.h"
 #include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/producers/programmatic/ProgrammaticProducer.h"
 #include "playout.grpc.pb.h"
@@ -31,6 +31,9 @@ namespace
 {
 
 using retrovue::tests::RegisterExpectedDomainCoverage;
+
+// Default ProgramFormat JSON for tests (1080p30, 48kHz stereo)
+constexpr const char* kDefaultProgramFormatJson = R"({"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}})";
 
 const bool kRegisterCoverage = []() {
   RegisterExpectedDomainCoverage(
@@ -94,7 +97,7 @@ TEST_F(PlayoutEngineContractTest, BC_001_FrameTimingAlignsWithMasterClock)
 
   renderer::RenderConfig config;
   config.mode = renderer::RenderMode::HEADLESS;
-  auto renderer = renderer::FrameRenderer::Create(
+  auto renderer = renderer::ProgramOutput::Create(
       config, buffer, clock, metrics, kChannelId);
   ASSERT_NE(renderer, nullptr);
   ASSERT_TRUE(renderer->Start());
@@ -400,14 +403,15 @@ TEST_F(PlayoutEngineContractTest, LT_005_LoadPreviewSequence)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);  // control_surface_only
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   // Start a channel first (required for LoadPreview)
   retrovue::playout::StartChannelRequest start_request;
   start_request.set_channel_id(1);
   start_request.set_plan_handle("test-plan");
   start_request.set_port(8090);
+  start_request.set_program_format_json(kDefaultProgramFormatJson);
   retrovue::playout::StartChannelResponse start_response;
   grpc::ServerContext start_context;
   grpc::Status start_status = service.StartChannel(&start_context, &start_request, &start_response);
@@ -443,14 +447,15 @@ TEST_F(PlayoutEngineContractTest, LT_006_SwitchToLiveSequence)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);  // control_surface_only
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   // Start a channel
   retrovue::playout::StartChannelRequest start_request;
   start_request.set_channel_id(1);
   start_request.set_plan_handle("test-plan");
   start_request.set_port(8090);
+  start_request.set_program_format_json(kDefaultProgramFormatJson);
   retrovue::playout::StartChannelResponse start_response;
   grpc::ServerContext start_context;
   grpc::Status start_status = service.StartChannel(&start_context, &start_request, &start_response);
@@ -496,8 +501,8 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_ServerAcceptsFourRPCs)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);  // control_surface_only
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   const int32_t channel_id = 1;
 
@@ -506,6 +511,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_ServerAcceptsFourRPCs)
   start_req.set_channel_id(channel_id);
   start_req.set_plan_handle("plan-1");
   start_req.set_port(50051);
+  start_req.set_program_format_json(kDefaultProgramFormatJson);
   retrovue::playout::StartChannelResponse start_resp;
   grpc::ServerContext start_ctx;
   grpc::Status start_st = service.StartChannel(&start_ctx, &start_req, &start_resp);
@@ -548,13 +554,14 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_StartChannelIdempotentSuccess)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   retrovue::playout::StartChannelRequest req;
   req.set_channel_id(42);
   req.set_plan_handle("plan");
   req.set_port(9999);
+  req.set_program_format_json(kDefaultProgramFormatJson);
   retrovue::playout::StartChannelResponse resp;
   grpc::ServerContext ctx;
 
@@ -574,8 +581,8 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_LoadPreviewBeforeStartChannel_Error)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   retrovue::playout::LoadPreviewRequest req;
   req.set_channel_id(99);
@@ -592,13 +599,14 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_SwitchToLiveWithNoPreview_Error)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   retrovue::playout::StartChannelRequest start_req;
   start_req.set_channel_id(2);
   start_req.set_plan_handle("p");
   start_req.set_port(50052);
+  start_req.set_program_format_json(kDefaultProgramFormatJson);
   retrovue::playout::StartChannelResponse start_resp;
   grpc::ServerContext start_ctx;
   grpc::Status start_st = service.StartChannel(&start_ctx, &start_req, &start_resp);
@@ -618,8 +626,8 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_StopChannelIdempotentSuccess)
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, true);
-  auto controller = std::make_shared<runtime::PlayoutController>(engine);
-  retrovue::playout::PlayoutControlImpl service(controller);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface);
 
   retrovue::playout::StopChannelRequest req;
   req.set_channel_id(999);  // never started

@@ -22,7 +22,10 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include "retrovue/runtime/AspectPolicy.h"
 #include "retrovue/timing/MasterClock.h"
+
+#include <cstring>
 
 namespace retrovue::producers::file
 {
@@ -53,6 +56,7 @@ namespace retrovue::producers::file
         codec_ctx_(nullptr),
         frame_(nullptr),
         scaled_frame_(nullptr),
+        intermediate_frame_(nullptr),
         packet_(nullptr),
         sws_ctx_(nullptr),
         video_stream_index_(-1),
@@ -76,7 +80,12 @@ namespace retrovue::producers::file
         next_stub_deadline_utc_(0),
         shadow_decode_mode_(false),
         shadow_decode_ready_(false),
-        pts_offset_us_(0)
+        pts_offset_us_(0),
+        aspect_policy_(runtime::AspectPolicy::Preserve),
+        scale_width_(0),
+        scale_height_(0),
+        pad_x_(0),
+        pad_y_(0)
   {
   }
 
@@ -491,7 +500,7 @@ namespace retrovue::producers::file
       }
     }
 
-    // Initialize scaler
+    // Initialize scaler with aspect ratio handling
     int src_width = codec_ctx_->width;
     int src_height = codec_ctx_->height;
     AVPixelFormat src_format = codec_ctx_->pix_fmt;
@@ -499,9 +508,36 @@ namespace retrovue::producers::file
     int dst_height = config_.target_height;
     AVPixelFormat dst_format = AV_PIX_FMT_YUV420P;
 
+    // Compute scale dimensions based on aspect policy
+    if (aspect_policy_ == runtime::AspectPolicy::Preserve) {
+      // Preserve aspect: scale to fit, pad with black bars
+      double src_aspect = static_cast<double>(src_width) / src_height;
+      double dst_aspect = static_cast<double>(dst_width) / dst_height;
+      
+      if (src_aspect > dst_aspect) {
+        // Source is wider: fit to width, pad height
+        scale_width_ = dst_width;
+        scale_height_ = static_cast<int>(dst_width / src_aspect);
+        pad_x_ = 0;
+        pad_y_ = (dst_height - scale_height_) / 2;
+      } else {
+        // Source is taller: fit to height, pad width
+        scale_width_ = static_cast<int>(dst_height * src_aspect);
+        scale_height_ = dst_height;
+        pad_x_ = (dst_width - scale_width_) / 2;
+        pad_y_ = 0;
+      }
+    } else {
+      // Stretch: use target dimensions directly
+      scale_width_ = dst_width;
+      scale_height_ = dst_height;
+      pad_x_ = 0;
+      pad_y_ = 0;
+    }
+
     sws_ctx_ = sws_getContext(
         src_width, src_height, src_format,
-        dst_width, dst_height, dst_format,
+        scale_width_, scale_height_, dst_format,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
 
     if (!sws_ctx_)
@@ -523,6 +559,25 @@ namespace retrovue::producers::file
     scaled_frame_->width = dst_width;
     scaled_frame_->height = dst_height;
     scaled_frame_->format = dst_format;
+
+    // Allocate intermediate frame if padding needed (for aspect preserve)
+    bool needs_padding = (scale_width_ != dst_width || scale_height_ != dst_height);
+    if (needs_padding) {
+      intermediate_frame_ = av_frame_alloc();
+      if (!intermediate_frame_) {
+        CloseDecoder();
+        return false;
+      }
+      if (av_image_alloc(intermediate_frame_->data, intermediate_frame_->linesize,
+                        scale_width_, scale_height_, dst_format, 32) < 0) {
+        av_frame_free(&intermediate_frame_);
+        CloseDecoder();
+        return false;
+      }
+      intermediate_frame_->width = scale_width_;
+      intermediate_frame_->height = scale_height_;
+      intermediate_frame_->format = dst_format;
+    }
 
     // Allocate packet
     packet_ = av_packet_alloc();
@@ -547,6 +602,16 @@ namespace retrovue::producers::file
     {
       sws_freeContext(sws_ctx_);
       sws_ctx_ = nullptr;
+    }
+
+    if (intermediate_frame_)
+    {
+      if (intermediate_frame_->data[0])
+      {
+        av_freep(&intermediate_frame_->data[0]);
+      }
+      av_frame_free(&intermediate_frame_);
+      intermediate_frame_ = nullptr;
     }
 
     if (scaled_frame_)
@@ -819,9 +884,51 @@ namespace retrovue::producers::file
       return false;
     }
 
+    // Check if padding needed (aspect preserve)
+    bool needs_padding = (intermediate_frame_ != nullptr);
+
+    // Scale to intermediate dimensions (preserving aspect if needed)
+    AVFrame* scale_target = needs_padding ? intermediate_frame_ : scaled_frame_;
+
+    // Scale frame
     sws_scale(sws_ctx_, 
               frame_->data, frame_->linesize, 0, codec_ctx_->height,
-              scaled_frame_->data, scaled_frame_->linesize);
+              scale_target->data, scale_target->linesize);
+
+    // If padding needed, copy scaled frame to final frame with padding
+    if (needs_padding) {
+      // Clear target frame (black for Y, gray for UV)
+      std::memset(scaled_frame_->data[0], 0, 
+                  config_.target_width * config_.target_height);
+      std::memset(scaled_frame_->data[1], 128, 
+                  (config_.target_width / 2) * (config_.target_height / 2));
+      std::memset(scaled_frame_->data[2], 128, 
+                  (config_.target_width / 2) * (config_.target_height / 2));
+
+      // Copy Y plane with padding
+      for (int y = 0; y < scale_height_; y++) {
+        std::memcpy(scaled_frame_->data[0] + (pad_y_ + y) * scaled_frame_->linesize[0] + pad_x_,
+                    intermediate_frame_->data[0] + y * intermediate_frame_->linesize[0],
+                    scale_width_);
+      }
+
+      // Copy U plane with padding
+      int uv_pad_x = pad_x_ / 2;
+      int uv_pad_y = pad_y_ / 2;
+      for (int y = 0; y < scale_height_ / 2; y++) {
+        std::memcpy(scaled_frame_->data[1] + (uv_pad_y + y) * scaled_frame_->linesize[1] + uv_pad_x,
+                    intermediate_frame_->data[1] + y * intermediate_frame_->linesize[1],
+                    scale_width_ / 2);
+      }
+
+      // Copy V plane with padding
+      for (int y = 0; y < scale_height_ / 2; y++) {
+        std::memcpy(scaled_frame_->data[2] + (uv_pad_y + y) * scaled_frame_->linesize[2] + uv_pad_x,
+                    intermediate_frame_->data[2] + y * intermediate_frame_->linesize[2],
+                    scale_width_ / 2);
+      }
+    }
+
     return true;
   }
 

@@ -31,6 +31,8 @@
 #include <optional>
 #include <unordered_map>
 
+#include "retrovue/runtime/ProgramFormat.h"
+
 namespace retrovue::buffer {
 struct Frame;
 struct AudioFrame;
@@ -84,7 +86,8 @@ class PlayoutEngine {
       int32_t channel_id,
       const std::string& plan_handle,
       int32_t port,
-      const std::optional<std::string>& uds_path = std::nullopt);
+      const std::optional<std::string>& uds_path = std::nullopt,
+      const std::string& program_format_json = "");
   
   EngineResult StopChannel(int32_t channel_id);
   
@@ -130,6 +133,10 @@ class PlayoutEngine {
   // Returns nullptr if channel not found.
   output::OutputBus* GetOutputBus(int32_t channel_id);
 
+  // Gets the ProgramFormat for a channel.
+  // Returns empty optional if channel not found.
+  std::optional<ProgramFormat> GetProgramFormat(int32_t channel_id);
+
   // Connects the renderer to the OutputBus for frame routing.
   // Call this after attaching a sink to start frame flow.
   void ConnectRendererToOutputBus(int32_t channel_id);
@@ -147,11 +154,11 @@ class PlayoutEngine {
   bool control_surface_only_;
 
   // Forward declaration for internal playout runtime (one per Air instance).
-  struct PlayoutSession;
+  struct PlayoutInstance;
 
   // TODO: Legacy/transitional. Air runs one playout session; channel identity is external (Core).
   mutable std::mutex channels_mutex_;
-  std::unordered_map<int32_t, std::unique_ptr<PlayoutSession>> channels_;
+  std::unordered_map<int32_t, std::unique_ptr<PlayoutInstance>> channels_;
 };
 
 }  // namespace retrovue::runtime

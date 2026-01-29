@@ -18,18 +18,18 @@
 
 #include "playout.grpc.pb.h"
 #include "playout.pb.h"
-#include "retrovue/runtime/PlayoutController.h"
+#include "retrovue/runtime/PlayoutInterface.h"
 
 namespace retrovue {
 namespace playout {
 
 // PlayoutControlImpl implements the gRPC service defined in playout.proto.
-// This is a thin adapter that delegates to PlayoutController.
+// This is a thin adapter that delegates to PlayoutInterface.
 class PlayoutControlImpl final : public PlayoutControl::Service {
  public:
   // Constructs the service with a controller that manages channel lifecycle.
   // control_surface_only: when true, AttachStream writes HELLO (Phase 8.0 tests); when false, stream stays silent until SwitchToLive writes real MPEG-TS (Phase 8.6).
-  PlayoutControlImpl(std::shared_ptr<runtime::PlayoutController> controller,
+  PlayoutControlImpl(std::shared_ptr<runtime::PlayoutInterface> interface,
                      bool control_surface_only = false);
   ~PlayoutControlImpl() override;
 
@@ -73,7 +73,7 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
 
  private:
   // Controller that manages all channel lifecycle operations
-  std::shared_ptr<runtime::PlayoutController> controller_;
+  std::shared_ptr<runtime::PlayoutInterface> interface_;
 
   // Phase 9.0: OutputBus/OutputSink architecture
   // control_surface_only_: when true, uses legacy HelloLoop; when false, uses MpegTSOutputSink

@@ -218,7 +218,10 @@ def test_phase8_6_real_mpeg_ts_no_hello_vlc_e2e():
                 with grpc.insecure_channel(grpc_addr) as ch:
                     stub = playout_pb2_grpc.PlayoutControlStub(ch)
                     start_resp = stub.StartChannel(
-                        playout_pb2.StartChannelRequest(channel_id=1, plan_handle="phase86", port=0),
+                        playout_pb2.StartChannelRequest(
+                            channel_id=1, plan_handle="phase86", port=0,
+                            program_format_json=_DEFAULT_PROGRAM_FORMAT_JSON
+                        ),
                         timeout=rpc_timeout,
                     )
                     if not start_resp.success:

@@ -56,6 +56,11 @@ message StartChannelRequest {
   int32 channel_id = 1;      // Unique identifier for the target channel.
   string plan_handle = 2;    // Reference to the schedule plan that should begin playback.
   int32 port = 3;            // Local UDP/RTP port where the engine should output media.
+
+  // Canonical per-channel program signal format.
+  // JSON object; schema defined by PlayoutInstanceAndProgramFormatContract.md.
+  // Required: defines video (width, height, frame_rate) and audio (sample_rate, channels).
+  string program_format_json = 10;
 }
 
 // StartChannelResponse reports success or failure of the start operation.

@@ -14,7 +14,7 @@
 
 #include "playout_service.h"
 #include "retrovue/runtime/PlayoutEngine.h"
-#include "retrovue/runtime/PlayoutController.h"
+#include "retrovue/runtime/PlayoutInterface.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/timing/MasterClock.h"
 
@@ -74,10 +74,10 @@ void RunServer(const ServerConfig& config) {
       metrics_exporter, master_clock, config.control_surface_only);
   
   // Create the controller (thin adapter between gRPC and domain)
-  auto controller = std::make_shared<retrovue::runtime::PlayoutController>(engine);
+  auto interface = std::make_shared<retrovue::runtime::PlayoutInterface>(engine);
   
-  // Create the gRPC service (thin adapter between gRPC and controller)
-  retrovue::playout::PlayoutControlImpl service(controller, config.control_surface_only);
+  // Create the gRPC service (thin adapter between gRPC and interface)
+  retrovue::playout::PlayoutControlImpl service(interface, config.control_surface_only);
 
   // Enable health checking and reflection
   grpc::EnableDefaultHealthCheckService(true);
@@ -103,7 +103,7 @@ void RunServer(const ServerConfig& config) {
   std::cout << "\nComponents:" << std::endl;
   std::cout << "  ✓ FFmpegDecoder (real video decoding)" << std::endl;
   std::cout << "  ✓ FrameRingBuffer (lock-free circular buffer)" << std::endl;
-  std::cout << "  ✓ FrameRenderer (headless mode)" << std::endl;
+  std::cout << "  ✓ ProgramOutput (headless mode)" << std::endl;
   std::cout << "  ✓ MetricsHTTPServer (Prometheus format)" << std::endl;
   std::cout << "\nPress Ctrl+C to shutdown...\n" << std::endl;
 

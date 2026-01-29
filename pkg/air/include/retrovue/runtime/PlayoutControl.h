@@ -27,7 +27,7 @@ namespace producers {
   class IProducer;
 }
 namespace renderer {
-  class FrameRenderer;
+  class ProgramOutput;
 }
 }
 
@@ -146,7 +146,7 @@ class PlayoutControl {
   // Stops live producer, flushes renderer, resets timestamps, and swaps producers.
   // Requires: renderer pointer for flushing (can be nullptr if not available).
   // Returns true on success, false on failure.
-  bool activatePreviewAsLive(renderer::FrameRenderer* renderer = nullptr);
+  bool activatePreviewAsLive(renderer::ProgramOutput* program_output = nullptr);
 
   // Gets the preview bus (const access).
   const ProducerBus& getPreviewBus() const;

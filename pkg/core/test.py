@@ -12,6 +12,9 @@ sys.path.insert(0, str(_proto_dir))
 sys.path.insert(0, str(_proto_dir.parent))
 from retrovue import playout_pb2, playout_pb2_grpc
 
+# Default ProgramFormat JSON (1080p30, 48kHz stereo)
+_DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}}'
+
 # Create UDS server first (like the launch code does)
 socket_path = "/tmp/test_air.sock"
 import os
@@ -36,7 +39,8 @@ print(stub.GetVersion(playout_pb2.ApiVersionRequest(), timeout=5))
 
 print("\n2. StartChannel...")
 resp = stub.StartChannel(playout_pb2.StartChannelRequest(
-    channel_id=1, plan_handle="test", port=0
+    channel_id=1, plan_handle="test", port=0,
+    program_format_json=_DEFAULT_PROGRAM_FORMAT_JSON
 ), timeout=30)
 print(f"   success={resp.success}, message={resp.message}")
 

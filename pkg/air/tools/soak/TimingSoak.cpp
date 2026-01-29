@@ -12,7 +12,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/decode/FrameProducer.h"
-#include "retrovue/renderer/FrameRenderer.h"
+#include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "playout_service.h"
 #include "retrovue/timing/MasterClock.h"
