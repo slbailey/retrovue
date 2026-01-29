@@ -32,7 +32,7 @@ OutputBus is a **signal path**, not a transport.
 
 - Exists for the lifetime of a playout session
 - Receives rendered video and audio frames
-- Routes frames to attached output sinks
+- Routes frames to currently attached output sinks
 - Manages attachment and detachment of sinks
 - Is governed by EngineStateMachine
 
@@ -83,7 +83,7 @@ An OutputSink converts frames into an external representation (e.g. MPEG-TS over
 ### 3.2 Attachment Model
 
 - OutputBus may have zero or more sinks conceptually
-- **Current policy:** Air enforces at most one attached sink
+- **Current enforced invariant:** Air allows at most one attached sink per OutputBus
 - Policy is enforced by EngineStateMachine, not by OutputBus itself
 
 #### Attachment rules (current)
@@ -107,6 +107,8 @@ The state machine enforces:
 - Deterministic transition order
 
 **OutputSink implementations must not bypass EngineStateMachine.**
+
+OutputBus must not perform attach/detach operations autonomously.
 
 ---
 
@@ -142,6 +144,8 @@ The following terms are **forbidden** in public or runtime-level code:
 - `WriterState`
 - `WriterThread`
 - `WriteLoop` (unless strictly private to a sink)
+
+Any legacy symbols containing these terms must be encapsulated and not exposed outside a concrete OutputSink.
 
 **Allowed terminology:**
 
