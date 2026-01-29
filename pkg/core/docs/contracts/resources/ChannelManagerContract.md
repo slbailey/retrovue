@@ -317,7 +317,7 @@ This contract covers Phase 8 (simplified playout). Future phases will add:
 | CM-030 | `test_channel_manager_schedule_selection` |
 | CM-031 | `test_channel_manager_asset_validation` |
 | CM-040 | `test_channel_manager_channel_isolation` |
-| CM-041 | `test_channel_manager_daemon_resilience` |
+| CM-041 | `test_channel_manager_resilience` |
 | CM-050, CM-051 | `test_channel_manager_schedule_format` |
 
 ---

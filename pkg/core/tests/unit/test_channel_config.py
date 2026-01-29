@@ -16,6 +16,7 @@ from retrovue.runtime.config import (
     ProgramFormat,
     ChannelConfig,
     InlineChannelConfigProvider,
+    RuntimeConfig,
     DEFAULT_PROGRAM_FORMAT,
     MOCK_CHANNEL_CONFIG,
 )
@@ -231,3 +232,72 @@ class TestFileChannelConfigProvider:
             assert "ch2" in provider.list_channel_ids()
         finally:
             path.unlink()
+
+
+class TestRuntimeConfig:
+    """Tests for RuntimeConfig dataclass."""
+
+    def test_defaults(self):
+        """RuntimeConfig has sensible defaults."""
+        config = RuntimeConfig()
+        assert config.program_director_port == 8000
+        assert config.channel_manager_port == 9000
+        assert config.channels_config == "config/channels.json"
+        assert config.schedules_dir == "config/schedules"
+
+    def test_load_from_file(self):
+        """RuntimeConfig.load() reads from JSON file."""
+        content = json.dumps({
+            "program_director_port": 8080,
+            "channel_manager_port": 9090,
+            "channels_config": "custom/channels.json",
+            "schedules_dir": "custom/schedules",
+        })
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(content)
+            f.flush()
+            path = f.name
+
+        try:
+            config = RuntimeConfig.load(path)
+            assert config.program_director_port == 8080
+            assert config.channel_manager_port == 9090
+            assert config.channels_config == "custom/channels.json"
+            assert config.schedules_dir == "custom/schedules"
+        finally:
+            Path(path).unlink()
+
+    def test_load_nonexistent_returns_defaults(self):
+        """RuntimeConfig.load() returns defaults when file doesn't exist."""
+        config = RuntimeConfig.load("/nonexistent/config.json")
+        assert config.program_director_port == 8000
+        assert config.channel_manager_port == 9000
+
+    def test_load_partial_file(self):
+        """RuntimeConfig.load() uses defaults for missing fields."""
+        content = json.dumps({
+            "program_director_port": 7000,
+        })
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(content)
+            f.flush()
+            path = f.name
+
+        try:
+            config = RuntimeConfig.load(path)
+            assert config.program_director_port == 7000
+            assert config.channel_manager_port == 9000  # default
+            assert config.channels_config == "config/channels.json"  # default
+        finally:
+            Path(path).unlink()
+
+    def test_get_paths(self):
+        """get_channels_config_path() and get_schedules_dir_path() return Path objects."""
+        config = RuntimeConfig(
+            channels_config="my/channels.json",
+            schedules_dir="my/schedules",
+        )
+        assert config.get_channels_config_path() == Path("my/channels.json")
+        assert config.get_schedules_dir_path() == Path("my/schedules")

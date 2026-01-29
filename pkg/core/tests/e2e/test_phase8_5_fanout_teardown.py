@@ -92,14 +92,14 @@ def _start_director_85(provider: _StubChannelManagerProvider85) -> tuple[Program
 
 def test_phase8_5_multiple_viewers_receive_same_bytes():
     """
-    Phase 8.5: Open N HTTP connections to GET /channels/{id}.ts; all receive the same bytes.
+    Phase 8.5: Open N HTTP connections to GET /channel/{id}.ts; all receive the same bytes.
 
     Contract: Multiple HTTP readers receive the same stream (or logical copy).
     """
     provider = _StubChannelManagerProvider85("mock")
     director, base = _start_director_85(provider)
     try:
-        url = f"{base}/channels/mock.ts"
+        url = f"{base}/channel/mock.ts"
         target_bytes = 188 * 30
         responses = []
         try:
@@ -143,7 +143,7 @@ def test_phase8_5_last_viewer_disconnect_stops_stream():
     provider = _StubChannelManagerProvider85("mock")
     director, base = _start_director_85(provider)
     try:
-        url = f"{base}/channels/mock.ts"
+        url = f"{base}/channel/mock.ts"
 
         # First viewer: get some bytes then close
         with requests.get(url, stream=True, timeout=(3, 2)) as r:

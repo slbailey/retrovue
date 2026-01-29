@@ -22,10 +22,7 @@ from retrovue.runtime.producer.base import (
     ProducerMode,
     ProducerStatus,
 )
-from retrovue.runtime.channel_manager_daemon import (
-    ChannelManagerDaemon,
-    ChannelManager,
-)
+from retrovue.runtime.channel_manager import ChannelManager
 from retrovue.runtime.program_director import ProgramDirector
 
 
@@ -78,20 +75,20 @@ class FakeProducer(Producer):
 
 
 # ---------------------------------------------------------------------------
-# Provider fixture (ChannelManagerDaemon with fake producer; no HTTP, no Air)
+# Provider fixture (ProgramDirector with embedded registry and fake producer; no Air)
 # ---------------------------------------------------------------------------
 
 CHANNEL_ID = "mock"
 
 
 @pytest.fixture
-def channel_manager_provider() -> ChannelManagerDaemon:
-    """ChannelManagerDaemon with mock schedule and FakeProducer; no start() so no HTTP/Air."""
-    daemon = ChannelManagerDaemon(schedule_dir=None)
-    daemon._producer_factory = lambda channel_id, mode, config, channel_config=None: FakeProducer(
+def channel_manager_provider() -> ProgramDirector:
+    """ProgramDirector with embedded registry, mock schedule, and FakeProducer; no start() so no HTTP/Air."""
+    provider = ProgramDirector(schedule_dir=None)
+    provider._producer_factory = lambda channel_id, mode, config, channel_config=None: FakeProducer(
         channel_id, ProducerMode.NORMAL, config or {}
     )
-    return daemon
+    return provider
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +96,7 @@ def channel_manager_provider() -> ChannelManagerDaemon:
 # ---------------------------------------------------------------------------
 
 
-def test_viewer_count_zero_destroys_channel_manager(channel_manager_provider: ChannelManagerDaemon) -> None:
+def test_viewer_count_zero_destroys_channel_manager(channel_manager_provider: ProgramDirector) -> None:
     """
     Phase 8.7: When viewer count goes 1 → 0, ChannelManager is destroyed (removed from registry).
 
@@ -135,7 +132,7 @@ def test_viewer_count_zero_destroys_channel_manager(channel_manager_provider: Ch
         director.stop(timeout=1.0)
 
 
-def test_double_disconnect_is_safe(channel_manager_provider: ChannelManagerDaemon) -> None:
+def test_double_disconnect_is_safe(channel_manager_provider: ProgramDirector) -> None:
     """
     Phase 8.7: Disconnecting twice (e.g. duplicate stop_channel or viewer_leave) must not
     raise exceptions and viewer count must never go negative.
@@ -159,7 +156,7 @@ def test_double_disconnect_is_safe(channel_manager_provider: ChannelManagerDaemo
         assert m.runtime_state.viewer_count >= 0, "viewer_count must never go negative"
 
 
-def test_new_viewer_creates_fresh_channel_manager(channel_manager_provider: ChannelManagerDaemon) -> None:
+def test_new_viewer_creates_fresh_channel_manager(channel_manager_provider: ProgramDirector) -> None:
     """
     Phase 8.7: Connect → disconnect → connect again must create a NEW ChannelManager
     instance (not reuse the torn-down one).

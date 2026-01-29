@@ -271,13 +271,15 @@ def _launch_air_binary(
 
     channel_id_int = channel_config.channel_id_int
     program_format_json = channel_config.program_format.to_json()
+    # Air uses plan_handle as the initial asset URI (file path) for the producer; pass resolved path.
+    plan_handle = asset_path if asset_path else "mock"
     with grpc.insecure_channel(grpc_addr) as ch:
         stub = playout_pb2_grpc.PlayoutControlStub(ch)
         r = _rpc(
             "StartChannel",
             lambda timeout: stub.StartChannel(
                 playout_pb2.StartChannelRequest(
-                    channel_id=channel_id_int, plan_handle="mock", port=0,
+                    channel_id=channel_id_int, plan_handle=plan_handle, port=0,
                     program_format_json=program_format_json
                 ),
                 timeout=timeout,

@@ -2,7 +2,7 @@
 Phase 8.0 — Transport contract (TS-oriented).
 
 Contract: Python creates UDS server, Air connects as client and writes real MPEG-TS.
-GET /channels/{id}.ts returns bytes starting with TS sync 0x47 (no HELLO).
+GET /channel/{id}.ts returns bytes starting with TS sync 0x47 (no HELLO).
 Runtime is Air-only; no ffmpeg.
 
 See: pkg/air/docs/contracts/phases/Phase8-0-Transport.md
@@ -88,10 +88,10 @@ def _find_sample_asset() -> Path | None:
 
 
 class _StreamHandler(BaseHTTPRequestHandler):
-    """Serves GET /channels/mock.ts by streaming bytes from the shared client socket."""
+    """Serves GET /channel/mock.ts by streaming bytes from the shared client socket."""
 
     def do_GET(self):
-        if self.path.strip("/") == "channels/mock.ts":
+        if self.path.strip("/") == "channel/mock.ts":
             if self.server.stream_socket is None:
                 self.send_error(503, "No stream attached")
                 return
@@ -244,7 +244,7 @@ def test_phase8_0_transport_ts_sync_once_live():
             time.sleep(1.5)
 
             r = requests.get(
-                f"http://127.0.0.1:{http_port}/channels/mock.ts",
+                f"http://127.0.0.1:{http_port}/channel/mock.ts",
                 stream=True,
                 timeout=(3, 5),
             )

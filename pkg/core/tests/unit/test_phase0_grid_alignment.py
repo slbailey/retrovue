@@ -11,7 +11,7 @@ full ChannelManager or ScheduleService setup.
 from datetime import datetime, timezone, timedelta
 import pytest
 
-from retrovue.runtime.channel_manager_daemon import (
+from retrovue.runtime.channel_manager import (
     ChannelManager,
     MockGridScheduleService,
     Phase8ProgramDirector,

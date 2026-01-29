@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from retrovue.runtime.clock import ControllableMasterClock
-from retrovue.runtime.channel_manager_daemon import (
+from retrovue.runtime.channel_manager import (
     ChannelManager,
     MockAlternatingScheduleService,
     Phase8ProgramDirector,

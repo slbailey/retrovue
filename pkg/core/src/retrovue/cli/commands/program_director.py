@@ -2,23 +2,26 @@
 Program Director CLI commands.
 
 Provides commands to start the ProgramDirector which serves as the
-control plane inside RetroVue, routing viewer requests to ChannelManagers.
+control plane inside RetroVue. ProgramDirector owns the ChannelManager
+registry (creation, health ticking, fanout attachment, teardown); there
+is no separate daemon. Single HTTP server, single port.
 """
 
 import logging
 import typer
 from pathlib import Path
-from retrovue.runtime.channel_manager_daemon import ChannelManagerDaemon
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.runtime.config import RuntimeConfig
+from retrovue.runtime.providers.file_config_provider import FileChannelConfigProvider
 
 app = typer.Typer(help="Retrovue Program Director commands")
 
 
 @app.command("start")
 def start(
-    schedule_dir: str = typer.Option(None, help="Directory containing schedule.json files (Phase 8); if omitted, use mock schedule (channel 'mock', assets/samplecontent.mp4)"),
-    port: int = typer.Option(8000, help="Port for ProgramDirector HTTP server"),
-    channel_manager_port: int = typer.Option(9000, help="Port for ChannelManager (internal)"),
+    config_file: str = typer.Option(None, "--config", "-c", help="Path to retrovue.json (default: auto-detect)"),
+    schedule_dir: str = typer.Option(None, help="Directory containing schedule.json files (Phase 8); if omitted, use config file or mock schedule"),
+    port: int = typer.Option(None, help="Port for HTTP server (default: from config or 8000)"),
     # Mock schedule: grid + filler (no real schedule)
     mock_schedule_grid: bool = typer.Option(False, help="Use mock grid schedule (program + filler on 30-minute grid)"),
     program_asset: str = typer.Option(None, help="Mock grid: Path to program asset (MP4 file)"),
@@ -33,13 +36,22 @@ def start(
 ):
     """
     Starts RetroVue with ProgramDirector as the control plane.
-    
+
+    Configuration is loaded from (in order):
+    1. --config FILE (if specified)
+    2. config/retrovue.json (relative to cwd)
+    3. /opt/retrovue/config/retrovue.json
+    4. Built-in defaults
+
+    With no arguments, starts with config file settings or defaults.
+    CLI options override config file values when specified.
+
     ProgramDirector is the control plane inside RetroVue that:
-    - Exposes HTTP endpoints (GET /channels, GET /channels/{id}.ts, POST /admin/emergency)
+    - Exposes HTTP endpoints (GET /channels, GET /channel/{id}.ts, POST /admin/emergency)
     - Routes viewer tune requests to ChannelManager
     - Owns and manages FanoutBuffers per channel
     - Stops playout engine pipelines when last viewer disconnects
-    
+
     Mock grid (--mock-schedule-grid):
     - Uses fixed 30-minute grid with program + filler model
     - Requires --program-asset, --program-duration, and --filler-asset
@@ -60,6 +72,31 @@ def start(
         format="%(levelname)s:     %(message)s",
         force=True,
     )
+
+    # Load runtime configuration from file (or defaults)
+    runtime_config = RuntimeConfig.load(config_file)
+
+    # CLI options override config file values (single port; no separate daemon)
+    http_port = port if port is not None else runtime_config.program_director_port
+
+    # Load channel config provider from config file path
+    channel_config_provider = None
+    channels_config_path = runtime_config.get_channels_config_path()
+    if channels_config_path.exists():
+        channel_config_provider = FileChannelConfigProvider(channels_config_path)
+        typer.echo(f"Loaded channel configs from {channels_config_path}")
+
+    # Determine schedule directory
+    # Priority: CLI arg > config file > None (mock schedule)
+    effective_schedule_dir = None
+    if schedule_dir:
+        effective_schedule_dir = Path(schedule_dir)
+    elif not mock_schedule_grid and not mock_schedule_ab:
+        # Check if schedules_dir from config exists and has schedule files
+        schedules_dir_path = runtime_config.get_schedules_dir_path()
+        if schedules_dir_path.exists() and list(schedules_dir_path.glob("*.json")):
+            effective_schedule_dir = schedules_dir_path
+            typer.echo(f"Using schedules from {schedules_dir_path}")
 
     # Validate mock A/B configuration
     if mock_schedule_ab:
@@ -93,20 +130,24 @@ def start(
         if not Path(filler_asset).exists():
             typer.echo(f"Error: Filler asset not found: {filler_asset}", err=True)
             raise typer.Exit(1)
-    # Create RetroVue Core runtime (implements ChannelManagerProvider)
+    # Create ProgramDirector with embedded ChannelManager registry (single component, single port)
     if mock_schedule_ab:
-        channel_manager = ChannelManagerDaemon(
-            schedule_dir=Path("/tmp"),  # Dummy path for mock A/B (not used)
-            port=channel_manager_port,
+        program_director = ProgramDirector(
+            host="0.0.0.0",
+            port=http_port,
+            schedule_dir=Path("/tmp"),
+            channel_config_provider=channel_config_provider,
             mock_schedule_ab_mode=True,
             asset_a_path=asset_a,
             asset_b_path=asset_b,
             segment_seconds=segment_seconds,
         )
     elif mock_schedule_grid:
-        channel_manager = ChannelManagerDaemon(
-            schedule_dir=Path("/tmp"),  # Dummy path for mock grid (not used)
-            port=channel_manager_port,
+        program_director = ProgramDirector(
+            host="0.0.0.0",
+            port=http_port,
+            schedule_dir=Path("/tmp"),
+            channel_config_provider=channel_config_provider,
             mock_schedule_grid_mode=True,
             program_asset_path=program_asset,
             program_duration_seconds=program_duration,
@@ -114,40 +155,21 @@ def start(
             filler_duration_seconds=filler_duration,
         )
     else:
-        channel_manager = ChannelManagerDaemon(
-            schedule_dir=Path(schedule_dir) if schedule_dir else None,  # None = built-in mock schedule
-            port=channel_manager_port,  # Internal port for ChannelManager
+        program_director = ProgramDirector(
+            host="0.0.0.0",
+            port=http_port,
+            schedule_dir=effective_schedule_dir,
+            channel_config_provider=channel_config_provider,
         )
-    
-    # Create ProgramDirector with RetroVue Core runtime as provider
-    program_director = ProgramDirector(
-        channel_manager_provider=channel_manager,
-        host="0.0.0.0",
-        port=port,
-    )
-    
-    # Start both components
-    # ChannelManagerDaemon.start() blocks (runs uvicorn server), so start it in a thread
-    import threading
-    
-    def start_channel_manager():
-        channel_manager.start()
-    
-    cm_thread = threading.Thread(target=start_channel_manager, name="channel-manager", daemon=True)
-    cm_thread.start()
-    
-    # Start ProgramDirector (this will start its HTTP server in a background thread)
+
     program_director.start()
-    
-    # Keep main thread alive and handle shutdown
+
     try:
         import time
-        print(f"ProgramDirector started on port {port}")
-        print(f"ChannelManager running on port {channel_manager_port} (internal)")
+        print(f"ProgramDirector started on port {http_port}")
         print("Press Ctrl+C to stop...")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nShutting down...")
         program_director.stop()
-        channel_manager.stop()

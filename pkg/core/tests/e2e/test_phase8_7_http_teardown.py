@@ -1,7 +1,7 @@
 """
 Phase 8.7 — HTTP Teardown E2E.
 
-Contract: GET /channels/<id>.ts → read bytes → close connection → within 500ms:
+Contract: GET /channel/<id>.ts → read bytes → close connection → within 500ms:
 - ChannelManager no longer exists (removed from registry)
 - No reconnect attempts logged
 - No Air activity for that channel
@@ -25,7 +25,6 @@ import pytest
 import requests
 
 from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource
-from retrovue.runtime.channel_manager_daemon import ChannelManagerDaemon
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.runtime.producer.base import (
     ContentSegment,
@@ -91,8 +90,8 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _start_director_with_daemon(
-    provider: ChannelManagerDaemon,
+def _start_director_with_provider(
+    provider: ProgramDirector,
     channel_stream_factory: Any,
 ) -> tuple[ProgramDirector, str]:
     port = _free_port()
@@ -131,23 +130,23 @@ def _poll_until(
 
 def test_http_close_teardown_within_500ms_no_reconnect(caplog: pytest.LogCaptureFixture) -> None:
     """
-    Phase 8.7 E2E: GET /channels/<id>.ts, read bytes, close → within 500ms:
+    Phase 8.7 E2E: GET /channel/<id>.ts, read bytes, close → within 500ms:
     - ChannelManager no longer exists
     - No reconnect attempts logged
     - No Air activity for that channel (no Air in this test; fakes only)
     """
     caplog.set_level(logging.INFO, logger="retrovue.runtime")
 
-    provider = ChannelManagerDaemon(schedule_dir=None)
-    provider._producer_factory = lambda cid, mode, cfg: FakeProducerWithSocket(
+    provider = ProgramDirector(schedule_dir=None)
+    provider._producer_factory = lambda cid, mode, cfg, channel_config=None: FakeProducerWithSocket(
         cid, ProducerMode.NORMAL, cfg or {}
     )
     channel_stream_factory = lambda cid, path: ChannelStream(
         cid, ts_source_factory=lambda: FakeTsSource(chunk_size=188 * 10)
     )
 
-    director, base = _start_director_with_daemon(provider, channel_stream_factory)
-    url = f"{base}/channels/{CHANNEL_ID}.ts"
+    director, base = _start_director_with_provider(provider, channel_stream_factory)
+    url = f"{base}/channel/{CHANNEL_ID}.ts"
 
     try:
         # Open stream, read some bytes, close

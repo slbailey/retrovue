@@ -152,12 +152,12 @@ def test_phase7_0_one_channel_http_200_and_bytes_flow(phase7_program_director):
     """
     Phase 7.0: One channel, one HTTP client, status 200, bytes flow.
 
-    - GET /channels/{channel_id}.ts returns 200
+    - GET /channel/{channel_id}.ts returns 200
     - Content-Type is video/mp2t
     - At least some TS bytes are received (e.g. 1880 = 10 packets)
     """
     base = phase7_program_director
-    url = f"{base}/channels/mock.ts"
+    url = f"{base}/channel/mock.ts"
 
     with requests.get(url, stream=True, timeout=5) as r:
         assert r.status_code == 200, r.text
@@ -192,7 +192,7 @@ def test_phase7_1_correctness_at_tune_in_asset_and_offset(phase7_program_directo
 
     # Tune in (start stream) then probe at :02
     t_02 = int((base_ts + 2 * 60) * 1000)
-    with requests.get(f"{base}/channels/{channel_id}.ts", stream=True, timeout=2) as r:
+    with requests.get(f"{base}/channel/{channel_id}.ts", stream=True, timeout=2) as r:
         assert r.status_code == 200
     r2 = requests.get(
         f"{base}/debug/channels/{channel_id}/current-segment",
