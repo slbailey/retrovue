@@ -26,6 +26,7 @@ Guide contributors and operators to the correct documentation based on their goa
 ## Contracts
 
 - [Playout Engine Contract](contracts/PlayoutEngineContract.md) - Control plane guarantees and rule IDs.
+- [OutputBus & OutputSink Contract](contracts/OutputBusAndOutputSinkContract.md) - Output signal model and bus/sink architecture.
 - [Renderer Contract](contracts/RendererContract.md) - Renderer expectations and coverage.
 - [Metrics and Timing Contract](contracts/MetricsAndTimingContract.md) - Metrics schema and enforcement.
 
