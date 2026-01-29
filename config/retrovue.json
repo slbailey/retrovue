@@ -1,0 +1,6 @@
+{
+  "program_director_port": 8000,
+  "channel_manager_port": 9000,
+  "channels_config": "config/channels.json",
+  "schedules_dir": "config/schedules"
+}
