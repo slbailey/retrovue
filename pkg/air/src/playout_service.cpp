@@ -265,7 +265,7 @@ namespace retrovue
               const auto& program_format = *program_format_opt;
               playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
               config.stub_mode = false;
-              config.persistent_mux = true;
+              config.persistent_mux = false;  // Resend headers at keyframes for late-joining clients
               config.target_fps = program_format.GetFrameRateAsDouble();
               config.target_width = program_format.video.width;
               config.target_height = program_format.video.height;

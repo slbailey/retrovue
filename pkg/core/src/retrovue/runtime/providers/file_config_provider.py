@@ -1,0 +1,139 @@
+"""
+File-based channel configuration provider.
+
+Loads channel configurations from a JSON file.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from ..config import ChannelConfig, ChannelConfigProvider
+
+_logger = logging.getLogger(__name__)
+
+
+class FileChannelConfigProvider:
+    """
+    ChannelConfigProvider that loads configurations from a JSON file.
+
+    Expected JSON format:
+    {
+      "channels": [
+        {
+          "channel_id": "mock",
+          "channel_id_int": 1,
+          "name": "Mock Channel",
+          "program_format": {
+            "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
+            "audio": {"sample_rate": 48000, "channels": 2}
+          },
+          "schedule_source": "mock",
+          "schedule_config": {}
+        }
+      ]
+    }
+    """
+
+    def __init__(self, config_path: Path | str):
+        """
+        Initialize the provider.
+
+        Args:
+            config_path: Path to the channels.json file
+        """
+        self._config_path = Path(config_path)
+        self._configs: dict[str, ChannelConfig] = {}
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        """Load configs from file if not already loaded."""
+        if self._loaded:
+            return
+
+        if not self._config_path.exists():
+            _logger.warning(
+                "Channel config file not found: %s",
+                self._config_path,
+            )
+            self._loaded = True
+            return
+
+        try:
+            with open(self._config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            channels_data = data.get("channels", [])
+            for channel_data in channels_data:
+                try:
+                    config = ChannelConfig.from_dict(channel_data)
+                    self._configs[config.channel_id] = config
+                    _logger.debug(
+                        "Loaded channel config: %s (int_id=%d)",
+                        config.channel_id,
+                        config.channel_id_int,
+                    )
+                except (KeyError, ValueError, TypeError) as e:
+                    _logger.warning(
+                        "Skipping invalid channel config: %s (error: %s)",
+                        channel_data.get("channel_id", "<unknown>"),
+                        e,
+                    )
+
+            _logger.info(
+                "Loaded %d channel configs from %s",
+                len(self._configs),
+                self._config_path,
+            )
+
+        except json.JSONDecodeError as e:
+            _logger.error(
+                "Failed to parse channel config file %s: %s",
+                self._config_path,
+                e,
+            )
+        except OSError as e:
+            _logger.error(
+                "Failed to read channel config file %s: %s",
+                self._config_path,
+                e,
+            )
+
+        self._loaded = True
+
+    def reload(self) -> None:
+        """Force reload of configs from file."""
+        self._loaded = False
+        self._configs.clear()
+        self._ensure_loaded()
+
+    def get_channel_config(self, channel_id: str) -> ChannelConfig | None:
+        """
+        Get configuration for a channel by ID.
+
+        Args:
+            channel_id: Human-readable channel ID
+
+        Returns:
+            ChannelConfig if found, None otherwise
+        """
+        self._ensure_loaded()
+        return self._configs.get(channel_id)
+
+    def list_channel_ids(self) -> list[str]:
+        """
+        List all available channel IDs.
+
+        Returns:
+            List of channel IDs
+        """
+        self._ensure_loaded()
+        return list(self._configs.keys())
+
+
+__all__ = [
+    "FileChannelConfigProvider",
+]

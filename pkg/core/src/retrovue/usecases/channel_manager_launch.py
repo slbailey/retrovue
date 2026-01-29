@@ -33,9 +33,8 @@ ProcessHandle = subprocess.Popen[bytes]
 # Air stdout/stderr go here: pkg/air/logs/<channel_id>-air.log
 _AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs"
 
-# Default ProgramFormat JSON (1080p30, 48kHz stereo)
-# See: pkg/air/docs/contracts/architecture/PlayoutInstanceAndProgramFormatContract.md
-_DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}}'
+# Import ChannelConfig for type hints
+from retrovue.runtime.config import ChannelConfig, MOCK_CHANNEL_CONFIG
 
 
 def _open_air_log(channel_id: str):
@@ -187,6 +186,7 @@ def _launch_air_binary(
     start_pts_ms: int,
     socket_path: Path,
     channel_id: str,
+    channel_config: ChannelConfig,
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
 ) -> tuple[ProcessHandle, Path, queue.Queue[Any], str]:
@@ -269,7 +269,8 @@ def _launch_air_binary(
         proc.wait(timeout=3)
         raise RuntimeError("Air gRPC server did not become ready")
 
-    channel_id_int = 1
+    channel_id_int = channel_config.channel_id_int
+    program_format_json = channel_config.program_format.to_json()
     with grpc.insecure_channel(grpc_addr) as ch:
         stub = playout_pb2_grpc.PlayoutControlStub(ch)
         r = _rpc(
@@ -277,7 +278,7 @@ def _launch_air_binary(
             lambda timeout: stub.StartChannel(
                 playout_pb2.StartChannelRequest(
                     channel_id=channel_id_int, plan_handle="mock", port=0,
-                    program_format_json=_DEFAULT_PROGRAM_FORMAT_JSON
+                    program_format_json=program_format_json
                 ),
                 timeout=timeout,
             ),
@@ -341,6 +342,7 @@ def _launch_air_binary(
 def launch_air(
     *,
     playout_request: dict[str, Any],
+    channel_config: ChannelConfig | None = None,
     stdin: Any = subprocess.PIPE,
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
@@ -367,6 +369,9 @@ def launch_air(
     asset_path = playout_request.get("asset_path", "")
     start_pts_ms = playout_request.get("start_pts", 0)
 
+    # Use provided config or fall back to mock config for backwards compatibility
+    config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
+
     if ts_socket_path is None:
         socket_path = get_uds_socket_path(channel_id)
     else:
@@ -387,6 +392,7 @@ def launch_air(
         start_pts_ms=start_pts_ms,
         socket_path=socket_path,
         channel_id=channel_id,
+        channel_config=config,
         stdout=stdout,
         stderr=stderr,
     )

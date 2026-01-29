@@ -32,7 +32,8 @@ FFmpegDecoder::FFmpegDecoder(const DecoderConfig& config)
       video_stream_index_(-1),
       eof_reached_(false),
       start_time_(0),
-      time_base_(0.0) {
+      time_base_(0.0),
+      first_keyframe_seen_(false) {
 }
 
 FFmpegDecoder::~FFmpegDecoder() {
@@ -201,6 +202,7 @@ void FFmpegDecoder::Close() {
   audio_stream_index_ = -1;
   eof_reached_ = false;
   audio_eof_reached_ = false;
+  first_keyframe_seen_ = false;
 }
 
 int FFmpegDecoder::GetVideoWidth() const {
@@ -562,9 +564,26 @@ bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame)
   output_frame.width = config_.target_width;
   output_frame.height = config_.target_height;
 
-  // Calculate PTS in seconds
+  // Calculate PTS in microseconds (MpegTSOutputSink expects microseconds)
   int64_t pts = av_frame->pts != AV_NOPTS_VALUE ? av_frame->pts : av_frame->best_effort_timestamp;
-  output_frame.metadata.pts = pts;
+  // Convert from stream timebase to microseconds
+  // pts * time_base_ gives seconds, multiply by 1,000,000 for microseconds
+  int64_t pts_us = (pts != AV_NOPTS_VALUE)
+      ? static_cast<int64_t>((pts - start_time_) * time_base_ * 1'000'000.0)
+      : 0;
+  output_frame.metadata.pts = pts_us;
+
+  // Diagnostic: log PTS for first 20 frames
+  static int decode_diag_count = 0;
+  ++decode_diag_count;
+  if (decode_diag_count <= 20) {
+    std::cout << "[FFmpegDecoder] DIAG: frame=" << decode_diag_count
+              << " av_pts=" << av_frame->pts
+              << " pts_us=" << pts_us
+              << " time_base=" << time_base_
+              << " pict_type=" << av_get_picture_type_char(av_frame->pict_type)
+              << std::endl;
+  }
   output_frame.metadata.dts = av_frame->pkt_dts;
   // Use duration field (pkt_duration is deprecated in newer FFmpeg)
   int64_t frame_duration = av_frame->duration != AV_NOPTS_VALUE ? av_frame->duration : 0;

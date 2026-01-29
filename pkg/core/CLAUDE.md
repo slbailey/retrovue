@@ -5,6 +5,29 @@ Core owns editorial intent, persistence, scheduling horizons, playout plan gener
 AIR is a separate C++ playout engine; Core supervises and spawns AIR per channel.
 
 ────────────────────────
+HOW TO RUN PYTHON (MANDATORY)
+────────────────────────
+Use the Core virtualenv only. Do not use system python, system pytest, or any other interpreter for Core code.
+
+Activate the venv (do this first, in every shell where you run Core Python):
+  From repo root:    source pkg/core/.venv/bin/activate
+  From pkg/core/:    source .venv/bin/activate
+
+Then, with the venv active:
+  Install deps:      pip install -r pkg/core/requirements.txt   (from repo root)
+  Run all tests:    pytest pkg/core/tests/
+  Run one file:     pytest pkg/core/tests/path/to/test_file.py -vv
+  Lint:             ruff check pkg/core/src/   ;  mypy pkg/core/src/
+  CLI:              retrovue <noun> <verb>     (e.g. retrovue channel list)
+
+Database (tests and runtime often need Postgres):
+  Migrations:       cd pkg/core && alembic upgrade head
+
+Do NOT:
+- Run `python`, `pytest`, or `pip` for Core without activating pkg/core/.venv first.
+- Use system python or a different venv for Core code.
+
+────────────────────────
 BOUNDARIES
 ────────────────────────
 Core IS responsible for:

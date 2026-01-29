@@ -111,6 +111,13 @@ class MpegTSOutputSink : public IOutputSink {
   // Track if we've had frames (for flush detection on producer switch)
   bool had_frames_;
   int empty_iterations_;
+
+  // Prebuffer: accumulates encoded data before streaming starts.
+  // This absorbs encoder warmup bitrate spikes (fade-ins, scene changes).
+  std::vector<uint8_t> prebuffer_;
+  size_t prebuffer_target_bytes_;
+  std::atomic<bool> prebuffering_;
+  mutable std::mutex prebuffer_mutex_;
 };
 
 }  // namespace retrovue::output

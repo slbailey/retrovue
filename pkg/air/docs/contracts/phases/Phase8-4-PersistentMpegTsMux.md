@@ -1,6 +1,6 @@
 # Phase 8.4 — Persistent MPEG-TS Mux (Single Producer)
 
-_Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md)_
+_Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [OutputBus & OutputSink Contract](../../contracts/architecture/OutputBusAndOutputSinkContract.md) (jitter protection)_
 
 **Principle:** Establish a real, persistent MPEG-TS mux per channel per active stream session that converts decoded frames into a continuous, spec-compliant TS byte stream. This phase makes TS continuity real for the first time.
 
@@ -37,6 +37,7 @@ This avoids conflict when adding replace_existing or teardown: the invariant app
 - **No PID reset** within a session. No continuity_counter reset within a session.
 - **PSI cadence (no PAT/PMT spam):** PAT and PMT must be emitted at least every **X ms** (e.g. 100–500 ms) or at least every **N packets**, and must also appear at stream start. They must **not** be emitted per frame or per PES packet.
 - **PCR:** PCR monotonic per PCR PID; PCR PID is stable within a session; PCR/PTS timebase consistent (no jumps). (TS continuity is not just continuity counters and PTS — PCR keeps timing sane; without it, VLC can still exhibit "audio leads video" behaviour.)
+- **Jitter protection:** The output path (OutputBus and/or OutputSink) must provide jitter protection per the [OutputBus & OutputSink Contract](../../contracts/architecture/OutputBusAndOutputSinkContract.md). This phase’s PCR/PTS and continuity guarantees assume that requirement is satisfied.
 - **Single producer:** Producer emits **decoded audio+video frames** (not TS bytes). Mux **accepts frames and outputs TS**. The **mux owns the PID map and continuity counters**, not the producer. (Makes 8.3 obvious: switch frame source, not mux.)
 
 ## Scope (very tight)

@@ -6,7 +6,6 @@
 #include "retrovue/output/MpegTSOutputSink.h"
 
 #include <chrono>
-#include <iostream>
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
@@ -37,10 +36,7 @@ MpegTSOutputSink::MpegTSOutputSink(
       had_frames_(false),
       empty_iterations_(0),
       prebuffer_target_bytes_(0),
-      prebuffering_(false) {  // Disabled: OutputTiming now handles pacing
-  // Prebuffer disabled - OutputTiming (per OutputTimingContract.md) now enforces
-  // real-time delivery discipline at the packet level, making prebuffering unnecessary.
-  std::cout << "[" << name_ << "] Direct streaming mode (OutputTiming handles pacing)" << std::endl;
+      prebuffering_(false) {
 }
 
 MpegTSOutputSink::~MpegTSOutputSink() {
@@ -50,7 +46,6 @@ MpegTSOutputSink::~MpegTSOutputSink() {
 bool MpegTSOutputSink::Start() {
   SinkStatus expected = SinkStatus::kIdle;
   if (!status_.compare_exchange_strong(expected, SinkStatus::kStarting)) {
-    std::cerr << "[" << name_ << "] Cannot start: not in idle state" << std::endl;
     return false;
   }
 
@@ -66,8 +61,6 @@ bool MpegTSOutputSink::Start() {
     encoder_.reset();
     return false;
   }
-
-  std::cout << "[" << name_ << "] Encoder pipeline opened" << std::endl;
 
   // Start mux thread
   stop_requested_.store(false, std::memory_order_release);
@@ -97,7 +90,6 @@ void MpegTSOutputSink::Stop() {
   if (encoder_) {
     encoder_->close();
     encoder_.reset();
-    std::cout << "[" << name_ << "] Encoder pipeline closed" << std::endl;
   }
 
   // Clear queues
@@ -142,8 +134,6 @@ std::string MpegTSOutputSink::GetName() const {
 }
 
 void MpegTSOutputSink::MuxLoop() {
-  std::cout << "[" << name_ << "] MuxLoop started" << std::endl;
-
   while (!stop_requested_.load(std::memory_order_acquire) && fd_ >= 0) {
     bool processed_any = false;
 
@@ -152,9 +142,7 @@ void MpegTSOutputSink::MuxLoop() {
     if (DequeueVideoFrame(&frame)) {
       // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
-      if (!encoder_->encodeFrame(frame, pts90k)) {
-        std::cerr << "[" << name_ << "] Video encode failed, continuing..." << std::endl;
-      }
+      encoder_->encodeFrame(frame, pts90k);
       processed_any = true;
       had_frames_ = true;
     }
@@ -164,9 +152,7 @@ void MpegTSOutputSink::MuxLoop() {
     if (DequeueAudioFrame(&audio_frame)) {
       // AudioFrame.pts_us is in microseconds; encoder expects 90kHz.
       const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
-      if (!encoder_->encodeAudioFrame(audio_frame, audio_pts90k)) {
-        std::cerr << "[" << name_ << "] Audio encode failed, continuing..." << std::endl;
-      }
+      encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
       processed_any = true;
       had_frames_ = true;
     }
@@ -188,8 +174,6 @@ void MpegTSOutputSink::MuxLoop() {
         empty_iterations_++;
         // Wait several iterations to confirm it's a real switch, not a brief gap
         if (empty_iterations_ >= 10) {  // ~50ms at 5ms sleep intervals
-          std::cout << "[" << name_ << "] Queues empty for " << empty_iterations_
-                    << " iterations - flushing encoder buffers" << std::endl;
           encoder_->flushAudio();
           had_frames_ = false;
           empty_iterations_ = 0;
@@ -205,8 +189,6 @@ void MpegTSOutputSink::MuxLoop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
-
-  std::cout << "[" << name_ << "] MuxLoop stopped" << std::endl;
 }
 
 void MpegTSOutputSink::EnqueueVideoFrame(const buffer::Frame& frame) {
@@ -268,11 +250,6 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
 
     // Check if we've reached the target
     if (sink->prebuffer_.size() >= sink->prebuffer_target_bytes_) {
-      std::cout << "[" << sink->name_ << "] Prebuffer full ("
-                << sink->prebuffer_.size() << " bytes), flushing to client..."
-                << std::endl;
-      std::cout.flush();
-
       // Write entire prebuffer to fd (handle EAGAIN/EINTR)
       const uint8_t* p = sink->prebuffer_.data();
       size_t remaining = sink->prebuffer_.size();
@@ -285,13 +262,10 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
             std::this_thread::sleep_for(std::chrono::microseconds(100));
             continue;
           }
-          std::cerr << "[" << sink->name_ << "] Prebuffer flush failed: "
-                    << strerror(errno) << std::endl;
           sink->prebuffer_.clear();
           return -1;
         }
         if (n == 0) {
-          std::cerr << "[" << sink->name_ << "] Prebuffer flush: write returned 0" << std::endl;
           sink->prebuffer_.clear();
           return -1;
         }
@@ -299,8 +273,6 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
         p += n;
       }
 
-      std::cout << "[" << sink->name_ << "] Prebuffer flushed, switching to direct streaming"
-                << std::endl;
       sink->prebuffer_.clear();
       sink->prebuffer_.shrink_to_fit();  // Free memory
       sink->prebuffering_.store(false, std::memory_order_release);

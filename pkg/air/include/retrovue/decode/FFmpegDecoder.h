@@ -168,6 +168,9 @@ class FFmpegDecoder {
   int audio_stream_index_;
   bool eof_reached_;
   bool audio_eof_reached_;
+
+  // Skip pre-keyframe frames to avoid scaling artifacts
+  bool first_keyframe_seen_;
   
   // Timing
   int64_t start_time_;

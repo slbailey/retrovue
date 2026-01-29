@@ -220,11 +220,22 @@ class MpegTSPlayoutSink : public IPlayoutSink {
   std::atomic<uint64_t> late_frame_drops_;
   std::atomic<uint64_t> dropped_packets_{0};  // Packets dropped due to EAGAIN
 
+  // Prebuffer: accumulates encoded data before streaming starts.
+  // This absorbs encoder warmup bitrate spikes (fade-ins, scene changes).
+  std::vector<uint8_t> prebuffer_;
+  size_t prebuffer_target_bytes_{0};  // Target size before streaming starts
+  std::atomic<bool> prebuffering_{true};  // True while accumulating, false when streaming
+  mutable std::mutex prebuffer_mutex_;
+
  public:
   // FE-017: Write all bytes atomically (blocks until complete or error)
   // This ensures TS packets are never split, preserving continuity counters
   // Returns number of bytes written, or -1 on error
   int writeAllBlocking(uint8_t* buf, int buf_size);
+
+ private:
+  // Helper: send data directly to socket (bypasses prebuffer)
+  bool sendToSocketDirect(const uint8_t* data, size_t size);
 };
 
 // C-style callback for FFmpeg AVIO (must be in global scope or extern "C")
