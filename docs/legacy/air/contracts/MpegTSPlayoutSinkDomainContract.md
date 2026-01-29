@@ -1,6 +1,6 @@
 # MPEG-TS Playout Sink Contract
 
-_Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](Phase6A-Overview.md) · [File Producer Contract](FileProducerDomainContract.md) · [Timing Contract](MpegTSPlayoutSinkTimingContract.md)_
+_Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](Phase6A-Overview.md) · [File Producer Contract](FileProducerContract.md) · [Timing Contract](MpegTSPlayoutSinkTimingContract.md)_
 
 **Applies starting in:** Phase 7+ (MPEG-TS serving)  
 **Status:** Deferred (Applies Phase 7+); Enforced when TS output is in scope
@@ -269,5 +269,5 @@ Define the observable guarantees for the **MPEG-TS Playout Sink** — the compon
 - [Playout Engine Contract](PlayoutEngineContract.md) — control plane
 - [Phase Model](../../contracts/PHASE_MODEL.md) — phase taxonomy
 - [Phase 6A Overview](Phase6A-Overview.md) — deferral of MPEG-TS
-- [File Producer Contract](FileProducerDomainContract.md) — frame production
+- [File Producer Contract](FileProducerContract.md) — frame production
 - [Contract Hygiene Checklist](../../standards/contract-hygiene.md) — authoring guidelines

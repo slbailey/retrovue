@@ -45,4 +45,4 @@ Only after **6A.0–6A.3** pass:
 
 - **MPEG-TS serving:** Real TS output, tune-in, byte-level checks (e.g. Phase 7).
 - **Renderer placement:** Where frames become TS (inside Air vs separate Renderer); see [Architecture Overview](../../architecture/ArchitectureOverview.md).
-- **Performance:** Latency targets, buffer depth, throughput (see [PlayoutEngineContract](../architecture/PlayoutEngineContract.md), [FileProducerDomainContract](../architecture/FileProducerDomainContract.md)).
+- **Performance:** Latency targets, buffer depth, throughput (see [PlayoutEngineContract](../architecture/PlayoutEngineContract.md), [FileProducerContract](../architecture/FileProducerContract.md)).

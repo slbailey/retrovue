@@ -2,7 +2,7 @@ _Metadata: Status=Draft; Scope=Contract; Owner=@runtime-platform_
 
 _Related: [Metrics Export Domain](../../domain/MetricsExportDomain.md); [Metrics and Timing Domain](../../domain/MetricsAndTimingDomain.md)_
 
-# Contract - Metrics Export Domain
+# Metrics Export Contract
 
 ## Purpose
 

@@ -58,20 +58,25 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 ┌─────────────────────────────────────────────────────────┐
 │  PlayoutInstance (internal: one per active “channel”)    │
 │  ┌───────────────────────────────────────────────────┐  │
-│  │ Producer (FileProducer / ProgrammaticProducer)     │  │
+│  │ INPUT PATH (ProducerBus):                          │  │
+│  │   ProducerBus (preview) + ProducerBus (live)       │  │
+│  │   → IProducer on live bus (e.g. FileProducer)      │  │
 │  │         ▼                                          │  │
-│  │ FrameRingBuffer (lock-free circular buffer)       │  │
+│  │ FrameRingBuffer (lock-free circular buffer)        │  │
 │  │         ▼                                          │  │
-│  │ ProgramOutput (headless; routes to OutputBus)     │  │
+│  │ ProgramOutput (headless; routes to OutputBus)       │  │
 │  │         ▼                                          │  │
-│  │ OutputBus (signal path; routes to attached sink)  │  │
+│  │ OUTPUT PATH: OutputBus → OutputSink (encode, mux)   │  │
+│  │   OutputBus (signal path; routes to attached sink)  │  │
 │  │         ▼                                          │  │
 │  │ OutputSink (MpegTSOutputSink: encode, mux, stream) │  │
 │  └───────────────────────────────────────────────────┘  │
-│  PlayoutControl (RuntimePhase, bus switching)           │  │
+│  PlayoutControl (preview + live buses; RuntimePhase)    │  │
 │  TimingLoop (timing, backpressure)                       │  │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Input bus:** PlayoutControl owns two ProducerBuses (preview, live). LoadPreview loads the preview bus; SwitchToLive promotes preview → live. The live bus’s producer feeds FrameRingBuffer. See [ProducerBusContract](contracts/architecture/ProducerBusContract.md).
 
 ---
 
@@ -106,7 +111,7 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 | **PlayoutEngine** | `runtime/PlayoutEngine.h` | Root execution unit. Single playout session at a time. Owns runtime graph (producer → buffer → ProgramOutput → OutputBus → OutputSink), clock, and engine-level state. Provides AttachOutputSink/DetachOutputSink, ConnectRendererToOutputBus methods. Does *not* own channel lifecycle or schedules. |
 | **PlayoutInterface** | `runtime/PlayoutInterface.h` | Thin adapter: gRPC layer → PlayoutEngine. Delegates all ops to engine. Provides AttachOutputSink/DetachOutputSink, GetOutputBus, ConnectRendererToOutputBus wrappers. |
 | **PlayoutControl** | `runtime/PlayoutControl.h` | Enforces valid sequencing of runtime ops (PTS, buffer priming, decode/render order). Uses **RuntimePhase** (kIdle, kBuffering, kReady, kPlaying, kPaused, kStopping, kError). Governs OutputBus attach/detach transitions via CanAttachSink/CanDetachSink. Tracks sink attachment state. Does *not* represent channel lifecycle or scheduling. |
-| **ProducerBus** | `runtime/ProducerBus.h` | Routed producer input path (LIVE or PREVIEW). Not storage; may be empty, primed, or active. Switched atomically by PlayoutControl. |
+| **ProducerBus** | `runtime/ProducerBus.h` | Input path: two buses (preview, live). Each bus holds an IProducer (e.g. FileProducer). Live bus’s producer feeds FrameRingBuffer. Core directs LoadPreview (preview bus) and SwitchToLive (promote preview → live). See [ProducerBusContract](contracts/architecture/ProducerBusContract.md). BlackFrameProducer fallback when live runs out: [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md). |
 | **TimingLoop** | `runtime/TimingLoop.h` | Tick loop, backpressure events, timing/coordination with MasterClock. |
 
 **PlayoutInstance** (internal struct in `PlayoutEngine.cpp`): Holds one instance's runtime: `channel_id` (external), `plan_handle`, `program_format` (ProgramFormat struct parsed from JSON), ring_buffer, live_producer, preview_producer, program_output, timing_loop, PlayoutControl (control), OutputBus. One instance per active “channel” slot; Air enforces at most one active instance. ProgramFormat defines canonical program signal (video: width, height, frame_rate; audio: sample_rate, channels); fixed for lifetime of instance; independent of encoding/transport. See [PlayoutInstanceAndProgramFormatContract](contracts/architecture/PlayoutInstanceAndProgramFormatContract.md).
@@ -118,6 +123,7 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 | **IProducer** | `producers/IProducer.h` | Minimal interface: start(), stop(), isRunning(). |
 | **FileProducer** | `producers/file/FileProducer.h` | Decodes local video/audio (FFmpeg), produces frames/audio into FrameRingBuffer. Segment params: start_offset_ms, hard_stop_time_ms. |
 | **ProgrammaticProducer** | `producers/programmatic/ProgrammaticProducer.h` | **Scaffolding / test-only.** Synthetic frames; no FFmpeg. Same IProducer lifecycle; will be replaced by domain producers. |
+| **BlackFrameProducer** | (design) | **Fallback producer.** Produces valid black video (program format) and no audio. When the **live** producer runs out of frames and Core has not yet supplied the next segment, Air **immediately** switches to BlackFrameProducer so the sink **always** receives valid output. See [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md). |
 
 ### Buffer and program output
 

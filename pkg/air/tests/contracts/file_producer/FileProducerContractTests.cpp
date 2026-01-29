@@ -105,7 +105,7 @@ namespace
     std::unique_ptr<FileProducer> producer_;
   };
 
-  // Rule: FE-001 Producer Lifecycle (FileProducerDomainContract.md §FE-001)
+  // Rule: FE-001 Producer Lifecycle (FileProducerContract.md §FE-001)
   TEST_F(FileProducerContractTest, FE_001_ProducerLifecycle)
   {
     ProducerConfig config;

@@ -4,21 +4,25 @@
 
 **Use when:** Designing, reviewing, or implementing changes that touch PlayoutEngine, OutputBus, ProgramFormat, ProgramOutput, producers, or control flow. Start with [Air Architecture Reference](../../architecture/AirArchitectureReference.md) for the component list, then drill into the contract that applies.
 
+**Naming:** Contract filenames are `{Subject}Contract.md` (no "Domain" suffix).
+
 ## Contents
 
 | Contract | Scope |
 |----------|--------|
 | [PlayoutEngineContract](PlayoutEngineContract.md) | gRPC control plane, rule IDs, metrics guarantees. |
-| [PlayoutControlDomainContract](PlayoutControlDomainContract.md) | RuntimePhase, bus switching, valid sequencing. |
+| [PlayoutControlContract](PlayoutControlContract.md) | RuntimePhase, bus switching, valid sequencing. |
 | [PlayoutInstanceAndProgramFormatContract](PlayoutInstanceAndProgramFormatContract.md) | One instance per channel, ProgramFormat lifecycle. |
+| [ProducerBusContract](ProducerBusContract.md) | Input path: ProducerBus (preview + live), producers feed FrameRingBuffer. |
+| [BlackFrameProducerContract](BlackFrameProducerContract.md) | BlackFrameProducer fallback; sink always receives valid output when live producer runs out. |
 | [OutputBusAndOutputSinkContract](OutputBusAndOutputSinkContract.md) | Output signal path, attach/detach, sink lifecycle. |
 | [OutputContinuityContract](OutputContinuityContract.md) | Output-layer timestamp legality; monotonic PTS/DTS per stream, no regression. |
 | [OutputTimingContract](OutputTimingContract.md) | Output-layer real-time delivery discipline; pacing anchor, no early delivery. |
 | [RendererContract](RendererContract.md) | ProgramOutput (headless/preview), frame consumption. |
-| [FileProducerDomainContract](FileProducerDomainContract.md) | FileProducer segment params, decode, frame contract. |
-| [MasterClockDomainContract](MasterClockDomainContract.md) | Timing authority, deadlines. |
+| [FileProducerContract](FileProducerContract.md) | FileProducer segment params, decode, frame contract. |
+| [MasterClockContract](MasterClockContract.md) | Timing authority, deadlines. |
 | [MetricsAndTimingContract](MetricsAndTimingContract.md) | Metrics schema, timing enforcement. |
-| [MetricsExportDomainContract](MetricsExportDomainContract.md) | Telemetry export contract. |
+| [MetricsExportContract](MetricsExportContract.md) | Telemetry export contract. |
 
 ## See also
 

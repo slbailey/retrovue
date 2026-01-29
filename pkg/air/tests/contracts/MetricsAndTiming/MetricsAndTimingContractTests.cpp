@@ -92,7 +92,7 @@ namespace
     }
   };
 
-  // Rule: MT-001 Monotonic now() (MasterClockDomainContract.md §MT_001)
+  // Rule: MT-001 Monotonic now() (MasterClockContract.md §MT_001)
   TEST_F(MetricsAndTimingContractTest, MT_001_MasterClockMonotonicAndLowJitter)
   {
     MasterClockStub clock;
@@ -117,7 +117,7 @@ namespace
     }
     EXPECT_LT(max_jitter_us, 1'000.0);
   }
-  // Rule: MT-002 Stable PTS mapping (MasterClockDomainContract.md §MT_002)
+  // Rule: MT-002 Stable PTS mapping (MasterClockContract.md §MT_002)
   TEST_F(MetricsAndTimingContractTest, MT_002_PtsToUtcMappingStable)
   {
     MasterClockStub clock;
@@ -144,7 +144,7 @@ namespace
     }
   }
 
-  // Rule: MT-003 Pace controller convergence (MasterClockDomainContract.md §MT_003)
+  // Rule: MT-003 Pace controller convergence (MasterClockContract.md §MT_003)
   TEST_F(MetricsAndTimingContractTest, MT_003_PaceControllerReducesGap)
   {
     telemetry::MetricsExporter exporter(/*port=*/0, /*enable_http=*/false);
@@ -204,7 +204,7 @@ namespace
         << "Final frame gap should approach zero within tolerance";
   }
 
-  // Rule: MT-004 Underrun recovery (MasterClockDomainContract.md §MT_004)
+  // Rule: MT-004 Underrun recovery (MasterClockContract.md §MT_004)
   TEST_F(MetricsAndTimingContractTest, MT_004_UnderrunTriggersBufferingAndRecovery)
   {
     telemetry::MetricsExporter exporter(/*port=*/0);

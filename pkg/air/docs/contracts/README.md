@@ -24,14 +24,14 @@ Index: [architecture/README.md](architecture/README.md)
 | Contract | Purpose |
 |----------|---------|
 | [architecture/PlayoutEngineContract.md](architecture/PlayoutEngineContract.md) | gRPC control plane, rule IDs, and metrics guarantees. |
-| [architecture/PlayoutControlDomainContract.md](architecture/PlayoutControlDomainContract.md) | RuntimePhase, bus switching, and valid sequencing. |
+| [architecture/PlayoutControlContract.md](architecture/PlayoutControlContract.md) | RuntimePhase, bus switching, and valid sequencing. |
 | [architecture/PlayoutInstanceAndProgramFormatContract.md](architecture/PlayoutInstanceAndProgramFormatContract.md) | One instance per channel and ProgramFormat lifecycle. |
 | [architecture/OutputBusAndOutputSinkContract.md](architecture/OutputBusAndOutputSinkContract.md) | Output signal path, attach/detach, and sink lifecycle. |
 | [architecture/RendererContract.md](architecture/RendererContract.md) | ProgramOutput expectations and frame consumption. |
-| [architecture/FileProducerDomainContract.md](architecture/FileProducerDomainContract.md) | FileProducer segment params, decode, and frame contract. |
-| [architecture/MasterClockDomainContract.md](architecture/MasterClockDomainContract.md) | Timing authority and deadlines. |
+| [architecture/FileProducerContract.md](architecture/FileProducerContract.md) | FileProducer segment params, decode, and frame contract. |
+| [architecture/MasterClockContract.md](architecture/MasterClockContract.md) | Timing authority and deadlines. |
 | [architecture/MetricsAndTimingContract.md](architecture/MetricsAndTimingContract.md) | Metrics schema and timing enforcement. |
-| [architecture/MetricsExportDomainContract.md](architecture/MetricsExportDomainContract.md) | Telemetry export contract. |
+| [architecture/MetricsExportContract.md](architecture/MetricsExportContract.md) | Telemetry export contract. |
 
 ---
 

@@ -44,6 +44,12 @@ Executable instruction computed by ChannelManager: asset_path, start_offset_ms (
 **Playout plan**  
 Opaque handle (optional path) referencing scheduled media; may be supplied by ChannelManager via `StartChannel`/`UpdatePlan`. Segment-based control is canonical.
 
+**ProducerBus (input bus)**  
+Input path in Air: two buses, **preview** and **live**. Each holds an IProducer (e.g. FileProducer). The **live** bus’s producer feeds the FrameRingBuffer → ProgramOutput → OutputBus → OutputSink. Core directs LoadPreview (load next segment on preview bus) and SwitchToLive (promote preview → live). See [ProducerBusContract](../contracts/architecture/ProducerBusContract.md).
+
+**BlackFrameProducer**  
+Fallback producer that outputs valid black video (program format) and no audio. When the active content producer runs out of frames and Core has not yet supplied the next segment, Air immediately switches to BlackFrameProducer so the sink always receives valid output. See [BlackFrameProducerContract](../contracts/architecture/BlackFrameProducerContract.md).
+
 ## See also
 
 - `../standards/documentation-standards.md`

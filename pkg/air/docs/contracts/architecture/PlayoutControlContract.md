@@ -1,4 +1,4 @@
-# Playout Control Domain Contract
+# Playout Control Contract
 
 _Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase 6A Overview](../phases/Phase6A-Overview.md)_
 

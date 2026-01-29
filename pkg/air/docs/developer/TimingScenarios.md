@@ -1,4 +1,4 @@
-_Related: [Playout runtime](../runtime/PlayoutRuntime.md) • [Contract testing scaffolding](ContractTesting.md) • [MasterClock domain contract](../contracts/MasterClockDomainContract.md)_
+_Related: [Playout runtime](../runtime/PlayoutRuntime.md) • [Contract testing scaffolding](ContractTesting.md) • [MasterClock domain contract](../contracts/MasterClockContract.md)_
 
 # Timing scenarios
 

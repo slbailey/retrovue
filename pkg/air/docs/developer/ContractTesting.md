@@ -33,8 +33,8 @@ tests/
 ## Naming and traceability
 
 - **One contract rule => one `TEST_F` or `TEST_P`.**
-  - Every GoogleTest test name must begin with the rule ID exactly as listed in the corresponding DomainContract (e.g. `TEST_F(MetricsAndTimingContractTest, MT_001_MasterClockAuthority)`).
-  - Add a comment header `// Rule: MT-001 MasterClock Authority (MetricsAndTimingDomain.md §Core Invariants)` for quick cross-reference.
+  - Every GoogleTest test name must begin with the rule ID exactly as listed in the corresponding contract (e.g. `TEST_F(MetricsAndTimingContractTest, MT_001_MasterClockAuthority)`).
+  - Add a comment header `// Rule: MT-001 MasterClock Authority (MetricsAndTimingContract.md §Core Invariants)` for quick cross-reference.
 - ✅ Corrected example
   ```cpp
   TEST_F(MetricsAndTimingContractTest, MT_001_MasterClockAuthority) {
