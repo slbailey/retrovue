@@ -34,7 +34,7 @@ ProcessHandle = subprocess.Popen[bytes]
 _AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs"
 
 # Default ProgramFormat JSON (1080p30, 48kHz stereo)
-# See: docs/air/contracts/PlayoutInstanceAndProgramFormatContract.md
+# See: pkg/air/docs/contracts/architecture/PlayoutInstanceAndProgramFormatContract.md
 _DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}}'
 
 

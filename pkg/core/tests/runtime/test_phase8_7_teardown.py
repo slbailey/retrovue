@@ -4,7 +4,7 @@ Phase 8.7 — Immediate Teardown & Lifecycle Ownership.
 Contract: Viewer count 0 → ChannelManager destroyed (removed from registry); no reuse;
 double disconnect safe; new viewer gets fresh ChannelManager.
 
-See: docs/air/contracts/Phase8-7-ImmediateTeardown.md
+See: pkg/air/docs/contracts/phases/Phase8-7-ImmediateTeardown.md
 
 Tests use mocks/lightweight fakes; no Air or UDS.
 """

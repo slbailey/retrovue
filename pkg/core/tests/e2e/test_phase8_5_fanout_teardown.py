@@ -4,7 +4,7 @@ Phase 8.5 — Fan-out & Teardown.
 Contract: Multiple HTTP readers from same stream; last viewer disconnect → Air stops;
 no per-client buffering required; one slow client must not stall others.
 
-See: docs/air/contracts/Phase8-5-FanoutTeardown.md
+See: pkg/air/docs/contracts/phases/Phase8-5-FanoutTeardown.md
 """
 
 from __future__ import annotations

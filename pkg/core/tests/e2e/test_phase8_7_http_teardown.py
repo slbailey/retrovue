@@ -9,7 +9,7 @@ Contract: GET /channels/<id>.ts → read bytes → close connection → within 5
 We open the stream, read bytes, close the connection, then trigger teardown (stop_channel)
 and assert within 500ms that the channel is gone and no reconnect was logged. The HTTP
 stack may delay running the stream finally until the next send; we poll for the condition.
-See: docs/air/contracts/Phase8-7-ImmediateTeardown.md
+See: pkg/air/docs/contracts/phases/Phase8-7-ImmediateTeardown.md
 """
 
 from __future__ import annotations

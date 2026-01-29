@@ -5,7 +5,7 @@ Contract: Python creates UDS server, Air connects as client and writes real MPEG
 GET /channels/{id}.ts returns bytes starting with TS sync 0x47 (no HELLO).
 Runtime is Air-only; no ffmpeg.
 
-See: docs/air/contracts/Phase8-0-Transport.md
+See: pkg/air/docs/contracts/phases/Phase8-0-Transport.md
 """
 
 from __future__ import annotations

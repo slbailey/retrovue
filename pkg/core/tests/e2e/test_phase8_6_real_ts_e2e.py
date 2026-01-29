@@ -5,7 +5,7 @@ Contract: Stream carries only real MPEG-TS from Air after SwitchToLive; no HELLO
 Run Air without --control-surface-only so AttachStream does not start HelloLoop.
 Manual exit: open the stream URL in VLC to confirm playback.
 
-See: docs/air/contracts/Phase8-6-RealMpegTsE2E.md
+See: pkg/air/docs/contracts/phases/Phase8-6-RealMpegTsE2E.md
 """
 
 from __future__ import annotations
