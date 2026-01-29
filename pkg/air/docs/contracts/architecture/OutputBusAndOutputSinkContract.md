@@ -55,6 +55,7 @@ An OutputSink converts frames into an external representation (e.g. MPEG-TS over
 
 - Accept video and audio frames
 - Perform encoding, muxing, and transport
+- **Provide jitter protection** (buffering and paced emit) so the emitted stream meets timing and continuity requirements (see §2.3)
 - Manage its own internal threads and resources
 - Report backpressure or failure to the engine (via defined signals)
 
@@ -64,6 +65,16 @@ An OutputSink converts frames into an external representation (e.g. MPEG-TS over
 - Decide when it may attach or detach
 - Know about channels, schedules, or preview/live concepts
 - Interact directly with gRPC
+
+### 2.3 Jitter protection (Normative)
+
+The output path **MUST** provide **jitter protection** so that the emitted stream meets timing and continuity requirements.
+
+- **Requirement:** Byte delivery from the output to the transport must be smoothed such that:
+  - Bursty or variable-rate input (e.g. from decode or mux) does not cause undue burstiness or gaps in the emitted stream.
+  - Downstream timing guarantees (e.g. PCR/PTS monotonicity, continuity counters, decoder buffer constraints) can be met.
+- **Placement:** Jitter protection **MUST** be implemented in the **OutputSink**. The bus is a signal path and explicitly does not make timing or scheduling decisions (§2.1); the sink owns encoding, muxing, transport, and internal resources, and is the last point before bytes hit the wire. The sink is therefore the normative place for buffering and paced emit.
+- **Scope:** Applies to all output paths. Downstream contracts (e.g. Phase 8.4 persistent TS mux) assume this requirement is satisfied when they specify PCR/PTS monotonicity and stream continuity.
 
 ---
 
@@ -192,6 +203,7 @@ Those may be introduced later without violating this contract.
 3. gRPC does not own output runtime state
 4. PlayoutControl governs output transitions
 5. Transport details never leak into engine control logic
+6. The OutputSink provides jitter protection (buffering and paced emit) so that the emitted stream meets timing and continuity requirements
 
 ---
 

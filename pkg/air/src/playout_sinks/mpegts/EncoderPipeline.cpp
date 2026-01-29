@@ -8,11 +8,13 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 
 #include <cassert>
+#include <chrono>
 #include <cstdlib>
-#include <iostream>
-#include <iomanip>
-#include <sstream>
 #include <cstring>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <thread>
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 #include <libavutil/dict.h>
@@ -55,11 +57,17 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       header_written_(false),
       codec_opened_(false),
       muxer_opts_(nullptr),
-      last_mux_dts_(AV_NOPTS_VALUE),
+      last_video_mux_dts_(AV_NOPTS_VALUE),
+      last_audio_mux_dts_(AV_NOPTS_VALUE),
       last_input_pts_(AV_NOPTS_VALUE),
+      first_frame_encoded_(false),
+      video_frame_count_(0),
       avio_opaque_(nullptr),
       avio_write_callback_(nullptr),
-      custom_avio_ctx_(nullptr) {
+      custom_avio_ctx_(nullptr),
+      output_timing_anchor_set_(false),
+      output_timing_anchor_pts_(0),
+      output_timing_anchor_wall_() {
   time_base_.num = 1;
   time_base_.den = 90000;  // MPEG-TS timebase is 90kHz
 }
@@ -117,7 +125,7 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   }
 
   AVDictionary* muxer_opts = nullptr;
-  av_dict_set(&muxer_opts, "max_delay", "100000", 0);
+  av_dict_set(&muxer_opts, "max_delay", "0", 0);  // No muxer delay for immediate output
   av_dict_set(&muxer_opts, "muxrate", "0", 0);
   muxer_opts_ = muxer_opts;
 
@@ -338,10 +346,36 @@ skip_audio:
       close();
       return false;
     }
+    // Set low delay flag to minimize encoder buffering
+    codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    // Explicitly set delay to 0 (tells FFmpeg we want immediate output)
+    codec_ctx_->delay = 0;
+
+    // VBV-constrained VBR (industry standard for streaming)
+    // This allows variable bitrate but limits spikes to prevent decoder buffer issues.
+    // vbv-maxrate = 1.5x target gives headroom for complex scenes
+    // vbv-bufsize = 1 second of buffer (standard for streaming)
+    codec_ctx_->rc_max_rate = config.bitrate;          // Hard cap at target (no headroom)
+    codec_ctx_->rc_buffer_size = config.bitrate / 4;   // 0.25 second buffer
+
     AVDictionary* opts = nullptr;
     av_dict_set(&opts, "preset", "ultrafast", 0);
+    // zerolatency tune: disables lookahead, B-frames, and other latency-adding features
     av_dict_set(&opts, "tune", "zerolatency", 0);
+    // Force single-threaded encoding to eliminate frame reordering
+    av_dict_set(&opts, "threads", "1", 0);
+    // VBV-constrained VBR with settings to handle startup:
+    // - vbv-init=0.9: Start with buffer nearly full for immediate output
+    // - bframes=0: Already set by zerolatency tune
+    av_dict_set(&opts, "x264-params",
+        "bframes=0:nal-hrd=vbr:vbv-init=0.9",
+        0);
     ret = avcodec_open2(codec_ctx_, codec, &opts);
+
+    // Log the actual encoder delay after opening
+    std::cout << "[EncoderPipeline] Encoder opened with delay=" << codec_ctx_->delay
+              << " has_b_frames=" << codec_ctx_->has_b_frames << std::endl;
+
     av_dict_free(&opts);
     if (ret < 0) {
       char errbuf[AV_ERROR_MAX_STRING_SIZE];
@@ -351,6 +385,19 @@ skip_audio:
       return false;
     }
     codec_opened_ = true;
+
+    // CRITICAL: Re-copy codec parameters AFTER avcodec_open2 to capture extradata (SPS/PPS).
+    // Without this, P-frames cannot be decoded because the decoder lacks sequence parameters.
+    ret = avcodec_parameters_from_context(video_stream_->codecpar, codec_ctx_);
+    if (ret < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+      std::cerr << "[EncoderPipeline] Failed to copy codec parameters after open: " << errbuf << std::endl;
+      close();
+      return false;
+    }
+    std::cout << "[EncoderPipeline] Copied extradata to stream: size="
+              << video_stream_->codecpar->extradata_size << " bytes" << std::endl;
   }
 
   // Allocate frame, input frame, and packet
@@ -364,9 +411,6 @@ skip_audio:
   }
   assert(packet_ != reinterpret_cast<AVPacket*>(frame_) && "packet_ must not alias frame_");
   assert(packet_ != reinterpret_cast<AVPacket*>(input_frame_) && "packet_ must not alias input_frame_");
-  std::cerr << "ALLOC frame_=" << frame_
-            << " input_frame_=" << input_frame_
-            << " packet_=" << packet_ << "\n";
   if (packet_ == reinterpret_cast<AVPacket*>(input_frame_)) {
     std::cerr << "FATAL: packet_ == input_frame_ immediately after alloc\n";
     std::abort();
@@ -428,39 +472,33 @@ skip_audio:
 }
 
 void EncoderPipeline::EnforceMonotonicDts() {
-  if (!packet_ || !video_stream_) return;
+  if (!packet_) return;
+
+  // Use separate DTS trackers for video and audio to avoid timing corruption
+  bool is_video = video_stream_ && packet_->stream_index == video_stream_->index;
+  bool is_audio = audio_stream_ && packet_->stream_index == audio_stream_->index;
+
+  int64_t& last_dts = is_video ? last_video_mux_dts_ : last_audio_mux_dts_;
+
   int64_t dts = packet_->dts;
   int64_t pts = packet_->pts;
-  if (last_mux_dts_ != AV_NOPTS_VALUE) {
-    if (dts != AV_NOPTS_VALUE && dts <= last_mux_dts_)
-      dts = last_mux_dts_ + 1;
-    else if (pts != AV_NOPTS_VALUE && pts <= last_mux_dts_)
-      pts = last_mux_dts_ + 1;
+  if (last_dts != AV_NOPTS_VALUE) {
+    if (dts != AV_NOPTS_VALUE && dts <= last_dts)
+      dts = last_dts + 1;
+    else if (pts != AV_NOPTS_VALUE && pts <= last_dts)
+      pts = last_dts + 1;
   }
   if (pts != AV_NOPTS_VALUE && dts != AV_NOPTS_VALUE && pts < dts)
     pts = dts;
   packet_->dts = dts;
   packet_->pts = pts;
   if (dts != AV_NOPTS_VALUE)
-    last_mux_dts_ = dts;
+    last_dts = dts;
   else if (pts != AV_NOPTS_VALUE)
-    last_mux_dts_ = pts;
+    last_dts = pts;
 }
 
 bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t pts90k) {
-  std::cerr << "ALLOC frame_=" << frame_
-            << " input_frame_=" << input_frame_
-            << " packet_=" << packet_ << "\n";
-  if (packet_ == reinterpret_cast<AVPacket*>(input_frame_)) {
-    std::cerr << "FATAL: packet_ == input_frame_ at encodeFrame entry (corruption before frame data touched)\n";
-    std::abort();
-  }
-  std::cerr << "[EncoderPipeline] encodeFrame enter codec_ctx_=" << codec_ctx_
-            << " format_ctx_=" << format_ctx_
-            << " pb=" << (format_ctx_ ? format_ctx_->pb : nullptr)
-            << " cb=" << reinterpret_cast<void*>(avio_write_callback_)
-            << " opaque=" << avio_opaque_
-            << std::endl;
   if (!initialized_) {
     return false;
   }
@@ -489,7 +527,18 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
 
   // Phase 8.6: per-channel fixed resolution. If already opened at fixed size, scale input to it; no reinit.
   if (frame_width_ > 0 && frame_height_ > 0 && codec_opened_) {
+    // CRITICAL: Ensure frame buffer is writable before copying data
+    // Without this, the encoder may hold references to the buffer from previous frames
+    int wr = av_frame_make_writable(frame_);
+    if (wr < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(wr, errbuf, AV_ERROR_MAX_STRING_SIZE);
+      std::cerr << "[EncoderPipeline] av_frame_make_writable failed (fixed path): " << errbuf << std::endl;
+      return false;
+    }
+
     const bool needs_scale = (frame.width != frame_width_ || frame.height != frame_height_);
+
     if (needs_scale) {
       size_t y_size = static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height);
       size_t uv_size = (frame.width / 2) * (frame.height / 2);
@@ -531,15 +580,25 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       }
     }
     frame_->format = AV_PIX_FMT_YUV420P;
-    // Enforce strictly increasing input PTS (same as main path) to avoid muxer DTS errors.
+
+    // Use source pts90k converted to codec timebase with proper rounding.
+    // This keeps video on the same timeline as audio for proper A/V sync.
     AVRational tb90k = {1, 90000};
-    int64_t pts = av_rescale_q(pts90k, tb90k, codec_ctx_->time_base);
-    if (last_input_pts_ != AV_NOPTS_VALUE && pts <= last_input_pts_)
+    int64_t pts = av_rescale_q_rnd(pts90k, tb90k, codec_ctx_->time_base,
+                                    static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+
+    // Ensure monotonically increasing PTS (handles rounding collisions)
+    if (last_input_pts_ != AV_NOPTS_VALUE && pts <= last_input_pts_) {
       pts = last_input_pts_ + 1;
+    }
     last_input_pts_ = pts;
     frame_->pts = pts;
     frame_->metadata = nullptr;
     frame_->opaque = nullptr;
+
+    // Let encoder decide frame type (no forcing)
+    frame_->pict_type = AV_PICTURE_TYPE_NONE;
+
     int send_ret = avcodec_send_frame(codec_ctx_, frame_);
     if (send_ret < 0) {
       if (send_ret == AVERROR(EAGAIN)) {
@@ -551,7 +610,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
           packet_->stream_index = video_stream_->index;
           av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
           EnforceMonotonicDts();
-          av_write_frame(format_ctx_, packet_);
+          GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
+          av_interleaved_write_frame(format_ctx_, packet_);
         }
         send_ret = avcodec_send_frame(codec_ctx_, frame_);
       }
@@ -572,7 +632,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       packet_->stream_index = video_stream_->index;
       av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
       EnforceMonotonicDts();
-      if (av_write_frame(format_ctx_, packet_) < 0) { /* logged elsewhere */ }
+      GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
+      if (av_interleaved_write_frame(format_ctx_, packet_) < 0) { /* logged elsewhere */ }
     }
     return true;
   }
@@ -639,11 +700,24 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       return false;
     }
 
-    // Set encoder options for low latency using AVDictionary
-    // This is more reliable than av_opt_set and works with all FFmpeg versions
+    // Set low delay flag to minimize encoder buffering
+    codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    // Explicitly set delay to 0 (tells FFmpeg we want immediate output)
+    codec_ctx_->delay = 0;
+
+    // VBV-constrained VBR (industry standard for streaming)
+    codec_ctx_->rc_max_rate = config_.bitrate;          // Hard cap at target
+    codec_ctx_->rc_buffer_size = config_.bitrate / 4;   // 0.25 second buffer
+
+    // Set encoder options for streaming
     AVDictionary* opts = nullptr;
     av_dict_set(&opts, "preset", "ultrafast", 0);
-    av_dict_set(&opts, "tune", "zerolatency", 0);
+    // Force single-threaded encoding to eliminate frame reordering
+    av_dict_set(&opts, "threads", "1", 0);
+    // VBV-constrained VBR with settings to handle startup/fade-in
+    av_dict_set(&opts, "x264-params",
+        "rc-lookahead=10:sync-lookahead=0:bframes=0:nal-hrd=vbr:vbv-init=0.5:qpmin=18",
+        0);
 
     // Open codec with options
     ret = avcodec_open2(codec_ctx_, codec, &opts);
@@ -655,6 +729,10 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       return false;
     }
     codec_opened_ = true;
+
+    // Log the actual encoder delay after opening
+    std::cout << "[EncoderPipeline] Encoder opened with delay=" << codec_ctx_->delay
+              << " has_b_frames=" << codec_ctx_->has_b_frames << std::endl;
 
     // Free options dictionary (options are now applied to codec context)
     // Note: avcodec_open2 consumes the options, so we free the dictionary
@@ -817,6 +895,15 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
   frame_->metadata = nullptr;
   frame_->opaque = nullptr;
 
+  // Force first frame to be a keyframe (I-frame) to ensure clean stream start
+  if (!first_frame_encoded_) {
+    frame_->pict_type = AV_PICTURE_TYPE_I;
+    std::cout << "[EncoderPipeline] Forcing first frame to keyframe" << std::endl;
+    first_frame_encoded_ = true;
+  } else {
+    frame_->pict_type = AV_PICTURE_TYPE_NONE;  // Let encoder decide
+  }
+
   // Send frame to encoder
   int send_ret = avcodec_send_frame(codec_ctx_, frame_);
   if (send_ret < 0) {
@@ -847,8 +934,9 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         packet_->stream_index = video_stream_->index;
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
         EnforceMonotonicDts();
-        // av_write_frame takes ownership and unrefs the packet.
-        int write_ret = av_write_frame(format_ctx_, packet_);
+        GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
+        // av_interleaved_write_frame takes ownership and unrefs the packet.
+        int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
         if (write_ret == AVERROR(EAGAIN)) {
           break;
         }
@@ -908,10 +996,11 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     packet_->stream_index = video_stream_->index;
     av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
     EnforceMonotonicDts();
+    GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
 
     // Write packet to muxer.
-    // av_write_frame takes ownership and unrefs the packet.
-    int write_ret = av_write_frame(format_ctx_, packet_);
+    // av_interleaved_write_frame takes ownership and unrefs the packet.
+    int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
 
     if (write_ret == AVERROR(EAGAIN)) {
       break;
@@ -938,8 +1027,11 @@ void EncoderPipeline::close() {
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   // Idempotent: prevent double-close (e.g. from destructor) from re-running teardown.
   initialized_ = false;
-  last_mux_dts_ = AV_NOPTS_VALUE;
+  last_video_mux_dts_ = AV_NOPTS_VALUE;
+  last_audio_mux_dts_ = AV_NOPTS_VALUE;
   last_input_pts_ = AV_NOPTS_VALUE;
+  first_frame_encoded_ = false;
+  video_frame_count_ = 0;
 
   if (muxer_opts_) {
     av_dict_free(&muxer_opts_);
@@ -957,8 +1049,9 @@ void EncoderPipeline::close() {
         packet_->stream_index = video_stream_->index;
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
         EnforceMonotonicDts();
-        // av_write_frame takes ownership and unrefs the packet.
-        int write_ret = av_write_frame(format_ctx_, packet_);
+        GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
+        // av_interleaved_write_frame takes ownership and unrefs the packet.
+        int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
         if (write_ret < 0 && write_ret != AVERROR(EAGAIN)) {
           char errbuf[AV_ERROR_MAX_STRING_SIZE];
           av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
@@ -1060,19 +1153,14 @@ bool EncoderPipeline::IsInitialized() const {
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 int EncoderPipeline::AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size) {
-  std::cerr << "[EncoderPipeline] AVIOWriteThunk opaque=" << opaque
-            << " buf_size=" << buf_size << std::endl;
   if (opaque == nullptr) return -1;
   auto* pipeline = reinterpret_cast<EncoderPipeline*>(opaque);
   return pipeline->HandleAVIOWrite(buf, buf_size);
 }
 
 int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
-  std::cerr << "[EncoderPipeline] HandleAVIOWrite cb=" << reinterpret_cast<void*>(avio_write_callback_)
-            << " opaque=" << avio_opaque_ << " buf_size=" << buf_size << std::endl;
   if (!avio_write_callback_) return -1;
-  int ret = avio_write_callback_(avio_opaque_, buf, buf_size);
-  return (ret == buf_size) ? buf_size : -1;
+  return avio_write_callback_(avio_opaque_, buf, buf_size);
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
 
@@ -1174,8 +1262,8 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
 
       // Get current PTS to continue from
       int64_t flush_pts90k = 0;
-      if (last_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
-        flush_pts90k = av_rescale_q(last_mux_dts_, audio_stream_->time_base, tb90k);
+      if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
+        flush_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
         int64_t frame_duration_90k = (static_cast<int64_t>(frame_size) * 90000) / encoder_sample_rate;
         flush_pts90k += frame_duration_90k;
       }
@@ -1222,7 +1310,10 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
               packet_->stream_index = audio_stream_->index;
               av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
               EnforceMonotonicDts();
-              av_write_frame(format_ctx_, packet_);
+              // Convert audio PTS to 90kHz for consistent output timing
+              int64_t pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
+              GateOutputTiming(pts_90k);
+              av_interleaved_write_frame(format_ctx_, packet_);
             }
             std::cout << "[EncoderPipeline] Encoded buffered samples from previous producer" << std::endl;
           }
@@ -1431,9 +1522,9 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
 
   // Now handle PTS rebasing for the muxer
   // On a producer switch, we need to calculate the offset to continue from last muxed PTS
-  if (is_first_frame_of_new_producer && last_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
-    // Convert last_mux_dts_ from stream timebase to 90kHz
-    int64_t last_muxed_pts90k = av_rescale_q(last_mux_dts_, audio_stream_->time_base, tb90k);
+  if (is_first_frame_of_new_producer && last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
+    // Convert last_audio_mux_dts_ from stream timebase to 90kHz
+    int64_t last_muxed_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
 
     // Calculate duration of one AAC frame in 90kHz units
     const int frame_size = audio_codec_ctx_->frame_size;
@@ -1518,7 +1609,10 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
           packet_->stream_index = audio_stream_->index;
           av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
           EnforceMonotonicDts();
-          av_write_frame(format_ctx_, packet_);
+          // Convert audio PTS to 90kHz for consistent output timing
+          int64_t audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
+          GateOutputTiming(audio_pts_90k);
+          av_interleaved_write_frame(format_ctx_, packet_);
         }
         ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
       }
@@ -1541,32 +1635,30 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       packet_->stream_index = audio_stream_->index;
       av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
       
-      // Enforce monotonic DTS for audio (same as video)
-      // Special case: If encoder was just reopened (last_mux_dts_ == AV_NOPTS_VALUE) and
-      // the incoming DTS is very low, initialize last_mux_dts_ to a reasonable starting value
-      // to prevent backward jumps that cause stuttering
-      if (last_mux_dts_ == AV_NOPTS_VALUE && packet_->dts != AV_NOPTS_VALUE && packet_->dts < 100000) {
-        // Initialize to a reasonable starting DTS to avoid backward jumps
-        // Use a value that's safely above typical initial PTS values
-        last_mux_dts_ = 100000;
-        if (audio_frame_count <= 5) {
-          std::cout << "[EncoderPipeline] Initialized last_mux_dts_ to " << last_mux_dts_ 
-                    << " (incoming DTS was " << packet_->dts << ")" << std::endl;
+      // Enforce monotonic DTS for audio
+      // If first packet has negative or zero DTS (common with AAC encoder priming),
+      // just clamp to 0 and track from there. Don't add arbitrary offsets.
+      if (last_audio_mux_dts_ == AV_NOPTS_VALUE) {
+        if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
+          if (audio_frame_count <= 5) {
+            std::cout << "[EncoderPipeline] First audio packet DTS was " << packet_->dts
+                      << ", clamping to 0" << std::endl;
+          }
+          packet_->dts = 0;
+          if (packet_->pts < packet_->dts) {
+            packet_->pts = packet_->dts;
+          }
         }
+        last_audio_mux_dts_ = (packet_->dts != AV_NOPTS_VALUE) ? packet_->dts : 0;
       }
-      
+
       EnforceMonotonicDts();
       
-      // Log every packet for first 50 frames, then every 100
-      bool should_log_packet = (audio_frame_count <= 50) || (audio_frame_count % 100 == 0);
-      if (should_log_packet) {
-        std::cout << "[EncoderPipeline] Muxing audio packet: stream=" << packet_->stream_index
-                  << ", pts=" << packet_->pts << ", dts=" << packet_->dts
-                  << ", size=" << packet_->size
-                  << ", frame_count=" << audio_frame_count << std::endl;
-      }
-      
-      int mux_ret = av_write_frame(format_ctx_, packet_);
+      // Convert audio PTS to 90kHz for consistent output timing
+      int64_t audio_pts_90k_gate = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
+      GateOutputTiming(audio_pts_90k_gate);
+
+      int mux_ret = av_interleaved_write_frame(format_ctx_, packet_);
       if (mux_ret < 0) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE];
         av_strerror(mux_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
@@ -1644,10 +1736,10 @@ bool EncoderPipeline::flushAudio() {
   }
   
   // Step 2: Encode any remaining buffered samples (including flushed resampler output)
-  // Get current PTS from last_mux_dts_ if available, otherwise use a reasonable value
+  // Get current PTS from last_audio_mux_dts_ if available, otherwise use a reasonable value
   int64_t current_pts90k = 0;
-  if (last_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
-    current_pts90k = av_rescale_q(last_mux_dts_, audio_stream_->time_base, tb90k);
+  if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
+    current_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
     // Add duration of one frame to continue from last
     int64_t frame_duration_90k = (static_cast<int64_t>(frame_size) * 90000) / encoder_sample_rate;
     current_pts90k += frame_duration_90k;
@@ -1714,7 +1806,10 @@ bool EncoderPipeline::flushAudio() {
         packet_->stream_index = audio_stream_->index;
         av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
         EnforceMonotonicDts();
-        av_write_frame(format_ctx_, packet_);
+        // Convert audio PTS to 90kHz for consistent output timing
+        int64_t flush_audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
+        GateOutputTiming(flush_audio_pts_90k);
+        av_interleaved_write_frame(format_ctx_, packet_);
       }
       
       // Advance PTS and pointer
@@ -1747,7 +1842,10 @@ bool EncoderPipeline::flushAudio() {
     packet_->stream_index = audio_stream_->index;
     av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
     EnforceMonotonicDts();
-    av_write_frame(format_ctx_, packet_);
+    // Convert audio PTS to 90kHz for consistent output timing
+    int64_t drain_audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
+    GateOutputTiming(drain_audio_pts_90k);
+    av_interleaved_write_frame(format_ctx_, packet_);
   }
   
   std::cout << "[EncoderPipeline] Audio flush complete: drained " << packets_drained << " packets" << std::endl;
@@ -1755,6 +1853,67 @@ bool EncoderPipeline::flushAudio() {
   return true;
 #else
   return true;
+#endif
+}
+
+// OutputTiming: Gate packet emission to enforce real-time delivery discipline.
+// Per OutputTimingContract.md:
+// - Enforce that output media time does not advance faster than real elapsed time
+// - Use a process-local monotonic clock (steady_clock)
+// - Gate packet emission to prevent early delivery
+// - Late packets emit immediately (no resync)
+void EncoderPipeline::GateOutputTiming(int64_t packet_pts_90k) {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  // Cannot gate without a valid timestamp
+  if (packet_pts_90k == AV_NOPTS_VALUE) {
+    return;
+  }
+
+  // First packet establishes the timing anchor
+  if (!output_timing_anchor_set_) {
+    output_timing_anchor_pts_ = packet_pts_90k;
+    output_timing_anchor_wall_ = std::chrono::steady_clock::now();
+    output_timing_anchor_set_ = true;
+    return;  // First packet emits immediately
+  }
+
+  // Calculate media time elapsed since anchor (in microseconds)
+  // packet_pts is in 90kHz units, convert to microseconds: pts * 1000000 / 90000
+  int64_t media_elapsed_us = (packet_pts_90k - output_timing_anchor_pts_) * 1000000 / 90000;
+
+  // Delivery rule (OutputTimingContract.md §5.4):
+  // (packet_pts − anchor_output_pts) ≤ (elapsed_wall_time_since_anchor)
+  // If packet is early, wait. If late, emit immediately.
+
+  // Use short sleeps (≤2ms) to avoid oversleeping per ChatGPT recommendation
+  while (true) {
+    auto wall_elapsed = std::chrono::steady_clock::now() - output_timing_anchor_wall_;
+    auto wall_us = std::chrono::duration_cast<std::chrono::microseconds>(wall_elapsed).count();
+
+    if (wall_us >= media_elapsed_us) {
+      break;  // Real time has caught up to media time
+    }
+
+    auto remaining_us = media_elapsed_us - wall_us;
+    // Cap sleep to ~2ms to avoid oversleeping and accumulating jitter
+    auto sleep_us = std::min<int64_t>(remaining_us, 2000);
+    std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+  }
+#else
+  (void)packet_pts_90k;
+#endif
+}
+
+// Reset output timing anchor (per OutputTimingContract.md §6: SwitchToLive Semantics)
+// On SwitchToLive:
+// - OutputTiming resets its internal timing anchor
+// - OutputTiming does not modify output PTS
+// - SwitchToLive defines a new output pacing epoch, not a new media timeline
+void EncoderPipeline::ResetOutputTiming() {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  output_timing_anchor_set_ = false;
+  output_timing_anchor_pts_ = 0;
+  // anchor_wall_ will be set on next packet
 #endif
 }
 

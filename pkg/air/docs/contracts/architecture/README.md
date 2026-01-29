@@ -12,6 +12,7 @@
 | [PlayoutControlDomainContract](PlayoutControlDomainContract.md) | RuntimePhase, bus switching, valid sequencing. |
 | [PlayoutInstanceAndProgramFormatContract](PlayoutInstanceAndProgramFormatContract.md) | One instance per channel, ProgramFormat lifecycle. |
 | [OutputBusAndOutputSinkContract](OutputBusAndOutputSinkContract.md) | Output signal path, attach/detach, sink lifecycle. |
+| [OutputTimingContract](OutputTimingContract.md) | Output-layer real-time delivery discipline; pacing anchor, no early delivery. |
 | [RendererContract](RendererContract.md) | ProgramOutput (headless/preview), frame consumption. |
 | [FileProducerDomainContract](FileProducerDomainContract.md) | FileProducer segment params, decode, frame contract. |
 | [MasterClockDomainContract](MasterClockDomainContract.md) | Timing authority, deadlines. |

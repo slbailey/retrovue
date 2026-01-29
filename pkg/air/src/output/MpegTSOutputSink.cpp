@@ -12,8 +12,15 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 
+#include <cerrno>
+#include <cstring>
+
 #if defined(__linux__) || defined(__APPLE__)
 #include <unistd.h>
+#endif
+
+#if defined(__linux__)
+#include <sys/socket.h>  // For send() with MSG_NOSIGNAL
 #endif
 
 namespace retrovue::output {
@@ -28,7 +35,12 @@ MpegTSOutputSink::MpegTSOutputSink(
       status_(SinkStatus::kIdle),
       stop_requested_(false),
       had_frames_(false),
-      empty_iterations_(0) {
+      empty_iterations_(0),
+      prebuffer_target_bytes_(0),
+      prebuffering_(false) {  // Disabled: OutputTiming now handles pacing
+  // Prebuffer disabled - OutputTiming (per OutputTimingContract.md) now enforces
+  // real-time delivery discipline at the packet level, making prebuffering unnecessary.
+  std::cout << "[" << name_ << "] Direct streaming mode (OutputTiming handles pacing)" << std::endl;
 }
 
 MpegTSOutputSink::~MpegTSOutputSink() {
@@ -231,12 +243,95 @@ bool MpegTSOutputSink::DequeueAudioFrame(buffer::AudioFrame* out) {
   return true;
 }
 
+// Helper to write to fd without SIGPIPE (uses send with MSG_NOSIGNAL on Linux)
+static ssize_t SafeWrite(int fd, const void* data, size_t len) {
+#if defined(__linux__)
+  // Use send() with MSG_NOSIGNAL to avoid SIGPIPE on closed socket
+  return send(fd, data, len, MSG_NOSIGNAL);
+#else
+  return write(fd, data, len);
+#endif
+}
+
 int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size) {
 #if defined(__linux__) || defined(__APPLE__)
   auto* sink = static_cast<MpegTSOutputSink*>(opaque);
   if (!sink || sink->fd_ < 0) return -1;
-  ssize_t n = write(sink->fd_, buf, buf_size);
-  return (n == static_cast<ssize_t>(buf_size)) ? buf_size : -1;
+
+  // Prebuffer phase: accumulate data until we have enough for smooth playback.
+  // This absorbs encoder warmup bitrate spikes (fade-ins, etc.)
+  if (sink->prebuffering_.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lock(sink->prebuffer_mutex_);
+
+    // Add data to prebuffer
+    sink->prebuffer_.insert(sink->prebuffer_.end(), buf, buf + buf_size);
+
+    // Check if we've reached the target
+    if (sink->prebuffer_.size() >= sink->prebuffer_target_bytes_) {
+      std::cout << "[" << sink->name_ << "] Prebuffer full ("
+                << sink->prebuffer_.size() << " bytes), flushing to client..."
+                << std::endl;
+      std::cout.flush();
+
+      // Write entire prebuffer to fd (handle EAGAIN/EINTR)
+      const uint8_t* p = sink->prebuffer_.data();
+      size_t remaining = sink->prebuffer_.size();
+      while (remaining > 0) {
+        ssize_t n = SafeWrite(sink->fd_, p, remaining);
+        if (n < 0) {
+          if (errno == EINTR) continue;  // Interrupted, retry
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // Backpressure - brief sleep and retry
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+          }
+          std::cerr << "[" << sink->name_ << "] Prebuffer flush failed: "
+                    << strerror(errno) << std::endl;
+          sink->prebuffer_.clear();
+          return -1;
+        }
+        if (n == 0) {
+          std::cerr << "[" << sink->name_ << "] Prebuffer flush: write returned 0" << std::endl;
+          sink->prebuffer_.clear();
+          return -1;
+        }
+        remaining -= static_cast<size_t>(n);
+        p += n;
+      }
+
+      std::cout << "[" << sink->name_ << "] Prebuffer flushed, switching to direct streaming"
+                << std::endl;
+      sink->prebuffer_.clear();
+      sink->prebuffer_.shrink_to_fit();  // Free memory
+      sink->prebuffering_.store(false, std::memory_order_release);
+    }
+
+    return buf_size;  // Data accepted (buffered)
+  }
+
+  // Direct streaming mode: write all bytes (handle partial writes + EAGAIN/EINTR)
+  const uint8_t* p = buf;
+  size_t remaining = static_cast<size_t>(buf_size);
+  while (remaining > 0) {
+    ssize_t n = SafeWrite(sink->fd_, p, remaining);
+    if (n < 0) {
+      if (errno == EINTR) continue;  // Interrupted, retry
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        // Backpressure - brief sleep and retry
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        continue;
+      }
+      // Real error (EPIPE, etc.)
+      return -1;
+    }
+    if (n == 0) {
+      // Connection closed
+      return -1;
+    }
+    remaining -= static_cast<size_t>(n);
+    p += n;
+  }
+  return buf_size;
 #else
   (void)opaque;
   (void)buf;
