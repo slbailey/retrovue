@@ -1,6 +1,6 @@
 # Phase Model (Air Contract Taxonomy)
 
-_Related: [Phase 6A Overview](../air/contracts/Phase6A-Overview.md) · [Playout Engine Contract](../air/contracts/PlayoutEngineContract.md)_
+_Related: [Phase 6A Contract](../../pkg/air/docs/contracts/phases/Phase6A-Contract.md) · [Phase 6A Overview](../../pkg/air/docs/archive/phases/Phase6A-Overview.md) · [Playout Engine Contract](../../pkg/air/docs/contracts/architecture/PlayoutEngineContract.md)_
 
 ## Purpose
 
@@ -32,6 +32,7 @@ Contracts use the label **Deferred (Applies Phase 7+)** (or the specific phase) 
 
 ## See Also
 
-- [Phase 6A Overview](../air/contracts/Phase6A-Overview.md)
-- [Phase 6A.0 Control Surface](../air/contracts/Phase6A-0-ControlSurface.md)
-- [Playout Engine Contract](../air/contracts/PlayoutEngineContract.md)
+- [Phase 6A Contract](../../pkg/air/docs/contracts/phases/Phase6A-Contract.md)
+- [Phase 6A Overview](../../pkg/air/docs/archive/phases/Phase6A-Overview.md)
+- [Phase 6A.0 Control Surface](../../pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md)
+- [Playout Engine Contract](../../pkg/air/docs/contracts/architecture/PlayoutEngineContract.md)

@@ -25,7 +25,7 @@ Given `now` (from MasterClock or passed in as parameter):
 ## Test scaffolding
 
 - **Unit tests only**: Call `grid_start(now)`, `grid_end(now)`, and any helpers for `elapsed_in_grid` / `remaining_in_grid` with fixed datetimes. No HTTP, no tune-in.
-- **Simulate “now”**: Pass explicit `now` (e.g. 10:00, 10:07, 10:29:59, 10:30) and assert on returned values.
+- **Simulate "now"**: Pass explicit `now` (e.g. 10:00, 10:07, 10:29:59, 10:30) and assert on returned values.
 
 ## Tests
 

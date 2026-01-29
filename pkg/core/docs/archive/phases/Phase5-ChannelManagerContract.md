@@ -10,8 +10,8 @@ CM **must** issue **LoadPreview** for the next segment **no later than**:
 
 `hard_stop_time_ms − prefeed_window_ms`
 
-- **prefeed_window_ms** is a **config** (e.g. ChannelManager or system config; may be mocked in tests). The concrete value can be chosen later; the rule is what’s contractual.
-- **Why:** Prevents implementations that prefeed at T−1 ms; makes “early” objectively testable; gives Air a predictable buffer window.
+- **prefeed_window_ms** is a **config** (e.g. ChannelManager or system config; may be mocked in tests). The concrete value can be chosen later; the rule is what's contractual.
+- **Why:** Prevents implementations that prefeed at T−1 ms; makes "early" objectively testable; gives Air a predictable buffer window.
 - **Tests:** Assert **ordering** (LoadPreview before boundary, SwitchToLive at boundary), not absolute wall-clock values—unless the test injects a fixed prefeed_window_ms and then asserts the call happens within the window.
 
 ## Contract
@@ -24,7 +24,7 @@ CM **must** issue **LoadPreview** for the next segment **no later than**:
 - **Issues `LoadPreview`** with the next segment (asset_path, start_offset_ms, hard_stop_time_ms, channel id) **by** `hard_stop_time_ms − prefeed_window_ms` at latest (see rule above).
 - **Issues `SwitchToLive`** at the boundary exactly as defined in the proto (unchanged; no segment fields).
 - **Immutability:** Once issued to Air, a **PlayoutSegment is immutable**; any change requires a **new** segment and a **new** LoadPreview. CM does not mutate an existing segment/request.
-- Does **not** wait for Air to “ask” for the next segment; CM drives the timeline.
+- Does **not** wait for Air to "ask" for the next segment; CM drives the timeline.
 - **Re-evaluation:** CM may re-evaluate multiple times before the boundary (e.g. periodic tick, event loop, or scheduler), but **must not** issue duplicate **LoadPreview** calls for the **same** next segment (idempotent prefeed per segment).
 
 **Inputs**: MasterClock, current PlayoutSegment/PlayoutRequest, **prefeed_window_ms** (config), and schedule/plan as needed to call PlayoutPipeline.
@@ -42,7 +42,7 @@ CM **must** issue **LoadPreview** for the next segment **no later than**:
 - CM issues LoadPreview **no later than** `hard_stop_time_ms − prefeed_window_ms` (ordering, or with fixed config assert within window).
 - CM issues SwitchToLive at the boundary (after LoadPreview for that segment).
 - CM never mutates an existing segment once issued; changes require a new segment and new LoadPreview.
-- CM never waits for Air to “ask” for the next segment; CM drives the timeline.
+- CM never waits for Air to "ask" for the next segment; CM drives the timeline.
 - CM does **not** issue duplicate LoadPreview for the same next segment when re-evaluating multiple times before the boundary.
 
 ## Out of scope
