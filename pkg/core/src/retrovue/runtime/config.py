@@ -181,11 +181,75 @@ MOCK_CHANNEL_CONFIG = ChannelConfig(
 )
 
 
+@dataclass
+class RuntimeConfig:
+    """
+    Global runtime configuration for RetroVue.
+
+    Loaded from config/retrovue.json or fallback defaults.
+    """
+    program_director_port: int = 8000
+    channel_manager_port: int = 9000
+    channels_config: str = "config/channels.json"
+    schedules_dir: str = "config/schedules"
+
+    @classmethod
+    def load(cls, path: str | None = None) -> "RuntimeConfig":
+        """
+        Load configuration from JSON file, or return defaults if not found.
+
+        Search order:
+        1. Explicit path (if provided)
+        2. config/retrovue.json (relative to cwd)
+        3. /opt/retrovue/config/retrovue.json
+
+        Args:
+            path: Optional explicit path to config file
+
+        Returns:
+            RuntimeConfig instance (defaults if no file found)
+        """
+        from pathlib import Path
+
+        candidates = [
+            Path(path) if path else None,
+            Path("config/retrovue.json"),
+            Path("/opt/retrovue/config/retrovue.json"),
+        ]
+
+        for candidate in candidates:
+            if candidate and candidate.exists():
+                try:
+                    data = json.loads(candidate.read_text())
+                    return cls(
+                        program_director_port=data.get("program_director_port", 8000),
+                        channel_manager_port=data.get("channel_manager_port", 9000),
+                        channels_config=data.get("channels_config", "config/channels.json"),
+                        schedules_dir=data.get("schedules_dir", "config/schedules"),
+                    )
+                except (json.JSONDecodeError, OSError):
+                    # Fall through to defaults on error
+                    pass
+
+        return cls()  # Return defaults
+
+    def get_channels_config_path(self) -> "Path":
+        """Get resolved Path to channels config file."""
+        from pathlib import Path
+        return Path(self.channels_config)
+
+    def get_schedules_dir_path(self) -> "Path":
+        """Get resolved Path to schedules directory."""
+        from pathlib import Path
+        return Path(self.schedules_dir)
+
+
 __all__ = [
     "ProgramFormat",
     "ChannelConfig",
     "ChannelConfigProvider",
     "InlineChannelConfigProvider",
+    "RuntimeConfig",
     "DEFAULT_PROGRAM_FORMAT",
     "MOCK_CHANNEL_CONFIG",
 ]

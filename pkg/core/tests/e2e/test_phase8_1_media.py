@@ -3,7 +3,7 @@ Phase 8.1 — Air owns MPEG-TS: content only via LoadPreview → AttachStream �
 
 Contract: StartChannel (state) → LoadPreview(asset_path) → AttachStream (transport only)
 → SwitchToLive; media output starts only after AttachStream + SwitchToLive success.
-GET /channels/mock.ts returns HTTP 200, Content-Type video/mp2t, and MPEG-TS packets (0x47).
+GET /channel/mock.ts returns HTTP 200, Content-Type video/mp2t, and MPEG-TS packets (0x47)., Content-Type video/mp2t, and MPEG-TS packets (0x47).
 
 See: pkg/air/docs/contracts/phases/Phase8-1-AirOwnsMpegTs.md
 """
@@ -91,7 +91,7 @@ def _find_sample_asset() -> Path | None:
 # Stream handler that sends video/mp2t (Phase 8.1)
 class _StreamHandlerMP2T(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.strip("/") == "channels/mock.ts":
+        if self.path.strip("/") == "channel/mock.ts":
             if self.server.stream_socket is None:
                 self.send_error(503, "No stream attached")
                 return
@@ -254,7 +254,7 @@ def test_phase8_1_load_preview_switch_to_live_ts_stream():
             time.sleep(1.0)
 
             r = requests.get(
-                f"http://127.0.0.1:{http_port}/channels/mock.ts",
+                f"http://127.0.0.1:{http_port}/channel/mock.ts",
                 stream=True,
                 timeout=(3, 3),
             )

@@ -65,29 +65,29 @@ Once ProgramDirector is running, you can connect to the channel stream:
 
 ```bash
 # Stream to stdout (save to file)
-curl http://localhost:8000/channels/test-1.ts > output.ts
+curl http://localhost:8000/channel/test-1.ts > output.ts
 
 # Stream to VLC (if VLC is installed)
-curl http://localhost:8000/channels/test-1.ts | vlc -
+curl http://localhost:8000/channel/test-1.ts | vlc -
 ```
 
 ### Using VLC directly
 
 1. Open VLC
 2. Media → Open Network Stream
-3. Enter: `http://localhost:8000/channels/test-1.ts`
+3. Enter: `http://localhost:8000/channel/test-1.ts`
 4. Click Play
 
 ### Using ffplay
 
 ```bash
-ffplay http://localhost:8000/channels/test-1.ts
+ffplay http://localhost:8000/channel/test-1.ts
 ```
 
 ### Using a web browser
 
 Some browsers can play MPEG-TS streams directly:
-- Navigate to: `http://localhost:8000/channels/test-1.ts`
+- Navigate to: `http://localhost:8000/channel/test-1.ts`
 
 ## How It Works
 
@@ -150,11 +150,11 @@ retrovue program-director start \
   --filler-duration 3650
 
 # Terminal 2: Connect to stream
-curl http://localhost:8000/channels/test-1.ts | vlc -
+curl http://localhost:8000/channel/test-1.ts | vlc -
 ```
 
 ## API Endpoints
 
 - `GET /channels` - List available channels
-- `GET /channels/{channel_id}.ts` - Stream channel (e.g., `/channels/test-1.ts`)
+- `GET /channel/{channel_id}.ts` - Stream channel (e.g., `/channel/test-1.ts`)
 - `POST /admin/emergency` - Emergency override (no-op in Phase 0)

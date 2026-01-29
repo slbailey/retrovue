@@ -106,6 +106,29 @@ router.register(
 )
 
 
+@app.command("start")
+def start_alias(
+    config_file: str = typer.Option(None, "--config", "-c", help="Path to retrovue.json"),
+    port: int = typer.Option(None, help="Override ProgramDirector HTTP port"),
+):
+    """Start RetroVue (alias for program-director start)."""
+    from retrovue.cli.commands.program_director import start as pd_start
+    pd_start(
+        config_file=config_file,
+        schedule_dir=None,
+        port=port,
+        mock_schedule_grid=False,
+        program_asset=None,
+        program_duration=None,
+        filler_asset=None,
+        filler_duration=3600.0,
+        mock_schedule_ab=False,
+        asset_a=None,
+        asset_b=None,
+        segment_seconds=10.0,
+    )
+
+
 
 @app.callback()
 def main(

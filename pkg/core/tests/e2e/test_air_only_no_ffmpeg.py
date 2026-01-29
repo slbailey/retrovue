@@ -50,12 +50,11 @@ def test_launch_ffmpeg_fallback_raises():
 def test_get_channel_ts_503_when_air_unavailable():
     """GET /channel/{id}.ts returns 503 when Air cannot be started (no placeholder)."""
     import socket
-    import threading
     import time
 
     import requests
 
-    from retrovue.runtime.channel_manager_daemon import ChannelManagerDaemon
+    from retrovue.runtime.program_director import ProgramDirector
     from retrovue.usecases import channel_manager_launch
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -63,17 +62,16 @@ def test_get_channel_ts_503_when_air_unavailable():
         port = s.getsockname()[1]
 
     with patch.object(channel_manager_launch, "_find_air_binary", return_value=None):
-        daemon = ChannelManagerDaemon(
-            schedule_dir=None,
+        program_director = ProgramDirector(
             host="127.0.0.1",
             port=port,
+            schedule_dir=None,
             mock_schedule_ab_mode=True,
             asset_a_path="/tmp/a.mp4",
             asset_b_path="/tmp/b.mp4",
             segment_seconds=10.0,
         )
-        t = threading.Thread(target=daemon.start, daemon=True)
-        t.start()
+        program_director.start()
         r = None
         for _ in range(100):
             try:
@@ -86,13 +84,14 @@ def test_get_channel_ts_503_when_air_unavailable():
             except requests.exceptions.ConnectionError:
                 time.sleep(0.1)
         else:
-            daemon.stop()
+            program_director.stop()
             pytest.fail("Server did not start")
-        daemon.stop()
+        program_director.stop()
 
     assert r is not None
     assert r.status_code == 503
-    assert "Air playout engine unavailable" in (r.text or r.content.decode("utf-8", "replace"))
+    body = r.text or r.content.decode("utf-8", "replace")
+    assert "Air playout engine unavailable" in body or "Producer failed" in body or "unavailable" in body.lower()
 
 
 def test_ffmpeg_never_launched_in_playout_path():

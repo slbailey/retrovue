@@ -87,7 +87,7 @@ def _find_sample_asset() -> Path | None:
 
 class _StreamHandlerMP2T(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.strip("/") == "channels/mock.ts":
+        if self.path.strip("/") == "channel/mock.ts":
             if self.server.stream_socket is None:
                 self.send_error(503, "No stream attached")
                 return
@@ -231,7 +231,7 @@ def test_phase8_6_real_mpeg_ts_no_hello_vlc_e2e():
                     pytest.skip(
                         "Full Air engine StartChannel timed out (heavy init). "
                         "Run Phase 8.6 VLC check manually: start retrovue, then open "
-                        "http://<host>:<port>/channels/<channel_id>.ts in VLC."
+                        "http://<host>:<port>/channel/<channel_id>.ts in VLC."
                     )
                 raise
             with grpc.insecure_channel(grpc_addr) as ch:
@@ -262,7 +262,7 @@ def test_phase8_6_real_mpeg_ts_no_hello_vlc_e2e():
             # Allow mux to start and write TS
             time.sleep(2.0)
 
-            stream_url = f"http://127.0.0.1:{http_port}/channels/mock.ts"
+            stream_url = f"http://127.0.0.1:{http_port}/channel/mock.ts"
             r = requests.get(stream_url, stream=True, timeout=(3, 5))
             assert r.status_code == 200, r.text or r.reason
             assert "video/mp2t" in r.headers.get("Content-Type", "") or "mp2t" in r.headers.get("Content-Type", "")

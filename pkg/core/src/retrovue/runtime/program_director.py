@@ -25,13 +25,15 @@ Design Principles:
 
 import asyncio
 import logging
+import os
 import queue
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from threading import Thread
 from typing import Any, Callable, Optional, Protocol
 
@@ -41,7 +43,18 @@ from uvicorn import Config, Server
 
 from retrovue.runtime.clock import MasterClock, RealTimeMasterClock
 from retrovue.runtime.pace import PaceController
-from retrovue.runtime.channel_stream import ChannelStream, SocketTsSource, generate_ts_stream
+from retrovue.runtime.channel_stream import (
+    ChannelStream,
+    FakeTsSource,
+    SocketTsSource,
+    generate_ts_stream,
+)
+from retrovue.runtime.config import (
+    ChannelConfig,
+    ChannelConfigProvider,
+    InlineChannelConfigProvider,
+    MOCK_CHANNEL_CONFIG,
+)
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -152,16 +165,32 @@ class ProgramDirector:
         port: int = 8000,
         *,
         sleep_fn=time.sleep,
+        # Embedded mode (when provider is None): PD owns ChannelManager registry
+        schedule_dir: Optional[Path] = None,
+        channel_config_provider: Optional[Any] = None,
+        mock_schedule_grid_mode: bool = False,
+        program_asset_path: Optional[str] = None,
+        program_duration_seconds: Optional[float] = None,
+        filler_asset_path: Optional[str] = None,
+        filler_duration_seconds: float = 3600.0,
+        mock_schedule_ab_mode: bool = False,
+        asset_a_path: Optional[str] = None,
+        asset_b_path: Optional[str] = None,
+        segment_seconds: float = 10.0,
     ) -> None:
         """Initialize the Program Director.
         
         Args:
-            channel_manager_provider: Provider for ChannelManager instances
+            channel_manager_provider: Optional provider for ChannelManager instances (tests).
+                When None, use embedded config (schedule_dir or mock flags) and PD owns the registry.
             clock: MasterClock instance (optional)
             target_hz: Pacing target frequency (optional)
             host: HTTP server bind address
             port: HTTP server port
             sleep_fn: Sleep function for testing (optional)
+            schedule_dir: For embedded mode: directory containing schedule.json files
+            channel_config_provider: For embedded mode: channel config provider
+            mock_schedule_*: For embedded mode: mock schedule options
         """
         self._logger = logging.getLogger(__name__)
         self._clock = clock or RealTimeMasterClock()
@@ -170,12 +199,44 @@ class ProgramDirector:
         self._pace = PaceController(clock=self._clock, target_hz=target_hz or 30.0, sleep_fn=sleep_fn)
         self._pace_thread: Optional[Thread] = None
         
-        # Phase 0: ChannelManager integration
+        # Phase 0: ChannelManager integration (provider or embedded registry)
         self._channel_manager_provider = channel_manager_provider
         
+        # Embedded mode: PD is sole authority for ChannelManager lifecycle (creation, health, fanout, teardown)
+        self._managers: dict[str, Any] = {}
+        self._managers_lock = threading.Lock()
+        self._schedule_service: Optional[Any] = None
+        self._phase8_program_director: Optional[Any] = None
+        self._channel_config_provider: Optional[Any] = None
+        self._producer_factory: Optional[Callable[..., Any]] = None
+        self._health_check_stop: Optional[threading.Event] = None
+        self._health_check_thread: Optional[Thread] = None
+        self._health_check_interval_seconds = 1.0
+        self._embedded_clock: Optional[Any] = None  # MasterClock with now_utc() for ChannelManagers
+        self._test_mode = os.getenv("RETROVUE_TEST_MODE") == "1"
+        self._mock_schedule_grid_mode = mock_schedule_grid_mode
+        self._program_asset_path = program_asset_path
+        self._program_duration_seconds = program_duration_seconds
+        self._filler_asset_path = filler_asset_path
+        self._filler_duration_seconds = filler_duration_seconds
+        self._mock_schedule_ab_mode = mock_schedule_ab_mode
+        self._asset_a_path = asset_a_path
+        self._asset_b_path = asset_b_path
+        self._segment_seconds = segment_seconds
+        self._schedule_dir = schedule_dir or Path(".")
+        self._mock_schedule = (
+            schedule_dir is None and not mock_schedule_grid_mode and not mock_schedule_ab_mode
+        )
+
+        if self._channel_manager_provider is None:
+            self._init_embedded_registry(channel_config_provider)
+
         # Phase 0: FanoutBuffer (ChannelStream) per channel
         self._fanout_buffers: dict[str, ChannelStream] = {}
         self._fanout_lock = threading.Lock()
+        # Pre-warmed (CLI-started) channels: grace period before teardown if no viewer connects
+        self._pre_warmed_timers: dict[str, threading.Timer] = {}
+        self._pre_warmed_lock = threading.Lock()
         # Phase 7: Optional factory for tests (channel_id, socket_path) -> ChannelStream
         self._channel_stream_factory: Optional[Callable[[str, str], ChannelStream]] = None
         
@@ -200,9 +261,282 @@ class ProgramDirector:
             port,
         )
 
+    def _init_embedded_registry(
+        self, channel_config_provider: Optional[Any] = None
+    ) -> None:
+        """Build schedule service, program director, config provider, producer factory (embedded mode)."""
+        # ChannelManager and schedule services expect clock.now_utc() (datetime); use concrete MasterClock
+        self._embedded_clock = MasterClock()
+        from retrovue.runtime.channel_manager import (
+            ChannelManager,
+            MockAlternatingScheduleService,
+            MockGridScheduleService,
+            Phase8AirProducer,
+            Phase8MockScheduleService,
+            Phase8ProgramDirector,
+            Phase8ScheduleService,
+        )
+
+        if self._mock_schedule_ab_mode:
+            if not self._asset_a_path or not self._asset_b_path:
+                raise ValueError("Mock A/B mode requires asset_a_path and asset_b_path")
+            self._schedule_service = MockAlternatingScheduleService(
+                clock=self._embedded_clock,
+                asset_a_path=self._asset_a_path,
+                asset_b_path=self._asset_b_path,
+                segment_seconds=self._segment_seconds,
+            )
+        elif self._mock_schedule_grid_mode:
+            if not self._program_asset_path or self._program_duration_seconds is None:
+                raise ValueError("Mock grid requires program_asset_path and program_duration_seconds")
+            if not self._filler_asset_path:
+                raise ValueError("Mock grid requires filler_asset_path")
+            self._schedule_service = MockGridScheduleService(
+                clock=self._embedded_clock,
+                program_asset_path=self._program_asset_path,
+                program_duration_seconds=self._program_duration_seconds,
+                filler_asset_path=self._filler_asset_path,
+                filler_duration_seconds=self._filler_duration_seconds,
+            )
+        elif self._mock_schedule:
+            self._schedule_service = Phase8MockScheduleService(self._embedded_clock)
+        else:
+            self._schedule_service = Phase8ScheduleService(self._schedule_dir, self._embedded_clock)
+        self._phase8_program_director = Phase8ProgramDirector()
+        self._channel_config_provider = (
+            channel_config_provider
+            if channel_config_provider is not None
+            else InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG])
+        )
+
+        def _create_air_producer(
+            channel_id: str,
+            mode: str,
+            config: dict[str, Any],
+            channel_config: Optional[ChannelConfig] = None,
+        ) -> Optional[Any]:
+            if mode != "normal":
+                return None
+            return Phase8AirProducer(channel_id, config, channel_config=channel_config)
+
+        self._producer_factory = _create_air_producer
+        self._health_check_stop = threading.Event()
+
+    def _get_or_create_manager(self, channel_id: str) -> Any:
+        """Get or create ChannelManager for a channel (embedded mode). PD is sole authority for creation."""
+        with self._managers_lock:
+            if channel_id not in self._managers:
+                channel_config = self._channel_config_provider.get_channel_config(channel_id)
+                if channel_config is None:
+                    self._logger.warning(
+                        "[channel %s] No config found, using mock config",
+                        channel_id,
+                    )
+                    channel_config = MOCK_CHANNEL_CONFIG
+                success, error = self._schedule_service.load_schedule(channel_id)
+                if not success:
+                    from retrovue.runtime.channel_manager import ChannelManagerError
+                    raise ChannelManagerError(f"Failed to load schedule for {channel_id}: {error}")
+                from retrovue.runtime.channel_manager import ChannelManager
+                manager = ChannelManager(
+                    channel_id=channel_id,
+                    clock=self._embedded_clock,
+                    schedule_service=self._schedule_service,
+                    program_director=self._phase8_program_director,
+                )
+                manager.channel_config = channel_config
+                if self._mock_schedule_grid_mode:
+                    manager._mock_grid_block_minutes = 30
+                    manager._mock_grid_program_asset_path = self._program_asset_path
+                    manager._mock_grid_filler_asset_path = self._filler_asset_path
+                    manager._mock_grid_filler_epoch = datetime(
+                        2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc
+                    )
+                cfg = channel_config
+
+                def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
+                    return self._producer_factory(channel_id, mode, {}, channel_config=cfg)
+                manager._build_producer_for_mode = factory_wrapper
+                self._managers[channel_id] = manager
+                self._logger.info(
+                    "[channel %s] ChannelManager created (channel_id_int=%d)",
+                    channel_id,
+                    channel_config.channel_id_int,
+                )
+            return self._managers[channel_id]
+
+    def _health_check_loop(self) -> None:
+        """Run check_health() and tick() on each registered ChannelManager (embedded mode)."""
+        while (
+            self._health_check_stop is not None
+            and not self._health_check_stop.wait(timeout=self._health_check_interval_seconds)
+        ):
+            try:
+                with self._managers_lock:
+                    managers = list(self._managers.values())
+                for manager in managers:
+                    try:
+                        manager.check_health()
+                        manager.tick()
+                    except Exception as e:
+                        self._logger.warning(
+                            "Health check failed for channel %s: %s",
+                            getattr(manager, "channel_id", "?"),
+                            e,
+                            exc_info=True,
+                        )
+            except Exception as e:
+                self._logger.warning("Health check loop error: %s", e, exc_info=True)
+
+    def load_all_schedules(self) -> list[str]:
+        """Load schedule data for discoverable channels (embedded mode)."""
+        if self._schedule_service is None:
+            return []
+        if self._mock_schedule_ab_mode:
+            from retrovue.runtime.channel_manager import MockAlternatingScheduleService
+            channel_id = MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID
+            success, _ = self._schedule_service.load_schedule(channel_id)
+            return [channel_id] if success else []
+        if self._mock_schedule:
+            from retrovue.runtime.channel_manager import Phase8MockScheduleService
+            channel_id = Phase8MockScheduleService.MOCK_CHANNEL_ID
+            success, _ = self._schedule_service.load_schedule(channel_id)
+            return [channel_id] if success else []
+        if not Path(self._schedule_dir).exists():
+            return []
+        loaded = []
+        for schedule_file in Path(self._schedule_dir).glob("*.json"):
+            channel_id = schedule_file.stem
+            success, _ = self._schedule_service.load_schedule(channel_id)
+            if success:
+                loaded.append(channel_id)
+        return loaded
+
+    def _list_channels_internal(self) -> list[str]:
+        """List channel IDs in active registry (embedded mode)."""
+        with self._managers_lock:
+            return list(self._managers.keys())
+
+    def _get_pre_warmed_viewer_count(self, channel_id: str) -> int:
+        """Return current viewer (subscriber) count for this channel (0 if no fanout yet)."""
+        with self._fanout_lock:
+            fanout = self._fanout_buffers.get(channel_id)
+            return fanout.get_subscriber_count() if fanout else 0
+
+    def _schedule_pre_warmed_teardown(self, channel_id: str, grace_seconds: int) -> None:
+        """Schedule teardown of channel after grace_seconds if no viewer has connected."""
+        def teardown_if_no_viewers() -> None:
+            with self._pre_warmed_lock:
+                self._pre_warmed_timers.pop(channel_id, None)
+            if self._get_pre_warmed_viewer_count(channel_id) == 0:
+                self._logger.info(
+                    "[channel %s] Pre-warmed grace period (%ds) expired with no viewers; tearing down",
+                    channel_id,
+                    grace_seconds,
+                )
+                self.stop_channel(channel_id)
+
+        with self._pre_warmed_lock:
+            existing = self._pre_warmed_timers.pop(channel_id, None)
+            if existing:
+                existing.cancel()
+            t = threading.Timer(float(grace_seconds), teardown_if_no_viewers)
+            t.daemon = True
+            self._pre_warmed_timers[channel_id] = t
+            t.start()
+
+    def start_channel(
+        self,
+        channel_id: str,
+        pre_warmed_grace_seconds: Optional[int] = None,
+    ) -> Any:
+        """
+        Single entry point for starting a channel: ensure ChannelManager exists and is ready.
+
+        ProgramDirector uses this when a viewer tunes in (no grace period; teardown when viewers=0).
+        The CLI can call it with pre_warmed_grace_seconds (e.g. 30) so the channel is pre-warmed:
+        if no viewer connects within that many seconds, the channel is torn down; otherwise
+        normal rules apply (teardown when last viewer disconnects). Returns the ChannelManager.
+        """
+        if self._channel_manager_provider is not None:
+            return self._channel_manager_provider.get_channel_manager(channel_id)
+        manager = self._get_or_create_manager(channel_id)
+        if pre_warmed_grace_seconds is not None and pre_warmed_grace_seconds > 0:
+            self._schedule_pre_warmed_teardown(channel_id, pre_warmed_grace_seconds)
+        return manager
+
+    def get_channel_manager(self, channel_id: str) -> Any:
+        """Get or create ChannelManager (provider protocol). Delegates to start_channel (single code path)."""
+        return self.start_channel(channel_id)
+
+    def list_channels(self) -> list[str]:
+        """List channel IDs in active registry (provider protocol)."""
+        if self._channel_manager_provider is not None:
+            return self._channel_manager_provider.list_channels()
+        return self._list_channels_internal()
+
+    def stop_channel(self, channel_id: str) -> None:
+        """Stop channel and remove from registry (provider protocol; when embedded, PD is sole authority)."""
+        if self._channel_manager_provider is not None:
+            self._channel_manager_provider.stop_channel(channel_id)
+        else:
+            self._stop_channel_internal(channel_id)
+
+    def has_channel_stream(self, channel_id: str) -> bool:
+        """Return True if this channel has an active ChannelStream (for tests)."""
+        if self._channel_manager_provider is not None:
+            if hasattr(self._channel_manager_provider, "has_channel_stream"):
+                return self._channel_manager_provider.has_channel_stream(channel_id)
+            return False
+        with self._fanout_lock:
+            return channel_id in self._fanout_buffers
+
+    def _stop_channel_internal(self, channel_id: str) -> None:
+        """Stop channel and remove from registry (embedded mode). PD is sole authority for teardown."""
+        with self._pre_warmed_lock:
+            timer = self._pre_warmed_timers.pop(channel_id, None)
+        if timer:
+            timer.cancel()
+        with self._managers_lock:
+            manager = self._managers.get(channel_id)
+        if manager is not None:
+            self._logger.info("[channel %s] ChannelManager destroyed (viewer count 0)", channel_id)
+            manager.stop_channel()
+            if manager.active_producer:
+                self._logger.info("[channel %s] Force-stopping producer (terminating Air)", channel_id)
+                try:
+                    manager.active_producer.stop()
+                    manager.active_producer = None
+                except Exception as e:
+                    self._logger.warning(
+                        "Error stopping producer for channel %s: %s", channel_id, e
+                    )
+            with self._managers_lock:
+                self._managers.pop(channel_id, None)
+                fanout = self._fanout_buffers.pop(channel_id, None)
+            if fanout is not None:
+                self._logger.info("[teardown] stopping reader loop for channel %s", channel_id)
+                try:
+                    fanout.stop()
+                except Exception as e:
+                    self._logger.warning(
+                        "Error stopping channel stream for %s: %s", channel_id, e
+                    )
+
     # Lifecycle -------------------------------------------------------------
     def start(self) -> None:
-        """Start the pacing loop and HTTP server."""
+        """Start the pacing loop, health-check loop (embedded), and HTTP server."""
+        # Embedded mode: load schedules and start health-check thread
+        if self._channel_manager_provider is None:
+            self.load_all_schedules()
+            if self._health_check_stop is not None:
+                self._health_check_stop.clear()
+                self._health_check_thread = Thread(
+                    target=self._health_check_loop,
+                    name="program-director-health-check",
+                    daemon=True,
+                )
+                self._health_check_thread.start()
         # Start pacing loop
         if self._pace_thread and self._pace_thread.is_alive():
             self._logger.debug("ProgramDirector.start() called but pace thread already running")
@@ -269,6 +603,25 @@ class ProgramDirector:
                 except Exception as e:
                     self._logger.warning("Error stopping fanout buffer for channel %s: %s", channel_id, e)
             self._fanout_buffers.clear()
+
+        # Embedded mode: stop health-check thread and tear down all managers
+        if self._channel_manager_provider is None:
+            if self._health_check_stop is not None:
+                self._health_check_stop.set()
+            if self._health_check_thread is not None and self._health_check_thread.is_alive():
+                self._health_check_thread.join(timeout=2.0)
+                if self._health_check_thread.is_alive():
+                    self._logger.warning("Health-check thread did not stop within timeout")
+                self._health_check_thread = None
+            with self._managers_lock:
+                for channel_id, manager in list(self._managers.items()):
+                    if manager.active_producer:
+                        try:
+                            manager.active_producer.stop()
+                        except Exception as e:
+                            self._logger.warning("Error stopping producer %s: %s", channel_id, e)
+                        manager.active_producer = None
+                self._managers.clear()
         
         self._logger.debug("ProgramDirector stopped")
 
@@ -465,6 +818,22 @@ class ProgramDirector:
             ChannelStream instance or None if Producer not available
         """
         with self._fanout_lock:
+            # Embedded mode + test mode: fake TS source (no real Producer)
+            if (
+                self._channel_manager_provider is None
+                and self._test_mode
+            ):
+                if channel_id in self._fanout_buffers:
+                    return self._fanout_buffers[channel_id]
+                def ts_source_factory() -> FakeTsSource:
+                    return FakeTsSource()
+                fanout = ChannelStream(
+                    channel_id=channel_id,
+                    ts_source_factory=ts_source_factory,
+                )
+                self._fanout_buffers[channel_id] = fanout
+                return fanout
+
             # Check if Producer is running and has socket_path
             producer = getattr(manager, "active_producer", None)
 
@@ -531,20 +900,19 @@ class ProgramDirector:
             """
             Phase 0 contract: Channel discovery endpoint.
             
-            Returns list of available channels.
+            Returns list of available channels (from provider or embedded registry).
             """
-            if not self._channel_manager_provider:
-                return {"channels": []}
-            
-            # Get list of channels from provider
             channels = []
             try:
-                if hasattr(self._channel_manager_provider, "list_channels"):
-                    channel_ids = self._channel_manager_provider.list_channels()
+                if self._channel_manager_provider is not None:
+                    if hasattr(self._channel_manager_provider, "list_channels"):
+                        channel_ids = self._channel_manager_provider.list_channels()
+                        channels = [{"id": cid, "name": cid} for cid in channel_ids]
+                else:
+                    channel_ids = self._list_channels_internal()
                     channels = [{"id": cid, "name": cid} for cid in channel_ids]
             except Exception as e:
                 self._logger.warning("Error getting channel list: %s", e)
-            
             return {"channels": channels}
 
         def _run_stream_cleanup(
@@ -568,8 +936,7 @@ class ProgramDirector:
             except Exception as e:
                 self._logger.debug("tune_out on cleanup: %s", e)
             if to_stop:
-                if hasattr(self._channel_manager_provider, "stop_channel"):
-                    self._channel_manager_provider.stop_channel(channel_id)
+                self.stop_channel(channel_id)
                 to_stop.stop()
 
         async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
@@ -580,7 +947,7 @@ class ProgramDirector:
                 pass
             cleanup()
 
-        @self.fastapi_app.get("/channels/{channel_id}.ts")
+        @self.fastapi_app.get("/channel/{channel_id}.ts")
         async def stream_channel(request: Request, channel_id: str) -> StreamingResponse:
             """
             Phase 0 contract: Live stream endpoint for a channel.
@@ -589,15 +956,11 @@ class ProgramDirector:
             - Emits continuous MPEG-TS bytes
             - Stops playout engine pipeline when last viewer disconnects (Phase 8.7: disconnect triggers teardown)
             """
-            if not self._channel_manager_provider:
-                return Response(
-                    content="Channel manager provider not configured",
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
             try:
-                # Get ChannelManager for this channel
-                manager = self._channel_manager_provider.get_channel_manager(channel_id)
+                if self._channel_manager_provider is not None:
+                    manager = self._channel_manager_provider.get_channel_manager(channel_id)
+                else:
+                    manager = self._get_or_create_manager(channel_id)
             except Exception as e:
                 self._logger.error("Error getting ChannelManager for %s: %s", channel_id, e)
                 return Response(
@@ -701,13 +1064,11 @@ class ProgramDirector:
             Returns current segment (asset_id, asset_path, start_offset_ms) when the
             channel manager supports get_current_segment(now_utc_ms).
             """
-            if not self._channel_manager_provider:
-                return Response(
-                    content="Channel manager provider not configured",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
             try:
-                manager = self._channel_manager_provider.get_channel_manager(channel_id)
+                if self._channel_manager_provider is not None:
+                    manager = self._channel_manager_provider.get_channel_manager(channel_id)
+                else:
+                    manager = self._get_or_create_manager(channel_id)
             except Exception:
                 return Response(
                     content="Channel not found",

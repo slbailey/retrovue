@@ -17,6 +17,19 @@ interfaces/docs live.
 Channels exist in time even when not streaming.
 Internal playout engine pipelines only run when at least one viewer is present.
 
+## ChannelManager lifecycle (post-collapse)
+
+**ProgramDirector is the sole authority for ChannelManager lifecycle.** There is no separate “daemon” runtime concept; PD owns the active registry of ChannelManagers.
+
+- **Creation** — PD creates a ChannelManager on demand (e.g. first tune to a channel) and adds it to the registry.
+- **Health ticking** — PD runs the health-check loop and calls `check_health()` / `tick()` on each registered manager.
+- **Fanout attachment** — PD creates and attaches ChannelStream (fanout) to a manager’s producer.
+- **Teardown** — PD removes a manager from the registry and tears it down (e.g. on last viewer disconnect); ChannelManagers do not self-terminate.
+
+**Invariant:** ChannelManagers have no autonomous lifecycle; they exist only while referenced by ProgramDirector’s active registry. ChannelManagers must never self-terminate or assume daemon semantics.
+
+See: [ProgramDirector–ChannelManagerDaemon collapse](core/ProgramDirector-ChannelManagerDaemon-Collapse.md).
+
 ## Mental model (one channel, one viewer)
 
 ```mermaid
@@ -46,13 +59,13 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | **MasterClock** | One authoritative time source used across scheduling + playout | In-process protocol (time reads); used by ScheduleService/ChannelManager/ProgramDirector | `docs/core/domain/MasterClock.md` | `pkg/core/src/retrovue/runtime/clock.py` |
 | **ScheduleService** ("ScheduleManager") | Interprets schedules; answers "what should be airing now?"; broadcast-day alignment | In-process protocol; read-only to runtime; produces playout horizon/segments | `docs/core/runtime/schedule_service.md` • `docs/core/domain/Scheduling.md` | `pkg/core/src/retrovue/runtime/schedule_service.py` (and related runtime modules) |
-| **ChannelManager (CM)** | Per-channel runtime orchestration; decides when to start/stop/swap Producers; calls the internal playout engine via gRPC; viewer_count, join-in-progress offsets, plan authority. Never internet-facing. Never forwards MPEG-TS bytes. Only orchestrates plans and lifecycle. | gRPC client to internal playout engine (`StartChannel`, `UpdatePlan`, etc.); in-process status surface (not internet-facing) | `docs/core/runtime/channel_manager.md` • `docs/core/runtime/ProducerLifecycle.md` | `pkg/core/src/retrovue/runtime/channel_manager_daemon.py` |
-| **ProgramDirector (PM)** | The control plane inside RetroVue. Control plane + routing + operator surfaces. Owns all web servers, viewer routing, fanout buffers, global overrides (emergency/guide/maintenance), and operator dashboards. Does not perform scheduling or playout. | HTTP (viewer + operator UI), in-process commands to CMs | `docs/core/runtime/program_director.md` | `pkg/core/src/retrovue/runtime/program_director.py` |
+| **ChannelManager (CM)** | Per-channel runtime orchestration; decides when to start/stop/swap Producers; calls the internal playout engine via gRPC; viewer_count, join-in-progress offsets, plan authority. Never internet-facing. Never forwards MPEG-TS bytes. No autonomous lifecycle—exists only while in ProgramDirector’s active registry. | gRPC client to internal playout engine (`StartChannel`, `UpdatePlan`, etc.); in-process status surface (not internet-facing) | `docs/core/runtime/channel_manager.md` • `docs/core/runtime/ProducerLifecycle.md` | `pkg/core/src/retrovue/runtime/channel_manager.py` |
+| **ProgramDirector (PM)** | The control plane inside RetroVue. **Sole owner of ChannelManager lifecycle** (creation, health ticking, fanout attachment, teardown). Owns all web servers, viewer routing, fanout buffers, global overrides (emergency/guide/maintenance), and operator dashboards. Does not perform scheduling or playout. | HTTP (viewer + operator UI), in-process commands to CMs | `docs/core/runtime/program_director.md` • [PD–CM collapse](core/ProgramDirector-ChannelManagerDaemon-Collapse.md) | `pkg/core/src/retrovue/runtime/program_director.py` |
 | **AsRunLogger** | Records "what actually aired" (compliance/reporting feed) | In-process logger; depends on ScheduleService for broadcast-day labeling | `docs/core/runtime/asrun_logger.md` | `pkg/core/src/retrovue/runtime/asrun_logger.py` |
 | **FanoutBuffer (runtime)** | One-to-many distribution of live channel bytes. Receives a single MPEG-TS stream from the internal playout engine and multiplexes it to N viewers. Ensures only one playout engine pipeline runs per channel regardless of viewer count. | In-process async stream API | `docs/core/runtime/fanout_buffer.md` | `pkg/core/src/retrovue/runtime/fanout.py` |
 | **Domain model: Channel/Source/Collection/Asset/Enricher** ("Media Manager") | Operator-configured entities + invariants | CLI + usecases; DB-backed | `docs/core/domain/` (start: `Channel.md`, `Source.md`, `Asset.md`) | `pkg/core/src/retrovue/domain/` + `pkg/core/src/retrovue/usecases/` |
 | **CLI (test harness)** | Contract-first operator/dev harness; JSON is the canonical contract surface | Typer commands; calls usecases | `docs/core/contracts/resources/README.md` | `pkg/core/src/retrovue/cli/` |
-| **Web/API surfaces (experimental / legacy)** | HTTP entrypoints used for dev demos and runtime surfaces | FastAPI apps (varies) | `docs/core/architecture/ArchitectureOverview.md` (context) | `pkg/core/src/retrovue/web/server.py` and `pkg/core/src/retrovue/runtime/channel_manager_daemon.py` (`FastAPI(...)`) |
+| **Web/API surfaces (experimental / legacy)** | HTTP entrypoints used for dev demos and runtime surfaces | FastAPI apps (varies) | `docs/core/architecture/ArchitectureOverview.md` (context) | `pkg/core/src/retrovue/web/server.py`. **Note:** ChannelManagerDaemon’s HTTP is being collapsed into ProgramDirector; “daemon” is not a long-term runtime concept (see [PD–CM collapse](core/ProgramDirector-ChannelManagerDaemon-Collapse.md)). |
 
 ### Internal playout engine (C++) — real-time playout engine
 

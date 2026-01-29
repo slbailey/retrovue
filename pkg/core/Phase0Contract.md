@@ -25,7 +25,7 @@
 ### **ProgramDirector** (system control plane)
 
 - `GET /channels`
-- `GET /channels/{id}.ts`
+- `GET /channel/{id}.ts`
 - `POST /admin/emergency` <span style="color: #999999;">*(no-op for now)*</span>
 
 **Responsibilities:**
