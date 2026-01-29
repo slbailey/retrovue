@@ -17,7 +17,7 @@ import sys
 import tempfile
 import threading
 import time
-from http.server import HTTPServer
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 import pytest

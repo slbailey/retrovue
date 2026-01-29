@@ -481,15 +481,25 @@ def generate_ts_stream(client_queue: Queue[bytes]) -> Any:
     Yields:
         TS data chunks (bytes)
     """
+    consecutive_timeouts = 0
+    # Exit after 10 seconds of no data during shutdown.
+    # Must be > prebuffer time (2s) + encoder warmup (~3s) to allow initial buffering.
+    max_consecutive_timeouts = 20
     while True:
         try:
-            chunk = client_queue.get(timeout=1.0)
+            chunk = client_queue.get(timeout=0.5)
+            consecutive_timeouts = 0  # Reset on successful read
             if not chunk:  # EOF signal
                 break
             yield chunk
         except Empty:
             # Timeout - continue waiting (allows graceful shutdown on disconnect)
             # FastAPI will close connection if client disconnects
+            consecutive_timeouts += 1
+            # Safety exit: if no data for extended period, assume shutdown
+            if consecutive_timeouts >= max_consecutive_timeouts:
+                _logger.debug("generate_ts_stream exiting due to timeout (possible shutdown)")
+                break
             continue
         except GeneratorExit:
             # Client disconnected

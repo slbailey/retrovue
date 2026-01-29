@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -136,11 +137,15 @@ namespace retrovue::producers::file
     playback_start_utc_us_ = 0;
     segment_end_pts_us_ = -1;
 
-    // Phase 6A.2: non-stub mode — try to init decoder before starting thread
-    // If initialization fails, let ProduceLoop() handle fallback to stub mode (for compatibility with "mock" plan_handle)
+    // Phase 6A.2: non-stub mode — init decoder before starting thread
+    // If initialization fails (e.g. file not found), fail start() so caller knows
     if (!config_.stub_mode)
     {
-      InitializeDecoder();  // Don't fail start() if decoder init fails; ProduceLoop() will fallback to stub mode
+      if (!InitializeDecoder())
+      {
+        SetState(ProducerState::STOPPED);
+        return false;
+      }
     }
 
     // Set state to RUNNING before starting thread (so loop sees correct state)
@@ -775,6 +780,17 @@ namespace retrovue::producers::file
       if (master_clock_)
       {
         playback_start_utc_us_ = master_clock_->now_utc_us();
+        // Synchronize clock epoch with actual playback start time.
+        // This ensures ProgramOutput's scheduled_to_utc_us() returns correct deadlines
+        // relative to when playback actually started, not when AIR started.
+        // Note: We do NOT subtract first_frame_pts_us_ because that would make audio
+        // (which starts at PTS=0) appear early relative to video. Instead, we accept
+        // that video frames may arrive slightly early due to B-frame decoding delay,
+        // which is fine - early is better than late for client buffering.
+        master_clock_->set_epoch_utc_us(playback_start_utc_us_);
+        std::cout << "[FileProducer] Clock epoch synchronized: playback_start="
+                  << playback_start_utc_us_ << "us, first_frame_pts=" << first_frame_pts_us_
+                  << "us, epoch=" << playback_start_utc_us_ << "us" << std::endl;
       }
     }
 
@@ -887,11 +903,37 @@ namespace retrovue::producers::file
     // Check if padding needed (aspect preserve)
     bool needs_padding = (intermediate_frame_ != nullptr);
 
+    // Diagnostic for first 5 frames
+    static int fp_scale_diag_count = 0;
+    if (++fp_scale_diag_count <= 5) {
+      std::cout << "[FileProducer] SCALE_DIAG frame=" << fp_scale_diag_count
+                << " src=" << frame_->width << "x" << frame_->height
+                << " src_linesize=[" << frame_->linesize[0] << "," << frame_->linesize[1] << "," << frame_->linesize[2] << "]"
+                << " scale=" << scale_width_ << "x" << scale_height_
+                << " pad=(" << pad_x_ << "," << pad_y_ << ")"
+                << " target=" << config_.target_width << "x" << config_.target_height
+                << " target_linesize=[" << scaled_frame_->linesize[0] << "," << scaled_frame_->linesize[1] << "," << scaled_frame_->linesize[2] << "]"
+                << " needs_padding=" << (needs_padding ? "Y" : "N")
+                << std::endl;
+      if (needs_padding && intermediate_frame_) {
+        std::cout << "[FileProducer] SCALE_DIAG intermediate_linesize=["
+                  << intermediate_frame_->linesize[0] << ","
+                  << intermediate_frame_->linesize[1] << ","
+                  << intermediate_frame_->linesize[2] << "]" << std::endl;
+      }
+      // Log first 16 bytes of decoded Y plane
+      std::cout << "[FileProducer] SCALE_DIAG src_Y_first16: ";
+      for (int i = 0; i < 16 && i < frame_->linesize[0]; ++i) {
+        std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)frame_->data[0][i] << " ";
+      }
+      std::cout << std::dec << std::endl;
+    }
+
     // Scale to intermediate dimensions (preserving aspect if needed)
     AVFrame* scale_target = needs_padding ? intermediate_frame_ : scaled_frame_;
 
     // Scale frame
-    sws_scale(sws_ctx_, 
+    sws_scale(sws_ctx_,
               frame_->data, frame_->linesize, 0, codec_ctx_->height,
               scale_target->data, scale_target->linesize);
 
@@ -929,6 +971,28 @@ namespace retrovue::producers::file
       }
     }
 
+    // Diagnostic for first 5 frames - output data
+    if (fp_scale_diag_count <= 5) {
+      // Sample Y plane at content start (after padding)
+      int sample_y = pad_y_;
+      int sample_x = pad_x_;
+      std::cout << "[FileProducer] SCALE_DIAG output_Y at (" << sample_x << "," << sample_y << "): ";
+      uint8_t* row = scaled_frame_->data[0] + sample_y * scaled_frame_->linesize[0];
+      for (int i = sample_x; i < sample_x + 16 && i < config_.target_width; ++i) {
+        std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)row[i] << " ";
+      }
+      std::cout << std::dec << std::endl;
+      // Also sample the pillarbox/letterbox area (should be black = 0 for Y)
+      if (pad_x_ > 0) {
+        std::cout << "[FileProducer] SCALE_DIAG pillarbox_Y at (0,0): ";
+        uint8_t* pbox_row = scaled_frame_->data[0];
+        for (int i = 0; i < std::min(pad_x_, 16); ++i) {
+          std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)pbox_row[i] << " ";
+        }
+        std::cout << std::dec << std::endl;
+      }
+    }
+
     return true;
   }
 
@@ -947,7 +1011,7 @@ namespace retrovue::producers::file
     // Use frame PTS (from decoded frame) or best_effort_timestamp
     int64_t pts = frame_->pts != AV_NOPTS_VALUE ? frame_->pts : frame_->best_effort_timestamp;
     int64_t dts = frame_->pkt_dts != AV_NOPTS_VALUE ? frame_->pkt_dts : pts;
-    
+
     // Convert to microseconds
     int64_t pts_us = static_cast<int64_t>(pts * time_base_ * kMicrosecondsPerSecond);
     int64_t dts_us = static_cast<int64_t>(dts * time_base_ * kMicrosecondsPerSecond);

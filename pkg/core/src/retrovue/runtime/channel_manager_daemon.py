@@ -25,6 +25,12 @@ from uvicorn import Config, Server
 from .clock import MasterClock
 from .producer.base import Producer, ProducerMode, ProducerStatus, ContentSegment, ProducerState
 from .channel_stream import ChannelStream, FakeTsSource, SocketTsSource, generate_ts_stream
+from .config import (
+    ChannelConfig,
+    ChannelConfigProvider,
+    InlineChannelConfigProvider,
+    MOCK_CHANNEL_CONFIG,
+)
 from ..usecases import channel_manager_launch
 from typing import Protocol, TYPE_CHECKING
 from dataclasses import dataclass
@@ -230,6 +236,9 @@ class ChannelManager:
         self._preload_lead_seconds: float = 3.0  # Load next segment this many seconds before segment end
         self._preload_done_for_next: bool = False  # Have we already LoadPreview'd the segment that starts at _segment_end_time_utc?
         self._last_switch_at_segment_end_utc: datetime | None = None  # Guard: fire switch_to_live() once per segment
+
+        # Channel configuration (set by daemon when creating manager)
+        self.channel_config: ChannelConfig | None = None
 
     def stop_channel(self) -> None:
         """
@@ -1257,13 +1266,19 @@ class Phase8AirProducer(Producer):
     called by ChannelManager tick (schedule advances because time advanced, not EOF).
     """
 
-    def __init__(self, channel_id: str, configuration: dict[str, Any]):
+    def __init__(
+        self,
+        channel_id: str,
+        configuration: dict[str, Any],
+        channel_config: ChannelConfig | None = None,
+    ):
         super().__init__(channel_id, ProducerMode.NORMAL, configuration)
         self.air_process: channel_manager_launch.ProcessHandle | None = None
         self.socket_path: Path | None = None
         self.reader_socket_queue: Any = None  # queue.Queue: accepted UDS socket from Air after AttachStream
         self._stream_endpoint = f"/channel/{channel_id}.ts"
         self._grpc_addr: str | None = None  # Set after start(); used for LoadPreview/SwitchToLive
+        self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
 
     def start(self, playout_plan: list[dict[str, Any]], start_at_station_time: datetime) -> bool:
         """Start output by spawning an Air process. Builds PlayoutRequest, launches Air via stdin."""
@@ -1293,6 +1308,7 @@ class Phase8AirProducer(Producer):
 
             process, socket_path, reader_socket_queue, grpc_addr = channel_manager_launch.launch_air(
                 playout_request=playout_request,
+                channel_config=self.channel_config,
                 ts_socket_path=socket_path_arg,
             )
             self.air_process = process
@@ -1366,7 +1382,7 @@ class Phase8AirProducer(Producer):
         try:
             ok = channel_manager_launch.air_load_preview(
                 self._grpc_addr,
-                channel_id_int=1,
+                channel_id_int=self.channel_config.channel_id_int,
                 asset_path=asset_path,
                 start_offset_ms=start_offset_ms,
                 hard_stop_time_ms=hard_stop_time_ms,
@@ -1384,7 +1400,9 @@ class Phase8AirProducer(Producer):
             self._logger.warning("Channel %s: switch_to_live skipped (no grpc_addr)", self.channel_id)
             return False
         try:
-            ok = channel_manager_launch.air_switch_to_live(self._grpc_addr, channel_id_int=1)
+            ok = channel_manager_launch.air_switch_to_live(
+                self._grpc_addr, channel_id_int=self.channel_config.channel_id_int
+            )
             if not ok:
                 self._logger.warning("Channel %s: Air SwitchToLive returned success=false", self.channel_id)
             return ok
@@ -1407,6 +1425,7 @@ class ChannelManagerDaemon:
         host: str = "0.0.0.0",
         port: int = 9000,
         *,
+        channel_config_provider: ChannelConfigProvider | None = None,
         mock_schedule_grid_mode: bool = False,
         program_asset_path: str | None = None,
         program_duration_seconds: float | None = None,
@@ -1461,18 +1480,25 @@ class ChannelManagerDaemon:
         else:
             self.schedule_service = Phase8ScheduleService(self.schedule_dir, self.clock)
         self.program_director = Phase8ProgramDirector()
-        
+
+        # Channel config provider: if not provided, use inline provider with mock config
+        if channel_config_provider is not None:
+            self.channel_config_provider = channel_config_provider
+        else:
+            # Fallback: inline provider with just the mock channel
+            self.channel_config_provider = InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG])
+
         # Channel registry: channel_id -> ChannelManager instance
         self.managers: dict[str, ChannelManager] = {}
         self.lock = threading.Lock()
-        
+
         # ChannelStream registry per channel
         self.channel_streams: dict[str, ChannelStream] = {}
-        
+
         # HTTP server
         self.fastapi_app = FastAPI(title="ChannelManager")
         self._register_endpoints()
-        
+
         # Factory for creating Producers
         self._producer_factory = self._create_air_producer
         
@@ -1484,6 +1510,9 @@ class ChannelManagerDaemon:
         self._health_check_stop = threading.Event()
         self._health_check_thread: threading.Thread | None = None
         self._health_check_interval_seconds = 1.0
+
+        # Shutdown flag to prevent multiple stop() calls
+        self._stopped = False
 
     def _health_check_loop(self) -> None:
         """Background loop: periodically call check_health() on active (registered) channel managers only.
@@ -1509,16 +1538,32 @@ class ChannelManagerDaemon:
             except Exception as e:
                 _logger.warning("Health check loop error: %s", e, exc_info=True)
 
-    def _create_air_producer(self, channel_id: str, mode: str, config: dict[str, Any]) -> Producer | None:
+    def _create_air_producer(
+        self,
+        channel_id: str,
+        mode: str,
+        config: dict[str, Any],
+        channel_config: ChannelConfig | None = None,
+    ) -> Producer | None:
         """Factory for creating Producer instances."""
         if mode != "normal":
             return None  # Only supports normal mode
-        return Phase8AirProducer(channel_id, config)
+        return Phase8AirProducer(channel_id, config, channel_config=channel_config)
 
     def _get_or_create_manager(self, channel_id: str) -> ChannelManager:
         """Get or create ChannelManager instance for a channel."""
         with self.lock:
             if channel_id not in self.managers:
+                # Lookup channel config first
+                channel_config = self.channel_config_provider.get_channel_config(channel_id)
+                if channel_config is None:
+                    # Fall back to mock config for unknown channels (backwards compatibility)
+                    logging.getLogger(__name__).warning(
+                        "[channel %s] No config found, using mock config",
+                        channel_id,
+                    )
+                    channel_config = MOCK_CHANNEL_CONFIG
+
                 # Load schedule first (mock: no-op, Phase 8: loads from file)
                 success, error = self.schedule_service.load_schedule(channel_id)
                 if not success:
@@ -1531,25 +1576,27 @@ class ChannelManagerDaemon:
                     schedule_service=self.schedule_service,
                     program_director=self.program_director,
                 )
-                
+
+                # Store channel config on manager
+                manager.channel_config = channel_config
+
                 # Mock grid: configure grid settings if in mock grid mode
                 if self.mock_schedule_grid_mode:
                     manager._mock_grid_block_minutes = 30
                     manager._mock_grid_program_asset_path = self.program_asset_path
                     manager._mock_grid_filler_asset_path = self.filler_asset_path
                     manager._mock_grid_filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-                
-                # Override _build_producer_for_mode to use our factory
-                # Store original method and replace with our factory
-                original_factory = manager._build_producer_for_mode
-                def factory_wrapper(mode: str) -> Producer | None:
-                    return self._producer_factory(channel_id, mode, {})
+
+                # Override _build_producer_for_mode to use our factory with channel_config
+                def factory_wrapper(mode: str, cfg: ChannelConfig = channel_config) -> Producer | None:
+                    return self._producer_factory(channel_id, mode, {}, channel_config=cfg)
                 manager._build_producer_for_mode = factory_wrapper
-                
+
                 self.managers[channel_id] = manager
                 logging.getLogger(__name__).info(
-                    "[channel %s] ChannelManager created",
+                    "[channel %s] ChannelManager created (channel_id_int=%d)",
                     channel_id,
+                    channel_config.channel_id_int,
                 )
 
             return self.managers[channel_id]
@@ -1807,11 +1854,24 @@ class ChannelManagerDaemon:
 
         config = Config(self.fastapi_app, host=self.host, port=self.port, log_level="info")
         self.server = Server(config)
-        self.server.run()
+
+        try:
+            self.server.run()
+        finally:
+            # Ensure cleanup runs when server exits (including Ctrl+C)
+            self.stop()
 
     def stop(self) -> None:
         """Stop the HTTP server and terminate all Producers. No wait for EOF or external I/O."""
         _log = logging.getLogger(__name__)
+
+        # Guard against multiple stop() calls
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
+
+        _log.info("[teardown] Daemon stop() called")
+
         if hasattr(self, "server") and self.server:
             self.server.should_exit = True
 
@@ -1820,18 +1880,32 @@ class ChannelManagerDaemon:
             _log.info("[teardown] stopping health-check loop")
             self._health_check_stop.set()
         if getattr(self, "_health_check_thread", None) is not None and self._health_check_thread.is_alive():
-            self._health_check_thread.join(timeout=5.0)
+            self._health_check_thread.join(timeout=2.0)
+            if self._health_check_thread.is_alive():
+                _log.warning("[teardown] health-check thread did not stop within timeout")
+            else:
+                _log.info("[teardown] health-check thread stopped")
 
         # Stop all ChannelStreams
         with self.lock:
-            for channel_stream in self.channel_streams.values():
-                channel_stream.stop()
+            for channel_id, channel_stream in list(self.channel_streams.items()):
+                _log.info("[teardown] stopping channel stream: %s", channel_id)
+                try:
+                    channel_stream.stop()
+                except Exception as e:
+                    _log.warning("[teardown] error stopping channel stream %s: %s", channel_id, e)
             self.channel_streams.clear()
 
             # Terminate all Producers via ChannelManager instances
-            for manager in self.managers.values():
-                # Stop Producer if running (via viewer_leave if needed, or directly)
+            for channel_id, manager in list(self.managers.items()):
                 if manager.active_producer:
-                    manager.active_producer.stop()
+                    _log.info("[teardown] stopping producer for channel: %s", channel_id)
+                    try:
+                        manager.active_producer.stop()
+                    except Exception as e:
+                        _log.warning("[teardown] error stopping producer %s: %s", channel_id, e)
                     manager.active_producer = None
+            self.managers.clear()
+
+        _log.info("[teardown] Daemon shutdown complete")
 

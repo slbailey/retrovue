@@ -147,10 +147,12 @@ class EncoderPipeline {
   // Muxer options for PCR cadence configuration (FE-019)
   AVDictionary* muxer_opts_;
   
-  // Enforce strictly increasing DTS for mpegts muxer (and PTS for codec input)
-  // Separate trackers for video and audio to avoid timing corruption when interleaved
+  // OutputContinuity (per OutputContinuityContract.md): per-stream monotonic PTS/DTS.
+  // Separate trackers for video and audio; minimal correction only.
   int64_t last_video_mux_dts_;
+  int64_t last_video_mux_pts_;
   int64_t last_audio_mux_dts_;
+  int64_t last_audio_mux_pts_;
   int64_t last_input_pts_;
 
   // Force first frame to be an I-frame (keyframe) to avoid initial stutter
@@ -159,7 +161,7 @@ class EncoderPipeline {
   // Video frame counter for CFR PTS generation (resets per session)
   int64_t video_frame_count_;
 
-  // Ensure packet DTS (and PTS) are strictly increasing before av_interleaved_write_frame; update last_mux_dts_.
+  // OutputContinuity: enforce monotonic PTS/DTS per stream with minimal correction.
   void EnforceMonotonicDts();
 
   // Custom AVIO write callback (for nonblocking mode)

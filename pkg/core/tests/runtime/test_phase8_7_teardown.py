@@ -88,7 +88,7 @@ CHANNEL_ID = "mock"
 def channel_manager_provider() -> ChannelManagerDaemon:
     """ChannelManagerDaemon with mock schedule and FakeProducer; no start() so no HTTP/Air."""
     daemon = ChannelManagerDaemon(schedule_dir=None)
-    daemon._producer_factory = lambda channel_id, mode, config: FakeProducer(
+    daemon._producer_factory = lambda channel_id, mode, config, channel_config=None: FakeProducer(
         channel_id, ProducerMode.NORMAL, config or {}
     )
     return daemon

@@ -1,6 +1,6 @@
 # OutputTiming Contract
 
-_Related: [OutputBus & OutputSink Contract](OutputBusAndOutputSinkContract.md) · [Playout Engine Contract](PlayoutEngineContract.md) · [Phase contracts](../phases/README.md)_
+_Related: [OutputContinuity Contract](OutputContinuityContract.md) · [OutputBus & OutputSink Contract](OutputBusAndOutputSinkContract.md) · [Playout Engine Contract](PlayoutEngineContract.md) · [Phase contracts](../phases/README.md)_
 
 **Status:** Locked (pre-implementation)  
 **Scope:** Air (C++) playout engine runtime — Output layer  
@@ -25,7 +25,7 @@ OutputTiming operates on **already-muxed, timestamped output packets**, not raw 
 OutputTiming belongs to the **Output** archetype.
 
 ```
-Input → Playout → OutputTiming → OutputSink → Client
+Input → Playout → OutputContinuity → OutputTiming → OutputSink → Client
 ```
 
 It operates downstream of timestamp assignment and upstream of I/O.
@@ -155,6 +155,7 @@ OutputTiming ensures that output delivery respects reality without redefining ti
 
 ## See Also
 
+- [OutputContinuity Contract](OutputContinuityContract.md) — Timestamp legality and monotonicity; sits upstream of OutputTiming.
 - [OutputBus & OutputSink Contract](OutputBusAndOutputSinkContract.md) — Output signal path; OutputTiming sits between playout and sink.
 - [Playout Engine Contract](PlayoutEngineContract.md) — Control plane integration.
 - [Phase contracts](../phases/README.md) — Phase 8 (output, TS, pacing).

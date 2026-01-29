@@ -80,7 +80,7 @@ class SystemMasterClock : public MasterClock {
 
   void set_drift_ppm(double ppm) { drift_ppm_ = ppm; }
   void set_rate_ppm(double ppm) { rate_ppm_ = ppm; }
-  void set_epoch_utc_us(int64_t epoch_utc_us) { epoch_utc_us_ = epoch_utc_us; }
+  void set_epoch_utc_us(int64_t epoch_utc_us) override { epoch_utc_us_ = epoch_utc_us; }
 
  private:
   int64_t epoch_utc_us_;

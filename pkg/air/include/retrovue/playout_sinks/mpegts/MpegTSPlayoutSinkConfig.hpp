@@ -34,6 +34,10 @@ struct MpegTSPlayoutSinkConfig {
   bool enable_audio = false;          // Enable silent AAC audio
   size_t max_output_queue_packets = 100;  // Max packets in output queue before dropping
   size_t output_queue_high_water_mark = 80;  // High water mark: encode new frames only if queue below this
+
+  // Prebuffer settings: buffer encoded data before sending to client.
+  // This absorbs bitrate spikes during encoder warmup (fade-ins, etc.)
+  double prebuffer_seconds = 2.0;  // Seconds of data to buffer before streaming starts
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

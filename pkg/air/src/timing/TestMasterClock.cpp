@@ -125,6 +125,8 @@ void TestMasterClock::SetDriftPpm(double ppm) { drift_ppm_ = ppm; }
 
 void TestMasterClock::SetEpochUtcUs(int64_t epoch_utc_us) { epoch_utc_us_ = epoch_utc_us; }
 
+void TestMasterClock::set_epoch_utc_us(int64_t epoch_utc_us) { epoch_utc_us_ = epoch_utc_us; }
+
 void TestMasterClock::SetRatePpm(double rate_ppm) { rate_ppm_ = rate_ppm; }
 
 void TestMasterClock::SetMaxWaitUs(int64_t max_wait_us) {

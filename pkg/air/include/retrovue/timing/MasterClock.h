@@ -29,6 +29,11 @@ class MasterClock {
   // Fake clocks should not trigger real-time sleeps in consumers.
   virtual bool is_fake() const { return false; }
 
+  // Updates the epoch used for PTS-to-UTC mapping.
+  // Called when playback actually starts to synchronize the clock with the first frame.
+  // This ensures scheduled_to_utc_us() returns correct deadlines relative to actual playback start.
+  virtual void set_epoch_utc_us(int64_t epoch_utc_us) = 0;
+
   // Blocks until the clock reaches or exceeds target_utc_us.
   // For real clocks, this uses sleep-based waiting.
   // For fake clocks, this blocks on a condition variable that is woken by advance_us().

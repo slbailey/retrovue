@@ -56,6 +56,16 @@ MpegTSPlayoutSink::MpegTSPlayoutSink(
   if (!config_.ts_socket_path.empty()) {
     ts_output_sink_ = std::make_unique<TsOutputSink>(config_.ts_socket_path);
   }
+
+  // Initialize prebuffer: calculate target bytes from duration and bitrate.
+  // prebuffer_seconds * bitrate / 8 = bytes to buffer before streaming starts.
+  prebuffer_target_bytes_ = static_cast<size_t>(
+      config_.prebuffer_seconds * config_.bitrate / 8);
+  prebuffer_.reserve(prebuffer_target_bytes_ * 2);  // Reserve extra capacity
+  prebuffering_.store(true, std::memory_order_release);
+  std::cout << "[MpegTSPlayoutSink] Prebuffer configured: "
+            << config_.prebuffer_seconds << "s = "
+            << prebuffer_target_bytes_ << " bytes" << std::endl;
 }
 
 MpegTSPlayoutSink::MpegTSPlayoutSink(
@@ -85,6 +95,12 @@ MpegTSPlayoutSink::MpegTSPlayoutSink(
   if (!config_.ts_socket_path.empty()) {
     ts_output_sink_ = std::make_unique<TsOutputSink>(config_.ts_socket_path);
   }
+
+  // Initialize prebuffer (same as primary constructor)
+  prebuffer_target_bytes_ = static_cast<size_t>(
+      config_.prebuffer_seconds * config_.bitrate / 8);
+  prebuffer_.reserve(prebuffer_target_bytes_ * 2);
+  prebuffering_.store(true, std::memory_order_release);
 }
 
 MpegTSPlayoutSink::~MpegTSPlayoutSink() {
@@ -734,7 +750,13 @@ void MpegTSPlayoutSink::handleClientDisconnect() {
   // Close encoder pipeline (will reopen on next client)
   encoder_pipeline_->close();
 
-  // Reset encoder state for next client
+  // Reset prebuffer for next client
+  {
+    std::lock_guard<std::mutex> lock(prebuffer_mutex_);
+    prebuffer_.clear();
+    prebuffering_.store(true, std::memory_order_release);
+    std::cout << "[MpegTSPlayoutSink] Prebuffer reset for next client" << std::endl;
+  }
 }
 
 bool MpegTSPlayoutSink::initializeEncoderForClient() {
@@ -781,60 +803,89 @@ bool MpegTSPlayoutSink::sendToSocket(const uint8_t* data, size_t size) {
 
 // FE-017: Write all bytes atomically to preserve continuity counters
 // Socket is in blocking mode, so send() will block until all bytes are written
-// No EAGAIN can occur, no retries needed, no sleeps needed
-int MpegTSPlayoutSink::writeAllBlocking(uint8_t* buf, int buf_size) {
-  // Use UDS sink if configured, otherwise use TCP socket
+// Helper: send data directly to socket (UDS or TCP)
+// Returns true on success, false on failure
+bool MpegTSPlayoutSink::sendToSocketDirect(const uint8_t* data, size_t size) {
+  // UDS mode
   if (!config_.ts_socket_path.empty() && ts_output_sink_) {
     if (!ts_output_sink_->IsClientConnected()) {
-      return -1;  // No client connected
+      return false;
     }
-    
-    // Write to UDS sink (blocking write)
-    if (ts_output_sink_->Write(buf, static_cast<size_t>(buf_size))) {
-      return buf_size;  // All bytes written
-    } else {
-      // Write failed - client may have disconnected
-      return -1;
-    }
-  }
-  
-  // TCP mode: use existing TCP socket logic
-  if (!client_connected_.load(std::memory_order_acquire)) {
-    return -1;  // No client - fail immediately
+    return ts_output_sink_->Write(data, size);
   }
 
-  int sock = client_fd_;
-  if (sock < 0) {
-    client_connected_.store(false, std::memory_order_release);
-    return -1;
+  // TCP mode
+  if (!client_connected_.load(std::memory_order_acquire) || client_fd_ < 0) {
+    return false;
   }
 
-  // FE-017: Simple blocking send loop - socket is blocking so EAGAIN never happens
-  // This ensures TS packets (188 bytes) are written atomically, preserving continuity counters
-  uint8_t* p = buf;
-  int remaining = buf_size;
+  const uint8_t* p = data;
+  size_t remaining = size;
 
   while (remaining > 0) {
-    ssize_t n = send(sock, p, remaining, MSG_NOSIGNAL);
-    
+    ssize_t n = send(client_fd_, p, remaining, MSG_NOSIGNAL);
     if (n < 0) {
-      if (errno == EINTR) {
-        // Interrupted by signal - retry
-        continue;
-      }
-      // Hard failure - disconnect and fail
+      if (errno == EINTR) continue;
       client_connected_.store(false, std::memory_order_release);
-      close(sock);
+      close(client_fd_);
       client_fd_ = -1;
-      return -1;
+      return false;
     }
-    
-    // n > 0: bytes sent (blocking socket guarantees this until all sent or error)
-    remaining -= static_cast<int>(n);
+    remaining -= static_cast<size_t>(n);
     p += n;
   }
-  
-  return buf_size;  // All bytes written
+  return true;
+}
+
+// Prebuffer + write: absorbs encoder warmup bitrate spikes before streaming.
+// During prebuffer phase, data accumulates until threshold is reached.
+// Then prebuffer flushes and subsequent data goes directly to socket.
+int MpegTSPlayoutSink::writeAllBlocking(uint8_t* buf, int buf_size) {
+  // Check if client is connected (required for any mode)
+  bool has_client = false;
+  if (!config_.ts_socket_path.empty() && ts_output_sink_) {
+    has_client = ts_output_sink_->IsClientConnected();
+  } else {
+    has_client = client_connected_.load(std::memory_order_acquire) && client_fd_ >= 0;
+  }
+
+  if (!has_client) {
+    return -1;  // No client - fail
+  }
+
+  // Prebuffer phase: accumulate data until we have enough
+  if (prebuffering_.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lock(prebuffer_mutex_);
+
+    // Add data to prebuffer
+    prebuffer_.insert(prebuffer_.end(), buf, buf + buf_size);
+
+    // Check if we've reached the target
+    if (prebuffer_.size() >= prebuffer_target_bytes_) {
+      std::cout << "[MpegTSPlayoutSink] Prebuffer full (" << prebuffer_.size()
+                << " bytes), flushing to client..." << std::endl;
+
+      // Flush entire prebuffer to socket
+      if (!sendToSocketDirect(prebuffer_.data(), prebuffer_.size())) {
+        std::cerr << "[MpegTSPlayoutSink] Failed to flush prebuffer" << std::endl;
+        prebuffer_.clear();
+        return -1;
+      }
+
+      std::cout << "[MpegTSPlayoutSink] Prebuffer flushed, switching to direct streaming" << std::endl;
+      prebuffer_.clear();
+      prebuffer_.shrink_to_fit();  // Free memory
+      prebuffering_.store(false, std::memory_order_release);
+    }
+
+    return buf_size;  // Data accepted (buffered)
+  }
+
+  // Direct streaming mode: send immediately
+  if (!sendToSocketDirect(buf, static_cast<size_t>(buf_size))) {
+    return -1;
+  }
+  return buf_size;
 }
 
 size_t MpegTSPlayoutSink::drainOutputQueue() {

@@ -58,7 +58,9 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       codec_opened_(false),
       muxer_opts_(nullptr),
       last_video_mux_dts_(AV_NOPTS_VALUE),
+      last_video_mux_pts_(AV_NOPTS_VALUE),
       last_audio_mux_dts_(AV_NOPTS_VALUE),
+      last_audio_mux_pts_(AV_NOPTS_VALUE),
       last_input_pts_(AV_NOPTS_VALUE),
       first_frame_encoded_(false),
       video_frame_count_(0),
@@ -88,7 +90,6 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   }
 
   if (config.stub_mode) {
-    std::cout << "[EncoderPipeline] Stub mode enabled - skipping real encoding" << std::endl;
     initialized_ = true;
     return true;
   }
@@ -108,12 +109,10 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   std::string url;
   if (avio_write_callback_) {
     url = "dummy://";
-    std::cout << "[EncoderPipeline] Opening encoder pipeline with custom AVIO" << std::endl;
   } else {
     std::ostringstream url_stream;
     url_stream << "tcp://" << config.bind_host << ":" << config.port << "?listen=1";
     url = url_stream.str();
-    std::cout << "[EncoderPipeline] Opening encoder pipeline: " << url << std::endl;
   }
 
   int ret = avformat_alloc_output_context2(&format_ctx_, nullptr, "mpegts", url.c_str());
@@ -315,12 +314,8 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
       return false;
     }
 
-    std::cout << "[EncoderPipeline] Audio encoder initialized: "
-              << "sample_rate=" << audio_codec_ctx_->sample_rate
-              << ", channels=" << audio_codec_ctx_->ch_layout.nb_channels
-              << ", format=" << audio_codec_ctx_->sample_fmt << std::endl;
   } else {
-    std::cerr << "[EncoderPipeline] Warning: No AAC encoder found (aac or libfdk_aac). Audio will be disabled." << std::endl;
+    std::cerr << "[EncoderPipeline] No AAC encoder found, audio disabled" << std::endl;
   }
 
 skip_audio:
@@ -371,11 +366,6 @@ skip_audio:
         "bframes=0:nal-hrd=vbr:vbv-init=0.9",
         0);
     ret = avcodec_open2(codec_ctx_, codec, &opts);
-
-    // Log the actual encoder delay after opening
-    std::cout << "[EncoderPipeline] Encoder opened with delay=" << codec_ctx_->delay
-              << " has_b_frames=" << codec_ctx_->has_b_frames << std::endl;
-
     av_dict_free(&opts);
     if (ret < 0) {
       char errbuf[AV_ERROR_MAX_STRING_SIZE];
@@ -396,8 +386,6 @@ skip_audio:
       close();
       return false;
     }
-    std::cout << "[EncoderPipeline] Copied extradata to stream: size="
-              << video_stream_->codecpar->extradata_size << " bytes" << std::endl;
   }
 
   // Allocate frame, input frame, and packet
@@ -460,42 +448,41 @@ skip_audio:
     av_dict_free(&muxer_opts_);
     muxer_opts_ = nullptr;
     header_written_ = true;
-    std::cout << "[EncoderPipeline] Encoder pipeline initialized at " << frame_width_ << "x" << frame_height_
-              << " (per-channel fixed; all content scaled to this)" << std::endl;
   }
 
   initialized_ = true;
-  if (!fixed_dimensions) {
-    std::cout << "[EncoderPipeline] Encoder pipeline initialized (will set dimensions from first frame)" << std::endl;
-  }
   return true;
 }
 
 void EncoderPipeline::EnforceMonotonicDts() {
   if (!packet_) return;
 
-  // Use separate DTS trackers for video and audio to avoid timing corruption
+  // OutputContinuity (OutputContinuityContract.md): per-stream monotonic PTS/DTS,
+  // minimal correction only (MUST NOT adjust by more than minimum delta).
   bool is_video = video_stream_ && packet_->stream_index == video_stream_->index;
   bool is_audio = audio_stream_ && packet_->stream_index == audio_stream_->index;
 
   int64_t& last_dts = is_video ? last_video_mux_dts_ : last_audio_mux_dts_;
+  int64_t& last_pts = is_video ? last_video_mux_pts_ : last_audio_mux_pts_;
 
   int64_t dts = packet_->dts;
   int64_t pts = packet_->pts;
-  if (last_dts != AV_NOPTS_VALUE) {
-    if (dts != AV_NOPTS_VALUE && dts <= last_dts)
-      dts = last_dts + 1;
-    else if (pts != AV_NOPTS_VALUE && pts <= last_dts)
-      pts = last_dts + 1;
-  }
+
+  // Minimal correction per stream: only advance to last_* + 1 when violated.
+  if (last_dts != AV_NOPTS_VALUE && dts != AV_NOPTS_VALUE && dts <= last_dts)
+    dts = last_dts + 1;
+  if (last_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && pts <= last_pts)
+    pts = last_pts + 1;
+  // Decoder requirement: PTS must not be before DTS.
   if (pts != AV_NOPTS_VALUE && dts != AV_NOPTS_VALUE && pts < dts)
     pts = dts;
+
   packet_->dts = dts;
   packet_->pts = pts;
   if (dts != AV_NOPTS_VALUE)
     last_dts = dts;
-  else if (pts != AV_NOPTS_VALUE)
-    last_dts = pts;
+  if (pts != AV_NOPTS_VALUE)
+    last_pts = pts;
 }
 
 bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t pts90k) {
@@ -504,8 +491,6 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
   }
 
   if (config_.stub_mode) {
-    std::cout << "[EncoderPipeline] encodeFrame() - stub mode | PTS_us=" << frame.metadata.pts
-              << " | size=" << frame.width << "x" << frame.height << std::endl;
     return true;
   }
 
@@ -730,10 +715,6 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     }
     codec_opened_ = true;
 
-    // Log the actual encoder delay after opening
-    std::cout << "[EncoderPipeline] Encoder opened with delay=" << codec_ctx_->delay
-              << " has_b_frames=" << codec_ctx_->has_b_frames << std::endl;
-
     // Free options dictionary (options are now applied to codec context)
     // Note: avcodec_open2 consumes the options, so we free the dictionary
     av_dict_free(&opts);
@@ -818,10 +799,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       av_dict_free(&muxer_opts_);
       muxer_opts_ = nullptr;
       header_written_ = true;
-      std::cout << "[EncoderPipeline] Header written successfully" << std::endl;
     }
-
-    std::cout << "[EncoderPipeline] Codec opened: " << frame.width << "x" << frame.height << std::endl;
   }
 
   // Treat input frame as ephemeral: copy pixel data only into FFmpeg-owned buffers (no pointers to test-owned data).
@@ -898,10 +876,9 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
   // Force first frame to be a keyframe (I-frame) to ensure clean stream start
   if (!first_frame_encoded_) {
     frame_->pict_type = AV_PICTURE_TYPE_I;
-    std::cout << "[EncoderPipeline] Forcing first frame to keyframe" << std::endl;
     first_frame_encoded_ = true;
   } else {
-    frame_->pict_type = AV_PICTURE_TYPE_NONE;  // Let encoder decide
+    frame_->pict_type = AV_PICTURE_TYPE_NONE;
   }
 
   // Send frame to encoder
@@ -1020,7 +997,6 @@ void EncoderPipeline::close() {
   if (!initialized_) return;
   if (config_.stub_mode) {
     initialized_ = false;
-    std::cout << "[EncoderPipeline] close() - stub mode" << std::endl;
     return;
   }
 
@@ -1028,7 +1004,9 @@ void EncoderPipeline::close() {
   // Idempotent: prevent double-close (e.g. from destructor) from re-running teardown.
   initialized_ = false;
   last_video_mux_dts_ = AV_NOPTS_VALUE;
+  last_video_mux_pts_ = AV_NOPTS_VALUE;
   last_audio_mux_dts_ = AV_NOPTS_VALUE;
+  last_audio_mux_pts_ = AV_NOPTS_VALUE;
   last_input_pts_ = AV_NOPTS_VALUE;
   first_frame_encoded_ = false;
   video_frame_count_ = 0;
@@ -1190,9 +1168,6 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     return false;
   }
 
-  // Stub: just log
-  std::cout << "[EncoderPipeline] encodeFrame() - FFmpeg not available | PTS=" << pts90k
-            << " | size=" << frame.width << "x" << frame.height << std::endl;
   return true;
 }
 
@@ -1200,8 +1175,6 @@ void EncoderPipeline::close() {
   if (!initialized_) {
     return;
   }
-
-  std::cout << "[EncoderPipeline] close() - FFmpeg not available" << std::endl;
   initialized_ = false;
 }
 
@@ -1215,18 +1188,6 @@ bool EncoderPipeline::IsInitialized() const {
 bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio_frame, int64_t pts90k) {
   if (!initialized_ || config_.stub_mode) {
     return false;
-  }
-
-  static int audio_frame_count = 0;
-  audio_frame_count++;
-  
-  // Log every frame for first 50 frames, then every 100
-  bool should_log = (audio_frame_count <= 50) || (audio_frame_count % 100 == 0);
-  if (should_log) {
-    std::cout << "[EncoderPipeline] Encoding audio frame #" << audio_frame_count 
-              << ", pts90k=" << pts90k 
-              << ", samples=" << audio_frame.nb_samples
-              << ", sample_rate=" << audio_frame.sample_rate << std::endl;
   }
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
@@ -1244,14 +1205,6 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   const bool needs_resampling = (input_sample_rate != encoder_sample_rate);
   
   if (sample_rate_changed) {
-    std::cout << "[EncoderPipeline] ===== AUDIO SAMPLE RATE CHANGE =====" << std::endl;
-    std::cout << "[EncoderPipeline] Audio sample rate changed: "
-              << last_input_sample_rate_ << " Hz → " << input_sample_rate << " Hz" << std::endl;
-    std::cout << "[EncoderPipeline] Encoder sample rate: " << encoder_sample_rate << " Hz" << std::endl;
-    std::cout << "[EncoderPipeline] Needs resampling: " << (needs_resampling ? "YES" : "NO") << std::endl;
-    std::cout << "[EncoderPipeline] Current resampler state: " << (swr_ctx_ ? "ACTIVE" : "NULL") << std::endl;
-    std::cout << "[EncoderPipeline] Buffered samples: " << audio_resample_buffer_samples_ << std::endl;
-
     // IMPORTANT: Encode any buffered samples from the PREVIOUS producer before switching!
     // These are already-resampled samples waiting to fill a complete AAC frame.
     // We need to encode them (padded with silence if needed) to avoid losing audio.
@@ -1271,9 +1224,7 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       // Pad buffered samples with silence to make a complete frame
       int samples_to_pad = frame_size - audio_resample_buffer_samples_;
       if (samples_to_pad > 0 && samples_to_pad < frame_size) {
-        std::cout << "[EncoderPipeline] Padding " << audio_resample_buffer_samples_
-                  << " buffered samples with " << samples_to_pad << " silence samples" << std::endl;
-        audio_resample_buffer_.resize(frame_size * nb_channels, 0);  // Pad with silence
+        audio_resample_buffer_.resize(frame_size * nb_channels, 0);
         audio_resample_buffer_samples_ = frame_size;
       }
 
@@ -1315,7 +1266,6 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
               GateOutputTiming(pts_90k);
               av_interleaved_write_frame(format_ctx_, packet_);
             }
-            std::cout << "[EncoderPipeline] Encoded buffered samples from previous producer" << std::endl;
           }
         }
       }
@@ -1334,18 +1284,11 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
         if (flush_samples > 0) {
           std::vector<uint8_t> flush_buffer(flush_samples * nb_channels * sizeof(int16_t));
           uint8_t* out_data[1] = {flush_buffer.data()};
-          int flushed = swr_convert(swr_ctx_, out_data, flush_samples, nullptr, 0);
-          if (flushed > 0) {
-            std::cout << "[EncoderPipeline] Flushed " << flushed << " samples from resampler delay buffer" << std::endl;
-            // These samples should also be encoded, but they're typically very few
-            // and would require another partial frame handling. For now, log them.
-            // TODO: Accumulate and encode these with the next frame if significant.
-          }
+          swr_convert(swr_ctx_, out_data, flush_samples, nullptr, 0);
         }
       }
       swr_free(&swr_ctx_);
       swr_ctx_ = nullptr;
-      std::cout << "[EncoderPipeline] Freed existing resampler due to sample rate change" << std::endl;
     }
 
     last_input_sample_rate_ = input_sample_rate;
@@ -1388,23 +1331,10 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       return false;
     }
     
-    std::cout << "[EncoderPipeline] ===== AUDIO RESAMPLER INITIALIZED =====" << std::endl;
-    std::cout << "[EncoderPipeline] Audio resampler initialized: " 
-              << input_sample_rate << " Hz → " << encoder_sample_rate << " Hz" << std::endl;
-    std::cout << "[EncoderPipeline] Frame #" << audio_frame_count << std::endl;
   } else if (!needs_resampling && swr_ctx_) {
-    // Input rate matches encoder rate, but we have a resampler from previous clip
-    // Free it since resampling is no longer needed
+    // Input rate matches encoder rate, free unneeded resampler
     swr_free(&swr_ctx_);
     swr_ctx_ = nullptr;
-    std::cout << "[EncoderPipeline] Audio resampler freed (input rate matches encoder: " 
-              << input_sample_rate << " Hz)" << std::endl;
-  } else if (!needs_resampling && !swr_ctx_) {
-    // No resampling needed and no resampler - this is the normal case for matching rates
-    if (audio_frame_count <= 5 || audio_frame_count % 100 == 0) {
-      std::cout << "[EncoderPipeline] Audio passthrough (no resampling): " 
-                << input_sample_rate << " Hz input → " << encoder_sample_rate << " Hz encoder" << std::endl;
-    }
   }
   
   // AAC encoder has a fixed frame_size (typically 1024 samples).
@@ -1440,13 +1370,7 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       return false;
     }
     dst_nb_samples = ret;  // Actual samples produced
-    
-    if (audio_frame_count % 100 == 0) {
-      std::cout << "[EncoderPipeline] Resampled audio: " << src_nb_samples 
-                << " samples @ " << input_sample_rate << " Hz → " 
-                << dst_nb_samples << " samples @ " << encoder_sample_rate << " Hz" << std::endl;
-    }
-    
+
     // Use resampled data as source
     src_data = resampled_data.data();
     src_nb_samples = dst_nb_samples;
@@ -1509,10 +1433,6 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     const int64_t backward_threshold = 450000;  // 5 seconds in 90kHz
     if (pts90k < last_seen_audio_pts90k_ - backward_threshold) {
       is_first_frame_of_new_producer = true;
-      std::cout << "[EncoderPipeline] ===== PRODUCER SWITCH DETECTED =====" << std::endl;
-      std::cout << "[EncoderPipeline] Previous incoming PTS (90kHz): " << last_seen_audio_pts90k_ << std::endl;
-      std::cout << "[EncoderPipeline] New incoming PTS (90kHz): " << pts90k << std::endl;
-      std::cout << "[EncoderPipeline] Backward jump: " << (last_seen_audio_pts90k_ - pts90k) << " (threshold: " << backward_threshold << ")" << std::endl;
     }
   }
 
@@ -1534,12 +1454,6 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     // New producer's first frame should have PTS = last_muxed + one_frame_duration
     int64_t target_pts = last_muxed_pts90k + frame_duration_90k;
     audio_pts_offset_90k_ = target_pts - pts90k;
-
-    std::cout << "[EncoderPipeline] ===== AUDIO PTS REBASING =====" << std::endl;
-    std::cout << "[EncoderPipeline] Last muxed PTS (90kHz): " << last_muxed_pts90k << std::endl;
-    std::cout << "[EncoderPipeline] New producer first PTS (90kHz): " << pts90k << std::endl;
-    std::cout << "[EncoderPipeline] Target PTS (90kHz): " << target_pts << std::endl;
-    std::cout << "[EncoderPipeline] New PTS offset (90kHz): " << audio_pts_offset_90k_ << std::endl;
   }
 
   // Apply the PTS offset to get the muxed PTS
@@ -1637,13 +1551,9 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       
       // Enforce monotonic DTS for audio
       // If first packet has negative or zero DTS (common with AAC encoder priming),
-      // just clamp to 0 and track from there. Don't add arbitrary offsets.
+      // just clamp to 0 and track from there.
       if (last_audio_mux_dts_ == AV_NOPTS_VALUE) {
         if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
-          if (audio_frame_count <= 5) {
-            std::cout << "[EncoderPipeline] First audio packet DTS was " << packet_->dts
-                      << ", clamping to 0" << std::endl;
-          }
           packet_->dts = 0;
           if (packet_->pts < packet_->dts) {
             packet_->pts = packet_->dts;
@@ -1703,8 +1613,6 @@ bool EncoderPipeline::flushAudio() {
     return true;  // Audio encoder not initialized, nothing to flush
   }
 
-  std::cout << "[EncoderPipeline] ===== FLUSHING AUDIO BUFFERS =====" << std::endl;
-  
   const int encoder_sample_rate = audio_codec_ctx_->sample_rate;
   const int frame_size = audio_codec_ctx_->frame_size;
   const int nb_channels = audio_codec_ctx_->ch_layout.nb_channels;
@@ -1715,7 +1623,6 @@ bool EncoderPipeline::flushAudio() {
   if (swr_ctx_ && last_input_sample_rate_ > 0) {
     int64_t delay = swr_get_delay(swr_ctx_, last_input_sample_rate_);
     if (delay > 0) {
-      std::cout << "[EncoderPipeline] Flushing resampler delay: " << delay << " samples" << std::endl;
       // Estimate output samples for the delay
       int64_t flush_samples = av_rescale_rnd(delay, encoder_sample_rate, last_input_sample_rate_, AV_ROUND_UP);
       if (flush_samples > 0) {
@@ -1729,12 +1636,11 @@ bool EncoderPipeline::flushAudio() {
                                         flush_samples_ptr,
                                         flush_samples_ptr + flushed * nb_channels);
           audio_resample_buffer_samples_ += flushed;
-          std::cout << "[EncoderPipeline] Flushed " << flushed << " samples from resampler" << std::endl;
         }
       }
     }
   }
-  
+
   // Step 2: Encode any remaining buffered samples (including flushed resampler output)
   // Get current PTS from last_audio_mux_dts_ if available, otherwise use a reasonable value
   int64_t current_pts90k = 0;
@@ -1747,9 +1653,6 @@ bool EncoderPipeline::flushAudio() {
   
   // Process any buffered samples
   if (audio_resample_buffer_samples_ > 0) {
-    std::cout << "[EncoderPipeline] Encoding " << audio_resample_buffer_samples_ 
-              << " buffered samples" << std::endl;
-    
     const int16_t* samples_ptr = audio_resample_buffer_.data();
     int samples_remaining = audio_resample_buffer_samples_;
     
@@ -1847,9 +1750,7 @@ bool EncoderPipeline::flushAudio() {
     GateOutputTiming(drain_audio_pts_90k);
     av_interleaved_write_frame(format_ctx_, packet_);
   }
-  
-  std::cout << "[EncoderPipeline] Audio flush complete: drained " << packets_drained << " packets" << std::endl;
-  std::cout << "[EncoderPipeline] Note: Encoder remains active (not flushed to EOF) to allow continued encoding" << std::endl;
+
   return true;
 #else
   return true;

@@ -1,0 +1,11 @@
+{
+  "schedule": [
+    {
+      "id": "seg-001",
+      "asset_path": "/media/movie.mp4",
+      "start_time_utc": "2025-01-01T00:00:00Z",
+      "duration_seconds": 7200,
+      "content_type": "movie"
+    }
+  ]
+}

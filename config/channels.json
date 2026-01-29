@@ -1,0 +1,22 @@
+{
+  "channels": [
+    {
+      "channel_id": "mock",
+      "channel_id_int": 1,
+      "name": "Mock Channel",
+      "program_format": {
+        "video": {
+          "width": 968,
+          "height": 720,
+          "frame_rate": "30/1"
+        },
+        "audio": {
+          "sample_rate": 48000,
+          "channels": 2
+        }
+      },
+      "schedule_source": "mock",
+      "schedule_config": {}
+    }
+  ]
+}

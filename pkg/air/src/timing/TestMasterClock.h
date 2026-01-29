@@ -32,6 +32,7 @@ class TestMasterClock : public MasterClock {
   double drift_ppm() const override;
   bool is_fake() const override;
   void WaitUntilUtcUs(int64_t target_utc_us) const override;
+  void set_epoch_utc_us(int64_t epoch_utc_us) override;
 
   // Time control methods
   void SetNow(int64_t utc_us, double monotonic_s);
