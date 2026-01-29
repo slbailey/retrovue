@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [Core documentation](../../README.md), [developer/](../../developer/).
+
 # RetroVue Developer Documentation
 
 This directory is for **contributors and plugin authors** working on RetroVue's internals:

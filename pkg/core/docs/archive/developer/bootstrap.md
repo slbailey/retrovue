@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [developer/](../../developer/), [operations/configuration](../../operations/configuration.md).
+
 _Related: [Architecture overview](../architecture/ArchitectureOverview.md) • [Data model: Broadcast schema](../data-model/broadcast-schema.md) • [Operator CLI](../cli/README.md)_
 
 # RetroVue Infrastructure — Broadcast Domain Bootstrap

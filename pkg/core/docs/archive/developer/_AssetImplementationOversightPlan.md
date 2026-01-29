@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [Asset domain](../../data/domain/Asset.md), [Collection ingest contract](../../contracts/resources/CollectionIngestContract.md).
+
 # Asset Implementation Oversight Plan
 
 A staged, reviewable plan to deliver the Asset domain and support well-tested Collection Ingest. Each milestone is concrete and makes review/validation easy.

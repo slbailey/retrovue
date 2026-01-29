@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [contracts/cli](../../contracts/cli/README.md), [contracts/resources](../../contracts/resources/README.md).
+
 # RetroVue CLI
 
 \_See the [CLI contract](../contracts/resources/README.md) for the complete reference.

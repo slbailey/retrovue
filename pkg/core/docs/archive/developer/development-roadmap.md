@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [Repo review and roadmap](../../overview/RepoReviewAndRoadmap.md).
+
 _Related: [Abstract design principles](abstract-design-principles.md) • [Plugin authoring](PluginAuthoring.md) • [Architecture overview](../architecture/ArchitectureOverview.md)_
 
 # 🚦 Development Roadmap

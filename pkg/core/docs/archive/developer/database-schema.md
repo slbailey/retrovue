@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [data/README](../../data/README.md), [data/domain](../../data/domain/), Alembic migrations.
+
 # 🗄️ Database Schema Design
 
 _Related: [Data model: Broadcast schema](../data-model/broadcast-schema.md) • [Data model: Identity and referencing](../data-model/IdentityAndReferencing.md) • [Infrastructure bootstrap](../infra/bootstrap.md)_
