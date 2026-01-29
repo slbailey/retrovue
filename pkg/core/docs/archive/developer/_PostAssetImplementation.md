@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [CollectionWipeContract](../../contracts/resources/CollectionWipeContract.md).
+
 New command (resource contract)
 
 retrovue collection purge <collection_id>

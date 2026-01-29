@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [Data model](../../data/README.md), [Scheduling system](../../scheduling/SchedulingSystem.md), [data/domain](../../data/domain/).
+
 _Related: [Data model README](README.md) • [Infrastructure bootstrap](../infra/bootstrap.md) • [Architecture overview](../architecture/ArchitectureOverview.md)_
 
 # RetroVue Broadcast Data Model

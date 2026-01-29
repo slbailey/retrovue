@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [Repository conventions](../../../../../docs/standards/repository-conventions.md).
+
 > **Replaced:** The authoritative repository layout lives in [`../standards/repository-conventions.md`](../standards/repository-conventions.md). This document remains as historical background.
 
 # 📁 Project Structure & Allowed Patterns

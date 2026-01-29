@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [DestructiveOperationConfirmation](../../_ops/DestructiveOperationConfirmation.md) (canonical).
+
 # Destructive Operation Confirmation Contract
 
 ## Purpose

@@ -1,3 +1,5 @@
+> **⚠️ Historical document.** Superseded by: [CONTRACT_TEST_GUIDELINES](../../developer/CONTRACT_TEST_GUIDELINES.md), [contracts index](../../contracts/README.md); current scheduling uses SchedulePlan/Zones.
+
 # Database Scheduling Domain Tests
 
 This document defines the testing requirements and best practices for the Broadcast Scheduling Domain database tests. These tests validate the complete data model and ensure proper integration with Alembic migrations.
