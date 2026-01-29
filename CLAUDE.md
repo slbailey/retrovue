@@ -116,7 +116,7 @@ Contract tests exist in pairs:
 
 - `docs/ComponentMap.md` - Cross-repo component list and interfaces
 - `docs/core/README.md` - Core (Python) documentation index
-- `docs/air/README.md` - Internal playout engine (C++) documentation index
+- `pkg/air/docs/README.md` - Internal playout engine (C++) documentation index
 - `docs/core/architecture/ArchitectureOverview.md` - System mental model
 - `docs/core/contracts/resources/README.md` - CLI/usecase contract index
 

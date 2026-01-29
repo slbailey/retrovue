@@ -27,7 +27,7 @@ This project is a monorepo containing the following components:
 
 - **System component map**: `docs/ComponentMap.md` (what the key parts are, what they do, and where their interfaces live)
 - **Core (Python) docs index**: `docs/core/README.md`
-- **Air (C++) docs index**: `docs/air/README.md`
+- **Air (C++) docs index**: `pkg/air/docs/README.md`
 
 ## Getting Started
 

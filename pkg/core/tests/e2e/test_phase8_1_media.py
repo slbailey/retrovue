@@ -5,7 +5,7 @@ Contract: StartChannel (state) → LoadPreview(asset_path) → AttachStream (tra
 → SwitchToLive; media output starts only after AttachStream + SwitchToLive success.
 GET /channels/mock.ts returns HTTP 200, Content-Type video/mp2t, and MPEG-TS packets (0x47).
 
-See: docs/air/contracts/Phase8-1-AirOwnsMpegTs.md
+See: pkg/air/docs/contracts/phases/Phase8-1-AirOwnsMpegTs.md
 """
 
 from __future__ import annotations
