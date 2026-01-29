@@ -111,9 +111,9 @@ RUNTIME MODEL
 - Schedule gap → 503.
 - Channel errors are isolated.
 
-Viewer endpoints:
-- GET /channellist.m3u
-- GET /channel/{id}.ts
+Viewer endpoints (ProgramDirector, single server):
+- GET /channels (channel list JSON)
+- GET /channel/{id}.ts (MPEG-TS stream)
 
 ────────────────────────
 OPERATOR MODEL

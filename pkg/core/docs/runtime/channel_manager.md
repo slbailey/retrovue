@@ -8,6 +8,8 @@ _Related: [Runtime: Schedule service](schedule_service.md) • [Runtime: Program
 
 ChannelManager is responsible for executing scheduled content playback on the air. It receives ScheduledSegments from ScheduleService and plays them according to the precise timing specified.
 
+**Lifecycle (post–PD/CM collapse):** ChannelManagers have **no autonomous lifecycle**. They exist only while in ProgramDirector's active registry. ProgramDirector is the sole authority for creation, health ticking, fanout attachment, and teardown. ChannelManagers never self-terminate or assume daemon semantics. Code: `pkg/core/src/retrovue/runtime/channel_manager.py` (no separate daemon module).
+
 ## Time and Rollover Behavior
 
 ChannelManager receives ScheduledSegments and executes them.

@@ -13,7 +13,7 @@ retrovue program-director start --port 8000 \
   --asset-b /opt/retrovue/assets/SampleB.mp4
 ```
 
-- **HTTP:** `http://localhost:8000/channel/{channel_id}.ts` (TS stream), `http://localhost:8000/channellist.m3u` (channel list). **Use this URL in VLC** (Media → Open Network Stream). Do not use the UDS socket path (`/run/user/.../retrovue/air/channel_*.sock`); that socket is an internal pipe and is closed after the playout engine connects.
+- **HTTP:** `http://localhost:8000/channel/{channel_id}.ts` (TS stream), `http://localhost:8000/channels` (channel list JSON). **Use the .ts URL in VLC** (Media → Open Network Stream). Do not use the UDS socket path (`/run/user/.../retrovue/air/channel_*.sock`); that socket is an internal pipe and is closed after the playout engine connects.
 - **Playout engine:** **Air only.** The C++ playout engine (`retrovue_air`) is the only backend. There is no ffmpeg fallback. If Air cannot be started, GET returns **503 "Air playout engine unavailable"**.
 
 **Requirements:** Built `retrovue_air` (see Building below) or set `RETROVUE_AIR_EXE`. Asset paths must exist.

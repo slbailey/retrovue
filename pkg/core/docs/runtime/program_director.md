@@ -10,6 +10,10 @@ ProgramDirector coordinates channels and can trigger emergency overrides. It pro
 
 **ProgramDirector cannot redefine schedule or override 06:00 rollover.**
 
+### Post–PD/CM collapse (current architecture)
+
+ProgramDirector is the **sole authority** for ChannelManager lifecycle. There is no separate "ChannelManagerDaemon": ProgramDirector owns the ChannelManager registry (creation, health ticking, fanout attachment, teardown), the **single HTTP server** (one port), and all viewer routing. Stream endpoint: **GET /channel/{channel_id}.ts**. Channel list: **GET /channels**. Single entry point for starting a channel: **`start_channel(channel_id, pre_warmed_grace_seconds=None)`** (used when a viewer tunes in; CLI can call it with a grace period for pre-warmed channels). See `docs/core/ProgramDirector-ChannelManagerDaemon-Collapse.md` (in repo root).
+
 ## Coordination, Not Scheduling
 
 ProgramDirector coordinates channels and can trigger emergency overrides.
