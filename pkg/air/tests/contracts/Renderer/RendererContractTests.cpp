@@ -5,7 +5,7 @@
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
-#include "retrovue/renderer/FrameRenderer.h"
+#include "retrovue/renderer/ProgramOutput.h"
 
 using namespace retrovue;
 using namespace retrovue::tests;
@@ -59,7 +59,7 @@ namespace
 
     std::shared_ptr<timing::MasterClock> clock;
     std::shared_ptr<telemetry::MetricsExporter> metrics;
-    auto renderer = renderer::FrameRenderer::Create(config, buffer, clock, metrics, /*channel_id=*/0);
+    auto renderer = renderer::ProgramOutput::Create(config, buffer, clock, metrics, /*channel_id=*/0);
     ASSERT_TRUE(renderer->Start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -78,7 +78,7 @@ namespace
 
     std::shared_ptr<timing::MasterClock> clock;
     std::shared_ptr<telemetry::MetricsExporter> metrics;
-    auto renderer = renderer::FrameRenderer::Create(config, buffer, clock, metrics, /*channel_id=*/0);
+    auto renderer = renderer::ProgramOutput::Create(config, buffer, clock, metrics, /*channel_id=*/0);
     ASSERT_TRUE(renderer->Start());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
@@ -117,7 +117,7 @@ namespace
 
     std::shared_ptr<timing::MasterClock> clock;
     std::shared_ptr<telemetry::MetricsExporter> metrics;
-    auto renderer = renderer::FrameRenderer::Create(config, buffer, clock, metrics, /*channel_id=*/0);
+    auto renderer = renderer::ProgramOutput::Create(config, buffer, clock, metrics, /*channel_id=*/0);
     ASSERT_TRUE(renderer->Start());
 
     // Let renderer consume some frames

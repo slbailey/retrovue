@@ -61,6 +61,9 @@ except Exception as e:
     playout_pb2_grpc = None  # type: ignore[assignment]
     _grpc_import_error = e
 
+# Default ProgramFormat JSON for tests (1080p30, 48kHz stereo)
+_DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}}'
+
 
 def _find_retrovue_air() -> Path | None:
     repo_root = Path(__file__).resolve().parents[4]
@@ -209,7 +212,8 @@ def test_phase8_0_transport_ts_sync_once_live():
                 stub = playout_pb2_grpc.PlayoutControlStub(ch)
                 start_resp = stub.StartChannel(
                     playout_pb2.StartChannelRequest(
-                        channel_id=1, plan_handle="mock", port=0
+                        channel_id=1, plan_handle="mock", port=0,
+                        program_format_json=_DEFAULT_PROGRAM_FORMAT_JSON
                     ),
                     timeout=timeout_s,
                 )

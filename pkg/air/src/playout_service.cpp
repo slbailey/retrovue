@@ -20,7 +20,7 @@
 #include "retrovue/output/MpegTSOutputSink.h"
 #include "retrovue/output/OutputBus.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
-#include "retrovue/renderer/FrameRenderer.h"
+#include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/runtime/PlayoutEngine.h"
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -43,9 +43,9 @@ namespace retrovue
     } // namespace
 
     PlayoutControlImpl::PlayoutControlImpl(
-        std::shared_ptr<runtime::PlayoutController> controller,
+        std::shared_ptr<runtime::PlayoutInterface> interface,
         bool control_surface_only)
-        : controller_(std::move(controller)),
+        : interface_(std::move(interface)),
           control_surface_only_(control_surface_only)
     {
       std::cout << "[PlayoutControlImpl] Service initialized (API version: " << kApiVersion
@@ -98,12 +98,14 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const std::string &plan_handle = request->plan_handle();
       const int32_t port = request->port();
+      const std::string &program_format_json = request->program_format_json();
       std::optional<std::string> uds_path = std::nullopt;
 
       std::cout << "[StartChannel] Request received: channel_id=" << channel_id
-                << ", plan_handle=" << plan_handle << ", port=" << port << std::endl;
+                << ", plan_handle=" << plan_handle << ", port=" << port
+                << ", program_format_json=" << program_format_json << std::endl;
 
-      auto result = controller_->StartChannel(channel_id, plan_handle, port, uds_path);
+      auto result = interface_->StartChannel(channel_id, plan_handle, port, uds_path, program_format_json);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -132,7 +134,7 @@ namespace retrovue
       std::cout << "[UpdatePlan] Request received: channel_id=" << channel_id
                 << ", plan_handle=" << plan_handle << std::endl;
 
-      auto result = controller_->UpdatePlan(channel_id, plan_handle);
+      auto result = interface_->UpdatePlan(channel_id, plan_handle);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -162,7 +164,7 @@ namespace retrovue
         DetachStreamLocked(channel_id, true);
       }
 
-      auto result = controller_->StopChannel(channel_id);
+      auto result = interface_->StopChannel(channel_id);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -201,7 +203,7 @@ namespace retrovue
       std::cout << "[LoadPreview] Request received: channel_id=" << channel_id
                 << ", asset_path=" << asset_path << std::endl;
 
-      auto result = controller_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
+      auto result = interface_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -226,7 +228,7 @@ namespace retrovue
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
 
-      auto result = controller_->SwitchToLive(channel_id);
+      auto result = interface_->SwitchToLive(channel_id);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -248,18 +250,25 @@ namespace retrovue
 
           // Only create sink if not in control_surface_only mode and sink not yet attached
           // Query engine for sink attachment state (gRPC doesn't track output runtime state)
-          if (!control_surface_only_ && !controller_->IsOutputSinkAttached(channel_id))
+          if (!control_surface_only_ && !interface_->IsOutputSinkAttached(channel_id))
           {
-            std::optional<std::string> path = controller_->GetLiveAssetPath(channel_id);
+            std::optional<std::string> path = interface_->GetLiveAssetPath(channel_id);
             if (path && !path->empty())
             {
-              // Create MpegTSOutputSink with encoding config
+              // Create MpegTSOutputSink with encoding config from ProgramFormat
+              auto program_format_opt = interface_->GetProgramFormat(channel_id);
+              if (!program_format_opt) {
+                std::cerr << "[SwitchToLive] Failed to get ProgramFormat for channel " << channel_id << std::endl;
+                return grpc::Status::OK;
+              }
+              
+              const auto& program_format = *program_format_opt;
               playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
               config.stub_mode = false;
               config.persistent_mux = true;
-              config.target_fps = 30.0;
-              config.target_width = 640;
-              config.target_height = 480;
+              config.target_fps = program_format.GetFrameRateAsDouble();
+              config.target_width = program_format.video.width;
+              config.target_height = program_format.video.height;
               config.bitrate = 5000000;
               config.gop_size = 30;
 
@@ -268,14 +277,14 @@ namespace retrovue
                   state->fd, config, sink_name);
 
               // Attach sink via engine's OutputBus (engine owns sink lifecycle)
-              auto attach_result = controller_->AttachOutputSink(channel_id, std::move(sink), false);
+              auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink), false);
               if (attach_result.success)
               {
                 std::cout << "[SwitchToLive] MpegTSOutputSink attached for channel " << channel_id << std::endl;
 
-                // Connect renderer to OutputBus so frames flow to the sink
-                controller_->ConnectRendererToOutputBus(channel_id);
-                std::cout << "[SwitchToLive] Renderer connected to OutputBus for channel " << channel_id << std::endl;
+                // Connect program output to OutputBus so frames flow to the sink
+                interface_->ConnectRendererToOutputBus(channel_id);
+                std::cout << "[SwitchToLive] Program output connected to OutputBus for channel " << channel_id << std::endl;
               }
               else
               {
@@ -303,11 +312,11 @@ namespace retrovue
         return;
 
       // Detach sink from OutputBus if attached (query engine for state)
-      if (controller_->IsOutputSinkAttached(channel_id))
+      if (interface_->IsOutputSinkAttached(channel_id))
       {
-        // Disconnect renderer from OutputBus first
-        controller_->DisconnectRendererFromOutputBus(channel_id);
-        controller_->DetachOutputSink(channel_id, force);
+        // Disconnect program output from OutputBus first
+        interface_->DisconnectRendererFromOutputBus(channel_id);
+        interface_->DetachOutputSink(channel_id, force);
         std::cout << "[DetachStream] OutputSink detached for channel " << channel_id << std::endl;
       }
 

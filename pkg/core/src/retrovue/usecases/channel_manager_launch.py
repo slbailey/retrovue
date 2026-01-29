@@ -7,7 +7,8 @@ spawns ChannelManager when one doesn't exist for the requested channel. This
 module is used by ChannelManager to launch and terminate Air processes.
 
 Air logging (stdout/stderr):
-  Air output is written to pkg/air/logs/air.log (path is hardcoded).
+  Air output is written to pkg/air/logs/<channel_id>-air.log (one file per channel).
+  The log file is truncated on every launch so it does not grow without bound.
 """
 
 from __future__ import annotations
@@ -29,14 +30,20 @@ from typing import Any
 # Type alias for subprocess.Process
 ProcessHandle = subprocess.Popen[bytes]
 
-# Air stdout/stderr go here (hardcoded for now)
-_AIR_LOG_PATH = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs" / "air.log"
+# Air stdout/stderr go here: pkg/air/logs/<channel_id>-air.log
+_AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs"
+
+# Default ProgramFormat JSON (1080p30, 48kHz stereo)
+# See: docs/air/contracts/PlayoutInstanceAndProgramFormatContract.md
+_DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}}'
 
 
-def _open_air_log():
-    """Open Air log file (append, line-buffered). Caller closes after Popen."""
-    _AIR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return open(_AIR_LOG_PATH, "a", buffering=1, encoding="utf-8", errors="replace")
+def _open_air_log(channel_id: str):
+    """Open Air log file for this channel (truncate on open, line-buffered). Caller closes after Popen."""
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in channel_id) or "unknown"
+    log_path = _AIR_LOG_DIR / f"{safe_id}-air.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    return open(log_path, "w", buffering=1, encoding="utf-8", errors="replace")
 
 
 def _find_air_binary() -> Path | None:
@@ -210,8 +217,8 @@ def _launch_air_binary(
         s.bind(("127.0.0.1", 0))
         grpc_port = s.getsockname()[1]
 
-    # Redirect Air stdout/stderr to log file (hardcoded path)
-    air_log = _open_air_log()
+    # Redirect Air stdout/stderr to channel-specific log (truncated each run)
+    air_log = _open_air_log(channel_id)
     try:
         proc = subprocess.Popen(
             [str(air_bin), "--port", str(grpc_port)],
@@ -268,7 +275,10 @@ def _launch_air_binary(
         r = _rpc(
             "StartChannel",
             lambda timeout: stub.StartChannel(
-                playout_pb2.StartChannelRequest(channel_id=channel_id_int, plan_handle="mock", port=0),
+                playout_pb2.StartChannelRequest(
+                    channel_id=channel_id_int, plan_handle="mock", port=0,
+                    program_format_json=_DEFAULT_PROGRAM_FORMAT_JSON
+                ),
                 timeout=timeout,
             ),
             _RPC_CONTROL_S,

@@ -27,10 +27,18 @@ if command -v python3 >/dev/null 2>&1 && python3 -c "import grpc_tools" 2>/dev/n
     --grpc_python_out="$PYTHON_OUT" \
     "$PROTO_FILE"
   # Flatten so existing code can load from .../core/proto/retrovue/
+  # protoc generates files in retrovue/playout/ subdirectory, copy to retrovue/
   PLAYOUT_DIR="${PYTHON_OUT}/retrovue/playout"
   if [ -d "$PLAYOUT_DIR" ]; then
     cp -f "${PLAYOUT_DIR}"/*.py "${PYTHON_OUT}/retrovue/"
     rm -rf "$PLAYOUT_DIR"
+  else
+    # If protoc generated files directly in PYTHON_OUT (no subdir), copy to retrovue/
+    if [ -f "${PYTHON_OUT}/playout_pb2.py" ]; then
+      mkdir -p "${PYTHON_OUT}/retrovue"
+      cp -f "${PYTHON_OUT}/playout_pb2.py" "${PYTHON_OUT}/retrovue/"
+      cp -f "${PYTHON_OUT}/playout_pb2_grpc.py" "${PYTHON_OUT}/retrovue/"
+    fi
   fi
   echo "Generated Python stubs in ${PYTHON_OUT}/retrovue/"
 else

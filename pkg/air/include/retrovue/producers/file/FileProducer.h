@@ -16,6 +16,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
+#include "retrovue/runtime/AspectPolicy.h"
 
 namespace retrovue::timing
 {
@@ -189,10 +190,18 @@ namespace retrovue::producers::file
     AVCodecContext* codec_ctx_;
     AVFrame* frame_;
     AVFrame* scaled_frame_;
+    AVFrame* intermediate_frame_;  // For aspect-preserving scale (if different from target)
     AVPacket* packet_;
     SwsContext* sws_ctx_;
     int video_stream_index_;
     bool decoder_initialized_;
+    
+    // Aspect ratio handling
+    runtime::AspectPolicy aspect_policy_;
+    int scale_width_;   // Actual scale dimensions (may differ from target for aspect preserve)
+    int scale_height_;
+    int pad_x_;         // Padding offset for centered content
+    int pad_y_;
     bool eof_reached_;
     bool eof_event_emitted_;  // Phase 8.8: emit "eof" only once; producer stays running until explicit stop
     double time_base_;  // Stream time base for PTS/DTS conversion

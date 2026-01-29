@@ -12,7 +12,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/decode/FrameProducer.h"
-#include "retrovue/renderer/FrameRenderer.h"
+#include "retrovue/renderer/ProgramOutput.h"
 #include "timing/TestMasterClock.h"
 #include "../../fixtures/ChannelManagerStub.h"
 #include "../../fixtures/MasterClockStub.h"
@@ -421,7 +421,7 @@ namespace
 
     retrovue::renderer::RenderConfig config;
     auto metrics = std::make_shared<retrovue::telemetry::MetricsExporter>(0);
-    auto renderer = retrovue::renderer::FrameRenderer::Create(
+    auto renderer = retrovue::renderer::ProgramOutput::Create(
         config, buffer, clock, metrics, 900);
     ASSERT_NE(renderer, nullptr);
 
@@ -569,7 +569,7 @@ namespace
 
     renderer::RenderConfig config;
     config.mode = renderer::RenderMode::HEADLESS;
-    auto renderer = renderer::FrameRenderer::Create(
+    auto renderer = renderer::ProgramOutput::Create(
         config, buffer, runtime_clock, metrics, 808);
 
     EXPECT_NE(renderer, nullptr);
