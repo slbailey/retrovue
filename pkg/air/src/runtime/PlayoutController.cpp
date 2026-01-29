@@ -4,6 +4,9 @@
 // Copyright (c) 2025 RetroVue
 
 #include "retrovue/runtime/PlayoutController.h"
+
+#include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/runtime/PlayoutEngine.h"
 
 namespace retrovue::runtime {
@@ -81,6 +84,36 @@ ControllerResult PlayoutController::UpdatePlan(
   // Delegate to domain engine
   auto result = engine_->UpdatePlan(channel_id, plan_handle);
   return ControllerResult(result.success, result.message);
+}
+
+// Phase 9.0: OutputBus/OutputSink methods
+ControllerResult PlayoutController::AttachOutputSink(
+    int32_t channel_id,
+    std::unique_ptr<output::IOutputSink> sink,
+    bool replace_existing) {
+  auto result = engine_->AttachOutputSink(channel_id, std::move(sink), replace_existing);
+  return ControllerResult(result.success, result.message);
+}
+
+ControllerResult PlayoutController::DetachOutputSink(int32_t channel_id, bool force) {
+  auto result = engine_->DetachOutputSink(channel_id, force);
+  return ControllerResult(result.success, result.message);
+}
+
+output::OutputBus* PlayoutController::GetOutputBus(int32_t channel_id) {
+  return engine_->GetOutputBus(channel_id);
+}
+
+bool PlayoutController::IsOutputSinkAttached(int32_t channel_id) {
+  return engine_->IsOutputSinkAttached(channel_id);
+}
+
+void PlayoutController::ConnectRendererToOutputBus(int32_t channel_id) {
+  engine_->ConnectRendererToOutputBus(channel_id);
+}
+
+void PlayoutController::DisconnectRendererFromOutputBus(int32_t channel_id) {
+  engine_->DisconnectRendererFromOutputBus(channel_id);
 }
 
 }  // namespace retrovue::runtime

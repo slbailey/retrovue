@@ -11,14 +11,17 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
-#include <queue>
 #include <string>
 #include <thread>
 #include <utility>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
-#include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
+#include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/MpegTSOutputSink.h"
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
+#include "retrovue/renderer/FrameRenderer.h"
+#include "retrovue/runtime/PlayoutEngine.h"
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/socket.h>
@@ -39,247 +42,6 @@ namespace retrovue
       constexpr size_t kPhase80PayloadLen = 6;
     } // namespace
 
-    // Phase 8.0/8.3/8.4: per-channel stream writer (UDS client).
-    // One TS mux per channel per active stream session. Session = AttachStream → DetachStream/StopChannel.
-    // Within a session: mux created once, FD fixed, no restart on segment boundaries. SwitchToLive swaps frame source only.
-    struct PlayoutControlImpl::StreamWriterState
-    {
-      int fd = -1;
-      std::atomic<bool> stop{false};
-      std::thread writer_thread;
-      bool close_fd_on_exit = true;
-      std::string asset_path;
-      int32_t channel_id = -1;
-      std::shared_ptr<runtime::PlayoutController> controller;
-      
-      // Phase 8.9: Encoder pipeline persists for the entire channel lifetime
-      // Created once when channel starts, destroyed only when channel stops
-      std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder;
-#if defined(__linux__) || defined(__APPLE__)
-      pid_t ffmpeg_pid = -1;
-#else
-      int ffmpeg_pid = -1;
-#endif
-
-      // Phase 8.4: frame queue for TS mux (renderer thread enqueues, FfmpegLoop dequeues).
-      std::mutex mux_queue_mutex;
-      std::queue<buffer::Frame> mux_frame_queue;
-      static constexpr size_t kMuxQueueMax = 30;
-
-      // Phase 8.9: audio frame queue for TS mux
-      std::mutex mux_audio_queue_mutex;
-      std::queue<buffer::AudioFrame> mux_audio_frame_queue;
-      static constexpr size_t kMuxAudioQueueMax = 30;
-
-      void EnqueueFrameForMux(const buffer::Frame& frame)
-      {
-        std::lock_guard<std::mutex> lock(mux_queue_mutex);
-        if (mux_frame_queue.size() >= kMuxQueueMax)
-          mux_frame_queue.pop();
-        mux_frame_queue.push(frame);
-      }
-
-      bool DequeueFrameForMux(buffer::Frame* out)
-      {
-        if (!out)
-          return false;
-        std::lock_guard<std::mutex> lock(mux_queue_mutex);
-        if (mux_frame_queue.empty())
-          return false;
-        *out = std::move(mux_frame_queue.front());
-        mux_frame_queue.pop();
-        return true;
-      }
-
-      // Phase 8.9: Audio frame enqueue/dequeue
-      void EnqueueAudioFrameForMux(const buffer::AudioFrame& audio_frame)
-      {
-        std::lock_guard<std::mutex> lock(mux_audio_queue_mutex);
-        if (mux_audio_frame_queue.size() >= kMuxAudioQueueMax)
-          mux_audio_frame_queue.pop();
-        mux_audio_frame_queue.push(audio_frame);
-      }
-
-      bool DequeueAudioFrameForMux(buffer::AudioFrame* out)
-      {
-        if (!out)
-          return false;
-        std::lock_guard<std::mutex> lock(mux_audio_queue_mutex);
-        if (mux_audio_frame_queue.empty())
-          return false;
-        *out = std::move(mux_audio_frame_queue.front());
-        mux_audio_frame_queue.pop();
-        return true;
-      }
-
-      void HelloLoop()
-      {
-        while (!stop.load(std::memory_order_acquire) && fd >= 0)
-        {
-#if defined(__linux__) || defined(__APPLE__)
-          ssize_t n = write(fd, kPhase80Payload, kPhase80PayloadLen);
-          if (n < 0 || static_cast<size_t>(n) != kPhase80PayloadLen)
-            break;
-#endif
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        if (close_fd_on_exit && fd >= 0)
-        {
-#if defined(__linux__) || defined(__APPLE__)
-          close(fd);
-#endif
-          fd = -1;
-        }
-      }
-
-#if defined(__linux__) || defined(__APPLE__)
-      // Phase 8.4: Persistent TS mux per session — one mux per channel per session, same FD; no PID/continuity reset within session.
-      static int WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size)
-      {
-        auto* s = static_cast<StreamWriterState*>(opaque);
-        if (!s || s->fd < 0)
-          return -1;
-        ssize_t n = write(s->fd, buf, buf_size);
-        return (n == static_cast<ssize_t>(buf_size)) ? buf_size : -1;
-      }
-
-      void FfmpegLoop()
-      {
-        (void)asset_path;
-        (void)ffmpeg_pid;
-        if (fd < 0)
-          return;
-        
-        // Encoder should already be created and opened before this thread starts
-        if (!encoder || !encoder->IsInitialized())
-        {
-          std::cerr << "[Phase8.4] Encoder not initialized for channel " << channel_id << std::endl;
-          return;
-        }
-        
-        std::cout << "[Phase8.4] Encoder loop started for channel " << channel_id << std::endl;
-        bool had_frames_before = false;  // Track if we had frames before to detect switch
-        while (!stop.load(std::memory_order_acquire) && fd >= 0)
-        {
-          // Phase 8.9: Process both video and audio frames
-          bool processed_any = false;
-
-          // Process video frame
-          buffer::Frame frame;
-          if (DequeueFrameForMux(&frame))
-          {
-            // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
-            const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
-            if (!encoder->encodeFrame(frame, pts90k))
-            {
-              // Encode failures are non-fatal - log and continue
-              std::cerr << "[Phase8.4] Video encode failed for channel " << channel_id 
-                        << ", continuing..." << std::endl;
-            }
-            processed_any = true;
-            had_frames_before = true;
-          }
-
-          // Phase 8.9: Process audio frame
-          buffer::AudioFrame audio_frame;
-          if (DequeueAudioFrameForMux(&audio_frame))
-          {
-            // AudioFrame.pts_us is in microseconds; encoder expects 90kHz.
-            const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
-            if (!encoder->encodeAudioFrame(audio_frame, audio_pts90k))
-            {
-              // Encode failures are non-fatal - log and continue
-              std::cerr << "[Phase8.4] Audio encode failed for channel " << channel_id 
-                        << ", continuing..." << std::endl;
-            }
-            processed_any = true;
-            had_frames_before = true;
-          }
-          
-          // Phase 8.9: If we had frames before but now both queues are empty,
-          // we're likely switching producers. Flush encoder buffers to ensure
-          // all audio from the previous producer is encoded.
-          // Use a static counter to avoid flushing too frequently
-          static int empty_iterations = 0;
-          if (had_frames_before && !processed_any)
-          {
-            // Check if both queues are empty
-            bool video_empty = mux_frame_queue.empty();
-            bool audio_empty = false;
-            {
-              std::lock_guard<std::mutex> lock(mux_audio_queue_mutex);
-              audio_empty = mux_audio_frame_queue.empty();
-            }
-            
-            if (video_empty && audio_empty)
-            {
-              empty_iterations++;
-              // Wait for several iterations to ensure it's really a switch, not just a brief gap
-              if (empty_iterations >= 10) {  // ~50ms at 5ms sleep intervals
-                std::cout << "[Phase8.4] Queues empty for " << empty_iterations 
-                          << " iterations - flushing encoder buffers" << std::endl;
-                encoder->flushAudio();
-                had_frames_before = false;  // Reset after flush
-                empty_iterations = 0;
-              }
-            }
-            else
-            {
-              empty_iterations = 0;  // Reset if frames arrive
-            }
-          }
-          else
-          {
-            empty_iterations = 0;  // Reset if we processed frames
-          }
-
-          if (!processed_any)
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        
-        // Encoder is closed in destructor, not here
-        std::cout << "[Phase8.4] Encoder loop stopped for channel " << channel_id << std::endl;
-        if (controller && channel_id >= 0) {
-          controller->UnregisterMuxFrameCallback(channel_id);
-          controller->UnregisterMuxAudioFrameCallback(channel_id);
-        }
-      }
-#else
-      void FfmpegLoop() {}
-#endif
-
-      ~StreamWriterState()
-      {
-        stop.store(true, std::memory_order_release);
-#if defined(__linux__) || defined(__APPLE__)
-        if (ffmpeg_pid > 0)
-        {
-          kill(ffmpeg_pid, SIGTERM);
-          waitpid(ffmpeg_pid, nullptr, 0);
-          ffmpeg_pid = -1;
-        }
-#endif
-        if (writer_thread.joinable())
-          writer_thread.join();
-        
-        // Phase 8.9: Close encoder only when StreamWriterState is destroyed (channel teardown)
-        if (encoder)
-        {
-          encoder->close();
-          encoder.reset();
-          std::cout << "[Phase8.4] Encoder closed for channel " << channel_id << std::endl;
-        }
-        
-        if (fd >= 0)
-        {
-#if defined(__linux__) || defined(__APPLE__)
-          close(fd);
-#endif
-          fd = -1;
-        }
-      }
-    };
-
     PlayoutControlImpl::PlayoutControlImpl(
         std::shared_ptr<runtime::PlayoutController> controller,
         bool control_surface_only)
@@ -294,9 +56,39 @@ namespace retrovue
     {
       std::cout << "[PlayoutControlImpl] Service shutting down" << std::endl;
       std::lock_guard<std::mutex> lock(stream_mutex_);
-      for (auto it = stream_writers_.begin(); it != stream_writers_.end(); ++it)
-        it->second.reset();
-      stream_writers_.clear();
+      for (auto& [channel_id, state] : stream_states_)
+      {
+        if (state)
+        {
+          state->stop.store(true, std::memory_order_release);
+          if (state->hello_thread.joinable())
+          {
+            state->hello_thread.join();
+          }
+          if (state->fd >= 0)
+          {
+#if defined(__linux__) || defined(__APPLE__)
+            close(state->fd);
+#endif
+          }
+        }
+      }
+      stream_states_.clear();
+    }
+
+    void PlayoutControlImpl::HelloLoop(StreamState* state)
+    {
+#if defined(__linux__) || defined(__APPLE__)
+      while (!state->stop.load(std::memory_order_acquire) && state->fd >= 0)
+      {
+        ssize_t n = write(state->fd, kPhase80Payload, kPhase80PayloadLen);
+        if (n < 0 || static_cast<size_t>(n) != kPhase80PayloadLen)
+          break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+#else
+      (void)state;
+#endif
     }
 
     grpc::Status PlayoutControlImpl::StartChannel(grpc::ServerContext *context,
@@ -306,18 +98,16 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const std::string &plan_handle = request->plan_handle();
       const int32_t port = request->port();
-      // UDS path is optional - check if field exists in proto
       std::optional<std::string> uds_path = std::nullopt;
 
       std::cout << "[StartChannel] Request received: channel_id=" << channel_id
                 << ", plan_handle=" << plan_handle << ", port=" << port << std::endl;
 
-      // Delegate to controller
       auto result = controller_->StartChannel(channel_id, plan_handle, port, uds_path);
-      
+
       response->set_success(result.success);
       response->set_message(result.message);
-      
+
       if (!result.success) {
         grpc::StatusCode code = grpc::StatusCode::INTERNAL;
         if (result.message.find("already") != std::string::npos) {
@@ -327,7 +117,7 @@ namespace retrovue
         }
         return grpc::Status(code, result.message);
       }
-      
+
       std::cout << "[StartChannel] Channel " << channel_id << " started successfully" << std::endl;
       return grpc::Status::OK;
     }
@@ -342,12 +132,11 @@ namespace retrovue
       std::cout << "[UpdatePlan] Request received: channel_id=" << channel_id
                 << ", plan_handle=" << plan_handle << std::endl;
 
-      // Delegate to controller
       auto result = controller_->UpdatePlan(channel_id, plan_handle);
-      
+
       response->set_success(result.success);
       response->set_message(result.message);
-      
+
       if (!result.success) {
         grpc::StatusCode code = grpc::StatusCode::INTERNAL;
         if (result.message.find("not found") != std::string::npos) {
@@ -355,7 +144,7 @@ namespace retrovue
         }
         return grpc::Status(code, result.message);
       }
-      
+
       std::cout << "[UpdatePlan] Channel " << channel_id << " plan updated successfully" << std::endl;
       return grpc::Status::OK;
     }
@@ -367,18 +156,17 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       std::cout << "[StopChannel] Request received: channel_id=" << channel_id << std::endl;
 
-      // Phase 8.0: StopChannel implies detach
+      // Phase 9.0: StopChannel implies detach (OutputBus::DetachSink is called by engine)
       {
         std::lock_guard<std::mutex> lock(stream_mutex_);
         DetachStreamLocked(channel_id, true);
       }
-      
-      // Delegate to controller
+
       auto result = controller_->StopChannel(channel_id);
-      
+
       response->set_success(result.success);
       response->set_message(result.message);
-      
+
       if (!result.success) {
         grpc::StatusCode code = grpc::StatusCode::INTERNAL;
         if (result.message.find("not found") != std::string::npos) {
@@ -386,7 +174,7 @@ namespace retrovue
         }
         return grpc::Status(code, result.message);
       }
-      
+
       std::cout << "[StopChannel] Channel " << channel_id << " stopped successfully" << std::endl;
       return grpc::Status::OK;
     }
@@ -413,18 +201,17 @@ namespace retrovue
       std::cout << "[LoadPreview] Request received: channel_id=" << channel_id
                 << ", asset_path=" << asset_path << std::endl;
 
-      // Delegate to controller (start_offset_ms, hard_stop_time_ms accepted for proto/Phase 4; not interpreted in 6A.0)
       auto result = controller_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
-      
+
       response->set_success(result.success);
       response->set_message(result.message);
       response->set_shadow_decode_started(result.shadow_decode_started);
-      // Phase 6A.0: error semantics via response success=false, not gRPC Status
+
       if (!result.success) {
         std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message << std::endl;
         return grpc::Status::OK;
       }
-      
+
       std::cout << "[LoadPreview] Channel " << channel_id
                 << " preview loaded successfully (shadow_decode_started="
                 << std::boolalpha << result.shadow_decode_started << ")" << std::endl;
@@ -439,72 +226,66 @@ namespace retrovue
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
 
-      // Delegate to controller
       auto result = controller_->SwitchToLive(channel_id);
-      
+
       response->set_success(result.success);
       response->set_message(result.message);
       response->set_pts_contiguous(result.pts_contiguous);
       response->set_live_start_pts(result.live_start_pts);
-      // Phase 6A.0: error semantics via response success=false, not gRPC Status
+
       if (!result.success) {
         std::cout << "[SwitchToLive] Channel " << channel_id << " switch failed" << std::endl;
         return grpc::Status::OK;
       }
 
-      // Phase 8.3/8.4: Switch is frame-source only. Encoder and TS mux stay alive across switches.
-      // Engine has already stopped the old FrameProducer and atomically promoted preview → live.
-      // Do NOT stop/join/restart the writer thread or reinitialize encoder/AVFormatContext/PTS.
+      // Phase 9.0: Create and attach MpegTSOutputSink on first SwitchToLive (if stream attached)
       {
         std::lock_guard<std::mutex> lock(stream_mutex_);
-        auto it = stream_writers_.find(channel_id);
-        std::optional<std::string> path = controller_->GetLiveAssetPath(channel_id);
-        if (it != stream_writers_.end() && it->second && path && !path->empty())
+        auto it = stream_states_.find(channel_id);
+        if (it != stream_states_.end() && it->second && it->second->fd >= 0)
         {
-          StreamWriterState* state = it->second.get();
-          state->asset_path = *path;
-          state->controller = controller_;
-          if (!state->writer_thread.joinable()) {
-            // First switch: create encoder once, then start writer thread (one per channel/session).
-            state->close_fd_on_exit = false;
-            state->stop.store(false, std::memory_order_release);
-            
-            // Phase 8.9: Create encoder once when channel starts (fixed audio/video profile)
-            playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
-            config.stub_mode = false;
-            config.persistent_mux = true;
-            config.target_fps = 30.0;
-            config.target_width = 640;   // Phase 8.6: per-channel fixed resolution
-            config.target_height = 480;
-            config.bitrate = 5000000;
-            config.gop_size = 30;
-            
-            state->encoder = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config);
-            if (!state->encoder->open(config, state, &StreamWriterState::WriteToFdCallback))
+          StreamState* state = it->second.get();
+
+          // Only create sink if not in control_surface_only mode and sink not yet attached
+          // Query engine for sink attachment state (gRPC doesn't track output runtime state)
+          if (!control_surface_only_ && !controller_->IsOutputSinkAttached(channel_id))
+          {
+            std::optional<std::string> path = controller_->GetLiveAssetPath(channel_id);
+            if (path && !path->empty())
             {
-              std::cerr << "[Phase8.4] Encoder open failed for channel " << channel_id << std::endl;
-              state->encoder.reset();
-              return grpc::Status::OK;
+              // Create MpegTSOutputSink with encoding config
+              playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
+              config.stub_mode = false;
+              config.persistent_mux = true;
+              config.target_fps = 30.0;
+              config.target_width = 640;
+              config.target_height = 480;
+              config.bitrate = 5000000;
+              config.gop_size = 30;
+
+              std::string sink_name = "channel-" + std::to_string(channel_id) + "-mpeg-ts";
+              auto sink = std::make_unique<output::MpegTSOutputSink>(
+                  state->fd, config, sink_name);
+
+              // Attach sink via engine's OutputBus (engine owns sink lifecycle)
+              auto attach_result = controller_->AttachOutputSink(channel_id, std::move(sink), false);
+              if (attach_result.success)
+              {
+                std::cout << "[SwitchToLive] MpegTSOutputSink attached for channel " << channel_id << std::endl;
+
+                // Connect renderer to OutputBus so frames flow to the sink
+                controller_->ConnectRendererToOutputBus(channel_id);
+                std::cout << "[SwitchToLive] Renderer connected to OutputBus for channel " << channel_id << std::endl;
+              }
+              else
+              {
+                std::cerr << "[SwitchToLive] Failed to attach sink: " << attach_result.message << std::endl;
+              }
             }
-            std::cout << "[Phase8.4] Encoder created and opened for channel " << channel_id << std::endl;
-            
-            controller_->RegisterMuxFrameCallback(channel_id, [state](const buffer::Frame& f) {
-              state->EnqueueFrameForMux(f);
-            });
-            // Phase 8.9: Register audio frame callback
-            controller_->RegisterMuxAudioFrameCallback(channel_id, [state](const buffer::AudioFrame& af) {
-              state->EnqueueAudioFrameForMux(af);
-            });
-            state->writer_thread = std::thread(&StreamWriterState::FfmpegLoop, state);
-            std::cout << "[SwitchToLive] Channel " << channel_id << " streaming TS from " << *path << std::endl;
-          } else {
-            // Already running: encoder persists; engine already swapped producer. No PAT/PMT reset, same PCR/PTS.
-            std::cout << "[SwitchToLive] Channel " << channel_id << " now streaming TS from " << *path 
-                      << " (encoder persists)" << std::endl;
           }
         }
       }
-      
+
       std::cout << "[SwitchToLive] Channel " << channel_id
                 << " switch " << (result.success ? "succeeded" : "failed")
                 << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous << std::endl;
@@ -513,13 +294,41 @@ namespace retrovue
 
     void PlayoutControlImpl::DetachStreamLocked(int32_t channel_id, bool force)
     {
-      (void)force;
-      auto it = stream_writers_.find(channel_id);
-      if (it == stream_writers_.end())
+      auto it = stream_states_.find(channel_id);
+      if (it == stream_states_.end())
         return;
-      it->second.reset();
-      stream_writers_.erase(it);
-      std::cout << "[Phase8] Detached stream for channel " << channel_id << std::endl;
+
+      StreamState* state = it->second.get();
+      if (!state)
+        return;
+
+      // Detach sink from OutputBus if attached (query engine for state)
+      if (controller_->IsOutputSinkAttached(channel_id))
+      {
+        // Disconnect renderer from OutputBus first
+        controller_->DisconnectRendererFromOutputBus(channel_id);
+        controller_->DetachOutputSink(channel_id, force);
+        std::cout << "[DetachStream] OutputSink detached for channel " << channel_id << std::endl;
+      }
+
+      // Stop HelloLoop thread if running
+      state->stop.store(true, std::memory_order_release);
+      if (state->hello_thread.joinable())
+      {
+        state->hello_thread.join();
+      }
+
+      // Close FD
+      if (state->fd >= 0)
+      {
+#if defined(__linux__) || defined(__APPLE__)
+        close(state->fd);
+#endif
+        state->fd = -1;
+      }
+
+      stream_states_.erase(it);
+      std::cout << "[DetachStream] Stream detached for channel " << channel_id << std::endl;
     }
 
     grpc::Status PlayoutControlImpl::AttachStream(grpc::ServerContext* context,
@@ -540,13 +349,13 @@ namespace retrovue
       if (transport != StreamTransport::STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET)
       {
         response->set_success(false);
-        response->set_message("Phase 8.0: only UNIX_DOMAIN_SOCKET transport is supported");
+        response->set_message("Phase 9.0: only UNIX_DOMAIN_SOCKET transport is supported");
         return grpc::Status::OK;
       }
 
       std::lock_guard<std::mutex> lock(stream_mutex_);
-      auto it = stream_writers_.find(channel_id);
-      if (it != stream_writers_.end())
+      auto it = stream_states_.find(channel_id);
+      if (it != stream_states_.end())
       {
         if (!replace_existing)
         {
@@ -554,8 +363,7 @@ namespace retrovue
           response->set_message("Already attached; set replace_existing=true to replace");
           return grpc::Status::OK;
         }
-        it->second.reset();
-        stream_writers_.erase(it);
+        DetachStreamLocked(channel_id, true);
       }
 
       int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -589,15 +397,20 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
-      // Phase 8.4/8.6: This FD is the single write side for the channel. Phase 8.6: do not write
-      // dummy bytes (HELLO) in normal mode; stream stays silent until SwitchToLive writes real MPEG-TS.
-      // Phase 8.0 contract tests use --control-surface-only so we still start HelloLoop in that mode.
-      auto state = std::make_unique<StreamWriterState>();
+      // Phase 9.0: Store stream state (FD owned by gRPC layer)
+      // Sink will be created and attached on SwitchToLive (not here)
+      // gRPC layer does NOT track output runtime state - only transport (FD)
+      auto state = std::make_unique<StreamState>();
       state->fd = fd;
-      state->channel_id = channel_id;
+
+      // In control_surface_only mode, start HelloLoop for backward compatibility
       if (control_surface_only_)
-        state->writer_thread = std::thread(&StreamWriterState::HelloLoop, state.get());
-      stream_writers_[channel_id] = std::move(state);
+      {
+        state->stop.store(false, std::memory_order_release);
+        state->hello_thread = std::thread(&PlayoutControlImpl::HelloLoop, state.get());
+      }
+
+      stream_states_[channel_id] = std::move(state);
 
       response->set_success(true);
       response->set_message("Attached");
@@ -609,7 +422,7 @@ namespace retrovue
       (void)endpoint;
       (void)replace_existing;
       response->set_success(false);
-      response->set_message("Phase 8.0 UDS not implemented on this platform");
+      response->set_message("Phase 9.0 UDS not implemented on this platform");
       return grpc::Status::OK;
 #endif
     }
@@ -624,8 +437,8 @@ namespace retrovue
       std::cout << "[DetachStream] Request received: channel_id=" << channel_id << ", force=" << force << std::endl;
 
       std::lock_guard<std::mutex> lock(stream_mutex_);
-      auto it = stream_writers_.find(channel_id);
-      if (it == stream_writers_.end())
+      auto it = stream_states_.find(channel_id);
+      if (it == stream_states_.end())
       {
         response->set_success(true);
         response->set_message("Not attached (idempotent)");
@@ -636,7 +449,6 @@ namespace retrovue
       response->set_message("Detached");
       return grpc::Status::OK;
     }
-
 
   } // namespace playout
 } // namespace retrovue

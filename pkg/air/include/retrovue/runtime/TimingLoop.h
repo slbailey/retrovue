@@ -1,5 +1,5 @@
-#ifndef RETROVUE_RUNTIME_ORCHESTRATION_LOOP_H_
-#define RETROVUE_RUNTIME_ORCHESTRATION_LOOP_H_
+#ifndef RETROVUE_RUNTIME_TIMING_LOOP_H_
+#define RETROVUE_RUNTIME_TIMING_LOOP_H_
 
 #include <atomic>
 #include <chrono>
@@ -16,7 +16,7 @@
 
 namespace retrovue::runtime {
 
-class OrchestrationLoop {
+class TimingLoop {
  public:
   enum class BackPressureEvent {
     kUnderrun,
@@ -56,13 +56,13 @@ class OrchestrationLoop {
 
   using TickCallback = std::function<TickResult(const TickContext&)>;
 
-  OrchestrationLoop(Config config,
+  TimingLoop(Config config,
                     std::shared_ptr<timing::MasterClock> clock,
                     TickCallback callback);
-  ~OrchestrationLoop();
+  ~TimingLoop();
 
-  OrchestrationLoop(const OrchestrationLoop&) = delete;
-  OrchestrationLoop& operator=(const OrchestrationLoop&) = delete;
+  TimingLoop(const TimingLoop&) = delete;
+  TimingLoop& operator=(const TimingLoop&) = delete;
 
   void Start();
   void Stop();
@@ -103,5 +103,4 @@ class OrchestrationLoop {
 
 }  // namespace retrovue::runtime
 
-#endif  // RETROVUE_RUNTIME_ORCHESTRATION_LOOP_H_
-
+#endif  // RETROVUE_RUNTIME_TIMING_LOOP_H_

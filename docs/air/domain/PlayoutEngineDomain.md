@@ -310,7 +310,7 @@ graph TD
 
    - Preview slot: Contains producer that is loaded but not started
    - Live slot: Contains producer that is running and outputting frames
-   - Both slots can contain any `IProducer` implementation (VideoFileProducer, etc.)
+   - Both slots can contain any `IProducer` implementation (FileProducer, etc.)
    - Producers are created via factory pattern
 
 5. **IProducer → Plan** (N:1 consumption)
@@ -337,7 +337,7 @@ graph TD
 
 1. Validate channel_id and plan_handle
 2. Allocate FrameRingBuffer (default: 60 frames)
-3. Set producer factory for creating VideoFileProducer instances
+3. Set producer factory for creating FileProducer instances
 4. Load initial asset into preview slot via `loadPreviewAsset()`
 5. Activate preview as live via `activatePreviewAsLive()` (backward compatibility: first asset goes live immediately)
 6. Start live producer's decode thread

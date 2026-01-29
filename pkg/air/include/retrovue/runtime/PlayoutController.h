@@ -16,6 +16,10 @@ namespace retrovue::buffer {
 struct Frame;
 struct AudioFrame;
 }
+namespace retrovue::output {
+class IOutputSink;
+class OutputBus;
+}
 namespace retrovue::runtime {
 
 // Forward declaration
@@ -82,7 +86,28 @@ class PlayoutController {
   void RegisterMuxAudioFrameCallback(int32_t channel_id,
                                      std::function<void(const buffer::AudioFrame&)> callback);
   void UnregisterMuxAudioFrameCallback(int32_t channel_id);
-  
+
+  // Phase 9.0: OutputBus/OutputSink methods
+  // Attaches an output sink to the channel's OutputBus.
+  ControllerResult AttachOutputSink(int32_t channel_id,
+                                    std::unique_ptr<output::IOutputSink> sink,
+                                    bool replace_existing = false);
+
+  // Detaches the output sink from the channel's OutputBus.
+  ControllerResult DetachOutputSink(int32_t channel_id, bool force = false);
+
+  // Gets the OutputBus for a channel (for direct access if needed).
+  output::OutputBus* GetOutputBus(int32_t channel_id);
+
+  // Returns true if an output sink is attached to the channel's OutputBus.
+  bool IsOutputSinkAttached(int32_t channel_id);
+
+  // Connects the renderer to the OutputBus for frame routing.
+  void ConnectRendererToOutputBus(int32_t channel_id);
+
+  // Disconnects the renderer from the OutputBus.
+  void DisconnectRendererFromOutputBus(int32_t channel_id);
+
   // Update the playout plan for an active channel
   ControllerResult UpdatePlan(
       int32_t channel_id,

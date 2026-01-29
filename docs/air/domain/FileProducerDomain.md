@@ -1,16 +1,16 @@
 _Related: [Playout Engine Domain](PlayoutEngineDomain.md) • [Renderer Domain](RendererDomain.md) • [Architecture Overview](../architecture/ArchitectureOverview.md) • [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
 
-# Domain — Video File Producer
+# Domain — File Producer
 
 Status: Enforced
 
 ## 1. Overview
 
-The **Video File Producer** is one kind of execution producer in the RetroVue Air playout pipeline: it reads local video files, decodes them into raw YUV420 frames (e.g. via libav/ffmpeg — decoding is an implementation detail of file-backed producers), and stages those decoded frames in a `FrameRingBuffer` for consumption by the Renderer or direct TS path. Programmatic producers (Prevue, weather, community, test patterns) share the same output contract but differ internally.
+The **File Producer** is one kind of execution producer in the RetroVue Air playout pipeline: it reads local video files, decodes them into raw YUV420 frames (e.g. via libav/ffmpeg — decoding is an implementation detail of file-backed producers), and stages those decoded frames in a `FrameRingBuffer` for consumption by the Renderer or direct TS path. Programmatic producers (Prevue, weather, community, test patterns) share the same output contract but differ internally.
 
 ### Purpose
 
-The Video File Producer exists to:
+The File Producer exists to:
 
 - **Read and decode video assets**: Transform encoded video files (MP4, MKV, MOV, etc.) into raw YUV420 frames; implementation may use libav/ffmpeg or equivalent — decoding is an implementation detail
 - **Maintain decode pacing**: Produce frames at the correct rate to keep the Renderer fed without buffer overflow
@@ -22,14 +22,14 @@ The Video File Producer exists to:
 
 ```
 ┌──────────────┐     ┌──────────────────────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Video      │     │  VideoFile                    │     │    Frame     │     │   Renderer   │
+│   Media      │     │  File                         │     │    Frame     │     │   Renderer   │
 │   File       │────▶│  Producer                     │────▶│  RingBuffer  │────▶│  (Consumer) │
 │  (MP4/MKV)   │     │  (Reads + Decodes internally) │     │  (60 frames) │     │              │
 └──────────────┘     └──────────────────────────────┘     └──────────────┘     └──────────────┘
      Source              Decode Stage (self-contained)         Staging              Output
 ```
 
-The Video File Producer is a **standalone, self-contained decoder** that sits between the source media asset and the frame staging buffer. It performs both file reading and frame decoding internally, outputting only decoded frames ready for rendering. It does not interact directly with the Renderer; frames flow through the buffer.
+The File Producer is a **standalone, self-contained decoder** that sits between the source media asset and the frame staging buffer. It performs both file reading and frame decoding internally, outputting only decoded frames ready for rendering. It does not interact directly with the Renderer; frames flow through the buffer.
 
 ### Why It Exists
 
@@ -68,7 +68,7 @@ The Video File Producer is a **standalone, self-contained decoder** that sits be
 
 ## 2. Domain Responsibilities
 
-### What VideoFileProducer DOES
+### What FileProducer DOES
 
 - ✅ **Read video files**: Opens and reads encoded video files (MP4, MKV, MOV, etc.) from local storage
 - ✅ **Decode frames internally**: May use libav/ffmpeg or equivalent to decode H.264, HEVC, and other supported codecs into raw YUV420 frames; implementation detail of this producer type
@@ -82,7 +82,7 @@ The Video File Producer is a **standalone, self-contained decoder** that sits be
 - ✅ **Fallback to stub mode**: Automatically falls back to synthetic decoded frames if internal decoder fails to initialize
 - ✅ **Scale frames**: Converts decoded frames to target resolution (default: 1920x1080)
 
-### What VideoFileProducer DOES NOT
+### What FileProducer DOES NOT
 
 - ❌ **Schedule content**: Does not decide which video file to play or when (ChannelManager responsibility)
 - ❌ **Render frames**: Does not display, encode, or output frames (Renderer responsibility)
@@ -96,7 +96,7 @@ The Video File Producer is a **standalone, self-contained decoder** that sits be
 
 ### Boundary Conditions
 
-The Video File Producer operates within these boundaries:
+The File Producer operates within these boundaries:
 
 - **Input**: Single video file URI (file path or local URI)
 - **Output**: Decoded Frame objects (YUV420 format) pushed to `FrameRingBuffer`
@@ -115,8 +115,8 @@ graph TB
         PC[PlayoutControl]
     end
     
-    subgraph "Video File Producer Domain"
-        VFP[VideoFileProducer<br/>Self-contained decoder]
+    subgraph "File Producer Domain"
+        VFP[FileProducer<br/>Self-contained decoder]
         subgraph "Internal Components"
             DEMUX[Demuxer<br/>libavformat]
             DEC[Decoder<br/>libavcodec]
@@ -167,22 +167,22 @@ graph TB
 
 ### Key Relationships
 
-1. **VideoFileProducer → Internal Decoder Components** (contains)
+1. **FileProducer → Internal Decoder Components** (contains)
    - Producer encapsulates demuxer, decoder, scaler, and frame assembly
    - All FFmpeg operations are internal implementation details
    - Producer exposes only decoded Frame objects to external components
 
-2. **VideoFileProducer → FrameRingBuffer** (pushes decoded frames)
+2. **FileProducer → FrameRingBuffer** (pushes decoded frames)
    - Producer holds reference to buffer (owned by ChannelWorker)
    - Non-blocking push operations with decoded frames only
    - Producer backs off when buffer is full
 
-3. **VideoFileProducer → MasterClock** (optional timing reference)
+3. **FileProducer → MasterClock** (optional timing reference)
    - Used in stub mode for pacing
    - Real decode mode uses file timestamps (PTS) instead
    - Enables deterministic frame production
 
-4. **ChannelManager → VideoFileProducer** (lifecycle control)
+4. **ChannelManager → FileProducer** (lifecycle control)
    - Creates producer via `StartChannel` gRPC call
    - Updates content via `UpdatePlan` (hot-swaps producer)
    - Destroys producer via `StopChannel`
@@ -206,8 +206,8 @@ graph TB
    config.target_fps = 30.0;
    config.stub_mode = false;
    ```
-4. **PlayoutControl** creates `VideoFileProducer(config, ring_buffer, master_clock)`
-5. **VideoFileProducer** initializes internal decoder subsystem:
+4. **PlayoutControl** creates `FileProducer(config, ring_buffer, master_clock)`
+5. **FileProducer** initializes internal decoder subsystem:
    - Opens file using libavformat (demuxer)
    - Detects format and initializes codec context (decoder)
    - Configures scaler for target resolution (1920x1080)
@@ -266,7 +266,7 @@ The Renderer runs in a separate thread and pulls decoded frames from the same `F
 
 ### Frame Structure
 
-Each decoded frame produced by VideoFileProducer has this structure:
+Each decoded frame produced by FileProducer has this structure:
 
 ```cpp
 struct Frame {
@@ -300,7 +300,7 @@ struct FrameMetadata {
 
 ## 4.1. Internal Decoder Subsystem Architecture
 
-The VideoFileProducer contains a complete FFmpeg-based decoder subsystem that performs all decoding operations internally. This subsystem consists of four main components:
+The FileProducer contains a complete FFmpeg-based decoder subsystem that performs all decoding operations internally. This subsystem consists of four main components:
 
 ### Demuxer (libavformat)
 
@@ -448,7 +448,7 @@ The decode loop runs in a dedicated producer thread and orchestrates the entire 
 ### Loop Structure
 
 ```cpp
-void VideoFileProducer::ProduceLoop() {
+void FileProducer::ProduceLoop() {
     // Initialize decoder if not in stub mode
     if (!config_.stub_mode) {
         InitializeDecoder();  // Sets up demuxer, decoder, scaler
@@ -565,13 +565,13 @@ void VideoFileProducer::ProduceLoop() {
 
 ## 5. Interfaces and Contracts
 
-### VideoFileProducer Public API
+### FileProducer Public API
 
 ```cpp
-class VideoFileProducer {
+class FileProducer {
 public:
     // Constructs producer with configuration and output buffer.
-    VideoFileProducer(
+    FileProducer(
         const ProducerConfig& config,
         buffer::FrameRingBuffer& output_buffer,
         std::shared_ptr<timing::MasterClock> clock = nullptr
@@ -628,7 +628,7 @@ public:
 
 ### Error Events
 
-The VideoFileProducer handles these error conditions:
+The FileProducer handles these error conditions:
 
 1. **Internal decoder initialization failure**:
    - Logs error: `"Failed to initialize internal decoder, falling back to stub mode"`
@@ -662,11 +662,11 @@ The VideoFileProducer handles these error conditions:
 
 The producer emits these lifecycle events (via logging, not callbacks):
 
-- **Started**: `"[VideoFileProducer] Started for asset: <uri>"`
-- **Stopped**: `"[VideoFileProducer] Stopped. Total decoded frames produced: <count>"`
-- **Teardown requested**: `"[VideoFileProducer] Teardown requested (timeout=<ms>)"`
-- **Buffer drained**: `"[VideoFileProducer] Buffer drained; completing teardown"`
-- **Decode loop exited**: `"[VideoFileProducer] Decode loop exited"`
+- **Started**: `"[FileProducer] Started for asset: <uri>"`
+- **Stopped**: `"[FileProducer] Stopped. Total decoded frames produced: <count>"`
+- **Teardown requested**: `"[FileProducer] Teardown requested (timeout=<ms>)"`
+- **Buffer drained**: `"[FileProducer] Buffer drained; completing teardown"`
+- **Decode loop exited**: `"[FileProducer] Decode loop exited"`
 
 **Note**: The producer does not emit gRPC events or metrics directly. The `MetricsExporter` aggregates statistics from multiple sources.
 
@@ -716,7 +716,7 @@ The following contracts are verified by unit and integration tests in `tests/tes
 
 ### Decode Rate
 
-The VideoFileProducer maintains decode rate based on the configured `target_fps`:
+The FileProducer maintains decode rate based on the configured `target_fps`:
 
 - **Real decode mode**: Internal decoder reads and decodes frames as fast as possible from file, but frame timestamps (PTS) reflect original file timing
 - **Stub mode**: Producer generates decoded frames at exactly `target_fps` using MasterClock pacing
@@ -759,11 +759,11 @@ When `FrameRingBuffer` is full (60 decoded frames), the producer:
 **Station Timestamp** (future):
 - Virtual timeline aligned to MasterClock
 - Used for multi-channel synchronization
-- Not currently implemented in VideoFileProducer
+- Not currently implemented in FileProducer
 
 ### Sync with Renderer
 
-The VideoFileProducer does not directly synchronize with the Renderer. Instead:
+The FileProducer does not directly synchronize with the Renderer. Instead:
 
 1. **Producer** pushes decoded frames to `FrameRingBuffer` as fast as decode allows (or at target_fps in stub mode)
 2. **Renderer** pulls decoded frames from buffer at MasterClock-aligned intervals
@@ -799,7 +799,7 @@ The ChannelManager orchestrates preview-to-live switching using the `UpdatePlan`
 3. **PlayoutControl** creates new producer with new plan:
    ```cpp
    producer_config.asset_uri = new_plan_handle;
-   worker->producer = std::make_unique<VideoFileProducer>(...);
+   worker->producer = std::make_unique<FileProducer>(...);
    worker->producer->Start();
    ```
 4. **Producer** begins reading and decoding new content
@@ -813,7 +813,7 @@ The ChannelManager orchestrates preview-to-live switching using the `UpdatePlan`
 
 ### Event Emission
 
-The VideoFileProducer does not emit gRPC events directly. Instead:
+The FileProducer does not emit gRPC events directly. Instead:
 
 1. **Producer** logs lifecycle events (started, stopped, errors)
 2. **MetricsExporter** aggregates statistics:
@@ -850,12 +850,12 @@ The ChannelManager feeds preview content to a separate preview channel:
          │
          ├───gRPC───▶ PlayoutControl
                           │
-                          ├───Channel 0: VideoFileProducer("preview.mp4")
-                          └───Channel 1: VideoFileProducer("live.mp4")
+                          ├───Channel 0: FileProducer("preview.mp4")
+                          └───Channel 1: FileProducer("live.mp4")
 ```
 
 **Preview Channel**:
-- Uses same `VideoFileProducer` as live channel
+- Uses same `FileProducer` as live channel
 - Configured with `RenderMode::PREVIEW` (if SDL2 available)
 - Renders to preview window instead of MPEG-TS stream
 - Can be switched to live via `UpdatePlan` on live channel
@@ -957,13 +957,13 @@ AVFormatContext* format_ctx = avformat_open_input(...);
 
 **Correct pattern**:
 ```cpp
-// CORRECT: FFmpeg is internal to VideoFileProducer
-// External components only interact with VideoFileProducer API
-auto producer = std::make_unique<VideoFileProducer>(config, buffer);
+// CORRECT: FFmpeg is internal to FileProducer
+// External components only interact with FileProducer API
+auto producer = std::make_unique<FileProducer>(config, buffer);
 // FFmpeg operations are encapsulated inside producer
 ```
 
-**Why**: FFmpeg operations are internal implementation details of VideoFileProducer. External components should only interact with the producer's public API and receive decoded frames.
+**Why**: FFmpeg operations are internal implementation details of FileProducer. External components should only interact with the producer's public API and receive decoded frames.
 
 ### ❌ Do NOT Emit Metrics or gRPC Events
 
@@ -1039,7 +1039,7 @@ file.read(buffer, size);  // Blocks if file is on slow network mount
 ```cpp
 // CORRECT: Internal decoder handles I/O with buffering
 // Decoder reads ahead in background, decode thread never blocks
-// This is handled internally by VideoFileProducer's decoder subsystem
+// This is handled internally by FileProducer's decoder subsystem
 ```
 
 **Why**: The decode thread must maintain real-time frame production. Blocking I/O operations will cause frame drops and buffer underruns.
@@ -1105,7 +1105,7 @@ producer.config_.target_fps = 60.0;  // Producer already started!
 // CORRECT: Configuration is immutable after construction
 ProducerConfig config;
 config.target_fps = 60.0;
-auto producer = std::make_unique<VideoFileProducer>(config, buffer);
+auto producer = std::make_unique<FileProducer>(config, buffer);
 // Config is frozen at construction time
 ```
 
@@ -1172,7 +1172,7 @@ class CCTVProducer {
 };
 ```
 
-**Key Point**: CCTVProducer will also perform decoding internally (just like VideoFileProducer), outputting decoded frames ready for the renderer.
+**Key Point**: CCTVProducer will also perform decoding internally (just like FileProducer), outputting decoded frames ready for the renderer.
 
 ### PrevueGuideProducer
 
@@ -1217,7 +1217,7 @@ All future producers will:
 5. **Support same lifecycle**: Start, Stop, RequestTeardown methods
 
 **Architectural Consistency**: This unified model ensures that:
-- VideoFileProducer decodes video files internally
+- FileProducer decodes video files internally
 - CCTVProducer decodes camera streams internally
 - PrevueGuideProducer generates decoded graphics frames
 - LowerThirdProducer generates decoded overlay frames
@@ -1232,10 +1232,10 @@ All future producers will:
 A single decoded video frame containing raw pixel data (YUV420 format) and timing metadata (PTS, DTS, duration). Frames are the atomic unit of data flowing through the playout pipeline. All frames in FrameRingBuffer are decoded and ready for rendering.
 
 **Producer**  
-A component that generates decoded frames and pushes them into a `FrameRingBuffer`. The VideoFileProducer is a specialization that reads video files and decodes them internally. Future producers (CCTV, PrevueGuide) will also output decoded frames, either by decoding streams or generating graphics.
+A component that generates decoded frames and pushes them into a `FrameRingBuffer`. The FileProducer is a specialization that reads video files and decodes them internally. Future producers (CCTV, PrevueGuide) will also output decoded frames, either by decoding streams or generating graphics.
 
 **Pipeline**  
-The end-to-end data flow from source (video file) through decode (VideoFileProducer's internal decoder) and staging (FrameRingBuffer) to output (Renderer). The pipeline ensures decoded frames flow at the correct rate with proper timing.
+The end-to-end data flow from source (video file) through decode (FileProducer's internal decoder) and staging (FrameRingBuffer) to output (Renderer). The pipeline ensures decoded frames flow at the correct rate with proper timing.
 
 **Renderer**  
 The consumer component that pulls decoded frames from the `FrameRingBuffer` and delivers them to output targets (display, MPEG-TS stream, validation). The Renderer runs in a separate thread and maintains its own pacing. The Renderer never decodes frames; it only consumes already-decoded frames.
@@ -1247,7 +1247,7 @@ The overall process of decoding scheduled content and delivering it as a broadca
 A lock-free circular buffer that stages decoded frames between the producer (decode thread) and renderer (render thread). Default capacity is 60 frames (2 seconds at 30 fps). Contains only decoded frames, never encoded packets.
 
 **MasterClock**  
-The authoritative timing source from RetroVue Core that ensures all channels remain synchronized. The VideoFileProducer uses MasterClock for pacing in stub mode and for timestamp alignment.
+The authoritative timing source from RetroVue Core that ensures all channels remain synchronized. The FileProducer uses MasterClock for pacing in stub mode and for timestamp alignment.
 
 **PTS (Presentation Timestamp)**  
 The timestamp indicating when a frame should be displayed. Extracted from video file packet timestamps by the internal decoder and converted to microseconds. Must be monotonically increasing within a single asset.
@@ -1256,13 +1256,13 @@ The timestamp indicating when a frame should be displayed. Extracted from video 
 The timestamp indicating when a frame should be decoded. May be less than PTS for B-frames (out-of-order decode). Currently set equal to PTS in the implementation.
 
 **Backpressure**  
-The condition when the downstream buffer is full and the producer cannot push more decoded frames. The VideoFileProducer handles backpressure by backing off (waiting 10ms) and retrying.
+The condition when the downstream buffer is full and the producer cannot push more decoded frames. The FileProducer handles backpressure by backing off (waiting 10ms) and retrying.
 
 **Teardown**  
 A graceful shutdown procedure where the producer stops generating new decoded frames and waits for the buffer to drain before exiting. Used during channel transitions to avoid dropping frames.
 
 **Internal Decoder Subsystem**  
-The FFmpeg-based components (demuxer, decoder, scaler) that are encapsulated inside VideoFileProducer. These are implementation details; external components only see decoded Frame objects.
+The FFmpeg-based components (demuxer, decoder, scaler) that are encapsulated inside FileProducer. These are implementation details; external components only see decoded Frame objects.
 
 ---
 
@@ -1286,19 +1286,19 @@ This document has been updated to reflect a clarified architectural decision:
 
 ### Changes Made
 
-1. **Unified Producer Model**: VideoFileProducer now performs both reading and decoding internally. There is no separate FFmpegDecoder stage in the pipeline. Instead, VideoFileProducer *contains* the FFmpeg-based decoder internally.
+1. **Unified Producer Model**: FileProducer now performs both reading and decoding internally. There is no separate FFmpegDecoder stage in the pipeline. Instead, FileProducer *contains* the FFmpeg-based decoder internally.
 
 2. **Decoded Frames Only**: FrameRingBuffer now explicitly contains only decoded frames. All references to encoded packets or downstream decoding have been removed.
 
 3. **Simplified Pipeline**: The pipeline is now simpler and more object-oriented:
    - Input: asset URI
-   - VideoFileProducer: reads file + decodes internally → outputs decoded frames
+   - FileProducer: reads file + decodes internally → outputs decoded frames
    - FrameRingBuffer: stores decoded frames
    - Renderer: consumes decoded frames (never decodes)
 
 4. **Future Producers**: Future producers (PrevueChannelProducer, CCTVProducer, etc.) will NOT need decoding — they will simply generate already-decoded frames. This reinforces why decoding belongs inside each Producer, not at a central layer.
 
-5. **Internal Components**: The document now clarifies the internal components of VideoFileProducer:
+5. **Internal Components**: The document now clarifies the internal components of FileProducer:
    - Demuxer (libavformat)
    - Decoder (libavcodec)
    - Optional scaler (libswscale)

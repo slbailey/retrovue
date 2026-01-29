@@ -1,4 +1,4 @@
-_Related: [Playout Engine Domain](PlayoutEngineDomain.md) • [Video File Producer Domain](VideoFileProducerDomain.md) • [Architecture Overview](../architecture/ArchitectureOverview.md) • [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
+_Related: [Playout Engine Domain](PlayoutEngineDomain.md) • [File Producer Domain](FileProducerDomain.md) • [Architecture Overview](../architecture/ArchitectureOverview.md) • [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
 
 # Domain — MPEG-TS Playout Sink
 
@@ -979,7 +979,7 @@ The ring buffer policy ensures that sink and producer never block each other, an
 
 **Implementation**:
 - `FrameRingBuffer::Push()` returns `false` immediately if buffer is full
-- Producer handles full buffer by backing off and retrying (see VideoFileProducerDomain.md)
+- Producer handles full buffer by backing off and retrying (see FileProducerDomain.md)
 - Sink never waits for producer to push frames
 
 **Verification**:
@@ -1226,7 +1226,7 @@ The goal is: **frames come out of the sink in real time, aligned to MasterClock,
 The sink receives decoded frames from `FrameRingBuffer` where:
 
 - `frame.metadata.pts` is in **microseconds**, starting at or near 0 for the first frame
-- PTS is **monotonically increasing** within one asset (guaranteed by VideoFileProducer contract)
+- PTS is **monotonically increasing** within one asset (guaranteed by FileProducer contract)
 
 The sink maps media PTS to station (wall) time using a simple affine transform:
 
@@ -1359,7 +1359,7 @@ The timing contract between producer and sink is:
 
 - Producer tries to keep the `FrameRingBuffer` filled (depth ≈ 1–2 seconds of video)
 - Sink pops frames at real-time pace determined by MasterClock and frame PTS
-- If producer is faster, buffer fills and producer sees backpressure (already covered by VideoFileProducer contract)
+- If producer is faster, buffer fills and producer sees backpressure (already covered by FileProducer contract)
 - If producer is slower, buffer empties and sink sees underruns (as defined above)
 
 The sink does not try to adjust decode rate or manipulate the producer. It only:
@@ -2414,7 +2414,7 @@ A component that consumes decoded frames from a `FrameRingBuffer` and outputs th
 The end-to-end data flow from source (video file) through decode (Producer) and staging (FrameRingBuffer) to output (Sink). The pipeline ensures decoded frames flow at the correct rate with proper timing.
 
 **Producer**  
-The component that generates decoded frames and pushes them into a `FrameRingBuffer`. The VideoFileProducer is a specialization that reads video files and decodes them internally. Producers fill the buffer.
+The component that generates decoded frames and pushes them into a `FrameRingBuffer`. The FileProducer is a specialization that reads video files and decodes them internally. Producers fill the buffer.
 
 **Playout**  
 The overall process of decoding scheduled content and delivering it as a broadcast stream. The RetroVue Air playout engine orchestrates multiple channels, each with its own producer, buffer, and sink.
@@ -2448,7 +2448,7 @@ The base interface for all playout sinks. Defines common lifecycle methods (Star
 ## See Also
 
 - [Playout Engine Domain](PlayoutEngineDomain.md) — Overall channel architecture
-- [Video File Producer Domain](VideoFileProducerDomain.md) — Frame production and decoding
+- [File Producer Domain](FileProducerDomain.md) — Frame production and decoding
 - [Architecture Overview](../architecture/ArchitectureOverview.md) — System-wide architecture
 - [Playout Engine Contract](../contracts/PlayoutEngineContract.md) — Behavioral guarantees
 - [GLOSSARY.md](../GLOSSARY.md) — Additional terminology

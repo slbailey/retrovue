@@ -35,14 +35,14 @@ extern "C" {
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSink.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 #include "../../fixtures/EventBusStub.h"
 #include "timing/TestMasterClock.h"
 #include "../../fixtures/mpegts_sink/FrameFactory.h"
 
 using namespace retrovue;
 using namespace retrovue::playout_sinks::mpegts;
-using namespace retrovue::producers::video_file;
+using namespace retrovue::producers::file;
 using namespace retrovue::tests;
 using namespace retrovue::tests::fixtures;
 using namespace retrovue::tests::fixtures::mpegts_sink;  // For FrameFactory
@@ -798,7 +798,7 @@ namespace
     std::shared_ptr<retrovue::timing::TestMasterClock> fake_clock_;
     std::shared_ptr<FrameRingBuffer> buffer_;
     std::unique_ptr<MpegTSPlayoutSink> sink_;
-    std::unique_ptr<VideoFileProducer> producer_;
+    std::unique_ptr<FileProducer> producer_;
     std::unique_ptr<EventBusStub> event_bus_;
     MpegTSPlayoutSinkConfig config_;
     
@@ -980,7 +980,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;  // Use real decoding
 
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     ASSERT_TRUE(producer_->start());
 
@@ -1382,7 +1382,7 @@ namespace
   }
 
   // Rule: FE-013 Encodes Real Decoded Frames
-  // Create a VideoFileProducer in real decode mode, push real frames through the sink,
+  // Create a FileProducer in real decode mode, push real frames through the sink,
   // expect real H.264 packets (look for NAL signatures or non-zero muxed packet size)
   TEST_F(MpegTSPlayoutSinkContractTest, FE_013_EncodesRealDecodedFrames)
   {
@@ -1390,7 +1390,7 @@ namespace
     // Use real encoding mode
     config_.stub_mode = false;
     
-    // Create VideoFileProducer in real decode mode
+    // Create FileProducer in real decode mode
     ProducerConfig producer_config;
     producer_config.asset_uri = GetTestMediaPath("sample.mp4");
     producer_config.target_width = 1920;
@@ -1398,7 +1398,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;  // Real decode mode
 
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, fake_clock_, MakeEventCallback());
     
     // Create sink in real encoding mode
@@ -1480,7 +1480,7 @@ namespace
             std::chrono::system_clock::now().time_since_epoch()).count(),
         0.0);
     
-    // Create VideoFileProducer in real decode mode
+    // Create FileProducer in real decode mode
     ProducerConfig producer_config;
     producer_config.asset_uri = GetTestMediaPath("sample.mp4");
     producer_config.target_width = 1920;
@@ -1488,7 +1488,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;  // Real decode mode
 
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     // Create sink in real encoding mode
@@ -1565,7 +1565,7 @@ namespace
             std::chrono::system_clock::now().time_since_epoch()).count(),
         0.0);
     
-    // Create VideoFileProducer in real decode mode
+    // Create FileProducer in real decode mode
     ProducerConfig producer_config;
     producer_config.asset_uri = GetTestMediaPath("sample.mp4");
     producer_config.target_width = 1920;
@@ -1573,7 +1573,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;  // Real decode mode
 
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     // Create sink in real encoding mode
@@ -1670,7 +1670,7 @@ namespace
             std::chrono::system_clock::now().time_since_epoch()).count(),
         0.0);
     
-    // Create VideoFileProducer in real decode mode
+    // Create FileProducer in real decode mode
     ProducerConfig producer_config;
     producer_config.asset_uri = GetTestMediaPath("sample.mp4");
     producer_config.target_width = 1920;
@@ -1678,7 +1678,7 @@ namespace
     producer_config.target_fps = expected_fps;
     producer_config.stub_mode = false;  // Real decode mode
 
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     // Create sink in real encoding mode
@@ -1754,7 +1754,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;
     
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     sink_ = std::make_unique<MpegTSPlayoutSink>(buffer_, real_clock, config_);
@@ -1865,7 +1865,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;
     
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     sink_ = std::make_unique<MpegTSPlayoutSink>(buffer_, real_clock, config_);
@@ -1973,7 +1973,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;
     
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     sink_ = std::make_unique<MpegTSPlayoutSink>(buffer_, real_clock, config_);
@@ -2209,7 +2209,7 @@ namespace
     producer_config.target_fps = 30.0;
     producer_config.stub_mode = false;
     
-    producer_ = std::make_unique<VideoFileProducer>(
+    producer_ = std::make_unique<FileProducer>(
         producer_config, *buffer_, real_clock, MakeEventCallback());
     
     sink_ = std::make_unique<MpegTSPlayoutSink>(buffer_, real_clock, config_);

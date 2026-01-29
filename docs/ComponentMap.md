@@ -59,7 +59,7 @@ flowchart LR
 | Component | Owns | Primary interfaces | Where to start (docs) | Where to start (code) |
 | --- | --- | --- | --- | --- |
 | **PlayoutEngine (control plane + engine)** | Channel lifecycle: start/stop/update plan; coordinates internal pipeline. Does not persist, segment, or store output; emits live bytes only. | gRPC service surface; Prometheus metrics | `docs/air/contracts/PlayoutEngineContract.md` • `docs/air/domain/PlayoutEngineDomain.md` | `pkg/air/src/runtime/PlayoutEngine.cpp` • `pkg/air/src/runtime/PlayoutController.cpp` |
-| **Producers (decode/input)** | Turning assets into frames (FFmpeg/libav boundary) | Internal C++ interfaces | `docs/air/domain/VideoFileProducerDomain.md` | `pkg/air/src/producers/` |
+| **Producers (decode/input)** | Turning assets into frames (FFmpeg/libav boundary) | Internal C++ interfaces | `docs/air/domain/FileProducerDomain.md` | `pkg/air/src/producers/` |
 | **Buffering** | Frame bus / ring buffer / staging between decode and render | Internal C++ interfaces | (see architecture/runtime docs) | `pkg/air/src/buffer/` |
 | **Renderer** | Converts staged frames into renderable output; optional preview | Internal C++ interface; telemetry | `docs/air/domain/RendererDomain.md` • `docs/air/contracts/RendererContract.md` | `pkg/air/src/renderer/FrameRenderer.cpp` |
 | **MPEG-TS sinks** | Emit continuous MPEG-TS stream; handle pacing/backpressure | TCP/UDS output + telemetry | `docs/air/domain/MpegTSPlayoutSinkDomain.md` • contracts under `docs/air/air/contracts/` | `pkg/air/src/sinks/mpegts/` and `pkg/air/src/playout_sinks/mpegts/` |

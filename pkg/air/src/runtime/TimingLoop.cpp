@@ -1,4 +1,4 @@
-#include "retrovue/runtime/OrchestrationLoop.h"
+#include "retrovue/runtime/TimingLoop.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +20,7 @@ double ToMilliseconds(int64_t microseconds) {
 
 }  // namespace
 
-OrchestrationLoop::OrchestrationLoop(Config config,
+TimingLoop::TimingLoop(Config config,
                                      std::shared_ptr<timing::MasterClock> clock,
                                      TickCallback callback)
     : config_(std::move(config)),
@@ -29,19 +29,19 @@ OrchestrationLoop::OrchestrationLoop(Config config,
       running_(false),
       tick_index_(0) {}
 
-OrchestrationLoop::~OrchestrationLoop() { Stop(); }
+TimingLoop::~TimingLoop() { Stop(); }
 
-void OrchestrationLoop::Start() {
+void TimingLoop::Start() {
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true)) {
     return;
   }
 
   start_time_ = std::chrono::steady_clock::now();
-  thread_ = std::make_unique<std::thread>(&OrchestrationLoop::Run, this);
+  thread_ = std::make_unique<std::thread>(&TimingLoop::Run, this);
 }
 
-void OrchestrationLoop::Stop() {
+void TimingLoop::Stop() {
   bool expected = true;
   if (!running_.compare_exchange_strong(expected, false)) {
     return;
@@ -59,12 +59,12 @@ void OrchestrationLoop::Stop() {
   stats_.teardown_duration_ms = duration_ms;
 }
 
-void OrchestrationLoop::SetTickCallback(TickCallback callback) {
+void TimingLoop::SetTickCallback(TickCallback callback) {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   tick_callback_ = std::move(callback);
 }
 
-void OrchestrationLoop::ReportBackPressureEvent(BackPressureEvent event) {
+void TimingLoop::ReportBackPressureEvent(BackPressureEvent event) {
   const auto now_utc =
       clock_ ? clock_->now_utc_us()
              : static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -81,12 +81,12 @@ void OrchestrationLoop::ReportBackPressureEvent(BackPressureEvent event) {
   };
 }
 
-OrchestrationLoop::Stats OrchestrationLoop::Snapshot() const {
+TimingLoop::Stats TimingLoop::Snapshot() const {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   return stats_;
 }
 
-void OrchestrationLoop::Run() {
+void TimingLoop::Run() {
   const double interval_seconds = 1.0 / std::max(config_.target_fps, 1.0);
   const int64_t interval_us = ToMicroseconds(interval_seconds);
 
@@ -158,17 +158,17 @@ void OrchestrationLoop::Run() {
   }
 }
 
-void OrchestrationLoop::RecordTickSkew(double skew_ms) {
+void TimingLoop::RecordTickSkew(double skew_ms) {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   stats_.tick_skew_ms.push_back(skew_ms);
 }
 
-void OrchestrationLoop::RecordLatency(double latency_ms) {
+void TimingLoop::RecordLatency(double latency_ms) {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   stats_.latency_ms.push_back(latency_ms);
 }
 
-void OrchestrationLoop::HandleBackPressure(const TickResult& result) {
+void TimingLoop::HandleBackPressure(const TickResult& result) {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   if (!pending_backpressure_) {
     return;
@@ -194,7 +194,7 @@ void OrchestrationLoop::HandleBackPressure(const TickResult& result) {
   }
 }
 
-double OrchestrationLoop::ComputePercentile(const std::vector<double>& values,
+double TimingLoop::ComputePercentile(const std::vector<double>& values,
                                             double percentile) {
   if (values.empty()) {
     return 0.0;
@@ -216,4 +216,3 @@ double OrchestrationLoop::ComputePercentile(const std::vector<double>& values,
 }
 
 }  // namespace retrovue::runtime
-

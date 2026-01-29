@@ -1,7 +1,7 @@
-# Phase 8.1.5 — VideoFileProducer Internal Decode Refactor (LIBAV)
+# Phase 8.1.5 — FileProducer Internal Decode Refactor (LIBAV)
 
 **Purpose**  
-Redesign `VideoFileProducer` so that all media demuxing, decoding, and frame emission are handled _entirely in-process_ via the libav* family of libraries (libavformat, libavcodec, libavutil)—**never** by spawning an ffmpeg executable. The public/observable behavior (single contiguous file playback, no asset switching) must remain unchanged from Phase 8.1, as seen by the pipeline and downstream code.
+Redesign `FileProducer` so that all media demuxing, decoding, and frame emission are handled _entirely in-process_ via the libav* family of libraries (libavformat, libavcodec, libavutil)—**never** by spawning an ffmpeg executable. The public/observable behavior (single contiguous file playback, no asset switching) must remain unchanged from Phase 8.1, as seen by the pipeline and downstream code.
 
 This refactor is specifically to unlock the frame-accurate segment boundaries and control needed for advanced broadcast playout, while improving reliability and testability.
 
@@ -111,7 +111,7 @@ This refactor is specifically to unlock the frame-accurate segment boundaries an
 
 ## Exit Criteria
 
-- `VideoFileProducer` uses _only_ libav* code for all demux and decode
+- `FileProducer` uses _only_ libav* code for all demux and decode
 - Frame emission and advancing are 100% deterministically controlled by the producer
 - Frame boundaries are enforced at the decoded-frame level, not at packet or keyframe boundaries
 - _No subprocess launching or ffmpeg_ at any point in Air

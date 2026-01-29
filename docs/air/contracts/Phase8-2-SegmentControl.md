@@ -1,14 +1,14 @@
 # Phase 8.2 — Segment Control → Frame-Accurate Start & Stop (LIBAV)
 
-_Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase 8.1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase 8.1.5 VideoFileProducer Internal Refactor](Phase8-1-5-VideoFileProducerInternalRefactor.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase 6A Overview](Phase6A-Overview.md)_
+_Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase 8.1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase 8.1.5 FileProducer Internal Refactor](Phase8-1-5-FileProducerInternalRefactor.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase 6A Overview](Phase6A-Overview.md)_
 
-**Principle:** Connect the existing segment logic (Phases 3–6) to frame-level emission control inside VideoFileProducer. Join-in-progress and hard stops are enforced at the decoded-frame level; no switching yet. No ffmpeg executable; libav is the engine.
+**Principle:** Connect the existing segment logic (Phases 3–6) to frame-level emission control inside FileProducer. Join-in-progress and hard stops are enforced at the decoded-frame level; no switching yet. No ffmpeg executable; libav is the engine.
 
 Shared invariants (segment authority: start_offset_ms and hard_stop_time_ms from Python/Phase 4, enforced by Air) are in the [Overview](Phase8-Overview.md).
 
 ## Purpose
 
-Apply **segment start/stop policy to an already-decoded frame stream**. Air does not “tell ffmpeg where to seek and when to stop.” VideoFileProducer owns decode and enforces segment boundaries during decode/emission—frame admission control, not container seek.
+Apply **segment start/stop policy to an already-decoded frame stream**. Air does not “tell ffmpeg where to seek and when to stop.” FileProducer owns decode and enforces segment boundaries during decode/emission—frame admission control, not container seek.
 
 - **start_offset_ms** → first frame **emitted** is the first whose presentation time satisfies the segment start; frames before that are decoded but discarded.
 - **hard_stop_time_ms** → wall-clock deadline; emission ceases when MasterClock reaches it; last emitted frame must satisfy the derived media-time end boundary (see below).
@@ -39,7 +39,7 @@ Air **MUST**:
 
 When a segment becomes live, Air records `segment_start_wallclock_ms = MasterClock.now_utc_ms()`. Define `segment_duration_ms = hard_stop_time_ms - segment_start_wallclock_ms`. Define `segment_end_pts_ms = start_offset_ms + segment_duration_ms`. Emit frames while `frame.pts_ms < segment_end_pts_ms`. Stop producing once the next frame would violate the boundary. This makes “frame accurate” testable.
 
-Air passes **start_offset_ms** and **hard_stop_time_ms** into **VideoFileProducerConfig**. VideoFileProducer enforces segment boundaries during decode/emission. No container seek, no keyframe-only seek, no CLI behavior.
+Air passes **start_offset_ms** and **hard_stop_time_ms** into **FileProducerConfig**. FileProducer enforces segment boundaries during decode/emission. No container seek, no keyframe-only seek, no CLI behavior.
 
 - **Stops writing TS** at the hard stop; closes or drains the stream cleanly.
 - **No switching yet:** one segment per channel at a time; at boundary, a new LoadPreview/Producer instance can be used, but 8.2 does not require seamless SwitchToLive in the TS (that is 8.3).
@@ -54,7 +54,7 @@ Air passes **start_offset_ms** and **hard_stop_time_ms** into **VideoFileProduce
   - asset_path (or asset_uri)
   - start_offset_ms (e.g. 120_000 for +2 min)
   - hard_stop_time_ms (e.g. grid end in epoch ms)
-- Air passes these into **VideoFileProducerConfig**. VideoFileProducer decodes in-process via libav and enforces segment boundaries during decode/emission. TS is written to the stream FD from the emitted frame stream; Python serves it.
+- Air passes these into **FileProducerConfig**. FileProducer decodes in-process via libav and enforces segment boundaries during decode/emission. TS is written to the stream FD from the emitted frame stream; Python serves it.
 
 ## Tests
 

@@ -1,14 +1,14 @@
 // Repository: Retrovue-playout
-// Component: Producer Slot
-// Purpose: Implementation of ProducerSlot.
+// Component: Producer Bus
+// Purpose: Implementation of ProducerBus.
 // Copyright (c) 2025 RetroVue
 
-#include "retrovue/runtime/ProducerSlot.h"
+#include "retrovue/runtime/ProducerBus.h"
 #include "retrovue/producers/IProducer.h"
 
 namespace retrovue {
 
-void ProducerSlot::reset() {
+void ProducerBus::reset() {
   if (producer) {
     if (producer->isRunning()) {
       producer->stop();
@@ -21,4 +21,3 @@ void ProducerSlot::reset() {
 }
 
 } // namespace retrovue
-

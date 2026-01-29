@@ -1,4 +1,4 @@
-# Video File Producer Contract
+# File Producer Contract
 
 _Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](Phase6A-Overview.md) · [Phase6A-2 FileBackedProducer](Phase6A-2-FileBackedProducer.md) · [Renderer Contract](RendererContract.md)_
 
@@ -9,7 +9,7 @@ _Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase Model](.
 
 ## Purpose
 
-Define the observable guarantees for the **Video File Producer** — one kind of execution producer that reads video files and produces decoded frames. File-backed producers may use ffmpeg subprocesses or libav internally; decoding is an implementation detail. This contract specifies **what** the producer guarantees (lifecycle and segment semantics first; output contract when Renderer/TS path exists). **Producers are passive:** they respond to Start/Stop only; the **engine** owns preview/live slots, switch timing, and deadline enforcement. Producers must not self-switch or interpret schedules.
+Define the observable guarantees for the **File Producer** — one kind of execution producer that reads video files and produces decoded frames. File-backed producers may use ffmpeg subprocesses or libav internally; decoding is an implementation detail. This contract specifies **what** the producer guarantees (lifecycle and segment semantics first; output contract when Renderer/TS path exists). **Producers are passive:** they respond to Start/Stop only; the **engine** owns preview/live slots, switch timing, and deadline enforcement. Producers must not self-switch or interpret schedules.
 
 ---
 

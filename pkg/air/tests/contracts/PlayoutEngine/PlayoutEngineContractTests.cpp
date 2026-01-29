@@ -8,10 +8,10 @@
 #include "retrovue/decode/FrameProducer.h"
 #include "retrovue/renderer/FrameRenderer.h"
 #include "retrovue/telemetry/MetricsExporter.h"
-#include "retrovue/runtime/PlayoutControlStateMachine.h"
+#include "retrovue/runtime/PlayoutControl.h"
 #include "retrovue/runtime/PlayoutEngine.h"
 #include "retrovue/runtime/PlayoutController.h"
-#include "retrovue/producers/video_file/VideoFileProducer.h"
+#include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/producers/programmatic/ProgrammaticProducer.h"
 #include "playout.grpc.pb.h"
 #include "playout.pb.h"
@@ -248,19 +248,19 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   // - Ring buffer is NOT flushed during switch
   // - Renderer pipeline is NOT reset during switch
   
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   const int64_t start_time = 1'700'000'000'000'000LL;
   clock->SetEpochUtcUs(start_time);
 
-  // Set up producer factory (Phase 6A.1/6A.2: segment params passed to VideoFileProducer)
+  // Set up producer factory (Phase 6A.1/6A.2: segment params passed to FileProducer)
   controller.setProducerFactory(
       [](const std::string &path, const std::string &asset_id,
          buffer::FrameRingBuffer &rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = path;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -269,7 +269,7 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
 
-        return std::make_unique<producers::video_file::VideoFileProducer>(
+        return std::make_unique<producers::file::FileProducer>(
             config, rb, clk, nullptr);
       });
 
@@ -277,8 +277,8 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://asset1.mp4", "asset-1", buffer, clock));
   
-  const auto &preview1 = controller.getPreviewSlot();
-  auto* preview1_video = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  const auto &preview1 = controller.getPreviewBus();
+  auto* preview1_video = dynamic_cast<producers::file::FileProducer*>(
       preview1.producer.get());
   ASSERT_NE(preview1_video, nullptr);
   EXPECT_TRUE(preview1_video->IsShadowDecodeMode());
@@ -290,7 +290,7 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
 
   // Producer is already started (was started in loadPreviewAsset)
   // FrameRouter will pull from it
-  const auto &live1 = controller.getLiveSlot();
+  const auto &live1 = controller.getLiveBus();
   ASSERT_TRUE(live1.loaded);
   ASSERT_NE(live1.producer, nullptr);
   EXPECT_TRUE(live1.producer->isRunning()) << "Live producer should be running";
@@ -300,7 +300,7 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   int64_t last_live_pts = 0;
   
   // Extract last PTS from live producer if available
-  auto* live1_video = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  auto* live1_video = dynamic_cast<producers::file::FileProducer*>(
       live1.producer.get());
   if (live1_video) {
     last_live_pts = live1_video->GetNextPTS();
@@ -310,8 +310,8 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://asset2.mp4", "asset-2", buffer, clock));
   
-  const auto &preview2 = controller.getPreviewSlot();
-  auto* preview2_video = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  const auto &preview2 = controller.getPreviewBus();
+  auto* preview2_video = dynamic_cast<producers::file::FileProducer*>(
       preview2.producer.get());
   ASSERT_NE(preview2_video, nullptr);
   EXPECT_TRUE(preview2_video->IsShadowDecodeMode());
@@ -326,7 +326,7 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   // Switch to new asset (FrameRouter switches which producer it pulls from)
   ASSERT_TRUE(controller.activatePreviewAsLive());
 
-  const auto &live2 = controller.getLiveSlot();
+  const auto &live2 = controller.getLiveBus();
   EXPECT_TRUE(live2.loaded);
   EXPECT_EQ(live2.asset_id, "asset-2");
   EXPECT_NE(live2.producer, nullptr);
@@ -337,7 +337,7 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   EXPECT_GE(buffer.Size(), 0u) << "Ring buffer should contain frames after switch";
   
   // Verify PTS continuity: preview producer should have aligned PTS
-  auto* live2_video = dynamic_cast<producers::video_file::VideoFileProducer*>(
+  auto* live2_video = dynamic_cast<producers::file::FileProducer*>(
       live2.producer.get());
   if (live2_video && last_live_pts > 0) {
     int64_t preview_first_pts = live2_video->GetNextPTS();
@@ -352,7 +352,7 @@ TEST_F(PlayoutEngineContractTest, BC_007_DualProducerSwitchingSeamlessness)
   EXPECT_TRUE(live2.producer->isRunning()) << "New live producer should be running";
   
   // Preview slot should be empty after switch
-  const auto &preview_after = controller.getPreviewSlot();
+  const auto &preview_after = controller.getPreviewBus();
   EXPECT_FALSE(preview_after.loaded) << "Preview slot should be empty after switch";
 
   // Stop live producer before test teardown so controller destructor does not
@@ -643,7 +643,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_StopChannelIdempotentSuccess)
 
 TEST_F(PlayoutEngineContractTest, Phase6A1_LoadPreviewInstallsIntoPreviewSlot_LiveUnchanged)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
 
@@ -656,20 +656,20 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_LoadPreviewInstallsIntoPreviewSlot_Li
             path, asset_id, start_offset_ms, hard_stop_time_ms});
       });
 
-  EXPECT_FALSE(controller.getPreviewSlot().loaded);
-  EXPECT_FALSE(controller.getLiveSlot().loaded);
+  EXPECT_FALSE(controller.getPreviewBus().loaded);
+  EXPECT_FALSE(controller.getLiveBus().loaded);
 
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://segment.mp4", "seg-1", buffer, clock, 100, 60'000));
 
-  const auto& preview = controller.getPreviewSlot();
+  const auto& preview = controller.getPreviewBus();
   EXPECT_TRUE(preview.loaded) << "LoadPreview must install segment into preview slot";
   EXPECT_EQ(preview.asset_id, "seg-1");
   EXPECT_EQ(preview.file_path, "test://segment.mp4");
   ASSERT_NE(preview.producer, nullptr);
   EXPECT_TRUE(preview.producer->isRunning());
 
-  const auto& live = controller.getLiveSlot();
+  const auto& live = controller.getLiveBus();
   EXPECT_FALSE(live.loaded) << "Live must be unchanged until SwitchToLive";
 
   auto* stub = dynamic_cast<StubProducer*>(preview.producer.get());
@@ -682,7 +682,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_LoadPreviewInstallsIntoPreviewSlot_Li
 
 TEST_F(PlayoutEngineContractTest, Phase6A1_SwitchToLivePromotesPreview_StopsOldLive_ClearsPreview)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
 
@@ -698,14 +698,14 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_SwitchToLivePromotesPreview_StopsOldL
   ASSERT_TRUE(controller.loadPreviewAsset("test://a.mp4", "asset-a", buffer, clock, 0, 0));
   ASSERT_TRUE(controller.activatePreviewAsLive());
 
-  const auto& live1 = controller.getLiveSlot();
+  const auto& live1 = controller.getLiveBus();
   ASSERT_TRUE(live1.loaded);
   ASSERT_EQ(live1.asset_id, "asset-a");
   EXPECT_TRUE(live1.producer->isRunning());
-  EXPECT_FALSE(controller.getPreviewSlot().loaded);
+  EXPECT_FALSE(controller.getPreviewBus().loaded);
 
   ASSERT_TRUE(controller.loadPreviewAsset("test://b.mp4", "asset-b", buffer, clock, 0, 0));
-  const auto& preview2 = controller.getPreviewSlot();
+  const auto& preview2 = controller.getPreviewBus();
   ASSERT_TRUE(preview2.loaded);
   ASSERT_EQ(preview2.asset_id, "asset-b");
 
@@ -713,18 +713,18 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_SwitchToLivePromotesPreview_StopsOldL
   // Contract: old live is stopped before swap; preview slot cleared.
 
 
-  const auto& live2 = controller.getLiveSlot();
+  const auto& live2 = controller.getLiveBus();
   EXPECT_TRUE(live2.loaded);
   EXPECT_EQ(live2.asset_id, "asset-b");
   EXPECT_TRUE(live2.producer->isRunning());
 
-  const auto& preview_after = controller.getPreviewSlot();
+  const auto& preview_after = controller.getPreviewBus();
   EXPECT_FALSE(preview_after.loaded) << "Preview slot must be cleared after SwitchToLive";
 }
 
 TEST_F(PlayoutEngineContractTest, Phase6A1_ProducerReceivesSegmentParams_HardStopRecorded)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
 
@@ -742,7 +742,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_ProducerReceivesSegmentParams_HardSto
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://seg.mp4", "seg-id", buffer, clock, start_offset_ms, hard_stop_time_ms));
 
-  const auto& preview = controller.getPreviewSlot();
+  const auto& preview = controller.getPreviewBus();
   auto* stub = dynamic_cast<StubProducer*>(preview.producer.get());
   ASSERT_NE(stub, nullptr);
   EXPECT_EQ(stub->segmentParams().asset_path, "test://seg.mp4");
@@ -754,7 +754,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_ProducerReceivesSegmentParams_HardSto
 
 TEST_F(PlayoutEngineContractTest, Phase6A1_StopReleasesProducer_ObservableStoppedState)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
 
@@ -769,7 +769,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_StopReleasesProducer_ObservableStoppe
 
   ASSERT_TRUE(controller.loadPreviewAsset("test://x.mp4", "x", buffer, clock, 0, 0));
   ASSERT_TRUE(controller.activatePreviewAsLive());
-  const auto& live = controller.getLiveSlot();
+  const auto& live = controller.getLiveBus();
   ASSERT_TRUE(live.loaded);
   ASSERT_TRUE(live.producer->isRunning());
   auto* stub = dynamic_cast<StubProducer*>(live.producer.get());
@@ -794,7 +794,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_HardStopEnforced_ProducerStopsByDeadl
 
 TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProducer)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   clock->SetEpochUtcUs(1'700'000'000'000'000LL);
@@ -804,7 +804,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProduc
          buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = path;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -812,14 +812,14 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProduc
         config.stub_mode = true;
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
-        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+        return std::make_unique<producers::file::FileProducer>(config, rb, clk, nullptr);
       });
 
   const int64_t start_offset_ms = 60'000;
   const int64_t hard_stop_time_ms = 90'000;
   ASSERT_TRUE(controller.loadPreviewAsset(
       "test://seg.mp4", "seg", buffer, clock, start_offset_ms, hard_stop_time_ms));
-  const auto& preview = controller.getPreviewSlot();
+  const auto& preview = controller.getPreviewBus();
   ASSERT_TRUE(preview.loaded);
   EXPECT_TRUE(preview.producer->isRunning());
   // Params are in config and honored (seek in real decode; hard_stop in loop)
@@ -828,7 +828,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProduc
 
 TEST_F(PlayoutEngineContractTest, Phase6A2_InvalidPath_LoadPreviewFails)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
 
@@ -837,7 +837,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_InvalidPath_LoadPreviewFails)
          buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = path;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -845,7 +845,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_InvalidPath_LoadPreviewFails)
         config.stub_mode = false;  // Real decode path so open fails for bad path
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
-        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+        return std::make_unique<producers::file::FileProducer>(config, rb, clk, nullptr);
       });
 
   bool ok = controller.loadPreviewAsset(
@@ -857,7 +857,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A2_InvalidPath_LoadPreviewFails)
 
 TEST_F(PlayoutEngineContractTest, Phase6A3_LoadPreviewSwitchToLive_ProgrammaticProducer)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   clock->SetEpochUtcUs(1'700'000'000'000'000LL);
@@ -880,7 +880,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_LoadPreviewSwitchToLive_ProgrammaticP
 
   ASSERT_TRUE(controller.loadPreviewAsset(
       "programmatic://test", "prog-asset", buffer, clock, 0, 0));
-  const auto& preview = controller.getPreviewSlot();
+  const auto& preview = controller.getPreviewBus();
   ASSERT_TRUE(preview.loaded);
   ASSERT_TRUE(preview.producer->isRunning());
 
@@ -888,7 +888,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_LoadPreviewSwitchToLive_ProgrammaticP
   ASSERT_NE(prog, nullptr) << "Preview must be ProgrammaticProducer (no file/ffmpeg)";
 
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
-  const auto& live = controller.getLiveSlot();
+  const auto& live = controller.getLiveBus();
   ASSERT_TRUE(live.loaded);
   ASSERT_TRUE(live.producer->isRunning());
   ASSERT_NE(dynamic_cast<producers::programmatic::ProgrammaticProducer*>(live.producer.get()), nullptr);
@@ -903,7 +903,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_ProgrammaticProducer_StopsAtHardStopT
 
 TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammatic)
 {
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   clock->SetEpochUtcUs(1'700'000'000'000'000LL);
@@ -913,7 +913,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammati
                          std::shared_ptr<retrovue::timing::MasterClock> clk,
                          int64_t start_offset_ms, int64_t hard_stop_time_ms)
       -> std::unique_ptr<retrovue::producers::IProducer> {
-    producers::video_file::ProducerConfig config;
+    producers::file::ProducerConfig config;
     config.asset_uri = path;
     config.target_width = 1920;
     config.target_height = 1080;
@@ -921,7 +921,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammati
     config.stub_mode = true;
     config.start_offset_ms = start_offset_ms;
     config.hard_stop_time_ms = hard_stop_time_ms;
-    return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+    return std::make_unique<producers::file::FileProducer>(config, rb, clk, nullptr);
   };
 
   auto prog_factory = [](const std::string& path, const std::string& asset_id,
@@ -942,14 +942,14 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammati
 
   controller.setProducerFactory(file_factory);
   ASSERT_TRUE(controller.loadPreviewAsset("test://a.mp4", "asset-a", buffer, clock, 0, 0));
-  // VideoFileProducer uses shadow decode; wait for first frame so SwitchToLive can succeed
+  // FileProducer uses shadow decode; wait for first frame so SwitchToLive can succeed
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
   {
-    const auto& live = controller.getLiveSlot();
+    const auto& live = controller.getLiveBus();
     ASSERT_TRUE(live.loaded);
     ASSERT_TRUE(live.producer->isRunning());
-    ASSERT_NE(dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get()), nullptr);
+    ASSERT_NE(dynamic_cast<producers::file::FileProducer*>(live.producer.get()), nullptr);
     live.producer->stop();
   }
 
@@ -957,7 +957,7 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammati
   ASSERT_TRUE(controller.loadPreviewAsset("programmatic://bars", "bars", buffer, clock, 0, 0));
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
   {
-    const auto& live = controller.getLiveSlot();
+    const auto& live = controller.getLiveBus();
     ASSERT_TRUE(live.loaded);
     ASSERT_TRUE(live.producer->isRunning());
     ASSERT_NE(dynamic_cast<producers::programmatic::ProgrammaticProducer*>(live.producer.get()), nullptr);
@@ -969,9 +969,9 @@ TEST_F(PlayoutEngineContractTest, Phase6A3_SwitchBetweenFileBackedAndProgrammati
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
   {
-    const auto& live = controller.getLiveSlot();
+    const auto& live = controller.getLiveBus();
     ASSERT_TRUE(live.loaded);
-    ASSERT_NE(dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get()), nullptr);
+    ASSERT_NE(dynamic_cast<producers::file::FileProducer*>(live.producer.get()), nullptr);
     live.producer->stop();
   }
 }
@@ -995,7 +995,7 @@ TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAsse
     GTEST_SKIP() << "Phase 8.3 sample assets not found (SampleA.mp4, SampleB.mp4). Set RETROVUE_TEST_VIDEO_PATH_A/B or add assets/SampleA.mp4 and assets/SampleB.mp4.";
   }
 
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   clock->SetEpochUtcUs(1'700'000'000'000'000LL);
@@ -1006,7 +1006,7 @@ TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAsse
          std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = path;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -1014,14 +1014,14 @@ TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAsse
         config.stub_mode = false;
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
-        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+        return std::make_unique<producers::file::FileProducer>(config, rb, clk, nullptr);
       });
 
   // LoadPreview(SampleA) → SwitchToLive
   ASSERT_TRUE(controller.loadPreviewAsset(path_a, "sample-a", buffer, clock, 0, 0));
-  const auto& preview_a = controller.getPreviewSlot();
+  const auto& preview_a = controller.getPreviewBus();
   ASSERT_TRUE(preview_a.loaded);
-  auto* video_a = dynamic_cast<producers::video_file::VideoFileProducer*>(preview_a.producer.get());
+  auto* video_a = dynamic_cast<producers::file::FileProducer*>(preview_a.producer.get());
   ASSERT_NE(video_a, nullptr);
   EXPECT_TRUE(video_a->IsShadowDecodeMode());
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -1029,7 +1029,7 @@ TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAsse
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   }
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
-  const auto& live_a = controller.getLiveSlot();
+  const auto& live_a = controller.getLiveBus();
   ASSERT_TRUE(live_a.loaded);
   EXPECT_EQ(live_a.file_path, path_a);
   ASSERT_TRUE(live_a.producer->isRunning());
@@ -1037,19 +1037,19 @@ TEST_F(PlayoutEngineContractTest, Phase83_LoadPreviewSwitchToLive_RealSampleAsse
 
   // LoadPreview(SampleB) → SwitchToLive
   ASSERT_TRUE(controller.loadPreviewAsset(path_b, "sample-b", buffer, clock, 0, 0));
-  const auto& preview_b = controller.getPreviewSlot();
+  const auto& preview_b = controller.getPreviewBus();
   ASSERT_TRUE(preview_b.loaded);
-  auto* video_b = dynamic_cast<producers::video_file::VideoFileProducer*>(preview_b.producer.get());
+  auto* video_b = dynamic_cast<producers::file::FileProducer*>(preview_b.producer.get());
   ASSERT_NE(video_b, nullptr);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
-  const auto& live_b = controller.getLiveSlot();
+  const auto& live_b = controller.getLiveBus();
   ASSERT_TRUE(live_b.loaded);
   EXPECT_EQ(live_b.file_path, path_b);
   ASSERT_TRUE(live_b.producer->isRunning());
   live_b.producer->stop();
 
-  const auto& preview_after = controller.getPreviewSlot();
+  const auto& preview_after = controller.getPreviewBus();
   EXPECT_FALSE(preview_after.loaded);
 }
 
@@ -1062,7 +1062,7 @@ TEST_F(PlayoutEngineContractTest, Phase88_ProducerEofDoesNotStopProducer)
     GTEST_SKIP() << "Phase 8.8 requires a sample asset (e.g. SampleA.mp4). Set RETROVUE_TEST_VIDEO_PATH_A or add assets.";
   }
 
-  runtime::PlayoutControlStateMachine controller;
+  runtime::PlayoutControl controller;
   buffer::FrameRingBuffer buffer(60);
   auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
   clock->SetEpochUtcUs(1'700'000'000'000'000LL);
@@ -1073,7 +1073,7 @@ TEST_F(PlayoutEngineContractTest, Phase88_ProducerEofDoesNotStopProducer)
          std::shared_ptr<retrovue::timing::MasterClock> clk,
          int64_t start_offset_ms, int64_t hard_stop_time_ms)
           -> std::unique_ptr<retrovue::producers::IProducer> {
-        producers::video_file::ProducerConfig config;
+        producers::file::ProducerConfig config;
         config.asset_uri = p;
         config.target_width = 1920;
         config.target_height = 1080;
@@ -1081,15 +1081,15 @@ TEST_F(PlayoutEngineContractTest, Phase88_ProducerEofDoesNotStopProducer)
         config.stub_mode = false;
         config.start_offset_ms = start_offset_ms;
         config.hard_stop_time_ms = hard_stop_time_ms;
-        return std::make_unique<producers::video_file::VideoFileProducer>(config, rb, clk, nullptr);
+        return std::make_unique<producers::file::FileProducer>(config, rb, clk, nullptr);
       });
 
   ASSERT_TRUE(controller.loadPreviewAsset(path, "phase88", buffer, clock, 0, 0));
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   ASSERT_TRUE(controller.activatePreviewAsLive(nullptr));
-  const auto& live = controller.getLiveSlot();
+  const auto& live = controller.getLiveBus();
   ASSERT_TRUE(live.loaded);
-  auto* video = dynamic_cast<producers::video_file::VideoFileProducer*>(live.producer.get());
+  auto* video = dynamic_cast<producers::file::FileProducer*>(live.producer.get());
   ASSERT_NE(video, nullptr);
 
   // Run long enough for a short file to hit EOF (demux faster than real time). Phase 8.8: producer

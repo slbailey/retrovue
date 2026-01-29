@@ -1,10 +1,10 @@
 // Repository: Retrovue-playout
-// Component: Video File Producer
-// Purpose: Decodes local video files and produces frames for the ring buffer.
+// Component: File Producer
+// Purpose: Decodes local video/audio files and produces frames for the ring buffer.
 // Copyright (c) 2025 RetroVue
 
-#ifndef RETROVUE_PRODUCERS_VIDEO_FILE_VIDEO_FILE_PRODUCER_H_
-#define RETROVUE_PRODUCERS_VIDEO_FILE_VIDEO_FILE_PRODUCER_H_
+#ifndef RETROVUE_PRODUCERS_FILE_FILE_PRODUCER_H_
+#define RETROVUE_PRODUCERS_FILE_FILE_PRODUCER_H_
 
 #include <atomic>
 #include <chrono>
@@ -29,7 +29,7 @@ struct AVFrame;
 struct AVPacket;
 struct SwsContext;
 
-namespace retrovue::producers::video_file
+namespace retrovue::producers::file
 {
 
   // Producer state machine
@@ -41,7 +41,7 @@ namespace retrovue::producers::video_file
     STOPPING
   };
 
-  // ProducerConfig holds configuration for video file producer (Phase 6A.2 segment params).
+  // ProducerConfig holds configuration for file producer (Phase 6A.2 segment params).
   struct ProducerConfig
   {
     std::string asset_uri;       // URI or path to video file
@@ -66,8 +66,8 @@ namespace retrovue::producers::video_file
   // Event callback for producer events (for test harness)
   using ProducerEventCallback = std::function<void(const std::string &event_type, const std::string &message)>;
 
-  // VideoFileProducer is a self-contained decoder that reads video files,
-  // decodes them internally using FFmpeg, and produces decoded YUV420 frames.
+  // FileProducer is a self-contained decoder that reads video/audio files,
+  // decodes them internally using FFmpeg, and produces decoded YUV420 frames and PCM audio.
   //
   // Responsibilities:
   // - Read video files (MP4, MKV, MOV, etc.)
@@ -81,21 +81,21 @@ namespace retrovue::producers::video_file
   // - Self-contained: performs both reading and decoding internally
   // - Outputs only decoded frames (never encoded packets)
   // - Internal decoder subsystem: demuxer, decoder, scaler, frame assembly
-  class VideoFileProducer : public retrovue::producers::IProducer
+  class FileProducer : public retrovue::producers::IProducer
   {
   public:
     // Constructs a producer with the given configuration and output buffer.
-    VideoFileProducer(
+    FileProducer(
         const ProducerConfig &config,
         buffer::FrameRingBuffer &output_buffer,
         std::shared_ptr<timing::MasterClock> clock = nullptr,
         ProducerEventCallback event_callback = nullptr);
 
-    ~VideoFileProducer();
+    ~FileProducer();
 
     // Disable copy and move
-    VideoFileProducer(const VideoFileProducer &) = delete;
-    VideoFileProducer &operator=(const VideoFileProducer &) = delete;
+    FileProducer(const FileProducer &) = delete;
+    FileProducer &operator=(const FileProducer &) = delete;
 
     // IProducer interface
     bool start() override;
@@ -225,6 +225,6 @@ namespace retrovue::producers::video_file
     int64_t pts_offset_us_;  // PTS offset for alignment (added to frame PTS)
   };
 
-} // namespace retrovue::producers::video_file
+} // namespace retrovue::producers::file
 
-#endif // RETROVUE_PRODUCERS_VIDEO_FILE_VIDEO_FILE_PRODUCER_H_
+#endif // RETROVUE_PRODUCERS_FILE_FILE_PRODUCER_H_
