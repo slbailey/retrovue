@@ -8,6 +8,7 @@
 
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -147,8 +148,16 @@ class EncoderPipeline {
   AVDictionary* muxer_opts_;
   
   // Enforce strictly increasing DTS for mpegts muxer (and PTS for codec input)
-  int64_t last_mux_dts_;
+  // Separate trackers for video and audio to avoid timing corruption when interleaved
+  int64_t last_video_mux_dts_;
+  int64_t last_audio_mux_dts_;
   int64_t last_input_pts_;
+
+  // Force first frame to be an I-frame (keyframe) to avoid initial stutter
+  bool first_frame_encoded_;
+
+  // Video frame counter for CFR PTS generation (resets per session)
+  int64_t video_frame_count_;
 
   // Ensure packet DTS (and PTS) are strictly increasing before av_interleaved_write_frame; update last_mux_dts_.
   void EnforceMonotonicDts();
@@ -160,10 +169,24 @@ class EncoderPipeline {
 
   static int AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size);
   int HandleAVIOWrite(uint8_t* buf, int buf_size);
+
+  // OutputTiming: Gate packet emission to enforce real-time delivery discipline.
+  // See OutputTimingContract.md for invariants.
+  // Gating happens after av_packet_rescale_ts(), before av_interleaved_write_frame().
+  void GateOutputTiming(int64_t packet_pts_90k);
+
+  // OutputTiming state (per OutputTimingContract.md)
+  bool output_timing_anchor_set_;
+  int64_t output_timing_anchor_pts_;  // First packet's PTS (90kHz timebase)
+  std::chrono::steady_clock::time_point output_timing_anchor_wall_;
 #endif
 
   MpegTSPlayoutSinkConfig config_;
   bool initialized_;
+
+ public:
+  // Reset output timing anchor (call on SwitchToLive per OutputTimingContract.md §6)
+  void ResetOutputTiming();
 };
 
 }  // namespace retrovue::playout_sinks::mpegts
