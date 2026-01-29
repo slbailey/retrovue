@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Describe intent only: a static, declarative plan for the mock channel. **Duration-free**: no clock math, no offsets, no durations, no playout—just the structure of “what runs in each grid” (item identity and order).
+Describe intent only: a static, declarative plan for the mock channel. **Duration-free**: no clock math, no offsets, no durations, no playout—just the structure of "what runs in each grid" (item identity and order).
 
 ## Contract
 
@@ -11,7 +11,7 @@ Describe intent only: a static, declarative plan for the mock channel. **Duratio
 - For **every** grid segment (30-minute block):
   - **Item A**: samplecontent (e.g. `samplecontent` or asset id)
   - **Item B**: filler (e.g. `filler` or asset id)
-- **Order only**; **no durations, no offsets, no timing** in the plan itself. Phase 3 introduces a separate “mock duration config” to resolve which item is active; the plan stays purely structural.
+- **Order only**; **no durations, no offsets, no timing** in the plan itself. Phase 3 introduces a separate "mock duration config" to resolve which item is active; the plan stays purely structural.
 
 **Inputs**: none (static plan).
 
@@ -19,8 +19,8 @@ Describe intent only: a static, declarative plan for the mock channel. **Duratio
 
 ## Execution (this phase)
 
-- **No process required.** Build the plan data structure and optionally a loader or accessor that returns “plan for any given day.”
-- **Dependency**: May use Phase 1 grid boundaries to define “per grid” only if needed for structure; no elapsed/remaining math here.
+- **No process required.** Build the plan data structure and optionally a loader or accessor that returns "plan for any given day."
+- **Dependency**: May use Phase 1 grid boundaries to define "per grid" only if needed for structure; no elapsed/remaining math here.
 
 ## Test scaffolding
 

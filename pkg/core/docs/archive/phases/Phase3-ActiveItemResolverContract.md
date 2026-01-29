@@ -24,7 +24,7 @@ So: `elapsed_in_grid_ms < filler_start_ms` → samplecontent; `elapsed_in_grid_m
 - Grid timing: `grid_start`, `elapsed_in_grid_ms` (from Phase 1; elapsed in ms)
 - Mock duration config: `sample_duration_ms`, `grid_duration_ms`, `filler_start_ms` (as above)
 
-**Resolve**: the **active ScheduleItem** (conceptual: “samplecontent” or “filler”) for the current moment.
+**Resolve**: the **active ScheduleItem** (conceptual: "samplecontent" or "filler") for the current moment.
 
 **Inputs**: SchedulePlan, grid timing info, mock duration config.
 

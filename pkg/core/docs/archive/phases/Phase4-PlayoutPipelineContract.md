@@ -16,15 +16,15 @@ Even if implemented inline, the contract defines a **PlayoutSegment** so broadca
 
 **Units:** All offsets are **milliseconds (int64)**. Matches proto `*_ms`; avoids float drift; keeps tests exact; keeps Air simpler. You can display seconds elsewhere if needed.
 
-**end_offset is optional and advisory.** If both **hard_stop_time** and **end_offset** are present, **hard_stop_time is authoritative**; end_offset is advisory only and may be ignored by Air. This protects against later additions of end_offset “for convenience” without changing stopping behaviour.
+**end_offset is optional and advisory.** If both **hard_stop_time** and **end_offset** are present, **hard_stop_time is authoritative**; end_offset is advisory only and may be ignored by Air. This protects against later additions of end_offset "for convenience" without changing stopping behaviour.
 
 **Precedence (stopping):** If **hard_stop_time** (or wire: `hard_stop_time_ms`) is present, it is **authoritative**. End_offset / duration is derived and **never overrides** wall-clock time. Grid alignment must always win; duration math can drift. Air has a single stopping rule: stop at or before the hard stop. This keeps behaviour deterministic.
 
-**Offset vs time:** **start_offset_ms** is **media-relative only, never wall-clock-relative**. That keeps segment semantics clean and avoids “start at wall-clock T” creeping into Air. Asymmetry is intentional: Air **seeks by offset**, **stops by time**.
+**Offset vs time:** **start_offset_ms** is **media-relative only, never wall-clock-relative**. That keeps segment semantics clean and avoids "start at wall-clock T" creeping into Air. Asymmetry is intentional: Air **seeks by offset**, **stops by time**.
 
-**Air stopping rule (contractual):** Air may stop **at or before** hard_stop_time_ms, but **must never play past it**. This matters for encoder latency, PTS rounding, and real hardware. Broadcast systems allow “≤ boundary”, never “> boundary”.
+**Air stopping rule (contractual):** Air may stop **at or before** hard_stop_time_ms, but **must never play past it**. This matters for encoder latency, PTS rounding, and real hardware. Broadcast systems allow "≤ boundary", never "> boundary".
 
-ChannelManager (and gRPC) use this shape so that: the mock channel stays simple, broadcast semantics (switch at boundary) stay correct, and future optimizations (e.g. preload windows, trim ranges) don’t break the contract.
+ChannelManager (and gRPC) use this shape so that: the mock channel stays simple, broadcast semantics (switch at boundary) stay correct, and future optimizations (e.g. preload windows, trim ranges) don't break the contract.
 
 ## Contract
 

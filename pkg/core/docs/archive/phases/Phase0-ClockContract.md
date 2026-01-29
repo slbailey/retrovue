@@ -17,7 +17,7 @@ The following flow applies once the system is runnable:
 - `ProgramDirector.start_channel(channel_id, now)` or  
 - `ProgramDirector.ensure_channel_running(channel_id)`
 
-Tests call this API (or the equivalent in-process path) and assert on responses, stream metadata, or side effects—**no manual interaction required**. No need for a separate “TuneInSimulator” abstraction; the direct API is the contract.
+Tests call this API (or the equivalent in-process path) and assert on responses, stream metadata, or side effects—**no manual interaction required**. No need for a separate "TuneInSimulator" abstraction; the direct API is the contract.
 
 ### Phase scope: HTTP and real playout only in Phase 7
 
