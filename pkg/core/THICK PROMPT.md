@@ -136,10 +136,10 @@ Core runtime contracts include:
 ────────────────────────
 HTTP SERVING SURFACE (VIEWERS)
 ────────────────────────
-ChannelManager exposes an HTTP interface:
+ProgramDirector exposes the HTTP interface (single server, post–PD/CM collapse):
 
-- GET /channellist.m3u
-  - Returns an M3U playlist of available channels (only those with valid schedules).
+- GET /channels
+  - Returns JSON channel list: `{"channels": [{"id": "...", "name": "..."}, ...]}`.
 
 - GET /channel/{id}.ts
   - Returns a continuous MPEG-TS stream for that channel.

@@ -9,15 +9,15 @@
 
 **retrovue is the station. Everything else is internal.**
 
-The system process is `retrovue`. There is no public or user-visible concept of "Air", "ChannelManagerDaemon", or "Phase8ProgramDirector". These remain as internal implementation details only.
+The system process is `retrovue`. There is no public or user-visible concept of "Air" or "Phase8ProgramDirector". These remain as internal implementation details only.
 
 - **RetroVue** is the product name
 - **retrovue** is the running process
-- **ProgramDirector** is described as "the control plane inside RetroVue"
-- **ChannelManagerDaemon** is the RetroVue Core runtime (internal)
+- **ProgramDirector** is the control plane inside RetroVue: it owns the single HTTP server, the ChannelManager registry (creation, health, fanout, teardown), and all viewer routing. There is no separate "ChannelManagerDaemon"; that responsibility was collapsed into ProgramDirector (single process, single port).
+- **ChannelManager** is the per-channel runtime controller; instances exist only in ProgramDirector's registry and have no autonomous lifecycle.
 - **Air** is the internal playout engine (internal)
 
-The internal playout engine cannot be run independently. The RetroVue Core runtime is not a public daemon. All of these are implementation details of the RetroVue product.
+The internal playout engine cannot be run independently. All of these are implementation details of the RetroVue product.
 
 ---
 

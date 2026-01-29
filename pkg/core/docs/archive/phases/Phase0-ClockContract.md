@@ -1,5 +1,7 @@
 # Phase 0 — Clock Contract
 
+> **Historical:** This doc described the pre–PD/CM collapse flow (ChannelManagerDaemon as provider). Current architecture: ProgramDirector owns the ChannelManager registry; single HTTP server; stream path is **GET /channel/{channel_id}.ts**. See `docs/core/ProgramDirector-ChannelManagerDaemon-Collapse.md`.
+
 ## Purpose
 
 Establish a single, testable time authority. All downstream logic (grid math, schedule resolution, ChannelManager timing) must consume time only through this interface.
@@ -9,9 +11,9 @@ Establish a single, testable time authority. All downstream logic (grid math, sc
 The following flow applies once the system is runnable:
 
 1. **Start RetroVue**: `retrovue program-director start [options]` (or equivalent) starts the control plane.
-2. **ProgramDirector** starts and binds its HTTP server; it holds a reference to a **ChannelManagerProvider** (e.g. ChannelManagerDaemon).
-3. **ChannelManagerDaemon** runs (in-process or in a thread). It does **not** pre-spawn ChannelManagers for every channel.
-4. **Simulated tune-in**: For Phases 0–6, tune-in is simulated via a **direct ProgramDirector API** (no HTTP). For Phase 7, tune-in uses HTTP (e.g. `GET /channels/{channel_id}.ts`). In both cases, ProgramDirector (or the test) asks the provider for a ChannelManager for that `channel_id`; the daemon creates a ChannelManager on first use; that ChannelManager may start a Producer/Air process (and in Phase 7 serve the stream over HTTP).
+2. **ProgramDirector** starts and binds its HTTP server; it holds (or embeds) the ChannelManager registry (post-collapse: no separate daemon).
+3. ChannelManagers are created on first use by ProgramDirector (no pre-spawn for every channel).
+4. **Simulated tune-in**: For Phases 0–6, tune-in is simulated via a **direct ProgramDirector API** (no HTTP). For Phase 7, tune-in uses HTTP (e.g. `GET /channel/{channel_id}.ts`). In both cases, ProgramDirector creates or returns a ChannelManager for that `channel_id`; that ChannelManager may start a Producer/Air process (and in Phase 7 serve the stream over HTTP).
 
 **Testability**: All phases must be testable via a **direct ProgramDirector API**. HTTP is only required in the final end-to-end phase (Phase 7). Make the path explicit, for example:
 - `ProgramDirector.start_channel(channel_id, now)` or  

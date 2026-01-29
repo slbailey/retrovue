@@ -67,27 +67,18 @@ ChannelManager started:
 
 ## HTTP API Contract
 
-### GET /channellist.m3u
+### GET /channels
 
-**Purpose:** Channel discovery playlist.
+**Purpose:** Channel discovery (JSON). ProgramDirector serves this; single HTTP server (post–PD/CM collapse).
 
 **Response:**
 - Status: `200 OK`
-- Content-Type: `application/vnd.apple.mpegurl`
-- Body: M3U playlist listing all available channels
-
-**Example:**
-```
-#EXTM3U
-#EXTINF:-1,Retro1
-http://localhost:9000/channel/retro1.ts
-#EXTINF:-1,Retro2
-http://localhost:9000/channel/retro2.ts
-```
+- Content-Type: `application/json`
+- Body: `{"channels": [{"id": "<channel_id>", "name": "<name>"}, ...]}`
 
 **Behavior:**
-- Only channels with valid schedules are listed
-- Channels with errors are excluded (no partial entries)
+- Lists channel IDs in the active registry (on-demand: channels appear after first tune-in or pre-warm)
+- Stream URL for a channel is `GET /channel/{id}.ts` on the same host:port
 
 ---
 
@@ -118,7 +109,7 @@ http://localhost:9000/channel/retro2.ts
 
 **Observable behavior:**
 - All channel endpoints share the same host:port
-- `/channellist.m3u` lists all channels from one server
+- `GET /channels` lists all channels from one server
 
 ---
 
