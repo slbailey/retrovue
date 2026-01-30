@@ -236,3 +236,255 @@ class ScheduleDayConfig:
     filler_path: str                       # Path to filler content
     filler_duration_seconds: float         # Duration of filler file
     programming_day_start_hour: int = 6    # Broadcast day start
+
+
+# =============================================================================
+# Phase 3 Types: Dynamic Content Selection
+# =============================================================================
+
+from dataclasses import field
+from enum import Enum
+
+
+class ProgramRefType(Enum):
+    """
+    Type of content reference in a ScheduleSlot.
+
+    Phase 3 introduces dynamic content selection where scheduled slots
+    can reference Programs (requiring episode selection), direct Assets,
+    or literal file paths (Phase 2 compatibility).
+    """
+    PROGRAM = "program"   # Requires episode selection via play_mode
+    ASSET = "asset"       # Direct asset reference (no selection logic)
+    FILE = "file"         # Literal file path (Phase 2 backward compatibility)
+
+
+@dataclass
+class ProgramRef:
+    """
+    Reference to schedulable content.
+
+    Can reference:
+    - A Program (series/collection requiring episode selection)
+    - A direct Asset (specific movie or special)
+    - A literal file path (backward compatibility with Phase 2)
+    """
+    ref_type: ProgramRefType
+    ref_id: str  # Program ID, Asset ID, or file path
+
+
+@dataclass
+class ScheduleSlot:
+    """
+    A scheduled program slot within a ScheduleDay.
+
+    Phase 3 data structure that replaces ScheduleEntry. References a Program
+    or Asset which is resolved to a specific episode/asset during EPG generation.
+
+    Note: ScheduleSlot replaces ScheduleEntry for Phase 3. ScheduleEntry
+    remains for Phase 2 compatibility.
+    """
+    slot_time: time              # Grid-aligned time when this slot starts
+    program_ref: ProgramRef      # Reference to Program, Asset, or direct file
+    duration_seconds: float      # Duration of the slot
+    label: str = ""              # Optional label for debugging/logging
+
+
+@dataclass
+class Episode:
+    """
+    An episode within a Program's episode list.
+
+    Represents a single playable content item with metadata for
+    EPG display and playout.
+    """
+    episode_id: str              # Unique identifier for this episode
+    title: str                   # Episode title for EPG display
+    file_path: str               # Path to the media file
+    duration_seconds: float      # Actual content duration
+
+
+@dataclass
+class Program:
+    """
+    A program with episode selection logic.
+
+    Phase 3 entity representing a series or collection that requires
+    episode selection based on play_mode.
+    """
+    program_id: str              # Unique identifier
+    name: str                    # Program name for EPG display
+    play_mode: str               # "sequential", "random", or "manual"
+    episodes: list[Episode]      # Ordered list of episodes
+
+
+@dataclass
+class ResolvedAsset:
+    """
+    A fully resolved asset ready for playout.
+
+    Contains both the physical file path for playout and display metadata
+    for EPG presentation. Created during EPG generation; immutable once created.
+    """
+    file_path: str                          # Physical file path for playout
+    asset_id: str | None = None             # Asset ID if from catalog
+    title: str = ""                         # Display title (e.g., "Cheers")
+    episode_title: str | None = None        # Episode title (e.g., "Simon Says")
+    episode_id: str | None = None           # Episode identifier (e.g., "S02E05")
+    content_duration_seconds: float = 0.0   # Actual duration of content
+
+
+@dataclass
+class ResolvedSlot:
+    """
+    A ScheduleSlot with its content fully resolved.
+
+    Created during EPG generation. The resolved_asset is immutable
+    once the EPG is published.
+    """
+    slot_time: time              # Grid-aligned time
+    program_ref: ProgramRef      # Original reference (for display)
+    resolved_asset: ResolvedAsset  # The specific asset that will air
+    duration_seconds: float      # Duration of the slot
+    label: str = ""              # Display label
+
+
+@dataclass
+class SequenceState:
+    """
+    Snapshot of sequential program positions at resolution time.
+
+    Captures which episode each sequential program was at when
+    a ScheduleDay was resolved. Used for deterministic replay
+    and debugging.
+
+    INV-P3-004: State advances only at resolution time, never during playout.
+    """
+    positions: dict[str, int] = field(default_factory=dict)  # program_id -> episode_index
+    as_of: datetime | None = None  # When this state was captured
+
+
+@dataclass
+class ResolvedScheduleDay:
+    """
+    A ScheduleDay with all content resolved to specific assets.
+
+    Created during EPG generation. Once created, the resolved slots
+    are immutable—the same episodes will air regardless of when
+    playout is requested.
+
+    INV-P3-002: EPG Identity Immutability - once published, identities cannot change.
+    INV-P3-008: Resolution Idempotence - same (channel, day) resolved at most once.
+    """
+    programming_day_date: date
+    resolved_slots: list[ResolvedSlot]  # Ordered by slot_time
+    resolution_timestamp: datetime      # When this day was resolved
+    sequence_state: SequenceState       # State snapshot at resolution time
+
+
+@dataclass
+class EPGEvent:
+    """
+    An event in the Electronic Program Guide.
+
+    Represents a resolved, immutable entry in the EPG that viewers
+    can browse. Once published, the identity cannot change.
+
+    INV-P3-003: Resolution Independence - EPG exists even with no viewers.
+    """
+    channel_id: str
+    start_time: datetime         # Absolute start time (UTC)
+    end_time: datetime           # Absolute end time (UTC)
+    title: str                   # Program title
+    episode_title: str | None    # Episode title (if applicable)
+    episode_id: str | None       # Episode identifier (if applicable)
+    resolved_asset: ResolvedAsset  # The resolved asset
+    programming_day_date: date     # Which programming day this belongs to
+
+
+class ProgramCatalog(Protocol):
+    """
+    Abstraction that provides Program definitions.
+
+    Implementations may read from a database or in-memory cache.
+    """
+
+    def get_program(self, program_id: str) -> Program | None:
+        """Get a Program by ID, or None if not found."""
+        ...
+
+
+class SequenceStateStore(Protocol):
+    """
+    Abstraction for persisting sequential program state.
+
+    INV-P3-004: State advances only at EPG resolution time.
+    """
+
+    def get_position(self, channel_id: str, program_id: str) -> int:
+        """Get current episode index for a sequential program."""
+        ...
+
+    def set_position(self, channel_id: str, program_id: str, index: int) -> None:
+        """Set episode index for a sequential program."""
+        ...
+
+
+class ResolvedScheduleStore(Protocol):
+    """
+    Abstraction for storing resolved schedule days.
+
+    INV-P3-008: Resolution Idempotence - if a day is already resolved,
+    return the existing resolution, do not re-resolve.
+    """
+
+    def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
+        """Get a resolved schedule day, or None if not yet resolved."""
+        ...
+
+    def store(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
+        """Store a resolved schedule day. Must be idempotent."""
+        ...
+
+    def exists(self, channel_id: str, programming_day_date: date) -> bool:
+        """Check if a day has already been resolved."""
+        ...
+
+
+class EPGProvider(Protocol):
+    """
+    Protocol for EPG query capability.
+
+    Phase 3 adds this interface for EPG consumers (Prevue channel, guide API).
+    """
+
+    def get_epg_events(
+        self,
+        channel_id: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[EPGEvent]:
+        """
+        Get EPG events for the specified time range.
+
+        Returns resolved events with episode information.
+        Events are immutable once returned.
+        """
+        ...
+
+
+@dataclass
+class Phase3Config:
+    """
+    Configuration for Phase 3 ScheduleManager.
+
+    Phase 3 configuration that adds dynamic content selection
+    via Programs with episode selection logic.
+    """
+    grid_minutes: int                          # Grid slot duration (e.g., 30)
+    program_catalog: ProgramCatalog            # Provider of Program definitions
+    sequence_store: SequenceStateStore         # Persistence for sequential state
+    resolved_store: ResolvedScheduleStore      # Persistence for resolved schedules
+    filler_path: str                           # Path to filler content
+    filler_duration_seconds: float = 0.0       # Duration of filler file
+    programming_day_start_hour: int = 6        # Broadcast day start
