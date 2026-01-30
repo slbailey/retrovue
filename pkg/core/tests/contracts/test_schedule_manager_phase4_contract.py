@@ -942,3 +942,317 @@ class TestFixtureData:
         """Verify filler is configured."""
         assert fixture_catalog.filler_path
         assert fixture_catalog.filler_duration > 0
+
+
+# =============================================================================
+# Minimum Grid Occupancy Tests (P4-T016, P4-T017, P4-T018, P4-T019)
+# =============================================================================
+
+class TestMinimumGridOccupancy:
+    """Tests for INV-P4-001: Minimum Grid Occupancy."""
+
+    def test_P4_T016_minimum_blocks_content_shorter_than_grid(
+        self,
+        schedule_manager: Phase3ScheduleManager,
+        cheers_program: Program,
+    ):
+        """P4-T016: Minimum blocks for content shorter than grid.
+
+        GIVEN: Episode duration = 25:01 (1501.653s)
+               Grid size = 30 minutes (1800s)
+        WHEN:  Schedule is resolved
+        THEN:  Exactly 1 grid block is allocated
+               EPG duration = 30:00 (1800s)
+               Filler duration = 4:59 (298.347s)
+               NOT 2 grid blocks (60 minutes)
+        """
+        # S01E01: 1501.653s (25:01.653), shorter than 30-min grid
+        episode = cheers_program.episodes[0]
+        assert episode.duration_seconds < 1800  # Confirm shorter than grid
+
+        slots = [ScheduleSlot(
+            slot_time=time(6, 0),
+            program_ref=ProgramRef(ProgramRefType.PROGRAM, "cheers"),
+            duration_seconds=1800.0,  # Input slot duration (intent)
+        )]
+
+        resolved = schedule_manager.resolve_schedule_day(
+            channel_id="cheers-24-7",
+            programming_day_date=date(2025, 1, 30),
+            slots=slots,
+            resolution_time=datetime(2025, 1, 28, 12, 0, 0),
+        )
+
+        # INV-P4-001: Exactly 1 grid block (ceil(1501.653/1800) = 1)
+        resolved_slot = resolved.resolved_slots[0]
+        assert resolved_slot.duration_seconds == 1800.0, \
+            f"Expected 1 grid block (1800s), got {resolved_slot.duration_seconds}s"
+
+        # EPG should show grid-aligned end time
+        events = schedule_manager.get_epg_events(
+            "cheers-24-7",
+            datetime(2025, 1, 30, 6, 0, 0),
+            datetime(2025, 1, 30, 7, 0, 0),
+        )
+        assert len(events) == 1
+        epg_duration = (events[0].end_time - events[0].start_time).total_seconds()
+        assert epg_duration == 1800.0, \
+            f"EPG duration should be 1800s (1 grid block), got {epg_duration}s"
+
+        # Filler duration = grid_duration - content_duration
+        expected_filler = 1800.0 - episode.duration_seconds
+        block = schedule_manager.get_program_at(
+            "cheers-24-7",
+            datetime(2025, 1, 30, 6, 0, 0),
+        )
+        assert len(block.segments) == 2, "Should have episode + filler segments"
+        filler_duration = (block.segments[1].end_utc - block.segments[1].start_utc).total_seconds()
+        assert filler_duration == pytest.approx(expected_filler, rel=0.01)
+
+    def test_P4_T017_minimum_blocks_content_spanning_multiple_grids(
+        self,
+        fixture_catalog: FixtureProgramCatalog,
+        sequence_store: InMemorySequenceStore,
+        resolved_store: InMemoryResolvedStore,
+    ):
+        """P4-T017: Minimum blocks for content spanning multiple grids.
+
+        GIVEN: Episode duration = 42 minutes (2520s)
+               Grid size = 15 minutes (900s)
+        WHEN:  Schedule is resolved
+        THEN:  Exactly 3 grid blocks are allocated (ceil(42/15) = 3)
+               EPG duration = 45:00 (2700s)
+               Filler duration = 3:00 (180s)
+               NOT 4 grid blocks (60 minutes)
+        """
+        # Create a program with a 42-minute episode
+        mock_data = {
+            "filler": {"file_path": "/media/filler.mp4", "duration_seconds": 3600},
+            "programs": [{
+                "program_id": "long-show",
+                "name": "Long Show",
+                "play_mode": "sequential",
+                "episodes": [{
+                    "episode_id": "long-e01",
+                    "title": "Long Episode",
+                    "file_path": "/media/long.mp4",
+                    "duration_seconds": 2520.0,  # 42 minutes
+                }],
+            }],
+        }
+
+        catalog = FixtureProgramCatalog(mock_data)
+        config = Phase3Config(
+            grid_minutes=15,  # 15-minute grid
+            program_catalog=catalog,
+            sequence_store=sequence_store,
+            resolved_store=resolved_store,
+            filler_path=catalog.filler_path,
+            programming_day_start_hour=6,
+        )
+        manager = Phase3ScheduleManager(config)
+
+        slots = [ScheduleSlot(
+            slot_time=time(6, 0),
+            program_ref=ProgramRef(ProgramRefType.PROGRAM, "long-show"),
+            duration_seconds=900.0,  # Input: 1 grid block (will be expanded)
+        )]
+
+        resolved = manager.resolve_schedule_day(
+            channel_id="test",
+            programming_day_date=date(2025, 1, 30),
+            slots=slots,
+            resolution_time=datetime(2025, 1, 28, 12, 0, 0),
+        )
+
+        # INV-P4-001: Exactly 3 grid blocks (ceil(2520/900) = 3)
+        resolved_slot = resolved.resolved_slots[0]
+        expected_duration = 3 * 900.0  # 2700s = 45 minutes
+        assert resolved_slot.duration_seconds == expected_duration, \
+            f"Expected 3 grid blocks (2700s), got {resolved_slot.duration_seconds}s"
+
+        # Verify NOT 4 blocks (3600s)
+        assert resolved_slot.duration_seconds != 3600.0, \
+            "Should NOT allocate 4 blocks (3600s) for 42-minute content"
+
+        # EPG should show 45 minutes (3 blocks)
+        events = manager.get_epg_events(
+            "test",
+            datetime(2025, 1, 30, 6, 0, 0),
+            datetime(2025, 1, 30, 7, 0, 0),
+        )
+        assert len(events) == 1
+        epg_duration = (events[0].end_time - events[0].start_time).total_seconds()
+        assert epg_duration == 2700.0, \
+            f"EPG duration should be 2700s (3 grid blocks), got {epg_duration}s"
+
+        # Filler = 2700 - 2520 = 180s (3 minutes)
+        expected_filler = 180.0
+
+        # Get the last block where filler should appear
+        block = manager.get_program_at("test", datetime(2025, 1, 30, 6, 30, 0))
+        # In the third block (06:30-06:45), episode ends at 06:42, filler until 06:45
+        if len(block.segments) == 2:
+            filler_segment = block.segments[1]
+            filler_duration = (filler_segment.end_utc - filler_segment.start_utc).total_seconds()
+            assert filler_duration == pytest.approx(expected_filler, rel=0.01)
+
+    def test_P4_T018_exact_grid_fit_no_extra_blocks(
+        self,
+        fixture_catalog: FixtureProgramCatalog,
+        sequence_store: InMemorySequenceStore,
+        resolved_store: InMemoryResolvedStore,
+    ):
+        """P4-T018: Exact grid fit requires no extra blocks.
+
+        GIVEN: Episode duration = 30:00 (1800s)
+               Grid size = 30 minutes (1800s)
+        WHEN:  Schedule is resolved
+        THEN:  Exactly 1 grid block is allocated
+               EPG duration = 30:00 (1800s)
+               Filler duration = 0
+               No extra block allocated
+        """
+        mock_data = {
+            "filler": {"file_path": "/media/filler.mp4", "duration_seconds": 3600},
+            "programs": [{
+                "program_id": "exact-fit",
+                "name": "Exact Fit Show",
+                "play_mode": "sequential",
+                "episodes": [{
+                    "episode_id": "exact-e01",
+                    "title": "Exact Episode",
+                    "file_path": "/media/exact.mp4",
+                    "duration_seconds": 1800.0,  # Exactly 30 minutes
+                }],
+            }],
+        }
+
+        catalog = FixtureProgramCatalog(mock_data)
+        config = Phase3Config(
+            grid_minutes=30,
+            program_catalog=catalog,
+            sequence_store=sequence_store,
+            resolved_store=resolved_store,
+            filler_path=catalog.filler_path,
+            programming_day_start_hour=6,
+        )
+        manager = Phase3ScheduleManager(config)
+
+        slots = [ScheduleSlot(
+            slot_time=time(6, 0),
+            program_ref=ProgramRef(ProgramRefType.PROGRAM, "exact-fit"),
+            duration_seconds=1800.0,
+        )]
+
+        resolved = manager.resolve_schedule_day(
+            channel_id="test",
+            programming_day_date=date(2025, 1, 30),
+            slots=slots,
+            resolution_time=datetime(2025, 1, 28, 12, 0, 0),
+        )
+
+        # INV-P4-001: Exactly 1 grid block (ceil(1800/1800) = 1)
+        resolved_slot = resolved.resolved_slots[0]
+        assert resolved_slot.duration_seconds == 1800.0, \
+            f"Expected 1 grid block (1800s), got {resolved_slot.duration_seconds}s"
+
+        # Should NOT allocate 2 blocks
+        assert resolved_slot.duration_seconds != 3600.0, \
+            "Should NOT allocate 2 blocks for exact-fit content"
+
+        # No filler needed
+        block = manager.get_program_at("test", datetime(2025, 1, 30, 6, 0, 0))
+        assert len(block.segments) == 1, "Should have only episode segment, no filler"
+
+    def test_P4_T019_over_allocation_detection(
+        self,
+        fixture_catalog: FixtureProgramCatalog,
+        sequence_store: InMemorySequenceStore,
+        resolved_store: InMemoryResolvedStore,
+    ):
+        """P4-T019: Over-allocation detection.
+
+        This test verifies the invariant by computing the expected blocks
+        and asserting that the implementation matches exactly.
+
+        If someone changed the implementation to allocate extra blocks,
+        this test would fail.
+        """
+        import math
+
+        # Test multiple scenarios
+        test_cases = [
+            # (content_duration, grid_minutes, expected_blocks)
+            (1501.653, 30, 1),   # 25:01 in 30-min grid = 1 block
+            (1800.0, 30, 1),    # 30:00 in 30-min grid = 1 block
+            (1801.0, 30, 2),    # 30:01 in 30-min grid = 2 blocks
+            (2520.0, 15, 3),    # 42:00 in 15-min grid = 3 blocks
+            (2700.0, 15, 3),    # 45:00 in 15-min grid = 3 blocks
+            (2701.0, 15, 4),    # 45:01 in 15-min grid = 4 blocks
+            (3600.0, 30, 2),    # 60:00 in 30-min grid = 2 blocks
+            (5400.0, 30, 3),    # 90:00 in 30-min grid = 3 blocks
+        ]
+
+        for content_duration, grid_minutes, expected_blocks in test_cases:
+            mock_data = {
+                "filler": {"file_path": "/media/filler.mp4", "duration_seconds": 7200},
+                "programs": [{
+                    "program_id": "test-prog",
+                    "name": "Test Program",
+                    "play_mode": "sequential",
+                    "episodes": [{
+                        "episode_id": "test-e01",
+                        "title": "Test Episode",
+                        "file_path": "/media/test.mp4",
+                        "duration_seconds": content_duration,
+                    }],
+                }],
+            }
+
+            catalog = FixtureProgramCatalog(mock_data)
+            store = InMemorySequenceStore()
+            resolved = InMemoryResolvedStore()
+            config = Phase3Config(
+                grid_minutes=grid_minutes,
+                program_catalog=catalog,
+                sequence_store=store,
+                resolved_store=resolved,
+                filler_path=catalog.filler_path,
+                programming_day_start_hour=6,
+            )
+            manager = Phase3ScheduleManager(config)
+
+            slots = [ScheduleSlot(
+                slot_time=time(6, 0),
+                program_ref=ProgramRef(ProgramRefType.PROGRAM, "test-prog"),
+                duration_seconds=float(grid_minutes * 60),
+            )]
+
+            result = manager.resolve_schedule_day(
+                channel_id="test",
+                programming_day_date=date(2025, 1, 30),
+                slots=slots,
+                resolution_time=datetime(2025, 1, 28, 12, 0, 0),
+            )
+
+            resolved_slot = result.resolved_slots[0]
+            grid_seconds = grid_minutes * 60
+            expected_duration = expected_blocks * grid_seconds
+            actual_blocks = resolved_slot.duration_seconds / grid_seconds
+
+            # Verify exact block count
+            assert resolved_slot.duration_seconds == expected_duration, (
+                f"INV-P4-001 violation: "
+                f"content={content_duration}s, grid={grid_minutes}min, "
+                f"expected {expected_blocks} blocks ({expected_duration}s), "
+                f"got {actual_blocks} blocks ({resolved_slot.duration_seconds}s)"
+            )
+
+            # Verify it's the MINIMUM (not more)
+            minimum_blocks = math.ceil(content_duration / grid_seconds)
+            assert actual_blocks == minimum_blocks, (
+                f"Over-allocation detected: "
+                f"content={content_duration}s needs {minimum_blocks} blocks, "
+                f"but got {actual_blocks} blocks"
+            )
