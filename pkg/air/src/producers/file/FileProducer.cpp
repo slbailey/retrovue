@@ -516,21 +516,47 @@ namespace retrovue::producers::file
     // Compute scale dimensions based on aspect policy
     if (aspect_policy_ == runtime::AspectPolicy::Preserve) {
       // Preserve aspect: scale to fit, pad with black bars
-      double src_aspect = static_cast<double>(src_width) / src_height;
-      double dst_aspect = static_cast<double>(dst_width) / dst_height;
-      
-      if (src_aspect > dst_aspect) {
-        // Source is wider: fit to width, pad height
-        scale_width_ = dst_width;
-        scale_height_ = static_cast<int>(dst_width / src_aspect);
-        pad_x_ = 0;
-        pad_y_ = (dst_height - scale_height_) / 2;
+      // Use Display Aspect Ratio (DAR) which accounts for Sample Aspect Ratio (SAR)
+      // DAR = (width * SAR.num) / (height * SAR.den)
+      double src_aspect;
+      AVRational sar = codec_ctx_->sample_aspect_ratio;
+      if (sar.num > 0 && sar.den > 0) {
+        // SAR is defined: calculate DAR
+        src_aspect = (static_cast<double>(src_width) * sar.num) /
+                     (static_cast<double>(src_height) * sar.den);
+        std::cout << "[FileProducer] Using SAR " << sar.num << ":" << sar.den
+                  << " -> DAR " << src_aspect << std::endl;
       } else {
-        // Source is taller: fit to height, pad width
-        scale_width_ = static_cast<int>(dst_height * src_aspect);
+        // No SAR: assume square pixels
+        src_aspect = static_cast<double>(src_width) / src_height;
+        std::cout << "[FileProducer] No SAR, using pixel aspect " << src_aspect << std::endl;
+      }
+      double dst_aspect = static_cast<double>(dst_width) / dst_height;
+
+      // Calculate scaled dimensions with proper rounding
+      int calc_scale_width, calc_scale_height;
+      if (src_aspect > dst_aspect) {
+        // Source is wider: fit to width, pad height (letterbox)
+        calc_scale_width = dst_width;
+        calc_scale_height = static_cast<int>(std::round(dst_width / src_aspect));
+      } else {
+        // Source is taller or equal: fit to height, pad width (pillarbox)
+        calc_scale_width = static_cast<int>(std::round(dst_height * src_aspect));
+        calc_scale_height = dst_height;
+      }
+
+      // If within 1 pixel of target, use target dimensions (avoid sub-pixel padding)
+      if (std::abs(calc_scale_width - dst_width) <= 1 &&
+          std::abs(calc_scale_height - dst_height) <= 1) {
+        scale_width_ = dst_width;
         scale_height_ = dst_height;
-        pad_x_ = (dst_width - scale_width_) / 2;
+        pad_x_ = 0;
         pad_y_ = 0;
+      } else {
+        scale_width_ = calc_scale_width;
+        scale_height_ = calc_scale_height;
+        pad_x_ = (dst_width - scale_width_) / 2;
+        pad_y_ = (dst_height - scale_height_) / 2;
       }
     } else {
       // Stretch: use target dimensions directly
@@ -593,7 +619,9 @@ namespace retrovue::producers::file
       return false;
     }
 
-    // Phase 8.2: no container seek. Decode from start; segment start enforced by frame admission in ProduceRealFrame.
+    // TODO: Container seek for mid-program join - disabled until debugged
+    // The seek + frame admission approach needs more testing
+    // if (config_.start_offset_ms > 0) { ... }
 
     decoder_initialized_ = true;
     eof_reached_ = false;
@@ -940,12 +968,13 @@ namespace retrovue::producers::file
     // If padding needed, copy scaled frame to final frame with padding
     if (needs_padding) {
       // Clear target frame (black for Y, gray for UV)
-      std::memset(scaled_frame_->data[0], 0, 
-                  config_.target_width * config_.target_height);
-      std::memset(scaled_frame_->data[1], 128, 
-                  (config_.target_width / 2) * (config_.target_height / 2));
-      std::memset(scaled_frame_->data[2], 128, 
-                  (config_.target_width / 2) * (config_.target_height / 2));
+      // Use linesize * height to clear entire buffer including alignment padding
+      std::memset(scaled_frame_->data[0], 0,
+                  static_cast<size_t>(scaled_frame_->linesize[0]) * config_.target_height);
+      std::memset(scaled_frame_->data[1], 128,
+                  static_cast<size_t>(scaled_frame_->linesize[1]) * (config_.target_height / 2));
+      std::memset(scaled_frame_->data[2], 128,
+                  static_cast<size_t>(scaled_frame_->linesize[2]) * (config_.target_height / 2));
 
       // Copy Y plane with padding
       for (int y = 0; y < scale_height_; y++) {
