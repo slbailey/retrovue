@@ -570,6 +570,11 @@ class Phase3ScheduleManager:
         """
         events = []
 
+        # Normalize times for comparison (strip timezone if needed)
+        start_naive = start_time.replace(tzinfo=None) if start_time.tzinfo else start_time
+        end_naive = end_time.replace(tzinfo=None) if end_time.tzinfo else end_time
+        has_tz = start_time.tzinfo is not None
+
         # Determine programming days in range
         current = start_time
         while current < end_time:
@@ -584,7 +589,12 @@ class Phase3ScheduleManager:
                     # ceil(content_duration / grid) * grid
                     slot_end = slot_start + timedelta(seconds=slot.duration_seconds)
 
-                    if slot_start < end_time and slot_end > start_time:
+                    if slot_start < end_naive and slot_end > start_naive:
+                        # Add timezone back if original times had one
+                        if has_tz:
+                            slot_start = slot_start.replace(tzinfo=start_time.tzinfo)
+                            slot_end = slot_end.replace(tzinfo=start_time.tzinfo)
+
                         events.append(EPGEvent(
                             channel_id=channel_id,
                             start_time=slot_start,
@@ -872,6 +882,9 @@ class Phase3ScheduleManager:
 
         day_start_hour_seconds = self._config.programming_day_start_hour * 3600
 
+        # Normalize block_start for comparison (strip timezone if needed)
+        block_start_naive = block_start.replace(tzinfo=None) if block_start.tzinfo else block_start
+
         # Check both current and previous programming days
         for day_start in [current_day_start, previous_day_start]:
             programming_day_date = day_start.date()
@@ -890,7 +903,10 @@ class Phase3ScheduleManager:
                 slot_end = slot_start + timedelta(seconds=slot.duration_seconds)
 
                 # Check if block_start falls within slot's time window
-                if slot_start <= block_start < slot_end:
+                if slot_start <= block_start_naive < slot_end:
+                    # Return slot_start with original timezone if block_start had one
+                    if block_start.tzinfo:
+                        slot_start = slot_start.replace(tzinfo=block_start.tzinfo)
                     return (slot, slot_start)
 
         return (None, None)
@@ -933,7 +949,7 @@ class Phase3ScheduleManager:
         return t.date()
 
     def _slot_to_datetime(self, programming_day_date: date, slot_time: time) -> datetime:
-        """Convert a slot time to absolute datetime."""
+        """Convert a slot time to absolute datetime (naive, for backward compat)."""
         base = datetime.combine(programming_day_date, slot_time)
         if slot_time.hour < self._config.programming_day_start_hour:
             base += timedelta(days=1)
