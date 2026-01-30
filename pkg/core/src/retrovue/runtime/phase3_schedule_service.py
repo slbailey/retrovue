@@ -340,7 +340,23 @@ class Phase3ScheduleService:
         # Get program block from manager
         block = self._manager.get_program_at(channel_id, now)
         if not block or not block.segments:
+            self._logger.warning(
+                "[%s] get_playout_plan_now: no block or segments at %s",
+                channel_id, now
+            )
             return []
+
+        # Debug: log what we got from the manager
+        self._logger.info(
+            "[%s] get_playout_plan_now: now=%s, block_start=%s, block_end=%s, segments=%d",
+            channel_id, now, block.block_start, block.block_end, len(block.segments)
+        )
+        for i, seg in enumerate(block.segments):
+            self._logger.info(
+                "[%s]   segment[%d]: file=%s, start=%s, end=%s, seek=%.1f",
+                channel_id, i, seg.file_path.split('/')[-1] if seg.file_path else 'None',
+                seg.start_utc, seg.end_utc, seg.seek_offset_seconds
+            )
 
         # INV-P5-003: Transform ProgramBlock segments to ChannelManager format
         # Find the segment that is currently active and calculate proper seek offset

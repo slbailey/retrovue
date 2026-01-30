@@ -329,20 +329,18 @@ EngineResult PlayoutEngine::LoadPreview(
     const std::string& asset_path,
     int64_t start_offset_ms,
     int64_t hard_stop_time_ms) {
-  (void)start_offset_ms;
-  (void)hard_stop_time_ms;
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  
+
   auto it = channels_.find(channel_id);
   if (it == channels_.end()) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
-  
+
   auto& state = it->second;
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
   }
-  
+
   if (control_surface_only_) {
     state->preview_loaded = true;
     state->preview_asset_path = asset_path;
@@ -350,7 +348,7 @@ EngineResult PlayoutEngine::LoadPreview(
     result.shadow_decode_started = false;  // No actual decode in 6A.0
     return result;
   }
-  
+
   try {
     // Create preview producer config
     producers::file::ProducerConfig preview_config;
@@ -359,7 +357,10 @@ EngineResult PlayoutEngine::LoadPreview(
     preview_config.stub_mode = false;
     preview_config.target_width = it->second->program_format.video.width;
     preview_config.target_height = it->second->program_format.video.height;
-    
+    // TODO: Enable seek once debugged - for now start from beginning to ensure playback works
+    // preview_config.start_offset_ms = start_offset_ms;
+    // preview_config.hard_stop_time_ms = hard_stop_time_ms;
+
     // Create preview producer (FileProducer - decodes both audio and video)
     // Do NOT start it here; SwitchToLive will start it when promoting to live.
     // This ensures LoadPreview only prepares the next asset; clock-driven SwitchToLive triggers the actual switch.

@@ -337,8 +337,8 @@ class ProgramDirector:
             # Phase 5: Use Phase3ScheduleService for this channel
             if channel_id not in self._phase3_schedule_services:
                 schedule_config = channel_config.schedule_config
-                programs_dir = Path(schedule_config.get("programs_dir", "config/programs"))
-                schedules_dir = Path(schedule_config.get("schedules_dir", "config/schedules"))
+                programs_dir = Path(schedule_config.get("programs_dir", "/opt/retrovue/config/programs"))
+                schedules_dir = Path(schedule_config.get("schedules_dir", "/opt/retrovue/config/schedules"))
                 filler_path = schedule_config.get("filler_path", "/opt/retrovue/assets/filler.mp4")
                 filler_duration = schedule_config.get("filler_duration_seconds", 3650.0)
                 grid_minutes = schedule_config.get("grid_minutes", 30)

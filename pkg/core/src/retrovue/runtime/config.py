@@ -187,11 +187,12 @@ class RuntimeConfig:
     Global runtime configuration for RetroVue.
 
     Loaded from config/retrovue.json or fallback defaults.
+    Uses absolute paths to /opt/retrovue/config/ by default.
     """
     program_director_port: int = 8000
     channel_manager_port: int = 9000
-    channels_config: str = "config/channels.json"
-    schedules_dir: str = "config/schedules"
+    channels_config: str = "/opt/retrovue/config/channels.json"
+    schedules_dir: str = "/opt/retrovue/config/schedules"
 
     @classmethod
     def load(cls, path: str | None = None) -> "RuntimeConfig":
@@ -211,6 +212,10 @@ class RuntimeConfig:
         """
         from pathlib import Path
 
+        # Default paths (absolute)
+        default_channels = "/opt/retrovue/config/channels.json"
+        default_schedules = "/opt/retrovue/config/schedules"
+
         candidates = [
             Path(path) if path else None,
             Path("config/retrovue.json"),
@@ -224,8 +229,8 @@ class RuntimeConfig:
                     return cls(
                         program_director_port=data.get("program_director_port", 8000),
                         channel_manager_port=data.get("channel_manager_port", 9000),
-                        channels_config=data.get("channels_config", "config/channels.json"),
-                        schedules_dir=data.get("schedules_dir", "config/schedules"),
+                        channels_config=data.get("channels_config", default_channels),
+                        schedules_dir=data.get("schedules_dir", default_schedules),
                     )
                 except (json.JSONDecodeError, OSError):
                     # Fall through to defaults on error
