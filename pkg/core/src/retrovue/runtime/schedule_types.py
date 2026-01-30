@@ -159,3 +159,80 @@ class DailyScheduleConfig:
     filler_path: str                       # Path to filler content
     filler_duration_seconds: float         # Duration of filler file
     programming_day_start_hour: int = 6    # Broadcast day start
+
+
+# =============================================================================
+# Phase 2 Types: ScheduleDay Integration
+# =============================================================================
+
+from datetime import date
+
+
+@dataclass
+class ScheduleEntry:
+    """
+    A single scheduled item within a ScheduleDay.
+
+    Phase 2 data structure equivalent to Phase 1's ScheduledProgram,
+    but anchored to a specific programming day rather than repeating daily.
+    """
+    slot_time: time           # Grid-aligned time when this entry starts
+    file_path: str            # Path to the program file
+    duration_seconds: float   # Duration of the program content
+    label: str = ""           # Optional label for debugging/logging
+
+
+@dataclass
+class ScheduleDay:
+    """
+    Immutable snapshot of one programming day's schedule.
+
+    A ScheduleDay covers the programming day window starting at
+    programming_day_date + programming_day_start_hour. Once created,
+    a ScheduleDay MUST NOT be modified.
+    """
+    programming_day_date: date       # Calendar date when this programming day starts
+    entries: list[ScheduleEntry]     # Scheduled items for this day (ordered by slot_time)
+
+
+class ScheduleSource(Protocol):
+    """
+    Abstraction that provides ScheduleDay instances to ScheduleManager.
+
+    Implementations may read from a database, a file, or an in-memory cache.
+    ScheduleManager does not care how ScheduleDay is obtained—only that it
+    is deterministic and immutable.
+    """
+
+    def get_schedule_day(
+        self, channel_id: str, programming_day_date: date
+    ) -> ScheduleDay | None:
+        """
+        Get the ScheduleDay for the given channel and programming day.
+
+        Args:
+            channel_id: The channel identifier
+            programming_day_date: Calendar date of the programming day start
+
+        Returns:
+            ScheduleDay for that day, or None if no schedule exists
+        """
+        ...
+
+
+@dataclass
+class ScheduleDayConfig:
+    """
+    Configuration for a ScheduleDay-based ScheduleManager.
+
+    Phase 2 configuration that replaces DailyScheduleConfig with
+    day-specific schedule lookups via ScheduleSource.
+
+    Note: ScheduleDayConfig is the concrete runtime config implementing
+    the ScheduleDayConfig contract from ScheduleManagerPhase2Contract.md.
+    """
+    grid_minutes: int                      # Grid slot duration (e.g., 30)
+    schedule_source: ScheduleSource        # Provider of ScheduleDay instances
+    filler_path: str                       # Path to filler content
+    filler_duration_seconds: float         # Duration of filler file
+    programming_day_start_hour: int = 6    # Broadcast day start
