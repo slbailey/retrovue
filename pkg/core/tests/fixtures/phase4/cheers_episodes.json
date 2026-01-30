@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "generated_at": "2025-01-30T12:00:00Z",
+  "generated_by": "ffprobe one-time data collection",
+  "notes": "Durations from actual media files via ffprobe. This is static fixture data, not runtime probing.",
+  "filler": {
+    "file_path": "/opt/retrovue/assets/filler.mp4",
+    "duration_seconds": 3650.455011
+  },
+  "programs": [
+    {
+      "program_id": "cheers",
+      "name": "Cheers",
+      "play_mode": "sequential",
+      "episodes": [
+        {
+          "episode_id": "cheers-s01e01",
+          "title": "Give Me a Ring Sometime",
+          "file_path": "/opt/retrovue/assets/Cheers (1982) - S01E01 - Give Me a Ring Sometime [Bluray-720p][AAC 2.0][x264]-Bordure.mp4",
+          "duration_seconds": 1501.653,
+          "season": 1,
+          "episode_number": 1
+        },
+        {
+          "episode_id": "cheers-s01e02",
+          "title": "Sam's Women",
+          "file_path": "/opt/retrovue/assets/Cheers (1982) - S01E02 - Sams Women [AMZN WEBDL-720p][AAC 2.0][x264]-Trollhd.mp4",
+          "duration_seconds": 1333.457111,
+          "season": 1,
+          "episode_number": 2
+        },
+        {
+          "episode_id": "cheers-s01e03",
+          "title": "The Tortelli Tort",
+          "file_path": "/opt/retrovue/assets/Cheers (1982) - S01E03 - The Tortelli Tort [Bluray-720p][AAC 2.0][x264]-Bordure.mp4",
+          "duration_seconds": 1499.904,
+          "season": 1,
+          "episode_number": 3
+        }
+      ]
+    }
+  ]
+}
