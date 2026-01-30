@@ -9,7 +9,11 @@ _Related: [Proto Schema](../../../protos/playout.proto) · [Phase 6A Overview](.
 
 ## Purpose
 
-Define the observable guarantees for the RetroVue Playout Engine's gRPC control plane and telemetry. This contract specifies **what** the engine guarantees, not how it is implemented internally. **Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Segment-based control** is canonical: execution is driven by LoadPreview (segment payload) + SwitchToLive (control-only); StartChannel initializes channel state and does not imply media playback.
+Define the observable guarantees for the RetroVue Playout Engine's gRPC control plane and telemetry. This contract specifies **what** the engine guarantees, not how it is implemented internally.
+
+**THINK vs ACT:** Core performs THINK (authoritative timeline, what plays next, when transitions occur); Air performs ACT (executes explicit commands). Air **does not** make scheduling, timing, or sequencing decisions. Air does **not** track asset duration to decide transitions, initiate transitions on EOF or producer exhaustion, or decide "what comes next." Producers are treated as continuous sources; a producer ending does **not** imply a transition. Transitions occur **only** via explicit Core commands (e.g. LoadPreview, SwitchToLive). Air is intentionally "dumb" with respect to timing—it executes commands; it does not infer intent.
+
+**Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Segment-based control** is canonical: execution is driven by LoadPreview (segment payload) + SwitchToLive (control-only); StartChannel initializes channel state and does not imply media playback.
 
 ---
 
@@ -109,6 +113,8 @@ service PlayoutControl {
 ### LoadPreview
 
 **Purpose:** Load the next segment into the **preview slot**. This is the **primary execution instruction** for segment-based control. Segment payload: `asset_path`, `start_offset_ms` (media-relative), `hard_stop_time_ms` (wall-clock epoch ms, authoritative). Air may stop at or before `hard_stop_time_ms` but must never play past it.
+
+**End PTS / hard stop as guardrail (normative):** The end boundary (e.g. `hard_stop_time_ms` or derived end PTS) defines a **maximum output boundary** for that producer. It is **not** a signal to initiate a transition and **not** used by Air to decide when to switch. If the producer reaches the boundary and Core has not yet issued the next control command: Air **MUST NOT** emit frames from that producer beyond the boundary; Air **MUST** clamp output for that producer; Air **MUST** continue to satisfy always-valid-output (e.g. black/silence via BlackFrameProducer). This is a **failsafe containment mechanism**, not a scheduling action. Core still decides *when* transitions occur; Air enforces output limits. Design intent: prefer **bounded silence/black** over **content bleed**.
 
 | Request Field | Type | Description |
 |---------------|------|-------------|

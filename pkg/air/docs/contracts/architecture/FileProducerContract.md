@@ -29,6 +29,8 @@ Define the observable guarantees for the **File Producer** — one kind of execu
 
 **Segment params:** From LoadPreview: `asset_path`, `start_offset_ms` (media-relative), `hard_stop_time_ms` (wall-clock epoch ms). Producer must honor start offset (seek at or before start_offset_ms) and must stop **at or before** hard_stop_time_ms. Engine may enforce hard stop by duration limit and/or wall-clock supervision.
 
+**End PTS / hard stop as safety clamp:** The end boundary (e.g. derived from `hard_stop_time_ms`) is a **maximum output boundary**—a **guardrail**, not a trigger. It is **not** used to decide when to switch producers; it exists solely to prevent output beyond the agreed boundary (clock skew, late commands, content bleed). The producer MUST NOT emit frames beyond this boundary. If the producer reaches the boundary and Core has not yet issued the next command, the engine clamps output and satisfies always-valid-output (e.g. black/silence). This is **failsafe containment**, not a scheduling action. Transitions remain only via explicit Core commands (e.g. SwitchToLive).
+
 ---
 
 ### PROD-010b: Invalid Input Handling (6A.2)

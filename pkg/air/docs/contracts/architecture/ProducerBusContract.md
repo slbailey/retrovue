@@ -14,6 +14,8 @@ This contract defines the **input path** in Air: how content producers (e.g. Fil
 
 OutputBus is documented separately (output path to the sink). This contract documents the **input bus** (ProducerBus) so the full signal path is clear: **ProducerBus (preview + live) → active producer → FrameRingBuffer → ProgramOutput → OutputBus → OutputSink**.
 
+**Control model:** The preview/live bus model is **command-driven**. Core performs THINK (timeline, what plays next, when to transition); Air performs ACT (executes explicit commands). Air **does not** track asset duration, detect producer EOF, or initiate transitions. All content transitions occur **only** when Core issues a command (e.g. SwitchToLive). Air never switches buses autonomously except when entering **dead-man failsafe** (see §2.4).
+
 ---
 
 ## 2. Core Definitions (Normative)
@@ -48,9 +50,25 @@ The **live** bus’s producer is the one whose output is consumed by ProgramOutp
 
 **ProducerBus (live) → IProducer (e.g. FileProducer) → FrameRingBuffer → ProgramOutput → OutputBus → OutputSink → client.**
 
-### 2.4 Always-valid-output (normative)
+### 2.4 Always-valid-output and dead-man failsafe (normative)
 
-The **sink MUST always receive valid output.** When the **live** producer has frames, Air outputs those frames. When the live producer runs out of frames (EOF, buffer empty, or Core has not yet sent the next segment), Air **immediately** switches output to **BlackFrameProducer** so the sink continues to receive valid video (black) and no audio until Core supplies new work and Air switches back to the live bus. No gaps, freezes, or invalid data. The fallback producer and selection logic are defined in [BlackFrameProducerContract](BlackFrameProducerContract.md).
+The **sink MUST always receive valid output.** When the **live** producer has frames, Air outputs those frames. If the live producer runs out of frames (EOF, underrun, or Core has not yet issued the next control command), Air **immediately** enters **failsafe mode**: output is switched to an internal **BlackFrameProducer** (black video, no audio). This is a **dead-man fallback**, not a scheduling decision—Air is protecting output continuity until Core explicitly reasserts control (e.g. LoadPreview + SwitchToLive). Air remains in failsafe indefinitely until Core issues the next command. No gaps, freezes, or invalid data. The fallback producer and selection logic are defined in [BlackFrameProducerContract](BlackFrameProducerContract.md).
+
+### 2.5 End PTS / hard stop as safety clamp (normative)
+
+An **end PTS** (or equivalent hard-stop boundary, e.g. derived from `hard_stop_time_ms`) may be provided by Core as part of a playout-ready descriptor. Its purpose is to define a **maximum output boundary** for that producer—a **guardrail**, not a trigger.
+
+- The end PTS is **not** a signal to initiate a transition.
+- The end PTS is **not** used by Air to decide *when* to switch producers.
+- It exists solely to **prevent output beyond an agreed boundary** (bounds clock skew, late commands, decode variance; prevents content bleed across segments, e.g. program frames into an ad block).
+
+**Air behavior at the boundary:** If a producer reaches its end PTS and Core has not yet issued the next control command:
+
+- Air **MUST NOT** emit frames from that producer beyond the end PTS.
+- Air **MUST** clamp output for that producer.
+- Air **MUST** continue to satisfy the always-valid-output invariant (e.g. black/silence via BlackFrameProducer or equivalent).
+
+This is a **failsafe containment mechanism**, not a scheduling action. The system prefers **bounded silence/black** over **content bleed**. Transitions still occur **only** via explicit Core commands (e.g. SwitchToLive).
 
 ---
 
@@ -98,8 +116,9 @@ IProducer (e.g. FileProducer) → FrameRingBuffer → ProgramOutput → OutputBu
 1. There are exactly **two** ProducerBuses per PlayoutInstance: **preview** and **live**.
 2. The **live** bus is the one whose producer (if any) feeds the FrameRingBuffer and thus the output path.
 3. The **preview** bus is used only for loading the next segment; it does not feed output until promoted to live via SwitchToLive.
-4. Core directs all content changes via gRPC (LoadPreview, SwitchToLive, UpdatePlan); Air does not make content or scheduling decisions.
-5. The **sink always receives valid output**: when the live producer runs out of frames, Air switches to BlackFrameProducer (see [BlackFrameProducerContract](BlackFrameProducerContract.md)); no gaps, freezes, or invalid data.
+4. **Core directs all transitions.** Air does not detect producer endings, track duration, or initiate transitions. Air switches buses **only** in response to explicit Core commands (e.g. SwitchToLive) or when entering dead-man failsafe (live producer underrun → BlackFrameProducer).
+5. The **sink always receives valid output**: when the live producer runs out of frames and Core has not yet commanded the next action, Air enters dead-man failsafe and switches to BlackFrameProducer (see [BlackFrameProducerContract](BlackFrameProducerContract.md)); no gaps, freezes, or invalid data.
+6. **End PTS / hard stop is a guardrail, not a trigger.** Air MUST NOT emit frames beyond the producer's end boundary; at the boundary Air clamps and satisfies always-valid-output (black/silence). Transitions occur only via explicit Core commands.
 
 ---
 

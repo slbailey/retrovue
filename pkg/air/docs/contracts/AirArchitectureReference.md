@@ -21,6 +21,8 @@
 
 ## Explicit Non-Goals of Air
 
+**THINK vs ACT:** Core performs THINK (authoritative timeline, what plays next, when transitions occur); Air performs ACT (executes explicit commands). Air does **not** make scheduling, timing, or sequencing decisions.
+
 Air intentionally does NOT:
 
 - Manage multiple channels internally
@@ -28,9 +30,12 @@ Air intentionally does NOT:
 - Interpret schedules or EPG data
 - Make business or editorial decisions
 - Coordinate redundancy or failover
+- **Detect producer endings or initiate transitions** (no duration tracking, no EOF-triggered switching, no "what comes next"—transitions occur only via explicit Core commands or dead-man failsafe; see [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md))
 
 These concerns are owned by Core.  
 Air enforces only runtime execution correctness.
+
+**Core → Air boundary:** Core passes asset identity (GUID), resolved playout-ready descriptors (producer type, offsets, constraints), and explicit control commands (LoadPreview, SwitchToLive, UpdatePlan). Core does **not** pass file paths or execution instructions; Air maps descriptors to concrete producer implementations and owns *how* media is materialized, not *what* or *when*.
 
 ---
 
@@ -123,7 +128,7 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 | **IProducer** | `producers/IProducer.h` | Minimal interface: start(), stop(), isRunning(). |
 | **FileProducer** | `producers/file/FileProducer.h` | Decodes local video/audio (FFmpeg), produces frames/audio into FrameRingBuffer. Segment params: start_offset_ms, hard_stop_time_ms. |
 | **ProgrammaticProducer** | `producers/programmatic/ProgrammaticProducer.h` | **Scaffolding / test-only.** Synthetic frames; no FFmpeg. Same IProducer lifecycle; will be replaced by domain producers. |
-| **BlackFrameProducer** | (design) | **Fallback producer.** Produces valid black video (program format) and no audio. When the **live** producer runs out of frames and Core has not yet supplied the next segment, Air **immediately** switches to BlackFrameProducer so the sink **always** receives valid output. See [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md). |
+| **BlackFrameProducer** | (design) | **Internal failsafe (dead-man fallback).** Produces valid black video (program format) and no audio. When the **live** producer runs out of frames (EOF, underrun) and Core has not yet issued the next control command, Air **immediately** switches output to BlackFrameProducer so the sink **always** receives valid output. Not content, not scheduled; exists solely to guarantee always-valid output until Core reasserts control. See [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md). |
 
 ### Buffer and program output
 

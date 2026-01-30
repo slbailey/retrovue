@@ -2,17 +2,17 @@
 
 _Related: [ProducerBus (Input Bus) Contract](ProducerBusContract.md) · [FileProducer Contract](FileProducerContract.md) · [Output Continuity](OutputContinuityContract.md) · [Playout Engine Contract](PlayoutEngineContract.md)_
 
-**Status:** Design (pre-implementation)  
-**Scope:** Air (C++) playout engine — fallback producer for continuous valid output  
+**Status:** Implemented
+**Scope:** Air (C++) playout engine — fallback producer for continuous valid output
 **Audience:** Engine implementers, refactor tools (Cursor), future maintainers
 
 ---
 
 ## 1. Purpose
 
-Define the observable guarantees for **BlackFrameProducer** — a fallback producer that outputs valid black video (program format) and no audio. It is used when the **live** bus’s content producer runs out of frames and Core has not yet supplied the next segment. Air switches to BlackFrameProducer **immediately** so the sink **always** receives valid output; no gaps, freezes, or invalid data. See [ProducerBusContract](ProducerBusContract.md) for the input path (preview + live buses) and the always-valid-output invariant.
+Define the observable guarantees for **BlackFrameProducer** — an **internal failsafe** producer that outputs valid black video (program format) and no audio. It is used when the **live** bus’s content producer runs out of frames and Core has not yet issued the next control command. Air switches output to BlackFrameProducer **immediately** so the sink **always** receives valid output; no gaps, freezes, or invalid data. See [ProducerBusContract](ProducerBusContract.md) for the input path (preview + live buses) and the always-valid-output invariant.
 
-**BlackFrameProducer is not content.** It is a continuity guarantee. Core does not send segments to it; Air selects it only when the live producer underruns.
+**BlackFrameProducer is not content and not scheduled.** It is a **dead-man fallback** for output continuity. Core does not send segments to it, schedule it, or control it; Air selects it only when the live producer underruns. Air remains in this state indefinitely until Core explicitly reasserts control (e.g. LoadPreview + SwitchToLive). Entry into BlackFrameProducer may occur without any gRPC interaction and does not imply an error condition; it is a protective continuity state.
 
 ---
 
@@ -27,17 +27,18 @@ Define the observable guarantees for **BlackFrameProducer** — a fallback produ
 
 It does **not** take segment parameters from Core (asset_path, start_offset_ms, etc.). The engine invokes it only when switching to fallback; it runs until the engine switches back to the live bus.
 
-### 2.2 When It Is Used
+### 2.2 When It Is Used (dead-man failsafe)
 
-- The **live** bus’s producer (e.g. FileProducer) runs out of frames (EOF, buffer empty, or Core has not yet sent LoadPreview/UpdatePlan for the next segment).
-- Air **immediately** switches the output path to BlackFrameProducer (or equivalent feed: black frames, no audio).
-- The sink continues to receive valid video (black) and no audio until Core supplies new work and Air switches back to the live bus (with the new producer).
+- The **live** bus’s producer (e.g. FileProducer) runs out of frames (EOF, buffer empty, or Core has not yet issued the next control command).
+- Air **immediately** enters **failsafe mode** and switches the output path to BlackFrameProducer (black frames, no audio).
+- This is **dead-man behavior**: Air protects output continuity; it does **not** make a scheduling or "what comes next" decision.
+- The sink continues to receive valid video (black) and no audio until Core explicitly reasserts control (e.g. LoadPreview + SwitchToLive). Air remains in failsafe indefinitely until then.
 
 ### 2.3 When It Is Not Used
 
 - BlackFrameProducer is **not** used when the live producer has frames available.
-- It is **not** loaded on the preview or live bus as a segment; it is a separate fallback path.
-- It does **not** participate in LoadPreview or SwitchToLive as content; the engine switches to it internally on underrun.
+- It is **not** loaded on the preview or live bus as a segment; it is an **internal** fallback path, not a scheduled asset.
+- It does **not** participate in LoadPreview or SwitchToLive as content; the engine switches to it internally on underrun only.
 
 ---
 
@@ -60,17 +61,17 @@ It does **not** take segment parameters from Core (asset_path, start_offset_ms, 
 ### 3.3 Air (Engine) MUST
 
 - Detect when the live producer has run out of frames (no more frames available for the current segment).
-- **Immediately** switch output to BlackFrameProducer when such an underrun occurs.
-- Switch back from BlackFrameProducer to the live bus when Core has supplied new work (LoadPreview, SwitchToLive, UpdatePlan) and the live producer has frames ready.
-- Ensure the sink never receives a gap, freeze, or invalid data; BlackFrameProducer is the guarantee when content is temporarily unavailable.
+- **Immediately** switch output to BlackFrameProducer when such an underrun occurs (dead-man failsafe).
+- Switch back from BlackFrameProducer to the live bus **only** when Core has explicitly reasserted control (e.g. LoadPreview, SwitchToLive, UpdatePlan) and the live producer has frames ready.
+- Ensure the sink never receives a gap, freeze, or invalid data; BlackFrameProducer is the **failsafe** guarantee when content is temporarily unavailable—not a scheduling or sequencing decision.
 
 ---
 
 ## 4. Invariants (Must Always Hold)
 
-1. **BlackFrameProducer** is used only when the **live** producer has run out of frames and Core has not yet supplied the next segment.
+1. **BlackFrameProducer** is an **internal failsafe**, not a scheduled asset. It is used only when the **live** producer has run out of frames and Core has not yet issued the next control command.
 2. Output from BlackFrameProducer is **valid black video** (program format) and **no audio**, with monotonic PTS/DTS.
-3. The **sink always receives valid output**: either frames from the live producer, or frames from BlackFrameProducer. Never a gap, freeze, or invalid data (see [ProducerBusContract](ProducerBusContract.md) § Always-valid-output).
+3. The **sink always receives valid output**: either frames from the live producer, or frames from BlackFrameProducer (dead-man fallback). Never a gap, freeze, or invalid data. This reflects **dead-man behavior**, not scheduling logic (see [ProducerBusContract](ProducerBusContract.md) § Always-valid-output).
 
 ---
 
