@@ -9,7 +9,7 @@ MUST import from this module, not redefine locally.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from typing import Protocol
 
 
@@ -123,3 +123,39 @@ class ScheduleManager(Protocol):
 class ScheduleError(Exception):
     """Raised when schedule operations fail."""
     pass
+
+
+# =============================================================================
+# Phase 1 Types: Multiple Programs
+# =============================================================================
+
+@dataclass
+class ScheduledProgram:
+    """
+    A program assigned to a specific grid slot.
+
+    Phase 1 data structure representing a single program scheduled
+    at a particular time of day.
+    """
+    slot_time: time           # Grid-aligned time when this program starts
+    file_path: str            # Path to the program file
+    duration_seconds: float   # Duration of the program content
+    label: str = ""           # Optional label for debugging/logging
+
+
+@dataclass
+class DailyScheduleConfig:
+    """
+    Configuration for a daily repeating schedule with multiple programs.
+
+    Phase 1 configuration that replaces SimpleGridConfig when multiple
+    programs are needed throughout the broadcast day.
+
+    Note: DailyScheduleConfig is the concrete runtime config implementing
+    the DailySchedule contract from ScheduleManagerPhase1Contract.md.
+    """
+    grid_minutes: int                      # Grid slot duration (e.g., 30)
+    programs: list[ScheduledProgram]       # Programs throughout the day
+    filler_path: str                       # Path to filler content
+    filler_duration_seconds: float         # Duration of filler file
+    programming_day_start_hour: int = 6    # Broadcast day start
