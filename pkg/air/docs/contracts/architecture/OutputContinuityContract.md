@@ -16,6 +16,10 @@ It ensures that timestamps (PTS/DTS) never regress, remain monotonic per stream,
 
 OutputContinuity does not enforce real-time pacing and does not define media time. It only ensures that output timestamps are order-correct and decoder-safe.
 
+**Always-valid output:** The guarantee that the sink always receives valid output (no gaps, freezes, or invalid data) is achieved by **dead-man failsafe** (BlackFrameProducer), not by scheduling logic. When the live producer underruns and Core has not yet commanded the next action, Air switches to an internal BlackFrameProducer until Core reasserts control. That is continuity of *source* (failsafe); OutputContinuity (this contract) is continuity of *timestamps* on whatever source is active.
+
+**Clamp at end PTS:** When a producer reaches its end PTS (or equivalent hard-stop boundary) and Core has not yet issued the next control command, Air MUST NOT emit frames beyond that boundary. Air clamps output for that producer and satisfies always-valid-output by outputting black/silence (BlackFrameProducer or equivalent). This is **failsafe containment**—prefer **bounded silence/black** over **content bleed**—not a scheduling or transition decision. Timestamp continuity (this contract) applies to whatever output is active, including black/silence during containment.
+
 ---
 
 ## 2. Position in the Architecture
@@ -157,3 +161,4 @@ It is a **correctness discipline**, not a scheduler, not a clock, and not a paci
 - [OutputTiming Contract](OutputTimingContract.md) — Real-time pacing discipline.
 - [OutputBus & OutputSink Contract](OutputBusAndOutputSinkContract.md) — Output signal path.
 - [Playout Engine Contract](PlayoutEngineContract.md) — Timestamp assignment and control plane.
+- [BlackFrameProducer Contract](BlackFrameProducerContract.md) — Dead-man failsafe for always-valid output (source continuity).

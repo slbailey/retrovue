@@ -88,7 +88,7 @@ Define enforceable guarantees for session control: state transitions, preview/li
 - Preview asset (segment) can be loaded while live continues (or while no live).
 - LoadPreview installs segment into **preview** slot; live unchanged until SwitchToLive.
 - SwitchToLive promotes preview to live atomically; old live content stops (or is recycled); preview slot cleared or ready for next LoadPreview.
-- Producers do not “self-switch” or manage switch timing; engine owns switch timing.
+- **All content transitions are Core-commanded.** Producers do not “self-switch” or manage switch timing; engine never switches buses autonomously except when entering dead-man failsafe (live producer underrun → BlackFrameProducer). Engine owns switch timing only in response to Core commands or internal failsafe.
 
 ---
 

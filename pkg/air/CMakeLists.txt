@@ -138,6 +138,7 @@ set(AIR_CORE_SOURCES
   src/timing/SystemMasterClock.cpp
   src/producers/file/FileProducer.cpp
   src/producers/programmatic/ProgrammaticProducer.cpp
+  src/producers/black/BlackFrameProducer.cpp
   src/playout_sinks/mpegts/EncoderPipeline.cpp
   # Phase 9.0: OutputBus/OutputSink architecture
   src/output/OutputBus.cpp
@@ -228,4 +229,43 @@ enable_testing()
 add_test(
   NAME PlayoutEngineContracts
   COMMAND contracts_playoutengine_tests
+)
+
+# ---- Deterministic Harness Contract Tests ----
+# Tests control-plane and continuity invariants without real media files.
+# NOTE: These tests are designed to FAIL until BlackFrameProducer is implemented.
+add_executable(deterministic_harness_tests
+  tests/harness/deterministic/FakeProducers.cpp
+  tests/harness/deterministic/RecordingSink.cpp
+  tests/harness/deterministic/DeterministicTestHarness.cpp
+  tests/contracts/DeterministicHarness/DeterministicHarnessContractTests.cpp
+  tests/ContractRegistry.cpp
+  tests/contracts/ContractRegistryEnvironment.cpp
+  src/timing/TestMasterClock.cpp
+)
+
+target_link_libraries(deterministic_harness_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_link_options(deterministic_harness_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
+)
+
+target_include_directories(deterministic_harness_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/harness
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_test(
+  NAME DeterministicHarnessContracts
+  COMMAND deterministic_harness_tests
 )

@@ -6,6 +6,7 @@
 
 #include "retrovue/producers/IProducer.h"
 #include "retrovue/producers/file/FileProducer.h"
+#include "retrovue/producers/black/BlackFrameProducer.h"
 
 namespace retrovue::runtime
 {
@@ -469,6 +470,17 @@ namespace retrovue::runtime
     if (!preview_video_producer)
     {
       std::cout << "[PlayoutControl] Activate preview as live (simple producer)" << std::endl;
+
+      // Exit fallback mode if active (Core is reasserting control)
+      if (in_fallback_) {
+        std::cout << "[PlayoutControl] Exiting BLACK fallback (control reasserted)" << std::endl;
+        if (fallback_producer_) {
+          fallback_producer_->stop();
+          fallback_producer_.reset();
+        }
+        in_fallback_ = false;
+      }
+
       if (liveBus.loaded && liveBus.producer && liveBus.producer->isRunning())
         liveBus.producer->stop();
       liveBus.producer = std::move(previewBus.producer);
@@ -487,6 +499,16 @@ namespace retrovue::runtime
     }
 
     std::cout << "[PlayoutControl] Seamless switch: preview to live..." << std::endl;
+
+    // Exit fallback mode if active (Core is reasserting control)
+    if (in_fallback_) {
+      std::cout << "[PlayoutControl] Exiting BLACK fallback (control reasserted)" << std::endl;
+      if (fallback_producer_) {
+        fallback_producer_->stop();
+        fallback_producer_.reset();
+      }
+      in_fallback_ = false;
+    }
 
     // Seamless Switch Algorithm (FileProducer):
     // 1. Get last PTS from live producer
@@ -591,6 +613,108 @@ namespace retrovue::runtime
   {
     std::lock_guard<std::mutex> lock(mutex_);
     return sink_attached_;
+  }
+
+  // BlackFrameProducer fallback support
+
+  void PlayoutControl::ConfigureFallbackProducer(const ProgramFormat& format,
+                                                 buffer::FrameRingBuffer& buffer,
+                                                 std::shared_ptr<timing::MasterClock> clock)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fallback_format_ = format;
+    fallback_buffer_ = &buffer;
+    fallback_clock_ = std::move(clock);
+    std::cout << "[PlayoutControl] Fallback producer configured: "
+              << format.video.width << "x" << format.video.height
+              << " @ " << format.GetFrameRateAsDouble() << " fps" << std::endl;
+  }
+
+  // ============================================================================
+  // FALLBACK STATE MANAGEMENT
+  //
+  // NOTE: Fallback represents LOSS OF CORE DIRECTION. AIR has run out of content
+  // and Core has not yet told us what to do next. This is a dead-man failsafe,
+  // not a convenience mechanism.
+  //
+  // DO NOT exit fallback without an explicit Core command (LoadPreview + SwitchToLive).
+  // DO NOT add timers, heuristics, or "helpful" auto-recovery logic here.
+  // If you're tempted to make AIR "smarter" about exiting fallback, stop — that
+  // violates the architectural boundary. Core owns editorial intent, not AIR.
+  // ============================================================================
+
+  bool PlayoutControl::EnterFallback(int64_t continuation_pts_us)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (in_fallback_) {
+      return false;  // Already in fallback
+    }
+
+    if (!fallback_buffer_) {
+      std::cerr << "[PlayoutControl] Cannot enter fallback: not configured" << std::endl;
+      return false;
+    }
+
+    // Stop live producer if running
+    if (liveBus.producer && liveBus.producer->isRunning()) {
+      std::cout << "[PlayoutControl] Stopping live producer for fallback" << std::endl;
+      liveBus.producer->stop();
+    }
+
+    // Create and start BlackFrameProducer with PTS continuity
+    fallback_producer_ = std::make_unique<producers::black::BlackFrameProducer>(
+        *fallback_buffer_, fallback_format_, fallback_clock_, continuation_pts_us);
+
+    if (!fallback_producer_->start()) {
+      std::cerr << "[PlayoutControl] Failed to start fallback producer" << std::endl;
+      fallback_producer_.reset();
+      return false;
+    }
+
+    in_fallback_ = true;
+    ++fallback_entry_count_;
+    std::cout << "[PlayoutControl] Entered BLACK fallback at PTS " << continuation_pts_us
+              << " (dead-man failsafe, entry #" << fallback_entry_count_ << ")" << std::endl;
+    return true;
+  }
+
+  bool PlayoutControl::ExitFallback()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!in_fallback_) {
+      return false;  // Not in fallback
+    }
+
+    // Stop BlackFrameProducer
+    if (fallback_producer_) {
+      std::cout << "[PlayoutControl] Stopping fallback producer" << std::endl;
+      fallback_producer_->stop();
+      fallback_producer_.reset();
+    }
+
+    in_fallback_ = false;
+    std::cout << "[PlayoutControl] Exited BLACK fallback (control reasserted)" << std::endl;
+    return true;
+  }
+
+  bool PlayoutControl::IsInFallback() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return in_fallback_;
+  }
+
+  uint64_t PlayoutControl::GetFallbackEntryCount() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return fallback_entry_count_;
+  }
+
+  producers::black::BlackFrameProducer* PlayoutControl::GetFallbackProducer() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return fallback_producer_.get();
   }
 
 } // namespace retrovue::runtime

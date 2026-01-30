@@ -15,6 +15,8 @@
 
 #include "retrovue/runtime/TimingLoop.h"
 #include "retrovue/runtime/ProducerBus.h"
+#include "retrovue/runtime/ProgramFormat.h"
+#include "retrovue/producers/black/BlackFrameProducer.h"
 
 namespace retrovue {
 namespace buffer {
@@ -174,6 +176,75 @@ class PlayoutControl {
   // Returns true if a sink is currently attached.
   [[nodiscard]] bool IsSinkAttached() const;
 
+  // ============================================================================
+  // BlackFrameProducer Fallback Support (per BlackFrameProducerContract.md)
+  // ============================================================================
+  //
+  // INVARIANT 1: Fallback is a DEAD-MAN STATE, not a convenience mechanism.
+  //   - AIR enters fallback ONLY when the live producer has no frames available
+  //     (underrun, EOF, or end-PTS clamp reached) AND Core has not yet issued
+  //     the next control command.
+  //   - Fallback is NEVER entered during planned transitions, between segments,
+  //     or as part of SwitchToLive/preview promotion.
+  //
+  // INVARIANT 2: Fallback exit requires EXPLICIT Core reassertion.
+  //   - AIR remains in fallback indefinitely until Core issues LoadPreview +
+  //     SwitchToLive (or equivalent command).
+  //   - AIR does NOT exit fallback due to time passing, producers becoming
+  //     available, or internal heuristics.
+  //
+  // INVARIANT 3: End-PTS clamp triggers fallback.
+  //   - When a producer reaches its end-PTS boundary, it is considered
+  //     exhausted (IsExhausted() returns true).
+  //   - This causes fallback entry, reflecting that Core failed to supply
+  //     the next segment before the current one ended.
+  //   - This is intentional: end-PTS exhaustion = loss of direction = fallback.
+  //
+  // ============================================================================
+
+  // Configures the fallback producer with the program format.
+  // Must be called before fallback can be entered.
+  void ConfigureFallbackProducer(const ProgramFormat& format,
+                                 buffer::FrameRingBuffer& buffer,
+                                 std::shared_ptr<timing::MasterClock> clock);
+
+  // Enters fallback mode (dead-man failsafe).
+  //
+  // PRECONDITIONS (caller must ensure):
+  //   - Live producer has no frames available (underrun/EOF/end-PTS)
+  //   - Core has not yet issued the next control command
+  //
+  // This method MUST NOT be called:
+  //   - During planned transitions
+  //   - As part of SwitchToLive or preview promotion
+  //   - For convenience or "between segments"
+  //
+  // Returns true if fallback was entered, false if already in fallback.
+  bool EnterFallback(int64_t continuation_pts_us);
+
+  // Exits fallback mode.
+  //
+  // This method MUST ONLY be called as a result of an explicit Core command
+  // (e.g., SwitchToLive via activatePreviewAsLive).
+  //
+  // AIR MUST NOT call this method autonomously based on:
+  //   - Time passing
+  //   - Producers becoming available
+  //   - Internal heuristics
+  //
+  // Returns true if fallback was exited, false if not in fallback.
+  bool ExitFallback();
+
+  // Returns true if currently in fallback mode (BlackFrameProducer active).
+  [[nodiscard]] bool IsInFallback() const;
+
+  // Returns the number of times fallback has been entered (telemetry).
+  [[nodiscard]] uint64_t GetFallbackEntryCount() const;
+
+  // Returns the BlackFrameProducer (for inspection/testing).
+  // May return nullptr if fallback is not configured or not active.
+  [[nodiscard]] producers::black::BlackFrameProducer* GetFallbackProducer() const;
+
  private:
   void TransitionLocked(RuntimePhase to, int64_t event_utc_us);
   void RecordTransitionLocked(RuntimePhase from, RuntimePhase to);
@@ -216,6 +287,14 @@ class PlayoutControl {
 
   // Sink attachment tracking (Phase 9.0: OutputBus/OutputSink)
   bool sink_attached_ = false;
+
+  // BlackFrameProducer fallback state
+  std::unique_ptr<producers::black::BlackFrameProducer> fallback_producer_;
+  bool in_fallback_ = false;
+  uint64_t fallback_entry_count_ = 0;  // Telemetry: times fallback entered
+  ProgramFormat fallback_format_;
+  buffer::FrameRingBuffer* fallback_buffer_ = nullptr;
+  std::shared_ptr<timing::MasterClock> fallback_clock_;
 };
 
 }  // namespace retrovue::runtime
