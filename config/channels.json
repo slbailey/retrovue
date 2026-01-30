@@ -17,6 +17,27 @@
       },
       "schedule_source": "mock",
       "schedule_config": {}
+    },
+    {
+      "channel_id": "cheers-24-7",
+      "channel_id_int": 2,
+      "name": "Cheers 24/7",
+      "program_format": {
+        "video": {
+          "width": 968,
+          "height": 720,
+          "frame_rate": "30/1"
+        },
+        "audio": {
+          "sample_rate": 48000,
+          "channels": 2
+        }
+      },
+      "schedule_source": "phase3",
+      "schedule_config": {
+        "grid_minutes": 30,
+        "filler_path": "/opt/retrovue/assets/filler.mp4"
+      }
     }
   ]
 }

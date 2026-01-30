@@ -31,7 +31,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from threading import Thread
@@ -55,6 +55,7 @@ from retrovue.runtime.config import (
     InlineChannelConfigProvider,
     MOCK_CHANNEL_CONFIG,
 )
+from retrovue.runtime.phase3_schedule_service import Phase3ScheduleService
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -206,6 +207,8 @@ class ProgramDirector:
         self._managers: dict[str, Any] = {}
         self._managers_lock = threading.Lock()
         self._schedule_service: Optional[Any] = None
+        # Phase 5: Per-channel schedule services for Phase 3 mode
+        self._phase3_schedule_services: dict[str, Phase3ScheduleService] = {}
         self._phase8_program_director: Optional[Any] = None
         self._channel_config_provider: Optional[Any] = None
         self._producer_factory: Optional[Callable[..., Any]] = None
@@ -322,6 +325,45 @@ class ProgramDirector:
         self._producer_factory = _create_air_producer
         self._health_check_stop = threading.Event()
 
+    def _get_schedule_service_for_channel(self, channel_id: str, channel_config: ChannelConfig) -> Any:
+        """
+        Get appropriate schedule service based on channel config.
+
+        INV-P5-001: Config-Driven Activation - schedule_source: "phase3" enables Phase 3 mode.
+        """
+        schedule_source = channel_config.schedule_source
+
+        if schedule_source == "phase3":
+            # Phase 5: Use Phase3ScheduleService for this channel
+            if channel_id not in self._phase3_schedule_services:
+                schedule_config = channel_config.schedule_config
+                programs_dir = Path(schedule_config.get("programs_dir", "config/programs"))
+                schedules_dir = Path(schedule_config.get("schedules_dir", "config/schedules"))
+                filler_path = schedule_config.get("filler_path", "/opt/retrovue/assets/filler.mp4")
+                filler_duration = schedule_config.get("filler_duration_seconds", 3650.0)
+                grid_minutes = schedule_config.get("grid_minutes", 30)
+
+                self._logger.info(
+                    "[channel %s] Creating Phase3ScheduleService (schedule_source=%s)",
+                    channel_id,
+                    schedule_source,
+                )
+
+                service = Phase3ScheduleService(
+                    clock=self._embedded_clock,
+                    programs_dir=programs_dir,
+                    schedules_dir=schedules_dir,
+                    filler_path=filler_path,
+                    filler_duration_seconds=filler_duration,
+                    grid_minutes=grid_minutes,
+                )
+                self._phase3_schedule_services[channel_id] = service
+
+            return self._phase3_schedule_services[channel_id]
+
+        # Default: use the existing schedule service (Phase 8 or mock)
+        return self._schedule_service
+
     def _get_or_create_manager(self, channel_id: str) -> Any:
         """Get or create ChannelManager for a channel (embedded mode). PD is sole authority for creation."""
         with self._managers_lock:
@@ -333,7 +375,11 @@ class ProgramDirector:
                         channel_id,
                     )
                     channel_config = MOCK_CHANNEL_CONFIG
-                success, error = self._schedule_service.load_schedule(channel_id)
+
+                # INV-P5-001: Select schedule service based on channel config
+                schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
+
+                success, error = schedule_service.load_schedule(channel_id)
                 if not success:
                     from retrovue.runtime.channel_manager import ChannelManagerError
                     raise ChannelManagerError(f"Failed to load schedule for {channel_id}: {error}")
@@ -341,7 +387,7 @@ class ProgramDirector:
                 manager = ChannelManager(
                     channel_id=channel_id,
                     clock=self._embedded_clock,
-                    schedule_service=self._schedule_service,
+                    schedule_service=schedule_service,
                     program_director=self._phase8_program_director,
                 )
                 manager.channel_config = channel_config
@@ -1095,11 +1141,93 @@ class ProgramDirector:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
+        @self.fastapi_app.get("/api/epg/{channel_id}")
+        async def get_epg(
+            channel_id: str,
+            start: Optional[str] = None,
+            end: Optional[str] = None,
+        ) -> Any:
+            """
+            Phase 5 contract: EPG endpoint for a channel.
+
+            INV-P5-004: EPG Endpoint Independence - works without active viewers.
+
+            Query params:
+                start: ISO 8601 start time (default: now)
+                end: ISO 8601 end time (default: start + 24 hours)
+
+            Returns:
+                JSON with EPG events for the time range.
+            """
+            # Get channel config
+            channel_config = None
+            if self._channel_config_provider is not None:
+                channel_config = self._channel_config_provider.get_channel_config(channel_id)
+
+            if channel_config is None:
+                return Response(
+                    content=f"Channel not found: {channel_id}",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Only Phase 3 channels support EPG
+            if channel_config.schedule_source != "phase3":
+                return {"channel_id": channel_id, "events": [], "message": "EPG not available for this channel type"}
+
+            # Get or create Phase 3 schedule service
+            try:
+                schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
+                success, error = schedule_service.load_schedule(channel_id)
+                if not success:
+                    return Response(
+                        content=f"Failed to load schedule: {error}",
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+            except Exception as e:
+                self._logger.error("Error getting schedule service for EPG: %s", e)
+                return Response(
+                    content=f"Internal error: {e}",
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Parse time range
+            now = datetime.now(timezone.utc)
+            try:
+                if start:
+                    start_time = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                else:
+                    start_time = now
+                if end:
+                    end_time = datetime.fromisoformat(end.replace("Z", "+00:00"))
+                else:
+                    end_time = start_time + timedelta(hours=24)
+            except ValueError as e:
+                return Response(
+                    content=f"Invalid time format: {e}",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Get EPG events
+            try:
+                events = schedule_service.get_epg_events(channel_id, start_time, end_time)
+                return {
+                    "channel_id": channel_id,
+                    "start_time": start_time.isoformat(),
+                    "end_time": end_time.isoformat(),
+                    "events": events,
+                }
+            except Exception as e:
+                self._logger.error("Error getting EPG events: %s", e)
+                return Response(
+                    content=f"Error getting EPG: {e}",
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
         @self.fastapi_app.post("/admin/emergency")
         async def emergency_override() -> dict[str, Any]:
             """
             Phase 0 contract: Emergency override endpoint (placeholder/no-op for now).
-            
+
             In Phase 0, this is a no-op. Future phases will enforce global overrides.
             """
             # Phase 0: No-op implementation
