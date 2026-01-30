@@ -504,11 +504,97 @@ THEN:  Each sample:
        - No identity drift
 ```
 
+### Minimum Grid Occupancy Tests
+
+#### P4-T016: Minimum Blocks for Content Shorter Than Grid
+
+```
+GIVEN: Episode duration = 25:01 (1501s)
+       Grid size = 30 minutes (1800s)
+WHEN:  Schedule is resolved
+THEN:  Exactly 1 grid block is allocated
+       EPG duration = 30:00 (1800s)
+       Filler duration = 4:59 (299s)
+       NOT 2 grid blocks (60 minutes)
+```
+
+#### P4-T017: Minimum Blocks for Content Spanning Multiple Grids
+
+```
+GIVEN: Episode duration = 42 minutes (2520s)
+       Grid size = 15 minutes (900s)
+WHEN:  Schedule is resolved
+THEN:  Exactly 3 grid blocks are allocated (ceil(42/15) = 3)
+       EPG duration = 45:00 (2700s)
+       Filler duration = 3:00 (180s)
+       NOT 4 grid blocks (60 minutes)
+```
+
+#### P4-T018: Exact Grid Fit Requires No Extra Blocks
+
+```
+GIVEN: Episode duration = 30:00 (1800s)
+       Grid size = 30 minutes (1800s)
+WHEN:  Schedule is resolved
+THEN:  Exactly 1 grid block is allocated
+       EPG duration = 30:00 (1800s)
+       Filler duration = 0
+       No extra block allocated
+```
+
+#### P4-T019: Over-Allocation Detection
+
+```
+GIVEN: A hypothetical faulty implementation that allocates
+       ceil(duration/grid) + 1 blocks
+WHEN:  Tests verify block count
+THEN:  Test MUST fail
+       Error message indicates over-allocation
+```
+
 ---
 
 ## Phase 4 Invariants
 
-Phase 4 introduces no new invariants. It validates existing Phase 3 invariants with real data.
+Phase 4 introduces one new invariant and validates existing Phase 3 invariants with real data.
+
+### INV-P4-001: Minimum Grid Occupancy
+
+For any resolved asset with content duration D and grid size G, the ScheduleManager MUST:
+
+1. Allocate exactly `ceil(D / G)` contiguous grid blocks
+2. NOT allocate more grid blocks than mathematically required
+3. Fill any remaining time in the final grid block with filler content
+
+**Rationale:** This rule ensures predictable schedule density. Without it, schedule drift accumulates and downstream features (ads, promos, live content) cannot rely on grid boundaries.
+
+**Formula:**
+```
+grid_seconds = G * 60
+blocks_required = ceil(D / grid_seconds)
+epg_duration_seconds = blocks_required * grid_seconds
+filler_duration = epg_duration_seconds - D
+```
+
+**Examples:**
+
+| Content Duration | Grid Size | Blocks | EPG Duration | Filler |
+|------------------|-----------|--------|--------------|--------|
+| 22:34 (1354s) | 30 min | 1 | 30:00 | 7:26 |
+| 25:01 (1501s) | 30 min | 1 | 30:00 | 4:59 |
+| 42:00 (2520s) | 15 min | 3 | 45:00 | 3:00 |
+| 42:00 (2520s) | 30 min | 2 | 60:00 | 18:00 |
+| 30:00 (1800s) | 30 min | 1 | 30:00 | 0:00 |
+
+**Anti-pattern (MUST NOT):**
+```
+Content: 42 minutes
+Grid: 15 minutes
+WRONG: 4 blocks (60 minutes) with 18 minutes filler
+RIGHT: 3 blocks (45 minutes) with 3 minutes filler
+```
+
+### Validation of Phase 3 Invariants
 
 | ID | Validation Target |
 |----|-------------------|

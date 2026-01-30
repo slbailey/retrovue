@@ -10,6 +10,7 @@ Implements ScheduleManager protocol as defined in:
 
 from datetime import datetime, date, time, timedelta
 import hashlib
+import math
 
 from retrovue.runtime.schedule_types import (
     PlayoutSegment,
@@ -578,12 +579,10 @@ class Phase3ScheduleManager:
             if resolved:
                 for slot in resolved.resolved_slots:
                     slot_start = self._slot_to_datetime(day_date, slot.slot_time)
-                    # INV-P3-009: Content Duration Supremacy
-                    content_duration = (
-                        slot.resolved_asset.content_duration_seconds
-                        or slot.duration_seconds
-                    )
-                    slot_end = slot_start + timedelta(seconds=content_duration)
+                    # INV-P4-001: EPG uses grid-aligned duration (minimum blocks)
+                    # slot.duration_seconds was computed during resolution as
+                    # ceil(content_duration / grid) * grid
+                    slot_end = slot_start + timedelta(seconds=slot.duration_seconds)
 
                     if slot_start < end_time and slot_end > start_time:
                         events.append(EPGEvent(
@@ -628,15 +627,28 @@ class Phase3ScheduleManager:
 
         # Resolve each slot
         resolved_slots = []
+        grid_seconds = self._config.grid_minutes * 60
+
         for slot in slots:
             resolved_asset = self._resolve_program_ref(
                 channel_id, slot.program_ref, programming_day_date, slot.slot_time
             )
+
+            # INV-P4-001: Minimum Grid Occupancy
+            # Compute exactly ceil(content_duration / grid) blocks
+            content_duration = resolved_asset.content_duration_seconds
+            if content_duration > 0:
+                blocks_required = math.ceil(content_duration / grid_seconds)
+                actual_duration = blocks_required * grid_seconds
+            else:
+                # Fallback to slot duration if content duration unknown
+                actual_duration = slot.duration_seconds
+
             resolved_slots.append(ResolvedSlot(
                 slot_time=slot.slot_time,
                 program_ref=slot.program_ref,
                 resolved_asset=resolved_asset,
-                duration_seconds=slot.duration_seconds,
+                duration_seconds=actual_duration,
                 label=slot.label,
             ))
 
@@ -873,12 +885,9 @@ class Phase3ScheduleManager:
             for slot in resolved_day.resolved_slots:
                 slot_start = self._slot_to_datetime(programming_day_date, slot.slot_time)
 
-                # INV-P3-009: Content Duration Supremacy
-                content_duration = (
-                    slot.resolved_asset.content_duration_seconds
-                    or slot.duration_seconds
-                )
-                slot_end = slot_start + timedelta(seconds=content_duration)
+                # INV-P4-001: Use grid-aligned duration for slot coverage
+                # slot.duration_seconds = ceil(content_duration / grid) * grid
+                slot_end = slot_start + timedelta(seconds=slot.duration_seconds)
 
                 # Check if block_start falls within slot's time window
                 if slot_start <= block_start < slot_end:
