@@ -610,14 +610,21 @@ class ChannelManager:
         self.runtime_state.producer_started_at = station_time
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
-        # Clock-driven switching: segment end time from schedule (not media). Time alone advances the schedule.
-        duration_s = self._segment_duration_seconds(playout_plan[0])
-        if duration_s > 0:
-            self._segment_end_time_utc = station_time + timedelta(seconds=duration_s)
-            self._preload_done_for_next = False
+        # Clock-driven switching: use end_time_utc from schedule for exact grid boundary timing.
+        # DO NOT calculate from station_time + duration - that's wrong for mid-segment joins.
+        end_time_str = playout_plan[0].get("end_time_utc")
+        if end_time_str:
+            self._segment_end_time_utc = datetime.fromisoformat(end_time_str)
+            if self._segment_end_time_utc.tzinfo is None:
+                self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
         else:
-            self._segment_end_time_utc = None
-            self._preload_done_for_next = False
+            # Fallback for legacy schedules without end_time_utc
+            duration_s = self._segment_duration_seconds(playout_plan[0])
+            if duration_s > 0:
+                self._segment_end_time_utc = station_time + timedelta(seconds=duration_s)
+            else:
+                self._segment_end_time_utc = None
+        self._preload_done_for_next = False
 
     def _segment_duration_seconds(self, segment: dict[str, Any]) -> float:
         """Duration of segment from schedule (seconds). Uses duration_seconds or metadata.segment_seconds."""
@@ -678,15 +685,22 @@ class ChannelManager:
                     self.channel_id, seg_ts, actual_ts,
                 )
                 self._last_switch_at_segment_end_utc = segment_end
-                # Advance to next segment: end time = current boundary + next segment duration.
+                # Advance to next segment: use end_time_utc from schedule for exact timing.
                 next_plan = self.schedule_service.get_playout_plan_now(self.channel_id, segment_end)
                 if next_plan:
-                    next_duration = self._segment_duration_seconds(next_plan[0])
-                    if next_duration > 0:
-                        self._segment_end_time_utc = segment_end + timedelta(seconds=next_duration)
-                        self._preload_done_for_next = False
+                    next_end_str = next_plan[0].get("end_time_utc")
+                    if next_end_str:
+                        self._segment_end_time_utc = datetime.fromisoformat(next_end_str)
+                        if self._segment_end_time_utc.tzinfo is None:
+                            self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
                     else:
-                        self._segment_end_time_utc = None
+                        # Fallback for legacy schedules
+                        next_duration = self._segment_duration_seconds(next_plan[0])
+                        if next_duration > 0:
+                            self._segment_end_time_utc = segment_end + timedelta(seconds=next_duration)
+                        else:
+                            self._segment_end_time_utc = None
+                    self._preload_done_for_next = False
                 else:
                     self._segment_end_time_utc = None
 

@@ -201,7 +201,9 @@ namespace retrovue
       const int64_t hard_stop_time_ms = request->hard_stop_time_ms();
 
       std::cout << "[LoadPreview] Request received: channel_id=" << channel_id
-                << ", asset_path=" << asset_path << std::endl;
+                << ", asset_path=" << asset_path
+                << ", start_offset_ms=" << start_offset_ms
+                << ", hard_stop_time_ms=" << hard_stop_time_ms << std::endl;
 
       auto result = interface_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
 

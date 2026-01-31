@@ -121,6 +121,16 @@ class ProgramOutput {
   // Called when switching producers to ensure clean state.
   void resetPipeline();
 
+  // Redirects input to a different buffer (for hot-switching buses).
+  // Per OutputSwitchingContract: Output Bus can change its source immediately.
+  // Thread-safe: takes effect on next frame pop.
+  void SetInputBuffer(buffer::FrameRingBuffer* buffer);
+
+  // Phase 7: Returns the PTS of the last emitted frame.
+  // Used by SwitchToLive to ensure PTS continuity across segment boundaries.
+  // Per INV-P7-001: Channel PTS must be monotonically increasing.
+  int64_t GetLastEmittedPTS() const;
+
   // Phase 8.4: Optional callback invoked for each frame (e.g. to feed TS mux).
   void SetSideSink(std::function<void(const buffer::Frame&)> fn);
   void ClearSideSink();
@@ -168,7 +178,8 @@ class ProgramOutput {
   void PublishMetrics(double frame_gap_ms);
 
   RenderConfig config_;
-  buffer::FrameRingBuffer& input_buffer_;
+  buffer::FrameRingBuffer* input_buffer_;  // Pointer for hot-switch redirection
+  mutable std::mutex input_buffer_mutex_;  // Protects input_buffer_ pointer
   RenderStats stats_;
 
   std::shared_ptr<timing::MasterClock> clock_;

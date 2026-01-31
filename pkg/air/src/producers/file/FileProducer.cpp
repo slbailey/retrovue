@@ -25,6 +25,7 @@ extern "C" {
 
 #include "retrovue/runtime/AspectPolicy.h"
 #include "retrovue/timing/MasterClock.h"
+#include "retrovue/timing/TimelineController.h"
 
 #include <cstring>
 
@@ -41,14 +42,17 @@ namespace retrovue::producers::file
       const ProducerConfig &config,
       buffer::FrameRingBuffer &output_buffer,
       std::shared_ptr<timing::MasterClock> clock,
-      ProducerEventCallback event_callback)
+      ProducerEventCallback event_callback,
+      timing::TimelineController* timeline_controller)
       : config_(config),
         output_buffer_(output_buffer),
         master_clock_(clock),
+        timeline_controller_(timeline_controller),
         event_callback_(event_callback),
         state_(ProducerState::STOPPED),
         stop_requested_(false),
         teardown_requested_(false),
+        writes_disabled_(false),
         frames_produced_(0),
         buffer_full_count_(0),
         decode_errors_(0),
@@ -76,17 +80,27 @@ namespace retrovue::producers::file
         audio_time_base_(0.0),
         audio_eof_reached_(false),
         last_audio_pts_us_(0),
+        effective_seek_target_us_(0),
         stub_pts_counter_(0),
         frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
         next_stub_deadline_utc_(0),
         shadow_decode_mode_(false),
         shadow_decode_ready_(false),
         pts_offset_us_(0),
+        pts_aligned_(false),
         aspect_policy_(runtime::AspectPolicy::Preserve),
         scale_width_(0),
         scale_height_(0),
         pad_x_(0),
-        pad_y_(0)
+        pad_y_(0),
+        video_frame_count_(0),
+        video_discard_count_(0),
+        audio_frame_count_(0),
+        frames_since_producer_start_(0),
+        audio_skip_count_(0),
+        audio_drop_count_(0),
+        audio_ungated_logged_(false),
+        scale_diag_count_(0)
   {
   }
 
@@ -218,9 +232,23 @@ namespace retrovue::producers::file
 
   void FileProducer::ForceStop()
   {
+    // Phase 7: Hard write barrier - disable writes BEFORE signaling stop
+    // This prevents any in-flight frames from being pushed after this point
+    writes_disabled_.store(true, std::memory_order_release);
     stop_requested_.store(true, std::memory_order_release);
-    std::cout << "[FileProducer] Force stop requested" << std::endl;
+    std::cout << "[FileProducer] Force stop requested (writes disabled)" << std::endl;
     EmitEvent("force_stop", "");
+  }
+
+  void FileProducer::SetWriteBarrier()
+  {
+    // Phase 8: Disable writes without stopping the producer.
+    // Producer continues decoding but frames are silently dropped.
+    // Used when switching segments to prevent old producer from affecting
+    // the TimelineController's segment mapping.
+    writes_disabled_.store(true, std::memory_order_release);
+    std::cout << "[FileProducer] Write barrier set (producer continues decoding)" << std::endl;
+    EmitEvent("write_barrier", "");
   }
 
   bool FileProducer::isRunning() const
@@ -619,9 +647,89 @@ namespace retrovue::producers::file
       return false;
     }
 
-    // TODO: Container seek for mid-program join - disabled until debugged
-    // The seek + frame admission approach needs more testing
-    // if (config_.start_offset_ms > 0) { ... }
+    // Phase 6 (INV-P6-002): Container seek for mid-segment join
+    // When start_offset_ms > 0, seek to the nearest keyframe at or before target PTS
+    if (config_.start_offset_ms > 0)
+    {
+      auto seek_start_time = std::chrono::steady_clock::now();
+
+      // Get media duration for modulo calculation (INV-P6-008)
+      AVStream* video_stream = format_ctx_->streams[video_stream_index_];
+      int64_t media_duration_us = 0;
+      if (format_ctx_->duration != AV_NOPTS_VALUE)
+      {
+        // format_ctx_->duration is in AV_TIME_BASE (microseconds)
+        media_duration_us = format_ctx_->duration;
+      }
+      else if (video_stream->duration != AV_NOPTS_VALUE)
+      {
+        // Stream duration in stream time_base
+        media_duration_us = av_rescale_q(
+            video_stream->duration,
+            video_stream->time_base,
+            {1, static_cast<int>(kMicrosecondsPerSecond)});
+      }
+
+      // Calculate effective seek target in media time (INV-P6-008)
+      // For looping content: target = start_offset % media_duration
+      int64_t raw_target_us = config_.start_offset_ms * 1000;  // ms -> us
+      int64_t target_us = raw_target_us;
+
+      if (media_duration_us > 0 && raw_target_us >= media_duration_us)
+      {
+        target_us = raw_target_us % media_duration_us;
+        std::cout << "[FileProducer] Phase 6 (INV-P6-008): Adjusted seek target for looping - "
+                  << "raw_offset=" << raw_target_us << "us, media_duration=" << media_duration_us
+                  << "us, effective_target=" << target_us << "us" << std::endl;
+      }
+
+      // Store effective seek target for frame admission (INV-P6-008)
+      effective_seek_target_us_ = target_us;
+
+      int64_t target_ts = av_rescale_q(
+          target_us,
+          {1, static_cast<int>(kMicrosecondsPerSecond)},
+          video_stream->time_base);
+
+      std::cout << "[FileProducer] Phase 6: Seeking to offset " << (target_us / 1000)
+                << "ms (target_ts=" << target_ts << " in stream time_base)" << std::endl;
+
+      // INV-P6-002: Seek to nearest keyframe at or before target
+      // INV-P6-003: Single seek per join (no retry loops)
+      int seek_ret = av_seek_frame(format_ctx_, video_stream_index_, target_ts, AVSEEK_FLAG_BACKWARD);
+
+      if (seek_ret < 0)
+      {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(seek_ret, errbuf, sizeof(errbuf));
+        std::cerr << "[FileProducer] Phase 6: Seek failed (" << errbuf
+                  << "), falling back to decode-from-start with frame admission" << std::endl;
+        // INV-P6-003: No retry loop - fall back to decode-from-start
+        // Frame admission (INV-P6-004) will still filter frames < start_offset
+      }
+      else
+      {
+        // INV-P6-006: Flush decoder buffers after seek to maintain A/V sync
+        avcodec_flush_buffers(codec_ctx_);
+
+        if (audio_codec_ctx_ != nullptr)
+        {
+          avcodec_flush_buffers(audio_codec_ctx_);
+        }
+
+        auto seek_end_time = std::chrono::steady_clock::now();
+        auto seek_latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            seek_end_time - seek_start_time).count();
+
+        // Phase 6 observability: emit structured log
+        std::cout << "[FileProducer] Phase 6: Seek complete - target_pts=" << target_us
+                  << "us, seek_latency_ms=" << seek_latency_ms << std::endl;
+
+        std::ostringstream msg;
+        msg << "target_pts=" << target_us << "us, seek_latency_ms=" << seek_latency_ms;
+        EmitEvent("seek_complete", msg.str());
+      }
+    }
 
     decoder_initialized_ = true;
     eof_reached_ = false;
@@ -752,22 +860,24 @@ namespace retrovue::producers::file
     // Send packet to decoder
     ret = avcodec_send_packet(codec_ctx_, packet_);
     av_packet_unref(packet_);
-    
+
     if (ret < 0)
     {
+      std::cerr << "[FileProducer] Video send_packet error: " << ret << std::endl;
       return false;  // Decode error
     }
 
     // Receive decoded frame
     ret = avcodec_receive_frame(codec_ctx_, frame_);
-    
+
     if (ret == AVERROR(EAGAIN))
     {
       return true;  // Need more packets, try again
     }
-    
+
     if (ret < 0)
     {
+      std::cerr << "[FileProducer] Video receive_frame error: " << ret << std::endl;
       return false;  // Decode error
     }
 
@@ -785,59 +895,216 @@ namespace retrovue::producers::file
 
     // Extract frame PTS in microseconds (media-relative)
     int64_t base_pts_us = output_frame.metadata.pts;
-    // Phase 8.2: frame admission — discard until presentation_time (media PTS) >= start_offset_ms
-    const int64_t start_offset_us = static_cast<int64_t>(config_.start_offset_ms) * 1000;
-    if (base_pts_us < start_offset_us)
+
+    // Debug: log video frame decode with full PTS info for diagnosis
+    video_frame_count_++;
+    if (video_frame_count_ <= 10 || video_frame_count_ % 100 == 0)
     {
+      std::cout << "[FileProducer] VIDEO_PTS raw_ts=" << frame_->pts
+                << " tb=" << format_ctx_->streams[video_stream_index_]->time_base.num
+                << "/" << format_ctx_->streams[video_stream_index_]->time_base.den
+                << " -> pts_us=" << base_pts_us
+                << " target_us=" << effective_seek_target_us_
+                << (base_pts_us < effective_seek_target_us_ ? " DISCARD" : " EMIT")
+                << std::endl;
+    }
+
+    // Phase 8: Load shadow mode state early - needed for gating decisions
+    bool in_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
+
+    // Phase 6 (INV-P6-004/INV-P6-008): frame admission — discard until PTS >= effective_seek_target
+    // SCOPED by Phase 8 (INV-P8-TIME-BLINDNESS): This gating applies ONLY when:
+    //   - TimelineController is NOT active (legacy mode), OR
+    //   - Producer is in shadow mode, OR
+    //   - TimelineController mapping is PENDING (awaiting seek-stable frame to lock)
+    //
+    // The mapping_pending case is CRITICAL: when BeginSegment is called, the mapping
+    // is pending until the first frame locks it. We MUST continue Phase 6 gating
+    // during this window to ensure only seek-stable frames (MT >= target) can lock
+    // the mapping. Without this, the first random keyframe would lock with wrong MT.
+    bool mapping_pending = timeline_controller_ && timeline_controller_->IsMappingPending();
+    bool phase6_gating_active = !timeline_controller_ || in_shadow_mode || mapping_pending;
+
+    if (phase6_gating_active && base_pts_us < effective_seek_target_us_)
+    {
+      video_discard_count_++;
+      if (video_discard_count_ <= 5 || video_discard_count_ % 100 == 0)
+      {
+        std::cout << "[FileProducer] DROP_VIDEO_BEFORE_START #" << video_discard_count_
+                  << " pts_us=" << base_pts_us
+                  << " target_us=" << effective_seek_target_us_
+                  << " (need " << ((effective_seek_target_us_ - base_pts_us) / 1000) << "ms more)"
+                  << std::endl;
+      }
       return true;  // Discard frame; continue decoding
+    }
+
+    // Phase 6 (INV-P6-005/INV-P6-ALIGN-FIRST-FRAME): Log first emitted frame accuracy after seek
+    // SCOPED by Phase 8: Only log in legacy/shadow mode. In Phase 8 with TimelineController,
+    // "first frame accuracy" is meaningless - TimelineController assigns CT, not producer.
+    if (phase6_gating_active && effective_seek_target_us_ > 0 && first_frame_pts_us_ == 0)
+    {
+      int64_t accuracy_us = base_pts_us - effective_seek_target_us_;
+      std::cout << "[FileProducer] Phase 6: First emitted video frame - target_pts=" << effective_seek_target_us_
+                << "us, first_emitted_pts=" << base_pts_us
+                << "us, accuracy=" << accuracy_us << "us ("
+                << (accuracy_us / 1000) << "ms)" << std::endl;
+
+      std::ostringstream msg;
+      msg << "target_pts=" << effective_seek_target_us_ << "us, first_emitted_pts=" << base_pts_us
+          << "us, accuracy_ms=" << (accuracy_us / 1000);
+      EmitEvent("first_frame_emitted", msg.str());
     }
 
     // Phase 8.6: no duration-based cutoff. Run until natural EOF (decoder returns no more frames).
     // segment_end_pts_us_ is not used to stop; asset duration may be logged but must not force stop.
 
-    // Apply PTS offset for alignment
-    int64_t frame_pts_us = base_pts_us + pts_offset_us_;
+    // Phase 8: Unified Timeline Authority
+    // Three paths for PTS/CT assignment:
+    // 1. Shadow mode: emit raw MT only (time-blind, no CT assignment)
+    // 2. TimelineController available: use it for CT assignment
+    // 3. Legacy (no TimelineController): use pts_offset_us_
+    int64_t frame_pts_us;
+    // Note: in_shadow_mode already loaded above for Phase 6 gating scope check
+
+    // Phase 8: CRITICAL - Check write barrier BEFORE touching TimelineController.
+    // If write barrier is set, this producer is being phased out during a segment
+    // transition. We must NOT call AdmitFrame() because that could lock the new
+    // segment's mapping with the wrong MT (from the old producer).
+    if (writes_disabled_.load(std::memory_order_acquire))
+    {
+      // Silently drop - producer is being phased out
+      return true;
+    }
+
+    if (in_shadow_mode)
+    {
+      // Phase 8 §7.2: Shadow mode emits raw MT only.
+      // No offsets, no CT assignment. PTS field carries MT for caching.
+      // CT will be assigned by TimelineController after SwitchToLive.
+      frame_pts_us = base_pts_us;
+      output_frame.metadata.has_ct = false;  // NOT timeline-valid yet
+    }
+    else if (timeline_controller_)
+    {
+      // Phase 8: TimelineController assigns CT
+      int64_t assigned_ct_us = 0;
+      timing::AdmissionResult result = timeline_controller_->AdmitFrame(base_pts_us, assigned_ct_us);
+
+      switch (result)
+      {
+        case timing::AdmissionResult::ADMITTED:
+          frame_pts_us = assigned_ct_us;
+          output_frame.metadata.has_ct = true;  // Timeline-valid
+          break;
+
+        case timing::AdmissionResult::REJECTED_LATE:
+          // Frame is too late - drop it and continue decoding
+          std::cout << "[FileProducer] Phase 8: Frame rejected (late), MT=" << base_pts_us
+                    << "us, CT_cursor=" << timeline_controller_->GetCTCursor() << "us" << std::endl;
+          return true;  // Continue decoding next frame
+
+        case timing::AdmissionResult::REJECTED_EARLY:
+          // Frame is too early - this is unusual, log and drop
+          std::cout << "[FileProducer] Phase 8: Frame rejected (early), MT=" << base_pts_us
+                    << "us, CT_cursor=" << timeline_controller_->GetCTCursor() << "us" << std::endl;
+          return true;  // Continue decoding next frame
+
+        case timing::AdmissionResult::REJECTED_NO_MAPPING:
+          // No segment mapping - this is a configuration error
+          std::cerr << "[FileProducer] Phase 8: ERROR - No segment mapping, MT=" << base_pts_us << "us" << std::endl;
+          return true;  // Continue decoding (maybe mapping will be set)
+      }
+    }
+    else
+    {
+      // Legacy path (no TimelineController): apply PTS offset for alignment
+      frame_pts_us = base_pts_us + pts_offset_us_;
+      output_frame.metadata.has_ct = true;  // Legacy assumes PTS == CT
+    }
+
     output_frame.metadata.pts = frame_pts_us;
     last_decoded_frame_pts_us_ = frame_pts_us;
     last_pts_us_ = frame_pts_us;
 
-    // Establish time mapping on first emitted frame
+    // Establish time mapping on first emitted frame (VIDEO_EPOCH_SET)
     if (first_frame_pts_us_ == 0)
     {
       first_frame_pts_us_ = frame_pts_us;
-      if (master_clock_)
+
+      // Critical diagnostic: video epoch is now set, audio can start emitting
+      std::cout << "[FileProducer] VIDEO_EPOCH_SET first_video_pts_us=" << frame_pts_us
+                << " target_us=" << effective_seek_target_us_ << std::endl;
+
+      // Phase 8: If TimelineController is active, it owns the epoch.
+      // Producer is "time-blind" and should not set epoch.
+      if (timeline_controller_)
       {
-        playback_start_utc_us_ = master_clock_->now_utc_us();
-        // Synchronize clock epoch with actual playback start time.
-        // This ensures ProgramOutput's scheduled_to_utc_us() returns correct deadlines
-        // relative to when playback actually started, not when AIR started.
-        // Note: We do NOT subtract first_frame_pts_us_ because that would make audio
-        // (which starts at PTS=0) appear early relative to video. Instead, we accept
-        // that video frames may arrive slightly early due to B-frame decoding delay,
-        // which is fine - early is better than late for client buffering.
-        master_clock_->set_epoch_utc_us(playback_start_utc_us_);
-        std::cout << "[FileProducer] Clock epoch synchronized: playback_start="
-                  << playback_start_utc_us_ << "us, first_frame_pts=" << first_frame_pts_us_
-                  << "us, epoch=" << playback_start_utc_us_ << "us" << std::endl;
+        std::cout << "[FileProducer] Phase 8: TimelineController owns epoch (producer is time-blind)"
+                  << std::endl;
+        // Still need playback_start_utc_us_ for internal pacing calculations
+        if (master_clock_)
+        {
+          playback_start_utc_us_ = master_clock_->now_utc_us();
+        }
+      }
+      else
+      {
+        // Legacy path: Per Phase 7 contract (INV-P7-004): Epoch stability.
+        // Only the first (live) producer sets the epoch.
+        // Preview/shadow producers must NOT reset the epoch - they inherit the channel's epoch.
+        // Belt-and-suspenders: even if shadow_mode check fails, TrySetEpochOnce() will refuse.
+        bool shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
+        if (master_clock_ && !shadow_mode)
+        {
+          playback_start_utc_us_ = master_clock_->now_utc_us();
+          // CRITICAL FIX for mid-segment join (Phase 6):
+          // The epoch must account for the media PTS offset after seek.
+          // Without this, scheduled_to_utc_us(frame_pts) returns a time far in the future
+          // (playback_start + frame_pts), when it should return a time near playback_start.
+          //
+          // Correct formula: epoch = playback_start - first_frame_pts
+          // Then: scheduled_to_utc_us(frame_pts) = epoch + frame_pts
+          //                                      = playback_start - first_frame_pts + frame_pts
+          //                                      = playback_start + (frame_pts - first_frame_pts)
+          // So the first frame is due at playback_start, and subsequent frames are due
+          // at playback_start + (their offset from first frame).
+          int64_t epoch_utc_us = playback_start_utc_us_ - first_frame_pts_us_;
+
+          // Phase 7: Use TrySetEpochOnce with LIVE role - if epoch already set, this is a no-op
+          if (master_clock_->TrySetEpochOnce(epoch_utc_us, timing::MasterClock::EpochSetterRole::LIVE)) {
+            std::cout << "[FileProducer] Clock epoch synchronized: playback_start="
+                      << playback_start_utc_us_ << "us, first_frame_pts=" << first_frame_pts_us_
+                      << "us, epoch=" << epoch_utc_us << "us" << std::endl;
+          } else {
+            // Epoch was already set by another producer - read existing epoch
+            int64_t existing_epoch = master_clock_->get_epoch_utc_us();
+            std::cout << "[FileProducer] Epoch already established (existing=" << existing_epoch
+                      << "), not resetting (INV-P7-004)" << std::endl;
+          }
+        } else if (shadow_mode) {
+          std::cout << "[FileProducer] Shadow mode: inheriting existing epoch (no reset)" << std::endl;
+        }
       }
     }
 
-    // Check if in shadow decode mode
-    bool shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
-    if (shadow_mode)
+    // Shadow mode: cache first frame only, do NOT fill buffer yet.
+    // Buffer must be filled AFTER AlignPTS is called in SwitchToLive to ensure correct PTS.
+    // Phase 7: Epoch protection is via TrySetEpochOnce (PREVIEW role rejected).
+    // Note: in_shadow_mode was loaded earlier for Phase 8 TimelineController check
+    if (in_shadow_mode)
     {
-      // Shadow mode: cache first frame, don't push to buffer
+      // Cache the first frame for potential use
       std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
       if (!cached_first_frame_)
       {
         cached_first_frame_ = std::make_unique<buffer::Frame>(output_frame);
         shadow_decode_ready_.store(true, std::memory_order_release);
-        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS=" 
+        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS="
                   << frame_pts_us << std::endl;
-        // Emit ShadowDecodeReady event
         EmitEvent("ShadowDecodeReady", "");
       }
-      // Don't push to buffer in shadow mode, but continue decoding
+      // Do NOT fill buffer in shadow mode - wait for AlignPTS before filling
       return true;
     }
 
@@ -880,16 +1147,31 @@ namespace retrovue::producers::file
       }
     }
 
+    // Phase 7: Check write barrier before pushing
+    if (writes_disabled_.load(std::memory_order_acquire)) {
+      return true;  // Silently drop - producer is being force-stopped
+    }
+
     // Attempt to push decoded frame
     if (output_buffer_.Push(output_frame))
     {
-      frames_produced_.fetch_add(1, std::memory_order_relaxed);
+      uint64_t produced = frames_produced_.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (produced <= 5 || produced % 100 == 0)
+      {
+        std::cout << "[FileProducer] Video frame pushed #" << produced
+                  << ", pts=" << output_frame.metadata.pts << std::endl;
+      }
       return true;
     }
     else
     {
       // Buffer is full, back off
-      buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
+      uint64_t full_count = buffer_full_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (full_count <= 5 || full_count % 100 == 0)
+      {
+        std::cerr << "[FileProducer] Video buffer full #" << full_count
+                  << ", pts=" << output_frame.metadata.pts << std::endl;
+      }
       if (master_clock_)
       {
         int64_t now_utc_us = master_clock_->now_utc_us();
@@ -932,9 +1214,8 @@ namespace retrovue::producers::file
     bool needs_padding = (intermediate_frame_ != nullptr);
 
     // Diagnostic for first 5 frames
-    static int fp_scale_diag_count = 0;
-    if (++fp_scale_diag_count <= 5) {
-      std::cout << "[FileProducer] SCALE_DIAG frame=" << fp_scale_diag_count
+    if (++scale_diag_count_ <= 5) {
+      std::cout << "[FileProducer] SCALE_DIAG frame=" << scale_diag_count_
                 << " src=" << frame_->width << "x" << frame_->height
                 << " src_linesize=[" << frame_->linesize[0] << "," << frame_->linesize[1] << "," << frame_->linesize[2] << "]"
                 << " scale=" << scale_width_ << "x" << scale_height_
@@ -1001,7 +1282,7 @@ namespace retrovue::producers::file
     }
 
     // Diagnostic for first 5 frames - output data
-    if (fp_scale_diag_count <= 5) {
+    if (scale_diag_count_ <= 5) {
       // Sample Y plane at content start (after padding)
       int sample_y = pad_y_;
       int sample_x = pad_x_;
@@ -1169,13 +1450,17 @@ namespace retrovue::producers::file
       {
         cached_first_frame_ = std::make_unique<buffer::Frame>(frame);
         shadow_decode_ready_.store(true, std::memory_order_release);
-        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS=" 
+        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS="
                   << frame.metadata.pts << std::endl;
-        // Emit ShadowDecodeReady event
         EmitEvent("ShadowDecodeReady", "");
       }
-      // Don't push to buffer in shadow mode
+      // Don't push to buffer in shadow mode - wait for AlignPTS
       return;
+    }
+
+    // Phase 7: Check write barrier before pushing
+    if (writes_disabled_.load(std::memory_order_acquire)) {
+      return;  // Silently drop - producer is being force-stopped
     }
 
     // Normal mode: attempt to push decoded frame
@@ -1251,8 +1536,13 @@ namespace retrovue::producers::file
 
   void FileProducer::AlignPTS(int64_t target_pts)
   {
+    // Phase 7: Idempotent - only align once
+    if (pts_aligned_.exchange(true, std::memory_order_acq_rel)) {
+      std::cout << "[FileProducer] AlignPTS ignored (already aligned)" << std::endl;
+      return;
+    }
+
     // Calculate offset needed to align next frame to target_pts
-    // Note: last_pts_us_ is not atomic, but this is called from state machine which holds a lock
     int64_t next_pts_without_offset = last_pts_us_;
     if (next_pts_without_offset == 0)
     {
@@ -1264,12 +1554,19 @@ namespace retrovue::producers::file
       // Calculate offset: target_pts - (next_pts_without_offset + frame_interval_us_)
       pts_offset_us_ = target_pts - (next_pts_without_offset + frame_interval_us_);
     }
-    std::cout << "[FileProducer] Aligned PTS: target=" << target_pts 
+    std::cout << "[FileProducer] PTS aligned: target=" << target_pts
               << ", offset=" << pts_offset_us_ << std::endl;
+  }
+
+  bool FileProducer::IsPTSAligned() const
+  {
+    return pts_aligned_.load(std::memory_order_acquire);
   }
 
   // Phase 8.9: Receive audio frames that were already sent to the decoder
   // This does NOT read packets - packets are dispatched by ProduceRealFrame()
+  // Phase 6 fix: Process only ONE audio frame per call to prevent burst emission.
+  // This allows video/audio to interleave properly for correct clock-gating pacing.
   bool FileProducer::ReceiveAudioFrames()
   {
     if (audio_stream_index_ < 0 || !audio_codec_ctx_ || !audio_frame_ || audio_eof_reached_)
@@ -1278,9 +1575,10 @@ namespace retrovue::producers::file
     }
 
     bool received_any = false;
+    bool processed_one = false;  // Phase 6: Exit after processing one frame
 
-    // Receive all available decoded audio frames (non-blocking)
-    while (!stop_requested_.load(std::memory_order_acquire))
+    // Receive decoded audio frames - but exit after processing ONE to prevent burst
+    while (!stop_requested_.load(std::memory_order_acquire) && !processed_one)
     {
       int ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
       if (ret == AVERROR(EAGAIN))
@@ -1303,9 +1601,44 @@ namespace retrovue::producers::file
       buffer::AudioFrame output_audio_frame;
       if (ConvertAudioFrame(audio_frame_, output_audio_frame))
       {
+        // Phase 8: CRITICAL - Check write barrier BEFORE any processing.
+        // If write barrier is set, silently drop all frames from this producer.
+        if (writes_disabled_.load(std::memory_order_acquire))
+        {
+          av_frame_unref(audio_frame_);
+          continue;  // Silently drop
+        }
+
         // Track base PTS before offset
         int64_t base_pts_us = output_audio_frame.pts_us;
-        
+
+        // Phase 6 (INV-P6-004/INV-P6-008): Audio frame admission gate
+        // SCOPED by Phase 8 (INV-P8-TIME-BLINDNESS): This gating applies ONLY when:
+        //   - TimelineController is NOT active (legacy mode), OR
+        //   - Producer is in shadow mode, OR
+        //   - TimelineController mapping is PENDING (awaiting seek-stable frame)
+        bool audio_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
+        bool audio_mapping_pending = timeline_controller_ && timeline_controller_->IsMappingPending();
+        bool audio_phase6_gating_active = !timeline_controller_ || audio_shadow_mode || audio_mapping_pending;
+
+        if (audio_phase6_gating_active && base_pts_us < effective_seek_target_us_)
+        {
+          // Discard audio frame before target PTS; continue decoding
+          av_frame_unref(audio_frame_);
+          continue;
+        }
+
+        // Phase 6 (INV-P6-005/006/INV-P6-ALIGN-FIRST-FRAME): Log first audio frame accuracy
+        // SCOPED by Phase 8: Only log in legacy/shadow mode.
+        if (audio_phase6_gating_active && effective_seek_target_us_ > 0 && last_audio_pts_us_ == 0)
+        {
+          int64_t accuracy_us = base_pts_us - effective_seek_target_us_;
+          std::cout << "[FileProducer] Phase 6: First audio frame - target_pts=" << effective_seek_target_us_
+                    << "us, first_emitted_pts=" << base_pts_us
+                    << "us, accuracy=" << accuracy_us << "us ("
+                    << (accuracy_us / 1000) << "ms)" << std::endl;
+        }
+
         // Apply PTS offset for alignment (same as video)
         output_audio_frame.pts_us += pts_offset_us_;
 
@@ -1316,55 +1649,145 @@ namespace retrovue::producers::file
           int64_t old_pts = output_audio_frame.pts_us;
           output_audio_frame.pts_us = last_audio_pts_us_ + 1;
           pts_adjusted = true;
-          std::cout << "[FileProducer] Audio PTS adjusted: " << old_pts 
-                    << " -> " << output_audio_frame.pts_us 
+          std::cout << "[FileProducer] Audio PTS adjusted: " << old_pts
+                    << " -> " << output_audio_frame.pts_us
                     << " (last_audio_pts=" << last_audio_pts_us_ << ")" << std::endl;
         }
         last_audio_pts_us_ = output_audio_frame.pts_us;
 
-        // Push to buffer (non-blocking - if full, skip)
-        static int audio_frame_count = 0;
-        static int frames_since_producer_start = 0;  // Track frames since last producer start
-        audio_frame_count++;
-        frames_since_producer_start++;
-        
-        // Reset counter when we detect a new producer (when last_audio_pts_us_ resets to 0)
-        static int64_t last_seen_audio_pts = -1;
-        if (last_audio_pts_us_ == 0 && last_seen_audio_pts > 0) {
-          frames_since_producer_start = 1;  // This is frame #1 of new producer
-          std::cout << "[FileProducer] Detected new producer start, resetting frame counter" << std::endl;
+        // Phase 6 (INV-P6-010): Audio MUST NOT emit until video establishes the epoch
+        // SCOPED by Phase 8 (INV-P8-TIME-BLINDNESS): This epoch gating applies ONLY when:
+        //   - TimelineController is NOT active, OR
+        //   - Producer is in shadow mode
+        // When TimelineController is active and NOT in shadow mode, audio/video sync
+        // is handled by TimelineController's unified CT assignment, not producer epoch gating.
+        //
+        // CRITICAL: Do NOT sleep/block for audio clock gating!
+        // Sleeping for audio would starve video decoding because they share a thread.
+        // Instead:
+        // 1. Wait for video epoch before emitting any audio (Phase 6 only)
+        // 2. After epoch, emit audio immediately (no sleep)
+        // 3. Rely on buffer backpressure and downstream encoder to pace audio
+        //
+        // The downstream encoder/muxer interleaves audio with video based on PTS,
+        // so audio emitted "early" will be held until the video catches up.
+        if (master_clock_ && audio_phase6_gating_active)
+        {
+          // Skip audio emission if video epoch not yet established
+          // This allows video decode loop to continue until video emits
+          if (first_frame_pts_us_ == 0)
+          {
+            // Log every 100 skips to show progress without spam
+            audio_skip_count_++;
+            if (audio_skip_count_ == 1 || audio_skip_count_ % 100 == 0)
+            {
+              std::cout << "[FileProducer] AUDIO_SKIP #" << audio_skip_count_
+                        << " waiting for video epoch (audio_pts_us=" << base_pts_us << ")"
+                        << std::endl;
+            }
+            av_frame_unref(audio_frame_);
+            continue;  // Skip this audio frame, continue decoding
+          }
+
+          // Log when audio starts emitting after video epoch is set (one-shot)
+          if (!audio_ungated_logged_)
+          {
+            std::cout << "[FileProducer] AUDIO_UNGATED first_audio_pts_us=" << base_pts_us
+                      << " aligned_to_video_pts_us=" << first_frame_pts_us_ << std::endl;
+            audio_ungated_logged_ = true;
+          }
+
+          // For FAKE clocks (tests only): clock-gate audio to maintain determinism
+          if (master_clock_->is_fake())
+          {
+            int64_t frame_offset_us = output_audio_frame.pts_us - first_frame_pts_us_;
+            int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
+
+            // Busy-wait for fake clock to advance (tests only)
+            while (master_clock_->now_utc_us() < target_utc_us &&
+                   !stop_requested_.load(std::memory_order_acquire))
+            {
+              std::this_thread::yield();
+            }
+          }
+          // For REAL clocks: NO clock gating for audio - emit immediately
+          // Buffer backpressure and downstream encoder will pace output
         }
-        last_seen_audio_pts = last_audio_pts_us_;
+
+        // Push to buffer with backpressure (block until space available)
+        // Per-instance counters ensure accurate tracking per producer
+        audio_frame_count_++;
+        frames_since_producer_start_++;
         
         // Always log first 50 frames after producer start, then every 100
-        bool should_log = (frames_since_producer_start <= 50) || (frames_since_producer_start % 100 == 0);
-        
-        if (output_buffer_.PushAudioFrame(output_audio_frame))
-        {
-          received_any = true;
-          
-          if (should_log) {
-            std::cout << "[FileProducer] Pushed audio frame #" << audio_frame_count 
-                      << " (frames_since_start=" << frames_since_producer_start << ")"
-                      << ", base_pts_us=" << base_pts_us
-                      << ", offset=" << pts_offset_us_
-                      << ", final_pts_us=" << output_audio_frame.pts_us
-                      << ", samples=" << output_audio_frame.nb_samples
-                      << ", sample_rate=" << output_audio_frame.sample_rate
-                      << (pts_adjusted ? " [PTS_ADJUSTED]" : "") << std::endl;
-          }
+        bool should_log = (frames_since_producer_start_ <= 50) || (frames_since_producer_start_ % 100 == 0);
+
+        // Phase 7: Check write barrier before pushing audio
+        if (writes_disabled_.load(std::memory_order_acquire)) {
+          return true;  // Silently drop - producer is being force-stopped
         }
-        else
+
+        // Phase 6: Blocking push with backpressure - wait for space when buffer full
+        bool pushed = false;
+        int retry_count = 0;
+        while (!pushed && !stop_requested_.load(std::memory_order_acquire))
         {
-          std::cerr << "[FileProducer] ===== FAILED TO PUSH AUDIO FRAME =====" << std::endl;
-          std::cerr << "[FileProducer] Frame #" << audio_frame_count 
-                    << " (frames_since_start=" << frames_since_producer_start << ")"
-                    << ", base_pts_us=" << base_pts_us
-                    << ", offset=" << pts_offset_us_
-                    << ", final_pts_us=" << output_audio_frame.pts_us
-                    << ", samples=" << output_audio_frame.nb_samples
-                    << ", sample_rate=" << output_audio_frame.sample_rate
-                    << " (BUFFER FULL)" << std::endl;
+          if (output_buffer_.PushAudioFrame(output_audio_frame))
+          {
+            received_any = true;
+            pushed = true;
+            processed_one = true;  // Phase 6: Exit loop after this frame
+
+            if (should_log)
+            {
+              std::cout << "[FileProducer] Pushed audio frame #" << audio_frame_count_
+                        << " (frames_since_start=" << frames_since_producer_start_ << ")"
+                        << ", base_pts_us=" << base_pts_us
+                        << ", offset=" << pts_offset_us_
+                        << ", final_pts_us=" << output_audio_frame.pts_us
+                        << ", samples=" << output_audio_frame.nb_samples
+                        << ", sample_rate=" << output_audio_frame.sample_rate
+                        << (pts_adjusted ? " [PTS_ADJUSTED]" : "")
+                        << (retry_count > 0 ? " [RETRIED=" + std::to_string(retry_count) + "]" : "")
+                        << std::endl;
+            }
+          }
+          else
+          {
+            // Buffer full - back off and retry (Phase 6 flow control)
+            retry_count++;
+
+            // CRITICAL: Don't retry forever! If buffer is consistently full,
+            // give up after a reasonable number of retries to avoid deadlock.
+            // The audio frame will be dropped, but this is better than blocking
+            // video decode indefinitely.
+            constexpr int kMaxAudioRetries = 50;
+            if (retry_count > kMaxAudioRetries)
+            {
+              audio_drop_count_++;
+              if (audio_drop_count_ <= 5 || audio_drop_count_ % 100 == 0)
+              {
+                std::cout << "[FileProducer] Audio frame dropped #" << audio_drop_count_
+                          << " (buffer full after " << kMaxAudioRetries << " retries)"
+                          << std::endl;
+              }
+              break;  // Give up on this frame, continue decoding
+            }
+
+            if (retry_count == 1 || retry_count % 100 == 0)
+            {
+              std::cout << "[FileProducer] Audio buffer full, backing off (retry #"
+                        << retry_count << ")" << std::endl;
+            }
+            if (master_clock_ && !master_clock_->is_fake())
+            {
+              std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+            }
+            else
+            {
+              std::this_thread::yield();
+            }
+          }
         }
       }
       else

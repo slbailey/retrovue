@@ -111,9 +111,10 @@ class EncoderPipeline {
   // Swscale context for format conversion
   SwsContext* sws_ctx_;
   
-  // Phase 8.9: Swresample context for audio sample rate conversion
+  // Phase 8.9: Swresample context for audio sample rate AND channel conversion
   struct SwrContext* swr_ctx_;
   int last_input_sample_rate_;  // Track input sample rate to detect changes
+  int last_input_channels_;     // Track input channel count to detect changes
   
   // Phase 8.9: Buffer for partial audio frames after resampling
   // AAC requires all frames (except last) to be exactly frame_size, so we buffer
@@ -181,6 +182,7 @@ class EncoderPipeline {
   bool output_timing_anchor_set_;
   int64_t output_timing_anchor_pts_;  // First packet's PTS (90kHz timebase)
   std::chrono::steady_clock::time_point output_timing_anchor_wall_;
+  bool output_timing_enabled_;  // P8-IO-001: Can disable during prebuffer
 #endif
 
   MpegTSPlayoutSinkConfig config_;
@@ -189,6 +191,9 @@ class EncoderPipeline {
  public:
   // Reset output timing anchor (call on SwitchToLive per OutputTimingContract.md §6)
   void ResetOutputTiming();
+
+  // P8-IO-001: Enable/disable output timing gating (disable during prebuffer)
+  void SetOutputTimingEnabled(bool enabled);
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

@@ -1,0 +1,220 @@
+// Repository: Retrovue-playout
+// Component: Timeline Controller
+// Purpose: Phase 8 unified timeline authority - single owner of channel time (CT).
+// Copyright (c) 2025 RetroVue
+
+#ifndef RETROVUE_TIMING_TIMELINE_CONTROLLER_H_
+#define RETROVUE_TIMING_TIMELINE_CONTROLLER_H_
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+
+namespace retrovue::timing {
+
+class MasterClock;
+
+// Phase 8 Contract: Frame admission result
+enum class AdmissionResult {
+  ADMITTED,       // Frame accepted, CT assigned
+  REJECTED_LATE,  // Frame too far behind CT_cursor
+  REJECTED_EARLY, // Frame too far ahead of CT_cursor
+  REJECTED_NO_MAPPING  // No segment mapping active
+};
+
+// Phase 8 Contract: Segment mapping for MT -> CT conversion
+struct SegmentMapping {
+  int64_t ct_segment_start_us;  // CT when this segment began output
+  int64_t mt_segment_start_us;  // MT of first admitted frame from this segment
+
+  // Convert media time to channel time using this mapping
+  int64_t MediaToChannel(int64_t mt_us) const {
+    return ct_segment_start_us + (mt_us - mt_segment_start_us);
+  }
+};
+
+// Phase 8 Contract: Frame with media time (input to TimelineController)
+struct MediaFrame {
+  int64_t media_time_us;  // MT: position in source asset
+  // Other frame data would be here (pixels, audio samples, etc.)
+  // For now, we only need the timing metadata
+};
+
+// Phase 8 Contract: Frame with assigned channel time (output from TimelineController)
+struct AdmittedFrame {
+  int64_t channel_time_us;  // CT: assigned position in channel timeline
+  int64_t media_time_us;    // MT: original media position (for provenance)
+  // Other frame data would be here
+};
+
+// Configuration for admission thresholds
+struct TimelineConfig {
+  int64_t tolerance_us = 33'333;        // Snap-to-grid tolerance (1 frame at 30fps)
+  int64_t late_threshold_us = 500'000;  // Max late before rejection (500ms)
+  int64_t early_threshold_us = 500'000; // Max early before rejection (500ms)
+  int64_t catch_up_limit_us = 5'000'000; // Max CT lag before session restart (5s)
+  int64_t frame_period_us = 33'333;     // Frame period (1/fps in microseconds)
+
+  // Derive from fps
+  static TimelineConfig FromFps(double fps, int target_depth = 5, int max_depth = 30) {
+    TimelineConfig cfg;
+    cfg.frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+    cfg.tolerance_us = cfg.frame_period_us;
+    cfg.late_threshold_us = std::min(static_cast<int64_t>(500'000), static_cast<int64_t>(target_depth) * cfg.frame_period_us);
+    cfg.early_threshold_us = static_cast<int64_t>(max_depth) * cfg.frame_period_us;
+    return cfg;
+  }
+};
+
+// TimelineController: Phase 8 unified timeline authority
+//
+// Responsibilities (from ScheduleManagerPhase8Contract):
+// - Own CT_cursor (the current channel time position)
+// - Compute and store epoch at session start
+// - Accept frames with MT metadata from producers
+// - Assign CT to each admitted frame using the segment mapping
+// - Reject frames whose computed CT falls outside the admission window
+// - Advance CT_cursor by one frame period per admitted frame (frame-driven model)
+//
+// The TimelineController is the ONLY component that may assign CT values.
+// Producers emit MT only; they are "time-blind" to the channel timeline.
+class TimelineController {
+ public:
+  explicit TimelineController(std::shared_ptr<MasterClock> clock,
+                               TimelineConfig config = TimelineConfig());
+  ~TimelineController() = default;
+
+  // Disable copy/move
+  TimelineController(const TimelineController&) = delete;
+  TimelineController& operator=(const TimelineController&) = delete;
+
+  // ========================================================================
+  // Session Lifecycle
+  // ========================================================================
+
+  // Starts a new session, establishing epoch from current wall-clock time.
+  // CT_cursor is set to 0. Clears any existing segment mapping.
+  // Returns false if a session is already active.
+  bool StartSession();
+
+  // Ends the current session. Clears all timeline state.
+  // Safe to call even if no session is active.
+  void EndSession();
+
+  // Returns true if a session is currently active.
+  bool IsSessionActive() const;
+
+  // ========================================================================
+  // Segment Mapping
+  // ========================================================================
+
+  // Sets the segment mapping for the current/next segment.
+  // ct_start: CT position where this segment begins (typically CT_cursor + frame_period)
+  // mt_start: MT of the first frame from this segment
+  // NOTE: Prefer BeginSegment() + auto-lock for new code. This method is for
+  // cases where MT_start is known ahead of time.
+  void SetSegmentMapping(int64_t ct_start_us, int64_t mt_start_us);
+
+  // Phase 8 §6.1: Begins a new segment with known CT_start but pending MT_start.
+  // MT_start will be locked on the first admitted frame (prevents mapping skew).
+  // Use this instead of SetSegmentMapping() when MT is not yet known.
+  void BeginSegment(int64_t ct_start_us);
+
+  // Returns true if a segment mapping is pending (BeginSegment called, MT not locked).
+  bool IsMappingPending() const;
+
+  // Returns the current segment mapping, or nullopt if none set.
+  std::optional<SegmentMapping> GetSegmentMapping() const;
+
+  // ========================================================================
+  // Frame Admission (Core Phase 8 Operation)
+  // ========================================================================
+
+  // Attempts to admit a frame with the given media time.
+  // On success (ADMITTED), returns the assigned channel time in out_ct_us.
+  // On failure, out_ct_us is undefined.
+  //
+  // This is the central Phase 8 operation:
+  // 1. Compute CT_frame using segment mapping
+  // 2. Check admission window (late_threshold, early_threshold)
+  // 3. If admitted: assign CT, advance CT_cursor
+  // 4. If rejected: log reason, do not advance CT_cursor
+  AdmissionResult AdmitFrame(int64_t media_time_us, int64_t& out_ct_us);
+
+  // ========================================================================
+  // Timeline State (Read-Only)
+  // ========================================================================
+
+  // Returns the current CT cursor position in microseconds.
+  int64_t GetCTCursor() const;
+
+  // Returns the epoch (wall-clock time corresponding to CT=0).
+  int64_t GetEpoch() const;
+
+  // Returns the expected CT for the next frame (CT_cursor + frame_period).
+  int64_t GetExpectedNextCT() const;
+
+  // Returns the wall-clock deadline for a given CT position.
+  int64_t GetWallClockDeadline(int64_t ct_us) const;
+
+  // ========================================================================
+  // Catch-Up Detection (Phase 8 Section 5.6)
+  // ========================================================================
+
+  // Returns true if we are in catch-up mode (CT behind wall-clock).
+  bool IsInCatchUp() const;
+
+  // Returns the current lag: W_now - (epoch + CT_cursor).
+  // Positive = CT is behind wall-clock (catch-up needed).
+  // Negative = CT is ahead of wall-clock (normal/buffered).
+  int64_t GetLag() const;
+
+  // Returns true if lag exceeds catch_up_limit (session should restart).
+  bool ShouldRestartSession() const;
+
+  // ========================================================================
+  // Statistics
+  // ========================================================================
+
+  struct Stats {
+    uint64_t frames_admitted = 0;
+    uint64_t frames_rejected_late = 0;
+    uint64_t frames_rejected_early = 0;
+    uint64_t catch_up_events = 0;      // Times we entered catch-up mode
+    int64_t max_lag_us = 0;            // Worst lag observed
+  };
+
+  Stats GetStats() const;
+  void ResetStats();
+
+ private:
+  // Internal helper - computes lag without taking mutex (caller must hold it)
+  int64_t GetLagUnlocked() const;
+
+  std::shared_ptr<MasterClock> clock_;
+  TimelineConfig config_;
+
+  mutable std::mutex mutex_;
+
+  // Session state
+  bool session_active_ = false;
+  int64_t epoch_us_ = 0;
+  int64_t ct_cursor_us_ = 0;
+
+  // Segment mapping
+  std::optional<SegmentMapping> segment_mapping_;
+
+  // Phase 8 §6.1: Pending segment mapping (CT known, MT locked on first admission)
+  bool mapping_pending_ = false;
+  int64_t pending_ct_start_us_ = 0;
+
+  // Statistics
+  Stats stats_;
+  bool was_in_catch_up_ = false;  // For detecting catch-up transitions
+};
+
+}  // namespace retrovue::timing
+
+#endif  // RETROVUE_TIMING_TIMELINE_CONTROLLER_H_

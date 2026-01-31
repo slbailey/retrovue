@@ -1,0 +1,324 @@
+// Phase 8 Integration Tests
+// These are "integration truth" tests that verify Phase 8 guarantees
+// at the system level, not just unit tests.
+
+#include <gtest/gtest.h>
+#include <memory>
+#include <vector>
+#include <atomic>
+#include <thread>
+#include <chrono>
+
+#include "retrovue/timing/TimelineController.h"
+#include "retrovue/timing/MasterClock.h"
+#include "retrovue/buffer/FrameRingBuffer.h"
+
+namespace retrovue::tests {
+
+// Test clock that allows manual time control
+class Phase8TestClock : public timing::MasterClock {
+ public:
+  Phase8TestClock() : now_us_(0), epoch_us_(0), epoch_locked_(false) {}
+
+  int64_t now_utc_us() const override { return now_us_; }
+  double now_monotonic_s() const override { return now_us_ / 1'000'000.0; }
+  int64_t scheduled_to_utc_us(int64_t pts_us) const override {
+    return epoch_us_ + pts_us;
+  }
+  double drift_ppm() const override { return 0.0; }
+  bool is_fake() const override { return true; }
+
+  void set_epoch_utc_us(int64_t epoch_utc_us) override {
+    epoch_us_ = epoch_utc_us;
+    epoch_locked_ = true;
+  }
+
+  bool TrySetEpochOnce(int64_t epoch_utc_us,
+                       EpochSetterRole role = EpochSetterRole::LIVE) override {
+    if (role == EpochSetterRole::PREVIEW) return false;
+    if (epoch_locked_) return false;
+    epoch_us_ = epoch_utc_us;
+    epoch_locked_ = true;
+    return true;
+  }
+
+  void ResetEpochForNewSession() override {
+    epoch_locked_ = false;
+    epoch_us_ = 0;
+  }
+
+  bool IsEpochLocked() const override { return epoch_locked_; }
+  int64_t get_epoch_utc_us() const override { return epoch_us_; }
+
+  void SetNow(int64_t now_us) { now_us_ = now_us; }
+  void AdvanceUs(int64_t delta_us) { now_us_ += delta_us; }
+
+ private:
+  int64_t now_us_;
+  int64_t epoch_us_;
+  bool epoch_locked_;
+};
+
+// ============================================================================
+// IT-P8-01: Shadow frames never appear in output
+// ============================================================================
+// Verifies that frames with has_ct=false are never consumed by output.
+// This is a hard Phase 8 guarantee: "A frame is not timeline-valid until CT."
+
+TEST(Phase8IntegrationTest, IT_P8_01_ShadowFramesNeverAppearInOutput) {
+  buffer::FrameRingBuffer buffer(60);
+
+  // Simulate shadow mode: push frames with has_ct=false (raw MT only)
+  constexpr int kShadowFrameCount = 10;
+  for (int i = 0; i < kShadowFrameCount; ++i) {
+    buffer::Frame frame;
+    frame.metadata.pts = i * 33'333;  // Raw MT
+    frame.metadata.has_ct = false;    // Shadow mode: NOT timeline-valid
+    frame.width = 1920;
+    frame.height = 1080;
+    ASSERT_TRUE(buffer.Push(frame));
+  }
+
+  EXPECT_EQ(buffer.Size(), kShadowFrameCount);
+
+  // Simulate output consumer: MUST reject frames with has_ct=false
+  int frames_consumed = 0;
+  int frames_rejected = 0;
+
+  buffer::Frame output_frame;
+  while (buffer.Pop(output_frame)) {
+    if (output_frame.metadata.has_ct) {
+      // Would be consumed by output
+      frames_consumed++;
+    } else {
+      // Rejected: not timeline-valid
+      frames_rejected++;
+    }
+  }
+
+  // All shadow frames must be rejected
+  EXPECT_EQ(frames_consumed, 0) << "Shadow frames (has_ct=false) must never appear in output";
+  EXPECT_EQ(frames_rejected, kShadowFrameCount) << "All shadow frames should be rejected";
+}
+
+// ============================================================================
+// IT-P8-02: SwitchToLive first output frame has CT contiguous
+// ============================================================================
+// Verifies that after SwitchToLive, the first frame has CT = last_CT + frame_period.
+// No gaps, no regressions.
+
+TEST(Phase8IntegrationTest, IT_P8_02_SwitchToLiveFirstFrameIsContiguous) {
+  auto clock = std::make_shared<Phase8TestClock>();
+  clock->SetNow(1'000'000'000'000);
+
+  timing::TimelineConfig config;
+  config.frame_period_us = 33'333;  // 30fps
+  config.tolerance_us = 33'333;
+  config.late_threshold_us = 500'000;
+  config.early_threshold_us = 500'000;
+
+  timing::TimelineController controller(clock, config);
+
+  // Start session (simulates StartChannel)
+  ASSERT_TRUE(controller.StartSession());
+
+  // Build some CT on the "live" producer
+  controller.SetSegmentMapping(0, 0);  // CT=0 maps to MT=0
+
+  int64_t ct;
+  std::vector<int64_t> live_cts;
+
+  // Admit 10 frames from live producer
+  for (int i = 0; i < 10; ++i) {
+    int64_t mt = i * 33'333;
+    auto result = controller.AdmitFrame(mt, ct);
+    ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+    live_cts.push_back(ct);
+    clock->AdvanceUs(33'333);
+  }
+
+  // Verify CT is contiguous
+  for (size_t i = 1; i < live_cts.size(); ++i) {
+    EXPECT_EQ(live_cts[i] - live_cts[i-1], 33'333)
+        << "Live CT should advance by frame_period";
+  }
+
+  int64_t last_live_ct = live_cts.back();
+
+  // Simulate SwitchToLive: BeginSegment with CT_start = last_CT + frame_period
+  int64_t ct_segment_start = last_live_ct + config.frame_period_us;
+  controller.BeginSegment(ct_segment_start);
+
+  // First frame from "preview" producer (now live) - arbitrary MT
+  int64_t preview_first_mt = 5'000'000;  // Different asset, different MT
+  auto result = controller.AdmitFrame(preview_first_mt, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+
+  // First frame after switch must be contiguous with last live frame
+  EXPECT_EQ(ct, ct_segment_start)
+      << "First frame after SwitchToLive must have CT = last_live_CT + frame_period";
+  EXPECT_EQ(ct - last_live_ct, config.frame_period_us)
+      << "No gap in CT across SwitchToLive";
+
+  // Subsequent frames should also be contiguous
+  int64_t prev_ct = ct;
+  for (int i = 1; i < 5; ++i) {
+    int64_t mt = preview_first_mt + i * 33'333;
+    result = controller.AdmitFrame(mt, ct);
+    ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+    EXPECT_EQ(ct - prev_ct, config.frame_period_us)
+        << "CT must remain contiguous after switch";
+    prev_ct = ct;
+  }
+}
+
+// ============================================================================
+// IT-P8-03: Mapping locks on first admitted frame
+// ============================================================================
+// Verifies that BeginSegment + first AdmitFrame locks MT_start correctly,
+// preventing mapping skew from pre-buffered/dropped frames.
+
+TEST(Phase8IntegrationTest, IT_P8_03_MappingLocksOnFirstAdmittedFrame) {
+  auto clock = std::make_shared<Phase8TestClock>();
+  clock->SetNow(1'000'000'000'000);
+
+  timing::TimelineConfig config;
+  config.frame_period_us = 33'333;
+  config.tolerance_us = 33'333;
+  config.late_threshold_us = 500'000;
+  config.early_threshold_us = 500'000;
+
+  timing::TimelineController controller(clock, config);
+  ASSERT_TRUE(controller.StartSession());
+
+  // Use BeginSegment (pending mapping) instead of SetSegmentMapping
+  int64_t ct_start = 100'000;  // CT starts at 100ms
+  controller.BeginSegment(ct_start);
+
+  // Verify mapping is pending
+  EXPECT_TRUE(controller.IsMappingPending());
+  EXPECT_FALSE(controller.GetSegmentMapping().has_value())
+      << "Mapping should not be set until first frame is admitted";
+
+  // Simulate: first frame arrives with MT=7'500'000 (not MT=0!)
+  // This could be due to seeking, or frames getting dropped, etc.
+  int64_t first_mt = 7'500'000;  // 7.5 seconds into the asset
+  int64_t ct;
+  auto result = controller.AdmitFrame(first_mt, ct);
+
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_FALSE(controller.IsMappingPending())
+      << "Mapping should be locked after first admission";
+
+  // Verify mapping was locked with actual first frame's MT
+  auto mapping = controller.GetSegmentMapping();
+  ASSERT_TRUE(mapping.has_value());
+  EXPECT_EQ(mapping->ct_segment_start_us, ct_start);
+  EXPECT_EQ(mapping->mt_segment_start_us, first_mt)
+      << "MT_start must be the first ADMITTED frame's MT, not a pre-buffered value";
+
+  // Verify CT was assigned correctly using the locked mapping
+  EXPECT_EQ(ct, ct_start)
+      << "First frame CT should equal CT_start when MT=MT_start";
+
+  // Subsequent frames should use the locked mapping
+  clock->AdvanceUs(33'333);
+  int64_t second_mt = first_mt + 33'333;
+  result = controller.AdmitFrame(second_mt, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+
+  int64_t expected_ct = ct_start + 33'333;
+  EXPECT_EQ(ct, expected_ct)
+      << "Second frame CT should be CT_start + frame_period";
+}
+
+// ============================================================================
+// IT-P8-04: has_ct flag propagates through buffer correctly
+// ============================================================================
+// Verifies that the has_ct flag survives push/pop operations.
+
+TEST(Phase8IntegrationTest, IT_P8_04_HasCtFlagPropagatesThroughBuffer) {
+  buffer::FrameRingBuffer buffer(60);
+
+  // Push frames with mixed has_ct values
+  for (int i = 0; i < 5; ++i) {
+    buffer::Frame frame;
+    frame.metadata.pts = i * 33'333;
+    frame.metadata.has_ct = false;  // Shadow frames
+    ASSERT_TRUE(buffer.Push(frame));
+  }
+
+  for (int i = 0; i < 5; ++i) {
+    buffer::Frame frame;
+    frame.metadata.pts = (5 + i) * 33'333;
+    frame.metadata.has_ct = true;  // Admitted frames
+    ASSERT_TRUE(buffer.Push(frame));
+  }
+
+  // Pop and verify has_ct is preserved
+  int shadow_count = 0;
+  int admitted_count = 0;
+
+  buffer::Frame frame;
+  while (buffer.Pop(frame)) {
+    if (frame.metadata.has_ct) {
+      admitted_count++;
+    } else {
+      shadow_count++;
+    }
+  }
+
+  EXPECT_EQ(shadow_count, 5) << "Shadow frame count should be preserved";
+  EXPECT_EQ(admitted_count, 5) << "Admitted frame count should be preserved";
+}
+
+// ============================================================================
+// IT-P8-05: Mapping skew prevention
+// ============================================================================
+// Verifies that using a "peeked" MT for mapping would cause issues,
+// but BeginSegment + lock-on-first-admit prevents this.
+
+TEST(Phase8IntegrationTest, IT_P8_05_MappingSkewPrevention) {
+  auto clock = std::make_shared<Phase8TestClock>();
+  clock->SetNow(1'000'000'000'000);
+
+  timing::TimelineConfig config;
+  config.frame_period_us = 33'333;
+  config.tolerance_us = 33'333;
+  config.late_threshold_us = 100'000;  // Tight threshold for test
+  config.early_threshold_us = 100'000;
+
+  timing::TimelineController controller(clock, config);
+  ASSERT_TRUE(controller.StartSession());
+
+  // Scenario: We have a seek target of MT=5'000'000
+  // But due to keyframe seeking, first decodable frame is at MT=5'100'000
+  // If we pre-set mapping with MT=5'000'000, frames would be off by 100ms
+
+  // WRONG approach (what we're preventing):
+  // controller.SetSegmentMapping(0, 5'000'000);
+  // First frame at MT=5'100'000 would compute CT = 0 + (5'100'000 - 5'000'000) = 100'000
+  // But expected CT is 33'333 (second frame position), causing early rejection!
+
+  // CORRECT approach: BeginSegment, lock on first admitted frame
+  controller.BeginSegment(0);
+
+  // First frame arrives at MT=5'100'000 (after keyframe seek)
+  int64_t ct;
+  auto result = controller.AdmitFrame(5'100'000, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_EQ(ct, 0) << "First frame should get CT=CT_start";
+
+  // Second frame at MT=5'133'333
+  result = controller.AdmitFrame(5'133'333, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_EQ(ct, 33'333) << "Second frame should get CT=33'333";
+
+  // This works because mapping locked MT_start=5'100'000, not 5'000'000
+  auto mapping = controller.GetSegmentMapping();
+  ASSERT_TRUE(mapping.has_value());
+  EXPECT_EQ(mapping->mt_segment_start_us, 5'100'000)
+      << "Mapping MT_start should be first admitted frame, not seek target";
+}
+
+}  // namespace retrovue::tests

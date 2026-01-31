@@ -23,11 +23,17 @@ namespace retrovue::buffer
     double duration;       // Frame duration in seconds
     std::string asset_uri; // Source asset identifier
 
+    // Phase 8: CT validity marker
+    // A frame is not timeline-valid until CT has been assigned via TimelineController.
+    // Shadow mode frames have has_ct=false; only AdmitFrame() sets has_ct=true.
+    // Renderer MUST NOT consume frames with has_ct=false.
+    bool has_ct;
+
     FrameMetadata()
-        : pts(0), dts(0), duration(0.0) {}
+        : pts(0), dts(0), duration(0.0), has_ct(false) {}
 
     FrameMetadata(int64_t p, int64_t d, double dur, const std::string &uri)
-        : pts(p), dts(d), duration(dur), asset_uri(uri) {}
+        : pts(p), dts(d), duration(dur), asset_uri(uri), has_ct(false) {}
   };
 
   // Frame holds the actual decoded frame data along with metadata.
@@ -114,12 +120,19 @@ namespace retrovue::buffer
     // Note: The returned pointer is only valid until the next PopAudioFrame() or PushAudioFrame().
     const AudioFrame* PeekAudioFrame() const;
 
-    // Returns the current number of frames in the buffer.
+    // Returns the current number of video frames in the buffer.
     // This is an approximate count due to concurrent access.
     size_t Size() const;
 
-    // Returns the maximum capacity of the buffer.
+    // Returns the current number of audio frames in the buffer.
+    // This is an approximate count due to concurrent access.
+    size_t AudioSize() const;
+
+    // Returns the maximum capacity of the video buffer.
     size_t Capacity() const { return capacity_; }
+
+    // Returns the maximum capacity of the audio buffer.
+    size_t AudioCapacity() const { return audio_capacity_; }
 
     // Returns true if the buffer is empty.
     bool IsEmpty() const;
@@ -139,9 +152,10 @@ namespace retrovue::buffer
 
   private:
     const size_t capacity_;
+    const size_t audio_capacity_;  // Larger than video (3x) due to higher audio frame rate
     std::unique_ptr<Frame[]> buffer_;
 
-    // Audio frame buffer (separate from video buffer)
+    // Audio frame buffer (separate from video buffer, larger capacity)
     std::unique_ptr<AudioFrame[]> audio_buffer_;
     std::atomic<uint32_t> audio_write_index_;
     std::atomic<uint32_t> audio_read_index_;

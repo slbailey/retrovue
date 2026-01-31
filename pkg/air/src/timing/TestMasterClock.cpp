@@ -15,6 +15,7 @@ TestMasterClock::TestMasterClock(Mode mode)
       utc_us_(0),
       monotonic_s_(0.0),
       epoch_utc_us_(0),
+      epoch_locked_(false),
       rate_ppm_(0.0),
       drift_ppm_(0.0),
       max_wait_us_(0) {}
@@ -24,6 +25,7 @@ TestMasterClock::TestMasterClock(int64_t start_time_us, Mode mode)
       utc_us_(start_time_us),
       monotonic_s_(static_cast<double>(start_time_us) / kMillion),
       epoch_utc_us_(0),
+      epoch_locked_(false),
       rate_ppm_(0.0),
       drift_ppm_(0.0),
       max_wait_us_(0) {}
@@ -123,9 +125,45 @@ void TestMasterClock::AdvanceSeconds(double delta_s) {
 
 void TestMasterClock::SetDriftPpm(double ppm) { drift_ppm_ = ppm; }
 
-void TestMasterClock::SetEpochUtcUs(int64_t epoch_utc_us) { epoch_utc_us_ = epoch_utc_us; }
+void TestMasterClock::SetEpochUtcUs(int64_t epoch_utc_us) {
+  epoch_utc_us_ = epoch_utc_us;
+  epoch_locked_ = (epoch_utc_us != 0);
+}
 
-void TestMasterClock::set_epoch_utc_us(int64_t epoch_utc_us) { epoch_utc_us_ = epoch_utc_us; }
+void TestMasterClock::set_epoch_utc_us(int64_t epoch_utc_us) {
+  // For tests, allow direct epoch setting (bypasses lock)
+  epoch_utc_us_ = epoch_utc_us;
+}
+
+bool TestMasterClock::TrySetEpochOnce(int64_t epoch_utc_us, EpochSetterRole role) {
+  // P7-ARCH-001: PREVIEW can never set epoch
+  if (role == EpochSetterRole::PREVIEW) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (epoch_locked_) {
+    return false;
+  }
+  epoch_utc_us_ = epoch_utc_us;
+  epoch_locked_ = true;
+  return true;
+}
+
+bool TestMasterClock::IsEpochLocked() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return epoch_locked_;
+}
+
+void TestMasterClock::ResetEpochForNewSession() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  epoch_utc_us_ = 0;
+  epoch_locked_ = false;
+}
+
+int64_t TestMasterClock::get_epoch_utc_us() const {
+  return epoch_utc_us_;
+}
 
 void TestMasterClock::SetRatePpm(double rate_ppm) { rate_ppm_ = rate_ppm; }
 

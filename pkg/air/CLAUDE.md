@@ -26,10 +26,36 @@ Build:
 Run tests:
   ctest --test-dir pkg/air/build --output-on-failure
 
+Verifying builds (IMPORTANT):
+- CMake incremental builds may not detect all changes. Always verify.
+- After editing a source file, check that the object file was actually rebuilt:
+    # Before build - note the timestamp
+    ls -la pkg/air/build/CMakeFiles/retrovue_air.dir/src/producers/file/FileProducer.cpp.o
+    # Build
+    cmake --build pkg/air/build -j$(nproc)
+    # After build - timestamp MUST have changed
+    ls -la pkg/air/build/CMakeFiles/retrovue_air.dir/src/producers/file/FileProducer.cpp.o
+- If the object file timestamp didn't change, force recompilation:
+    touch pkg/air/src/producers/file/FileProducer.cpp
+    cmake --build pkg/air/build -j$(nproc)
+- For a full clean rebuild of a specific target:
+    rm pkg/air/build/retrovue_air
+    cmake --build pkg/air/build -j$(nproc)
+- Do NOT assume the build worked without verifying timestamps changed.
+
 Build directory:
 - The build directory MUST be pkg/air/build.
 - Do NOT use: build/ at repo root, pkg/air/out/, pkg/air/build-asan, or any other path.
 - Do NOT run cmake from inside pkg/air/build; always use -S pkg/air -B pkg/air/build from repo root (or -S . -B build from pkg/air).
+
+Output binary:
+- The binary MUST be pkg/air/build/retrovue_air.
+- Core spawns this binary when running `retrovue start`.
+- Do NOT build or use binaries from any other location.
+
+Logs:
+- AIR writes logs to pkg/air/logs/<channelname>-air.log (e.g., pkg/air/logs/cheers-24-7-air.log).
+- When debugging, always check this log file for the channel being tested.
 
 Proto (if you change protos/playout.proto):
 - From repo root: sh scripts/air/generate_proto.sh

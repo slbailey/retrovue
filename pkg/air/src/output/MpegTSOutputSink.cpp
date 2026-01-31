@@ -6,6 +6,7 @@
 #include "retrovue/output/MpegTSOutputSink.h"
 
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
@@ -62,6 +63,16 @@ bool MpegTSOutputSink::Start() {
     return false;
   }
 
+  // P8-IO-001: Enable prebuffering to accumulate initial data before writing to socket
+  // This ensures VLC/clients see immediate data when they connect.
+  // Target: ~64KB (enough for MPEG-TS header + initial video/audio packets)
+  prebuffer_target_bytes_ = 64 * 1024;
+  prebuffering_.store(true, std::memory_order_release);
+
+  // P8-IO-001: Disable output timing during prebuffer phase to allow rapid filling
+  encoder_->SetOutputTimingEnabled(false);
+  std::cout << "[MpegTSOutputSink] Prebuffering enabled, target=" << prebuffer_target_bytes_ << " bytes" << std::endl;
+
   // Start mux thread
   stop_requested_.store(false, std::memory_order_release);
   mux_thread_ = std::thread(&MpegTSOutputSink::MuxLoop, this);
@@ -115,11 +126,25 @@ SinkStatus MpegTSOutputSink::GetStatus() const {
 }
 
 void MpegTSOutputSink::ConsumeVideo(const buffer::Frame& frame) {
+  static int consume_count = 0;
+  consume_count++;
+  if (consume_count <= 5 || consume_count % 100 == 0) {
+    std::cout << "[MpegTSOutputSink] ConsumeVideo #" << consume_count
+              << " running=" << (IsRunning() ? "yes" : "no")
+              << " status=" << static_cast<int>(GetStatus()) << std::endl;
+  }
   if (!IsRunning()) return;
   EnqueueVideoFrame(frame);
 }
 
 void MpegTSOutputSink::ConsumeAudio(const buffer::AudioFrame& audio_frame) {
+  static int consume_audio_count = 0;
+  consume_audio_count++;
+  if (consume_audio_count <= 5 || consume_audio_count % 100 == 0) {
+    std::cout << "[MpegTSOutputSink] ConsumeAudio #" << consume_audio_count
+              << " running=" << (IsRunning() ? "yes" : "no")
+              << " pts_us=" << audio_frame.pts_us << std::endl;
+  }
   if (!IsRunning()) return;
   EnqueueAudioFrame(audio_frame);
 }
@@ -134,25 +159,71 @@ std::string MpegTSOutputSink::GetName() const {
 }
 
 void MpegTSOutputSink::MuxLoop() {
+  std::cout << "[MpegTSOutputSink] MuxLoop starting, fd=" << fd_ << std::endl;
+  static int loop_count = 0;
+  static int dequeue_success = 0;
+  static int encode_calls = 0;
+
+  // INV-P8-AUDIO-CT-001: Audio PTS must be derived from CT, not raw media time
+  // Track CT-based audio timeline to keep audio in sync with video
+  int64_t audio_ct_us = 0;  // CT-based audio PTS in microseconds
+  bool audio_ct_initialized = false;
+
   while (!stop_requested_.load(std::memory_order_acquire) && fd_ >= 0) {
     bool processed_any = false;
+    loop_count++;
 
     // Process video frame
     buffer::Frame frame;
     if (DequeueVideoFrame(&frame)) {
+      dequeue_success++;
+      if (dequeue_success <= 5 || dequeue_success % 100 == 0) {
+        std::cout << "[MpegTSOutputSink] MuxLoop dequeued #" << dequeue_success
+                  << " (loop=" << loop_count << ")" << std::endl;
+      }
+
+      // INV-P8-AUDIO-CT-001: Initialize audio CT from first video frame
+      if (!audio_ct_initialized) {
+        audio_ct_us = frame.metadata.pts;
+        audio_ct_initialized = true;
+        std::cout << "[MpegTSOutputSink] Audio CT initialized from video: " << audio_ct_us << "us" << std::endl;
+      }
+
       // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
       encoder_->encodeFrame(frame, pts90k);
+      encode_calls++;
+      if (encode_calls <= 5 || encode_calls % 100 == 0) {
+        std::cout << "[MpegTSOutputSink] MuxLoop encoded #" << encode_calls << std::endl;
+      }
       processed_any = true;
       had_frames_ = true;
     }
 
     // Process audio frame
     buffer::AudioFrame audio_frame;
+    static int audio_dequeue_count = 0;
     if (DequeueAudioFrame(&audio_frame)) {
-      // AudioFrame.pts_us is in microseconds; encoder expects 90kHz.
-      const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
+      audio_dequeue_count++;
+
+      // INV-P8-AUDIO-CT-001: Derive audio PTS from CT, not raw media time
+      // audio_ct_us tracks our position in CT timeline
+      // Increment by audio frame duration after encoding
+      const int64_t audio_pts90k = (audio_ct_us * 90000) / 1'000'000;
+
+      if (audio_dequeue_count <= 5 || audio_dequeue_count % 100 == 0) {
+        std::cout << "[MpegTSOutputSink] MuxLoop audio dequeued #" << audio_dequeue_count
+                  << " raw_pts_us=" << audio_frame.pts_us
+                  << " ct_pts_us=" << audio_ct_us << std::endl;
+      }
+
       encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
+
+      // Advance audio CT by frame duration: (samples * 1000000) / sample_rate
+      if (audio_frame.sample_rate > 0) {
+        audio_ct_us += (static_cast<int64_t>(audio_frame.nb_samples) * 1'000'000) / audio_frame.sample_rate;
+      }
+
       processed_any = true;
       had_frames_ = true;
     }
@@ -189,10 +260,18 @@ void MpegTSOutputSink::MuxLoop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
+  std::cout << "[MpegTSOutputSink] MuxLoop exiting, stop_requested=" << stop_requested_.load()
+            << " fd=" << fd_ << std::endl;
 }
 
 void MpegTSOutputSink::EnqueueVideoFrame(const buffer::Frame& frame) {
   std::lock_guard<std::mutex> lock(video_queue_mutex_);
+  static int enqueue_count = 0;
+  if (enqueue_count < 5 || enqueue_count % 100 == 0) {
+    std::cout << "[MpegTSOutputSink] EnqueueVideoFrame #" << enqueue_count
+              << " queue_size=" << video_queue_.size() << std::endl;
+  }
+  enqueue_count++;
   if (video_queue_.size() >= kMaxVideoQueueSize) {
     video_queue_.pop();  // Drop oldest frame
   }
@@ -276,6 +355,12 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
       sink->prebuffer_.clear();
       sink->prebuffer_.shrink_to_fit();  // Free memory
       sink->prebuffering_.store(false, std::memory_order_release);
+
+      // P8-IO-001: Re-enable output timing now that prebuffer is flushed
+      if (sink->encoder_) {
+        sink->encoder_->SetOutputTimingEnabled(true);
+      }
+      std::cout << "[MpegTSOutputSink] Prebuffer flushed, output timing re-enabled" << std::endl;
     }
 
     return buf_size;  // Data accepted (buffered)
