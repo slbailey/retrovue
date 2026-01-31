@@ -180,6 +180,7 @@ class EncoderPipeline {
   bool silence_injection_active_;      // True while injecting silence (for logging/metrics)
   int64_t silence_audio_pts_90k_;      // Next PTS for silence frame (90kHz)
   int silence_frames_generated_;       // Counter: retrovue_audio_silence_frames_injected_total
+  bool audio_liveness_enabled_;        // INV-P10-PCR-PACED-MUX: False to disable silence injection
 
   // Generate and encode silence frames to fill gap up to target_pts_90k
   void GenerateSilenceFrames(int64_t target_pts_90k);
@@ -216,6 +217,10 @@ class EncoderPipeline {
 
   // P8-IO-001: Enable/disable output timing gating (disable during prebuffer)
   void SetOutputTimingEnabled(bool enabled);
+
+  // INV-P10-PCR-PACED-MUX: Disable audio liveness injection when PCR-paced mux is active.
+  // When disabled, no silence frames are generated - producer audio is authoritative.
+  void SetAudioLivenessEnabled(bool enabled);
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

@@ -206,6 +206,7 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/TimelineController/TimelineControllerContractTests.cpp
   tests/contracts/TimelineController/Phase8IntegrationTests.cpp
   tests/contracts/Phase9OutputBootstrapTests.cpp
+  tests/contracts/Phase10PipelineFlowControlTests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp

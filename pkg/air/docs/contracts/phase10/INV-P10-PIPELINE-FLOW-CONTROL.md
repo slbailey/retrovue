@@ -2,7 +2,7 @@
 
 _Related: [Phase 9 Output Bootstrap](../phases/Phase9-OutputBootstrap.md) · [Phase 8 Overview](../phases/Phase8-Overview.md)_
 
-**Status:** PROPOSED (not yet implemented)
+**Status:** IMPLEMENTED
 
 **Principle:** After a successful switch (Phase 9), the pipeline must sustain realtime playout indefinitely without frame drops, buffer overruns, or timing drift. Phase 10 defines the flow control invariants that govern producer-consumer relationships during steady-state operation.
 
@@ -92,6 +92,42 @@ Phase 10 continues until:
 ❌ Either stream drops frames due to asymmetric backpressure
 ```
 
+### 3.2.1 Architectural Rule: Elastic Decode-Level Gating
+
+**RULE-P10-DECODE-GATE**: Flow control must be applied at the earliest admission point (decode/demux), not at push/emit. However, flow control must use **elastic gating with hysteresis** to allow jitter compensation.
+
+This is a **binding architectural rule** that all producers must follow:
+
+```
+✅ CORRECT: Elastic gate with bounded decode-ahead
+   WaitForDecodeReady()  ← blocks only when buffer > high-water mark
+     └── av_read_frame()        (resumes at low-water mark = hysteresis)
+           ├── audio packet → decode → push (with retry if needed)
+           └── video packet → decode → push (with retry if needed)
+
+❌ WRONG: Hard gate that blocks on any fullness (causes buffer starvation)
+   WaitForDecodeReady()  ← blocks immediately when buffer is full
+     └── Downstream hiccup drains buffer before decode resumes
+
+❌ WRONG: Gate at push level (causes A/V desync)
+   av_read_frame()       ← reads unconditionally
+     ├── audio packet → decode → WaitForPushReady() → push
+     └── video packet → decode → WaitForPushReady() → push ← audio ran ahead!
+```
+
+**Why elastic gating is required:**
+- Hard gating (block when full) removes jitter tolerance
+- Downstream hiccups cause buffer to drain before decode resumes
+- Result: buffer starvation, video stutter, audio silence
+- Elastic gating allows bounded decode-ahead (e.g., 3-5 frames) for jitter compensation
+
+**Hysteresis parameters:**
+- High-water mark: Block when buffer exceeds (capacity - decode_ahead_budget)
+- Low-water mark: Resume when buffer falls below threshold (e.g., 2-3 frames)
+- The gap prevents oscillation between blocking and resuming
+
+**The lesson:** Producers must not read/generate new units of work when downstream cannot accept them. Backpressure must be symmetric in time-equivalent units. But BOUNDED ELASTICITY is required for jitter tolerance.
+
 ### 3.3 Producer Throttling vs Consumer Capacity
 
 **INV-P10-PRODUCER-THROTTLE**: Producer decode rate must be governed by consumer capacity, not by decoder speed.
@@ -99,7 +135,17 @@ Phase 10 continues until:
 - Decode-ahead budget: ≤ N frames (configurable, default 5)
 - When buffer depth reaches threshold, producer must yield
 - Throttling must not cause decoder stalls or seek penalties
-- Throttling must be smooth (not bursty)
+
+**Bounded Decode Burstiness (Allowed):** The invariant permits bounded decode bursts without violation:
+- Disk I/O may deliver frames in bursts (especially at segment boundaries)
+- GOP-aligned decode is more efficient than frame-by-frame
+- Producer may decode a burst of frames up to the budget, then pause
+- This is not a violation as long as buffer depth stays within [1, 2N]
+
+**What IS a violation:**
+- Unbounded decode (buffer grows without limit)
+- Sustained decode rate > consumer rate for > 10 seconds
+- Ignoring backpressure signals
 
 **Mechanism options (implementation chooses one):**
 - Blocking push with backpressure
@@ -155,7 +201,62 @@ This prevents situations where "video has 2 frames but audio has 200ms buffered"
 
 ---
 
-## 4. Non-Goals (Explicitly Out of Phase 10 Scope)
+## 4. Philosophical Alignment (Design Decisions)
+
+These decisions are **locked** and must not be reconsidered during Phase 10 implementation:
+
+### 4.0 DOCTRINE: Elastic Buffering is Mandatory
+
+> **"Zero dropped frames requires elastic buffering.**
+> **Hard synchronization without jitter tolerance is a bug."**
+
+This is the **cardinal rule** of Phase 10 flow control. It was learned through painful experience:
+
+**The failure mode:** Hard gating (block immediately when buffer is full) removes jitter tolerance. When downstream has any hiccup, the buffer drains before decode can resume. Result: buffer starvation, video stutter, audio silence.
+
+**The solution:** Elastic buffering with hysteresis. Allow bounded decode-ahead (e.g., 5 frames). Block only at high-water mark. Resume at low-water mark. This absorbs downstream jitter while still bounding memory growth.
+
+**Why this matters for future producers:**
+- Synthetic producers (Prevue, Weather, Emergency) don't need FFmpeg timing tricks
+- They just obey the same buffer + CT rules
+- They inherit jitter tolerance for free
+- No special-casing per producer type
+
+**Corollary rules:**
+- Never gate on "buffer is full" — gate on "buffer exceeds high-water mark"
+- Never resume on "buffer has space" — resume on "buffer below low-water mark"
+- The gap between thresholds (hysteresis) is load-bearing, not optional
+
+
+### 4.1 MasterClock is Authoritative
+
+- All timing is measured against MasterClock, not wall clock
+- PTS correctness means "bounded to MasterClock", not "equals wall clock at every instant"
+- Phase 9 established PCR authority; Phase 10 must not undermine it
+
+### 4.2 No Micro-Corrections
+
+- PTS values are deterministic and never "nudged"
+- No adaptive rate shifting, time-warping, or speed adjustment
+- Drift indicates a bug, not a condition to paper over
+- If drift exceeds threshold, escalate (rebootstrap), don't compensate
+
+### 4.3 Broadcast-Like Determinism
+
+- Same input + same MasterClock = same output
+- No probabilistic or adaptive behaviors
+- Frame drops are explicit, logged, and symmetric
+
+### 4.4 Bounded Decode Burstiness is Acceptable
+
+- Disk I/O and GOP alignment may cause decode bursts
+- Bursts are fine as long as buffer stays in equilibrium range
+- "Just-in-time decode" is a goal, not a micro-requirement
+- Producer may decode ahead up to budget, pause, repeat
+
+---
+
+## 5. Non-Goals (Explicitly Out of Scope)
 
 Phase 10 does **not** address:
 
@@ -169,30 +270,32 @@ Phase 10 does **not** address:
 
 ---
 
-## 5. Failure Modes
+## 6. Failure Modes
 
-### 5.1 Underrun (Buffer Drains)
+### 6.1 Underrun (Buffer Drains)
 
 **Symptom:** Output stutters, VLC pauses/buffers
 **Cause:** Consumer faster than producer, or producer stall
 **Detection:** `buffer_depth < 1` for > 1 frame duration
 **Recovery:** Producer catches up, silence injection bridges gap
 
-### 5.2 Overrun (Buffer Fills)
+**Note:** Silence injection behavior is defined in Phase 9 (INV-P9-AUDIO-LIVENESS) and is only *observed* here, not *controlled*. Phase 10 does not modify silence injection policy.
+
+### 6.2 Overrun (Buffer Fills)
 
 **Symptom:** Memory grows, latency increases
 **Cause:** Producer faster than consumer (decode > realtime)
 **Detection:** `buffer_depth > 2N` threshold
 **Recovery:** Backpressure throttles producer
 
-### 5.3 A/V Desync
+### 6.3 A/V Desync
 
 **Symptom:** Lip sync issues, audio leads/lags video
 **Cause:** Asymmetric backpressure or frame drops
 **Detection:** `|audio_pts - video_pts| > threshold` (e.g., 100ms)
 **Recovery:** Coordinated drop to resync, or wait for natural catchup
 
-### 5.4 Timing Drift
+### 6.4 Timing Drift
 
 **Symptom:** Playback gradually speeds up or slows down
 **Cause:** Clock domain mismatch, PTS calculation error
@@ -214,7 +317,7 @@ These are forbidden because they conflict with Phase 9's PCR authority and broad
 
 ---
 
-## 6. Logging Requirements
+## 7. Logging Requirements
 
 Phase 10 requires these log lines for debugging:
 
@@ -229,14 +332,15 @@ INV-P10-DESYNC: detected (audio_pts=X, video_pts=Y, delta_ms=Z)
 
 ---
 
-## 7. Metrics Requirements
+## 8. Metrics Requirements
 
 Phase 10 requires these metrics:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `retrovue_buffer_depth_frames` | Gauge | Current buffer depth |
+| `retrovue_buffer_depth_frames` | Gauge | Current buffer depth (video frames) |
 | `retrovue_buffer_depth_target` | Gauge | Target buffer depth |
+| `retrovue_buffer_depth_ms` | Gauge | Current buffer depth in milliseconds (optional, supports time-equivalent invariants) |
 | `retrovue_frames_produced_total` | Counter | Frames decoded by producer |
 | `retrovue_frames_consumed_total` | Counter | Frames encoded/emitted |
 | `retrovue_frames_dropped_total` | Counter | Frames intentionally dropped |
@@ -247,7 +351,7 @@ Phase 10 requires these metrics:
 
 ---
 
-## 8. Proposed Tests (Not Yet Implemented)
+## 9. Proposed Tests (Not Yet Implemented)
 
 The following tests would prove Phase 10 compliance. Implementation deferred until contract is accepted.
 
@@ -258,11 +362,12 @@ The following tests would prove Phase 10 compliance. Implementation deferred unt
 **Then:** Output FPS matches target ± 1%
 **And:** No underrun events logged
 
-### TEST-P10-REALTIME-THROUGHPUT-002: PTS Matches Wall Clock
+### TEST-P10-REALTIME-THROUGHPUT-002: PTS Bounded to MasterClock
 
 **Given:** Channel playing for 60 seconds
-**When:** Final PTS compared to wall clock elapsed
+**When:** Final PTS compared to MasterClock elapsed
 **Then:** Difference < 100ms
+**And:** No micro-corrections were applied (PTS values are deterministic)
 
 ### TEST-P10-BACKPRESSURE-001: Producer Throttled When Buffer Full
 
@@ -308,7 +413,7 @@ The following tests would prove Phase 10 compliance. Implementation deferred unt
 
 ---
 
-## 9. Exit Criteria
+## 10. Exit Criteria
 
 Phase 10 is complete when:
 
@@ -322,7 +427,153 @@ Phase 10 is complete when:
 
 ---
 
-## 10. Implementation Notes (Guidance, Not Prescription)
+## 10.1 Producer Template Contract
+
+All producers (FileProducer, PrevueProducer, WeatherProducer, EmergencyProducer, etc.) must follow this flow control contract.
+
+### DOCTRINE (Read This First)
+
+> **"Zero dropped frames requires elastic buffering.**
+> **Hard synchronization without jitter tolerance is a bug."**
+
+Do NOT implement hard gating. Do NOT block when buffer is merely "full". Use elastic flow control with hysteresis (high-water/low-water marks). This is non-negotiable.
+
+### Mandatory Requirements
+
+1. **Producers must not read/generate new units of work when downstream cannot accept them.**
+   - Flow control gate BEFORE packet read/frame generation
+   - NOT at push/emit level
+   - **BUT: Use ELASTIC gating, not hard gating** (see doctrine above)
+
+2. **Backpressure must be symmetric in time-equivalent units.**
+   - Audio and video gated together
+   - Neither stream may "run ahead" during backpressure
+
+3. **No hidden queues between decode and push.**
+   - All work generated must be immediately pushable
+   - No internal buffering that bypasses flow control
+
+4. **Video through TimelineController; audio uses sample clock.**
+   - Video: call `AdmitFrame()` for each frame to get CT
+   - Audio: call `AdmitFrame()` for FIRST frame only (origin CT)
+   - Audio subsequent frames: `ct += (samples * 1_000_000) / sample_rate`
+   - That's it. No adjustments. No nudging. No repairs.
+
+5. **Audio time is SIMPLE (non-negotiable).**
+
+   What to KEEP:
+   - TimelineController sets origin CT (first frame only)
+   - Sample clock advances time: `ct += sample_duration`
+   - Monotonicity guard only if time goes backwards: `if (ct < last) ct = last`
+
+   What is FORBIDDEN:
+   - ❌ No `<=` comparison (equality is fine)
+   - ❌ No `+1µs` nudging
+   - ❌ No per-frame "adjustments" or "repairs"
+   - ❌ No "Audio PTS adjusted" logic
+
+   Why this is safe:
+   - Audio clock is inherently monotonic (sample counter)
+   - Sample duration defines cadence, not frame-by-frame fixups
+   - Video jitter does NOT affect audio slope
+   - PCR (audio-master) must free-run continuously
+   - This is how real broadcast chains work
+
+6. **INV-P10-PRODUCER-CT-AUTHORITATIVE: Muxer must use producer-provided CT.**
+
+   The producer computes correct CT via TimelineController and sample clock.
+   The muxer MUST use `audio_frame.pts_us` directly — no local counters.
+
+   What is FORBIDDEN:
+   - ❌ `int64_t audio_ct_us = 0;` — Never reset CT to 0 in muxer
+   - ❌ Ignoring `audio_frame.pts_us` from producer
+   - ❌ Maintaining a separate CT counter that shadows the producer's
+
+   Why this matters:
+   - Producer CT may start at hours into channel playback (not 0)
+   - Muxer resetting to 0 causes audio freeze / A/V desync
+   - Producer owns timeline truth; muxer is a pass-through
+
+7. **INV-P10-PCR-PACED-MUX: Mux loop must be time-driven, not availability-driven.**
+
+   The mux loop emits frames at their scheduled CT, not as fast as possible.
+   This prevents buffer oscillation and ensures smooth playback.
+
+   Algorithm:
+   1. Peek at next video frame to get its CT
+   2. Wait until wall clock matches that CT
+   3. Dequeue and encode exactly ONE video frame
+   4. Dequeue and encode all audio with CT ≤ video CT
+   5. Repeat
+
+   What is FORBIDDEN:
+   - ❌ Draining loops ("while queue not empty → emit")
+   - ❌ Burst writes (emit as fast as possible)
+   - ❌ Adaptive speed-up / slow-down
+   - ❌ Dropping frames to catch up
+
+   Why this matters:
+   - Availability-driven mux causes buffer saw-tooth oscillation
+   - High-water / low-water gates fire repeatedly
+   - Bursty delivery causes VLC stutter and audio clicks
+   - PCR-paced emission produces smooth, steady output
+
+8. **INV-P10-NO-SILENCE-INJECTION: Audio liveness must be disabled when PCR-paced mux is active.**
+
+   When MpegTSOutputSink starts with PCR-paced mux, silence injection is permanently disabled.
+   Producer audio is the ONLY audio source. No competing audio streams.
+
+   What is FORBIDDEN:
+   - ❌ Silence injection once PCR pacing starts
+   - ❌ "Audio missing" heuristics
+   - ❌ Fallback audio
+   - ❌ Speculative silence
+   - ❌ Any fabricated audio
+
+   Correct behavior when audio queue is empty:
+   - Mux loop stalls (does not emit video either)
+   - Video and audio wait together
+   - PCR only advances from real audio
+
+   Why this matters:
+   - Competing audio sources cause PTS discontinuities
+   - VLC drops/mutes audio, then video freezes
+   - PCR becomes inconsistent
+   - Audio liveness was designed for Phase 9 bootstrap, not steady-state
+
+### Common Flow Control Primitive
+
+All producers should share a common flow control pattern:
+
+```cpp
+// RULE-P10-DECODE-GATE pattern (pseudocode)
+bool WaitForProduceReady() {
+    while (!CanPush()) {
+        if (stop_requested || write_barrier) return false;
+        log_once("Blocking at produce level");
+        yield_or_sleep();
+    }
+    log_if_was_blocked("Released");
+    return true;
+}
+
+// Production loop
+while (!stop) {
+    if (!WaitForProduceReady()) break;  // Gate BEFORE work
+    GenerateWork();                      // Read packet / generate frame
+    Push();                              // Guaranteed to succeed
+}
+```
+
+### Metrics
+
+All producers should expose:
+- `retrovue_decode_gate_events_total` — Count of backpressure episodes
+- `retrovue_frames_produced_total` — Total frames produced
+
+---
+
+## 11. Implementation Notes (Guidance, Not Prescription)
 
 These are suggestions for implementation, not requirements:
 
@@ -354,7 +605,7 @@ When drops are necessary:
 
 ---
 
-## 11. Relation to Other Phases
+## 12. Relation to Other Phases
 
 | Phase | Concern | Phase 10 Dependency |
 |-------|---------|---------------------|
@@ -365,7 +616,7 @@ When drops are necessary:
 
 ---
 
-## 12. Acceptance Criteria
+## 13. Acceptance Criteria
 
 This contract is accepted when:
 

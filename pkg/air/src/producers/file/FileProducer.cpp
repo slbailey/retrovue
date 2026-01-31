@@ -36,7 +36,22 @@ namespace retrovue::producers::file
   {
     constexpr int64_t kProducerBackoffUs = 10'000; // 10ms backoff when buffer is full
     constexpr int64_t kMicrosecondsPerSecond = 1'000'000;
+
+    // ==========================================================================
+    // INV-P10-ELASTIC-FLOW-CONTROL: Bounded decode-ahead with hysteresis
+    // ==========================================================================
+    // Instead of blocking immediately when buffer is full, we allow bounded
+    // decode-ahead (jitter tolerance) and only apply backpressure at a high-water
+    // mark. This prevents buffer starvation while still bounding memory growth.
+    //
+    // High water mark: Block decode when buffer exceeds this threshold
+    // Low water mark: Resume decode when buffer falls below this threshold
+    // The gap between them (hysteresis) prevents oscillation.
+    // ==========================================================================
+    constexpr size_t kDecodeAheadBudget = 5;  // Max frames to decode ahead of consumer
+    constexpr size_t kLowWaterFrames = 2;     // Resume decode when buffer drops to this
   }
+
 
   FileProducer::FileProducer(
       const ProducerConfig &config,
@@ -103,7 +118,9 @@ namespace retrovue::producers::file
         audio_mapping_gate_drop_count_(0),
         audio_ungated_logged_(false),
         scale_diag_count_(0),
-        mapping_locked_this_iteration_(false)
+        mapping_locked_this_iteration_(false),
+        decode_gate_block_count_(0),
+        decode_gate_blocked_(false)
   {
   }
 
@@ -252,6 +269,181 @@ namespace retrovue::producers::file
     writes_disabled_.store(true, std::memory_order_release);
     std::cout << "[FileProducer] Write barrier set (producer continues decoding)" << std::endl;
     EmitEvent("write_barrier", "");
+  }
+
+  // ==========================================================================
+  // INV-P10-BACKPRESSURE-SYMMETRIC: Unified A/V gating
+  // ==========================================================================
+
+  bool FileProducer::CanPushAV() const
+  {
+    // Gate is closed if ANY of these conditions are true:
+    // 1. Write barrier is set
+    // 2. Video buffer is full
+    // 3. Audio buffer is full
+    // 4. Stop was requested
+    if (writes_disabled_.load(std::memory_order_acquire)) {
+      return false;
+    }
+    if (stop_requested_.load(std::memory_order_acquire)) {
+      return false;
+    }
+    if (output_buffer_.IsFull()) {
+      return false;
+    }
+    if (output_buffer_.IsAudioFull()) {
+      return false;
+    }
+    return true;
+  }
+
+  bool FileProducer::WaitForAVPushReady()
+  {
+    static bool logged_backpressure = false;
+
+    while (!CanPushAV()) {
+      // Check termination conditions
+      if (stop_requested_.load(std::memory_order_acquire)) {
+        return false;
+      }
+      if (writes_disabled_.load(std::memory_order_acquire)) {
+        return false;  // Write barrier set - caller should drop frame
+      }
+
+      // Log backpressure event (once per episode)
+      if (!logged_backpressure) {
+        buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
+        std::cout << "[FileProducer] INV-P10-BACKPRESSURE-SYMMETRIC: A/V gated together "
+                  << "(video_full=" << output_buffer_.IsFull()
+                  << ", audio_full=" << output_buffer_.IsAudioFull() << ")"
+                  << std::endl;
+        logged_backpressure = true;
+      }
+
+      // Yield and retry
+      if (master_clock_ && !master_clock_->is_fake()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+      } else {
+        std::this_thread::yield();
+      }
+    }
+
+    logged_backpressure = false;  // Reset for next backpressure episode
+    return true;
+  }
+
+  // ==========================================================================
+  // RULE-P10-DECODE-GATE: Architectural rule for all producers
+  // ==========================================================================
+  //
+  // DOCTRINE: "Zero dropped frames requires elastic buffering.
+  //            Hard synchronization without jitter tolerance is a bug."
+  //
+  // Flow control must be applied at the earliest admission point (decode/demux),
+  // not at push/emit. However, flow control must use ELASTIC gating with
+  // hysteresis to allow jitter compensation:
+  //
+  // ✅ CORRECT: Elastic gate with bounded decode-ahead
+  //    WaitForDecodeReady()  ← blocks only when buffer > high-water mark
+  //      └── av_read_frame()        (resumes at low-water mark)
+  //            ├── audio packet → decode → push
+  //            └── video packet → decode → push
+  //
+  // ❌ WRONG: Hard gate that blocks on any fullness (causes buffer starvation)
+  //    Downstream hiccup → buffer drains before decode resumes → stutter
+  //
+  // ❌ WRONG: Gate at push level (causes A/V desync)
+  //    Audio runs ahead while video is blocked
+  //
+  // The hysteresis gap between high-water and low-water marks is LOAD-BEARING.
+  // It absorbs downstream jitter while still bounding memory growth.
+  // Future producers (Prevue, Weather, Emergency) inherit this for free.
+  // ==========================================================================
+
+  bool FileProducer::WaitForDecodeReady()
+  {
+    // INV-P10-ELASTIC-FLOW-CONTROL: Elastic gate with hysteresis.
+    // - Allow bounded decode-ahead (jitter tolerance)
+    // - Block only at high-water mark
+    // - Resume at low-water mark (hysteresis prevents oscillation)
+
+    // Check termination conditions first
+    if (stop_requested_.load(std::memory_order_acquire)) return false;
+    if (writes_disabled_.load(std::memory_order_acquire)) return false;
+
+    // Calculate high-water mark: capacity minus decode-ahead budget
+    // For small buffers (testing), fall back to near-full threshold
+    size_t video_capacity = output_buffer_.Capacity();
+    size_t audio_capacity = output_buffer_.AudioCapacity();
+
+    // High-water mark: block when buffer is nearly full
+    // For large buffers: capacity - decode_ahead_budget (allows jitter tolerance)
+    // For small buffers: capacity - 1 (preserve space for at least one more frame)
+    size_t video_high_water, audio_high_water;
+    if (video_capacity > kDecodeAheadBudget + 2) {
+      video_high_water = video_capacity - kDecodeAheadBudget;
+    } else {
+      video_high_water = (video_capacity > 1) ? (video_capacity - 1) : video_capacity;
+    }
+
+    if (audio_capacity > kDecodeAheadBudget * 3 + 6) {
+      audio_high_water = audio_capacity - kDecodeAheadBudget * 3;
+    } else {
+      audio_high_water = (audio_capacity > 3) ? (audio_capacity - 3) : audio_capacity;
+    }
+
+    size_t video_depth = output_buffer_.Size();
+    size_t audio_depth = output_buffer_.AudioSize();
+
+    // Check if we're above high-water mark (need to block)
+    bool video_above_high = video_depth >= video_high_water;
+    bool audio_above_high = audio_depth >= audio_high_water;
+
+    if (!video_above_high && !audio_above_high) {
+      // Below high-water mark - decode immediately (jitter tolerance)
+      decode_gate_blocked_ = false;
+      return true;
+    }
+
+    // Above high-water mark - enter blocking state with hysteresis
+    bool was_blocked = decode_gate_blocked_;
+    decode_gate_blocked_ = true;
+
+    if (!was_blocked) {
+      decode_gate_block_count_++;
+      std::cout << "[FileProducer] INV-P10-ELASTIC-GATE: Blocking at high-water "
+                << "(video=" << video_depth << "/" << video_high_water
+                << ", audio=" << audio_depth << "/" << audio_high_water
+                << ", episode=" << decode_gate_block_count_ << ")" << std::endl;
+    }
+
+    // Wait until we're at or below LOW-water mark (hysteresis)
+    // For small buffers, low-water = high-water (no hysteresis, simpler behavior)
+    size_t video_low_water = (video_capacity > kDecodeAheadBudget + 2) ? kLowWaterFrames : video_high_water;
+    size_t audio_low_water = (audio_capacity > kDecodeAheadBudget * 3 + 6) ? kLowWaterFrames * 3 : audio_high_water;
+
+    while (true) {
+      if (stop_requested_.load(std::memory_order_acquire)) return false;
+      if (writes_disabled_.load(std::memory_order_acquire)) return false;
+
+      video_depth = output_buffer_.Size();
+      audio_depth = output_buffer_.AudioSize();
+
+      // Resume when BOTH are at or below low-water mark
+      if (video_depth <= video_low_water && audio_depth <= audio_low_water) {
+        std::cout << "[FileProducer] INV-P10-ELASTIC-GATE: Released at low-water "
+                  << "(video=" << video_depth << "/" << video_low_water
+                  << ", audio=" << audio_depth << "/" << audio_low_water << ")" << std::endl;
+        decode_gate_blocked_ = false;
+        return true;
+      }
+
+      if (master_clock_ && !master_clock_->is_fake()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+      } else {
+        std::this_thread::yield();
+      }
+    }
   }
 
   bool FileProducer::isRunning() const
@@ -820,6 +1012,13 @@ namespace retrovue::producers::file
       return false;
     }
 
+    // INV-P10-BACKPRESSURE-SYMMETRIC: Decode-level gate
+    // Exception: Shadow mode bypasses for ONE frame (then waits via INV-P8-SHADOW-PACE)
+    bool in_shadow = shadow_decode_mode_.load(std::memory_order_acquire);
+    if (!in_shadow && !WaitForDecodeReady()) {
+      return true;  // Stop or write barrier - continue loop to check termination
+    }
+
     // Decode ONE frame at a time (paced according to fake time)
     // Read packet
     int ret = av_read_frame(format_ctx_, packet_);
@@ -1205,60 +1404,32 @@ namespace retrovue::producers::file
       }
     }
 
-    // Phase 7: Check write barrier before pushing
-    if (writes_disabled_.load(std::memory_order_acquire)) {
-      return true;  // Silently drop - producer is being force-stopped
+    // =======================================================================
+    // INV-P10-ELASTIC-FLOW-CONTROL: Push with backpressure retry
+    // =======================================================================
+    // Elastic gating allows bounded decode-ahead, so push may occasionally fail
+    // if buffer fills between gate check and push. Retry with backpressure.
+    while (!output_buffer_.Push(output_frame))
+    {
+      if (stop_requested_.load(std::memory_order_acquire)) return true;
+      if (writes_disabled_.load(std::memory_order_acquire)) return true;
+
+      buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
+
+      if (master_clock_ && !master_clock_->is_fake()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+      } else {
+        std::this_thread::yield();
+      }
     }
 
-    // Attempt to push decoded frame
-    if (output_buffer_.Push(output_frame))
+    uint64_t produced = frames_produced_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (produced <= 5 || produced % 100 == 0)
     {
-      uint64_t produced = frames_produced_.fetch_add(1, std::memory_order_relaxed) + 1;
-      if (produced <= 5 || produced % 100 == 0)
-      {
-        std::cout << "[FileProducer] Video frame pushed #" << produced
-                  << ", pts=" << output_frame.metadata.pts << std::endl;
-      }
-      return true;
+      std::cout << "[FileProducer] Video frame pushed #" << produced
+                << ", pts=" << output_frame.metadata.pts << std::endl;
     }
-    else
-    {
-      // Buffer is full, back off
-      uint64_t full_count = buffer_full_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-      if (full_count <= 5 || full_count % 100 == 0)
-      {
-        std::cerr << "[FileProducer] Video buffer full #" << full_count
-                  << ", pts=" << output_frame.metadata.pts << std::endl;
-      }
-      if (master_clock_)
-      {
-        int64_t now_utc_us = master_clock_->now_utc_us();
-        int64_t deadline_utc_us = now_utc_us + kProducerBackoffUs;
-        if (master_clock_->is_fake())
-        {
-          // For fake clock, busy-wait
-          while (master_clock_->now_utc_us() < deadline_utc_us && 
-                 !stop_requested_.load(std::memory_order_acquire))
-          {
-            std::this_thread::yield();
-          }
-        }
-        else
-        {
-          while (master_clock_->now_utc_us() < deadline_utc_us && 
-                 !stop_requested_.load(std::memory_order_acquire))
-          {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-          }
-        }
-      }
-      else
-      {
-        std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
-      }
-      // Retry on next iteration
-      return true;  // Frame was decoded successfully, just couldn't push
-    }
+    return true;
   }
 
   bool FileProducer::ScaleFrame()
@@ -1816,19 +1987,69 @@ namespace retrovue::producers::file
                     << (accuracy_us / 1000) << "ms)" << std::endl;
         }
 
-        // Apply PTS offset for alignment (same as video)
-        output_audio_frame.pts_us += pts_offset_us_;
-
-        // Enforce monotonicity
-        bool pts_adjusted = false;
-        if (output_audio_frame.pts_us <= last_audio_pts_us_)
+        // =======================================================================
+        // INV-P10-AUDIO-SAMPLE-CLOCK: Audio CT driven by sample duration
+        // =======================================================================
+        // Audio time is SIMPLE:
+        //   1. TimelineController sets origin CT (first frame only)
+        //   2. Producer advances CT by sample_duration each frame
+        //   3. That's it. No adjustments. No nudging. No repairs.
+        //
+        // Sample durations:
+        //   48kHz, 1024 samples → 21333µs
+        //   44.1kHz, 1024 samples → 23219µs
+        //
+        // WHY NO ADJUSTMENTS:
+        //   - Audio clock is inherently monotonic (sample counter)
+        //   - Sample duration defines cadence, not frame-by-frame fixups
+        //   - Video jitter does NOT affect audio slope
+        //   - PCR (audio-master) must free-run continuously
+        //   - Any +1µs nudging or equality clamping freezes PCR
+        //
+        // This is how real broadcast chains work.
+        // =======================================================================
+        if (timeline_controller_ && !shadow_decode_mode_.load(std::memory_order_acquire))
         {
-          int64_t old_pts = output_audio_frame.pts_us;
-          output_audio_frame.pts_us = last_audio_pts_us_ + 1;
-          pts_adjusted = true;
-          std::cout << "[FileProducer] Audio PTS adjusted: " << old_pts
-                    << " -> " << output_audio_frame.pts_us
-                    << " (last_audio_pts=" << last_audio_pts_us_ << ")" << std::endl;
+          // Calculate sample duration in microseconds
+          int64_t sample_duration_us = (static_cast<int64_t>(output_audio_frame.nb_samples) * 1000000LL)
+                                       / output_audio_frame.sample_rate;
+
+          if (last_audio_pts_us_ == 0) {
+            // FIRST audio frame: use AdmitFrame to get CT origin
+            int64_t audio_ct_us = 0;
+            timing::AdmissionResult result = timeline_controller_->AdmitFrame(base_pts_us, audio_ct_us);
+
+            if (result == timing::AdmissionResult::ADMITTED) {
+              output_audio_frame.pts_us = audio_ct_us;
+              std::cout << "[FileProducer] INV-P10-AUDIO-SAMPLE-CLOCK: Origin CT=" << audio_ct_us
+                        << "us, sample_duration=" << sample_duration_us << "us" << std::endl;
+            } else {
+              // Audio rejected (late/early/no mapping) - skip this frame
+              av_frame_unref(audio_frame_);
+              continue;
+            }
+          } else {
+            // SUBSEQUENT frames: advance CT by sample duration (sample clock)
+            // This is the ONLY rule. No adjustments. No nudging.
+            output_audio_frame.pts_us = last_audio_pts_us_ + sample_duration_us;
+          }
+
+          // Monotonicity guard: ONLY if time goes backwards (should never happen)
+          // ⚠️ No +1µs nudge - just hold at last value
+          // ⚠️ No equality clamp - equal is fine
+          if (output_audio_frame.pts_us < last_audio_pts_us_) {
+            output_audio_frame.pts_us = last_audio_pts_us_;
+          }
+        }
+        else
+        {
+          // Legacy path: Apply PTS offset for alignment
+          output_audio_frame.pts_us += pts_offset_us_;
+
+          // Legacy monotonicity guard (same rules)
+          if (output_audio_frame.pts_us < last_audio_pts_us_) {
+            output_audio_frame.pts_us = last_audio_pts_us_;
+          }
         }
         last_audio_pts_us_ = output_audio_frame.pts_us;
 
@@ -1943,77 +2164,41 @@ namespace retrovue::producers::file
         // Always log first 50 frames after producer start, then every 100
         bool should_log = (frames_since_producer_start_ <= 50) || (frames_since_producer_start_ % 100 == 0);
 
-        // Phase 7: Check write barrier before pushing audio
-        if (writes_disabled_.load(std::memory_order_acquire)) {
-          return true;  // Silently drop - producer is being force-stopped
+        // =======================================================================
+        // INV-P10-ELASTIC-FLOW-CONTROL: Push with backpressure retry
+        // =======================================================================
+        // Elastic gating allows bounded decode-ahead, so push may occasionally fail
+        // if buffer fills between gate check and push. Retry with backpressure.
+        while (!output_buffer_.PushAudioFrame(output_audio_frame))
+        {
+          if (stop_requested_.load(std::memory_order_acquire)) {
+            av_frame_unref(audio_frame_);
+            return received_any;
+          }
+          if (writes_disabled_.load(std::memory_order_acquire)) {
+            av_frame_unref(audio_frame_);
+            return received_any;
+          }
+
+          if (master_clock_ && !master_clock_->is_fake()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+          } else {
+            std::this_thread::yield();
+          }
         }
 
-        // Phase 6: Blocking push with backpressure - wait for space when buffer full
-        // INV-P9-WRITE-BARRIER-SYMMETRIC: Also check writes_disabled_ in retry loop.
-        // Without this, audio frames already in the retry loop when SetWriteBarrier()
-        // is called would continue retrying and eventually push, while video frames
-        // are correctly dropped. This causes A/V desync during switch.
-        bool pushed = false;
-        int retry_count = 0;
-        while (!pushed && !stop_requested_.load(std::memory_order_acquire) &&
-               !writes_disabled_.load(std::memory_order_acquire))
+        received_any = true;
+        processed_one = true;  // Phase 6: Exit loop after this frame
+
+        if (should_log)
         {
-          if (output_buffer_.PushAudioFrame(output_audio_frame))
-          {
-            received_any = true;
-            pushed = true;
-            processed_one = true;  // Phase 6: Exit loop after this frame
-
-            if (should_log)
-            {
-              std::cout << "[FileProducer] Pushed audio frame #" << audio_frame_count_
-                        << " (frames_since_start=" << frames_since_producer_start_ << ")"
-                        << ", base_pts_us=" << base_pts_us
-                        << ", offset=" << pts_offset_us_
-                        << ", final_pts_us=" << output_audio_frame.pts_us
-                        << ", samples=" << output_audio_frame.nb_samples
-                        << ", sample_rate=" << output_audio_frame.sample_rate
-                        << (pts_adjusted ? " [PTS_ADJUSTED]" : "")
-                        << (retry_count > 0 ? " [RETRIED=" + std::to_string(retry_count) + "]" : "")
-                        << std::endl;
-            }
-          }
-          else
-          {
-            // Buffer full - back off and retry (Phase 6 flow control)
-            retry_count++;
-
-            // CRITICAL: Don't retry forever! If buffer is consistently full,
-            // give up after a reasonable number of retries to avoid deadlock.
-            // The audio frame will be dropped, but this is better than blocking
-            // video decode indefinitely.
-            constexpr int kMaxAudioRetries = 50;
-            if (retry_count > kMaxAudioRetries)
-            {
-              audio_drop_count_++;
-              if (audio_drop_count_ <= 5 || audio_drop_count_ % 100 == 0)
-              {
-                std::cout << "[FileProducer] Audio frame dropped #" << audio_drop_count_
-                          << " (buffer full after " << kMaxAudioRetries << " retries)"
-                          << std::endl;
-              }
-              break;  // Give up on this frame, continue decoding
-            }
-
-            if (retry_count == 1 || retry_count % 100 == 0)
-            {
-              std::cout << "[FileProducer] Audio buffer full, backing off (retry #"
-                        << retry_count << ")" << std::endl;
-            }
-            if (master_clock_ && !master_clock_->is_fake())
-            {
-              std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
-            }
-            else
-            {
-              std::this_thread::yield();
-            }
-          }
+          std::cout << "[FileProducer] Pushed audio frame #" << audio_frame_count_
+                    << " (frames_since_start=" << frames_since_producer_start_ << ")"
+                    << ", base_pts_us=" << base_pts_us
+                    << ", ct_pts_us=" << output_audio_frame.pts_us
+                    << ", samples=" << output_audio_frame.nb_samples
+                    << ", sample_rate=" << output_audio_frame.sample_rate
+                    << std::endl;
         }
       }
       else
