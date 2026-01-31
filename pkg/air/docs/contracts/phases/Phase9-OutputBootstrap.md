@@ -1,8 +1,8 @@
 # Phase 9 — Output Bootstrap After Segment Commit
 
-_Related: [Phase 8 Overview](Phase8-Overview.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [OutputSwitchingContract](../architecture/OutputSwitchingContract.md)_
+_Related: [Phase 8 Overview](Phase8-Overview.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [OutputSwitchingContract](../architecture/OutputSwitchingContract.md) · [PlayoutInvariants-BroadcastGradeGuarantees](../PlayoutInvariants-BroadcastGradeGuarantees.md)_
 
-**Principle:** After a segment commits and takes timeline ownership (Phase 8), there must be a deterministic path from commit to observable output. Phase 9 defines the minimal bootstrap required to break the readiness deadlock and route the first frame.
+**Principle:** After a segment commits and takes timeline ownership (Phase 8), there must be a deterministic path from commit to observable output. Phase 9 defines the minimal bootstrap required to break the readiness deadlock and route the first frame. **Authoritative definition of output liveness and timeline laws lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).**
 
 Phase 8 is **frozen**. This contract does not modify timeline semantics, segment commit rules, or CT/MT invariants.
 

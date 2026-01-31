@@ -1,5 +1,7 @@
 # Phase 8 Invariants — Compiled Reference
 
+**Authoritative definition of broadcast-grade laws** (clock authority, CT monotonicity, output liveness, audio format, seamless switching) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).** This document compiles Phase 8 refinements only.
+
 Compiled from: Core `ScheduleManagerPhase8Contract.md`, AIR `Phase8-3-PreviewSwitchToLive.md`, and code comments. For full statements see source docs.
 
 ## 1. Timeline (Core — ScheduleManagerPhase8Contract)

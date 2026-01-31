@@ -4,6 +4,8 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 **Principle:** Add seamless switching to the TS pipeline. Shadow decode and PTS continuity from Phase 6A become real in the byte stream: no discontinuity, no PID reset, no timestamp jump.
 
+**Authoritative definition of the switching law** (no gaps, no PTS regression, no silence during switches) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).**
+
 Shared invariants (one logical stream per channel, segment authority) are in the [Overview](Phase8-Overview.md).
 
 ## Purpose

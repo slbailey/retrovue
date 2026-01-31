@@ -4,6 +4,8 @@ _Related: [MasterClock Domain](../../domain/MasterClockDomain.md); [Architecture
 
 # MasterClock Contract
 
+**Authoritative definition of the clock law** (MasterClock is the only source of "now"; CT never resets once established) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).** This contract specifies component-level behavior that satisfies that law.
+
 ## Purpose
 
 Define the enforceable rules and test expectations for the MasterClock service that coordinates timing across `retrovue-air`.

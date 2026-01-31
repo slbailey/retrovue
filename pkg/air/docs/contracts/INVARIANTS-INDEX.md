@@ -25,7 +25,7 @@
 
 ## Layer 0 – Constitutional Laws
 
-Top-level broadcast guarantees. Full text in [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md). Phase invariants refine these; they do not replace them.
+Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md).** Phase invariants refine these; they do not replace them.
 
 | Law | One-line | Type |
 |-----|----------|------|

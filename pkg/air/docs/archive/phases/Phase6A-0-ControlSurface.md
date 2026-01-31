@@ -6,7 +6,7 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](P
 
 **Principle:** Air must be correct before it is fast. Performance guarantees are explicitly deferred until correctness is contractually proven.
 
-Shared invariants (no schedule/plan in Air, segment-based control, clock authority, hard stop authoritative) are defined in the [Overview](Phase6A-Overview.md).
+Shared invariants (no schedule/plan in Air, segment-based control, clock authority, hard stop authoritative) are defined in the [Overview](Phase6A-Overview.md). **Authoritative definition of clock and other broadcast-grade laws lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../../contracts/PlayoutInvariants-BroadcastGradeGuarantees.md).**
 
 ## Purpose
 

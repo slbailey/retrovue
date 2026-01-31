@@ -10,7 +10,7 @@ Documentation is organized into six layers. Lower-numbered layers take precedenc
 
 ### Layer 0 – Constitutional Laws
 
-**Non-negotiable system guarantees.** These are the top-level invariants that define what the system *is*: clock authority, timeline ownership, output liveness, format guarantees, and switching behavior. They cannot be relaxed without changing the fundamental character of the playout engine. No other document may contradict them.
+**Non-negotiable system guarantees.** These are the top-level invariants that define what the system *is*: clock authority, timeline ownership, output liveness, format guarantees, and switching behavior. They cannot be relaxed without changing the fundamental character of the playout engine. No other document may contradict them. **Authoritative definition lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md).**
 
 ### Layer 1 – Semantic Contracts
 

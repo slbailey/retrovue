@@ -9,7 +9,7 @@ _Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase 6A Overv
 
 ## Purpose
 
-Define the observable guarantees for **metrics and timing** in the Playout Engine. This contract specifies **what** timing and metrics guarantees the system provides, not how they are achieved internally. **Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. hard_stop_time_ms) but does not compute schedule time. Microsecond-level timing and metrics pipeline are **not required for Phase 6A**; definitions and targets are preserved for Phase 7+.
+Define the observable guarantees for **metrics and timing** in the Playout Engine. This contract specifies **what** timing and metrics guarantees the system provides, not how they are achieved internally. **Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. hard_stop_time_ms) but does not compute schedule time. **Authoritative definition of the clock law** (MasterClock is the only source of "now"; CT never resets) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).** Microsecond-level timing and metrics pipeline are **not required for Phase 6A**; definitions and targets are preserved for Phase 7+.
 
 ---
 

@@ -4,6 +4,8 @@ _Metadata: Status=Draft; Scope=Domain; Owner=@runtime-platform_
 
 _Related: [Architecture Overview](../architecture/ArchitectureOverview.md); [MasterClock Domain](MasterClockDomain.md); [Playout Engine Contract](../contracts/PlayoutEngineContract.md)_
 
+**Authoritative definition of clock and switching laws lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../../contracts/PlayoutInvariants-BroadcastGradeGuarantees.md).**
+
 # Domain - Playout Control
 
 ## Purpose
