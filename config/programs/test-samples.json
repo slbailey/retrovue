@@ -1,0 +1,19 @@
+{
+  "program_id": "test-samples",
+  "name": "Test Samples",
+  "play_mode": "sequential",
+  "episodes": [
+    {
+      "episode_id": "sample-a",
+      "title": "Sample A",
+      "file_path": "/opt/retrovue/assets/SampleA.mp4",
+      "duration_seconds": 10.3
+    },
+    {
+      "episode_id": "sample-b",
+      "title": "Sample B",
+      "file_path": "/opt/retrovue/assets/SampleB.mp4",
+      "duration_seconds": 10.1
+    }
+  ]
+}

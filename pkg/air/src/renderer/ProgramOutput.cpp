@@ -98,7 +98,7 @@ ProgramOutput::ProgramOutput(const RenderConfig& config,
                              const std::shared_ptr<telemetry::MetricsExporter>& metrics,
                              int32_t channel_id)
     : config_(config),
-      input_buffer_(input_buffer),
+      input_buffer_(&input_buffer),  // Store as pointer for hot-switch support
       clock_(clock),
       metrics_(metrics),
       channel_id_(channel_id),
@@ -142,7 +142,7 @@ bool ProgramOutput::Start() {
   if (metrics_) {
     telemetry::ChannelMetrics initial_snapshot;
     initial_snapshot.state = telemetry::ChannelState::READY;
-    initial_snapshot.buffer_depth_frames = input_buffer_.Size();
+    initial_snapshot.buffer_depth_frames = input_buffer_->Size();
     initial_snapshot.frame_gap_seconds = 0.0;
     initial_snapshot.corrections_total = stats_.corrections_total;
     std::cout << "[ProgramOutput] Registering channel " << channel_id_
@@ -176,7 +176,7 @@ void ProgramOutput::Stop() {
     if (!metrics_->GetChannelMetrics(channel_id_, final_snapshot)) {
       final_snapshot = telemetry::ChannelMetrics{};
     }
-    final_snapshot.buffer_depth_frames = input_buffer_.Size();
+    final_snapshot.buffer_depth_frames = input_buffer_->Size();
     final_snapshot.frame_gap_seconds = stats_.frame_gap_ms / 1000.0;
     final_snapshot.corrections_total = stats_.corrections_total;
     std::cout << "[ProgramOutput] Flushing final metrics snapshot for channel "
@@ -206,6 +206,14 @@ void ProgramOutput::RenderLoop() {
   }
 
   while (!stop_requested_.load(std::memory_order_acquire)) {
+    // Phase 7: Get current buffer pointer under lock to support hot-switching.
+    // The pointer may change during SwitchToLive, so we read it once per iteration.
+    buffer::FrameRingBuffer* current_buffer;
+    {
+      std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+      current_buffer = input_buffer_;
+    }
+
     int64_t frame_start_utc = 0;
     std::chrono::steady_clock::time_point frame_start_fallback;
     if (clock_) {
@@ -215,7 +223,7 @@ void ProgramOutput::RenderLoop() {
     }
 
     buffer::Frame frame;
-    if (!input_buffer_.Pop(frame)) {
+    if (!current_buffer->Pop(frame)) {
       WaitForMicros(clock_, kEmptyBufferBackoffUs, &stop_requested_);
       stats_.frames_skipped++;
       continue;
@@ -245,7 +253,7 @@ void ProgramOutput::RenderLoop() {
               clock_->scheduled_to_utc_us(frame.metadata.pts) - clock_->now_utc_us();
         }
       } else if (gap_s < kDropThresholdSeconds &&
-                 input_buffer_.Size() > kMinDepthForDrop) {
+                 current_buffer->Size() > kMinDepthForDrop) {
         stats_.frames_dropped++;
         stats_.corrections_total++;
         PublishMetrics(frame_gap_ms);
@@ -275,7 +283,7 @@ void ProgramOutput::RenderLoop() {
     int audio_frames_consumed = 0;
     while (true) {
       buffer::AudioFrame audio_frame;
-      if (!input_buffer_.PopAudioFrame(audio_frame)) {
+      if (!current_buffer->PopAudioFrame(audio_frame)) {
         break;
       }
       audio_frames_consumed++;
@@ -359,7 +367,7 @@ void ProgramOutput::PublishMetrics(double frame_gap_ms) {
     snapshot = telemetry::ChannelMetrics{};
   }
 
-  snapshot.buffer_depth_frames = input_buffer_.Size();
+  snapshot.buffer_depth_frames = input_buffer_->Size();
   snapshot.frame_gap_seconds = frame_gap_ms / 1000.0;
   snapshot.corrections_total = stats_.corrections_total;
   metrics_->SubmitChannelMetrics(channel_id_, snapshot);
@@ -373,7 +381,7 @@ void ProgramOutput::setProducer(producers::IProducer* producer) {
 void ProgramOutput::resetPipeline() {
   std::cout << "[ProgramOutput] Resetting pipeline..." << std::endl;
 
-  input_buffer_.Clear();
+  input_buffer_->Clear();
 
   last_pts_ = 0;
   if (clock_) {
@@ -417,6 +425,18 @@ void ProgramOutput::ClearOutputBus() {
   std::lock_guard<std::mutex> lock(output_bus_mutex_);
   output_bus_ = nullptr;
   std::cout << "[ProgramOutput] OutputBus cleared (frames will use legacy callbacks)" << std::endl;
+}
+
+void ProgramOutput::SetInputBuffer(buffer::FrameRingBuffer* buffer) {
+  std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+  input_buffer_ = buffer;
+  std::cout << "[ProgramOutput] Input buffer redirected (hot-switch)" << std::endl;
+}
+
+int64_t ProgramOutput::GetLastEmittedPTS() const {
+  // Phase 7: Return last emitted PTS for continuity across segment boundaries
+  // This is read by SwitchToLive to align the next segment's PTS
+  return last_pts_;
 }
 
 // ============================================================================

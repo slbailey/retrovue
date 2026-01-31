@@ -320,16 +320,50 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"AttachStream failed: {r.message}")
-        r = _rpc(
-            "SwitchToLive",
-            lambda timeout: stub.SwitchToLive(
-                playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
-                timeout=timeout,
-            ),
-            _RPC_CONTROL_S,
-        )
-        if not r.success:
+        # Phase 7: SwitchToLive may return NOT_READY if preview buffer isn't filled yet.
+        # This is a transient state - retry with backoff until success or timeout.
+        _SWITCH_RETRY_ATTEMPTS = 20  # ~10 seconds total with backoff
+        _SWITCH_RETRY_BACKOFF_MS = 500  # Start at 500ms between retries
+        switch_ok = False
+        last_message = ""
+        first_not_ready_logged = False
+        switch_start_time = time.monotonic()
+        for attempt in range(_SWITCH_RETRY_ATTEMPTS):
+            r = _rpc(
+                "SwitchToLive",
+                lambda timeout: stub.SwitchToLive(
+                    playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
+                    timeout=timeout,
+                ),
+                _RPC_CONTROL_S,
+            )
+            if r.success:
+                switch_ok = True
+                elapsed_ms = (time.monotonic() - switch_start_time) * 1000
+                import logging
+                logging.getLogger(__name__).info(
+                    "SwitchToLive succeeded after %d attempts (%.0fms)", attempt + 1, elapsed_ms
+                )
+                break
+            last_message = r.message
+            # NOT_READY variants are expected during buffer fill - retry
+            if "not ready" in r.message.lower() or "NOT_READY" in r.message or "preparing" in r.message.lower():
+                if not first_not_ready_logged:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "SwitchToLive NOT_READY (attempt 1): %s - retrying up to %d times",
+                        r.message, _SWITCH_RETRY_ATTEMPTS
+                    )
+                    first_not_ready_logged = True
+                time.sleep(_SWITCH_RETRY_BACKOFF_MS / 1000.0)
+                continue
+            # Other errors are fatal
             raise RuntimeError(f"SwitchToLive failed: {r.message}")
+        if not switch_ok:
+            elapsed_ms = (time.monotonic() - switch_start_time) * 1000
+            raise RuntimeError(
+                f"SwitchToLive timed out after {_SWITCH_RETRY_ATTEMPTS} attempts ({elapsed_ms:.0f}ms): {last_message}"
+            )
 
     try:
         conn = reader_socket_queue.get(timeout=_UDS_ACCEPT_S)

@@ -136,6 +136,7 @@ set(AIR_CORE_SOURCES
   src/telemetry/MetricsExporter.cpp
   src/telemetry/MetricsHTTPServer.cpp
   src/timing/SystemMasterClock.cpp
+  src/timing/TimelineController.cpp
   src/producers/file/FileProducer.cpp
   src/producers/programmatic/ProgrammaticProducer.cpp
   src/producers/black/BlackFrameProducer.cpp
@@ -198,8 +199,12 @@ target_include_directories(retrovue_air
 # ---- Contract tests (Phase 6A.0: PlayoutEngine + control surface) ----
 add_executable(contracts_playoutengine_tests
   tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp
+  tests/contracts/OutputSwitching/OutputSwitchingContractTests.cpp
   tests/contracts/Phase815FileProducerTests.cpp
   tests/contracts/Phase84PersistentMpegTsMuxTests.cpp
+  tests/contracts/file_producer/FileProducerContractTests.cpp
+  tests/contracts/TimelineController/TimelineControllerContractTests.cpp
+  tests/contracts/TimelineController/Phase8IntegrationTests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp

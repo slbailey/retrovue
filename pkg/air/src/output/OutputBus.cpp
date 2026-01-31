@@ -101,6 +101,13 @@ bool OutputBus::IsAttached() const {
 
 void OutputBus::RouteVideo(const buffer::Frame& frame) {
   std::lock_guard<std::mutex> lock(mutex_);
+  static int route_count = 0;
+  route_count++;
+  if (route_count <= 5 || route_count % 100 == 0) {
+    std::cout << "[OutputBus] RouteVideo #" << route_count
+              << " sink_=" << (sink_ ? "yes" : "no")
+              << " running=" << (sink_ && sink_->IsRunning() ? "yes" : "no") << std::endl;
+  }
   if (sink_ && sink_->IsRunning()) {
     sink_->ConsumeVideo(frame);
   }

@@ -21,6 +21,7 @@
 namespace retrovue::timing
 {
   class MasterClock;
+  class TimelineController;
 }
 
 // Forward declarations for FFmpeg types (opaque pointers)
@@ -86,11 +87,15 @@ namespace retrovue::producers::file
   {
   public:
     // Constructs a producer with the given configuration and output buffer.
+    // Phase 8: Optional TimelineController for CT assignment. If provided,
+    // the producer emits raw MT and TimelineController assigns CT.
+    // If nullptr, legacy behavior (producer computes PTS offset internally).
     FileProducer(
         const ProducerConfig &config,
         buffer::FrameRingBuffer &output_buffer,
         std::shared_ptr<timing::MasterClock> clock = nullptr,
-        ProducerEventCallback event_callback = nullptr);
+        ProducerEventCallback event_callback = nullptr,
+        timing::TimelineController* timeline_controller = nullptr);
 
     ~FileProducer();
 
@@ -108,6 +113,10 @@ namespace retrovue::producers::file
 
     // Forces immediate stop (used when teardown times out).
     void ForceStop();
+
+    // Phase 8: Sets write barrier without stopping the producer.
+    // Used when switching segments - old producer can decode but not write.
+    void SetWriteBarrier();
 
     // Returns the total number of decoded frames produced.
     uint64_t GetFramesProduced() const;
@@ -137,7 +146,11 @@ namespace retrovue::producers::file
 
     // Aligns PTS to continue from a target PTS (for seamless switching).
     // Sets the PTS offset so that the next frame will have target_pts.
+    // Idempotent: only aligns once, subsequent calls are no-ops.
     void AlignPTS(int64_t target_pts);
+
+    // Returns true if PTS has been aligned (AlignPTS was called).
+    bool IsPTSAligned() const;
 
   private:
     // Main production loop (runs in producer thread).
@@ -172,11 +185,13 @@ namespace retrovue::producers::file
     ProducerConfig config_;
     buffer::FrameRingBuffer &output_buffer_;
     std::shared_ptr<timing::MasterClock> master_clock_;
+    timing::TimelineController* timeline_controller_;  // Phase 8: optional, for CT assignment
     ProducerEventCallback event_callback_;
 
     std::atomic<ProducerState> state_;
     std::atomic<bool> stop_requested_;
     std::atomic<bool> teardown_requested_;
+    std::atomic<bool> writes_disabled_;  // Phase 7: Hard write barrier for ForceStop
     std::atomic<uint64_t> frames_produced_;
     std::atomic<uint64_t> buffer_full_count_;
     std::atomic<uint64_t> decode_errors_;
@@ -221,6 +236,10 @@ namespace retrovue::producers::file
     // Phase 8.2: derived segment end (media PTS in us). -1 = not set. Set when segment goes live.
     int64_t segment_end_pts_us_;
 
+    // Phase 6 (INV-P6-008): Effective seek target in media time (after modulo for looping content)
+    // This is the actual PTS threshold for frame admission, not the raw start_offset_ms
+    int64_t effective_seek_target_us_;
+
     // State for stub frame generation
     std::atomic<int64_t> stub_pts_counter_;
     int64_t frame_interval_us_;
@@ -232,6 +251,18 @@ namespace retrovue::producers::file
     std::mutex shadow_decode_mutex_;
     std::unique_ptr<buffer::Frame> cached_first_frame_;  // First decoded frame (cached in shadow mode)
     int64_t pts_offset_us_;  // PTS offset for alignment (added to frame PTS)
+    std::atomic<bool> pts_aligned_;  // Phase 7: True after AlignPTS called (idempotent guard)
+
+    // Per-instance diagnostic counters (NOT static - must reset on new producer)
+    // These track progress within a single producer's lifetime
+    int video_frame_count_;       // Total video frames decoded
+    int video_discard_count_;     // Video frames discarded before seek target
+    int audio_frame_count_;       // Total audio frames processed
+    int frames_since_producer_start_;  // Frames since this producer started
+    int audio_skip_count_;        // Audio frames skipped waiting for video epoch
+    int audio_drop_count_;        // Audio frames dropped due to buffer full
+    bool audio_ungated_logged_;   // Whether we've logged audio ungating (one-shot)
+    int scale_diag_count_;        // Scale diagnostic log counter
   };
 
 } // namespace retrovue::producers::file

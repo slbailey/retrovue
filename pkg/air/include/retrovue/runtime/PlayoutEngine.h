@@ -39,6 +39,7 @@ struct AudioFrame;
 }
 namespace retrovue::timing {
 class MasterClock;
+class TimelineController;
 }
 namespace retrovue::telemetry {
 class MetricsExporter;
@@ -54,14 +55,15 @@ namespace retrovue::runtime {
 struct EngineResult {
   bool success;
   std::string message;
-  
+  std::string error_code;  // Structured error code for retry logic (e.g., "NOT_READY_VIDEO")
+
   // For LoadPreview
   bool shadow_decode_started = false;
-  
+
   // For SwitchToLive
   bool pts_contiguous = false;
   uint64_t live_start_pts = 0;
-  
+
   EngineResult(bool s, const std::string& msg)
       : success(s), message(msg) {}
 };

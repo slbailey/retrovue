@@ -1,8 +1,11 @@
 #include "retrovue/timing/MasterClock.h"
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #ifdef _WIN32
@@ -19,6 +22,7 @@ class SystemMasterClock : public MasterClock {
  public:
   SystemMasterClock(int64_t epoch_utc_us, double rate_ppm)
       : epoch_utc_us_(epoch_utc_us),
+        epoch_locked_(epoch_utc_us != 0),  // Lock if initialized with non-zero
         rate_ppm_(rate_ppm),
         drift_ppm_(0.0) {
 #ifdef _WIN32
@@ -59,7 +63,7 @@ class SystemMasterClock : public MasterClock {
                    kMillion;
     const long double adjusted = static_cast<long double>(pts_us) * scale;
     const auto rounded = static_cast<int64_t>(std::llround(adjusted));
-    return epoch_utc_us_ + rounded;
+    return epoch_utc_us_.load(std::memory_order_acquire) + rounded;
   }
 
   double drift_ppm() const override { return drift_ppm_; }
@@ -80,10 +84,57 @@ class SystemMasterClock : public MasterClock {
 
   void set_drift_ppm(double ppm) { drift_ppm_ = ppm; }
   void set_rate_ppm(double ppm) { rate_ppm_ = ppm; }
-  void set_epoch_utc_us(int64_t epoch_utc_us) override { epoch_utc_us_ = epoch_utc_us; }
+
+  // DEPRECATED: Use TrySetEpochOnce() instead.
+  void set_epoch_utc_us(int64_t epoch_utc_us) override {
+    if (!TrySetEpochOnce(epoch_utc_us, EpochSetterRole::LIVE)) {
+      std::cerr << "[MasterClock] WARNING: set_epoch_utc_us() blocked (P7-ARCH-001)" << std::endl;
+    }
+  }
+
+  // Phase 7 (P7-ARCH-001): Atomic one-time epoch set with role enforcement.
+  // Uses compare_exchange_strong to prevent races between concurrent setters.
+  bool TrySetEpochOnce(int64_t epoch_utc_us, EpochSetterRole role = EpochSetterRole::LIVE) override {
+    // P7-ARCH-001: PREVIEW can never set epoch
+    if (role == EpochSetterRole::PREVIEW) {
+      std::cerr << "[MasterClock] REJECTED: Preview attempted epoch set (P7-ARCH-001)" << std::endl;
+      return false;
+    }
+
+    // Atomic CAS: only one LIVE caller wins the race
+    bool expected = false;
+    if (!epoch_locked_.compare_exchange_strong(expected, true,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+      // Another caller already locked - this is expected for subsequent producers
+      return false;
+    }
+
+    // We won the lock - now set the epoch value
+    epoch_utc_us_.store(epoch_utc_us, std::memory_order_release);
+    std::cout << "[MasterClock] Epoch established by LIVE: " << epoch_utc_us << std::endl;
+    return true;
+  }
+
+  // Called only on channel stop/start boundaries.
+  void ResetEpochForNewSession() override {
+    epoch_utc_us_.store(0, std::memory_order_release);
+    epoch_locked_.store(false, std::memory_order_release);
+    std::cout << "[MasterClock] Epoch reset for new session" << std::endl;
+  }
+
+  bool IsEpochLocked() const override {
+    return epoch_locked_.load(std::memory_order_acquire);
+  }
+
+  int64_t get_epoch_utc_us() const override {
+    return epoch_utc_us_.load(std::memory_order_acquire);
+  }
 
  private:
-  int64_t epoch_utc_us_;
+  std::atomic<int64_t> epoch_utc_us_;
+  std::atomic<bool> epoch_locked_;
+  mutable std::mutex epoch_mutex_;  // Protects epoch set/reset operations
   double rate_ppm_;
   double drift_ppm_;
 #ifdef _WIN32

@@ -20,6 +20,7 @@
 #include "retrovue/runtime/PlayoutControl.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/timing/MasterClock.h"
+#include "retrovue/timing/TimelineController.h"
 
 namespace retrovue::runtime {
 
@@ -78,6 +79,7 @@ struct PlayoutEngine::PlayoutInstance {
 
   // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
+  std::unique_ptr<buffer::FrameRingBuffer> preview_ring_buffer;  // Separate buffer for preview pre-fill
   std::unique_ptr<producers::file::FileProducer> live_producer;
   std::unique_ptr<producers::file::FileProducer> preview_producer;  // For shadow decode/preview
   std::unique_ptr<renderer::ProgramOutput> program_output;
@@ -86,6 +88,9 @@ struct PlayoutEngine::PlayoutInstance {
 
   // Phase 9.0: OutputBus for frame routing to sinks
   std::unique_ptr<output::OutputBus> output_bus;
+
+  // Phase 8: Timeline Controller for unified time authority
+  std::unique_ptr<timing::TimelineController> timeline_controller;
 
   PlayoutInstance(int32_t id, const std::string& plan, int32_t p,
                  const std::optional<std::string>& uds, const ProgramFormat& format)
@@ -164,12 +169,30 @@ EngineResult PlayoutEngine::StartChannel(
     
     // Create ring buffer
     state->ring_buffer = std::make_unique<buffer::FrameRingBuffer>(kDefaultBufferSize);
-    
+
     // Create control state machine
     state->control = std::make_unique<PlayoutControl>();
 
     // Phase 9.0: Create OutputBus with state machine validation
     state->output_bus = std::make_unique<output::OutputBus>(state->control.get());
+
+    // Phase 8: Create TimelineController for unified time authority
+    timing::TimelineConfig timeline_config = timing::TimelineConfig::FromFps(
+        state->program_format.GetFrameRateAsDouble(), 5, 30);
+    state->timeline_controller = std::make_unique<timing::TimelineController>(
+        master_clock_, timeline_config);
+
+    // Start timeline session
+    if (!state->timeline_controller->StartSession()) {
+      return EngineResult(false, "Failed to start timeline session for channel " + std::to_string(channel_id));
+    }
+    std::cout << "[PlayoutEngine] Phase 8 TimelineController started for channel " << channel_id << std::endl;
+
+    // Phase 7 (INV-P7-001): Epoch is established by first live producer.
+    // The first live producer will set epoch = playback_start - first_frame_pts
+    // via TrySetEpochOnce(). Subsequent producers (preview) will be blocked.
+    // Note: ResetEpochForNewSession() is called in StopChannel(), not here,
+    // so epoch persists across the channel session.
 
     // Create producer config from ProgramFormat (canonical signal format)
     producers::file::ProducerConfig producer_config;
@@ -180,8 +203,10 @@ EngineResult PlayoutEngine::StartChannel(
     producer_config.target_height = state->program_format.video.height;
     
     // Create live producer (FileProducer - decodes both audio and video)
+    // Phase 8: Pass TimelineController for unified timeline authority
     state->live_producer = std::make_unique<producers::file::FileProducer>(
-        producer_config, *state->ring_buffer, master_clock_, nullptr);
+        producer_config, *state->ring_buffer, master_clock_, nullptr,
+        state->timeline_controller.get());
     
     // Create program output
     renderer::RenderConfig render_config;
@@ -194,7 +219,14 @@ EngineResult PlayoutEngine::StartChannel(
     if (!state->control->BeginSession(MakeCommandId("start", channel_id), now)) {
       return EngineResult(false, "Failed to begin session for channel " + std::to_string(channel_id));
     }
-    
+
+    // Phase 8: Begin segment BEFORE starting producer.
+    // MT_start will be locked on first admitted frame (prevents mapping skew).
+    if (state->timeline_controller) {
+      state->timeline_controller->BeginSegment(0);
+      std::cout << "[PlayoutEngine] Phase 8: Segment begun, CT=0, MT pending first frame" << std::endl;
+    }
+
     // Start producer
     if (!state->live_producer->start()) {
       return EngineResult(false, "Failed to start producer for channel " + std::to_string(channel_id));
@@ -222,6 +254,9 @@ EngineResult PlayoutEngine::StartChannel(
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+
+    // Phase 8: Segment mapping was begun before producer start (BeginSegment).
+    // MT_start was locked on first admitted frame automatically.
 
     // Start program output AFTER buffer has sufficient depth
     if (!state->program_output->Start()) {
@@ -299,7 +334,14 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
       }
       state->preview_producer->stop();
     }
-    
+
+    // Phase 8: End timeline session
+    if (state->timeline_controller) {
+      state->timeline_controller->EndSession();
+      std::cout << "[PlayoutEngine] Phase 8 TimelineController session ended for channel "
+                << channel_id << std::endl;
+    }
+
     // Drain buffer
     if (state->ring_buffer) {
       buffer::Frame frame;
@@ -314,10 +356,16 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
     metrics.state = telemetry::ChannelState::STOPPED;
     metrics.buffer_depth_frames = 0;
     metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
-    
+
+    // Phase 7: Reset epoch for next session
+    // This allows a fresh epoch to be established when the channel restarts.
+    if (master_clock_) {
+      master_clock_->ResetEpochForNewSession();
+    }
+
     // Remove channel
     channels_.erase(it);
-    
+
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " stopped successfully");
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception stopping channel " + std::to_string(channel_id) + ": " + e.what());
@@ -357,20 +405,44 @@ EngineResult PlayoutEngine::LoadPreview(
     preview_config.stub_mode = false;
     preview_config.target_width = it->second->program_format.video.width;
     preview_config.target_height = it->second->program_format.video.height;
-    // TODO: Enable seek once debugged - for now start from beginning to ensure playback works
-    // preview_config.start_offset_ms = start_offset_ms;
-    // preview_config.hard_stop_time_ms = hard_stop_time_ms;
+    // Phase 6: Enable mid-segment join (seek)
+    preview_config.start_offset_ms = start_offset_ms;
+    preview_config.hard_stop_time_ms = hard_stop_time_ms;
 
-    // Create preview producer (FileProducer - decodes both audio and video)
-    // Do NOT start it here; SwitchToLive will start it when promoting to live.
-    // This ensures LoadPreview only prepares the next asset; clock-driven SwitchToLive triggers the actual switch.
+    // Create separate preview buffer for pre-fill (no interleaving with live)
+    bool created_new = false;
+    if (!state->preview_ring_buffer) {
+      state->preview_ring_buffer = std::make_unique<buffer::FrameRingBuffer>(kDefaultBufferSize);
+      created_new = true;
+    } else {
+      state->preview_ring_buffer->Clear();
+    }
+    std::cout << "[LoadPreview] Preview buffer " << (created_new ? "created" : "cleared")
+              << " (capacity=" << kDefaultBufferSize << ")" << std::endl;
+
+    // Create preview producer writing to its own buffer
+    // Phase 8: Pass TimelineController (will be used after shadow mode is disabled)
     state->preview_asset_path = asset_path;
     state->preview_producer = std::make_unique<producers::file::FileProducer>(
-        preview_config, *state->ring_buffer, master_clock_, nullptr);
-    
-    // Preview producer created but not started; SwitchToLive will start it when switching.
+        preview_config, *state->preview_ring_buffer, master_clock_, nullptr,
+        state->timeline_controller.get());
+
+    std::cout << "[LoadPreview] Created preview producer for: " << asset_path
+              << " (seek=" << start_offset_ms << "ms)" << std::endl;
+
+    // Phase 7 (INV-P7-004): Enable shadow decode mode BEFORE starting.
+    // This prevents the preview producer from resetting the master clock epoch.
+    state->preview_producer->SetShadowDecodeMode(true);
+
+    // Start preview producer to fill its buffer (shadow decode)
+    if (!state->preview_producer->start()) {
+      std::cerr << "[LoadPreview] FAILED to start preview producer!" << std::endl;
+      return EngineResult(false, "Failed to start preview producer for channel " + std::to_string(channel_id));
+    }
+    std::cout << "[LoadPreview] Preview producer STARTED - now filling buffer" << std::endl;
+
     EngineResult result(true, "Preview loaded for channel " + std::to_string(channel_id));
-    result.shadow_decode_started = false;  // Not started yet; will start on SwitchToLive
+    result.shadow_decode_started = true;
     return result;
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception loading preview for channel " + std::to_string(channel_id) + ": " + e.what());
@@ -408,71 +480,185 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   }
   
   try {
-    // Phase 8.9 / 8.8: we must not interleave frames from A and B.
-    // To avoid A/B/A/B flicker, ensure the old live producer has finished
-    // emitting frames before the new producer starts writing to the ring buffer.
-    //
-    // 1. Fully drain and stop OLD live producer.
-    // 2. Start preview producer (which becomes the new live producer).
-    // 3. Atomically swap preview → live.
-    
-    // Step 1: Fully drain and stop OLD live producer (if any).
-    if (state->live_producer && state->live_producer->isRunning()) {
-      state->live_producer->RequestTeardown(std::chrono::milliseconds(500));
-      // Wait until it reports not running (or timeout elapses inside producer).
-      while (state->live_producer->isRunning()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      state->live_producer->stop();
-      
-      // Phase 8.9: Wait for BOTH video and audio frames to be completely drained from the ring buffer
-      // before starting the new producer. This prevents A/B/A/B interleaving.
-      const auto drain_start = std::chrono::steady_clock::now();
-      const auto drain_timeout = std::chrono::milliseconds(1000);  // Max 1 second to drain
-      while (!state->ring_buffer->IsCompletelyEmpty()) {
-        if (std::chrono::steady_clock::now() - drain_start > drain_timeout) {
-          std::cerr << "[SwitchToLive] Warning: Timeout waiting for buffer drain, proceeding anyway" << std::endl;
-          break;
+    // Per OutputSwitchingContract: hot-switch with pre-decoded readiness.
+    // Preview producer has been filling preview_ring_buffer.
+    // We redirect ProgramOutput to read from preview's buffer (already has frames).
+
+    std::cout << "[SwitchToLive] === SWITCH START ===" << std::endl;
+    std::cout << "[SwitchToLive] Old live: " << state->live_asset_path << std::endl;
+    std::cout << "[SwitchToLive] New preview: " << state->preview_asset_path << std::endl;
+
+    size_t old_buffer_depth = state->ring_buffer ? state->ring_buffer->Size() : 0;
+    size_t preview_depth_before = state->preview_ring_buffer ? state->preview_ring_buffer->Size() : 0;
+    bool preview_running = state->preview_producer && state->preview_producer->isRunning();
+
+    std::cout << "[SwitchToLive] Old buffer depth: " << old_buffer_depth << " frames" << std::endl;
+    std::cout << "[SwitchToLive] Preview buffer depth: " << preview_depth_before << " frames" << std::endl;
+    std::cout << "[SwitchToLive] Preview producer running: " << (preview_running ? "YES" : "NO") << std::endl;
+
+    // Phase 7 (P7-ARCH-003): Readiness is a precondition to switching.
+    // Never switch if preview buffer is empty - would cause renderer stall.
+    // Check BOTH video AND audio readiness to prevent A/V desync at boundary.
+    constexpr size_t kMinPreviewVideoDepth = 2;   // At least 2 video frames
+    constexpr size_t kMinPreviewAudioDepth = 5;   // ~100ms audio at typical rates
+
+    size_t preview_audio_depth = state->preview_ring_buffer ?
+        state->preview_ring_buffer->AudioSize() : 0;
+
+    std::cout << "[SwitchToLive] Preview audio depth: " << preview_audio_depth << " frames" << std::endl;
+
+    // Phase 7: If preview is still in shadow mode, prepare it for buffer filling.
+    // This must happen BEFORE readiness check so that retries get aligned frames.
+    bool is_shadow_mode = state->preview_producer->IsShadowDecodeMode();
+    if (is_shadow_mode) {
+      // Calculate target PTS for alignment (same logic as Step 4, but done early)
+      int64_t last_emitted_pts = 0;
+      int64_t target_next_pts = 0;
+      if (state->program_output) {
+        last_emitted_pts = state->program_output->GetLastEmittedPTS();
+        if (last_emitted_pts > 0) {
+          double fps = state->program_format.GetFrameRateAsDouble();
+          int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+          target_next_pts = last_emitted_pts + frame_period_us;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
-      std::cout << "[SwitchToLive] Buffer completely drained (video and audio) before starting new producer" << std::endl;
-      
-      // Phase 8.9: Flush encoder's audio buffers to ensure all audio from SampleB is encoded/muxed
-      // The encoder may have buffered samples in the resampler or partial frames
-      // Note: encoder is accessed via renderer->GetEncoder() or similar - need to check access pattern
-      // For now, we'll rely on playout_service to flush when it detects buffer empty
-      
-      state->live_producer.reset();
+
+      // Phase 8: If TimelineController is active, it owns CT assignment.
+      // AlignPTS is bypassed - TimelineController.BeginSegment handles continuity.
+      // This prevents two systems "aligning" in different layers.
+      if (state->timeline_controller) {
+        // Phase 8 path: TimelineController owns CT continuity
+        std::cout << "[SwitchToLive] Phase 8: Skipping AlignPTS (TimelineController owns CT)"
+                  << std::endl;
+      } else if (target_next_pts > 0) {
+        // Legacy path: AlignPTS for systems without TimelineController
+        state->preview_producer->AlignPTS(target_next_pts);
+        std::cout << "[SwitchToLive] Legacy PTS alignment: target=" << target_next_pts << std::endl;
+      }
+
+      // Phase 8: CRITICAL - Set write barrier on live producer BEFORE BeginSegment.
+      // This prevents the live producer from emitting frames that would incorrectly
+      // lock the segment mapping. Only the preview producer should lock the new mapping.
+      if (state->live_producer && state->timeline_controller) {
+        state->live_producer->SetWriteBarrier();
+        std::cout << "[SwitchToLive] Phase 8: Write barrier set on live producer" << std::endl;
+      }
+
+      // Phase 8: Begin new segment in TimelineController
+      // CT_start = current CT cursor + frame_period (for seamless continuity)
+      // MT_start = locked on first admitted frame (prevents mapping skew)
+      if (state->timeline_controller) {
+        int64_t ct_cursor = state->timeline_controller->GetCTCursor();
+        double fps = state->program_format.GetFrameRateAsDouble();
+        int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+        int64_t ct_segment_start = ct_cursor + frame_period_us;
+        state->timeline_controller->BeginSegment(ct_segment_start);
+        std::cout << "[SwitchToLive] Phase 8 segment begun: CT_start="
+                  << ct_segment_start << "us, MT pending first frame" << std::endl;
+      }
+
+      // Clear any pre-filled frames (they have wrong PTS)
+      if (state->preview_ring_buffer) {
+        state->preview_ring_buffer->Clear();
+        std::cout << "[SwitchToLive] Cleared preview buffer (was shadow mode)" << std::endl;
+      }
+
+      // Disable shadow mode - producer will now fill buffer with aligned frames
+      state->preview_producer->SetShadowDecodeMode(false);
+      std::cout << "[SwitchToLive] Shadow mode disabled, buffer will now fill" << std::endl;
+
+      // Return NOT_READY - buffer is empty, Core will retry
+      EngineResult result(false, "SwitchToLive blocked: preview preparing (shadow->live transition)");
+      result.error_code = "NOT_READY_PREPARING";
+      return result;
     }
-    
-    // Debug: Log switch details
-    std::cout << "[SwitchToLive] ===== SWITCHING PRODUCERS =====" << std::endl;
+
+    if (preview_depth_before < kMinPreviewVideoDepth) {
+      std::cerr << "[SwitchToLive] BLOCKED: preview video not ready (depth="
+                << preview_depth_before << ", required=" << kMinPreviewVideoDepth
+                << ") - P7-ARCH-003" << std::endl;
+      EngineResult result(false, "SwitchToLive blocked: preview video not ready");
+      result.error_code = "NOT_READY_VIDEO";
+      return result;
+    }
+
+    if (preview_audio_depth < kMinPreviewAudioDepth) {
+      std::cerr << "[SwitchToLive] BLOCKED: preview audio not ready (depth="
+                << preview_audio_depth << ", required=" << kMinPreviewAudioDepth
+                << ") - P7-ARCH-003" << std::endl;
+      EngineResult result(false, "SwitchToLive blocked: preview audio not ready");
+      result.error_code = "NOT_READY_AUDIO";
+      return result;
+    }
+
+    std::cout << "[SwitchToLive] Readiness check PASSED (video=" << preview_depth_before
+              << ", audio=" << preview_audio_depth << ")" << std::endl;
+
+    // Step 1: Signal old Live producer to stop (non-blocking).
+    // Per Phase 7: Do NOT block on join() - old producer may be stuck in buffer backoff.
+    // Instead, signal stop and let it die naturally. The unique_ptr will be released
+    // after we move preview_producer to live_producer.
     if (state->live_producer) {
-      std::cout << "[SwitchToLive] Old live producer: " << state->live_asset_path << std::endl;
+      std::cout << "[SwitchToLive] Signaling old live producer to stop (non-blocking)..." << std::endl;
+      state->live_producer->ForceStop();  // Sets stop_requested_ immediately
+      // Do NOT call stop() here - it blocks on join() and can deadlock
+      // The old producer will be released when we assign preview_producer to live_producer
     }
-    if (state->preview_producer) {
-      std::cout << "[SwitchToLive] New preview producer: " << state->preview_asset_path << std::endl;
+
+    // Step 2: Redirect ProgramOutput to read from preview's buffer.
+    // Per contract: no draining - old buffer frames are discarded.
+    if (state->program_output && state->preview_ring_buffer) {
+      std::cout << "[SwitchToLive] Redirecting ProgramOutput to preview buffer" << std::endl;
+      state->program_output->SetInputBuffer(state->preview_ring_buffer.get());
     }
-    
-    // Step 4: Start preview producer (it will become live).
-    if (!state->preview_producer->start()) {
-      return EngineResult(false, "Failed to start preview producer for channel " + std::to_string(channel_id));
+
+    // Step 3: Swap buffer ownership. After this:
+    // - ring_buffer owns what was preview's buffer (ProgramOutput now reads this)
+    // - preview_ring_buffer owns the old buffer (will be cleared on next LoadPreview)
+    std::swap(state->ring_buffer, state->preview_ring_buffer);
+
+    // Step 4: Phase 7 PTS Continuity - Log alignment info for diagnostics.
+    // Note: AlignPTS was already called when transitioning from shadow mode (above).
+    // This just logs the final values for debugging.
+    int64_t last_emitted_pts = 0;
+    int64_t target_next_pts = 0;
+    if (state->program_output) {
+      last_emitted_pts = state->program_output->GetLastEmittedPTS();
+      if (last_emitted_pts > 0) {
+        double fps = state->program_format.GetFrameRateAsDouble();
+        int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+        target_next_pts = last_emitted_pts + frame_period_us;
+        std::cout << "[SwitchToLive] Phase 7 PTS alignment: last_pts=" << last_emitted_pts
+                  << " target_next_pts=" << target_next_pts
+                  << " frame_period=" << frame_period_us << "us" << std::endl;
+      }
     }
-    
-    // Step 3: Atomically swap preview → live (frame source swap only; encoder/mux unchanged per Phase 8.4).
+
+    // Step 5: Promote preview producer to live.
+    // Move old producer to temporary so destructor doesn't block the switch.
+    // The old producer's destructor calls stop() which joins the thread - we do this
+    // in a background thread to avoid blocking the switch.
+    auto old_producer = std::move(state->live_producer);
     state->live_producer = std::move(state->preview_producer);
     state->live_asset_path = state->preview_asset_path;
     state->preview_producer.reset();
     state->preview_asset_path.clear();
-    
-    // For PTS continuity, align preview PTS to live's next PTS (Phase 8.2/8.3)
+
+    // Clean up old producer in background thread to avoid blocking
+    if (old_producer) {
+      std::thread([producer = std::move(old_producer)]() mutable {
+        // Destructor will call stop() which joins the thread
+        producer.reset();
+      }).detach();
+    }
+
+    std::cout << "[SwitchToLive] === SWITCH COMPLETE ===" << std::endl;
+    std::cout << "[SwitchToLive] Now playing: " << state->live_asset_path << std::endl;
+
     EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
-    // PTS continuity is still expected because each producer has its own monotonic PTS;
-    // there may be a short gap, but not A/B interleaving.
-    result.pts_contiguous = true; // Simplified - would check actual PTS continuity
-    result.live_start_pts = 0;    // Would get from producer/renderer
-    
+    result.pts_contiguous = true;
+    result.live_start_pts = target_next_pts;
+
     return result;
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception switching to live for channel " + std::to_string(channel_id) + ": " + e.what());

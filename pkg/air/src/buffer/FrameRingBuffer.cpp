@@ -11,8 +11,9 @@ namespace retrovue::buffer {
 
 FrameRingBuffer::FrameRingBuffer(size_t capacity)
     : capacity_(capacity + 1),  // +1 to distinguish full from empty
+      audio_capacity_((capacity * 3) + 1),  // 3x video capacity for audio (higher frame rate)
       buffer_(new Frame[capacity + 1]),
-      audio_buffer_(new AudioFrame[capacity + 1]),
+      audio_buffer_(new AudioFrame[(capacity * 3) + 1]),
       write_index_(0),
       read_index_(0),
       audio_write_index_(0),
@@ -74,11 +75,22 @@ bool FrameRingBuffer::Pop(Frame& frame) {
 size_t FrameRingBuffer::Size() const {
   const uint32_t write = write_index_.load(std::memory_order_acquire);
   const uint32_t read = read_index_.load(std::memory_order_acquire);
-  
+
   if (write >= read) {
     return write - read;
   } else {
     return capacity_ - (read - write);
+  }
+}
+
+size_t FrameRingBuffer::AudioSize() const {
+  const uint32_t write = audio_write_index_.load(std::memory_order_acquire);
+  const uint32_t read = audio_read_index_.load(std::memory_order_acquire);
+
+  if (write >= read) {
+    return write - read;
+  } else {
+    return audio_capacity_ - (read - write);
   }
 }
 
@@ -106,37 +118,37 @@ bool FrameRingBuffer::IsFull() const {
 
 bool FrameRingBuffer::PushAudioFrame(const AudioFrame& audio_frame) {
   const uint32_t current_write = audio_write_index_.load(std::memory_order_relaxed);
-  const uint32_t next_write = (current_write + 1) % capacity_;
-  
+  const uint32_t next_write = (current_write + 1) % audio_capacity_;
+
   // Check if buffer is full
   if (next_write == audio_read_index_.load(std::memory_order_acquire)) {
     return false;  // Buffer full
   }
-  
+
   // Copy audio frame data
   audio_buffer_[current_write] = audio_frame;
-  
+
   // Update write index
   audio_write_index_.store(next_write, std::memory_order_release);
-  
+
   return true;
 }
 
 bool FrameRingBuffer::PopAudioFrame(AudioFrame& audio_frame) {
   const uint32_t current_read = audio_read_index_.load(std::memory_order_relaxed);
-  
+
   // Check if buffer is empty
   if (current_read == audio_write_index_.load(std::memory_order_acquire)) {
     return false;  // Buffer empty
   }
-  
+
   // Copy audio frame data
   audio_frame = audio_buffer_[current_read];
-  
+
   // Update read index
-  const uint32_t next_read = (current_read + 1) % capacity_;
+  const uint32_t next_read = (current_read + 1) % audio_capacity_;
   audio_read_index_.store(next_read, std::memory_order_release);
-  
+
   return true;
 }
 

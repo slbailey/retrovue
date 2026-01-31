@@ -33,6 +33,10 @@ class TestMasterClock : public MasterClock {
   bool is_fake() const override;
   void WaitUntilUtcUs(int64_t target_utc_us) const override;
   void set_epoch_utc_us(int64_t epoch_utc_us) override;
+  bool TrySetEpochOnce(int64_t epoch_utc_us, EpochSetterRole role = EpochSetterRole::LIVE) override;
+  void ResetEpochForNewSession() override;
+  bool IsEpochLocked() const override;
+  int64_t get_epoch_utc_us() const override;
 
   // Time control methods
   void SetNow(int64_t utc_us, double monotonic_s);
@@ -58,6 +62,7 @@ class TestMasterClock : public MasterClock {
   std::atomic<int64_t> utc_us_;
   double monotonic_s_;  // Protected by mutex_ in deterministic mode
   int64_t epoch_utc_us_;
+  bool epoch_locked_;  // Phase 7: One-time epoch lock
   double rate_ppm_;
   double drift_ppm_;
   int64_t max_wait_us_;  // Maximum wait timeout for deterministic mode (0 = no timeout)
