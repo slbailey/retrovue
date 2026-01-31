@@ -20,7 +20,6 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
-#include <libswresample/swresample.h>
 }
 #endif
 
@@ -66,10 +65,12 @@ class EncoderPipeline {
   virtual bool encodeFrame(const retrovue::buffer::Frame& frame, int64_t pts90k);
 
   // Phase 8.9: Encode an audio frame and mux into MPEG-TS.
-  // audio_frame: Decoded audio frame to encode
-  // pts90k: Presentation timestamp in 90kHz units (producer-relative, rescaled by caller)
-  // Returns true on success, false on failure (non-fatal errors may be logged and continue)
-  virtual bool encodeAudioFrame(const retrovue::buffer::AudioFrame& audio_frame, int64_t pts90k);
+  // audio_frame: Decoded audio frame to encode (must be house format; INV-AUDIO-HOUSE-FORMAT-001).
+  // pts90k: Presentation timestamp in 90kHz units (producer-relative, rescaled by caller).
+  // is_silence_pad: If true, frame is pad/silence; same path/CT/cadence/format, but do not set real_audio_received_.
+  // Returns true on success, false on failure (format mismatch is explicit failure).
+  virtual bool encodeAudioFrame(const retrovue::buffer::AudioFrame& audio_frame, int64_t pts90k,
+                               bool is_silence_pad = false);
 
   // Phase 8.9: Flush all buffered audio samples (resampler delay, partial frames, encoded packets).
   // This ensures all audio from the current producer is encoded and muxed before switching.
@@ -111,16 +112,11 @@ class EncoderPipeline {
   // Swscale context for format conversion
   SwsContext* sws_ctx_;
   
-  // Phase 8.9: Swresample context for audio sample rate AND channel conversion
-  struct SwrContext* swr_ctx_;
-  int last_input_sample_rate_;  // Track input sample rate to detect changes
-  int last_input_channels_;     // Track input channel count to detect changes
-  
-  // Phase 8.9: Buffer for partial audio frames after resampling
-  // AAC requires all frames (except last) to be exactly frame_size, so we buffer
-  // any remainder from resampling and prepend it to the next input frame.
-  std::vector<int16_t> audio_resample_buffer_;  // S16 interleaved samples
-  int audio_resample_buffer_samples_;  // Number of samples currently buffered
+  // Phase 8.9: Buffer for partial house-format audio frames (INV-AUDIO-HOUSE-FORMAT-001).
+  // AAC requires all frames (except last) to be exactly frame_size; we buffer
+  // remainder and prepend to the next input. No resampling — input must be house format.
+  std::vector<int16_t> audio_resample_buffer_;  // S16 interleaved, house format
+  int audio_resample_buffer_samples_;
   
   // Track last PTS to detect producer switches (for PTS continuity and flush timing)
   int64_t last_seen_audio_pts90k_;  // Last INCOMING PTS we saw (to detect backward jumps)

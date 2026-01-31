@@ -12,12 +12,12 @@
 
 | Goal | Go to |
 |------|--------|
-| **Constitutional laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md) |
+| **Constitutional laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md) |
 | **Find an invariant by ID** | Tables below by layer; follow **Source** in each section |
-| **Phase 8 timeline / segment / switch** | [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) |
-| **Phase 9 bootstrap / audio liveness** | [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) |
-| **Phase 10 pipeline flow control** | [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md) |
-| **Component-level contracts** | [architecture/README.md](architecture/README.md) |
+| **Phase 8 timeline / segment / switch** | [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) |
+| **Phase 9 bootstrap / audio liveness** | [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) |
+| **Phase 10 pipeline flow control** | [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) |
+| **Component-level contracts** | [README.md](semantics/README.md) |
 
 **Invariant types:** **Law** (constitutional); **Semantic** (correctness and time); **Coordination** (barriers, switch, readiness, backpressure); **Diagnostic** (logging, stall/drop policies, violation logs). When an invariant could fit multiple categories, this index assigns the highest applicable layer (Law > Semantic > Coordination > Diagnostic).
 
@@ -25,7 +25,7 @@
 
 ## Layer 0 – Constitutional Laws
 
-Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md).** Phase invariants refine these; they do not replace them.
+Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** Phase invariants refine these; they do not replace them.
 
 | Law | One-line | Type |
 |-----|----------|------|
@@ -41,7 +41,7 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 
 Truths about correctness and time: CT monotonicity, provenance, determinism, time-blindness, wall-clock correspondence, output safety/liveness semantics, format correctness.
 
-**Source:** [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) · [phases/Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) · [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) · [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md) · Core `ScheduleManagerPhase8Contract.md`
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · Core `ScheduleManagerPhase8Contract.md`
 
 | ID | One-line | Type |
 |----|----------|------|
@@ -75,7 +75,7 @@ Truths about correctness and time: CT monotonicity, provenance, determinism, tim
 
 Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, no-deadlock rules, ordering and sequencing that coordinate components.
 
-**Source:** [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) · [phases/Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) · [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) · [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md)
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md)
 
 | ID | One-line | Type |
 |----|----------|------|
@@ -112,7 +112,7 @@ Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, 
 
 Logging requirements, stall diagnostics, drop policies, safety rails, test-only guards. These make violations visible and enforce explicit handling.
 
-**Source:** [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) · [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md)
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md)
 
 | ID | One-line | Type |
 |----|----------|------|
@@ -127,14 +127,14 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 
 | You need… | Document / location |
 |-----------|----------------------|
-| **Laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md) |
+| **Laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md) |
 | **Invariants by layer** (this index) | Layer 1–3 tables above |
-| **Phase 8** (timeline, segment, switch) | [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) + [Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) |
-| **Phase 9** (bootstrap, audio liveness) | [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) |
-| **Phase 10** (flow control, backpressure, mux) | [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md) |
-| **Component contracts** | [architecture/README.md](architecture/README.md) |
-| **Phase narrative** (what was built in Phase 8.0–8.9) | [phases/Phase8-Overview.md](phases/Phase8-Overview.md) · [phases/README.md](phases/README.md) |
-| **Build / codec rules** | [build.md](build.md) |
-| **Architecture reference** | [AirArchitectureReference.md](AirArchitectureReference.md) |
+| **Phase 8** (timeline, segment, switch) | [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) + [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) |
+| **Phase 9** (bootstrap, audio liveness) | [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) |
+| **Phase 10** (flow control, backpressure, mux) | [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) |
+| **Component contracts** | [README.md](semantics/README.md) |
+| **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
+| **Build / codec rules** | [build.md](coordination/build.md) |
+| **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |
 
 Canonical contract documents take precedence over this index. When in doubt, the contract wins.

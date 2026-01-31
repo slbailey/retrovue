@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <thread>
@@ -139,6 +140,17 @@ bool ProgramOutput::Start() {
 
   stop_requested_.store(false, std::memory_order_release);
 
+  // =========================================================================
+  // INV-P10.5-AUDIO-FORMAT-LOCK: Lock pad audio format at channel start
+  // =========================================================================
+  // Pad audio format is locked to canonical values (48000 Hz, 2 channels).
+  // This prevents AUDIO_FORMAT_CHANGE after TS header is written.
+  // The format is NEVER changed, regardless of producer audio format.
+  // =========================================================================
+  LockPadAudioFormat();
+  std::cout << "[ProgramOutput] INV-P10.5-AUDIO-FORMAT-LOCK: Pad audio locked to "
+            << kCanonicalPadSampleRate << "Hz/" << kCanonicalPadChannels << "ch" << std::endl;
+
   if (metrics_) {
     telemetry::ChannelMetrics initial_snapshot;
     initial_snapshot.state = telemetry::ChannelState::READY;
@@ -223,14 +235,46 @@ void ProgramOutput::RenderLoop() {
     }
 
     buffer::Frame frame;
+    bool using_pad_frame = false;
     if (!current_buffer->Pop(frame)) {
       // =========================================================================
-      // INV-P9-B: Output Liveness - emit ready audio even when video is stalled
+      // INV-P10.5-OUTPUT-SAFETY-RAIL: Emit pad frame when producer is starved
       // =========================================================================
-      // A frame whose CT has arrived must eventually be emitted (or dropped).
-      // Even if video buffer is empty, we must process any audio frames whose
-      // CT has arrived. Without this, audio would be stuck waiting for video.
+      // Output must NEVER stall. If no producer frame is available, emit a
+      // deterministic black video frame and silence audio to maintain CT
+      // continuity. No waiting, no blocking, no multi-second pauses.
+      //
+      // This is NOT "filler" content - it's a continuity guarantee.
+      // Producer starvation, EOF, shadow readiness, or gating must NOT stop output.
       // =========================================================================
+
+      if (!pad_frame_initialized_) {
+        // First time starvation before we've seen any real frames.
+        // Use defaults (1920x1080 @ 30fps). Will be corrected on first real frame.
+        pad_frame_initialized_ = true;
+        std::cout << "[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Using default pad frame params "
+                  << pad_frame_width_ << "x" << pad_frame_height_
+                  << " @ " << (1'000'000 / pad_frame_duration_us_) << "fps" << std::endl;
+      }
+
+      // Compute next PTS based on last emitted PTS + frame duration
+      int64_t pad_pts_us = last_pts_ + pad_frame_duration_us_;
+
+      // If we haven't emitted any frames yet, use current CT
+      if (last_pts_ == 0 && clock_) {
+        pad_pts_us = clock_->now_utc_us() - clock_->get_epoch_utc_us();
+      }
+
+      frame = GeneratePadFrame(pad_pts_us);
+      using_pad_frame = true;
+      pad_frames_emitted_++;
+
+      if (pad_frames_emitted_ == 1 || pad_frames_emitted_ % 30 == 0) {
+        std::cout << "[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #"
+                  << pad_frames_emitted_ << " at PTS=" << pad_pts_us << "us" << std::endl;
+      }
+
+      // Process any ready audio from buffer (same as before)
       while (true) {
         const buffer::AudioFrame* peeked = current_buffer->PeekAudioFrame();
         if (!peeked) break;
@@ -257,9 +301,59 @@ void ProgramOutput::RenderLoop() {
         }
       }
 
-      WaitForMicros(clock_, kEmptyBufferBackoffUs, &stop_requested_);
-      stats_.frames_skipped++;
-      continue;
+      // =========================================================================
+      // INV-P10.5: Pad audio is GATED by pad video emission AND format lock
+      // =========================================================================
+      // Pad audio is emitted ONLY when:
+      //   1. Pad video is emitted (which it always is in this code path)
+      //   2. Audio format is locked (channel has started)
+      //
+      // If audio format is not locked, emit VIDEO-ONLY pad to avoid
+      // introducing a new audio format that could cause AUDIO_FORMAT_CHANGE.
+      //
+      // samples_per_frame = sample_rate / fps + remainder
+      // This keeps filler phase-continuous across frames.
+      // =========================================================================
+      if (current_buffer->IsAudioEmpty() && audio_format_locked_) {
+        // Compute exact samples for this video frame duration with fractional accumulation
+        // Always use canonical sample rate, never infer from producer
+        const double fps = 1'000'000.0 / static_cast<double>(pad_frame_duration_us_);
+        const double exact_samples = static_cast<double>(kCanonicalPadSampleRate) / fps + audio_sample_remainder_;
+        const int samples = static_cast<int>(std::floor(exact_samples));
+        audio_sample_remainder_ = exact_samples - static_cast<double>(samples);
+
+        buffer::AudioFrame pad_audio = GeneratePadAudio(pad_pts_us, samples);
+
+        std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
+        if (output_bus_) {
+          output_bus_->RouteAudio(pad_audio);
+        } else {
+          std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
+          if (audio_side_sink_) {
+            audio_side_sink_(pad_audio);
+          }
+        }
+      } else if (current_buffer->IsAudioEmpty() && !audio_format_locked_) {
+        // Audio format not yet locked - emit video-only pad
+        // This prevents introducing a new audio format before encoder is ready
+        if (pad_frames_emitted_ == 1) {
+          std::cout << "[ProgramOutput] INV-P10.5-AUDIO-FORMAT-LOCK: Video-only pad (audio format not locked)"
+                    << std::endl;
+        }
+      }
+    } else {
+      // Learn frame parameters from first real frame for future pad frames
+      if (!pad_frame_initialized_ && frame.width > 0 && frame.height > 0) {
+        pad_frame_width_ = frame.width;
+        pad_frame_height_ = frame.height;
+        if (frame.metadata.duration > 0.0) {
+          pad_frame_duration_us_ = static_cast<int64_t>(frame.metadata.duration * 1'000'000.0);
+        }
+        pad_frame_initialized_ = true;
+        std::cout << "[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Learned pad frame params "
+                  << pad_frame_width_ << "x" << pad_frame_height_
+                  << " @ " << (1'000'000 / pad_frame_duration_us_) << "fps" << std::endl;
+      }
     }
 
     double frame_gap_ms = 0.0;
@@ -501,6 +595,53 @@ int64_t ProgramOutput::GetLastEmittedPTS() const {
   // Phase 7: Return last emitted PTS for continuity across segment boundaries
   // This is read by SwitchToLive to align the next segment's PTS
   return last_pts_;
+}
+
+// =============================================================================
+// INV-P10.5-OUTPUT-SAFETY-RAIL: Pad frame generation
+// =============================================================================
+// When producer is starved (buffer empty), output must continue with
+// deterministic black video and silence audio to maintain CT continuity.
+// No freeze, no stall, no multi-second pause.
+// =============================================================================
+
+buffer::Frame ProgramOutput::GeneratePadFrame(int64_t pts_us) {
+  buffer::Frame frame;
+  frame.width = pad_frame_width_;
+  frame.height = pad_frame_height_;
+  frame.metadata.pts = pts_us;
+  frame.metadata.dts = pts_us;
+  frame.metadata.duration = static_cast<double>(pad_frame_duration_us_) / 1'000'000.0;
+  frame.metadata.asset_uri = "pad://black";
+  frame.metadata.has_ct = true;  // Pad frames have valid CT
+
+  // YUV420 black frame: Y=16 (black), U=V=128 (neutral chroma)
+  const int y_size = pad_frame_width_ * pad_frame_height_;
+  const int uv_size = (pad_frame_width_ / 2) * (pad_frame_height_ / 2);
+  frame.data.resize(static_cast<size_t>(y_size + 2 * uv_size));
+
+  // Fill Y plane with 16 (black in TV range)
+  std::memset(frame.data.data(), 16, static_cast<size_t>(y_size));
+  // Fill U and V planes with 128 (neutral chroma)
+  std::memset(frame.data.data() + y_size, 128, static_cast<size_t>(2 * uv_size));
+
+  return frame;
+}
+
+buffer::AudioFrame ProgramOutput::GeneratePadAudio(int64_t pts_us, int nb_samples) {
+  buffer::AudioFrame audio;
+  audio.pts_us = pts_us;
+  // INV-P10.5-AUDIO-FORMAT-LOCK: Always use canonical format, never infer from producer
+  audio.sample_rate = kCanonicalPadSampleRate;
+  audio.channels = kCanonicalPadChannels;
+  audio.nb_samples = nb_samples;
+
+  // S16 interleaved silence: all zeros
+  const size_t data_size = static_cast<size_t>(nb_samples) *
+                           static_cast<size_t>(kCanonicalPadChannels) * sizeof(int16_t);
+  audio.data.resize(data_size, 0);
+
+  return audio;
 }
 
 // ============================================================================

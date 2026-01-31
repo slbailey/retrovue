@@ -177,6 +177,17 @@ class ProgramOutput {
   void UpdateStats(double render_time_ms, double frame_gap_ms);
   void PublishMetrics(double frame_gap_ms);
 
+  // =========================================================================
+  // INV-P10.5-OUTPUT-SAFETY-RAIL: Pad frame generation for continuity
+  // =========================================================================
+  // Generates deterministic black video frame when producer is starved.
+  // Frame has correct resolution, format, and PTS to maintain CT continuity.
+  buffer::Frame GeneratePadFrame(int64_t pts_us);
+
+  // Generates deterministic silence audio for corresponding duration.
+  // Audio has correct sample rate, channels, and PTS to maintain CT continuity.
+  buffer::AudioFrame GeneratePadAudio(int64_t pts_us, int nb_samples);
+
   RenderConfig config_;
   buffer::FrameRingBuffer* input_buffer_;  // Pointer for hot-switch redirection
   mutable std::mutex input_buffer_mutex_;  // Protects input_buffer_ pointer
@@ -204,6 +215,46 @@ class ProgramOutput {
   int64_t last_pts_;
   int64_t last_frame_time_utc_;
   std::chrono::steady_clock::time_point fallback_last_frame_time_;
+
+  // =========================================================================
+  // INV-P10.5-OUTPUT-SAFETY-RAIL: Pad frame state
+  // =========================================================================
+  // Tracks frame dimensions and rate learned from first real frame.
+  // Used to generate matching pad frames when producer is starved.
+  bool pad_frame_initialized_ = false;
+  int pad_frame_width_ = 1920;
+  int pad_frame_height_ = 1080;
+  int64_t pad_frame_duration_us_ = 33333;  // Default 30fps
+  uint64_t pad_frames_emitted_ = 0;  // Metric: retrovue_pad_frames_emitted_total
+
+  // =========================================================================
+  // INV-P10.5-AUDIO-FORMAT-LOCK: Pad audio format is FIXED at channel start
+  // =========================================================================
+  // Pad audio format is locked to canonical values (48000 Hz, 2 channels).
+  // These values NEVER change, regardless of producer audio format.
+  // This prevents AUDIO_FORMAT_CHANGE after TS header is written.
+  //
+  // If producer audio has different format (e.g., 44100 Hz), the encoder's
+  // resampler handles it. Pad audio always uses the canonical format.
+  // =========================================================================
+  static constexpr int kCanonicalPadSampleRate = 48000;
+  static constexpr int kCanonicalPadChannels = 2;
+  bool audio_format_locked_ = false;  // Set true at channel start
+
+  // Fractional sample accumulator for phase-continuous pad audio.
+  // Reset ONLY on segment boundary (CT ownership change), not on first pad frame.
+  double audio_sample_remainder_ = 0.0;
+
+ public:
+  // Called at channel start to lock pad audio format.
+  // Must be called before any frames are emitted.
+  void LockPadAudioFormat() {
+    audio_format_locked_ = true;
+  }
+
+  // Called on segment boundary to reset pad audio phase accumulator.
+  // This keeps filler phase-continuous within a segment.
+  void ResetPadAudioAccumulator() { audio_sample_remainder_ = 0.0; }
 };
 
 // HeadlessProgramOutput consumes frames without displaying them.

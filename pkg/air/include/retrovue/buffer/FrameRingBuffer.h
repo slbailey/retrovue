@@ -47,16 +47,37 @@ namespace retrovue::buffer
     Frame() : width(0), height(0) {}
   };
 
+  // =========================================================================
+  // INV-P10.5-HOUSE-AUDIO-FORMAT: Channel house audio format is FIXED
+  // =========================================================================
+  // All audio entering OutputBus/EncoderPipeline MUST be in house format.
+  // EncoderPipeline never negotiates audio format - it assumes correctness.
+  // Resampling responsibility is UPSTREAM (FileProducer, ProgramOutput).
+  //
+  // Violating this invariant causes:
+  // - AUDIO_FORMAT_CHANGE errors
+  // - Encoder rejecting packets ("Operation not permitted")
+  // - Silent streams despite valid audio frames
+  // =========================================================================
+  static constexpr int kHouseAudioSampleRate = 48000;
+  static constexpr int kHouseAudioChannels = 2;
+  // Sample format is always S16 interleaved (implicit in AudioFrame::data)
+
   // AudioFrame holds decoded audio samples (PCM) along with timing metadata.
   struct AudioFrame
   {
     std::vector<uint8_t> data;   // PCM samples (interleaved, S16 format)
-    int sample_rate;             // Sample rate (e.g., 48000)
-    int channels;                // Number of channels (e.g., 2 for stereo)
+    int sample_rate;             // Sample rate (MUST be kHouseAudioSampleRate)
+    int channels;                // Number of channels (MUST be kHouseAudioChannels)
     int64_t pts_us;              // Presentation timestamp in microseconds
     int nb_samples;              // Number of PCM samples in this frame
 
     AudioFrame() : sample_rate(0), channels(0), pts_us(0), nb_samples(0) {}
+
+    // Returns true if this frame is in house format
+    bool IsHouseFormat() const {
+      return sample_rate == kHouseAudioSampleRate && channels == kHouseAudioChannels;
+    }
   };
 
   // FrameRingBuffer is a lock-free circular buffer for producer-consumer frame streaming.
