@@ -162,6 +162,28 @@ class EncoderPipeline {
   // Video frame counter for CFR PTS generation (resets per session)
   int64_t video_frame_count_;
 
+  // INV-P8-AUDIO-PRIME-STALL: Diagnostic counter for video frames dropped
+  // waiting for audio to prime the header. If this exceeds threshold, emit warning.
+  int audio_prime_stall_count_;
+
+  // =========================================================================
+  // INV-P9-AUDIO-LIVENESS: Deterministic silence generation
+  // =========================================================================
+  // From the moment the MPEG-TS header is written, output MUST contain
+  // continuous, monotonically increasing audio PTS. If no real audio is
+  // available, silence frames are injected to maintain:
+  // - 1024 samples at stream rate (48kHz)
+  // - PTS monotonically increasing, aligned to video CT
+  // - Seamless transition when real audio arrives (no discontinuity)
+  // =========================================================================
+  bool real_audio_received_;           // True once first real audio frame encoded
+  bool silence_injection_active_;      // True while injecting silence (for logging/metrics)
+  int64_t silence_audio_pts_90k_;      // Next PTS for silence frame (90kHz)
+  int silence_frames_generated_;       // Counter: retrovue_audio_silence_frames_injected_total
+
+  // Generate and encode silence frames to fill gap up to target_pts_90k
+  void GenerateSilenceFrames(int64_t target_pts_90k);
+
   // OutputContinuity: enforce monotonic PTS/DTS per stream with minimal correction.
   void EnforceMonotonicDts();
 

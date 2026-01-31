@@ -25,6 +25,64 @@ Python remains a dumb pipe reader; all switching and continuity are enforced in 
 
 There is **exactly one TS muxer per channel**. It is created once and persists across all segment switches. Continuity counters, PIDs, and timestamp bases never reset during preview/live transitions.
 
+**Segment mapping invariants (INV-P8-SWITCH-001, INV-P8-SWITCH-002)**
+
+These invariants govern how the TimelineController maps media time (MT) to channel time (CT) during segment switches:
+
+- **INV-P8-SWITCH-001: Mapping must be pending BEFORE preview fills**
+  - If preview exits shadow and begins writing frames before the segment mapping is pending, the mapping can lock against the wrong MT (or never lock deterministically).
+  - SwitchToLive() must call `BeginSegmentPending()` before disabling shadow mode on the preview producer.
+
+- **INV-P8-WRITE-BARRIER-DEFERRED: Write barrier waits for shadow decode ready**
+  - A producer required for switch readiness MUST be allowed to write until readiness is achieved.
+  - The write barrier on the live producer must NOT be set until the preview has cached its first shadow frame (IsShadowDecodeReady() == true).
+  - If the barrier is set before preview is ready, both producers are blocked and CT stalls:
+    - Live is barriered → cannot feed timeline
+    - Preview is seeking → cannot feed timeline yet
+    - Result: timeline starvation, subsequent frames rejected as "early"
+  - Switch is "armed" (switch_in_progress=true) immediately, but the barrier is deferred until preview is ready.
+
+- **INV-P8-SWITCH-002: CT and MT must describe the same instant at segment start**
+  - When switching segments, we cannot precompute `CT_start` because wall clock advances between the `BeginSegmentPending()` call and when the first preview frame is admitted.
+  - `BeginSegmentPending()` defers **both** CT and MT to the first admitted frame:
+    - `CT_start = wall_clock_at_admission - epoch` (current CT position when frame arrives)
+    - `MT_start = first_frame_media_time`
+  - This ensures CT and MT describe the EXACT same instant, preventing timeline skew that would cause all subsequent frames to be rejected as "early" or "late".
+
+- **INV-P8-SHADOW-PACE: Shadow mode must pause after first cached frame**
+  - Shadow decode mode caches the first decoded frame, then **waits in place** until shadow mode is disabled.
+  - The producer must NOT continue decoding frames while in shadow mode.
+  - Without this invariant, the preview producer would consume the entire file before the switch occurs.
+  - Implementation: After caching the first frame, the producer loops with `sleep_for(5ms)` checking `shadow_decode_mode_` and `stop_requested_` until shadow mode is disabled.
+  - When shadow mode is disabled, the **same frame** (already decoded) proceeds through AdmitFrame.
+
+- **INV-P8-AUDIO-GATE: Audio only gated while shadow_decode_mode_ is true**
+  - Audio frames are gated (dropped) only while the producer is in shadow decode mode.
+  - Audio is **NOT** gated based on `IsMappingPending()` — that would cause starvation.
+  - Rationale: When video's `AdmitFrame()` locks the segment mapping, audio on the same decode iteration must proceed ungated. If audio checked `IsMappingPending()`, it would be gated indefinitely.
+  - Implementation: `bool audio_should_be_gated = shadow_decode_mode_.load(std::memory_order_acquire);`
+
+- **INV-P8-SEGMENT-COMMIT: Explicit segment commit with timeline ownership**
+  - When a segment's mapping locks (first frame admitted), that segment **commits** and takes exclusive ownership of CT.
+  - The old segment is dead at this instant and must be closed (ForceStop).
+  - Commit is tracked via:
+    - `current_segment_id_`: The ID of the segment that owns CT (0 = none).
+    - `HasSegmentCommitted()`: Returns true if a segment has committed (state-based).
+  - This models broadcast-style segment ownership: the new segment "owns the timeline" and the old segment must yield.
+
+- **INV-P8-SEGMENT-COMMIT-EDGE: Generation counter for multi-switch support**
+  - `HasSegmentCommitted()` is state-based — it returns true continuously after the first commit.
+  - For 2nd, 3rd, Nth switches, we need **edge detection** (did a commit happen since we last checked?).
+  - `segment_commit_generation_` increments exactly once per commit.
+  - SwitchWatcher tracks `last_seen_commit_gen` and detects edges:
+    ```cpp
+    if (current_commit_gen > last_seen_commit_gen) {
+      // Commit edge detected — close old segment
+      last_seen_commit_gen = current_commit_gen;
+    }
+    ```
+  - This ensures the old producer is closed exactly once per switch, regardless of how many switches have occurred.
+
 - **Runs:**
   - **Preview** path: decode pipeline for the next segment; produces decoded frames; does not yet feed the TS mux.
   - **Live** path: decode pipeline whose frames are currently admitted into the TS mux; mux writes to the **stream_fd** given by Python.

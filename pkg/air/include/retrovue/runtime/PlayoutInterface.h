@@ -25,21 +25,22 @@ namespace retrovue::runtime {
 // Forward declarations
 class PlayoutEngine;
 struct ProgramFormat;
+enum class ResultCode;  // Defined in PlayoutEngine.h
 
 // Result structure for interface operations
 struct InterfaceResult {
   bool success;
   std::string message;
-  
+  ResultCode result_code;  // Phase 8: Typed result code
+
   // For LoadPreview
   bool shadow_decode_started = false;
-  
+
   // For SwitchToLive
   bool pts_contiguous = false;
   uint64_t live_start_pts = 0;
-  
-  InterfaceResult(bool s, const std::string& msg)
-      : success(s), message(msg) {}
+
+  InterfaceResult(bool s, const std::string& msg);
 };
 
 // PlayoutInterface is a thin adapter between gRPC and the domain engine.

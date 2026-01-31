@@ -24,6 +24,30 @@ enum class AdmissionResult {
   REJECTED_NO_MAPPING  // No segment mapping active
 };
 
+// =============================================================================
+// INV-P8-SWITCH-002: Type-safe pending segment modes
+// =============================================================================
+// These types make it IMPOSSIBLE to create a pending segment with:
+//   - a carried-forward CT (from old live)
+//   - a preview-derived MT
+// That state literally cannot be represented.
+// =============================================================================
+
+// Pending segment mode - determines how CT and MT are resolved
+enum class PendingSegmentMode {
+  AwaitPreviewFrame,   // Preview will define BOTH MT and CT (common case)
+  AbsoluteMapping      // Both CT and MT provided together upfront (rare)
+};
+
+// Unique segment identifier for tracking
+using SegmentId = uint64_t;
+
+// Pending segment state - opaque handle returned to caller
+struct PendingSegment {
+  SegmentId id;
+  PendingSegmentMode mode;
+};
+
 // Phase 8 Contract: Segment mapping for MT -> CT conversion
 struct SegmentMapping {
   int64_t ct_segment_start_us;  // CT when this segment began output
@@ -107,26 +131,67 @@ class TimelineController {
   bool IsSessionActive() const;
 
   // ========================================================================
-  // Segment Mapping
+  // Segment Mapping (Type-Safe API - INV-P8-SWITCH-002)
+  // ========================================================================
+  // The segment mapping API is designed to make dangerous states unrepresentable.
+  // There are exactly TWO ways to begin a segment:
+  //
+  // 1. BeginSegmentFromPreview() - Preview defines BOTH CT and MT
+  //    Used during segment switching. The first preview frame locks the mapping.
+  //    CT = wall_clock_at_first_frame - epoch
+  //    MT = first_frame_media_time
+  //
+  // 2. BeginSegmentAbsolute(ct, mt) - Both CT and MT provided together
+  //    Used at session start or when both values are known upfront.
+  //    CT and MT must be provided together - partial specification is impossible.
+  //
+  // The OLD APIs (SetSegmentMapping, BeginSegment, BeginSegmentPending) are
+  // DELETED because they allowed partial specification which caused timeline bugs.
   // ========================================================================
 
-  // Sets the segment mapping for the current/next segment.
-  // ct_start: CT position where this segment begins (typically CT_cursor + frame_period)
-  // mt_start: MT of the first frame from this segment
-  // NOTE: Prefer BeginSegment() + auto-lock for new code. This method is for
-  // cases where MT_start is known ahead of time.
-  void SetSegmentMapping(int64_t ct_start_us, int64_t mt_start_us);
+  // Case 1: Preview-driven segment (common case during switching)
+  // Preview will define BOTH MT and CT when first frame arrives.
+  // Returns a handle to the pending segment for tracking.
+  PendingSegment BeginSegmentFromPreview();
 
-  // Phase 8 §6.1: Begins a new segment with known CT_start but pending MT_start.
-  // MT_start will be locked on the first admitted frame (prevents mapping skew).
-  // Use this instead of SetSegmentMapping() when MT is not yet known.
-  void BeginSegment(int64_t ct_start_us);
+  // Case 2: Absolute segment (session start, or when both values known)
+  // BOTH CT and MT must be provided together - no partial state possible.
+  // Returns a handle to the segment for tracking.
+  PendingSegment BeginSegmentAbsolute(int64_t ct_start_us, int64_t mt_start_us);
 
-  // Returns true if a segment mapping is pending (BeginSegment called, MT not locked).
+  // Returns true if a segment mapping is pending (awaiting preview frame).
   bool IsMappingPending() const;
+
+  // Returns the current pending segment mode, or nullopt if not pending.
+  std::optional<PendingSegmentMode> GetPendingMode() const;
 
   // Returns the current segment mapping, or nullopt if none set.
   std::optional<SegmentMapping> GetSegmentMapping() const;
+
+  // ========================================================================
+  // INV-P8-SEGMENT-COMMIT: Explicit segment commit detection
+  // ========================================================================
+  // In broadcast terms, "commit" is when a pending segment locks its mapping
+  // and becomes the authoritative owner of the timeline. At commit:
+  //   - The new segment owns CT
+  //   - The old segment is dead (must be closed)
+  //   - Switch orchestration can proceed
+  // ========================================================================
+
+  // Returns true if a segment has committed (mapping locked, not pending).
+  // NOTE: This is STATE, not EDGE. For edge detection, use GetSegmentCommitGeneration().
+  bool HasSegmentCommitted() const;
+
+  // Returns the ID of the currently active (committed) segment.
+  // Returns 0 if no segment is active.
+  SegmentId GetActiveSegmentId() const;
+
+  // INV-P8-SEGMENT-COMMIT-EDGE: Generation counter for commit edge detection.
+  // Increments exactly once each time a segment commits (mapping locks).
+  // Use this to detect commit EDGES across multiple switches:
+  //   if (current_gen > last_seen_gen) { /* commit happened */ }
+  // This works for 1st, 2nd, Nth switches.
+  uint64_t GetSegmentCommitGeneration() const;
 
   // ========================================================================
   // Frame Admission (Core Phase 8 Operation)
@@ -203,12 +268,28 @@ class TimelineController {
   int64_t epoch_us_ = 0;
   int64_t ct_cursor_us_ = 0;
 
-  // Segment mapping
+  // Active segment mapping (set when segment is locked)
   std::optional<SegmentMapping> segment_mapping_;
 
-  // Phase 8 §6.1: Pending segment mapping (CT known, MT locked on first admission)
-  bool mapping_pending_ = false;
-  int64_t pending_ct_start_us_ = 0;
+  // ==========================================================================
+  // INV-P8-SWITCH-002: Type-safe pending segment state
+  // ==========================================================================
+  // The pending_segment_ holds the pending state. Its mode determines behavior:
+  //   - AwaitPreviewFrame: Both CT and MT locked from first preview frame
+  //   - AbsoluteMapping: Already resolved (segment_mapping_ is set)
+  //
+  // There is NO state where CT is set but MT is pending. That's the bug we fixed.
+  // ==========================================================================
+  std::optional<PendingSegment> pending_segment_;
+  SegmentId next_segment_id_ = 1;
+
+  // INV-P8-SEGMENT-COMMIT: Track the currently active (committed) segment
+  SegmentId current_segment_id_ = 0;  // 0 = no active segment
+
+  // INV-P8-SEGMENT-COMMIT-EDGE: Generation counter for commit edge detection
+  // Increments exactly once per commit. Allows detecting commit edges across
+  // multiple switches (1st, 2nd, Nth).
+  uint64_t segment_commit_generation_ = 0;
 
   // Statistics
   Stats stats_;

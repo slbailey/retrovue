@@ -23,6 +23,26 @@
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/runtime/PlayoutEngine.h"
 
+// Phase 8: Map C++ ResultCode enum to proto ResultCode enum
+namespace {
+  retrovue::playout::ResultCode MapResultCode(retrovue::runtime::ResultCode code) {
+    switch (code) {
+      case retrovue::runtime::ResultCode::kOk:
+        return retrovue::playout::RESULT_CODE_OK;
+      case retrovue::runtime::ResultCode::kNotReady:
+        return retrovue::playout::RESULT_CODE_NOT_READY;
+      case retrovue::runtime::ResultCode::kRejectedBusy:
+        return retrovue::playout::RESULT_CODE_REJECTED_BUSY;
+      case retrovue::runtime::ResultCode::kProtocolViolation:
+        return retrovue::playout::RESULT_CODE_PROTOCOL_VIOLATION;
+      case retrovue::runtime::ResultCode::kFailed:
+        return retrovue::playout::RESULT_CODE_FAILED;
+      default:
+        return retrovue::playout::RESULT_CODE_UNSPECIFIED;
+    }
+  }
+}  // namespace
+
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -210,9 +230,11 @@ namespace retrovue
       response->set_success(result.success);
       response->set_message(result.message);
       response->set_shadow_decode_started(result.shadow_decode_started);
+      response->set_result_code(MapResultCode(result.result_code));  // Phase 8: Typed result
 
       if (!result.success) {
-        std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message << std::endl;
+        std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message
+                  << " (result_code=" << static_cast<int>(result.result_code) << ")" << std::endl;
         return grpc::Status::OK;
       }
 
@@ -236,9 +258,11 @@ namespace retrovue
       response->set_message(result.message);
       response->set_pts_contiguous(result.pts_contiguous);
       response->set_live_start_pts(result.live_start_pts);
+      response->set_result_code(MapResultCode(result.result_code));  // Phase 8: Typed result
 
       if (!result.success) {
-        std::cout << "[SwitchToLive] Channel " << channel_id << " switch failed" << std::endl;
+        std::cout << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
+                  << static_cast<int>(result.result_code) << ")" << std::endl;
         return grpc::Status::OK;
       }
 

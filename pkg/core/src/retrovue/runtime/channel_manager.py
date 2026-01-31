@@ -15,8 +15,26 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any
+
+
+class SwitchState(Enum):
+    """Phase 8: State machine for clock-driven segment switching.
+
+    This enum makes invalid states unrepresentable. The transitions are:
+    - IDLE: No pending switch. LoadPreview() → PREVIEW_LOADED
+    - PREVIEW_LOADED: Preview loaded, buffers filling. SwitchToLive() → SWITCH_ARMED or IDLE
+    - SWITCH_ARMED: Switch in progress, waiting for auto-complete. SwitchToLive() → IDLE
+
+    CRITICAL: LoadPreview() is FORBIDDEN in SWITCH_ARMED state.
+    Calling LoadPreview while a switch is armed would destroy the preview producer
+    that's currently filling buffers, preventing the switch from ever completing.
+    """
+    IDLE = auto()           # No pending switch, ready for LoadPreview
+    PREVIEW_LOADED = auto() # Preview loaded, ready for SwitchToLive
+    SWITCH_ARMED = auto()   # SwitchToLive called, awaiting auto-complete
 
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -234,8 +252,10 @@ class ChannelManager:
         # Clock-driven segment switching (schedule advances because time advanced, not EOF).
         self._segment_end_time_utc: datetime | None = None  # When current segment ends (from schedule)
         self._preload_lead_seconds: float = 3.0  # Load next segment this many seconds before segment end
-        self._preload_done_for_next: bool = False  # Have we already LoadPreview'd the segment that starts at _segment_end_time_utc?
+        self._switch_lead_seconds: float = 0.100  # Start calling SwitchToLive this many seconds before segment end (100ms)
         self._last_switch_at_segment_end_utc: datetime | None = None  # Guard: fire switch_to_live() once per segment
+        # Phase 8: State machine for clock-driven switching (replaces boolean flags)
+        self._switch_state: SwitchState = SwitchState.IDLE
 
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
@@ -251,7 +271,7 @@ class ChannelManager:
         )
         self._channel_state = "STOPPED"
         self._segment_end_time_utc = None
-        self._preload_done_for_next = False
+        self._switch_state = SwitchState.IDLE
         self._last_switch_at_segment_end_utc = None
         self._stop_producer_if_idle()
 
@@ -624,7 +644,7 @@ class ChannelManager:
                 self._segment_end_time_utc = station_time + timedelta(seconds=duration_s)
             else:
                 self._segment_end_time_utc = None
-        self._preload_done_for_next = False
+        self._switch_state = SwitchState.IDLE
 
     def _segment_duration_seconds(self, segment: dict[str, Any]) -> float:
         """Duration of segment from schedule (seconds). Uses duration_seconds or metadata.segment_seconds."""
@@ -657,9 +677,26 @@ class ChannelManager:
         if segment_end.tzinfo is None:
             segment_end = segment_end.replace(tzinfo=timezone.utc)
 
-        # Preload: before segment end, load next asset into preview (time-based, not EOF).
+        # =======================================================================
+        # Two-phase clock-driven switching (INV-P8-SWITCH-TIMING)
+        # =======================================================================
+        # Phase 1: Preload (T - preload_lead, typically 3s before boundary)
+        #   - Call LoadPreview() to start filling Air's preview buffer
+        #   - State: IDLE → PREVIEW_LOADED
+        #
+        # Phase 2: Switch (T - switch_lead, typically 100ms before boundary)
+        #   - Start calling SwitchToLive() to arm the switch
+        #   - State: PREVIEW_LOADED → SWITCH_ARMED
+        #   - Continue polling SwitchToLive() until it returns success
+        #
+        # This ensures the switch completes AT the boundary, not before or after.
+        # Switching too early would cut the current segment short.
+        # Switching too late would cause frame discards in Air.
         preload_at = segment_end - timedelta(seconds=self._preload_lead_seconds)
-        if not self._preload_done_for_next and now >= preload_at:
+        switch_at = segment_end - timedelta(seconds=self._switch_lead_seconds)
+
+        # Phase 1: Preload - load next asset into preview buffer
+        if self._switch_state == SwitchState.IDLE and now >= preload_at:
             next_plan = self.schedule_service.get_playout_plan_now(self.channel_id, segment_end)
             if next_plan:
                 next_seg = next_plan[0]
@@ -668,41 +705,92 @@ class ChannelManager:
                     start_pts_ms = int(next_seg.get("start_pts", 0))
                     ok = producer.load_preview(asset_path, start_offset_ms=start_pts_ms, hard_stop_time_ms=0)
                     if ok:
-                        self._preload_done_for_next = True
+                        self._switch_state = SwitchState.PREVIEW_LOADED
                         self._logger.info(
-                            "Channel %s clock-driven preload: LoadPreview(%s)",
-                            self.channel_id, asset_path,
+                            "Channel %s preload: LoadPreview(%s) at T-%.1fs",
+                            self.channel_id, asset_path, (segment_end - now).total_seconds(),
                         )
 
-        # Switch: when now >= segment_end_time, promote preview to live (once per segment; no EOF).
-        if now >= segment_end and segment_end != self._last_switch_at_segment_end_utc:
+        # Phase 2: Switch - start calling SwitchToLive at switch_at
+        if self._switch_state == SwitchState.PREVIEW_LOADED and now >= switch_at:
+            ok = producer.switch_to_live()
+            self._switch_state = SwitchState.SWITCH_ARMED
+            self._logger.info(
+                "Channel %s switch armed at T-%.3fs (boundary=%.3fs)",
+                self.channel_id, (segment_end - now).total_seconds(), segment_end.timestamp(),
+            )
+            if ok:
+                # Rare: switch completed immediately (buffers were already full)
+                self._handle_switch_complete(producer, segment_end, now)
+                return
+
+        # Phase 3: Poll for switch completion while SWITCH_ARMED
+        if self._switch_state == SwitchState.SWITCH_ARMED and segment_end != self._last_switch_at_segment_end_utc:
             ok = producer.switch_to_live()
             if ok:
-                seg_ts = segment_end.timestamp()
-                actual_ts = now.timestamp()
-                self._logger.info(
-                    "Channel %s clock-driven switch: Scheduled end: %.3fs | Actual switch: %.3fs",
-                    self.channel_id, seg_ts, actual_ts,
-                )
-                self._last_switch_at_segment_end_utc = segment_end
-                # Advance to next segment: use end_time_utc from schedule for exact timing.
-                next_plan = self.schedule_service.get_playout_plan_now(self.channel_id, segment_end)
-                if next_plan:
-                    next_end_str = next_plan[0].get("end_time_utc")
-                    if next_end_str:
-                        self._segment_end_time_utc = datetime.fromisoformat(next_end_str)
-                        if self._segment_end_time_utc.tzinfo is None:
-                            self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
-                    else:
-                        # Fallback for legacy schedules
-                        next_duration = self._segment_duration_seconds(next_plan[0])
-                        if next_duration > 0:
-                            self._segment_end_time_utc = segment_end + timedelta(seconds=next_duration)
-                        else:
-                            self._segment_end_time_utc = None
-                    self._preload_done_for_next = False
+                self._handle_switch_complete(producer, segment_end, now)
+            else:
+                # Switch not complete yet (NOT_READY) - keep polling
+                # State remains SWITCH_ARMED; LoadPreview is blocked.
+                # INV-P8-SWITCH-TIMING: If we're past the boundary and still not complete, log warning
+                if now > segment_end:
+                    delta_ms = (now.timestamp() - segment_end.timestamp()) * 1000
+                    self._logger.warning(
+                        "INV-P8-SWITCH-TIMING: Channel %s switch still pending %.1fms AFTER boundary",
+                        self.channel_id, delta_ms,
+                    )
+
+    def _handle_switch_complete(
+        self, producer: Producer, segment_end: datetime, now: datetime
+    ) -> None:
+        """Handle switch completion: log timing, advance to next segment."""
+        seg_ts = segment_end.timestamp()
+        actual_ts = now.timestamp()
+        delta_ms = (actual_ts - seg_ts) * 1000
+
+        # ===================================================================
+        # INV-P8-SWITCH-TIMING: Diagnostic tripwire for late switches
+        # ===================================================================
+        # Core MUST complete switches no later than the scheduled boundary.
+        # Switches that complete AFTER the boundary indicate a timing violation.
+        #
+        # If this warning fires, investigate:
+        # - Was preload_lead_seconds too short for buffer fill?
+        # - Was switch_lead_seconds too short?
+        # - Was tick() not called frequently enough?
+        if actual_ts > seg_ts:
+            self._logger.warning(
+                "INV-P8-SWITCH-TIMING VIOLATION: Channel %s switch completed %.1fms AFTER boundary | "
+                "scheduled=%.3fs | actual=%.3fs",
+                self.channel_id, delta_ms, seg_ts, actual_ts,
+            )
+        else:
+            self._logger.info(
+                "Channel %s switch complete: %.1fms before boundary | scheduled=%.3fs | actual=%.3fs",
+                self.channel_id, -delta_ms, seg_ts, actual_ts,
+            )
+
+        self._last_switch_at_segment_end_utc = segment_end
+
+        # Advance to next segment: use end_time_utc from schedule for exact timing.
+        next_plan = self.schedule_service.get_playout_plan_now(self.channel_id, segment_end)
+        if next_plan:
+            next_end_str = next_plan[0].get("end_time_utc")
+            if next_end_str:
+                self._segment_end_time_utc = datetime.fromisoformat(next_end_str)
+                if self._segment_end_time_utc.tzinfo is None:
+                    self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
+            else:
+                # Fallback for legacy schedules
+                next_duration = self._segment_duration_seconds(next_plan[0])
+                if next_duration > 0:
+                    self._segment_end_time_utc = segment_end + timedelta(seconds=next_duration)
                 else:
                     self._segment_end_time_utc = None
+            self._switch_state = SwitchState.IDLE
+        else:
+            self._segment_end_time_utc = None
+            self._switch_state = SwitchState.IDLE  # Switch completed, no more segments
 
     def _stop_producer_if_idle(self) -> None:
         """Stop the Producer if there are no active viewers."""
@@ -1409,16 +1497,27 @@ class Phase8AirProducer(Producer):
             return False
 
     def switch_to_live(self) -> bool:
-        """Promote Air preview to live (clock-driven; no EOF). Returns success."""
+        """Promote Air preview to live (clock-driven; no EOF). Returns success.
+
+        Phase 8: Uses result_code to distinguish NOT_READY (transient, expected)
+        from errors. NOT_READY logs at DEBUG level; errors log at WARNING.
+        """
         if not self._grpc_addr:
             self._logger.warning("Channel %s: switch_to_live skipped (no grpc_addr)", self.channel_id)
             return False
         try:
-            ok = channel_manager_launch.air_switch_to_live(
+            ok, result_code = channel_manager_launch.air_switch_to_live(
                 self._grpc_addr, channel_id_int=self.channel_config.channel_id_int
             )
             if not ok:
-                self._logger.warning("Channel %s: Air SwitchToLive returned success=false", self.channel_id)
+                # Phase 8: NOT_READY is expected (transient), log at DEBUG
+                if result_code == channel_manager_launch.RESULT_CODE_NOT_READY:
+                    self._logger.debug("Channel %s: SwitchToLive NOT_READY (transient)", self.channel_id)
+                else:
+                    self._logger.warning(
+                        "Channel %s: Air SwitchToLive returned success=false (result_code=%d)",
+                        self.channel_id, result_code
+                    )
             return ok
         except Exception as e:
             self._logger.warning("Channel %s: SwitchToLive failed: %s", self.channel_id, e)

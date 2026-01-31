@@ -140,6 +140,12 @@ namespace retrovue::producers::file
     // Returns true if shadow decode is ready (first frame decoded and cached).
     bool IsShadowDecodeReady() const;
 
+    // INV-P8-SHADOW-FLUSH: Flush cached shadow frame to buffer immediately.
+    // Called by PlayoutEngine after SetShadowDecodeMode(false) to ensure
+    // the buffer has frames for readiness check without race condition.
+    // Returns true if a frame was flushed, false if no cached frame exists.
+    bool FlushCachedFrameToBuffer();
+
     // Gets the next PTS that will be used for the next frame (for PTS alignment).
     // Returns the PTS that the next decoded frame will have.
     int64_t GetNextPTS() const;
@@ -151,6 +157,10 @@ namespace retrovue::producers::file
 
     // Returns true if PTS has been aligned (AlignPTS was called).
     bool IsPTSAligned() const;
+
+    // Phase 8: Returns true if the producer has reached end-of-file.
+    // Used by INV-P8-EOF-SWITCH to detect when live producer is exhausted.
+    bool IsEOF() const;
 
   private:
     // Main production loop (runs in producer thread).
@@ -220,9 +230,12 @@ namespace retrovue::producers::file
     bool eof_reached_;
     bool eof_event_emitted_;  // Phase 8.8: emit "eof" only once; producer stays running until explicit stop
     double time_base_;  // Stream time base for PTS/DTS conversion
-    int64_t last_pts_us_;  // For PTS monotonicity enforcement
-    int64_t last_decoded_frame_pts_us_;  // PTS of last decoded frame (for EOF pacing)
-    int64_t first_frame_pts_us_;  // PTS of first frame (for establishing time mapping)
+    // MT-DOMAIN ONLY: These variables must NEVER hold CT values.
+    // MT = Media Time (raw decoder PTS, typically 0 to media duration)
+    // CT = Channel Time (timeline-mapped, can be hours into channel playback)
+    int64_t last_mt_pts_us_;  // For PTS monotonicity enforcement (MT ONLY!)
+    int64_t last_decoded_mt_pts_us_;  // PTS of last decoded frame (MT ONLY!)
+    int64_t first_mt_pts_us_;  // PTS of first frame for time mapping (MT ONLY!)
     int64_t playback_start_utc_us_;  // UTC time when first frame was decoded (for pacing)
 
     // Phase 8.9: Audio decoder subsystem
@@ -248,6 +261,7 @@ namespace retrovue::producers::file
     // Shadow decode mode support
     std::atomic<bool> shadow_decode_mode_;
     std::atomic<bool> shadow_decode_ready_;
+    std::atomic<bool> cached_frame_flushed_;  // INV-P8-SHADOW-FLUSH: true if FlushCachedFrameToBuffer() already pushed
     std::mutex shadow_decode_mutex_;
     std::unique_ptr<buffer::Frame> cached_first_frame_;  // First decoded frame (cached in shadow mode)
     int64_t pts_offset_us_;  // PTS offset for alignment (added to frame PTS)
@@ -261,8 +275,14 @@ namespace retrovue::producers::file
     int frames_since_producer_start_;  // Frames since this producer started
     int audio_skip_count_;        // Audio frames skipped waiting for video epoch
     int audio_drop_count_;        // Audio frames dropped due to buffer full
+    int audio_mapping_gate_drop_count_;  // Phase 8: Audio dropped while segment mapping pending
     bool audio_ungated_logged_;   // Whether we've logged audio ungating (one-shot)
     int scale_diag_count_;        // Scale diagnostic log counter
+
+    // INV-P8-AUDIO-GATE Fix #2: Track if mapping locked this iteration.
+    // When video AdmitFrame() locks the mapping, audio on the same iteration
+    // MUST be processed ungated. This flag overrides the shadow gating check.
+    bool mapping_locked_this_iteration_;
   };
 
 } // namespace retrovue::producers::file

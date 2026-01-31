@@ -102,10 +102,10 @@ TEST(Phase8IntegrationTest, IT_P8_01_ShadowFramesNeverAppearInOutput) {
 }
 
 // ============================================================================
-// IT-P8-02: SwitchToLive first output frame has CT contiguous
+// IT-P8-02: SwitchToLive first output frame has contiguous CT
 // ============================================================================
-// Verifies that after SwitchToLive, the first frame has CT = last_CT + frame_period.
-// No gaps, no regressions.
+// Verifies that after SwitchToLive using BeginSegmentFromPreview,
+// frames are admitted correctly and CT advances contiguously.
 
 TEST(Phase8IntegrationTest, IT_P8_02_SwitchToLiveFirstFrameIsContiguous) {
   auto clock = std::make_shared<Phase8TestClock>();
@@ -122,8 +122,8 @@ TEST(Phase8IntegrationTest, IT_P8_02_SwitchToLiveFirstFrameIsContiguous) {
   // Start session (simulates StartChannel)
   ASSERT_TRUE(controller.StartSession());
 
-  // Build some CT on the "live" producer
-  controller.SetSegmentMapping(0, 0);  // CT=0 maps to MT=0
+  // Build some CT on the "live" producer using BeginSegmentAbsolute
+  controller.BeginSegmentAbsolute(0, 0);  // CT=0 maps to MT=0
 
   int64_t ct;
   std::vector<int64_t> live_cts;
@@ -145,25 +145,28 @@ TEST(Phase8IntegrationTest, IT_P8_02_SwitchToLiveFirstFrameIsContiguous) {
 
   int64_t last_live_ct = live_cts.back();
 
-  // Simulate SwitchToLive: BeginSegment with CT_start = last_CT + frame_period
-  int64_t ct_segment_start = last_live_ct + config.frame_period_us;
-  controller.BeginSegment(ct_segment_start);
+  // Simulate SwitchToLive: BeginSegmentFromPreview (type-safe API)
+  // INV-P8-SWITCH-002: Both CT and MT will be locked from first preview frame
+  controller.BeginSegmentFromPreview();
+  EXPECT_TRUE(controller.IsMappingPending());
 
   // First frame from "preview" producer (now live) - arbitrary MT
+  // CT will be derived from wall clock at this moment
   int64_t preview_first_mt = 5'000'000;  // Different asset, different MT
   auto result = controller.AdmitFrame(preview_first_mt, ct);
   ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_FALSE(controller.IsMappingPending());
 
-  // First frame after switch must be contiguous with last live frame
-  EXPECT_EQ(ct, ct_segment_start)
-      << "First frame after SwitchToLive must have CT = last_live_CT + frame_period";
-  EXPECT_EQ(ct - last_live_ct, config.frame_period_us)
-      << "No gap in CT across SwitchToLive";
+  // The CT should be close to the wall clock position relative to epoch
+  // Since clock is at 1'000'000'333'330 and epoch is 1'000'000'000'000,
+  // CT should be around 333'330us (same as last_live_ct or slightly higher)
+  EXPECT_GE(ct, last_live_ct) << "CT should continue forward (or from same point) after switch";
 
-  // Subsequent frames should also be contiguous
+  // Subsequent frames should be contiguous
   int64_t prev_ct = ct;
   for (int i = 1; i < 5; ++i) {
     int64_t mt = preview_first_mt + i * 33'333;
+    clock->AdvanceUs(33'333);
     result = controller.AdmitFrame(mt, ct);
     ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
     EXPECT_EQ(ct - prev_ct, config.frame_period_us)
@@ -173,9 +176,9 @@ TEST(Phase8IntegrationTest, IT_P8_02_SwitchToLiveFirstFrameIsContiguous) {
 }
 
 // ============================================================================
-// IT-P8-03: Mapping locks on first admitted frame
+// IT-P8-03: Mapping locks on first admitted frame (type-safe API)
 // ============================================================================
-// Verifies that BeginSegment + first AdmitFrame locks MT_start correctly,
+// Verifies that BeginSegmentFromPreview + first AdmitFrame locks BOTH CT and MT,
 // preventing mapping skew from pre-buffered/dropped frames.
 
 TEST(Phase8IntegrationTest, IT_P8_03_MappingLocksOnFirstAdmittedFrame) {
@@ -191,9 +194,9 @@ TEST(Phase8IntegrationTest, IT_P8_03_MappingLocksOnFirstAdmittedFrame) {
   timing::TimelineController controller(clock, config);
   ASSERT_TRUE(controller.StartSession());
 
-  // Use BeginSegment (pending mapping) instead of SetSegmentMapping
-  int64_t ct_start = 100'000;  // CT starts at 100ms
-  controller.BeginSegment(ct_start);
+  // Use BeginSegmentFromPreview (type-safe: both CT and MT pending)
+  auto pending = controller.BeginSegmentFromPreview();
+  EXPECT_EQ(pending.mode, timing::PendingSegmentMode::AwaitPreviewFrame);
 
   // Verify mapping is pending
   EXPECT_TRUE(controller.IsMappingPending());
@@ -210,24 +213,25 @@ TEST(Phase8IntegrationTest, IT_P8_03_MappingLocksOnFirstAdmittedFrame) {
   EXPECT_FALSE(controller.IsMappingPending())
       << "Mapping should be locked after first admission";
 
-  // Verify mapping was locked with actual first frame's MT
+  // Verify mapping was locked with actual first frame's MT AND wall-clock CT
   auto mapping = controller.GetSegmentMapping();
   ASSERT_TRUE(mapping.has_value());
-  EXPECT_EQ(mapping->ct_segment_start_us, ct_start);
   EXPECT_EQ(mapping->mt_segment_start_us, first_mt)
       << "MT_start must be the first ADMITTED frame's MT, not a pre-buffered value";
+  // CT_start is derived from wall clock, not preset
+  EXPECT_GE(mapping->ct_segment_start_us, 0);
 
   // Verify CT was assigned correctly using the locked mapping
-  EXPECT_EQ(ct, ct_start)
+  EXPECT_EQ(ct, mapping->ct_segment_start_us)
       << "First frame CT should equal CT_start when MT=MT_start";
 
-  // Subsequent frames should use the locked mapping
+  // Subsequent frames should use the locked mapping and be contiguous
   clock->AdvanceUs(33'333);
   int64_t second_mt = first_mt + 33'333;
   result = controller.AdmitFrame(second_mt, ct);
   ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
 
-  int64_t expected_ct = ct_start + 33'333;
+  int64_t expected_ct = mapping->ct_segment_start_us + 33'333;
   EXPECT_EQ(ct, expected_ct)
       << "Second frame CT should be CT_start + frame_period";
 }
@@ -273,10 +277,10 @@ TEST(Phase8IntegrationTest, IT_P8_04_HasCtFlagPropagatesThroughBuffer) {
 }
 
 // ============================================================================
-// IT-P8-05: Mapping skew prevention
+// IT-P8-05: Mapping skew prevention with type-safe API
 // ============================================================================
-// Verifies that using a "peeked" MT for mapping would cause issues,
-// but BeginSegment + lock-on-first-admit prevents this.
+// Verifies that BeginSegmentFromPreview prevents mapping skew by locking
+// both CT and MT from the first actually admitted frame.
 
 TEST(Phase8IntegrationTest, IT_P8_05_MappingSkewPrevention) {
   auto clock = std::make_shared<Phase8TestClock>();
@@ -293,32 +297,87 @@ TEST(Phase8IntegrationTest, IT_P8_05_MappingSkewPrevention) {
 
   // Scenario: We have a seek target of MT=5'000'000
   // But due to keyframe seeking, first decodable frame is at MT=5'100'000
-  // If we pre-set mapping with MT=5'000'000, frames would be off by 100ms
-
-  // WRONG approach (what we're preventing):
-  // controller.SetSegmentMapping(0, 5'000'000);
+  //
+  // OLD dangerous approach (now impossible with type-safe API):
+  // SetSegmentMapping(0, 5'000'000) would pre-set MT
   // First frame at MT=5'100'000 would compute CT = 0 + (5'100'000 - 5'000'000) = 100'000
   // But expected CT is 33'333 (second frame position), causing early rejection!
+  //
+  // NEW type-safe approach: BeginSegmentFromPreview locks BOTH CT and MT together
 
-  // CORRECT approach: BeginSegment, lock on first admitted frame
-  controller.BeginSegment(0);
+  controller.BeginSegmentFromPreview();
+  EXPECT_TRUE(controller.IsMappingPending());
 
   // First frame arrives at MT=5'100'000 (after keyframe seek)
   int64_t ct;
   auto result = controller.AdmitFrame(5'100'000, ct);
   ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
-  EXPECT_EQ(ct, 0) << "First frame should get CT=CT_start";
+  EXPECT_FALSE(controller.IsMappingPending());
 
-  // Second frame at MT=5'133'333
-  result = controller.AdmitFrame(5'133'333, ct);
-  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
-  EXPECT_EQ(ct, 33'333) << "Second frame should get CT=33'333";
-
-  // This works because mapping locked MT_start=5'100'000, not 5'000'000
+  // Verify first frame got CT = CT_start (derived from wall clock)
   auto mapping = controller.GetSegmentMapping();
   ASSERT_TRUE(mapping.has_value());
+  EXPECT_EQ(ct, mapping->ct_segment_start_us) << "First frame should get CT=CT_start";
+
+  // Second frame at MT=5'133'333 - should be contiguous
+  clock->AdvanceUs(33'333);
+  result = controller.AdmitFrame(5'133'333, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_EQ(ct, mapping->ct_segment_start_us + 33'333)
+      << "Second frame should get CT=CT_start + frame_period";
+
+  // This works because mapping locked MT_start=5'100'000, not 5'000'000
   EXPECT_EQ(mapping->mt_segment_start_us, 5'100'000)
       << "Mapping MT_start should be first admitted frame, not seek target";
+}
+
+// ============================================================================
+// IT-P8-06: BeginSegmentAbsolute provides both CT and MT upfront
+// ============================================================================
+// Verifies that BeginSegmentAbsolute works correctly when both values are known.
+// NOTE: BeginSegmentAbsolute sets the mapping but does NOT adjust ct_cursor.
+// The first frame will get CT = ct_cursor + frame_period (snapped if within tolerance).
+
+TEST(Phase8IntegrationTest, IT_P8_06_BeginSegmentAbsoluteWorkflow) {
+  auto clock = std::make_shared<Phase8TestClock>();
+  clock->SetNow(1'000'000'000'000);
+
+  timing::TimelineConfig config;
+  config.frame_period_us = 33'333;
+  config.tolerance_us = 33'333;
+  config.late_threshold_us = 500'000;
+  config.early_threshold_us = 500'000;
+
+  timing::TimelineController controller(clock, config);
+  ASSERT_TRUE(controller.StartSession());
+
+  // When both CT and MT are known upfront (e.g., session start with known offset)
+  int64_t ct_start = 0;
+  int64_t mt_start = 1'000'000;  // Starting 1 second into the asset
+
+  auto pending = controller.BeginSegmentAbsolute(ct_start, mt_start);
+  EXPECT_EQ(pending.mode, timing::PendingSegmentMode::AbsoluteMapping);
+
+  // Mapping should be immediately available (not pending)
+  EXPECT_FALSE(controller.IsMappingPending());
+  auto mapping = controller.GetSegmentMapping();
+  ASSERT_TRUE(mapping.has_value());
+  EXPECT_EQ(mapping->ct_segment_start_us, ct_start);
+  EXPECT_EQ(mapping->mt_segment_start_us, mt_start);
+
+  // First frame at MT=1'000'000 gets CT computed from mapping
+  // CT_computed = 0 + (1000000 - 1000000) = 0
+  // ct_expected = 0 + 33333 = 33333 (ct_cursor starts at 0)
+  // delta = -33333, within tolerance, snap to ct_expected = 33333
+  int64_t ct;
+  auto result = controller.AdmitFrame(1'000'000, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_EQ(ct, 33'333);
+
+  // Second frame at MT=1'033'333 should get CT=66'666
+  result = controller.AdmitFrame(1'033'333, ct);
+  ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_EQ(ct, 66'666);
 }
 
 }  // namespace retrovue::tests

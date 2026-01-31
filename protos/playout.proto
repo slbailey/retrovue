@@ -117,6 +117,7 @@ message LoadPreviewResponse {
   bool success = 1;
   string message = 2;
   bool shadow_decode_started = 3;  // True if producer entered shadow mode.
+  ResultCode result_code = 4;      // Phase 8: Typed result for Core to distinguish states
 }
 
 // SwitchToLiveRequest identifies the channel to switch from preview to live.
@@ -131,6 +132,18 @@ message SwitchToLiveResponse {
   // Optional: engine may report continuity details for debugging.
   bool pts_contiguous = 3;
   uint64 live_start_pts = 4;
+  ResultCode result_code = 5;      // Phase 8: Typed result for Core to distinguish states
+}
+
+// Phase 8: Typed result codes for control operations
+// Allows Core to distinguish between transient states and errors.
+enum ResultCode {
+  RESULT_CODE_UNSPECIFIED = 0;        // Default/unknown
+  RESULT_CODE_OK = 1;                 // Operation succeeded
+  RESULT_CODE_NOT_READY = 2;          // Transient: switch armed, awaiting readiness (don't panic, don't retry aggressively)
+  RESULT_CODE_REJECTED_BUSY = 3;      // Operation forbidden in current state (e.g., LoadPreview while switch armed)
+  RESULT_CODE_PROTOCOL_VIOLATION = 4; // Caller violated the protocol (e.g., SwitchToLive without LoadPreview)
+  RESULT_CODE_FAILED = 5;             // Real error: operation failed permanently
 }
 
 // Phase 8: stream transport (Python creates sink, Air connects and writes bytes)

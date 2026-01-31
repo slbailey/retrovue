@@ -1114,5 +1114,384 @@ TEST_F(PlayoutEngineContractTest, Phase88_ProducerEofDoesNotStopProducer)
   ASSERT_FALSE(live.producer->isRunning());
 }
 
+// =============================================================================
+// Phase 8: INV-P8-SWITCH-ARMED Regression Test
+// =============================================================================
+// Verifies that LoadPreview is rejected when a switch is armed.
+// This is the critical invariant that prevents buffer resets during transitions.
+//
+// Sequence:
+//   1. StartChannel → LoadPreview(A) → SwitchToLive (arms switch, NOT_READY)
+//   2. LoadPreview(B) again → REJECTED with RESULT_CODE_REJECTED_BUSY
+//   3. Verify switch can still complete after rejection
+//
+// This test uses control_surface_only=false to exercise the real state machine.
+// The test is deterministic because it doesn't depend on actual buffer fill.
+
+TEST_F(PlayoutEngineContractTest, INV_P8_SWITCH_ARMED_LoadPreviewRejectedWhileSwitchArmed)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  // Use real decode mode (control_surface_only=false) to test the invariant
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 999;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  // Skip if test asset doesn't exist
+  {
+    std::ifstream f(sample_asset);
+    if (!f.good()) {
+      GTEST_SKIP() << "Test asset not found: " << sample_asset;
+    }
+  }
+
+  // Step 1: Start channel
+  {
+    retrovue::playout::StartChannelRequest req;
+    req.set_channel_id(channel_id);
+    req.set_plan_handle(sample_asset);  // Initial asset
+    req.set_port(0);
+    req.set_program_format_json(kDefaultProgramFormatJson);
+    retrovue::playout::StartChannelResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.StartChannel(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    ASSERT_TRUE(resp.success()) << resp.message();
+  }
+
+  // Step 2: LoadPreview (first time - should succeed)
+  {
+    retrovue::playout::LoadPreviewRequest req;
+    req.set_channel_id(channel_id);
+    req.set_asset_path(sample_asset);
+    req.set_start_offset_ms(0);
+    req.set_hard_stop_time_ms(0);
+    retrovue::playout::LoadPreviewResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    ASSERT_TRUE(resp.success()) << "First LoadPreview should succeed: " << resp.message();
+  }
+
+  // Step 3: SwitchToLive (arms switch, should return NOT_READY because buffers aren't full)
+  {
+    retrovue::playout::SwitchToLiveRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::SwitchToLiveResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    // Expect NOT_READY (buffers not filled yet) - switch is now armed
+    EXPECT_FALSE(resp.success()) << "SwitchToLive should return NOT_READY initially";
+    EXPECT_EQ(resp.result_code(), retrovue::playout::RESULT_CODE_NOT_READY)
+        << "Expected RESULT_CODE_NOT_READY, got " << resp.result_code();
+  }
+
+  // Step 4: LoadPreview again (while switch is armed) - MUST be rejected
+  {
+    retrovue::playout::LoadPreviewRequest req;
+    req.set_channel_id(channel_id);
+    req.set_asset_path(sample_asset);
+    req.set_start_offset_ms(1000);  // Different offset to ensure it's a new request
+    req.set_hard_stop_time_ms(0);
+    retrovue::playout::LoadPreviewResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();  // gRPC OK, but response.success=false
+
+    // THIS IS THE CRITICAL ASSERTION: LoadPreview must be rejected while switch is armed
+    EXPECT_FALSE(resp.success()) << "LoadPreview MUST be rejected while switch is armed";
+    EXPECT_EQ(resp.result_code(), retrovue::playout::RESULT_CODE_REJECTED_BUSY)
+        << "Expected RESULT_CODE_REJECTED_BUSY (INV-P8-SWITCH-ARMED), got " << resp.result_code();
+  }
+
+  // Step 5: Wait for switch to complete (buffer fill + watcher auto-complete)
+  bool switch_completed = false;
+  for (int attempt = 0; attempt < 40; ++attempt) {  // ~10 seconds
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    retrovue::playout::SwitchToLiveRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::SwitchToLiveResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+    if (st.ok() && resp.success()) {
+      switch_completed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(switch_completed) << "Switch should eventually complete";
+
+  // Step 6: After switch completes, LoadPreview should be allowed again
+  if (switch_completed) {
+    retrovue::playout::LoadPreviewRequest req;
+    req.set_channel_id(channel_id);
+    req.set_asset_path(sample_asset);
+    req.set_start_offset_ms(2000);  // Different offset
+    req.set_hard_stop_time_ms(0);
+    retrovue::playout::LoadPreviewResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    EXPECT_TRUE(resp.success()) << "LoadPreview should succeed after switch completes: " << resp.message();
+  }
+
+  // Cleanup
+  {
+    retrovue::playout::StopChannelRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse resp;
+    grpc::ServerContext ctx;
+    service.StopChannel(&ctx, &req, &resp);
+  }
+}
+
+// =============================================================================
+// INV-P8-EOF-SWITCH: EOF on live producer forces switch completion
+// =============================================================================
+// Contract: When the live producer reaches EOF while a switch is armed,
+// the switch MUST complete immediately regardless of preview buffer depth.
+//
+// Rationale: If live producer hits EOF and we block on buffer depth,
+// nothing is feeding the output → infinite stall. EOF is an implicit
+// readiness condition that forces preview to take over.
+//
+// Test structure:
+//   1. StartChannel with a short asset
+//   2. LoadPreview with the same asset
+//   3. SwitchToLive (arms switch)
+//   4. Wait for switch to complete (via buffer fill OR EOF - both are valid)
+//   5. Verify that switch completes within reasonable time
+//
+// Note: This test doesn't explicitly verify EOF-triggered completion vs
+// buffer-triggered completion. The invariant is tested implicitly: if EOF
+// was reached before buffers filled, the switch would stall indefinitely
+// without the INV-P8-EOF-SWITCH fix.
+
+TEST_F(PlayoutEngineContractTest, INV_P8_EOF_SWITCH_SwitchCompletesWhenLiveReachesEOF)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  // Use real decode mode to exercise EOF detection
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 998;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  // Skip if test asset doesn't exist
+  {
+    std::ifstream f(sample_asset);
+    if (!f.good()) {
+      GTEST_SKIP() << "Test asset not found: " << sample_asset;
+    }
+  }
+
+  // Step 1: Start channel
+  {
+    retrovue::playout::StartChannelRequest req;
+    req.set_channel_id(channel_id);
+    req.set_plan_handle(sample_asset);
+    req.set_port(0);
+    req.set_program_format_json(kDefaultProgramFormatJson);
+    retrovue::playout::StartChannelResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.StartChannel(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    ASSERT_TRUE(resp.success()) << resp.message();
+  }
+
+  // Step 2: LoadPreview
+  {
+    retrovue::playout::LoadPreviewRequest req;
+    req.set_channel_id(channel_id);
+    req.set_asset_path(sample_asset);
+    req.set_start_offset_ms(0);
+    req.set_hard_stop_time_ms(0);
+    retrovue::playout::LoadPreviewResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    ASSERT_TRUE(resp.success()) << "LoadPreview should succeed: " << resp.message();
+  }
+
+  // Step 3: SwitchToLive (arms switch)
+  {
+    retrovue::playout::SwitchToLiveRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::SwitchToLiveResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    // May succeed immediately or return NOT_READY - both are valid
+    // The point is that the switch is now armed
+  }
+
+  // Step 4: Wait for switch to complete (via buffer fill OR EOF - both valid)
+  // INV-P8-EOF-SWITCH ensures the switch completes even if buffer depth
+  // requirements aren't met when live producer hits EOF.
+  bool switch_completed = false;
+  for (int attempt = 0; attempt < 60; ++attempt) {  // ~15 seconds max
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    retrovue::playout::SwitchToLiveRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::SwitchToLiveResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+    if (st.ok() && resp.success()) {
+      switch_completed = true;
+      std::cout << "[Test] Switch completed on attempt " << (attempt + 1) << std::endl;
+      break;
+    }
+  }
+
+  // THIS IS THE CRITICAL ASSERTION: Switch must complete (via buffer fill or EOF)
+  // Without INV-P8-EOF-SWITCH, if EOF was reached before buffers filled,
+  // the switch would stall indefinitely.
+  EXPECT_TRUE(switch_completed)
+      << "Switch MUST complete (via buffer fill or EOF trigger). "
+      << "INV-P8-EOF-SWITCH ensures EOF forces completion.";
+
+  // Cleanup
+  {
+    retrovue::playout::StopChannelRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse resp;
+    grpc::ServerContext ctx;
+    service.StopChannel(&ctx, &req, &resp);
+  }
+}
+
+// =============================================================================
+// INV-P8-AUDIO-GATE: Readiness must trip within bounded time after switch armed
+// =============================================================================
+// This test ensures that the readiness starvation loop is fixed:
+//   - Preview audio MUST NOT be gated solely because mapping is pending
+//   - Once shadow mode is disabled, audio should flow to buffer
+//   - Readiness (video >= 2, audio >= 5) should pass quickly
+//
+// The bug was: audio gating checked IsMappingPending(), but mapping can't clear
+// until video calls AdmitFrame(). If audio is gated waiting for mapping, and
+// video is blocked by stale shadow state, readiness never trips → infinite stall.
+//
+// Fix: Only gate audio while shadow_decode_mode_ is true, not while mapping pending.
+
+TEST_F(PlayoutEngineContractTest, INV_P8_AUDIO_GATE_ReadinessTripsAfterShadowDisabled)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  // Use real decode mode to exercise audio gating path
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 997;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  // Skip if test asset doesn't exist
+  {
+    std::ifstream f(sample_asset);
+    if (!f.good()) {
+      GTEST_SKIP() << "Test asset not found: " << sample_asset;
+    }
+  }
+
+  // Step 1: Start channel with live asset
+  {
+    retrovue::playout::StartChannelRequest req;
+    req.set_channel_id(channel_id);
+    req.set_plan_handle(sample_asset);
+    req.set_port(0);
+    req.set_program_format_json(kDefaultProgramFormatJson);
+    retrovue::playout::StartChannelResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.StartChannel(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    ASSERT_TRUE(resp.success()) << resp.message();
+  }
+
+  // Let live producer fill its buffer
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  // Step 2: LoadPreview (starts shadow decode)
+  {
+    retrovue::playout::LoadPreviewRequest req;
+    req.set_channel_id(channel_id);
+    req.set_asset_path(sample_asset);
+    req.set_start_offset_ms(0);
+    req.set_hard_stop_time_ms(0);
+    retrovue::playout::LoadPreviewResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    ASSERT_TRUE(resp.success()) << "LoadPreview should succeed: " << resp.message();
+  }
+
+  // Step 3: SwitchToLive (arms switch, disables shadow, begins pending mapping)
+  auto switch_start = std::chrono::steady_clock::now();
+  {
+    retrovue::playout::SwitchToLiveRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::SwitchToLiveResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+    ASSERT_TRUE(st.ok()) << st.error_message();
+    // First call arms the switch, may return NOT_READY
+  }
+
+  // Step 4: Poll for switch completion
+  // INV-P8-AUDIO-GATE: Readiness MUST trip within bounded time (5s max)
+  // Without the fix, this would stall forever due to audio gating loop.
+  bool switch_completed = false;
+  int attempts = 0;
+  constexpr int kMaxAttempts = 40;  // 40 * 125ms = 5s max
+
+  for (attempts = 0; attempts < kMaxAttempts; ++attempts) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(125));
+    retrovue::playout::SwitchToLiveRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::SwitchToLiveResponse resp;
+    grpc::ServerContext ctx;
+    grpc::Status st = service.SwitchToLive(&ctx, &req, &resp);
+    if (st.ok() && resp.success()) {
+      switch_completed = true;
+      break;
+    }
+  }
+
+  auto switch_duration = std::chrono::steady_clock::now() - switch_start;
+  auto switch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(switch_duration).count();
+
+  // CRITICAL ASSERTION: Switch must complete within bounded time
+  EXPECT_TRUE(switch_completed)
+      << "INV-P8-AUDIO-GATE: Switch MUST complete within 5s. "
+      << "If this fails, audio gating is still blocking readiness. "
+      << "Attempts: " << attempts << "/" << kMaxAttempts;
+
+  // Bonus: Log timing for diagnostics
+  if (switch_completed) {
+    std::cout << "[Test] INV-P8-AUDIO-GATE: Switch completed in " << switch_ms
+              << "ms (" << (attempts + 1) << " attempts)" << std::endl;
+  }
+
+  // Cleanup
+  {
+    retrovue::playout::StopChannelRequest req;
+    req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse resp;
+    grpc::ServerContext ctx;
+    service.StopChannel(&ctx, &req, &resp);
+  }
+}
+
 } // namespace
 

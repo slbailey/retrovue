@@ -12,6 +12,10 @@
 
 namespace retrovue::runtime {
 
+// InterfaceResult constructor - must be in cpp because ResultCode is forward-declared
+InterfaceResult::InterfaceResult(bool s, const std::string& msg)
+    : success(s), message(msg), result_code(ResultCode::kUnspecified) {}
+
 PlayoutInterface::PlayoutInterface(std::shared_ptr<PlayoutEngine> engine)
     : engine_(std::move(engine)) {
 }
@@ -45,6 +49,7 @@ InterfaceResult PlayoutInterface::LoadPreview(
   auto result = engine_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
   InterfaceResult interface_result(result.success, result.message);
   interface_result.shadow_decode_started = result.shadow_decode_started;
+  interface_result.result_code = result.result_code;  // Phase 8: Forward typed result
   return interface_result;
 }
 
@@ -54,6 +59,7 @@ InterfaceResult PlayoutInterface::SwitchToLive(int32_t channel_id) {
   InterfaceResult interface_result(result.success, result.message);
   interface_result.pts_contiguous = result.pts_contiguous;
   interface_result.live_start_pts = result.live_start_pts;
+  interface_result.result_code = result.result_code;  // Phase 8: Forward typed result
   return interface_result;
 }
 

@@ -6,6 +6,7 @@
 #include "retrovue/timing/TimelineController.h"
 #include "retrovue/timing/MasterClock.h"
 
+#include <cassert>
 #include <iostream>
 
 namespace retrovue::timing {
@@ -66,8 +67,7 @@ void TimelineController::EndSession() {
   epoch_us_ = 0;
   ct_cursor_us_ = 0;
   segment_mapping_ = std::nullopt;
-  mapping_pending_ = false;
-  pending_ct_start_us_ = 0;
+  pending_segment_ = std::nullopt;
 }
 
 bool TimelineController::IsSessionActive() const {
@@ -76,40 +76,107 @@ bool TimelineController::IsSessionActive() const {
 }
 
 // ============================================================================
-// Segment Mapping
+// Segment Mapping (Type-Safe API - INV-P8-SWITCH-002)
+// ============================================================================
+// The segment mapping API is designed to make dangerous states unrepresentable.
+// There is NO way to set CT without MT or vice versa.
 // ============================================================================
 
-void TimelineController::SetSegmentMapping(int64_t ct_start_us, int64_t mt_start_us) {
+PendingSegment TimelineController::BeginSegmentFromPreview() {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  segment_mapping_ = SegmentMapping{ct_start_us, mt_start_us};
-  mapping_pending_ = false;  // Clear pending state
+  // ==========================================================================
+  // INV-P8-SWITCH-002: Preview-driven segment
+  // ==========================================================================
+  // The first preview frame will lock BOTH CT and MT together:
+  //   CT_start = wall_clock_at_first_frame - epoch
+  //   MT_start = first_frame_media_time
+  //
+  // This eliminates the dangerous state where CT is carried forward from
+  // live while MT comes from preview - that mismatch caused "early" rejections.
+  // ==========================================================================
+  assert(!pending_segment_ && "Cannot begin new segment while one is pending");
 
-  std::cout << "[TimelineController] Segment mapping set: CT_start=" << ct_start_us
-            << "us, MT_start=" << mt_start_us << "us" << std::endl;
-}
-
-void TimelineController::BeginSegment(int64_t ct_start_us) {
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  // Phase 8 §6.1: Begin segment with known CT, pending MT.
-  // MT_start will be locked on first admitted frame.
-  mapping_pending_ = true;
-  pending_ct_start_us_ = ct_start_us;
+  SegmentId id = next_segment_id_++;
+  pending_segment_ = PendingSegment{id, PendingSegmentMode::AwaitPreviewFrame};
   segment_mapping_ = std::nullopt;  // Clear any existing mapping
 
-  std::cout << "[TimelineController] Segment begun (pending): CT_start=" << ct_start_us
-            << "us, MT_start=<pending first frame>" << std::endl;
+  std::cout << "[TimelineController] Segment begun (preview-owned, id=" << id << "): "
+            << "CT_start=<pending>, MT_start=<pending first frame>" << std::endl;
+
+  return *pending_segment_;
+}
+
+PendingSegment TimelineController::BeginSegmentAbsolute(int64_t ct_start_us, int64_t mt_start_us) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  // ==========================================================================
+  // INV-P8-SWITCH-002: Absolute segment (both CT and MT provided together)
+  // ==========================================================================
+  // Both values MUST be provided - there is no partial specification.
+  // This is used at session start or when both values are known upfront.
+  //
+  // Unlike BeginSegmentFromPreview, this does NOT adjust ct_cursor because
+  // the caller is explicitly providing both CT and MT. The caller is
+  // responsible for ensuring the values are correct for their use case.
+  // ==========================================================================
+  assert(!pending_segment_ && "Cannot begin new segment while one is pending");
+  assert(ct_start_us >= 0 && "CT_start must be non-negative");
+  assert(mt_start_us >= 0 && "MT_start must be non-negative");
+
+  SegmentId id = next_segment_id_++;
+
+  // Immediately resolve the mapping since both values are known
+  segment_mapping_ = SegmentMapping{ct_start_us, mt_start_us};
+
+  // NOTE: Do NOT adjust ct_cursor here. The caller provides an absolute mapping
+  // and is responsible for ensuring CT_cursor is in the right position.
+  // This maintains backwards compatibility with the old SetSegmentMapping behavior.
+
+  std::cout << "[TimelineController] Segment begun (absolute, id=" << id << "): "
+            << "CT_start=" << ct_start_us << "us, MT_start=" << mt_start_us << "us" << std::endl;
+
+  return PendingSegment{id, PendingSegmentMode::AbsoluteMapping};
 }
 
 bool TimelineController::IsMappingPending() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return mapping_pending_;
+  return pending_segment_.has_value();
+}
+
+std::optional<PendingSegmentMode> TimelineController::GetPendingMode() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (pending_segment_) {
+    return pending_segment_->mode;
+  }
+  return std::nullopt;
 }
 
 std::optional<SegmentMapping> TimelineController::GetSegmentMapping() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return segment_mapping_;
+}
+
+// ============================================================================
+// INV-P8-SEGMENT-COMMIT: Explicit segment commit detection
+// ============================================================================
+
+bool TimelineController::HasSegmentCommitted() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  // Committed = mapping exists AND no pending segment AND segment ID is set
+  return segment_mapping_.has_value() &&
+         !pending_segment_.has_value() &&
+         current_segment_id_ != 0;
+}
+
+SegmentId TimelineController::GetActiveSegmentId() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return current_segment_id_;
+}
+
+uint64_t TimelineController::GetSegmentCommitGeneration() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return segment_commit_generation_;
 }
 
 // ============================================================================
@@ -126,19 +193,51 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
     return AdmissionResult::REJECTED_NO_MAPPING;
   }
 
-  // Phase 8 §6.1: If mapping is pending, lock MT_start on first admission.
-  // This ensures the mapping uses the actual first admitted frame's MT,
-  // not a peeked/precomputed value that might be dropped.
-  if (mapping_pending_) {
-    segment_mapping_ = SegmentMapping{pending_ct_start_us_, media_time_us};
-    mapping_pending_ = false;
+  // ==========================================================================
+  // INV-P8-SWITCH-002: Lock mapping from first frame (preview-owned segments)
+  // ==========================================================================
+  // If a segment is pending in AwaitPreviewFrame mode, the first frame locks
+  // BOTH CT and MT together. This ensures they describe the same instant.
+  // ==========================================================================
+  if (pending_segment_) {
+    assert(pending_segment_->mode == PendingSegmentMode::AwaitPreviewFrame &&
+           "AbsoluteMapping segments should not reach AdmitFrame while pending");
+
+    // Lock both CT and MT from this first frame
+    int64_t ct_start_us = clock_->now_utc_us() - epoch_us_;
+
+    // INV-P8-SEGMENT-COMMIT: Record the segment ID before clearing pending
+    SegmentId committed_segment_id = pending_segment_->id;
+
+    std::cout << "[TimelineController] INV-P8-SWITCH-002: Mapping LOCKED from preview frame "
+              << "(segment_id=" << committed_segment_id << "): "
+              << "wall=" << clock_->now_utc_us() << "us, epoch=" << epoch_us_
+              << "us, CT_start=" << ct_start_us << "us, MT_start=" << media_time_us << "us"
+              << std::endl;
+
+    segment_mapping_ = SegmentMapping{ct_start_us, media_time_us};
 
     // Critical: Set ct_cursor so that ct_expected = CT_start for this first frame.
     // ct_expected = ct_cursor + frame_period, so ct_cursor = CT_start - frame_period
-    ct_cursor_us_ = pending_ct_start_us_ - config_.frame_period_us;
+    ct_cursor_us_ = ct_start_us - config_.frame_period_us;
 
-    std::cout << "[TimelineController] Segment mapping LOCKED on first frame: CT_start="
-              << pending_ct_start_us_ << "us, MT_start=" << media_time_us << "us" << std::endl;
+    // Invariant check: both must be set together
+    assert(segment_mapping_->ct_segment_start_us >= 0);
+    assert(segment_mapping_->mt_segment_start_us >= 0);
+
+    // INV-P8-SEGMENT-COMMIT: This segment now owns the timeline
+    current_segment_id_ = committed_segment_id;
+
+    // INV-P8-SEGMENT-COMMIT-EDGE: Increment generation for edge detection
+    // This is the ONE place where commit generation advances.
+    segment_commit_generation_++;
+
+    // Clear pending state - segment is now active
+    pending_segment_ = std::nullopt;
+
+    std::cout << "[TimelineController] INV-P8-SEGMENT-COMMIT: Segment "
+              << current_segment_id_ << " now owns CT (commit_gen="
+              << segment_commit_generation_ << ")" << std::endl;
   }
 
   if (!segment_mapping_) {
@@ -185,20 +284,28 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
   // Check if too late
   if (delta < -config_.late_threshold_us) {
     stats_.frames_rejected_late++;
+    // Enhanced diagnostic logging for debugging segment switching issues
     std::cerr << "[TimelineController] Frame REJECTED (late): MT=" << media_time_us
               << ", CT_computed=" << ct_frame_us
               << ", CT_expected=" << ct_expected_us
-              << ", delta=" << delta << "us" << std::endl;
+              << ", delta=" << delta << "us"
+              << " | Mapping: CT_start=" << segment_mapping_->ct_segment_start_us
+              << ", MT_start=" << segment_mapping_->mt_segment_start_us
+              << " (check caller for asset path)" << std::endl;
     return AdmissionResult::REJECTED_LATE;
   }
 
   // Check if too early
   if (delta > config_.early_threshold_us) {
     stats_.frames_rejected_early++;
+    // Enhanced diagnostic logging for debugging segment switching issues
     std::cerr << "[TimelineController] Frame REJECTED (early): MT=" << media_time_us
               << ", CT_computed=" << ct_frame_us
               << ", CT_expected=" << ct_expected_us
-              << ", delta=" << delta << "us" << std::endl;
+              << ", delta=" << delta << "us"
+              << " | Mapping: CT_start=" << segment_mapping_->ct_segment_start_us
+              << ", MT_start=" << segment_mapping_->mt_segment_start_us
+              << " (check caller for asset path)" << std::endl;
     return AdmissionResult::REJECTED_EARLY;
   }
 
