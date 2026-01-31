@@ -24,12 +24,13 @@ namespace retrovue::timing
   class TimelineController;
 }
 
-// Forward declarations for FFmpeg types (opaque pointers)
+// Forward declarations for FFmpeg types (opaque pointers, global scope)
 struct AVFormatContext;
 struct AVCodecContext;
 struct AVFrame;
 struct AVPacket;
 struct SwsContext;
+struct SwrContext;
 
 namespace retrovue::producers::file
 {
@@ -245,6 +246,14 @@ namespace retrovue::producers::file
     double audio_time_base_;  // Audio stream time base for PTS conversion
     bool audio_eof_reached_;
     int64_t last_audio_pts_us_;  // Last audio frame PTS (for monotonicity)
+
+    // INV-P10.5-HOUSE-AUDIO-FORMAT: Resampler for converting to house format
+    // All audio MUST be resampled to house format (48kHz, 2ch, S16) before output.
+    // EncoderPipeline never negotiates format - it assumes correctness.
+    // FFmpeg type kept unambiguous: global ::SwrContext* (see PlayoutInvariants / broadcast-grade fix).
+    ::SwrContext* audio_swr_ctx_;
+    int audio_swr_src_rate_;      // Source sample rate for current swr context
+    int audio_swr_src_channels_;  // Source channels for current swr context
 
     // Phase 8.2: derived segment end (media PTS in us). -1 = not set. Set when segment goes live.
     int64_t segment_end_pts_us_;

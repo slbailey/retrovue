@@ -10,7 +10,7 @@ Documentation is organized into six layers. Lower-numbered layers take precedenc
 
 ### Layer 0 – Constitutional Laws
 
-**Non-negotiable system guarantees.** These are the top-level invariants that define what the system *is*: clock authority, timeline ownership, output liveness, format guarantees, and switching behavior. They cannot be relaxed without changing the fundamental character of the playout engine. No other document may contradict them. **Authoritative definition lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md).**
+**Non-negotiable system guarantees.** These are the top-level invariants that define what the system *is*: clock authority, timeline ownership, output liveness, format guarantees, and switching behavior. They cannot be relaxed without changing the fundamental character of the playout engine. No other document may contradict them. **Authoritative definition lives in [laws/PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** All other contracts refine these laws; they do not override them.
 
 ### Layer 1 – Semantic Contracts
 
@@ -49,6 +49,15 @@ These rules are binding for how documentation and code interact.
 
 4. **Code must conform to laws and contracts, not vice versa.**  
    When code and a law or contract conflict, the code is wrong. Fix the code or change the law/contract through the normal change process. Do not treat laws or contracts as advisory or “best effort.”
+
+---
+
+## Documentation Rules
+
+- **Laws live only in `contracts/laws/`.** Do not restate or redefine laws elsewhere; reference the canonical document.
+- **Invariants must have IDs.** Every codified invariant has a stable ID (e.g. INV-P8-001); see [INVARIANTS-INDEX.md](INVARIANTS-INDEX.md).
+- **Phase documents are coordination contracts, not laws.** They refine Layer 0 laws; they do not override them.
+- **Developer and overview docs are non-authoritative.** They inform and explain; they do not define required behavior.
 
 ---
 

@@ -162,7 +162,7 @@ class FFmpegDecoder {
   AVFrame* audio_frame_;
   AVPacket* packet_;
   SwsContext* sws_ctx_;
-  SwrContext* swr_ctx_;  // Audio resampler
+  ::SwrContext* swr_ctx_;  // Audio resampler (FFmpeg type, global scope)
 
   int video_stream_index_;
   int audio_stream_index_;

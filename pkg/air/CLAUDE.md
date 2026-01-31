@@ -173,6 +173,14 @@ When asked “add X to AIR”:
 4) Update contracts/docs before behavior changes.
 5) Do NOT introduce Core concepts.
 
+────────────────────────
+DOCUMENTATION RULES
+────────────────────────
+- Laws live only in docs/contracts/laws/. Do not restate or redefine laws elsewhere; reference the canonical document.
+- Invariants must have IDs. Every codified invariant has a stable ID (e.g. INV-P8-001); see docs/contracts/INVARIANTS-INDEX.md.
+- Phase documents are coordination contracts, not laws. They refine Layer 0 laws; they do not override them.
+- Developer and overview docs are non-authoritative. They inform and explain; they do not define required behavior.
+
 ACKNOWLEDGEMENT:
 Confirm understanding of AIR as a single-session C++ playout engine with explicit buses, strict timing control, and gRPC-defined boundaries.
 Do not proceed until accepted.

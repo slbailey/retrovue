@@ -23,7 +23,6 @@
 #include <libavutil/log.h>  // For av_log_set_level
 #include <libavutil/channel_layout.h>  // For av_channel_layout_from_mask, av_channel_layout_copy
 #include <libavutil/samplefmt.h>
-#include <libswresample/swresample.h>
 #endif
 
 namespace retrovue::playout_sinks::mpegts {
@@ -45,9 +44,6 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       input_frame_(nullptr),
       packet_(nullptr),
       sws_ctx_(nullptr),
-      swr_ctx_(nullptr),
-      last_input_sample_rate_(0),
-      last_input_channels_(0),
       audio_resample_buffer_samples_(0),
       last_seen_audio_pts90k_(AV_NOPTS_VALUE),
       audio_pts_offset_90k_(0),
@@ -1202,19 +1198,11 @@ void EncoderPipeline::close() {
     sws_ctx_ = nullptr;
   }
 
-  // Phase 8.9: Free audio resampler
-  if (swr_ctx_) {
-    swr_free(&swr_ctx_);
-    swr_ctx_ = nullptr;
-  }
-  
-  // Clear audio resample buffer and reset PTS/format tracking
+  // Clear audio remainder buffer and reset PTS tracking (INV-AUDIO-HOUSE-FORMAT-001: no resampler)
   audio_resample_buffer_.clear();
   audio_resample_buffer_samples_ = 0;
   last_seen_audio_pts90k_ = AV_NOPTS_VALUE;
   audio_pts_offset_90k_ = 0;
-  last_input_sample_rate_ = 0;
-  last_input_channels_ = 0;
   sws_ctx_valid_ = false;
 
   video_stream_ = nullptr;
@@ -1257,135 +1245,53 @@ int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
 #endif  // RETROVUE_FFMPEG_AVAILABLE
 
 // =========================================================================
-// INV-P9-AUDIO-LIVENESS: Generate deterministic silence audio frames
+// INV-P9-AUDIO-LIVENESS + INV-AUDIO-HOUSE-FORMAT-001: Pad via same path as program
 // =========================================================================
-// From the moment the MPEG-TS header is written, output MUST contain
-// continuous, monotonically increasing audio PTS. If no real audio is
-// available, silence frames are injected to maintain A/V sync.
-// - 1024 samples at encoder rate (48kHz)
-// - PTS monotonically increasing, aligned to video CT
-// - Seamless transition when real audio arrives (no discontinuity)
+// Pad (silence) uses the same encode path, CT, sample cadence, and house format
+// as program audio. We build a house-format buffer::AudioFrame and call
+// encodeAudioFrame(..., true) so pad goes through the same code path.
 // =========================================================================
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 void EncoderPipeline::GenerateSilenceFrames(int64_t target_pts_90k) {
-  // INV-P10-PCR-PACED-MUX: When audio liveness is disabled, never inject silence.
-  // Producer audio is authoritative; if audio queue is empty, mux should stall.
-  if (!audio_liveness_enabled_) {
+  if (!audio_liveness_enabled_ || real_audio_received_) {
     return;
   }
-
-  // Only generate if we haven't received real audio yet
-  if (real_audio_received_) {
-    return;
-  }
-
-  // Need audio encoder to be ready
   if (!audio_codec_ctx_ || !audio_stream_ || !audio_frame_ || !packet_ || !header_written_) {
     return;
   }
 
   const int encoder_sample_rate = audio_codec_ctx_->sample_rate;
-  const int encoder_channels = audio_codec_ctx_->ch_layout.nb_channels;
   const int frame_size = audio_codec_ctx_->frame_size > 0 ? audio_codec_ctx_->frame_size : 1024;
-
-  // Calculate duration of one audio frame in 90kHz units
   const int64_t frame_duration_90k = (static_cast<int64_t>(frame_size) * 90000) / encoder_sample_rate;
 
-  // INV-P9-AUDIO-LIVENESS: Log when silence injection starts
   if (!silence_injection_active_ && silence_frames_generated_ == 0) {
     std::cout << "INV-P9-AUDIO-LIVENESS: injecting_silence started" << std::endl;
     silence_injection_active_ = true;
   }
 
-  // Generate silence frames until we catch up to the video PTS
-  // Add a small buffer (one frame duration) to stay slightly ahead
   const int64_t deadline_pts_90k = target_pts_90k + frame_duration_90k;
 
-  AVRational tb90k{1, 90000};
-  AVRational tb_audio = audio_codec_ctx_->time_base;
+  // House-format silence frame (INV-AUDIO-HOUSE-FORMAT-001: same format as program)
+  retrovue::buffer::AudioFrame silence_frame;
+  silence_frame.sample_rate = buffer::kHouseAudioSampleRate;
+  silence_frame.channels = buffer::kHouseAudioChannels;
+  silence_frame.nb_samples = frame_size;
+  silence_frame.pts_us = 0;
+  silence_frame.data.resize(
+      static_cast<size_t>(frame_size) * static_cast<size_t>(buffer::kHouseAudioChannels) * sizeof(int16_t),
+      0);
 
   while (silence_audio_pts_90k_ < deadline_pts_90k) {
-    // Set frame parameters
-    audio_frame_->format = audio_codec_ctx_->sample_fmt;
-    audio_frame_->sample_rate = encoder_sample_rate;
-    int ret = av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
-    if (ret < 0) {
-      std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Failed to copy channel layout" << std::endl;
+    if (!encodeAudioFrame(silence_frame, silence_audio_pts_90k_, true)) {
       break;
     }
-    audio_frame_->nb_samples = frame_size;
-    audio_frame_->pts = av_rescale_q(silence_audio_pts_90k_, tb90k, tb_audio);
-
-    // Allocate frame buffer
-    ret = av_frame_get_buffer(audio_frame_, 0);
-    if (ret < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Failed to allocate buffer: " << errbuf << std::endl;
-      break;
-    }
-
-    // Fill with silence (zeros)
-    if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_S16) {
-      // S16 interleaved: zero all samples
-      std::memset(audio_frame_->data[0], 0,
-                  static_cast<size_t>(frame_size) * static_cast<size_t>(encoder_channels) * sizeof(int16_t));
-    } else if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
-      // Float planar: zero each plane
-      for (int c = 0; c < encoder_channels; ++c) {
-        std::memset(audio_frame_->data[c], 0, static_cast<size_t>(frame_size) * sizeof(float));
-      }
-    } else {
-      // Fallback: try to zero first plane
-      if (audio_frame_->data[0]) {
-        std::memset(audio_frame_->data[0], 0, audio_frame_->linesize[0]);
-      }
-    }
-
-    // Send frame to encoder
-    ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
-    if (ret < 0 && ret != AVERROR(EAGAIN)) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Send failed: " << errbuf << std::endl;
-      break;
-    }
-
-    // Receive and write packets
-    while (true) {
-      ret = avcodec_receive_packet(audio_codec_ctx_, packet_);
-      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-      if (ret < 0) break;
-
-      packet_->stream_index = audio_stream_->index;
-      av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
-      EnforceMonotonicDts();
-
-      // Convert audio PTS to 90kHz for output timing
-      int64_t audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, tb90k);
-      GateOutputTiming(audio_pts_90k);
-
-      int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
-      if (write_ret < 0) {
-        char errbuf[AV_ERROR_MAX_STRING_SIZE];
-        av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-        std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Write failed: " << errbuf << std::endl;
-      }
-    }
-
-    // Advance PTS for next silence frame
     silence_audio_pts_90k_ += frame_duration_90k;
     silence_frames_generated_++;
-
-    // Unref frame for next iteration
-    av_frame_unref(audio_frame_);
   }
 
-  // Log progress periodically (metric: retrovue_audio_silence_frames_injected_total)
   if (silence_frames_generated_ > 0 && (silence_frames_generated_ == 1 || silence_frames_generated_ % 100 == 0)) {
     std::cout << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: silence_frames_injected="
-              << silence_frames_generated_
-              << ", audio_pts_90k=" << silence_audio_pts_90k_ << std::endl;
+              << silence_frames_generated_ << ", audio_pts_90k=" << silence_audio_pts_90k_ << std::endl;
   }
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
@@ -1432,8 +1338,9 @@ bool EncoderPipeline::IsInitialized() const {
 
 #endif  // RETROVUE_FFMPEG_AVAILABLE
 
-// Phase 8.9: Encode audio frame and mux into MPEG-TS
-bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio_frame, int64_t pts90k) {
+// Phase 8.9: Encode audio frame and mux into MPEG-TS (INV-AUDIO-HOUSE-FORMAT-001: house format only)
+bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio_frame, int64_t pts90k,
+                                        bool is_silence_pad) {
   if (!initialized_ || config_.stub_mode) {
     return false;
   }
@@ -1468,9 +1375,21 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     return true;  // Skip, not a fatal error
   }
 
-  // INV-P9-AUDIO-LIVENESS: Mark that real audio has arrived.
-  // From this point, we stop generating silence and use real audio.
-  if (!real_audio_received_) {
+  // =========================================================================
+  // INV-AUDIO-HOUSE-FORMAT-001: Assert house format; fail loudly if not.
+  // =========================================================================
+  // EncoderPipeline never negotiates or resamples. All audio (including pad)
+  // must be house format. Normalization is upstream (FileProducer, etc.).
+  if (!audio_frame.IsHouseFormat()) {
+    std::cerr << "[EncoderPipeline] INV-AUDIO-HOUSE-FORMAT-001 VIOLATION: "
+              << "Audio not in house format. Got " << input_sample_rate << "Hz/"
+              << input_channels << "ch; expected " << buffer::kHouseAudioSampleRate << "Hz/"
+              << buffer::kHouseAudioChannels << "ch. Rejecting frame. Fix upstream." << std::endl;
+    return false;
+  }
+
+  // INV-P9-AUDIO-LIVENESS: Mark that real audio has arrived (not for silence pad).
+  if (!is_silence_pad && !real_audio_received_) {
     real_audio_received_ = true;
     if (silence_injection_active_) {
       std::cout << "INV-P9-AUDIO-LIVENESS: injecting_silence ended (real_audio_ready=true)"
@@ -1479,217 +1398,18 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     }
   }
 
-  // Handle sample rate OR channel count changes: clear buffer and reset resampler state
-  const bool sample_rate_changed = (last_input_sample_rate_ != input_sample_rate);
-  const bool channels_changed = (last_input_channels_ != input_channels);
-  const bool audio_format_changed = sample_rate_changed || channels_changed;
-  const bool needs_resampling = (input_sample_rate != encoder_sample_rate) ||
-                                (input_channels != encoder_channels);
-  
-  if (audio_format_changed) {
-    std::cout << "[EncoderPipeline] AUDIO_FORMAT_CHANGE: "
-              << last_input_sample_rate_ << "Hz/" << last_input_channels_ << "ch -> "
-              << input_sample_rate << "Hz/" << input_channels << "ch"
-              << " (buffered_samples=" << audio_resample_buffer_samples_
-              << ", swr_ctx=" << (swr_ctx_ ? "yes" : "no") << ")" << std::endl;
-    // IMPORTANT: Encode any buffered samples from the PREVIOUS producer before switching!
-    // These are already-resampled samples waiting to fill a complete AAC frame.
-    // We need to encode them (padded with silence if needed) to avoid losing audio.
-    if (audio_resample_buffer_samples_ > 0) {
-      const int frame_size = audio_codec_ctx_->frame_size;
-      AVRational tb90k{1, 90000};
-      AVRational tb_audio = audio_codec_ctx_->time_base;
-
-      // Get current PTS to continue from
-      int64_t flush_pts90k = 0;
-      if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
-        flush_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
-        int64_t frame_duration_90k = (static_cast<int64_t>(frame_size) * 90000) / encoder_sample_rate;
-        flush_pts90k += frame_duration_90k;
-      }
-
-      // Pad buffered samples with silence to make a complete frame
-      int samples_to_pad = frame_size - audio_resample_buffer_samples_;
-      if (samples_to_pad > 0 && samples_to_pad < frame_size) {
-        audio_resample_buffer_.resize(frame_size * encoder_channels, 0);
-        audio_resample_buffer_samples_ = frame_size;
-      }
-
-      // Now encode the padded frame
-      if (audio_resample_buffer_samples_ >= frame_size) {
-        audio_frame_->format = audio_codec_ctx_->sample_fmt;
-        audio_frame_->sample_rate = encoder_sample_rate;
-        av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
-        audio_frame_->nb_samples = frame_size;
-        audio_frame_->pts = av_rescale_q(flush_pts90k, tb90k, tb_audio);
-
-        int ret = av_frame_get_buffer(audio_frame_, 0);
-        if (ret >= 0) {
-          // Convert and copy the samples
-          if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_S16) {
-            std::memcpy(audio_frame_->data[0], audio_resample_buffer_.data(),
-                        frame_size * encoder_channels * sizeof(int16_t));
-          } else if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
-            for (int c = 0; c < encoder_channels; ++c) {
-              float* dst_plane = reinterpret_cast<float*>(audio_frame_->data[c]);
-              for (int i = 0; i < frame_size; ++i) {
-                dst_plane[i] = static_cast<float>(audio_resample_buffer_[i * encoder_channels + c]) / 32768.0f;
-              }
-            }
-          }
-
-          ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
-          if (ret >= 0 || ret == AVERROR(EAGAIN)) {
-            // Drain packets
-            while (true) {
-              ret = avcodec_receive_packet(audio_codec_ctx_, packet_);
-              if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-              if (ret < 0) break;
-              packet_->stream_index = audio_stream_->index;
-              av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
-              EnforceMonotonicDts();
-              // Convert audio PTS to 90kHz for consistent output timing
-              int64_t pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
-              GateOutputTiming(pts_90k);
-              av_interleaved_write_frame(format_ctx_, packet_);
-            }
-          }
-        }
-      }
-
-      // Now clear the buffer
-      audio_resample_buffer_.clear();
-      audio_resample_buffer_samples_ = 0;
-    }
-
-    // Flush and free existing resampler before switching
-    if (swr_ctx_) {
-      // Flush any remaining samples from the old resampler and ADD them to be encoded
-      int64_t delay = swr_get_delay(swr_ctx_, last_input_sample_rate_);
-      if (delay > 0) {
-        int64_t flush_samples = av_rescale_rnd(delay, encoder_sample_rate, last_input_sample_rate_, AV_ROUND_UP);
-        if (flush_samples > 0) {
-          std::vector<uint8_t> flush_buffer(flush_samples * encoder_channels * sizeof(int16_t));
-          uint8_t* out_data[1] = {flush_buffer.data()};
-          swr_convert(swr_ctx_, out_data, flush_samples, nullptr, 0);
-        }
-      }
-      swr_free(&swr_ctx_);
-      swr_ctx_ = nullptr;
-    }
-
-    // Only reset output timing on ACTUAL format changes (not first frame)
-    // First frame has last_input_sample_rate_=0, which isn't a real producer switch
-    if (last_input_sample_rate_ > 0) {
-      ResetOutputTiming();
-      std::cout << "[EncoderPipeline] Output timing anchor reset for new producer" << std::endl;
-    }
-
-    last_input_sample_rate_ = input_sample_rate;
-    last_input_channels_ = input_channels;
-  }
-  
-  // Create resampler when needed for sample rate OR channel conversion
-  if (needs_resampling && !swr_ctx_) {
-    // Create resampler: S16 interleaved @ input config → S16 interleaved @ encoder config
-    AVChannelLayout src_ch_layout, dst_ch_layout;
-
-    // Source layout: from input's channel count (mono, stereo, etc.)
-    if (input_channels == 1) {
-      av_channel_layout_from_mask(&src_ch_layout, AV_CH_LAYOUT_MONO);
-    } else if (input_channels == 2) {
-      av_channel_layout_from_mask(&src_ch_layout, AV_CH_LAYOUT_STEREO);
-    } else {
-      // Fallback for other channel counts
-      av_channel_layout_default(&src_ch_layout, input_channels);
-    }
-
-    // Destination layout: encoder's layout (always stereo for our AAC encoder)
-    av_channel_layout_copy(&dst_ch_layout, &audio_codec_ctx_->ch_layout);
-
-    std::cout << "[EncoderPipeline] Creating audio resampler: "
-              << input_sample_rate << "Hz/" << input_channels << "ch -> "
-              << encoder_sample_rate << "Hz/" << encoder_channels << "ch" << std::endl;
-
-    swr_ctx_ = swr_alloc();
-    if (!swr_ctx_) {
-      std::cerr << "[EncoderPipeline] Failed to allocate resampler context" << std::endl;
-      av_channel_layout_uninit(&src_ch_layout);
-      av_channel_layout_uninit(&dst_ch_layout);
-      return false;
-    }
-
-    int swr_ret = swr_alloc_set_opts2(&swr_ctx_,
-                                      &dst_ch_layout, AV_SAMPLE_FMT_S16, encoder_sample_rate,
-                                      &src_ch_layout, AV_SAMPLE_FMT_S16, input_sample_rate,
-                                      0, nullptr);
-    av_channel_layout_uninit(&src_ch_layout);
-    av_channel_layout_uninit(&dst_ch_layout);
-
-    if (swr_ret < 0) {
-      std::cerr << "[EncoderPipeline] Failed to set resampler options" << std::endl;
-      swr_free(&swr_ctx_);
-      swr_ctx_ = nullptr;
-      return false;
-    }
-
-    if (swr_init(swr_ctx_) < 0) {
-      std::cerr << "[EncoderPipeline] Failed to initialize resampler" << std::endl;
-      swr_free(&swr_ctx_);
-      swr_ctx_ = nullptr;
-      return false;
-    }
-
-  } else if (!needs_resampling && swr_ctx_) {
-    // Input matches encoder config exactly, free unneeded resampler
-    std::cout << "[EncoderPipeline] Freeing unneeded resampler (input now matches encoder)" << std::endl;
-    swr_free(&swr_ctx_);
-    swr_ctx_ = nullptr;
-  }
-  
-  // AAC encoder has a fixed frame_size (typically 1024 samples).
-  // ALL frames except the very last one MUST be exactly frame_size.
-  // We buffer partial samples from resampling and only send complete frames.
-  const int frame_size = audio_codec_ctx_->frame_size > 0 ? audio_codec_ctx_->frame_size : 1024;
-  
-  // Resample if needed (output will be S16 interleaved @ encoder_rate)
-  std::vector<uint8_t> resampled_data;
-  const uint8_t* src_data = audio_frame.data.data();
-  int src_nb_samples = audio_frame.nb_samples;
-  int dst_nb_samples = 0;
-  
-  if (swr_ctx_) {
-    // Calculate output sample count after resampling
-    dst_nb_samples = static_cast<int>(av_rescale_rnd(
-        src_nb_samples, encoder_sample_rate, input_sample_rate, AV_ROUND_UP));
-    
-    // Allocate resampled buffer (S16 interleaved)
-    const size_t resampled_size = static_cast<size_t>(dst_nb_samples) *
-                                  static_cast<size_t>(encoder_channels) *
-                                  sizeof(int16_t);
-    resampled_data.resize(resampled_size);
-    
-    // Resample
-    const uint8_t* in_data[1] = {src_data};
-    uint8_t* out_data[1] = {resampled_data.data()};
-    int ret = swr_convert(swr_ctx_, out_data, dst_nb_samples, in_data, src_nb_samples);
-    if (ret < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      std::cerr << "[EncoderPipeline] Resampling failed: " << errbuf << std::endl;
-      return false;
-    }
-    dst_nb_samples = ret;  // Actual samples produced
-
-    // Use resampled data as source
-    src_data = resampled_data.data();
-    src_nb_samples = dst_nb_samples;
-  } else if (needs_resampling) {
-    // This should never happen - if resampling is needed, swr_ctx_ should exist
-    std::cerr << "[EncoderPipeline] ERROR: Resampling needed but no resampler context!" << std::endl;
+  // INV-AUDIO-HOUSE-FORMAT-001: Input is house format; encoder is configured for house format.
+  // No resampling — use input directly. Assert encoder matches house (sanity).
+  if (encoder_sample_rate != buffer::kHouseAudioSampleRate || encoder_channels != buffer::kHouseAudioChannels) {
+    std::cerr << "[EncoderPipeline] INV-AUDIO-HOUSE-FORMAT-001: Encoder not in house format: "
+              << encoder_sample_rate << "Hz/" << encoder_channels << "ch. Misconfiguration." << std::endl;
     return false;
   }
-  
+
+  const int frame_size = audio_codec_ctx_->frame_size > 0 ? audio_codec_ctx_->frame_size : 1024;
+  const uint8_t* src_data = audio_frame.data.data();
+  int src_nb_samples = audio_frame.nb_samples;
+
   // Prepend any buffered samples from previous call, then append new samples
   // If sample rate changed, buffer was already cleared above
   std::vector<int16_t> combined_samples;
@@ -1750,20 +1470,19 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   // This tracks the SOURCE timeline, not the muxed timeline
   last_seen_audio_pts90k_ = pts90k;
 
-  // Now handle PTS rebasing for the muxer
-  // On a producer switch, we need to calculate the offset to continue from last muxed PTS
-  if (is_first_frame_of_new_producer && last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
-    // Convert last_audio_mux_dts_ from stream timebase to 90kHz
-    int64_t last_muxed_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
-
-    // Calculate duration of one AAC frame in 90kHz units
-    const int frame_size = audio_codec_ctx_->frame_size;
-    int64_t frame_duration_90k = (static_cast<int64_t>(frame_size) * 90000) / encoder_sample_rate;
-
-    // Calculate the offset needed to rebase the new producer's PTS
-    // New producer's first frame should have PTS = last_muxed + one_frame_duration
-    int64_t target_pts = last_muxed_pts90k + frame_duration_90k;
-    audio_pts_offset_90k_ = target_pts - pts90k;
+  // Producer switch: rebase PTS and reset output timing
+  if (is_first_frame_of_new_producer) {
+    ResetOutputTiming();
+    if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
+      // Convert last_audio_mux_dts_ from stream timebase to 90kHz
+      int64_t last_muxed_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
+      // Calculate duration of one AAC frame in 90kHz units
+      const int frame_size_90k = audio_codec_ctx_->frame_size;
+      int64_t frame_duration_90k = (static_cast<int64_t>(frame_size_90k) * 90000) / encoder_sample_rate;
+      // Calculate the offset needed to rebase the new producer's PTS
+      int64_t target_pts = last_muxed_pts90k + frame_duration_90k;
+      audio_pts_offset_90k_ = target_pts - pts90k;
+    }
   }
 
   // Apply the PTS offset to get the muxed PTS
@@ -1937,29 +1656,7 @@ bool EncoderPipeline::flushAudio() {
   AVRational tb90k{1, 90000};
   AVRational tb_audio = audio_codec_ctx_->time_base;
   
-  // Step 1: Flush resampler delay buffer (if resampler exists)
-  if (swr_ctx_ && last_input_sample_rate_ > 0) {
-    int64_t delay = swr_get_delay(swr_ctx_, last_input_sample_rate_);
-    if (delay > 0) {
-      // Estimate output samples for the delay
-      int64_t flush_samples = av_rescale_rnd(delay, encoder_sample_rate, last_input_sample_rate_, AV_ROUND_UP);
-      if (flush_samples > 0) {
-        std::vector<uint8_t> flush_buffer(flush_samples * encoder_channels * sizeof(int16_t));
-        uint8_t* out_data[1] = { flush_buffer.data() };
-        int flushed = swr_convert(swr_ctx_, out_data, flush_samples, nullptr, 0);
-        if (flushed > 0) {
-          // Add flushed samples to resample buffer
-          int16_t* flush_samples_ptr = reinterpret_cast<int16_t*>(flush_buffer.data());
-          audio_resample_buffer_.insert(audio_resample_buffer_.end(),
-                                        flush_samples_ptr,
-                                        flush_samples_ptr + flushed * encoder_channels);
-          audio_resample_buffer_samples_ += flushed;
-        }
-      }
-    }
-  }
-
-  // Step 2: Encode any remaining buffered samples (including flushed resampler output)
+  // Encode any remaining buffered house-format samples (INV-AUDIO-HOUSE-FORMAT-001: no resampler)
   // Get current PTS from last_audio_mux_dts_ if available, otherwise use a reasonable value
   int64_t current_pts90k = 0;
   if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {

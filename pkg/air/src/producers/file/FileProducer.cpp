@@ -13,13 +13,17 @@
 #include <sstream>
 #include <thread>
 
+// FFmpeg headers are C; keep type unambiguous (::SwrContext everywhere).
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/opt.h>
 #include <libavutil/rational.h>
 #include <libavutil/samplefmt.h>
+#include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
@@ -95,6 +99,9 @@ namespace retrovue::producers::file
         audio_time_base_(0.0),
         audio_eof_reached_(false),
         last_audio_pts_us_(0),
+        audio_swr_ctx_(nullptr),
+        audio_swr_src_rate_(0),
+        audio_swr_src_channels_(0),
         effective_seek_target_us_(0),
         stub_pts_counter_(0),
         frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
@@ -996,6 +1003,16 @@ namespace retrovue::producers::file
       avcodec_free_context(&audio_codec_ctx_);
       audio_codec_ctx_ = nullptr;
     }
+
+    // INV-P10.5-HOUSE-AUDIO-FORMAT: Clean up audio resampler (::SwrContext*)
+    if (audio_swr_ctx_)
+    {
+      ::SwrContext* ctx = audio_swr_ctx_;
+      audio_swr_ctx_ = nullptr;
+      swr_free(&ctx);
+    }
+    audio_swr_src_rate_ = 0;
+    audio_swr_src_channels_ = 0;
 
     decoder_initialized_ = false;
     video_stream_index_ = -1;
@@ -2220,88 +2237,140 @@ namespace retrovue::producers::file
       return false;
     }
 
-    // Get sample format and channel layout
-    AVSampleFormat sample_fmt = static_cast<AVSampleFormat>(av_frame->format);
-    int nb_channels = av_frame->ch_layout.nb_channels;
-    int sample_rate = av_frame->sample_rate;
-    int nb_samples = av_frame->nb_samples;
+    // Get source format info
+    AVSampleFormat src_fmt = static_cast<AVSampleFormat>(av_frame->format);
+    int src_channels = av_frame->ch_layout.nb_channels;
+    int src_rate = av_frame->sample_rate;
+    int src_samples = av_frame->nb_samples;
 
-    if (nb_samples <= 0 || nb_channels <= 0 || sample_rate <= 0)
+    if (src_samples <= 0 || src_channels <= 0 || src_rate <= 0)
     {
       return false;
     }
 
-    // Convert to interleaved S16 format (required by AudioFrame)
-    // For now, we'll copy the data directly if it's already in the right format
-    // In a full implementation, we'd use libswresample for format conversion
+    // =========================================================================
+    // INV-P10.5-HOUSE-AUDIO-FORMAT: Always resample to house format
+    // =========================================================================
+    // All audio MUST be converted to house format (48kHz, 2ch, S16) before output.
+    // EncoderPipeline never negotiates format - it assumes correctness.
+    // This prevents AUDIO_FORMAT_CHANGE errors after TS header is written.
+    // =========================================================================
+    constexpr int dst_rate = buffer::kHouseAudioSampleRate;     // 48000
+    constexpr int dst_channels = buffer::kHouseAudioChannels;   // 2
+    constexpr AVSampleFormat dst_fmt = AV_SAMPLE_FMT_S16;       // Interleaved S16
 
     // Calculate PTS in microseconds (producer-relative)
-    // Use same approach as video: pts * time_base * 1,000,000
     int64_t pts_us = 0;
     if (av_frame->pts != AV_NOPTS_VALUE)
     {
       pts_us = static_cast<int64_t>(av_frame->pts * audio_time_base_ * kMicrosecondsPerSecond);
     }
-    else
+    else if (av_frame->best_effort_timestamp != AV_NOPTS_VALUE)
     {
-      // Fallback: use best_effort_timestamp if pts is not set
-      if (av_frame->best_effort_timestamp != AV_NOPTS_VALUE)
-      {
-        pts_us = static_cast<int64_t>(av_frame->best_effort_timestamp * audio_time_base_ * kMicrosecondsPerSecond);
-      }
+      pts_us = static_cast<int64_t>(av_frame->best_effort_timestamp * audio_time_base_ * kMicrosecondsPerSecond);
     }
 
-    // For Phase 8.9, handle the common cases:
-    // - AV_SAMPLE_FMT_S16 (interleaved)  → copy directly
-    // - AV_SAMPLE_FMT_FLTP (planar float) → convert to S16 interleaved
-    //
-    // NOTE: EncoderPipeline currently expects S16 interleaved samples.
-    
-    // Calculate data size for S16 interleaved
-    const size_t data_size = static_cast<size_t>(nb_samples) *
-                             static_cast<size_t>(nb_channels) *
+    // Check if we need to create/recreate the resampler
+    bool need_new_swr = (audio_swr_ctx_ == nullptr) ||
+                        (audio_swr_src_rate_ != src_rate) ||
+                        (audio_swr_src_channels_ != src_channels);
+
+    if (need_new_swr)
+    {
+      // Log format change (only when actually changing, not on first frame)
+      if (audio_swr_ctx_ != nullptr)
+      {
+        std::cout << "[FileProducer] INV-P10.5-HOUSE-AUDIO: Source format changed from "
+                  << audio_swr_src_rate_ << "Hz/" << audio_swr_src_channels_ << "ch to "
+                  << src_rate << "Hz/" << src_channels << "ch (resampling to house format)"
+                  << std::endl;
+        ::SwrContext* old_ctx = audio_swr_ctx_;
+        audio_swr_ctx_ = nullptr;
+        swr_free(&old_ctx);
+      }
+      else
+      {
+        std::cout << "[FileProducer] INV-P10.5-HOUSE-AUDIO: Initializing resampler "
+                  << src_rate << "Hz/" << src_channels << "ch -> "
+                  << dst_rate << "Hz/" << dst_channels << "ch" << std::endl;
+      }
+
+      // Create resampler with newer API; pointer type explicit (::SwrContext*)
+      AVChannelLayout src_layout;
+      av_channel_layout_default(&src_layout, src_channels);
+      AVChannelLayout dst_layout;
+      av_channel_layout_default(&dst_layout, dst_channels);
+
+      ::SwrContext* new_ctx = nullptr;
+      int ret = swr_alloc_set_opts2(&new_ctx,
+                                    &dst_layout, AV_SAMPLE_FMT_S16, dst_rate,
+                                    &src_layout, AV_SAMPLE_FMT_S16, src_rate,
+                                    0, nullptr);
+      av_channel_layout_uninit(&src_layout);
+      av_channel_layout_uninit(&dst_layout);
+
+      if (ret < 0 || !new_ctx)
+      {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        if (ret < 0) av_strerror(ret, errbuf, sizeof(errbuf));
+        else std::snprintf(errbuf, sizeof(errbuf), "swr_alloc_set_opts2 returned null");
+        std::cerr << "[FileProducer] Failed to allocate SwrContext: " << errbuf << std::endl;
+        return false;
+      }
+
+      ret = swr_init(new_ctx);
+      if (ret < 0)
+      {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        std::cerr << "[FileProducer] Failed to init SwrContext: " << errbuf << std::endl;
+        swr_free(&new_ctx);
+        return false;
+      }
+
+      audio_swr_ctx_ = new_ctx;
+      audio_swr_src_rate_ = src_rate;
+      audio_swr_src_channels_ = src_channels;
+    }
+
+    // Calculate output sample count after resampling
+    int64_t delay = swr_get_delay(audio_swr_ctx_, src_rate);
+    int dst_samples = static_cast<int>(av_rescale_rnd(
+        delay + src_samples, dst_rate, src_rate, AV_ROUND_UP));
+
+    // Allocate output buffer
+    const size_t data_size = static_cast<size_t>(dst_samples) *
+                             static_cast<size_t>(dst_channels) *
                              sizeof(int16_t);
     output_frame.data.resize(data_size);
 
-    if (sample_fmt == AV_SAMPLE_FMT_S16)
-    {
-      // Already S16 interleaved - copy directly from data[0]
-      std::memcpy(output_frame.data.data(), av_frame->data[0], data_size);
-    }
-    else if (sample_fmt == AV_SAMPLE_FMT_FLTP)
-    {
-      // Planar float [-1.0, 1.0] per channel in data[c][i] → S16 interleaved
-      int16_t* dst = reinterpret_cast<int16_t*>(output_frame.data.data());
+    // Perform resampling (swr_convert expects const uint8_t ** for input)
+    uint8_t* out_ptr = output_frame.data.data();
+    const uint8_t** in_planes = const_cast<const uint8_t**>(av_frame->extended_data);
 
-      for (int i = 0; i < nb_samples; ++i)
-      {
-        for (int c = 0; c < nb_channels; ++c)
-        {
-          const float* src_plane = reinterpret_cast<const float*>(av_frame->data[c]);
-          float sample = src_plane[i];
+    int samples_out = swr_convert(audio_swr_ctx_,
+                                   &out_ptr, dst_samples,
+                                   in_planes, src_samples);
 
-          // Clamp to [-1.0, 1.0] and scale to int16 range
-          if (sample < -1.0f) sample = -1.0f;
-          if (sample >  1.0f) sample =  1.0f;
-          const float scaled = sample * 32767.0f;
-          const int16_t s16 = static_cast<int16_t>(std::lrintf(scaled));
-
-          dst[i * nb_channels + c] = s16;
-        }
-      }
-    }
-    else
+    if (samples_out < 0)
     {
-      // Other formats would require a full SwrContext; keep Phase 8.9 simple.
-      std::cerr << "[FileProducer] Audio format conversion not implemented for format: "
-                << sample_fmt << std::endl;
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(samples_out, errbuf, sizeof(errbuf));
+      std::cerr << "[FileProducer] swr_convert failed: " << errbuf << std::endl;
       return false;
     }
 
-    output_frame.sample_rate = sample_rate;
-    output_frame.channels = nb_channels;
+    // Resize output to actual sample count
+    const size_t actual_size = static_cast<size_t>(samples_out) *
+                               static_cast<size_t>(dst_channels) *
+                               sizeof(int16_t);
+    output_frame.data.resize(actual_size);
+
+    // Output is ALWAYS in house format
+    output_frame.sample_rate = dst_rate;
+    output_frame.channels = dst_channels;
     output_frame.pts_us = pts_us;
-    output_frame.nb_samples = nb_samples;
+    output_frame.nb_samples = samples_out;
 
     return true;
   }

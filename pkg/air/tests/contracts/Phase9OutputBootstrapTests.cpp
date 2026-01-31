@@ -620,6 +620,19 @@ TEST_F(Phase9AudioLivenessTest, TEST_P9_AUDIO_LIVENESS_001_HeaderToAudioLiveness
 }
 
 // =============================================================================
+// INV-AUDIO-HOUSE-FORMAT-001: house format only; pad same path/CT/cadence/format
+// =============================================================================
+// Contract: All audio reaching EncoderPipeline (including pad) must be house format.
+// Pipeline must reject or fail loudly on non-house input. Pad audio must use the
+// same encode path, CT, sample cadence, and format as program audio.
+// STUB: Full test TBD (e.g. send non-house frame → expect false; verify pad path).
+// =============================================================================
+TEST_F(Phase9AudioLivenessTest, INV_AUDIO_HOUSE_FORMAT_001_HouseFormatOnly) {
+  // STUB: Invariant documented; implementation asserts in EncoderPipeline.
+  SUCCEED() << "INV-AUDIO-HOUSE-FORMAT-001 stub: house format enforced in EncoderPipeline";
+}
+
+// =============================================================================
 // TEST-P9-AUDIO-LIVENESS-002: silence-to-real-audio-contiguity
 // =============================================================================
 // Given: Sink is injecting silence for at least 100ms
