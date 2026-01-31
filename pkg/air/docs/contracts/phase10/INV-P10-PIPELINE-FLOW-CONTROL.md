@@ -10,6 +10,12 @@ Phase 9 is **frozen**. This contract does not modify bootstrap semantics, switch
 
 ---
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
+---
+
 ## 1. Problem Statement
 
 Phase 9 solved the bootstrap problem: getting from segment commit to first observable output with correct timing. However, Phase 9 does not address what happens **after** bootstrap:

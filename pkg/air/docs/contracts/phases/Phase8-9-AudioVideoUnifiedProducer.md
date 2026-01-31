@@ -6,6 +6,12 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 ---
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
+---
+
 ## Problem Statement
 
 The current architecture may separate audio and video decoding into distinct abstractions (e.g., separate AudioProducer and FrameProducer). This creates complexity in lifecycle management, switching coordination, and PTS synchronization. The system needs a unified model where:

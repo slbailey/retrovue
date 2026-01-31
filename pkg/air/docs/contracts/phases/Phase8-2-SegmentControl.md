@@ -6,6 +6,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 Shared invariants (segment authority: start_offset_ms and hard_stop_time_ms from Python/Phase 4, enforced by Air) are in the [Overview](Phase8-Overview.md).
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 Apply **segment start/stop policy to an already-decoded frame stream**. Air does not “tell ffmpeg where to seek and when to stop.” FileProducer owns decode and enforces segment boundaries during decode/emission—frame admission control, not container seek.

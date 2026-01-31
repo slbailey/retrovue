@@ -4,6 +4,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 **Principle:** Establish a real, persistent MPEG-TS mux per channel per active stream session that converts decoded frames into a continuous, spec-compliant TS byte stream. This phase makes TS continuity real for the first time.
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 - **One TS mux per channel per active stream session**

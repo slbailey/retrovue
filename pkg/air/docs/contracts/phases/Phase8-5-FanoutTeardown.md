@@ -6,6 +6,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 Shared invariants (one logical stream per channel, clean shutdown) are in the [Overview](Phase8-Overview.md).
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 - **Fan-out:** Multiple HTTP clients can call `GET /channels/{id}.ts` and each receives the same TS stream (or a copy). Only **one** writer (Air) per channel.

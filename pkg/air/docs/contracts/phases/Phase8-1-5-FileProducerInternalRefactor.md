@@ -7,6 +7,12 @@ This refactor is specifically to unlock the frame-accurate segment boundaries an
 
 ---
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
+---
+
 ## Core Requirements & Invariants
 
 - **No ffmpeg processes or external decode.**

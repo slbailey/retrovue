@@ -8,6 +8,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 Shared invariants (one logical stream per channel, segment authority) are in the [Overview](Phase8-Overview.md).
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 - Run **preview** and **live** decode pipelines under Air’s control; both produce decoded frames, but only one pipeline is admitted into the TS mux at any time.

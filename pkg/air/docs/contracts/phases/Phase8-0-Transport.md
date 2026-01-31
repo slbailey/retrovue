@@ -6,6 +6,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 Shared invariants (Python does not run ffmpeg, one logical stream per channel, clean shutdown) are in the [Overview](Phase8-Overview.md).
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 Validate the **transport** path: Python creates the byte sink; Air connects and writes. No FD passing (avoids gRPC/platform issues). No media format assumptions anywhere.

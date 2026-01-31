@@ -8,6 +8,12 @@ Phase 8 is **frozen**. This contract does not modify timeline semantics, segment
 
 ---
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
+---
+
 ## 1. Purpose
 
 Phase 8 solved timeline correctness: CT and MT lock together on first preview frame, segment commit is explicit and edge-detected, and the old segment is hard-closed at commit.

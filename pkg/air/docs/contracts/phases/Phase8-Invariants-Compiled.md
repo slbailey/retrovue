@@ -4,6 +4,10 @@
 
 Compiled from: Core `ScheduleManagerPhase8Contract.md`, AIR `Phase8-3-PreviewSwitchToLive.md`, and code comments. For full statements see source docs.
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## 1. Timeline (Core — ScheduleManagerPhase8Contract)
 
 | ID | Name |
