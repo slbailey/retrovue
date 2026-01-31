@@ -1,0 +1,140 @@
+# Invariants Index
+
+**This index is navigational only. Canonical contract documents remain authoritative.**
+
+**Purpose:** Single entry point to find every codified invariant by ID. Use this when coding or reviewing: look up the ID, read the one-line summary and type, then follow the link to the authoritative contract for full text and tests.
+
+**Rule:** If code disagrees with an invariant, the code is wrong — fix the code or change the contract explicitly.
+
+---
+
+## How to use this index
+
+| Goal | Go to |
+|------|--------|
+| **Constitutional laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md) |
+| **Find an invariant by ID** | Tables below by layer; follow **Source** in each section |
+| **Phase 8 timeline / segment / switch** | [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) |
+| **Phase 9 bootstrap / audio liveness** | [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) |
+| **Phase 10 pipeline flow control** | [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md) |
+| **Component-level contracts** | [architecture/README.md](architecture/README.md) |
+
+**Invariant types:** **Law** (constitutional); **Semantic** (correctness and time); **Coordination** (barriers, switch, readiness, backpressure); **Diagnostic** (logging, stall/drop policies, violation logs). When an invariant could fit multiple categories, this index assigns the highest applicable layer (Law > Semantic > Coordination > Diagnostic).
+
+---
+
+## Layer 0 – Constitutional Laws
+
+Top-level broadcast guarantees. Full text in [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md). Phase invariants refine these; they do not replace them.
+
+| Law | One-line | Type |
+|-----|----------|------|
+| **Clock** | MasterClock is the only source of "now"; CT never resets once established. | Law |
+| **Timeline** | TimelineController owns CT mapping; producers are time-blind after lock. | Law |
+| **Output Liveness** | ProgramOutput never blocks; if no content → deterministic pad (black + silence). | Law |
+| **Audio Format** | Channel defines house format; all audio normalized before OutputBus; EncoderPipeline never negotiates. Contract test: **INV-AUDIO-HOUSE-FORMAT-001**. | Law |
+| **Switching** | No gaps, no PTS regression, no silence during switches. | Law |
+
+---
+
+## Layer 1 – Semantic Invariants
+
+Truths about correctness and time: CT monotonicity, provenance, determinism, time-blindness, wall-clock correspondence, output safety/liveness semantics, format correctness.
+
+**Source:** [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) · [phases/Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) · [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) · [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md) · Core `ScheduleManagerPhase8Contract.md`
+
+| ID | One-line | Type |
+|----|----------|------|
+| INV-P8-001 | Single Timeline Writer — only TimelineController assigns CT | Semantic |
+| INV-P8-002 | Monotonic Advancement — CT strictly increasing | Semantic |
+| INV-P8-003 | Contiguous Coverage — no CT gaps. *Defines timeline continuity.* | Semantic |
+| INV-P8-004 | Wall-Clock Correspondence — W = epoch + CT steady-state | Semantic |
+| INV-P8-005 | Epoch Immutability — epoch unchanged until session end | Semantic |
+| INV-P8-006 | Producer Time Blindness — producers do not read/compute CT | Semantic |
+| INV-P8-008 | Frame Provenance — one producer, one MT, one CT per frame | Semantic |
+| INV-P8-009 | Atomic Buffer Authority — one active buffer, instant switch | Semantic |
+| INV-P8-010 | No Cross-Producer Dependency — new CT from TC state only | Semantic |
+| INV-P8-011 | Backpressure Isolation — consumer slowness does not slow CT | Semantic |
+| INV-P8-012 | Deterministic Replay — same inputs → same CT sequence | Semantic |
+| INV-P8-OUTPUT-001 | Deterministic Output Liveness — explicit flush, bounded delivery. *Defines emission continuity.* | Semantic |
+| INV-P8-TIME-BLINDNESS | Producer must not drop on MT vs target, delay for alignment, gate audio on video PTS; all admission via TimelineController | Semantic |
+| INV-P8-SWITCH-002 | CT and MT describe same instant at segment start; first frame locks both | Semantic |
+| INV-P8-AUDIO-CT-001 | Audio PTS derived from CT, init from first video frame | Semantic |
+| INV-P9-A-OUTPUT-SAFETY | No frame emitted to sink before its CT | Semantic |
+| INV-P9-B-OUTPUT-LIVENESS | Frame whose CT has arrived must eventually be emitted (or dropped); audio processed even if video empty | Semantic |
+| INV-P10-REALTIME-THROUGHPUT | Output rate must match configured frame rate within tolerance during steady-state | Semantic |
+| INV-P10-PRODUCER-CT-AUTHORITATIVE | Muxer must use producer-provided CT (no local CT counter) | Semantic |
+| INV-P10-PCR-PACED-MUX | Mux loop must be time-driven, not availability-driven | Semantic |
+| INV-AUDIO-HOUSE-FORMAT-001 | All audio reaching EncoderPipeline (including pad) must be house format; pipeline rejects or fails loudly on non-house input; pad uses same path, CT, cadence, format as program. Test: INV_AUDIO_HOUSE_FORMAT_001_HouseFormatOnly (stub) | Semantic |
+
+**Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
+
+---
+
+## Layer 2 – Coordination / Concurrency Invariants
+
+Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, no-deadlock rules, ordering and sequencing that coordinate components.
+
+**Source:** [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) · [phases/Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) · [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) · [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md)
+
+| ID | One-line | Type |
+|----|----------|------|
+| INV-P8-007 | Write Barrier Finality — post-barrier writes = 0 | Coordination |
+| INV-P8-SWITCH-001 | Mapping must be pending BEFORE preview fills; write barrier on live before new segment | Coordination |
+| INV-P8-SHADOW-PACE | Shadow caches first frame, waits in place; no run-ahead decode | Coordination |
+| INV-P8-AUDIO-GATE | Audio gated only while shadow (and while mapping pending) | Coordination |
+| INV-P8-SEGMENT-COMMIT | First frame admitted → segment commits, owns CT; old segment ForceStop | Coordination |
+| INV-P8-SEGMENT-COMMIT-EDGE | Generation counter per commit for multi-switch edge detection | Coordination |
+| INV-P8-SWITCH-ARMED | No LoadPreview while switch armed; FATAL if reset code reached while armed | Coordination |
+| INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live MUST wait until preview shadow decode ready | Coordination |
+| INV-P8-EOF-SWITCH | Live producer EOF → switch completes immediately (do not block on buffer depth) | Coordination |
+| INV-P8-PREVIEW-EOF | Preview EOF with frames → complete with lower thresholds (e.g. ≥1 video, ≥1 audio) | Coordination |
+| INV-P8-SHADOW-FLUSH | On leaving shadow: flush cached first frame to buffer immediately | Coordination |
+| INV-P8-AUDIO-GATE Fix #2 | mapping_locked_this_iteration_ so audio same iteration ungate after video locks | Coordination |
+| INV-P8-AV-SYNC | Audio gated until video locks mapping (no audio ahead of video at switch) | Coordination |
+| INV-P8-AUDIO-PRIME-001 | No header until first audio; no video encode before header written | Coordination |
+| INV-P8-IO-UDS-001 | UDS/output must not block on prebuffer; prebuffering disabled for UDS path | Coordination |
+| INV-P9-FLUSH | Cached shadow frame pushed to buffer synchronously when shadow disabled. Test: INV_P9_FLUSH_Synchronous | Coordination |
+| INV-P9-BOOTSTRAP-READY | Readiness = commit detected AND ≥1 video frame, not deep buffering. Test: G9_002, AudioZeroFrameAcceptable | Coordination |
+| INV-P9-NO-DEADLOCK | Output routing must not wait on conditions that require output routing. Test: G9_003_NoDeadlockOnSwitch | Coordination |
+| INV-P9-WRITE-BARRIER-SYMMETRIC | When write barrier set, audio and video suppressed symmetrically; audio push checks writes_disabled_. Test: Audio liveness tests | Coordination |
+| INV-P9-BOOT-LIVENESS | Newly attached sink must emit decodable TS within bounded time, even if audio not yet available. Test: G9_001, G9_004 | Coordination |
+| INV-P9-AUDIO-LIVENESS | From header written, output must contain continuous, monotonic audio PTS with correct pacing (silence if no decoded audio yet). Test: AUDIO_LIVENESS_001/002/003 | Coordination |
+| INV-P9-PCR-AUDIO-MASTER | Audio owns PCR at startup. Test: PCR_AUDIO_MASTER_001/002, VLC_STARTUP_SMOKE | Coordination |
+| INV-P10-BACKPRESSURE-SYMMETRIC | When buffer full, both audio and video throttled symmetrically | Coordination |
+| INV-P10-PRODUCER-THROTTLE | Producer decode rate governed by consumer capacity, not decoder speed | Coordination |
+| INV-P10-BUFFER-EQUILIBRIUM | Buffer depth must oscillate around target, not grow unbounded or drain to zero | Coordination |
+| INV-P10-NO-SILENCE-INJECTION | Audio liveness must be disabled when PCR-paced mux is active | Coordination |
+
+---
+
+## Layer 3 – Diagnostic / Enforcement Invariants
+
+Logging requirements, stall diagnostics, drop policies, safety rails, test-only guards. These make violations visible and enforce explicit handling.
+
+**Source:** [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) · [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md)
+
+| ID | One-line | Type |
+|----|----------|------|
+| INV-P8-WRITE-BARRIER-DIAG | On writes_disabled_: drop frame, log INV-P8-WRITE-BARRIER | Diagnostic |
+| INV-P8-AUDIO-PRIME-STALL | Diagnostic: log if video dropped too long waiting for audio prime | Diagnostic |
+| INV-P8-SWITCH-TIMING | Core: switch at boundary; log if pending after boundary; violation log if complete after boundary | Diagnostic |
+| INV-P10-FRAME-DROP-POLICY | Frame drops forbidden except under explicit conditions; must log INV-P10-FRAME-DROP | Diagnostic |
+
+---
+
+## Where to find what (for coding)
+
+| You need… | Document / location |
+|-----------|----------------------|
+| **Laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](PlayoutInvariants-BroadcastGradeGuarantees.md) |
+| **Invariants by layer** (this index) | Layer 1–3 tables above |
+| **Phase 8** (timeline, segment, switch) | [phases/Phase8-Invariants-Compiled.md](phases/Phase8-Invariants-Compiled.md) + [Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) |
+| **Phase 9** (bootstrap, audio liveness) | [phases/Phase9-OutputBootstrap.md](phases/Phase9-OutputBootstrap.md) |
+| **Phase 10** (flow control, backpressure, mux) | [phase10/INV-P10-PIPELINE-FLOW-CONTROL.md](phase10/INV-P10-PIPELINE-FLOW-CONTROL.md) |
+| **Component contracts** | [architecture/README.md](architecture/README.md) |
+| **Phase narrative** (what was built in Phase 8.0–8.9) | [phases/Phase8-Overview.md](phases/Phase8-Overview.md) · [phases/README.md](phases/README.md) |
+| **Build / codec rules** | [build.md](build.md) |
+| **Architecture reference** | [AirArchitectureReference.md](AirArchitectureReference.md) |
+
+Canonical contract documents take precedence over this index. When in doubt, the contract wins.
