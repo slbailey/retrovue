@@ -65,13 +65,19 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       last_input_pts_(AV_NOPTS_VALUE),
       first_frame_encoded_(false),
       video_frame_count_(0),
+      audio_prime_stall_count_(0),
       avio_opaque_(nullptr),
       avio_write_callback_(nullptr),
       custom_avio_ctx_(nullptr),
       output_timing_anchor_set_(false),
       output_timing_anchor_pts_(0),
       output_timing_anchor_wall_(),
-      output_timing_enabled_(true) {  // P8-IO-001: Enabled by default, disable during prebuffer
+      output_timing_enabled_(true),  // P8-IO-001: Enabled by default, disable during prebuffer
+      // INV-P9-AUDIO-LIVENESS: Deterministic silence generation state
+      real_audio_received_(false),
+      silence_injection_active_(false),
+      silence_audio_pts_90k_(0),
+      silence_frames_generated_(0) {
   time_base_.num = 1;
   time_base_.den = 90000;  // MPEG-TS timebase is 90kHz
 }
@@ -333,10 +339,27 @@ skip_audio:
   std::cout << "[EncoderPipeline] open: target_width=" << config.target_width
             << " target_height=" << config.target_height
             << " fixed_dimensions=" << fixed_dimensions << std::endl;
+
+  // =========================================================================
+  // INV-P9-BOOT-LIVENESS: Require dimensions for immediate header write
+  // =========================================================================
+  // A newly attached sink must emit a decodable transport stream within a
+  // bounded time. This requires writing the MPEG-TS header immediately in
+  // open(), which requires known dimensions.
+  //
+  // Dynamic dimensions (deferring header to first frame) violates this
+  // invariant because viewers tuning in get no output until first frame.
+  // =========================================================================
   if (!fixed_dimensions) {
-    codec_ctx_->width = 0;
-    codec_ctx_->height = 0;
-  } else {
+    std::cerr << "[EncoderPipeline] INV-P9-BOOT-LIVENESS violated: "
+              << "dimensions required for immediate header write "
+              << "(target_width=" << config.target_width
+              << ", target_height=" << config.target_height << ")" << std::endl;
+    close();
+    return false;
+  }
+
+  {
     codec_ctx_->width = config.target_width;
     codec_ctx_->height = config.target_height;
     frame_width_ = config.target_width;
@@ -447,14 +470,38 @@ skip_audio:
         return false;
       }
     }
-    // INV-P8-AUDIO-PRIME-001: Do NOT write header here.
-    // Header write is deferred until first audio frame arrives (or audio is disabled).
-    // This ensures the PMT includes properly configured audio stream info.
-    std::cout << "[EncoderPipeline] PRE-HEADER streams=" << format_ctx_->nb_streams
+    // =========================================================================
+    // INV-P9-BOOT-LIVENESS: Write header immediately on sink attach
+    // =========================================================================
+    // A newly attached sink must emit a decodable TS (PAT/PMT + PCR cadence)
+    // within N milliseconds, even if audio is not yet available.
+    //
+    // Previously (INV-P8-AUDIO-PRIME-001), header was deferred until first audio
+    // frame to ensure PMT included audio info. This violated boot liveness -
+    // viewers tuning in got nothing until audio arrived.
+    //
+    // Fix: Write header immediately. Video can flow without audio. If audio
+    // stream is configured, it will be included in PMT but audio packets
+    // simply won't arrive until audio is ready. This is valid MPEG-TS.
+    // =========================================================================
+    std::cout << "[EncoderPipeline] INV-P9-BOOT-LIVENESS: Writing header immediately" << std::endl;
+    std::cout << "[EncoderPipeline] streams=" << format_ctx_->nb_streams
               << " video=" << (video_stream_ ? "yes" : "no")
-              << " audio=" << (audio_stream_ ? "yes" : "no")
-              << " (header deferred until audio primed)" << std::endl;
-    header_written_ = false;
+              << " audio=" << (audio_stream_ ? "yes" : "no") << std::endl;
+    ret = avformat_write_header(format_ctx_, &muxer_opts_);
+    if (ret < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+      std::cerr << "[EncoderPipeline] Failed to write header (boot): " << errbuf << std::endl;
+      close();
+      return false;
+    }
+    if (muxer_opts_) {
+      av_dict_free(&muxer_opts_);
+      muxer_opts_ = nullptr;
+    }
+    header_written_ = true;
+    std::cout << "[EncoderPipeline] Header written - TS output is now decodable" << std::endl;
   }
 
   initialized_ = true;
@@ -501,16 +548,24 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     return true;
   }
 
-  // INV-P8-AUDIO-PRIME-001: Do not encode video until header is written (audio primed)
-  // This prevents muxing video packets before the container header exists
+  // INV-P9-BOOT-LIVENESS: Header is now written in open(), so this should never trigger.
+  // If it does, it indicates a bug in the initialization path.
   if (!header_written_) {
-    static int waiting_count = 0;
-    if (++waiting_count <= 5 || waiting_count % 100 == 0) {
-      std::cout << "[EncoderPipeline] Waiting for audio to prime header (video frame #"
-                << waiting_count << " queued)" << std::endl;
-    }
-    return true;  // Not an error, just waiting
+    std::cerr << "[EncoderPipeline] BUG: encodeFrame called but header not written. "
+              << "This should not happen with INV-P9-BOOT-LIVENESS." << std::endl;
+    return false;  // Fail explicitly - this is a bug
   }
+
+  // =========================================================================
+  // INV-P9-AUDIO-LIVENESS: Generate silence audio frames up to this video PTS
+  // =========================================================================
+  // Before encoding each video frame, ensure audio is caught up by generating
+  // silence frames if real audio hasn't arrived yet. This ensures:
+  // - Continuous, monotonically increasing audio PTS from header write
+  // - A/V sync from the very first frame
+  // - Seamless transition when real audio arrives
+  // =========================================================================
+  GenerateSilenceFrames(pts90k);
 
   // Early validity guard: ignore invalid/control frames (no dereference, no fail).
   if (frame.width <= 0 || frame.height <= 0) {
@@ -1165,6 +1220,13 @@ void EncoderPipeline::close() {
   frame_width_ = 0;
   frame_height_ = 0;
   header_written_ = false;
+  audio_prime_stall_count_ = 0;  // Reset diagnostic counter
+
+  // INV-P9-AUDIO-LIVENESS: Reset silence generation state
+  real_audio_received_ = false;
+  silence_injection_active_ = false;
+  silence_audio_pts_90k_ = 0;
+  silence_frames_generated_ = 0;
 #endif
 }
 
@@ -1190,6 +1252,134 @@ int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
   }
   if (!avio_write_callback_) return -1;
   return avio_write_callback_(avio_opaque_, buf, buf_size);
+}
+#endif  // RETROVUE_FFMPEG_AVAILABLE
+
+// =========================================================================
+// INV-P9-AUDIO-LIVENESS: Generate deterministic silence audio frames
+// =========================================================================
+// From the moment the MPEG-TS header is written, output MUST contain
+// continuous, monotonically increasing audio PTS. If no real audio is
+// available, silence frames are injected to maintain A/V sync.
+// - 1024 samples at encoder rate (48kHz)
+// - PTS monotonically increasing, aligned to video CT
+// - Seamless transition when real audio arrives (no discontinuity)
+// =========================================================================
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+void EncoderPipeline::GenerateSilenceFrames(int64_t target_pts_90k) {
+  // Only generate if we haven't received real audio yet
+  if (real_audio_received_) {
+    return;
+  }
+
+  // Need audio encoder to be ready
+  if (!audio_codec_ctx_ || !audio_stream_ || !audio_frame_ || !packet_ || !header_written_) {
+    return;
+  }
+
+  const int encoder_sample_rate = audio_codec_ctx_->sample_rate;
+  const int encoder_channels = audio_codec_ctx_->ch_layout.nb_channels;
+  const int frame_size = audio_codec_ctx_->frame_size > 0 ? audio_codec_ctx_->frame_size : 1024;
+
+  // Calculate duration of one audio frame in 90kHz units
+  const int64_t frame_duration_90k = (static_cast<int64_t>(frame_size) * 90000) / encoder_sample_rate;
+
+  // INV-P9-AUDIO-LIVENESS: Log when silence injection starts
+  if (!silence_injection_active_ && silence_frames_generated_ == 0) {
+    std::cout << "INV-P9-AUDIO-LIVENESS: injecting_silence started" << std::endl;
+    silence_injection_active_ = true;
+  }
+
+  // Generate silence frames until we catch up to the video PTS
+  // Add a small buffer (one frame duration) to stay slightly ahead
+  const int64_t deadline_pts_90k = target_pts_90k + frame_duration_90k;
+
+  AVRational tb90k{1, 90000};
+  AVRational tb_audio = audio_codec_ctx_->time_base;
+
+  while (silence_audio_pts_90k_ < deadline_pts_90k) {
+    // Set frame parameters
+    audio_frame_->format = audio_codec_ctx_->sample_fmt;
+    audio_frame_->sample_rate = encoder_sample_rate;
+    int ret = av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
+    if (ret < 0) {
+      std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Failed to copy channel layout" << std::endl;
+      break;
+    }
+    audio_frame_->nb_samples = frame_size;
+    audio_frame_->pts = av_rescale_q(silence_audio_pts_90k_, tb90k, tb_audio);
+
+    // Allocate frame buffer
+    ret = av_frame_get_buffer(audio_frame_, 0);
+    if (ret < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+      std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Failed to allocate buffer: " << errbuf << std::endl;
+      break;
+    }
+
+    // Fill with silence (zeros)
+    if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_S16) {
+      // S16 interleaved: zero all samples
+      std::memset(audio_frame_->data[0], 0,
+                  static_cast<size_t>(frame_size) * static_cast<size_t>(encoder_channels) * sizeof(int16_t));
+    } else if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
+      // Float planar: zero each plane
+      for (int c = 0; c < encoder_channels; ++c) {
+        std::memset(audio_frame_->data[c], 0, static_cast<size_t>(frame_size) * sizeof(float));
+      }
+    } else {
+      // Fallback: try to zero first plane
+      if (audio_frame_->data[0]) {
+        std::memset(audio_frame_->data[0], 0, audio_frame_->linesize[0]);
+      }
+    }
+
+    // Send frame to encoder
+    ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
+    if (ret < 0 && ret != AVERROR(EAGAIN)) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+      std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Send failed: " << errbuf << std::endl;
+      break;
+    }
+
+    // Receive and write packets
+    while (true) {
+      ret = avcodec_receive_packet(audio_codec_ctx_, packet_);
+      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+      if (ret < 0) break;
+
+      packet_->stream_index = audio_stream_->index;
+      av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
+      EnforceMonotonicDts();
+
+      // Convert audio PTS to 90kHz for output timing
+      int64_t audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, tb90k);
+      GateOutputTiming(audio_pts_90k);
+
+      int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
+      if (write_ret < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        std::cerr << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: Write failed: " << errbuf << std::endl;
+      }
+    }
+
+    // Advance PTS for next silence frame
+    silence_audio_pts_90k_ += frame_duration_90k;
+    silence_frames_generated_++;
+
+    // Unref frame for next iteration
+    av_frame_unref(audio_frame_);
+  }
+
+  // Log progress periodically (metric: retrovue_audio_silence_frames_injected_total)
+  if (silence_frames_generated_ > 0 && (silence_frames_generated_ == 1 || silence_frames_generated_ % 100 == 0)) {
+    std::cout << "[EncoderPipeline] INV-P9-AUDIO-LIVENESS: silence_frames_injected="
+              << silence_frames_generated_
+              << ", audio_pts_90k=" << silence_audio_pts_90k_ << std::endl;
+  }
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
 
@@ -1246,37 +1436,12 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     return false;  // Audio encoder not initialized
   }
 
-  // INV-P8-AUDIO-PRIME-001: Write header on first audio frame
-  // This ensures the PMT includes properly configured audio stream info
-  if (!header_written_ && format_ctx_) {
-    std::cout << "[EncoderPipeline] AUDIO_PRIME: First audio frame arrived, writing header now" << std::endl;
-    std::cout << "[EncoderPipeline] PRE-HEADER streams=" << format_ctx_->nb_streams
-              << " video=" << (video_stream_ ? "yes" : "no")
-              << " audio=" << (audio_stream_ ? "yes" : "no");
-    if (audio_stream_ && audio_stream_->codecpar) {
-      std::cout << " audio_rate=" << audio_stream_->codecpar->sample_rate
-                << " audio_ch=" << audio_stream_->codecpar->ch_layout.nb_channels;
-    }
-    std::cout << std::endl;
-
-    int ret = avformat_write_header(format_ctx_, &muxer_opts_);
-    if (ret < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      std::cerr << "[EncoderPipeline] Failed to write header (audio prime): " << errbuf << std::endl;
-      return false;
-    }
-    std::cout << "[EncoderPipeline] POST-HEADER written successfully (audio primed)" << std::endl;
-    // P8-IO-001: Flush header immediately
-    if (format_ctx_->pb) {
-      avio_flush(format_ctx_->pb);
-      std::cout << "[EncoderPipeline] POST-HEADER flushed" << std::endl;
-    }
-    if (muxer_opts_) {
-      av_dict_free(&muxer_opts_);
-      muxer_opts_ = nullptr;
-    }
-    header_written_ = true;
+  // INV-P9-BOOT-LIVENESS: Header is now written in open(), so this should never trigger.
+  // If it does, it indicates a bug in the initialization path.
+  if (!header_written_) {
+    std::cerr << "[EncoderPipeline] BUG: encodeAudioFrame called but header not written. "
+              << "This should not happen with INV-P9-BOOT-LIVENESS." << std::endl;
+    return false;  // Fail explicitly - this is a bug
   }
 
   // Phase 8.9: Handle sample rate AND channel conversion if input differs from encoder
@@ -1294,6 +1459,17 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
                 << ", samples=" << audio_frame.nb_samples << std::endl;
     }
     return true;  // Skip, not a fatal error
+  }
+
+  // INV-P9-AUDIO-LIVENESS: Mark that real audio has arrived.
+  // From this point, we stop generating silence and use real audio.
+  if (!real_audio_received_) {
+    real_audio_received_ = true;
+    if (silence_injection_active_) {
+      std::cout << "INV-P9-AUDIO-LIVENESS: injecting_silence ended (real_audio_ready=true)"
+                << ", total_silence_frames=" << silence_frames_generated_ << std::endl;
+      silence_injection_active_ = false;
+    }
   }
 
   // Handle sample rate OR channel count changes: clear buffer and reset resampler state

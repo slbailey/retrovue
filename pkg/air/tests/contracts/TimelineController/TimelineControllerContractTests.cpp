@@ -86,7 +86,7 @@ TEST_F(TimelineControllerTest, P8_T001_ProducerEmitsMTOnly) {
   // Producer provides MT, TimelineController provides CT.
 
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 1000000);  // CT=0 corresponds to MT=1000000
+  controller_->BeginSegmentAbsolute(0, 1000000);  // CT=0 corresponds to MT=1000000
 
   int64_t media_time = 1000000;  // Producer's MT
   int64_t channel_time = 0;      // Will be assigned by controller
@@ -104,7 +104,7 @@ TEST_F(TimelineControllerTest, P8_T001_ProducerEmitsMTOnly) {
 
 TEST_F(TimelineControllerTest, P8_T002_TimelineControllerAssignsCT) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);  // 1:1 mapping for simplicity
+  controller_->BeginSegmentAbsolute(0, 0);  // 1:1 mapping for simplicity
 
   int64_t ct_out = -1;
   auto result = controller_->AdmitFrame(33'333, ct_out);
@@ -122,7 +122,7 @@ TEST_F(TimelineControllerTest, P8_T003_CTMonotonicityAcrossTransition) {
   ASSERT_TRUE(controller_->StartSession());
 
   // Segment A: MT starts at 0
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
 
@@ -142,7 +142,7 @@ TEST_F(TimelineControllerTest, P8_T003_CTMonotonicityAcrossTransition) {
   // Segment B starts at CT = current cursor + frame_period
   // Segment B's MT starts at 5000000 (different asset position)
   int64_t ct_transition = controller_->GetCTCursor() + 33'333;
-  controller_->SetSegmentMapping(ct_transition, 5000000);
+  controller_->BeginSegmentAbsolute(ct_transition, 5000000);
 
   // First frame from segment B
   EXPECT_EQ(controller_->AdmitFrame(5000000, ct_out), timing::AdmissionResult::ADMITTED);
@@ -161,14 +161,14 @@ TEST_F(TimelineControllerTest, P8_T004_EpochUnchangedByTransition) {
   ASSERT_TRUE(controller_->StartSession());
   int64_t epoch_at_start = controller_->GetEpoch();
 
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
   controller_->AdmitFrame(33'333, ct_out);
   controller_->AdmitFrame(66'666, ct_out);
 
   // Transition
-  controller_->SetSegmentMapping(controller_->GetCTCursor() + 33'333, 9999999);
+  controller_->BeginSegmentAbsolute(controller_->GetCTCursor() + 33'333, 9999999);
 
   controller_->AdmitFrame(9999999, ct_out);
   controller_->AdmitFrame(9999999 + 33'333, ct_out);
@@ -185,7 +185,7 @@ TEST_F(TimelineControllerTest, P8_T005_SegmentMappingIndependence) {
   ASSERT_TRUE(controller_->StartSession());
 
   // Segment A: MT=1000000000 (1000 seconds into asset)
-  controller_->SetSegmentMapping(0, 1'000'000'000);
+  controller_->BeginSegmentAbsolute(0, 1'000'000'000);
 
   int64_t ct_out = 0;
   controller_->AdmitFrame(1'000'000'000, ct_out);
@@ -196,7 +196,7 @@ TEST_F(TimelineControllerTest, P8_T005_SegmentMappingIndependence) {
   // The key point: B's CT does NOT depend on A's MT
   // It depends only on CT_cursor (which is ct_last_a)
   int64_t ct_b_start = ct_last_a + 33'333;
-  controller_->SetSegmentMapping(ct_b_start, 500'000'000);
+  controller_->BeginSegmentAbsolute(ct_b_start, 500'000'000);
 
   controller_->AdmitFrame(500'000'000, ct_out);
   int64_t ct_first_b = ct_out;
@@ -214,7 +214,7 @@ TEST_F(TimelineControllerTest, P8_T005_SegmentMappingIndependence) {
 
 TEST_F(TimelineControllerTest, P8_T006_LateFrameRejection) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
 
@@ -253,7 +253,7 @@ TEST_F(TimelineControllerTest, P8_T006_LateFrameRejection) {
 
 TEST_F(TimelineControllerTest, P8_T007_EarlyFrameRejection) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
 
@@ -276,7 +276,7 @@ TEST_F(TimelineControllerTest, P8_T007_EarlyFrameRejection) {
 
 TEST_F(TimelineControllerTest, P8_T008_BackpressureDoesNotSlowTimeline) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   // The TimelineController is frame-driven, so CT only advances when frames
   // are admitted. This test verifies that the controller correctly tracks
@@ -318,7 +318,7 @@ TEST_F(TimelineControllerTest, P8_T009_DeterministicCTAssignment) {
     timing::TimelineController ctrl1(clock1, config);
 
     ctrl1.StartSession();
-    ctrl1.SetSegmentMapping(0, 100'000);
+    ctrl1.BeginSegmentAbsolute(0, 100'000);
 
     int64_t ct = 0;
     for (int i = 0; i < 10; i++) {
@@ -336,7 +336,7 @@ TEST_F(TimelineControllerTest, P8_T009_DeterministicCTAssignment) {
     timing::TimelineController ctrl2(clock2, config);
 
     ctrl2.StartSession();
-    ctrl2.SetSegmentMapping(0, 100'000);  // Same mapping
+    ctrl2.BeginSegmentAbsolute(0, 100'000);  // Same mapping
 
     int64_t ct = 0;
     for (int i = 0; i < 10; i++) {
@@ -363,12 +363,12 @@ TEST_F(TimelineControllerTest, P8_T010_SegmentMappingSupersedes) {
   ASSERT_TRUE(controller_->StartSession());
 
   // Segment A
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
   int64_t ct_out = 0;
   controller_->AdmitFrame(33'333, ct_out);
 
   // Transition: new segment mapping
-  controller_->SetSegmentMapping(66'666, 5'000'000);
+  controller_->BeginSegmentAbsolute(66'666, 5'000'000);
 
   // Old mapping is gone; frames must use new mapping
   // A frame with MT=0 would map incorrectly with the new mapping
@@ -384,7 +384,7 @@ TEST_F(TimelineControllerTest, P8_T010_SegmentMappingSupersedes) {
 
 TEST_F(TimelineControllerTest, P8_T011_UnderrunPausesCT) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
 
@@ -444,7 +444,7 @@ TEST_F(TimelineControllerTest, MappingRequiredForAdmission) {
 
 TEST_F(TimelineControllerTest, CatchUpDetection) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
 
@@ -458,7 +458,7 @@ TEST_F(TimelineControllerTest, CatchUpDetection) {
 
 TEST_F(TimelineControllerTest, ShouldRestartOnExcessiveLag) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
   controller_->AdmitFrame(33'333, ct_out);
@@ -471,7 +471,7 @@ TEST_F(TimelineControllerTest, ShouldRestartOnExcessiveLag) {
 
 TEST_F(TimelineControllerTest, StatsTracking) {
   ASSERT_TRUE(controller_->StartSession());
-  controller_->SetSegmentMapping(0, 0);
+  controller_->BeginSegmentAbsolute(0, 0);
 
   int64_t ct_out = 0;
 
@@ -484,6 +484,143 @@ TEST_F(TimelineControllerTest, StatsTracking) {
   EXPECT_EQ(stats.frames_admitted, 3);
   EXPECT_EQ(stats.frames_rejected_late, 0);
   EXPECT_EQ(stats.frames_rejected_early, 0);
+}
+
+// ============================================================================
+// INV-P8-SWITCH-002: BeginSegmentFromPreview locks both CT and MT from first frame
+// ============================================================================
+
+TEST_F(TimelineControllerTest, BeginSegmentFromPreview_LocksBothCTAndMT) {
+  ASSERT_TRUE(controller_->StartSession());
+
+  // Simulate first segment running for a while
+  controller_->BeginSegmentAbsolute(0, 0);
+  int64_t ct_out = 0;
+  for (int i = 0; i < 100; i++) {
+    controller_->AdmitFrame((i + 1) * 33'333, ct_out);
+  }
+  int64_t ct_after_segment_a = controller_->GetCTCursor();
+  EXPECT_GT(ct_after_segment_a, 3'000'000);  // Should be ~3.3s
+
+  // Now switch segments: BeginSegmentFromPreview makes BOTH CT and MT pending
+  auto pending = controller_->BeginSegmentFromPreview();
+  EXPECT_TRUE(controller_->IsMappingPending());
+  EXPECT_EQ(pending.mode, timing::PendingSegmentMode::AwaitPreviewFrame);
+
+  auto pending_mode = controller_->GetPendingMode();
+  ASSERT_TRUE(pending_mode.has_value());
+  EXPECT_EQ(*pending_mode, timing::PendingSegmentMode::AwaitPreviewFrame);
+
+  // Simulate wall-clock advancing (preview pipeline latency)
+  clock_->AdvanceUs(100'000);  // 100ms passes
+
+  // First preview frame arrives with MT from the new asset (e.g., seek offset)
+  int64_t preview_mt = 4'300'000;  // 4.3s into the new asset
+  auto result = controller_->AdmitFrame(preview_mt, ct_out);
+
+  EXPECT_EQ(result, timing::AdmissionResult::ADMITTED);
+  EXPECT_FALSE(controller_->IsMappingPending());
+  EXPECT_FALSE(controller_->GetPendingMode().has_value());
+
+  // Verify the mapping was locked correctly:
+  // CT_start should be the wall-clock position when the frame arrived (not ct_after_segment_a)
+  // MT_start should be the first frame's MT (4.3s)
+  auto mapping = controller_->GetSegmentMapping();
+  ASSERT_TRUE(mapping.has_value());
+  EXPECT_EQ(mapping->mt_segment_start_us, preview_mt);
+
+  // The CT_start should reflect the wall-clock-derived position, not the old ct_cursor
+  // clock was at 1'000'000'000'000 initially, epoch was set to that value
+  // clock advanced 100'000, so CT_start should be ~100'000 (not ~3'333'300)
+  // Note: The exact value depends on session epoch, but it should NOT be ct_after_segment_a
+  EXPECT_NE(mapping->ct_segment_start_us, ct_after_segment_a + 33'333);
+
+  // Subsequent frames should be admitted without issue
+  result = controller_->AdmitFrame(preview_mt + 33'333, ct_out);
+  EXPECT_EQ(result, timing::AdmissionResult::ADMITTED);
+
+  result = controller_->AdmitFrame(preview_mt + 66'666, ct_out);
+  EXPECT_EQ(result, timing::AdmissionResult::ADMITTED);
+}
+
+TEST_F(TimelineControllerTest, BeginSegmentFromPreview_PreventsMismatchRejection) {
+  ASSERT_TRUE(controller_->StartSession());
+
+  // Simulate first segment running for a while
+  controller_->BeginSegmentAbsolute(0, 0);
+  int64_t ct_out = 0;
+  for (int i = 0; i < 100; i++) {
+    controller_->AdmitFrame((i + 1) * 33'333, ct_out);
+  }
+  // CT is now at ~3.3s
+
+  // The OLD approach (BeginSegment with preset CT) would cause this:
+  // CT_start = ct_cursor + frame_period = ~3.33s + 0.033s = ~3.37s
+  // Then if wall clock advances and preview frames arrive later,
+  // the computed CT might not match expectations.
+
+  // The NEW approach (BeginSegmentFromPreview) defers CT to arrival time:
+  controller_->BeginSegmentFromPreview();
+
+  // Advance clock significantly (simulating slow preview startup)
+  clock_->AdvanceUs(500'000);  // 500ms
+
+  // Preview frame with MT = 4.3s (seek offset into new asset)
+  int64_t preview_mt = 4'300'000;
+  auto result = controller_->AdmitFrame(preview_mt, ct_out);
+
+  // Should be admitted (not rejected as "early" or "late")
+  EXPECT_EQ(result, timing::AdmissionResult::ADMITTED);
+
+  // Verify subsequent frames are also admitted correctly
+  for (int i = 1; i < 10; i++) {
+    result = controller_->AdmitFrame(preview_mt + i * 33'333, ct_out);
+    EXPECT_EQ(result, timing::AdmissionResult::ADMITTED);
+  }
+}
+
+// ============================================================================
+// Type-safety test: Verify dangerous partial state is unrepresentable
+// ============================================================================
+
+TEST_F(TimelineControllerTest, TypeSafety_NoPartialSpecification) {
+  ASSERT_TRUE(controller_->StartSession());
+
+  // The type-safe API provides exactly two ways to begin a segment:
+  // 1. BeginSegmentFromPreview() - both CT and MT locked from first frame
+  // 2. BeginSegmentAbsolute(ct, mt) - both provided upfront
+
+  // There is NO way to:
+  // - Set CT without MT
+  // - Set MT without CT
+  // - Carry forward CT from a previous segment while getting MT from preview
+
+  // Test BeginSegmentAbsolute requires both values
+  auto pending1 = controller_->BeginSegmentAbsolute(0, 1000);
+  EXPECT_FALSE(controller_->IsMappingPending());  // Already resolved
+  auto mapping1 = controller_->GetSegmentMapping();
+  ASSERT_TRUE(mapping1.has_value());
+  EXPECT_EQ(mapping1->ct_segment_start_us, 0);
+  EXPECT_EQ(mapping1->mt_segment_start_us, 1000);
+
+  // Test BeginSegmentFromPreview defers both
+  auto pending2 = controller_->BeginSegmentFromPreview();
+  EXPECT_TRUE(controller_->IsMappingPending());
+  EXPECT_EQ(pending2.mode, timing::PendingSegmentMode::AwaitPreviewFrame);
+
+  // Before first frame, no mapping
+  EXPECT_FALSE(controller_->GetSegmentMapping().has_value());
+
+  // After first frame, both are set together
+  int64_t ct_out = 0;
+  controller_->AdmitFrame(5000, ct_out);
+  EXPECT_FALSE(controller_->IsMappingPending());
+
+  auto mapping2 = controller_->GetSegmentMapping();
+  ASSERT_TRUE(mapping2.has_value());
+  // Both CT and MT are now set - there was never a state where one was set and not the other
+  EXPECT_GE(mapping2->ct_segment_start_us, 0);
+  EXPECT_EQ(mapping2->mt_segment_start_us, 5000);
 }
 
 }  // namespace retrovue::tests

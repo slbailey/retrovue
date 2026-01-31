@@ -51,11 +51,23 @@ class OutputBus;
 
 namespace retrovue::runtime {
 
+// Phase 8: Typed result codes matching proto ResultCode enum
+// Allows Core to distinguish between transient states and errors.
+enum class ResultCode {
+  kUnspecified = 0,        // Default/unknown
+  kOk = 1,                 // Operation succeeded
+  kNotReady = 2,           // Transient: switch armed, awaiting readiness
+  kRejectedBusy = 3,       // Operation forbidden in current state
+  kProtocolViolation = 4,  // Caller violated the protocol (e.g., SwitchToLive without LoadPreview)
+  kFailed = 5              // Real error: operation failed permanently
+};
+
 // Domain result structure
 struct EngineResult {
   bool success;
   std::string message;
   std::string error_code;  // Structured error code for retry logic (e.g., "NOT_READY_VIDEO")
+  ResultCode result_code = ResultCode::kUnspecified;  // Phase 8: Typed result code
 
   // For LoadPreview
   bool shadow_decode_started = false;

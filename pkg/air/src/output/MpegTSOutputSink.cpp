@@ -63,15 +63,26 @@ bool MpegTSOutputSink::Start() {
     return false;
   }
 
-  // P8-IO-001: Enable prebuffering to accumulate initial data before writing to socket
-  // This ensures VLC/clients see immediate data when they connect.
-  // Target: ~64KB (enough for MPEG-TS header + initial video/audio packets)
-  prebuffer_target_bytes_ = 64 * 1024;
-  prebuffering_.store(true, std::memory_order_release);
-
-  // P8-IO-001: Disable output timing during prebuffer phase to allow rapid filling
-  encoder_->SetOutputTimingEnabled(false);
-  std::cout << "[MpegTSOutputSink] Prebuffering enabled, target=" << prebuffer_target_bytes_ << " bytes" << std::endl;
+  // ==========================================================================
+  // INV-P8-IO-UDS-001: UDS must never block output on prebuffer thresholds
+  // ==========================================================================
+  // UDS is low-latency and local; prebuffer thresholds can prevent first bytes
+  // from ever reaching the client if encoder/header gating stalls.
+  //
+  // Practical enforcement:
+  // - Default prebuffer OFF for UDS
+  // - If ever re-enabled, MUST flush on timeout (250ms) and/or client connect
+  // - Never use thresholds > 9.4KB (50 TS packets) for any transport
+  //
+  // Phase 8 issues that make large prebuffers dangerous:
+  // - Short clips and frequent producer switches reset prebuffer
+  // - Header deferral (INV-P8-AUDIO-PRIME-001) delays first bytes
+  // - CT resets on segment boundaries invalidate buffered data
+  // ==========================================================================
+  prebuffer_target_bytes_ = 0;
+  prebuffering_.store(false, std::memory_order_release);
+  encoder_->SetOutputTimingEnabled(true);  // Enable timing immediately
+  std::cout << "[MpegTSOutputSink] Prebuffering DISABLED (INV-P8-IO-UDS-001)" << std::endl;
 
   // Start mux thread
   stop_requested_.store(false, std::memory_order_release);
@@ -164,10 +175,15 @@ void MpegTSOutputSink::MuxLoop() {
   static int dequeue_success = 0;
   static int encode_calls = 0;
 
-  // INV-P8-AUDIO-CT-001: Audio PTS must be derived from CT, not raw media time
-  // Track CT-based audio timeline to keep audio in sync with video
-  int64_t audio_ct_us = 0;  // CT-based audio PTS in microseconds
-  bool audio_ct_initialized = false;
+  // =========================================================================
+  // INV-P9-PCR-AUDIO-MASTER: Audio owns PCR at startup
+  // =========================================================================
+  // Audio PTS MUST start at 0. Mux MUST NOT initialize audio timing from video.
+  // If no real audio is available, injected silence (starting at 0) is
+  // authoritative. Video is encoded with its own PTS but audio is PCR master.
+  // =========================================================================
+  int64_t audio_ct_us = 0;  // Audio CT starts at 0, NOT derived from video
+  std::cout << "[MpegTSOutputSink] INV-P9-PCR-AUDIO-MASTER: audio_ct_us initialized to 0 (audio owns PCR)" << std::endl;
 
   while (!stop_requested_.load(std::memory_order_acquire) && fd_ >= 0) {
     bool processed_any = false;
@@ -182,12 +198,8 @@ void MpegTSOutputSink::MuxLoop() {
                   << " (loop=" << loop_count << ")" << std::endl;
       }
 
-      // INV-P8-AUDIO-CT-001: Initialize audio CT from first video frame
-      if (!audio_ct_initialized) {
-        audio_ct_us = frame.metadata.pts;
-        audio_ct_initialized = true;
-        std::cout << "[MpegTSOutputSink] Audio CT initialized from video: " << audio_ct_us << "us" << std::endl;
-      }
+      // INV-P9-PCR-AUDIO-MASTER: Video uses its own PTS, audio owns PCR
+      // Do NOT initialize audio CT from video - audio starts at 0
 
       // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;

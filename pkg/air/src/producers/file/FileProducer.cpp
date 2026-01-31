@@ -69,9 +69,9 @@ namespace retrovue::producers::file
         eof_reached_(false),
         eof_event_emitted_(false),
         time_base_(0.0),
-        last_pts_us_(0),
-        last_decoded_frame_pts_us_(0),
-        first_frame_pts_us_(0),
+        last_mt_pts_us_(0),
+        last_decoded_mt_pts_us_(0),
+        first_mt_pts_us_(0),
         playback_start_utc_us_(0),
         segment_end_pts_us_(-1),
         audio_codec_ctx_(nullptr),
@@ -86,6 +86,7 @@ namespace retrovue::producers::file
         next_stub_deadline_utc_(0),
         shadow_decode_mode_(false),
         shadow_decode_ready_(false),
+        cached_frame_flushed_(false),
         pts_offset_us_(0),
         pts_aligned_(false),
         aspect_policy_(runtime::AspectPolicy::Preserve),
@@ -99,8 +100,10 @@ namespace retrovue::producers::file
         frames_since_producer_start_(0),
         audio_skip_count_(0),
         audio_drop_count_(0),
+        audio_mapping_gate_drop_count_(0),
         audio_ungated_logged_(false),
-        scale_diag_count_(0)
+        scale_diag_count_(0),
+        mapping_locked_this_iteration_(false)
   {
   }
 
@@ -144,10 +147,10 @@ namespace retrovue::producers::file
     next_stub_deadline_utc_.store(0, std::memory_order_release);
     eof_reached_ = false;
     eof_event_emitted_ = false;
-    last_pts_us_ = 0;
-    last_decoded_frame_pts_us_ = 0;
+    last_mt_pts_us_ = 0;
+    last_decoded_mt_pts_us_ = 0;
     last_audio_pts_us_ = 0;
-    first_frame_pts_us_ = 0;
+    first_mt_pts_us_ = 0;
     playback_start_utc_us_ = 0;
     segment_end_pts_us_ = -1;
 
@@ -942,7 +945,7 @@ namespace retrovue::producers::file
     // Phase 6 (INV-P6-005/INV-P6-ALIGN-FIRST-FRAME): Log first emitted frame accuracy after seek
     // SCOPED by Phase 8: Only log in legacy/shadow mode. In Phase 8 with TimelineController,
     // "first frame accuracy" is meaningless - TimelineController assigns CT, not producer.
-    if (phase6_gating_active && effective_seek_target_us_ > 0 && first_frame_pts_us_ == 0)
+    if (phase6_gating_active && effective_seek_target_us_ > 0 && first_mt_pts_us_ == 0)
     {
       int64_t accuracy_us = base_pts_us - effective_seek_target_us_;
       std::cout << "[FileProducer] Phase 6: First emitted video frame - target_pts=" << effective_seek_target_us_
@@ -959,13 +962,55 @@ namespace retrovue::producers::file
     // Phase 8.6: no duration-based cutoff. Run until natural EOF (decoder returns no more frames).
     // segment_end_pts_us_ is not used to stop; asset duration may be logged but must not force stop.
 
+    // =========================================================================
+    // INV-P8-SHADOW-PACE: Shadow mode caches first frame, then waits IN PLACE
+    // =========================================================================
+    // This MUST happen BEFORE the AdmitFrame decision so that when shadow is
+    // disabled, the frame can call AdmitFrame and be pushed to buffer.
+    if (in_shadow_mode)
+    {
+      // Cache first frame if not already cached
+      {
+        std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
+        if (!cached_first_frame_)
+        {
+          cached_first_frame_ = std::make_unique<buffer::Frame>(output_frame);
+          shadow_decode_ready_.store(true, std::memory_order_release);
+          std::cout << "[FileProducer] Shadow decode: first frame cached, PTS="
+                    << base_pts_us << std::endl;
+          EmitEvent("ShadowDecodeReady", "");
+        }
+      }
+
+      // Wait IN PLACE until shadow is disabled - do NOT return/discard frame
+      // Also check teardown_requested_ to avoid hanging during StopChannel
+      while (shadow_decode_mode_.load(std::memory_order_acquire) &&
+             !stop_requested_.load(std::memory_order_acquire) &&
+             !teardown_requested_.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+
+      // INV-P8-SHADOW-FLUSH: Check if frame was already flushed by PlayoutEngine
+      if (cached_frame_flushed_.load(std::memory_order_acquire)) {
+        std::cout << "[FileProducer] Shadow disabled, frame already flushed by SwitchToLive - "
+                  << "skipping to next frame" << std::endl;
+        // Frame was already pushed by FlushCachedFrameToBuffer(), skip this frame
+        return true;  // Return success to continue producing next frame
+      }
+
+      // Shadow disabled - update local variable so this frame goes through AdmitFrame
+      in_shadow_mode = false;
+      std::cout << "[FileProducer] Shadow disabled, processing frame through AdmitFrame"
+                << std::endl;
+    }
+
     // Phase 8: Unified Timeline Authority
     // Three paths for PTS/CT assignment:
     // 1. Shadow mode: emit raw MT only (time-blind, no CT assignment)
     // 2. TimelineController available: use it for CT assignment
     // 3. Legacy (no TimelineController): use pts_offset_us_
     int64_t frame_pts_us;
-    // Note: in_shadow_mode already loaded above for Phase 6 gating scope check
+    // Note: in_shadow_mode may have been updated above if shadow was disabled
 
     // Phase 8: CRITICAL - Check write barrier BEFORE touching TimelineController.
     // If write barrier is set, this producer is being phased out during a segment
@@ -973,7 +1018,11 @@ namespace retrovue::producers::file
     // segment's mapping with the wrong MT (from the old producer).
     if (writes_disabled_.load(std::memory_order_acquire))
     {
-      // Silently drop - producer is being phased out
+      // INV-P8-WRITE-BARRIER-DIAG: Log when write barrier triggers.
+      // This should ONLY happen for the OLD live producer during switch, never for preview.
+      // If this fires for preview producer, it indicates a bug in switch orchestration.
+      std::cout << "[FileProducer] INV-P8-WRITE-BARRIER: Frame dropped (writes_disabled), "
+                << "MT=" << base_pts_us << "us, asset=" << config_.asset_uri << std::endl;
       return true;
     }
 
@@ -988,6 +1037,10 @@ namespace retrovue::producers::file
     else if (timeline_controller_)
     {
       // Phase 8: TimelineController assigns CT
+      // INV-P8-AUDIO-GATE Fix #2: Track if this AdmitFrame call locks the mapping.
+      // If mapping was pending and becomes locked, we MUST ensure audio flows ungated.
+      bool was_pending = timeline_controller_->IsMappingPending();
+
       int64_t assigned_ct_us = 0;
       timing::AdmissionResult result = timeline_controller_->AdmitFrame(base_pts_us, assigned_ct_us);
 
@@ -996,6 +1049,14 @@ namespace retrovue::producers::file
         case timing::AdmissionResult::ADMITTED:
           frame_pts_us = assigned_ct_us;
           output_frame.metadata.has_ct = true;  // Timeline-valid
+
+          // INV-P8-AUDIO-GATE Fix #2: If mapping just locked, set flag to override audio gating.
+          // This ensures audio for this iteration flows to buffer, not dropped.
+          if (was_pending && !timeline_controller_->IsMappingPending()) {
+            mapping_locked_this_iteration_ = true;
+            std::cout << "[FileProducer] INV-P8-AUDIO-GATE: Mapping locked this iteration, "
+                      << "audio will bypass gating" << std::endl;
+          }
           break;
 
         case timing::AdmissionResult::REJECTED_LATE:
@@ -1024,17 +1085,24 @@ namespace retrovue::producers::file
     }
 
     output_frame.metadata.pts = frame_pts_us;
-    last_decoded_frame_pts_us_ = frame_pts_us;
-    last_pts_us_ = frame_pts_us;
+    // CRITICAL: Store MT (base_pts_us), NOT CT (frame_pts_us)!
+    // These variables are used in AssembleFrame's monotonicity check which operates in MT domain.
+    // Storing CT here causes contamination: next frame's raw MT gets "corrected" to CT-based value.
+    last_decoded_mt_pts_us_ = base_pts_us;  // MT, not CT!
+    last_mt_pts_us_ = base_pts_us;  // MT, not CT!
 
     // Establish time mapping on first emitted frame (VIDEO_EPOCH_SET)
-    if (first_frame_pts_us_ == 0)
+    // CRITICAL: Use base_pts_us (MT), not frame_pts_us (CT)!
+    // frame_pts_us may be CT if TimelineController mapped it.
+    // Producer internal tracking must use MT to avoid double-mapping.
+    if (first_mt_pts_us_ == 0)
     {
-      first_frame_pts_us_ = frame_pts_us;
+      first_mt_pts_us_ = base_pts_us;  // MT, not CT!
 
       // Critical diagnostic: video epoch is now set, audio can start emitting
-      std::cout << "[FileProducer] VIDEO_EPOCH_SET first_video_pts_us=" << frame_pts_us
-                << " target_us=" << effective_seek_target_us_ << std::endl;
+      // Log MT (base_pts_us), not CT (frame_pts_us) - this is what we store
+      std::cout << "[FileProducer] VIDEO_EPOCH_SET first_mt_pts_us=" << base_pts_us
+                << " (CT=" << frame_pts_us << ") target_us=" << effective_seek_target_us_ << std::endl;
 
       // Phase 8: If TimelineController is active, it owns the epoch.
       // Producer is "time-blind" and should not set epoch.
@@ -1069,12 +1137,12 @@ namespace retrovue::producers::file
           //                                      = playback_start + (frame_pts - first_frame_pts)
           // So the first frame is due at playback_start, and subsequent frames are due
           // at playback_start + (their offset from first frame).
-          int64_t epoch_utc_us = playback_start_utc_us_ - first_frame_pts_us_;
+          int64_t epoch_utc_us = playback_start_utc_us_ - first_mt_pts_us_;
 
           // Phase 7: Use TrySetEpochOnce with LIVE role - if epoch already set, this is a no-op
           if (master_clock_->TrySetEpochOnce(epoch_utc_us, timing::MasterClock::EpochSetterRole::LIVE)) {
             std::cout << "[FileProducer] Clock epoch synchronized: playback_start="
-                      << playback_start_utc_us_ << "us, first_frame_pts=" << first_frame_pts_us_
+                      << playback_start_utc_us_ << "us, first_frame_pts=" << first_mt_pts_us_
                       << "us, epoch=" << epoch_utc_us << "us" << std::endl;
           } else {
             // Epoch was already set by another producer - read existing epoch
@@ -1088,28 +1156,13 @@ namespace retrovue::producers::file
       }
     }
 
-    // Shadow mode: cache first frame only, do NOT fill buffer yet.
-    // Buffer must be filled AFTER AlignPTS is called in SwitchToLive to ensure correct PTS.
-    // Phase 7: Epoch protection is via TrySetEpochOnce (PREVIEW role rejected).
-    // Note: in_shadow_mode was loaded earlier for Phase 8 TimelineController check
-    if (in_shadow_mode)
-    {
-      // Cache the first frame for potential use
-      std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
-      if (!cached_first_frame_)
-      {
-        cached_first_frame_ = std::make_unique<buffer::Frame>(output_frame);
-        shadow_decode_ready_.store(true, std::memory_order_release);
-        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS="
-                  << frame_pts_us << std::endl;
-        EmitEvent("ShadowDecodeReady", "");
-      }
-      // Do NOT fill buffer in shadow mode - wait for AlignPTS before filling
-      return true;
-    }
+    // INV-P8-SHADOW-PACE: Shadow handling now happens earlier (before AdmitFrame decision)
+    // so that the cached frame goes through AdmitFrame when shadow is disabled.
 
-    // Calculate target UTC time for this frame: playback_start + (frame_pts - first_frame_pts)
-    int64_t frame_offset_us = frame_pts_us - first_frame_pts_us_;
+    // Calculate target UTC time for this frame: playback_start + (frame_MT - first_frame_MT)
+    // CRITICAL: Use base_pts_us (MT), NOT frame_pts_us (which may be CT after AdmitFrame)
+    // Pacing offset must be in MT domain - it represents relative time within the media file.
+    int64_t frame_offset_us = base_pts_us - first_mt_pts_us_;
     int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
 
     // Frame decoded and ready to push
@@ -1119,6 +1172,11 @@ namespace retrovue::producers::file
     {
       ReceiveAudioFrames();
     }
+
+    // INV-P8-AUDIO-GATE Fix #2: Clear the flag after audio has been processed.
+    // The flag was set when AdmitFrame locked the mapping, and ensured audio
+    // for this iteration bypassed gating. Now reset for next iteration.
+    mapping_locked_this_iteration_ = false;
 
     // Wait until target UTC time before pushing (real-time pacing)
     if (master_clock_)
@@ -1325,13 +1383,34 @@ namespace retrovue::producers::file
     // Convert to microseconds
     int64_t pts_us = static_cast<int64_t>(pts * time_base_ * kMicrosecondsPerSecond);
     int64_t dts_us = static_cast<int64_t>(dts * time_base_ * kMicrosecondsPerSecond);
+    const int64_t raw_mt_pts_us = pts_us;  // Capture raw decoder MT before any correction
 
-    // Ensure PTS monotonicity
-    if (pts_us <= last_pts_us_)
+    // Ensure PTS monotonicity (operating in MT domain)
+    // ASSERTION GUARD: last_mt_pts_us_ must be MT, not CT. CT values in a running channel
+    // are much larger (seconds-to-hours in channel timeline). If last_mt_pts_us_ exceeds
+    // a reasonable media duration bound, we have MT/CT contamination.
+    constexpr int64_t kMaxReasonableMediaDurationUs = 4 * 3600 * 1000000LL;  // 4 hours
+    if (last_mt_pts_us_ > kMaxReasonableMediaDurationUs)
     {
-      pts_us = last_pts_us_ + frame_interval_us_;
+      std::cerr << "[FileProducer] BUG: last_mt_pts_us_=" << last_mt_pts_us_
+                << "us exceeds max reasonable MT (" << kMaxReasonableMediaDurationUs
+                << "us). This indicates MT/CT contamination!" << std::endl;
     }
-    last_pts_us_ = pts_us;
+    if (pts_us <= last_mt_pts_us_)
+    {
+      pts_us = last_mt_pts_us_ + frame_interval_us_;
+    }
+    // DOMAIN MIXING DETECTION: If raw decoder MT is small (<1s) but corrected pts_us
+    // is large (>1s), we're mixing MT with CT. This catches the case where last_mt_pts_us_
+    // was contaminated with CT.
+    constexpr int64_t kSmallMT = 1000000LL;  // 1 second
+    if (raw_mt_pts_us < kSmallMT && pts_us > kSmallMT * 10)
+    {
+      std::cerr << "[FileProducer] BUG: Domain mixing detected! raw_mt=" << raw_mt_pts_us
+                << "us, corrected_pts=" << pts_us << "us, last_mt_pts_us_=" << last_mt_pts_us_
+                << "us. CT was injected into MT state!" << std::endl;
+    }
+    last_mt_pts_us_ = pts_us;
 
     // Ensure DTS <= PTS
     if (dts_us > pts_us)
@@ -1433,29 +1512,46 @@ namespace retrovue::producers::file
     frame.metadata.duration = 1.0 / config_.target_fps;
     frame.metadata.asset_uri = config_.asset_uri;
 
-    // Update last_pts_us_ for PTS tracking
-    last_pts_us_ = frame.metadata.pts;
+    // Update last_mt_pts_us_ for PTS tracking (use MT, not offset-adjusted PTS)
+    last_mt_pts_us_ = base_pts;  // MT, not CT!
 
     // Generate YUV420 planar data (stub: all zeros for now)
     size_t frame_size = static_cast<size_t>(config_.target_width * config_.target_height * 1.5);
     frame.data.resize(frame_size, 0);
 
-    // Check if in shadow decode mode
-    bool shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
-    if (shadow_mode)
+    // INV-P8-SHADOW-PACE: Shadow mode caches first frame, then waits IN PLACE
+    bool in_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
+    if (in_shadow_mode)
     {
-      // Shadow mode: cache first frame, don't push to buffer
-      std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
-      if (!cached_first_frame_)
+      // Shadow mode: cache first frame
       {
-        cached_first_frame_ = std::make_unique<buffer::Frame>(frame);
-        shadow_decode_ready_.store(true, std::memory_order_release);
-        std::cout << "[FileProducer] Shadow decode: first frame cached, PTS="
-                  << frame.metadata.pts << std::endl;
-        EmitEvent("ShadowDecodeReady", "");
+        std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
+        if (!cached_first_frame_)
+        {
+          cached_first_frame_ = std::make_unique<buffer::Frame>(frame);
+          shadow_decode_ready_.store(true, std::memory_order_release);
+          std::cout << "[FileProducer] Shadow decode (stub): first frame cached, PTS="
+                    << frame.metadata.pts << std::endl;
+          EmitEvent("ShadowDecodeReady", "");
+        }
       }
-      // Don't push to buffer in shadow mode - wait for AlignPTS
-      return;
+
+      // Wait IN PLACE until shadow is disabled
+      // Also check teardown_requested_ to avoid hanging during StopChannel
+      while (shadow_decode_mode_.load(std::memory_order_acquire) &&
+             !stop_requested_.load(std::memory_order_acquire) &&
+             !teardown_requested_.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+
+      // INV-P8-SHADOW-FLUSH: Check if frame was already flushed
+      if (cached_frame_flushed_.load(std::memory_order_acquire)) {
+        std::cout << "[FileProducer] Shadow disabled (stub), frame already flushed" << std::endl;
+        return;  // Frame was already pushed by FlushCachedFrameToBuffer
+      }
+
+      in_shadow_mode = false;
+      std::cout << "[FileProducer] Shadow disabled (stub), processing frame" << std::endl;
     }
 
     // Phase 7: Check write barrier before pushing
@@ -1495,18 +1591,91 @@ namespace retrovue::producers::file
     shadow_decode_mode_.store(enabled, std::memory_order_release);
     if (!enabled)
     {
-      // Exiting shadow mode - clear cached frame
-      std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
-      cached_first_frame_.reset();
+      // INV-P8-SHADOW-FLUSH: Do NOT reset cached_first_frame_ here.
+      // It will be handled by FlushCachedFrameToBuffer() or the producer thread.
+      // Just clear the ready flag.
       shadow_decode_ready_.store(false, std::memory_order_release);
     }
     else
     {
-      // Entering shadow mode - reset readiness state
+      // Entering shadow mode - reset ALL state
       std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
       shadow_decode_ready_.store(false, std::memory_order_release);
       cached_first_frame_.reset();
+      cached_frame_flushed_.store(false, std::memory_order_release);
     }
+  }
+
+  bool FileProducer::FlushCachedFrameToBuffer()
+  {
+    // INV-P8-SHADOW-FLUSH: Push cached shadow frame to buffer immediately.
+    // This is called by PlayoutEngine after SetShadowDecodeMode(false) to ensure
+    // the buffer has frames for readiness check without race condition.
+    //
+    // The frame goes through AdmitFrame for proper CT assignment (which locks
+    // the segment mapping on first frame per INV-P8-SWITCH-002).
+
+    std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
+
+    if (!cached_first_frame_) {
+      std::cout << "[FileProducer] FlushCachedFrameToBuffer: no cached frame" << std::endl;
+      return false;
+    }
+
+    buffer::Frame& frame = *cached_first_frame_;
+    int64_t media_time_us = frame.metadata.pts;  // This is MT (raw media time from shadow)
+
+    if (timeline_controller_) {
+      int64_t ct_us = 0;
+      auto result = timeline_controller_->AdmitFrame(media_time_us, ct_us);
+
+      if (result == timing::AdmissionResult::ADMITTED) {
+        frame.metadata.pts = ct_us;
+        frame.metadata.has_ct = true;
+
+        if (output_buffer_.Push(frame)) {
+          frames_produced_.fetch_add(1, std::memory_order_relaxed);
+
+          // CRITICAL: Set first_mt_pts_us_ to MT (not CT!) so the producer thread
+          // knows the first frame was already processed and doesn't re-establish epoch.
+          // This prevents MT/CT contamination on subsequent frames.
+          if (first_mt_pts_us_ == 0) {
+            first_mt_pts_us_ = media_time_us;  // MT, not CT!
+            std::cout << "[FileProducer] INV-P8-SHADOW-FLUSH: Set first_frame_pts_us=" << media_time_us
+                      << "us (MT) to prevent epoch re-establishment" << std::endl;
+          }
+
+          std::cout << "[FileProducer] INV-P8-SHADOW-FLUSH: Cached frame flushed to buffer, "
+                    << "MT=" << media_time_us << "us -> CT=" << ct_us << "us" << std::endl;
+          cached_first_frame_.reset();
+          cached_frame_flushed_.store(true, std::memory_order_release);
+          return true;
+        } else {
+          std::cerr << "[FileProducer] WARNING: FlushCachedFrameToBuffer buffer full" << std::endl;
+        }
+      } else {
+        std::cerr << "[FileProducer] WARNING: FlushCachedFrameToBuffer frame rejected by AdmitFrame: "
+                  << static_cast<int>(result) << std::endl;
+      }
+    } else {
+      // Legacy path: no TimelineController, just push with raw PTS
+      if (output_buffer_.Push(frame)) {
+        frames_produced_.fetch_add(1, std::memory_order_relaxed);
+
+        // Set first_mt_pts_us_ for legacy path too
+        if (first_mt_pts_us_ == 0) {
+          first_mt_pts_us_ = media_time_us;
+        }
+
+        std::cout << "[FileProducer] INV-P8-SHADOW-FLUSH: Cached frame flushed (legacy), PTS="
+                  << media_time_us << "us" << std::endl;
+        cached_first_frame_.reset();
+        cached_frame_flushed_.store(true, std::memory_order_release);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   bool FileProducer::IsShadowDecodeMode() const
@@ -1522,10 +1691,10 @@ namespace retrovue::producers::file
   int64_t FileProducer::GetNextPTS() const
   {
     // Return the PTS that the next frame will have
-    // This is last_pts_us_ + frame_interval_us_ + pts_offset_us_
-    // Note: last_pts_us_ is not atomic, but we're reading it in a const method
+    // This is last_mt_pts_us_ + frame_interval_us_ + pts_offset_us_
+    // Note: last_mt_pts_us_ is not atomic, but we're reading it in a const method
     // In practice, this is called from the state machine which holds a lock
-    int64_t next_pts = last_pts_us_;
+    int64_t next_pts = last_mt_pts_us_;
     if (next_pts == 0)
     {
       // First frame - use pts_offset_us_ as base
@@ -1543,7 +1712,7 @@ namespace retrovue::producers::file
     }
 
     // Calculate offset needed to align next frame to target_pts
-    int64_t next_pts_without_offset = last_pts_us_;
+    int64_t next_pts_without_offset = last_mt_pts_us_;
     if (next_pts_without_offset == 0)
     {
       // First frame - set offset directly
@@ -1561,6 +1730,14 @@ namespace retrovue::producers::file
   bool FileProducer::IsPTSAligned() const
   {
     return pts_aligned_.load(std::memory_order_acquire);
+  }
+
+  bool FileProducer::IsEOF() const
+  {
+    // Phase 8 (INV-P8-EOF-SWITCH): Returns true when the producer has exhausted
+    // all frames from the source. Used to detect when live producer reaches EOF
+    // so that switch-to-live can complete immediately (bypass buffer depth checks).
+    return eof_reached_;
   }
 
   // Phase 8.9: Receive audio frames that were already sent to the decoder
@@ -1675,7 +1852,7 @@ namespace retrovue::producers::file
         {
           // Skip audio emission if video epoch not yet established
           // This allows video decode loop to continue until video emits
-          if (first_frame_pts_us_ == 0)
+          if (first_mt_pts_us_ == 0)
           {
             // Log every 100 skips to show progress without spam
             audio_skip_count_++;
@@ -1693,14 +1870,15 @@ namespace retrovue::producers::file
           if (!audio_ungated_logged_)
           {
             std::cout << "[FileProducer] AUDIO_UNGATED first_audio_pts_us=" << base_pts_us
-                      << " aligned_to_video_pts_us=" << first_frame_pts_us_ << std::endl;
+                      << " aligned_to_video_pts_us=" << first_mt_pts_us_ << std::endl;
             audio_ungated_logged_ = true;
           }
 
           // For FAKE clocks (tests only): clock-gate audio to maintain determinism
           if (master_clock_->is_fake())
           {
-            int64_t frame_offset_us = output_audio_frame.pts_us - first_frame_pts_us_;
+            // Use base_pts_us (MT), NOT output_audio_frame.pts_us (has offset/CT mapping)
+            int64_t frame_offset_us = base_pts_us - first_mt_pts_us_;
             int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
 
             // Busy-wait for fake clock to advance (tests only)
@@ -1714,11 +1892,54 @@ namespace retrovue::producers::file
           // Buffer backpressure and downstream encoder will pace output
         }
 
+        // =======================================================================
+        // Phase 8: Gate audio on segment mapping lock (INV-P8-AV-SYNC)
+        // =======================================================================
+        // Audio must NOT advance ahead of video during preview/shadow mode.
+        // Until the segment mapping is LOCKED (first video frame admitted),
+        // audio frames must be dropped to prevent A/V desync at switch time.
+        //
+        // Why this matters:
+        // - Video goes through TimelineController.AdmitFrame() which gates on mapping
+        // - Audio was free-running, filling buffers while video waited for mapping
+        // - This caused audio to be "too far in the future" when video finally locked
+        // - Result: A/V desync, silent output, or stalled encoder after switch
+        //
+        // The fix: Drop audio in two cases:
+        // INV-P8-AUDIO-GATE: Only gate audio while in shadow mode.
+        // Previously, audio was also gated while IsMappingPending() was true, but this
+        // caused a readiness starvation loop:
+        //   - Mapping can't clear until video calls AdmitFrame()
+        //   - Audio gated while mapping pending → audio_depth stays 0
+        //   - Readiness requires audio_depth >= 5 → never passes
+        //   - SwitchToLive polls forever
+        //
+        // Fix: Allow audio to flow to buffer once shadow mode is disabled, even if
+        // mapping is still pending. The first video frame will lock the mapping,
+        // and audio will already be accumulating in the buffer for readiness.
+        //
+        // INV-P8-AUDIO-GATE Fix #2: If mapping locked this iteration, bypass gating entirely.
+        // This guarantees audio flows on the same iteration where video locks mapping.
+        bool audio_should_be_gated = shadow_decode_mode_.load(std::memory_order_acquire);
+        if (mapping_locked_this_iteration_) {
+          audio_should_be_gated = false;  // Override: mapping just locked, audio must flow
+        }
+        if (audio_should_be_gated) {
+          audio_mapping_gate_drop_count_++;
+          if (audio_mapping_gate_drop_count_ <= 5 || audio_mapping_gate_drop_count_ % 100 == 0) {
+            std::cout << "[FileProducer] AUDIO_GATED #" << audio_mapping_gate_drop_count_
+                      << " - shadow mode active (dropping audio until shadow disabled)"
+                      << std::endl;
+          }
+          av_frame_unref(audio_frame_);
+          continue;  // Drop this audio frame, continue decoding
+        }
+
         // Push to buffer with backpressure (block until space available)
         // Per-instance counters ensure accurate tracking per producer
         audio_frame_count_++;
         frames_since_producer_start_++;
-        
+
         // Always log first 50 frames after producer start, then every 100
         bool should_log = (frames_since_producer_start_ <= 50) || (frames_since_producer_start_ % 100 == 0);
 
@@ -1728,9 +1949,14 @@ namespace retrovue::producers::file
         }
 
         // Phase 6: Blocking push with backpressure - wait for space when buffer full
+        // INV-P9-WRITE-BARRIER-SYMMETRIC: Also check writes_disabled_ in retry loop.
+        // Without this, audio frames already in the retry loop when SetWriteBarrier()
+        // is called would continue retrying and eventually push, while video frames
+        // are correctly dropped. This causes A/V desync during switch.
         bool pushed = false;
         int retry_count = 0;
-        while (!pushed && !stop_requested_.load(std::memory_order_acquire))
+        while (!pushed && !stop_requested_.load(std::memory_order_acquire) &&
+               !writes_disabled_.load(std::memory_order_acquire))
         {
           if (output_buffer_.PushAudioFrame(output_audio_frame))
           {

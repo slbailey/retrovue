@@ -224,6 +224,39 @@ void ProgramOutput::RenderLoop() {
 
     buffer::Frame frame;
     if (!current_buffer->Pop(frame)) {
+      // =========================================================================
+      // INV-P9-B: Output Liveness - emit ready audio even when video is stalled
+      // =========================================================================
+      // A frame whose CT has arrived must eventually be emitted (or dropped).
+      // Even if video buffer is empty, we must process any audio frames whose
+      // CT has arrived. Without this, audio would be stuck waiting for video.
+      // =========================================================================
+      while (true) {
+        const buffer::AudioFrame* peeked = current_buffer->PeekAudioFrame();
+        if (!peeked) break;
+
+        if (clock_) {
+          const int64_t audio_deadline_utc = clock_->scheduled_to_utc_us(peeked->pts_us);
+          const int64_t now_utc = clock_->now_utc_us();
+          if (audio_deadline_utc > now_utc) {
+            break;  // Audio is in the future - hold for next iteration
+          }
+        }
+
+        buffer::AudioFrame audio_frame;
+        if (!current_buffer->PopAudioFrame(audio_frame)) break;
+
+        std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
+        if (output_bus_) {
+          output_bus_->RouteAudio(audio_frame);
+        } else {
+          std::lock_guard<std::mutex> lock(audio_side_sink_mutex_);
+          if (audio_side_sink_) {
+            audio_side_sink_(audio_frame);
+          }
+        }
+      }
+
       WaitForMicros(clock_, kEmptyBufferBackoffUs, &stop_requested_);
       stats_.frames_skipped++;
       continue;
@@ -280,11 +313,42 @@ void ProgramOutput::RenderLoop() {
       }
     }
 
+    // =========================================================================
+    // INV-P9-OUTPUT-CT-GATE: No frame emitted to sink before its CT
+    // =========================================================================
+    // No audio or video frame may be emitted to any sink before its CT.
+    //
+    // Producers may decode early and buffers may fill early, but release to
+    // output must be gated by CT. This prevents "audio too fast" during switches
+    // where audio was decoded ahead of video.
+    //
+    // Implementation: Peek audio frame, check if its CT is ready for release.
+    // Only pop and route if CT <= wall_clock_now.
+    // =========================================================================
     int audio_frames_consumed = 0;
+    int audio_frames_held = 0;
     while (true) {
+      // Peek to check CT authority before consuming
+      const buffer::AudioFrame* peeked = current_buffer->PeekAudioFrame();
+      if (!peeked) {
+        break;  // No more audio frames
+      }
+
+      // INV-P9-OUTPUT-CT-GATE: Gate audio release on CT vs wall-clock
+      if (clock_) {
+        const int64_t audio_deadline_utc = clock_->scheduled_to_utc_us(peeked->pts_us);
+        const int64_t now_utc = clock_->now_utc_us();
+        if (audio_deadline_utc > now_utc) {
+          // Audio frame is in the future - hold it for next iteration
+          audio_frames_held++;
+          break;
+        }
+      }
+
+      // CT is ready - pop and route
       buffer::AudioFrame audio_frame;
       if (!current_buffer->PopAudioFrame(audio_frame)) {
-        break;
+        break;  // Race condition - frame was consumed elsewhere
       }
       audio_frames_consumed++;
 

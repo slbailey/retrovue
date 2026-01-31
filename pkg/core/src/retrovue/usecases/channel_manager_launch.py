@@ -139,6 +139,15 @@ def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
             sys.modules.pop("playout_pb2", None)
 
 
+# Phase 8: ResultCode enum values (must match proto)
+RESULT_CODE_UNSPECIFIED = 0
+RESULT_CODE_OK = 1
+RESULT_CODE_NOT_READY = 2
+RESULT_CODE_REJECTED_BUSY = 3
+RESULT_CODE_PROTOCOL_VIOLATION = 4  # Caller violated the protocol
+RESULT_CODE_FAILED = 5
+
+
 def air_load_preview(
     grpc_addr: str,
     channel_id_int: int,
@@ -147,8 +156,14 @@ def air_load_preview(
     hard_stop_time_ms: int = 0,
     timeout_s: int = 90,
 ) -> bool:
-    """Call Air LoadPreview RPC. Returns success. Raises on connection/RPC error."""
+    """Call Air LoadPreview RPC. Returns success. Raises on connection/RPC error.
+
+    Phase 8: If result_code is REJECTED_BUSY, logs at INFO level (expected when
+    switch is armed) rather than WARNING.
+    """
     import grpc
+    import logging
+    logger = logging.getLogger(__name__)
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
     with grpc.insecure_channel(grpc_addr) as ch:
@@ -162,11 +177,23 @@ def air_load_preview(
             ),
             timeout=timeout_s,
         )
+
+    # Phase 8: Treat REJECTED_BUSY as expected (switch is armed, LoadPreview forbidden)
+    if not r.success:
+        result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
+        if result_code == RESULT_CODE_REJECTED_BUSY:
+            logger.info("LoadPreview rejected (switch armed): %s", r.message)
+        else:
+            logger.warning("LoadPreview failed: %s (result_code=%d)", r.message, result_code)
+
     return r.success
 
 
-def air_switch_to_live(grpc_addr: str, channel_id_int: int, timeout_s: int = 30) -> bool:
-    """Call Air SwitchToLive RPC. Returns success. Raises on connection/RPC error."""
+def air_switch_to_live(grpc_addr: str, channel_id_int: int, timeout_s: int = 30) -> tuple[bool, int]:
+    """Call Air SwitchToLive RPC. Returns (success, result_code). Raises on connection/RPC error.
+
+    Phase 8: Returns result_code so caller can distinguish NOT_READY (transient) from errors.
+    """
     import grpc
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
@@ -176,7 +203,8 @@ def air_switch_to_live(grpc_addr: str, channel_id_int: int, timeout_s: int = 30)
             playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
             timeout=timeout_s,
         )
-    return r.success
+    result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
+    return (r.success, result_code)
 
 
 def _launch_air_binary(
@@ -320,8 +348,9 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"AttachStream failed: {r.message}")
-        # Phase 7: SwitchToLive may return NOT_READY if preview buffer isn't filled yet.
+        # Phase 7/8: SwitchToLive may return NOT_READY if preview buffer isn't filled yet.
         # This is a transient state - retry with backoff until success or timeout.
+        # Phase 8: Use result_code for reliable detection (no message parsing).
         _SWITCH_RETRY_ATTEMPTS = 20  # ~10 seconds total with backoff
         _SWITCH_RETRY_BACKOFF_MS = 500  # Start at 500ms between retries
         switch_ok = False
@@ -346,8 +375,22 @@ def _launch_air_binary(
                 )
                 break
             last_message = r.message
-            # NOT_READY variants are expected during buffer fill - retry
-            if "not ready" in r.message.lower() or "NOT_READY" in r.message or "preparing" in r.message.lower():
+            # Phase 8: Use result_code for reliable retry detection
+            result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
+            is_retryable = (result_code == RESULT_CODE_NOT_READY)
+            # Fallback to message parsing for backward compatibility
+            if not is_retryable:
+                msg_lower = r.message.lower()
+                is_retryable = (
+                    "not ready" in msg_lower or
+                    "NOT_READY" in r.message or
+                    "preparing" in msg_lower or
+                    "transition started" in msg_lower or
+                    "waiting for preview" in msg_lower or
+                    "switch in progress" in msg_lower or
+                    "awaiting buffer" in msg_lower
+                )
+            if is_retryable:
                 if not first_not_ready_logged:
                     import logging
                     logging.getLogger(__name__).info(
