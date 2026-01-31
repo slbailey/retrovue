@@ -8,6 +8,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 Shared invariants (Python does not run ffmpeg, one logical stream per channel) are in the [Overview](Phase8-Overview.md).
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 Replace the 8.0 dummy byte source with **real MPEG-TS** produced by **Air** (via ffmpeg). Python continues to treat the stream as opaque bytes and only serves HTTP. Viewer validation is via VLC (manual) and automated TS packet checks.

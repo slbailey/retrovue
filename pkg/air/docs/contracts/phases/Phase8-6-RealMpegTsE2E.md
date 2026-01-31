@@ -4,6 +4,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 **Principle:** Remove the fake/dummy byte source (e.g. HELLO or stub TS). The attached stream carries **only** real MPEG-TS bytes produced by Air’s persistent mux (EncoderPipeline) so that end-to-end playback with VLC works.
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 - **No FakeTSMux / no dummy bytes:** The stream FD MUST NOT receive non–MPEG-TS data (e.g. `HELLO\n`) in the normal operating path. The only bytes written to the stream are valid MPEG-TS from the persistent mux after content is live.

@@ -4,6 +4,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 8 Overview](Ph
 
 **Principle:** Strict lifecycle ownership and **immediate** teardown when viewer count drops to zero. ProgramDirector is the authoritative owner; ChannelManager and Air activity exist only while there is at least one viewer. No background work, no reconnect attempts, and no ffmpeg/libav activity after teardown.
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 - **Authoritative ownership:** ProgramDirector owns channel lifecycle. ChannelManager and the associated producer (Air/ffmpeg) exist only when viewer count ≥ 1.

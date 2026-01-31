@@ -4,6 +4,10 @@ _Related: [Phase Model](../../contracts/PHASE_MODEL.md) · [Phase 6A Overview](P
 
 **Principle:** Prove the pipeline from Air byte output to HTTP viewer—first as raw plumbing, then with real MPEG-TS, then with segment control and switching. No media assumptions until 8.1; no switching until 8.3.
 
+## Document Role
+
+This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
+
 ## Purpose
 
 Phase 8 connects **Air** (C++ playout engine) to **Python** (ProgramDirector / HTTP) via a **stream transport**. Each sub-phase adds one layer: transport only → real TS from ffmpeg → segment control (seek/stop) → preview/live switch with TS continuity → fan-out and teardown. Phases 3–6 pay off in 8.2–8.3.
