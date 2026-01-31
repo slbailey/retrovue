@@ -1,62 +1,70 @@
-# Contracts index
+# Contracts — Authority Model
 
-This directory holds the **normative** contracts for the Air playout engine. Contracts define intended behavior, interfaces, and invariants. **If code disagrees with a contract, the code is wrong** — fix the code or change the contract explicitly; do not treat the contract as advisory.
-
-## Normative rule
-
-Contracts in this directory are **authoritative**. They specify what the system must guarantee. Implementation must conform. When implementation and contract conflict, the contract wins until the contract is updated through the normal change process.
+This document defines the **authority model** of the documentation in this directory. It describes which documents are normative and which are informational, and how they relate. It does not list specific files or implementation details; it establishes the conceptual layers and rules that govern the system.
 
 ---
 
-## Root-level contracts
+## Documentation Layers
 
-| Contract | Purpose |
-|----------|---------|
-| [AirArchitectureReference.md](AirArchitectureReference.md) | Canonical reference for first-class components, gRPC surface, ownership, and directory layout. |
-| [build.md](build.md) | Non-negotiable build and codec rules (paths, static FFmpeg, no LD_LIBRARY_PATH). |
+Documentation is organized into six layers. Lower-numbered layers take precedence over higher-numbered ones when there is conflict.
 
----
+### Layer 0 – Constitutional Laws
 
-## Architecture contracts
+**Non-negotiable system guarantees.** These are the top-level invariants that define what the system *is*: clock authority, timeline ownership, output liveness, format guarantees, and switching behavior. They cannot be relaxed without changing the fundamental character of the playout engine. No other document may contradict them.
 
-Index: [architecture/README.md](architecture/README.md)
+### Layer 1 – Semantic Contracts
 
-| Contract | Purpose |
-|----------|---------|
-| [architecture/PlayoutEngineContract.md](architecture/PlayoutEngineContract.md) | gRPC control plane, rule IDs, and metrics guarantees. |
-| [architecture/PlayoutControlContract.md](architecture/PlayoutControlContract.md) | RuntimePhase, bus switching, and valid sequencing. |
-| [architecture/PlayoutInstanceAndProgramFormatContract.md](architecture/PlayoutInstanceAndProgramFormatContract.md) | One instance per channel and ProgramFormat lifecycle. |
-| [architecture/OutputBusAndOutputSinkContract.md](architecture/OutputBusAndOutputSinkContract.md) | Output signal path, attach/detach, and sink lifecycle. |
-| [architecture/RendererContract.md](architecture/RendererContract.md) | ProgramOutput expectations and frame consumption. |
-| [architecture/FileProducerContract.md](architecture/FileProducerContract.md) | FileProducer segment params, decode, and frame contract. |
-| [architecture/MasterClockContract.md](architecture/MasterClockContract.md) | Timing authority and deadlines. |
-| [architecture/MetricsAndTimingContract.md](architecture/MetricsAndTimingContract.md) | Metrics schema and timing enforcement. |
-| [architecture/MetricsExportContract.md](architecture/MetricsExportContract.md) | Telemetry export contract. |
+**Correctness rules.** These specify truth about time, provenance, determinism, continuity, and output semantics. They define what “correct” means for timeline advancement, frame attribution, and emission guarantees. They are authoritative for behavioral correctness within their scope.
 
----
+### Layer 2 – Coordination Contracts
 
-## Phase contracts (Phase 8)
+**Concurrency, switching, backpressure.** These govern how components coordinate: write barriers, readiness, switching sequences, throttle and backpressure symmetry, and buffer equilibrium. They are authoritative for coordination and concurrency behavior within their scope.
 
-Index: [phases/README.md](phases/README.md)
+### Layer 3 – Narrative / Design History
 
-| Contract | Purpose |
-|----------|---------|
-| [phases/Phase8-Overview.md](phases/Phase8-Overview.md) | Phase 8 scope, dependencies, and sub-phases (transport → TS → segment control → switch). |
-| [phases/Phase8-0-Transport.md](phases/Phase8-0-Transport.md) | Stream transport (UDS, AttachStream/DetachStream). |
-| [phases/Phase8-1-AirOwnsMpegTs.md](phases/Phase8-1-AirOwnsMpegTs.md) | Air owns MPEG-TS output. |
-| [phases/Phase8-1-5-FileProducerInternalRefactor.md](phases/Phase8-1-5-FileProducerInternalRefactor.md) | FileProducer internal refactor. |
-| [phases/Phase8-2-SegmentControl.md](phases/Phase8-2-SegmentControl.md) | Segment control (seek/stop). |
-| [phases/Phase8-3-PreviewSwitchToLive.md](phases/Phase8-3-PreviewSwitchToLive.md) | Preview and SwitchToLive in the TS path. |
-| [phases/Phase8-4-PersistentMpegTsMux.md](phases/Phase8-4-PersistentMpegTsMux.md) | Persistent mux and PIDs. |
-| [phases/Phase8-5-FanoutTeardown.md](phases/Phase8-5-FanoutTeardown.md) | Fan-out and teardown. |
-| [phases/Phase8-6-RealMpegTsE2E.md](phases/Phase8-6-RealMpegTsE2E.md) | Real MPEG-TS end-to-end. |
-| [phases/Phase8-7-ImmediateTeardown.md](phases/Phase8-7-ImmediateTeardown.md) | Immediate teardown on last viewer. |
-| [phases/Phase8-8-FrameLifecycleAndPlayoutCompletion.md](phases/Phase8-8-FrameLifecycleAndPlayoutCompletion.md) | Frame lifecycle and playout completion. |
-| [phases/Phase8-9-AudioVideoUnifiedProducer.md](phases/Phase8-9-AudioVideoUnifiedProducer.md) | Unified audio/video producer. |
+**Informational only.** Phase overviews, design rationale, and “what was built and why” live here. They provide context and history. They do not override laws or contracts; they explain intent and evolution.
+
+### Layer 4 – Developer Notes / Investigations
+
+**Informational only.** Ad-hoc notes, investigations, and working documents. Useful for understanding past decisions or current exploration. Not authoritative for behavior.
+
+### Layer 5 – Archive
+
+**Historical.** Superseded or retired material. Kept for traceability. Not authoritative.
 
 ---
 
-## See also
+## Authority Rules
 
-- [Overview / doc entry point](../overview/README.md)
-- Phase 6A contracts (historical) are in [archive/phases/](../archive/phases/).
+These rules are binding for how documentation and code interact.
+
+1. **Laws override all other documents.**  
+   Constitutional laws (Layer 0) are supreme. No contract, phase document, or narrative may contradict them. If a lower-priority document conflicts with a law, the law wins.
+
+2. **Contracts are authoritative within their layer.**  
+   Semantic contracts (Layer 1) and coordination contracts (Layer 2) are normative within their respective domains. Implementation must satisfy them. Disagreement between code and contract is resolved in favor of the contract until the contract is explicitly changed.
+
+3. **Phase and narrative documents are informational only.**  
+   Layer 3 (and above) documents do not define required behavior. They inform; they do not override laws or contracts. They may describe intended design, but code and contracts are the source of truth for what the system actually guarantees.
+
+4. **Code must conform to laws and contracts, not vice versa.**  
+   When code and a law or contract conflict, the code is wrong. Fix the code or change the law/contract through the normal change process. Do not treat laws or contracts as advisory or “best effort.”
+
+---
+
+## Summary
+
+| Layer | Name                     | Role                | Authority   |
+|-------|--------------------------|----------------------|-------------|
+| 0     | Constitutional Laws      | Non-negotiable guarantees | Supreme     |
+| 1     | Semantic Contracts       | Correctness rules    | Normative   |
+| 2     | Coordination Contracts   | Concurrency, switching, backpressure | Normative   |
+| 3     | Narrative / Design History | Context and rationale | Informational |
+| 4     | Developer Notes / Investigations | Working notes   | Informational |
+| 5     | Archive                  | Retired material     | Historical  |
+
+Laws and contracts (Layers 0–2) define what the system must do. Narrative and notes (Layers 3–5) explain and document; they do not override.
+
+---
+
+For indexes and entry points to specific contracts and invariants, see the other documents in this directory.
