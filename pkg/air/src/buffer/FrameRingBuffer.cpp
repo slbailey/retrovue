@@ -112,7 +112,15 @@ bool FrameRingBuffer::IsFull() const {
   const uint32_t write = write_index_.load(std::memory_order_acquire);
   const uint32_t read = read_index_.load(std::memory_order_acquire);
   const uint32_t next_write = (write + 1) % capacity_;
-  
+
+  return next_write == read;
+}
+
+bool FrameRingBuffer::IsAudioFull() const {
+  const uint32_t write = audio_write_index_.load(std::memory_order_acquire);
+  const uint32_t read = audio_read_index_.load(std::memory_order_acquire);
+  const uint32_t next_write = (write + 1) % audio_capacity_;
+
   return next_write == read;
 }
 

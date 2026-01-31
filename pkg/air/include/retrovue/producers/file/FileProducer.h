@@ -283,6 +283,31 @@ namespace retrovue::producers::file
     // When video AdmitFrame() locks the mapping, audio on the same iteration
     // MUST be processed ungated. This flag overrides the shadow gating check.
     bool mapping_locked_this_iteration_;
+
+    // RULE-P10-DECODE-GATE: Count of decode-gate blocking episodes for metrics
+    int decode_gate_block_count_;
+
+    // INV-P10-ELASTIC-FLOW-CONTROL: Hysteresis state for elastic gating
+    // When true, we're in a blocking episode and must wait for low-water mark
+    bool decode_gate_blocked_;
+
+    // ==========================================================================
+    // INV-P10-BACKPRESSURE-SYMMETRIC: Unified A/V gating
+    // ==========================================================================
+    // Audio and video must be gated together. When EITHER buffer is full or
+    // write barrier is set, BOTH streams wait. No retries, no dropping.
+    // ==========================================================================
+
+    // Returns true if both audio and video can safely push.
+    bool CanPushAV() const;
+
+    // Blocks until CanPushAV() returns true or stop is requested.
+    // Returns true if ready to push, false if stop was requested.
+    bool WaitForAVPushReady();
+
+    // Blocks BEFORE av_read_frame() until both buffers have space.
+    // INV-P10-BACKPRESSURE-SYMMETRIC: Gate at decode level, not push level.
+    bool WaitForDecodeReady();
   };
 
 } // namespace retrovue::producers::file

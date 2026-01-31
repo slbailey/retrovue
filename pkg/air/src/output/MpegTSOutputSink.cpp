@@ -84,6 +84,16 @@ bool MpegTSOutputSink::Start() {
   encoder_->SetOutputTimingEnabled(true);  // Enable timing immediately
   std::cout << "[MpegTSOutputSink] Prebuffering DISABLED (INV-P8-IO-UDS-001)" << std::endl;
 
+  // =========================================================================
+  // INV-P10-PCR-PACED-MUX: Disable audio liveness injection
+  // =========================================================================
+  // With PCR-paced mux, producer audio is authoritative. Silence injection
+  // would create competing audio sources, causing PTS discontinuities.
+  // If audio queue is empty, the mux loop stalls (correct behavior).
+  // =========================================================================
+  encoder_->SetAudioLivenessEnabled(false);
+  std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Silence injection DISABLED" << std::endl;
+
   // Start mux thread
   stop_requested_.store(false, std::memory_order_release);
   mux_thread_ = std::thread(&MpegTSOutputSink::MuxLoop, this);
@@ -171,109 +181,190 @@ std::string MpegTSOutputSink::GetName() const {
 
 void MpegTSOutputSink::MuxLoop() {
   std::cout << "[MpegTSOutputSink] MuxLoop starting, fd=" << fd_ << std::endl;
-  static int loop_count = 0;
-  static int dequeue_success = 0;
-  static int encode_calls = 0;
 
   // =========================================================================
-  // INV-P9-PCR-AUDIO-MASTER: Audio owns PCR at startup
+  // INV-P10-PCR-PACED-MUX: Time-driven emission, not availability-driven
   // =========================================================================
-  // Audio PTS MUST start at 0. Mux MUST NOT initialize audio timing from video.
-  // If no real audio is available, injected silence (starting at 0) is
-  // authoritative. Video is encoded with its own PTS but audio is PCR master.
+  // The mux loop emits frames at their scheduled CT, not as fast as possible.
+  // This prevents buffer oscillation and ensures smooth playback.
+  //
+  // Algorithm:
+  // 1. Peek at next video frame to get its CT
+  // 2. Wait until wall clock matches that CT
+  // 3. Dequeue and encode exactly one video frame
+  // 4. Dequeue and encode all audio with CT <= video CT
+  // 5. Repeat
+  //
+  // Forbidden patterns:
+  // - No draining loops ("while queue not empty")
+  // - No burst writes
+  // - No adaptive speed-up/slow-down
+  // - No dropping frames
   // =========================================================================
-  int64_t audio_ct_us = 0;  // Audio CT starts at 0, NOT derived from video
-  std::cout << "[MpegTSOutputSink] INV-P9-PCR-AUDIO-MASTER: audio_ct_us initialized to 0 (audio owns PCR)" << std::endl;
+
+  // Pacing state
+  bool timing_initialized = false;
+  std::chrono::steady_clock::time_point wall_epoch;
+  int64_t ct_epoch_us = 0;
+
+  // Diagnostic counters (per-instance, not static)
+  int video_emit_count = 0;
+  int audio_emit_count = 0;
+  int pacing_wait_count = 0;
+
+  std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Time-driven emission enabled" << std::endl;
 
   while (!stop_requested_.load(std::memory_order_acquire) && fd_ >= 0) {
-    bool processed_any = false;
-    loop_count++;
+    // -----------------------------------------------------------------------
+    // Step 1: Peek at next video frame to determine target emit time
+    // -----------------------------------------------------------------------
+    int64_t next_video_ct_us = -1;
+    {
+      std::lock_guard<std::mutex> lock(video_queue_mutex_);
+      if (!video_queue_.empty()) {
+        next_video_ct_us = video_queue_.front().metadata.pts;
+      }
+    }
 
-    // Process video frame
+    if (next_video_ct_us < 0) {
+      // No video available - wait briefly and retry
+      // This is the ONLY place we sleep when queue is empty
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 2: Initialize timing on first frame
+    // -----------------------------------------------------------------------
+    if (!timing_initialized) {
+      wall_epoch = std::chrono::steady_clock::now();
+      ct_epoch_us = next_video_ct_us;
+      timing_initialized = true;
+      std::cout << "[MpegTSOutputSink] PCR-PACE: Timing initialized, ct_epoch_us="
+                << ct_epoch_us << std::endl;
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 3: Wait until wall clock matches frame's CT (PCR pacing)
+    // -----------------------------------------------------------------------
+    int64_t ct_delta_us = next_video_ct_us - ct_epoch_us;
+    auto target_wall = wall_epoch + std::chrono::microseconds(ct_delta_us);
+    auto now = std::chrono::steady_clock::now();
+
+    if (now < target_wall) {
+      // Not yet time to emit - sleep until target
+      auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(target_wall - now).count();
+      if (pacing_wait_count < 5 || pacing_wait_count % 100 == 0) {
+        std::cout << "[MpegTSOutputSink] PCR-PACE: Waiting " << wait_us
+                  << "us for frame CT=" << next_video_ct_us << std::endl;
+      }
+      pacing_wait_count++;
+
+      // Sleep in small increments to check stop_requested
+      while (std::chrono::steady_clock::now() < target_wall) {
+        if (stop_requested_.load(std::memory_order_acquire)) break;
+        auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(
+            target_wall - std::chrono::steady_clock::now());
+        if (remaining.count() > 5000) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        } else if (remaining.count() > 0) {
+          std::this_thread::sleep_for(remaining);
+        } else {
+          break;
+        }
+      }
+    }
+
+    if (stop_requested_.load(std::memory_order_acquire)) break;
+
+    // -----------------------------------------------------------------------
+    // Step 4: Dequeue and encode exactly ONE video frame
+    // -----------------------------------------------------------------------
     buffer::Frame frame;
     if (DequeueVideoFrame(&frame)) {
-      dequeue_success++;
-      if (dequeue_success <= 5 || dequeue_success % 100 == 0) {
-        std::cout << "[MpegTSOutputSink] MuxLoop dequeued #" << dequeue_success
-                  << " (loop=" << loop_count << ")" << std::endl;
-      }
+      video_emit_count++;
 
-      // INV-P9-PCR-AUDIO-MASTER: Video uses its own PTS, audio owns PCR
-      // Do NOT initialize audio CT from video - audio starts at 0
-
-      // Frame.metadata.pts is in microseconds; encoder expects 90kHz.
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
       encoder_->encodeFrame(frame, pts90k);
-      encode_calls++;
-      if (encode_calls <= 5 || encode_calls % 100 == 0) {
-        std::cout << "[MpegTSOutputSink] MuxLoop encoded #" << encode_calls << std::endl;
+
+      if (video_emit_count <= 5 || video_emit_count % 100 == 0) {
+        std::cout << "[MpegTSOutputSink] PCR-PACE: Emitted video #" << video_emit_count
+                  << " CT=" << frame.metadata.pts << "us pts90k=" << pts90k << std::endl;
       }
-      processed_any = true;
+
       had_frames_ = true;
-    }
 
-    // Process audio frame
-    buffer::AudioFrame audio_frame;
-    static int audio_dequeue_count = 0;
-    if (DequeueAudioFrame(&audio_frame)) {
-      audio_dequeue_count++;
+      // ---------------------------------------------------------------------
+      // Step 5: Dequeue and encode all audio with CT <= video CT
+      // ---------------------------------------------------------------------
+      // Audio should be emitted up to (and slightly beyond) the video frame's CT
+      // to ensure audio leads slightly for lip sync
+      int64_t audio_cutoff_ct_us = frame.metadata.pts;
 
-      // INV-P8-AUDIO-CT-001: Derive audio PTS from CT, not raw media time
-      // audio_ct_us tracks our position in CT timeline
-      // Increment by audio frame duration after encoding
-      const int64_t audio_pts90k = (audio_ct_us * 90000) / 1'000'000;
-
-      if (audio_dequeue_count <= 5 || audio_dequeue_count % 100 == 0) {
-        std::cout << "[MpegTSOutputSink] MuxLoop audio dequeued #" << audio_dequeue_count
-                  << " raw_pts_us=" << audio_frame.pts_us
-                  << " ct_pts_us=" << audio_ct_us << std::endl;
-      }
-
-      encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
-
-      // Advance audio CT by frame duration: (samples * 1000000) / sample_rate
-      if (audio_frame.sample_rate > 0) {
-        audio_ct_us += (static_cast<int64_t>(audio_frame.nb_samples) * 1'000'000) / audio_frame.sample_rate;
-      }
-
-      processed_any = true;
-      had_frames_ = true;
-    }
-
-    // Detect producer switch: if we had frames before but now both queues are empty,
-    // flush encoder buffers to ensure all audio from previous producer is encoded.
-    if (had_frames_ && !processed_any) {
-      bool video_empty, audio_empty;
-      {
-        std::lock_guard<std::mutex> lock(video_queue_mutex_);
-        video_empty = video_queue_.empty();
-      }
-      {
-        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-        audio_empty = audio_queue_.empty();
-      }
-
-      if (video_empty && audio_empty) {
-        empty_iterations_++;
-        // Wait several iterations to confirm it's a real switch, not a brief gap
-        if (empty_iterations_ >= 10) {  // ~50ms at 5ms sleep intervals
-          encoder_->flushAudio();
-          had_frames_ = false;
-          empty_iterations_ = 0;
+      buffer::AudioFrame audio_frame;
+      int audio_batch = 0;
+      while (true) {
+        // Peek at next audio frame
+        int64_t next_audio_ct_us = -1;
+        {
+          std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+          if (!audio_queue_.empty()) {
+            next_audio_ct_us = audio_queue_.front().pts_us;
+          }
         }
-      } else {
+
+        if (next_audio_ct_us < 0 || next_audio_ct_us > audio_cutoff_ct_us) {
+          // No more audio, or audio is ahead of video - stop
+          break;
+        }
+
+        // Dequeue and encode this audio frame
+        if (DequeueAudioFrame(&audio_frame)) {
+          audio_emit_count++;
+          audio_batch++;
+
+          const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
+          encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
+
+          if (audio_emit_count <= 5 || audio_emit_count % 100 == 0) {
+            std::cout << "[MpegTSOutputSink] PCR-PACE: Emitted audio #" << audio_emit_count
+                      << " CT=" << audio_frame.pts_us << "us" << std::endl;
+          }
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 6: Detect producer switch (empty queues after having frames)
+    // -----------------------------------------------------------------------
+    bool video_empty, audio_empty;
+    {
+      std::lock_guard<std::mutex> lock(video_queue_mutex_);
+      video_empty = video_queue_.empty();
+    }
+    {
+      std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+      audio_empty = audio_queue_.empty();
+    }
+
+    if (had_frames_ && video_empty && audio_empty) {
+      empty_iterations_++;
+      // Wait several iterations to confirm it's a real switch
+      if (empty_iterations_ >= 3) {  // ~100ms at 33ms per frame
+        encoder_->flushAudio();
+        had_frames_ = false;
         empty_iterations_ = 0;
+        // Reset timing for next segment
+        timing_initialized = false;
+        std::cout << "[MpegTSOutputSink] PCR-PACE: Segment ended, timing reset" << std::endl;
       }
     } else {
       empty_iterations_ = 0;
     }
-
-    if (!processed_any) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
   }
-  std::cout << "[MpegTSOutputSink] MuxLoop exiting, stop_requested=" << stop_requested_.load()
-            << " fd=" << fd_ << std::endl;
+
+  std::cout << "[MpegTSOutputSink] MuxLoop exiting, video_emitted=" << video_emit_count
+            << " audio_emitted=" << audio_emit_count << std::endl;
 }
 
 void MpegTSOutputSink::EnqueueVideoFrame(const buffer::Frame& frame) {

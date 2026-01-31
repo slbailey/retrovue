@@ -77,7 +77,8 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       real_audio_received_(false),
       silence_injection_active_(false),
       silence_audio_pts_90k_(0),
-      silence_frames_generated_(0) {
+      silence_frames_generated_(0),
+      audio_liveness_enabled_(true) {  // INV-P10-PCR-PACED-MUX: Default on, disable for PCR-paced
   time_base_.num = 1;
   time_base_.den = 90000;  // MPEG-TS timebase is 90kHz
 }
@@ -1267,6 +1268,12 @@ int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
 // =========================================================================
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 void EncoderPipeline::GenerateSilenceFrames(int64_t target_pts_90k) {
+  // INV-P10-PCR-PACED-MUX: When audio liveness is disabled, never inject silence.
+  // Producer audio is authoritative; if audio queue is empty, mux should stall.
+  if (!audio_liveness_enabled_) {
+    return;
+  }
+
   // Only generate if we haven't received real audio yet
   if (real_audio_received_) {
     return;
@@ -2144,6 +2151,18 @@ void EncoderPipeline::SetOutputTimingEnabled(bool enabled) {
     output_timing_anchor_set_ = false;
   }
   std::cout << "[EncoderPipeline] Output timing " << (enabled ? "ENABLED" : "DISABLED") << std::endl;
+#else
+  (void)enabled;
+#endif
+}
+
+// INV-P10-PCR-PACED-MUX: Enable/disable audio liveness silence injection
+// When disabled, no silence frames are generated - producer audio is authoritative.
+void EncoderPipeline::SetAudioLivenessEnabled(bool enabled) {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  audio_liveness_enabled_ = enabled;
+  std::cout << "[EncoderPipeline] INV-P10-PCR-PACED-MUX: Audio liveness "
+            << (enabled ? "ENABLED" : "DISABLED (producer audio authoritative)") << std::endl;
 #else
   (void)enabled;
 #endif
