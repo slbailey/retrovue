@@ -24,7 +24,7 @@ These apply across all Phase 6A sub-contracts:
 
 - **No schedule or plan logic in Air:** Air must not interpret schedules or plans. Segment-based control is canonical: Air receives exact execution instructions (asset_path, start_offset_ms, hard_stop_time_ms) via LoadPreview; SwitchToLive is control-only. Plan handles (e.g. in StartChannel) are accepted only for proto compatibility and must not drive behavior in 6A.
 - **Segment-based control:** Media execution is driven by **LoadPreview** (segment payload) then **SwitchToLive** (at boundary). StartChannel initializes channel state but does not imply media playback.
-- **Clock authority:** MasterClock lives in the Python runtime. Air enforces deadlines (e.g. hard_stop_time_ms) but does not compute schedule time.
+- **Clock authority:** MasterClock lives in the Python runtime. Air enforces deadlines (e.g. hard_stop_time_ms) but does not compute schedule time. **Authoritative definition of the clock and other broadcast-grade laws lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../../contracts/PlayoutInvariants-BroadcastGradeGuarantees.md).**
 - **Hard stop authoritative:** hard_stop_time_ms is authoritative; Air may stop at or before this time but must never play past it.
 - **Heterogeneous producers:** The engine supports both file-backed producers and programmatic (synthetic) producers; both use the same ExecutionProducer lifecycle and preview/live slot model.
 

@@ -13,7 +13,7 @@ Define the observable guarantees for the RetroVue Playout Engine's gRPC control 
 
 **THINK vs ACT:** Core performs THINK (authoritative timeline, what plays next, when transitions occur); Air performs ACT (executes explicit commands). Air **does not** make scheduling, timing, or sequencing decisions. Air does **not** track asset duration to decide transitions, initiate transitions on EOF or producer exhaustion, or decide "what comes next." Producers are treated as continuous sources; a producer ending does **not** imply a transition. Transitions occur **only** via explicit Core commands (e.g. LoadPreview, SwitchToLive). Air is intentionally "dumb" with respect to timing—it executes commands; it does not infer intent.
 
-**Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Segment-based control** is canonical: execution is driven by LoadPreview (segment payload) + SwitchToLive (control-only); StartChannel initializes channel state and does not imply media playback.
+**Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Authoritative definition of the clock law lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).** **Segment-based control** is canonical: execution is driven by LoadPreview (segment payload) + SwitchToLive (control-only); StartChannel initializes channel state and does not imply media playback.
 
 ---
 

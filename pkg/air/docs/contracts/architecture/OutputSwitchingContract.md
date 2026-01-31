@@ -12,6 +12,8 @@ _Related: [ProducerBus Contract](ProducerBusContract.md) · [OutputBus & OutputS
 
 This contract defines the invariants for switching between Live and Preview buses in AIR. The goal is seamless, gapless transitions between content segments with no stalls, glitches, or decoder startup delays at switch time.
 
+**Authoritative definition of the switching law** (no gaps, no PTS regression, no silence during switches) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).**
+
 ---
 
 ## 2. System Components

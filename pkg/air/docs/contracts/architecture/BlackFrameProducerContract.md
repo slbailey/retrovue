@@ -6,6 +6,8 @@ _Related: [ProducerBus (Input Bus) Contract](ProducerBusContract.md) · [FilePro
 **Scope:** Air (C++) playout engine — fallback producer for continuous valid output
 **Audience:** Engine implementers, refactor tools (Cursor), future maintainers
 
+**Authoritative definition of the output liveness law** (ProgramOutput never blocks; if no content → deterministic pad black + silence) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).**
+
 ---
 
 ## 1. Purpose

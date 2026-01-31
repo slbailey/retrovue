@@ -70,7 +70,7 @@ Phase 10 continues until:
 - **PTS must remain bounded to MasterClock** with no cumulative drift beyond threshold (100ms) over any 10-second window
 - Jitter budget: ≤ 1 frame duration (33ms at 30fps)
 
-**Clock Authority:** MasterClock is the source of truth, not wall clock. PTS correctness is measured against MasterClock, not against instantaneous wall clock readings. This avoids micro-correction policies and preserves PCR authority established in Phase 9.
+**Clock Authority:** MasterClock is the source of truth, not wall clock. PTS correctness is measured against MasterClock, not against instantaneous wall clock readings. This avoids micro-correction policies and preserves PCR authority established in Phase 9. **Authoritative definition of the clock law lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).**
 
 **Measurement:** Over any 10-second window:
 - Frame count must equal `target_fps * 10 ± 1`

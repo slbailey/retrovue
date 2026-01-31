@@ -6,6 +6,8 @@ _Related: [OutputTiming Contract](OutputTimingContract.md) · [OutputBus & Outpu
 **Scope:** Air (C++) playout engine runtime — Output layer  
 **Audience:** Engine implementers, refactor tools (Cursor), future maintainers
 
+**Authoritative definition of the output liveness and switching laws** (ProgramOutput never blocks; no gaps, no PTS regression, no silence during switches) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md).**
+
 ---
 
 ## 1. Overview
