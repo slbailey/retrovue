@@ -16,7 +16,7 @@ One task = one rule = one responsibility.
 | **P1-PO-002** | INV-P10-SINK-GATE | TEST | `pkg/air/tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp` | Test asserts buffer depth unchanged when no sink attached and frame CT arrives. |
 | **P1-PO-003** | INV-P10-SINK-GATE | LOG | `pkg/air/src/renderer/ProgramOutput.cpp` | Log emitted with CT value when frame not consumed due to missing sink. |
 | **P1-PO-004** | LAW-OUTPUT-LIVENESS | VERIFY | `pkg/air/tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp` | Confirmed: existing test explicitly asserts "never blocks; no content → pad". |
-| **P1-PO-005** | INV-AIR-CONTENT-BEFORE-PAD | VERIFY | `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` | Confirmed: test covers CONTENT-BEFORE-PAD gate logic prevents premature pad. |
+| **P1-PO-005** | INV-AIR-CONTENT-BEFORE-PAD | VERIFY+TEST | (none) → `PacingInvariantContractTests.cpp` if FAIL | Verify coverage; if FAIL add test (gate blocks pad when empty; pad after first real frame). |
 
 ### ProgramOutput Checklist
 
@@ -24,7 +24,7 @@ One task = one rule = one responsibility.
 - [ ] P1-PO-002: Add TEST for INV-P10-SINK-GATE
 - [ ] P1-PO-003: Add LOG for INV-P10-SINK-GATE
 - [ ] P1-PO-004: VERIFY LAW-OUTPUT-LIVENESS test assertion
-- [ ] P1-PO-005: VERIFY INV-AIR-CONTENT-BEFORE-PAD test coverage
+- [ ] P1-PO-005: VERIFY INV-AIR-CONTENT-BEFORE-PAD; if FAIL add TEST in same task
 
 ---
 
@@ -82,7 +82,7 @@ One task = one rule = one responsibility.
 
 | Type | Count | Task IDs |
 |------|-------|----------|
-| **TEST** | 5 | P1-PO-001, P1-PO-002, P1-EP-001, P1-EP-003, P1-EP-004 |
+| **TEST** | 6 | P1-PO-001, P1-PO-002, P1-PO-005, P1-EP-001, P1-EP-003, P1-EP-004 |
 | **LOG** | 5 | P1-PO-003, P1-EP-002, P1-MS-001, P1-MS-002, P1-PE-001 |
 | **VERIFY** | 5 | P1-PO-004, P1-PO-005, P1-EP-005, P1-MS-003, P1-PE-002 |
 | **Total** | 15 | — |

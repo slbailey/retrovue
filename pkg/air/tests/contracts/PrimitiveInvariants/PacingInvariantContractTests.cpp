@@ -48,7 +48,9 @@ using retrovue::tests::RegisterExpectedDomainCoverage;
 // Register expected coverage for this domain
 const bool kRegisterCoverage = []() {
   RegisterExpectedDomainCoverage("PrimitiveInvariants",
-                                 {"INV-PACING-001", "INV-PACING-002"});
+                                 {"INV-PACING-001", "INV-PACING-002",
+                                  "INV-P10-SINK-GATE", "INV-STARVATION-FAILSAFE-001",
+                                  "INV-AIR-CONTENT-BEFORE-PAD"});
   return true;
 }();
 
@@ -62,7 +64,8 @@ class PacingInvariantContractTest : public BaseContractTest {
   }
 
   [[nodiscard]] std::vector<std::string> CoveredRuleIds() const override {
-    return {"INV-PACING-001", "INV-PACING-002"};
+    return {"INV-PACING-001", "INV-PACING-002", "INV-P10-SINK-GATE",
+            "INV-STARVATION-FAILSAFE-001", "INV-AIR-CONTENT-BEFORE-PAD"};
   }
 
   // Creates a real system clock for wall-clock pacing tests
@@ -396,6 +399,224 @@ TEST_F(PacingInvariantContractTest, INV_PACING_002_NoFrameDropping) {
   std::cout << "[INV-PACING-002 CLAUSE 3] No-drop test: "
             << "rendered=" << stats.frames_rendered << ", "
             << "dropped=" << stats.frames_dropped << std::endl;
+}
+
+// =============================================================================
+// INV-P10-SINK-GATE: No frame consumption until sink is attached
+// =============================================================================
+// ProgramOutput must not consume frames from the buffer before a sink is
+// attached. Frames remain in the buffer until AttachSink/SetSideSink/SetOutputBus.
+//
+// Test strategy: Start ProgramOutput with no sink, buffer has frames with valid
+// CT. Let render loop run past frame CT deadlines. Buffer depth must be unchanged.
+// =============================================================================
+TEST_F(PacingInvariantContractTest, INV_P10_SINK_GATE) {
+  SCOPED_TRACE("INV-P10-SINK-GATE: Frames must not be consumed when no sink attached");
+
+  constexpr int kBufferCapacity = 30;
+  constexpr int kFrameCount = 5;
+  buffer::FrameRingBuffer buffer(kBufferCapacity);
+
+  // Fill buffer with frames that have valid CT
+  const int64_t frame_duration_us = kFramePeriodUs;
+  for (int i = 0; i < kFrameCount; ++i) {
+    buffer::Frame frame;
+    frame.metadata.pts = i * frame_duration_us;
+    frame.metadata.dts = i * frame_duration_us;
+    frame.metadata.duration = 1.0 / kTargetFps;
+    frame.metadata.has_ct = true;  // Valid CT - render loop would consume if sink attached
+    frame.width = 1920;
+    frame.height = 1080;
+
+    const int y_size = frame.width * frame.height;
+    const int uv_size = (frame.width / 2) * (frame.height / 2);
+    frame.data.resize(static_cast<size_t>(y_size + 2 * uv_size), 0);
+
+    ASSERT_TRUE(buffer.Push(frame)) << "Failed to push frame " << i;
+  }
+
+  // Assertion 1: Buffer depth before render loop
+  const size_t depth_before = buffer.Size();
+  ASSERT_EQ(depth_before, static_cast<size_t>(kFrameCount))
+      << "Buffer should contain " << kFrameCount << " frames before start";
+
+  renderer::RenderConfig config;
+  config.mode = renderer::RenderMode::HEADLESS;
+
+  auto clock = CreateRealClock();
+  std::shared_ptr<telemetry::MetricsExporter> metrics;
+
+  auto renderer =
+      renderer::ProgramOutput::Create(config, buffer, clock, metrics, /*channel_id=*/0);
+  ASSERT_NE(renderer, nullptr);
+
+  // Do NOT attach sink - SetSideSink/SetOutputBus are NOT called
+
+  // Assertion 2: Render loop advances past frame CT
+  // Run for 200ms = ~6 frame periods at 30fps; clock advances past first frames' CT
+  constexpr int kTestDurationMs = 200;
+  ASSERT_TRUE(renderer->Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(kTestDurationMs));
+  renderer->Stop();
+
+  // Assertion 3: Buffer depth after equals buffer depth before
+  const size_t depth_after = buffer.Size();
+  EXPECT_EQ(depth_after, depth_before)
+      << "INV-P10-SINK-GATE VIOLATION: Frame was consumed with no sink attached!\n"
+      << "  depth_before=" << depth_before << "\n"
+      << "  depth_after=" << depth_after << "\n"
+      << "  Frames must remain in buffer until sink is attached.";
+}
+
+// =============================================================================
+// INV-STARVATION-FAILSAFE-001: Pad frame emitted within 100ms of starvation
+// =============================================================================
+// When buffer remains empty for >1 frame duration, the render loop must emit
+// a pad frame within 100ms of starvation detection.
+//
+// Test strategy: Use empty buffer + SetNoContentSegment(true) so no freeze
+// path (pacing_has_last_frame_ is false); pad is emitted directly on first
+// empty Pop. Starvation detection = earliest moment condition holds (start +
+// frame_period). Pad must arrive within 100ms of that.
+// =============================================================================
+TEST_F(PacingInvariantContractTest, INV_STARVATION_FAILSAFE_001) {
+  SCOPED_TRACE("INV-STARVATION-FAILSAFE-001: Pad frame must be emitted within 100ms of starvation");
+
+  constexpr int kBufferCapacity = 10;
+  buffer::FrameRingBuffer buffer(kBufferCapacity);
+  // Empty buffer - no frames
+
+  renderer::RenderConfig config;
+  config.mode = renderer::RenderMode::HEADLESS;
+
+  auto clock = CreateRealClock();
+  std::shared_ptr<telemetry::MetricsExporter> metrics;
+
+  auto renderer = renderer::ProgramOutput::Create(config, buffer, clock, metrics, /*channel_id=*/0);
+  ASSERT_NE(renderer, nullptr);
+
+  renderer->SetNoContentSegment(true);
+  renderer->LockPadAudioFormat();
+
+  std::chrono::steady_clock::time_point starvation_time;
+  std::chrono::steady_clock::time_point pad_time;
+  std::atomic<bool> pad_received{false};
+
+  renderer->SetSideSink([&](const buffer::Frame& frame) {
+    if (frame.metadata.asset_uri == "pad://black") {
+      if (!pad_received.exchange(true)) {
+        pad_time = std::chrono::steady_clock::now();
+      }
+    }
+  });
+
+  const auto start_time = std::chrono::steady_clock::now();
+  starvation_time = start_time + std::chrono::microseconds(kFramePeriodUs);
+
+  ASSERT_TRUE(renderer->Start());
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+  while (!pad_received.load(std::memory_order_relaxed) &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  renderer->Stop();
+
+  ASSERT_TRUE(pad_received.load(std::memory_order_relaxed))
+      << "INV-STARVATION-FAILSAFE-001: No pad frame emitted after buffer starved";
+
+  const auto delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      pad_time - starvation_time).count();
+
+  EXPECT_LE(delta_ms, 100)
+      << "INV-STARVATION-FAILSAFE-001 VIOLATION: Pad emission exceeded 100ms bound\n"
+      << "  (pad_time - starvation_time) = " << delta_ms << "ms\n"
+      << "  Bound: <= 100ms";
+}
+
+// =============================================================================
+// INV-AIR-CONTENT-BEFORE-PAD: Pad only after first real content frame
+// =============================================================================
+// Pad frames may only be emitted after the first real decoded content frame
+// has been routed to output. This prevents a pad-only loop at startup.
+//
+// Phase 1: Empty buffer, no SetNoContentSegment — gate blocks pad; no frames.
+// Phase 2: Buffer with real frames — first frame(s) are not pad; after drain,
+//          at least one pad frame is emitted.
+// =============================================================================
+TEST_F(PacingInvariantContractTest, INV_AIR_CONTENT_BEFORE_PAD) {
+  SCOPED_TRACE("INV-AIR-CONTENT-BEFORE-PAD: No pad before first real frame; pad after real content when buffer empties");
+
+  auto clock = CreateRealClock();
+  std::shared_ptr<telemetry::MetricsExporter> metrics;
+  renderer::RenderConfig config;
+  config.mode = renderer::RenderMode::HEADLESS;
+
+  // -------------------------------------------------------------------------
+  // Phase 1: Empty buffer, NO SetNoContentSegment — no pad frames emitted
+  // -------------------------------------------------------------------------
+  constexpr int kBufferCapacity = 10;
+  buffer::FrameRingBuffer buffer_phase1(kBufferCapacity);
+  // Empty buffer; do NOT call SetNoContentSegment
+
+  auto renderer_phase1 = renderer::ProgramOutput::Create(config, buffer_phase1, clock, metrics, /*channel_id=*/0);
+  ASSERT_NE(renderer_phase1, nullptr);
+
+  std::atomic<uint64_t> phase1_frames_received{0};
+  renderer_phase1->SetSideSink([&phase1_frames_received](const buffer::Frame&) {
+    phase1_frames_received.fetch_add(1, std::memory_order_relaxed);
+  });
+
+  ASSERT_TRUE(renderer_phase1->Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  renderer_phase1->Stop();
+
+  const auto& stats_phase1 = renderer_phase1->GetStats();
+  EXPECT_EQ(stats_phase1.frames_rendered, 0u)
+      << "INV-AIR-CONTENT-BEFORE-PAD Phase 1: With empty buffer and no SetNoContentSegment, frames_rendered must be 0";
+  EXPECT_EQ(phase1_frames_received.load(std::memory_order_relaxed), 0u)
+      << "INV-AIR-CONTENT-BEFORE-PAD Phase 1: No frames must be received via side sink";
+
+  // -------------------------------------------------------------------------
+  // Phase 2: Buffer with 1–2 real frames — first frame(s) not pad; then pad after drain
+  // -------------------------------------------------------------------------
+  buffer::FrameRingBuffer buffer_phase2(kBufferCapacity);
+  FillBufferWithFrames(buffer_phase2, 2);
+
+  auto renderer_phase2 = renderer::ProgramOutput::Create(config, buffer_phase2, clock, metrics, /*channel_id=*/0);
+  ASSERT_NE(renderer_phase2, nullptr);
+
+  std::vector<std::string> frame_uris;
+  std::mutex uris_mutex;
+  renderer_phase2->SetSideSink([&](const buffer::Frame& frame) {
+    std::lock_guard<std::mutex> lock(uris_mutex);
+    frame_uris.push_back(frame.metadata.asset_uri);
+  });
+
+  ASSERT_TRUE(renderer_phase2->Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  renderer_phase2->Stop();
+
+  {
+    std::lock_guard<std::mutex> lock(uris_mutex);
+    ASSERT_GE(frame_uris.size(), 1u) << "INV-AIR-CONTENT-BEFORE-PAD Phase 2: At least one frame must be received";
+
+    // First frame(s) must NOT be pad
+    EXPECT_NE(frame_uris.front(), "pad://black")
+        << "INV-AIR-CONTENT-BEFORE-PAD Phase 2 VIOLATION: First frame must not be pad";
+
+    // At least one pad frame must appear after real content (when buffer empties)
+    bool saw_pad = false;
+    for (const auto& uri : frame_uris) {
+      if (uri == "pad://black") {
+        saw_pad = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(saw_pad)
+        << "INV-AIR-CONTENT-BEFORE-PAD Phase 2: After buffer empties, at least one pad frame must be received";
+  }
 }
 
 }  // namespace
