@@ -208,6 +208,88 @@ service PlayoutControl {
 
 ---
 
+## Part 2.5: Observability Requirements
+
+**Reference:** [Observability Parity Law](../laws/ObservabilityParityLaw.md) (LAW-OBS-001 through LAW-OBS-005). This section specifies the PlayoutEngine's concrete log events and required fields.
+
+### Required Log Events
+
+| RPC / Event | Log event | When emitted |
+|-------------|-----------|--------------|
+| StartChannel | `AIR-STARTCHANNEL-RECEIVED` | On gRPC handler entry |
+| StartChannel | `AIR-STARTCHANNEL-RESPONSE` | Before returning response |
+| LoadPreview | `AIR-LOADPREVIEW-RECEIVED` | On gRPC handler entry |
+| LoadPreview | `AIR-LOADPREVIEW-EFFECTIVE` | When preview segment installed (shadow decode ready) |
+| LoadPreview | `AIR-LOADPREVIEW-RESPONSE` | Before returning response |
+| SwitchToLive | `AIR-SWITCHTOLIVE-RECEIVED` | On gRPC handler entry |
+| SwitchToLive | `AIR-SWITCHTOLIVE-EFFECTIVE` | When switch committed (preview promoted to live) |
+| SwitchToLive | `AIR-SWITCHTOLIVE-RESPONSE` | Before returning response |
+| Producer clamp | `AIR-CLAMP-STARTED` | When producer reaches hard stop and output is clamped |
+| Producer clamp | `AIR-CLAMP-ACTIVE` | Optional; when clamp exceeds threshold (e.g. 1s) |
+| Producer clamp | `AIR-CLAMP-ENDED` | When SwitchToLive (or next LoadPreview) ends clamp |
+| Black/silence fallback | `AIR-FALLBACK-ENTERED` | When BlackFrameProducer or equivalent takes over (live underrun) |
+| Black/silence fallback | `AIR-FALLBACK-EXITED` | When real content resumes |
+| Mux/sink attach | `AIR-ATTACHSTREAM-RECEIVED`, `AIR-ATTACHSTREAM-RESPONSE` | On AttachStream gRPC |
+| Mux/sink detach | `AIR-DETACHSTREAM-RECEIVED`, `AIR-DETACHSTREAM-RESPONSE` | On DetachStream gRPC |
+
+### Required Fields (by event type)
+
+| Field | When required |
+|-------|---------------|
+| `channel_id` | All events |
+| `correlation_id` | All intent/receive/response events (from gRPC metadata or proto) |
+| `segment_id` | LoadPreview, clamp events (when segment identified) |
+| `asset_path` | LoadPreview, clamp, fallback events |
+| `start_offset_ms` | LoadPreview (or `start_frame` if frame-indexed) |
+| `hard_stop_time_ms` | LoadPreview, clamp events (as `boundary_time`) |
+| `boundary_time` | Clamp events (epoch ms when segment must stop) |
+| `result_code` | All response events |
+| `state_transitions` | When channel state changes (stopped → buffering → ready, etc.); log old and new state |
+| `receipt_time_ms` | All received events |
+| `completion_time_ms` | All response events |
+| `effective_time_ms` | LoadPreview-EFFECTIVE, SwitchToLive-EFFECTIVE |
+
+### Minimum Log Transcript Examples
+
+**Example 1: StartChannel → LoadPreview → SwitchToLive (happy path)**
+
+```
+[AIR] AIR-STARTCHANNEL-RECEIVED correlation_id=ch1-sc1-1738340100000 channel_id=1 receipt_time_ms=1738340100002
+[AIR] AIR-STARTCHANNEL-RESPONSE correlation_id=ch1-sc1-1738340100000 channel_id=1 success=true result_code=RESULT_CODE_OK completion_time_ms=1738340100005
+[AIR] AIR-LOADPREVIEW-RECEIVED correlation_id=ch1-lp1-1738340123000 channel_id=1 asset_path=/media/ep1.mp4 start_offset_ms=0 hard_stop_time_ms=1738340223000 receipt_time_ms=1738340123002
+[AIR] AIR-LOADPREVIEW-EFFECTIVE correlation_id=ch1-lp1-1738340123000 channel_id=1 asset_path=/media/ep1.mp4 effective_time_ms=1738340123020
+[AIR] AIR-LOADPREVIEW-RESPONSE correlation_id=ch1-lp1-1738340123000 channel_id=1 success=true result_code=RESULT_CODE_OK completion_time_ms=1738340123025
+[AIR] AIR-SWITCHTOLIVE-RECEIVED correlation_id=ch1-stl1-1738340223000 channel_id=1 receipt_time_ms=1738340223002
+[AIR] AIR-SWITCHTOLIVE-EFFECTIVE correlation_id=ch1-stl1-1738340223000 channel_id=1 effective_time_ms=1738340223010
+[AIR] AIR-SWITCHTOLIVE-RESPONSE correlation_id=ch1-stl1-1738340223000 channel_id=1 success=true result_code=RESULT_CODE_OK pts_contiguous=true completion_time_ms=1738340223015
+```
+
+**Example 2: Producer clamp (hard stop before SwitchToLive)**
+
+```
+[AIR] AIR-LOADPREVIEW-RECEIVED correlation_id=ch1-lp2-1738340223000 channel_id=1 asset_path=/media/ep2.mp4 hard_stop_time_ms=1738340323000 receipt_time_ms=1738340223002
+[AIR] AIR-LOADPREVIEW-EFFECTIVE correlation_id=ch1-lp2-1738340223000 channel_id=1 asset_path=/media/ep2.mp4 effective_time_ms=1738340223020
+[AIR] AIR-LOADPREVIEW-RESPONSE correlation_id=ch1-lp2-1738340223000 channel_id=1 success=true result_code=RESULT_CODE_OK completion_time_ms=1738340223025
+[AIR] AIR-CLAMP-STARTED correlation_id=ch1-lp1-1738340123000 channel_id=1 asset_path=/media/ep1.mp4 boundary_time=1738340223000 segment_correlation_id=ch1-lp1-1738340123000
+[AIR] AIR-FALLBACK-ENTERED channel_id=1 reason=producer_clamped asset_path=/media/ep1.mp4
+[AIR] AIR-SWITCHTOLIVE-RECEIVED correlation_id=ch1-stl2-1738340223500 channel_id=1 receipt_time_ms=1738340223502
+[AIR] AIR-CLAMP-ENDED channel_id=1 asset_path=/media/ep1.mp4 boundary_time=1738340223000 next_correlation_id=ch1-stl2-1738340223500
+[AIR] AIR-FALLBACK-EXITED channel_id=1 reason=switch_complete
+[AIR] AIR-SWITCHTOLIVE-EFFECTIVE correlation_id=ch1-stl2-1738340223500 channel_id=1 effective_time_ms=1738340223510
+[AIR] AIR-SWITCHTOLIVE-RESPONSE correlation_id=ch1-stl2-1738340223500 channel_id=1 success=true result_code=RESULT_CODE_OK completion_time_ms=1738340223515
+```
+
+**Example 3: AttachStream / DetachStream**
+
+```
+[AIR] AIR-ATTACHSTREAM-RECEIVED correlation_id=ch1-att1-1738340100100 channel_id=1 endpoint=/tmp/retrovue/ch_1.sock receipt_time_ms=1738340100102
+[AIR] AIR-ATTACHSTREAM-RESPONSE correlation_id=ch1-att1-1738340100100 channel_id=1 success=true result_code=RESULT_CODE_OK completion_time_ms=1738340100108
+[AIR] AIR-DETACHSTREAM-RECEIVED correlation_id=ch1-det1-1738341000000 channel_id=1 receipt_time_ms=1738341000002
+[AIR] AIR-DETACHSTREAM-RESPONSE correlation_id=ch1-det1-1738341000000 channel_id=1 success=true result_code=RESULT_CODE_OK completion_time_ms=1738341000008
+```
+
+---
+
 ## Part 3: Performance Targets
 
 **Phase applicability:** **Not enforced during Phase 6A.** Targets are **retained** as future intent for Phase 7+.

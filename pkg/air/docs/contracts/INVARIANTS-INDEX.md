@@ -12,7 +12,7 @@
 
 | Goal | Go to |
 |------|--------|
-| **Constitutional laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md) |
+| **Constitutional laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md) · [ObservabilityParityLaw.md](laws/ObservabilityParityLaw.md) |
 | **Find an invariant by ID** | Tables below by layer; follow **Source** in each section |
 | **Phase 8 timeline / segment / switch** | [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) |
 | **Phase 9 bootstrap / audio liveness** | [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) |
@@ -35,6 +35,9 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 | **Output Liveness** | ProgramOutput never blocks; if no content → deterministic pad (black + silence). | Law |
 | **Audio Format** | Channel defines house format; all audio normalized before OutputBus; EncoderPipeline never negotiates. Contract test: **INV-AUDIO-HOUSE-FORMAT-001**. | Law |
 | **Switching** | No gaps, no PTS regression, no silence during switches. | Law |
+| **Observability Parity** | Intent, correlation, result, timing, and boundary evidence (LAW-OBS-001 through LAW-OBS-005). | Law |
+
+**Source:** [ObservabilityParityLaw.md](laws/ObservabilityParityLaw.md)
 
 ---
 

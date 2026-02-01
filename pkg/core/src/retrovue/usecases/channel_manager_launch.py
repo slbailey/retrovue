@@ -34,14 +34,19 @@ ProcessHandle = subprocess.Popen[bytes]
 # Air stdout/stderr go here: pkg/air/logs/<channel_id>-air.log
 _AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs"
 
+
+def _air_log_path(channel_id: str) -> Path:
+    """Path to the Air log file for this channel (same as subprocess redirect)."""
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in channel_id) or "unknown"
+    return _AIR_LOG_DIR / f"{safe_id}-air.log"
+
 # Import ChannelConfig for type hints
 from retrovue.runtime.config import ChannelConfig, MOCK_CHANNEL_CONFIG
 
 
 def _open_air_log(channel_id: str):
     """Open Air log file for this channel (truncate on open, line-buffered). Caller closes after Popen."""
-    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in channel_id) or "unknown"
-    log_path = _AIR_LOG_DIR / f"{safe_id}-air.log"
+    log_path = _air_log_path(channel_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     return open(log_path, "w", buffering=1, encoding="utf-8", errors="replace")
 
@@ -162,11 +167,19 @@ def log_core_intent_frame_range(
 ) -> None:
     """Emit structured CORE_INTENT_FRAME_RANGE probe (once per segment hand-off to AIR)."""
     import logging
-    logging.getLogger(__name__).info(
-        "CORE_INTENT_FRAME_RANGE channel_id=%s segment_id=%s asset_path=%s "
-        "start_frame=%s end_frame=%s fps=%s CT_start_us=%s MT_start_us=%s",
-        channel_id, segment_id, asset_path, start_frame, end_frame, fps, CT_start_us, MT_start_us,
+    msg = (
+        f"CORE_INTENT_FRAME_RANGE channel_id={channel_id} segment_id={segment_id} asset_path={asset_path} "
+        f"start_frame={start_frame} end_frame={end_frame} fps={fps} CT_start_us={CT_start_us} MT_start_us={MT_start_us}"
     )
+    logging.getLogger(__name__).info("%s", msg)
+    # Also append to the channel's Air log so intent and AIR_AS_RUN appear together for comparison.
+    try:
+        log_path = _air_log_path(channel_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8", errors="replace") as f:
+            f.write("[Core] " + msg + "\n")
+    except OSError:
+        pass  # Do not fail hand-off if log write fails
 
 
 def air_load_preview(

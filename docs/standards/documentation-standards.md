@@ -16,6 +16,7 @@ Define the canonical tone, structure, and formatting rules for all Retrovue docu
 
 - Each doc begins with `## Purpose` and, when helpful, `_Related:` breadcrumbs.
 - Contracts use **MUST / SHOULD / MAY** language for normative statements.
+- **Phase docs vs canonical docs:** Phase docs are historical and may not be normative. Rules in phase docs MUST link to canonical LAW/CONTRACT ids. New rules MUST be added only to canonical docs (laws/contracts) and referenced from phase docs. See [Contract Hygiene § Phase docs and canonical rule authority](contract-hygiene.md#phase-docs-and-canonical-rule-authority).
 - CLI examples must mirror actual command syntax and show PowerShell variants when they differ from bash.
 
 ## Heading and section order
