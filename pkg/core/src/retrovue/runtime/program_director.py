@@ -48,6 +48,7 @@ from retrovue.runtime.channel_stream import (
     FakeTsSource,
     SocketTsSource,
     generate_ts_stream,
+    generate_ts_stream_async,
 )
 from retrovue.runtime.config import (
     ChannelConfig,
@@ -1040,11 +1041,12 @@ class ProgramDirector:
                     fanout_buffer = getattr(cleanup_placeholder, "_fanout", None)
                     _run_stream_cleanup(channel_id, session_id, manager, fanout_buffer)
 
-                def generate_placeholder():
+                # INV-IO-DRAIN-REALTIME: Async placeholder generator
+                async def generate_placeholder():
                     fanout_buffer = None
                     try:
                         for _ in range(10):
-                            time.sleep(1)
+                            await asyncio.sleep(1)
                             fanout_buffer = self._get_or_create_fanout_buffer(channel_id, manager)
                             if fanout_buffer:
                                 cleanup_placeholder._fanout = fanout_buffer
@@ -1054,9 +1056,11 @@ class ProgramDirector:
                             return
                         client_queue = fanout_buffer.subscribe(session_id)
                         asyncio.create_task(_wait_disconnect_then_cleanup(request, cleanup_placeholder))
-                        for chunk in generate_ts_stream(client_queue):
+                        async for chunk in generate_ts_stream_async(client_queue):
                             yield chunk
                     except GeneratorExit:
+                        pass
+                    except asyncio.CancelledError:
                         pass
                     finally:
                         cleanup_placeholder()
@@ -1068,6 +1072,7 @@ class ProgramDirector:
                         "Cache-Control": "no-cache, no-store, must-revalidate",
                         "Pragma": "no-cache",
                         "Expires": "0",
+                        "X-Accel-Buffering": "no",  # Disable nginx buffering if present
                     },
                 )
 
@@ -1084,11 +1089,15 @@ class ProgramDirector:
             # Phase 8.7: When client disconnects, receive() returns; run cleanup so viewer_count→0 triggers teardown.
             asyncio.create_task(_wait_disconnect_then_cleanup(request, cleanup_stream))
 
-            def generate_stream():
+            # INV-IO-DRAIN-REALTIME: Use async generator to yield to event loop
+            # This ensures non-blocking streaming and regular flush opportunities.
+            async def generate_stream():
                 try:
-                    for chunk in generate_ts_stream(client_queue):
+                    async for chunk in generate_ts_stream_async(client_queue):
                         yield chunk
                 except GeneratorExit:
+                    pass
+                except asyncio.CancelledError:
                     pass
                 finally:
                     cleanup_stream()
@@ -1100,6 +1109,7 @@ class ProgramDirector:
                     "Cache-Control": "no-cache, no-store, must-revalidate",
                     "Pragma": "no-cache",
                     "Expires": "0",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering if present
                 },
             )
 

@@ -155,6 +155,15 @@ class EncoderPipeline {
   // Force first frame to be an I-frame (keyframe) to avoid initial stutter
   bool first_frame_encoded_;
 
+  // =========================================================================
+  // INV-AIR-IDR-BEFORE-OUTPUT: Keyframe gate for segment start
+  // =========================================================================
+  // AIR must not emit any video packets for a segment until an IDR frame
+  // has been produced by the encoder for that segment.
+  // This gate blocks output until avcodec_receive_packet() returns a packet
+  // with AV_PKT_FLAG_KEY set. Reset on segment switch (ResetOutputTiming).
+  bool first_keyframe_emitted_;
+
   // Video frame counter for CFR PTS generation (resets per session)
   int64_t video_frame_count_;
 

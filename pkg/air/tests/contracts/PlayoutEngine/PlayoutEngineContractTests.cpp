@@ -3,9 +3,12 @@
 
 #include <chrono>
 #include <thread>
+#include <functional>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/decode/FrameProducer.h"
+#include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/runtime/PlayoutControl.h"
@@ -31,6 +34,48 @@ namespace
 {
 
 using retrovue::tests::RegisterExpectedDomainCoverage;
+
+// =============================================================================
+// TestOutputSink: Modern architecture test sink implementing IOutputSink
+// =============================================================================
+class TestOutputSink : public output::IOutputSink {
+ public:
+  explicit TestOutputSink(const std::string& name = "test-sink")
+      : name_(name), status_(output::SinkStatus::kIdle) {}
+
+  bool Start() override {
+    status_ = output::SinkStatus::kRunning;
+    return true;
+  }
+
+  void Stop() override {
+    status_ = output::SinkStatus::kStopped;
+  }
+
+  bool IsRunning() const override {
+    return status_ == output::SinkStatus::kRunning;
+  }
+
+  output::SinkStatus GetStatus() const override {
+    return status_;
+  }
+
+  void ConsumeVideo(const buffer::Frame&) override {}
+  void ConsumeAudio(const buffer::AudioFrame&) override {}
+
+  void SetStatusCallback(output::SinkStatusCallback callback) override {
+    status_callback_ = std::move(callback);
+  }
+
+  std::string GetName() const override {
+    return name_;
+  }
+
+ private:
+  std::string name_;
+  output::SinkStatus status_;
+  output::SinkStatusCallback status_callback_;
+};
 
 // Default ProgramFormat JSON for tests (1080p30, 48kHz stereo)
 constexpr const char* kDefaultProgramFormatJson = R"({"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}})";
@@ -95,11 +140,22 @@ TEST_F(PlayoutEngineContractTest, BC_001_FrameTimingAlignsWithMasterClock)
   seed.state = telemetry::ChannelState::READY;
   metrics->SubmitChannelMetrics(kChannelId, seed);
 
+  // Modern architecture: OutputBus + TestOutputSink
+  output::OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("bc-001-sink");
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
   renderer::RenderConfig config;
   config.mode = renderer::RenderMode::HEADLESS;
   auto renderer = renderer::ProgramOutput::Create(
       config, buffer, clock, metrics, kChannelId);
   ASSERT_NE(renderer, nullptr);
+
+  // INV-P10-SINK-GATE: OutputBus must be attached for frame consumption
+  renderer->SetOutputBus(&bus);
+
   ASSERT_TRUE(renderer->Start());
 
   std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -111,6 +167,7 @@ TEST_F(PlayoutEngineContractTest, BC_001_FrameTimingAlignsWithMasterClock)
 
   clock->AdvanceSeconds(0.05);
   renderer->Stop();
+  bus.DetachSink(/*force=*/true);
 
   const auto &stats = renderer->GetStats();
   EXPECT_GE(stats.frames_rendered, 1u);
@@ -422,8 +479,10 @@ TEST_F(PlayoutEngineContractTest, LT_005_LoadPreviewSequence)
   retrovue::playout::LoadPreviewRequest request;
   request.set_channel_id(1);
   request.set_asset_path("test://preview.mp4");
-  request.set_start_offset_ms(0);
-  request.set_hard_stop_time_ms(0);
+  request.set_start_frame(0);
+  request.set_frame_count(-1);  // -1 = play until EOF
+  request.set_fps_numerator(30);
+  request.set_fps_denominator(1);
   retrovue::playout::LoadPreviewResponse response;
   grpc::ServerContext context;
   grpc::Status status = service.LoadPreview(&context, &request, &response);
@@ -465,8 +524,10 @@ TEST_F(PlayoutEngineContractTest, LT_006_SwitchToLiveSequence)
   retrovue::playout::LoadPreviewRequest load_request;
   load_request.set_channel_id(1);
   load_request.set_asset_path("test://preview.mp4");
-  load_request.set_start_offset_ms(0);
-  load_request.set_hard_stop_time_ms(0);
+  load_request.set_start_frame(0);
+  load_request.set_frame_count(-1);  // -1 = play until EOF
+  load_request.set_fps_numerator(30);
+  load_request.set_fps_denominator(1);
   retrovue::playout::LoadPreviewResponse load_response;
   grpc::ServerContext load_context;
   grpc::Status load_status = service.LoadPreview(&load_context, &load_request, &load_response);
@@ -522,8 +583,10 @@ TEST_F(PlayoutEngineContractTest, Phase6A0_ServerAcceptsFourRPCs)
   retrovue::playout::LoadPreviewRequest load_req;
   load_req.set_channel_id(channel_id);
   load_req.set_asset_path("/fake/asset.mp4");
-  load_req.set_start_offset_ms(0);
-  load_req.set_hard_stop_time_ms(0);
+  load_req.set_start_frame(0);
+  load_req.set_frame_count(-1);  // -1 = play until EOF
+  load_req.set_fps_numerator(30);
+  load_req.set_fps_denominator(1);
   retrovue::playout::LoadPreviewResponse load_resp;
   grpc::ServerContext load_ctx;
   grpc::Status load_st = service.LoadPreview(&load_ctx, &load_req, &load_resp);
@@ -1169,8 +1232,10 @@ TEST_F(PlayoutEngineContractTest, INV_P8_SWITCH_ARMED_LoadPreviewRejectedWhileSw
     retrovue::playout::LoadPreviewRequest req;
     req.set_channel_id(channel_id);
     req.set_asset_path(sample_asset);
-    req.set_start_offset_ms(0);
-    req.set_hard_stop_time_ms(0);
+    req.set_start_frame(0);
+    req.set_frame_count(-1);  // -1 = play until EOF
+    req.set_fps_numerator(30);
+    req.set_fps_denominator(1);
     retrovue::playout::LoadPreviewResponse resp;
     grpc::ServerContext ctx;
     grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
@@ -1197,8 +1262,10 @@ TEST_F(PlayoutEngineContractTest, INV_P8_SWITCH_ARMED_LoadPreviewRejectedWhileSw
     retrovue::playout::LoadPreviewRequest req;
     req.set_channel_id(channel_id);
     req.set_asset_path(sample_asset);
-    req.set_start_offset_ms(1000);  // Different offset to ensure it's a new request
-    req.set_hard_stop_time_ms(0);
+    req.set_start_frame(1000);  // Different offset to ensure it's a new request
+    req.set_frame_count(-1);  // -1 = play until EOF
+    req.set_fps_numerator(30);
+    req.set_fps_denominator(1);
     retrovue::playout::LoadPreviewResponse resp;
     grpc::ServerContext ctx;
     grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
@@ -1231,8 +1298,10 @@ TEST_F(PlayoutEngineContractTest, INV_P8_SWITCH_ARMED_LoadPreviewRejectedWhileSw
     retrovue::playout::LoadPreviewRequest req;
     req.set_channel_id(channel_id);
     req.set_asset_path(sample_asset);
-    req.set_start_offset_ms(2000);  // Different offset
-    req.set_hard_stop_time_ms(0);
+    req.set_start_frame(2000);  // Different offset
+    req.set_frame_count(-1);  // -1 = play until EOF
+    req.set_fps_numerator(30);
+    req.set_fps_denominator(1);
     retrovue::playout::LoadPreviewResponse resp;
     grpc::ServerContext ctx;
     grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
@@ -1313,8 +1382,10 @@ TEST_F(PlayoutEngineContractTest, INV_P8_EOF_SWITCH_SwitchCompletesWhenLiveReach
     retrovue::playout::LoadPreviewRequest req;
     req.set_channel_id(channel_id);
     req.set_asset_path(sample_asset);
-    req.set_start_offset_ms(0);
-    req.set_hard_stop_time_ms(0);
+    req.set_start_frame(0);
+    req.set_frame_count(-1);  // -1 = play until EOF
+    req.set_fps_numerator(30);
+    req.set_fps_denominator(1);
     retrovue::playout::LoadPreviewResponse resp;
     grpc::ServerContext ctx;
     grpc::Status st = service.LoadPreview(&ctx, &req, &resp);
@@ -1427,8 +1498,10 @@ TEST_F(PlayoutEngineContractTest, INV_P8_AUDIO_GATE_ReadinessTripsAfterShadowDis
     retrovue::playout::LoadPreviewRequest req;
     req.set_channel_id(channel_id);
     req.set_asset_path(sample_asset);
-    req.set_start_offset_ms(0);
-    req.set_hard_stop_time_ms(0);
+    req.set_start_frame(0);
+    req.set_frame_count(-1);  // -1 = play until EOF
+    req.set_fps_numerator(30);
+    req.set_fps_denominator(1);
     retrovue::playout::LoadPreviewResponse resp;
     grpc::ServerContext ctx;
     grpc::Status st = service.LoadPreview(&ctx, &req, &resp);

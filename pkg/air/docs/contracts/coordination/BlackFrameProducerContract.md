@@ -50,9 +50,12 @@ It does **not** take segment parameters from Core (asset_path, start_offset_ms, 
 
 - Produce video frames that are decoder-legal (black, correct dimensions and frame rate per ProgramFormat).
 - Produce no audio (or silence as required by program format and sink).
-- Respect the PlayoutInstance’s ProgramFormat (width, height, frame rate).
+- Respect the PlayoutInstance's ProgramFormat (width, height, frame rate).
 - Advance PTS/DTS monotonically within its output (see [OutputContinuityContract](../semantics/OutputContinuityContract.md)).
 - Support the same lifecycle interface as other producers (start/stop or equivalent) so the engine can switch to and from it.
+- **Track padding progress by frame count** when executing structural padding (INV-FRAME-002).
+- **Compute CT from frame index** via TimelineController when executing structural padding (INV-FRAME-003).
+- **Emit exactly the specified frame count** when Core provides a `padding_frames` instruction.
 
 ### 3.2 BlackFrameProducer MUST NOT
 
@@ -69,11 +72,30 @@ It does **not** take segment parameters from Core (asset_path, start_offset_ms, 
 
 ---
 
+## 3.4 Structural Padding vs Failsafe Padding
+
+Black frame emission serves two distinct purposes. Both produce identical output (black + silence), but differ in control authority:
+
+| Aspect | Failsafe Padding | Structural Padding |
+|--------|------------------|-------------------|
+| **Trigger** | Producer underrun (Air-detected) | Core instruction (`padding_frames`) |
+| **Duration** | Unbounded (until Core reasserts) | Bounded (exact frame count) |
+| **Control** | Air-initiated, Air-terminated | Core-planned, Air-executed |
+| **Frame count** | Unknown at start | Known exactly |
+| **Purpose** | Continuity guarantee | Grid reconciliation / editorial |
+
+**Structural padding** is part of the playout plan. Core computes the frame count; Air emits exactly that many frames. See [INV-FRAME-002](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).
+
+**Failsafe padding** is Air's protective behavior. It is not part of the plan and has no predetermined duration.
+
+---
+
 ## 4. Invariants (Must Always Hold)
 
 1. **BlackFrameProducer** is an **internal failsafe**, not a scheduled asset. It is used only when the **live** producer has run out of frames and Core has not yet issued the next control command.
 2. Output from BlackFrameProducer is **valid black video** (program format) and **no audio**, with monotonic PTS/DTS.
 3. The **sink always receives valid output**: either frames from the live producer, or frames from BlackFrameProducer (dead-man fallback). Never a gap, freeze, or invalid data. This reflects **dead-man behavior**, not scheduling logic (see [ProducerBusContract](ProducerBusContract.md) § Always-valid-output).
+4. **INV-PAD-EXACT-COUNT:** When executing structural padding, Air MUST emit exactly the frame count specified by Core. No rounding, estimation, or adaptive adjustment.
 
 ---
 

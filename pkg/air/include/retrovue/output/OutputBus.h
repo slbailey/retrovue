@@ -6,6 +6,8 @@
 #ifndef RETROVUE_OUTPUT_OUTPUT_BUS_H_
 #define RETROVUE_OUTPUT_OUTPUT_BUS_H_
 
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -99,6 +101,11 @@ class OutputBus {
   mutable std::mutex mutex_;
   std::unique_ptr<IOutputSink> sink_;
   runtime::PlayoutControl* control_;  // Not owned
+
+  // DEBUG INSTRUMENTATION - remove after diagnosis
+  std::atomic<uint64_t> dbg_v_routed_{0};
+  std::atomic<uint64_t> dbg_a_routed_{0};
+  mutable std::chrono::steady_clock::time_point dbg_bus_heartbeat_time_;
 };
 
 }  // namespace retrovue::output

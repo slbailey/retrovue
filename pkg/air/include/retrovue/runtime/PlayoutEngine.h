@@ -105,11 +105,17 @@ class PlayoutEngine {
   
   EngineResult StopChannel(int32_t channel_id);
   
+  // Load a preview asset into shadow decode mode (frame-indexed execution)
+  // INV-FRAME-001: start_frame is the first frame index within asset (0-based)
+  // INV-FRAME-002: frame_count is the exact number of frames to play
+  // INV-FRAME-003: fps is provided as numerator/denominator for precision
   EngineResult LoadPreview(
       int32_t channel_id,
       const std::string& asset_path,
-      int64_t start_offset_ms = 0,
-      int64_t hard_stop_time_ms = 0);
+      int64_t start_frame,
+      int64_t frame_count,
+      int32_t fps_numerator,
+      int32_t fps_denominator);
   
   EngineResult SwitchToLive(int32_t channel_id);
   
@@ -169,6 +175,18 @@ class PlayoutEngine {
 
   // Forward declaration for internal playout runtime (one per Air instance).
   struct PlayoutInstance;
+
+  // Helper: Spawn background SwitchWatcher thread for auto-completion.
+  // Called when SwitchToLive returns NOT_READY to ensure readiness polling.
+  void SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* state);
+
+  // Helper: Check if output sink is attached (caller must hold channels_mutex_).
+  bool IsOutputSinkAttachedLocked(int32_t channel_id) const;
+
+  // INV-FINALIZE-LIVE: Centralized wiring of output bus → program output.
+  // Call after switch completes (normal or watcher) and after sink attach.
+  // Ensures ProgramOutput is connected to OutputBus so frames route to sink.
+  void FinalizeLiveOutput(int32_t channel_id);
 
   // TODO: Legacy/transitional. Air runs one playout session; channel identity is external (Core).
   mutable std::mutex channels_mutex_;

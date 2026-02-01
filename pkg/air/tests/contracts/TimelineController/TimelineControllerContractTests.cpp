@@ -502,6 +502,7 @@ TEST_F(TimelineControllerTest, BeginSegmentFromPreview_LocksBothCTAndMT) {
   int64_t ct_after_segment_a = controller_->GetCTCursor();
   EXPECT_GT(ct_after_segment_a, 3'000'000);  // Should be ~3.3s
 
+  controller_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Now switch segments: BeginSegmentFromPreview makes BOTH CT and MT pending
   auto pending = controller_->BeginSegmentFromPreview();
   EXPECT_TRUE(controller_->IsMappingPending());
@@ -559,6 +560,7 @@ TEST_F(TimelineControllerTest, BeginSegmentFromPreview_PreventsMismatchRejection
   // Then if wall clock advances and preview frames arrive later,
   // the computed CT might not match expectations.
 
+  controller_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // The NEW approach (BeginSegmentFromPreview) defers CT to arrival time:
   controller_->BeginSegmentFromPreview();
 
@@ -603,6 +605,7 @@ TEST_F(TimelineControllerTest, TypeSafety_NoPartialSpecification) {
   EXPECT_EQ(mapping1->ct_segment_start_us, 0);
   EXPECT_EQ(mapping1->mt_segment_start_us, 1000);
 
+  controller_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Test BeginSegmentFromPreview defers both
   auto pending2 = controller_->BeginSegmentFromPreview();
   EXPECT_TRUE(controller_->IsMappingPending());
@@ -621,6 +624,167 @@ TEST_F(TimelineControllerTest, TypeSafety_NoPartialSpecification) {
   // Both CT and MT are now set - there was never a state where one was set and not the other
   EXPECT_GE(mapping2->ct_segment_start_us, 0);
   EXPECT_EQ(mapping2->mt_segment_start_us, 5000);
+}
+
+// ============================================================================
+// INV-FRAME-003: CT Derives From Frame Index
+// ============================================================================
+// CT = start_ct + (frame_index * frame_period_us)
+// This invariant ensures that CT is computed from frame index, never inverted.
+// Used by structural padding (BlackFrameProducer) to assign CT to black frames.
+// ============================================================================
+
+TEST_F(TimelineControllerTest, INV_FRAME_003_CTFromFrameIndex_BasicComputation) {
+  // Given a starting CT and frame index
+  // When ComputeCTFromFrameIndex is called
+  // Then CT = start_ct + (frame_index * frame_period_us)
+
+  ASSERT_TRUE(controller_->StartSession());
+
+  int64_t start_ct = 0;
+  int64_t frame_period = controller_->GetFramePeriodUs();
+  EXPECT_EQ(frame_period, 33'333);  // 30fps
+
+  // Frame 0 at start_ct=0 should be 0
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(0, 0), 0);
+
+  // Frame 1 at start_ct=0 should be 1 * frame_period
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(0, 1), 33'333);
+
+  // Frame 10 at start_ct=0 should be 10 * frame_period
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(0, 10), 333'330);
+
+  // Frame 0 at start_ct=1000000 should be 1000000
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(1'000'000, 0), 1'000'000);
+
+  // Frame 5 at start_ct=1000000 should be 1000000 + 5*33333
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(1'000'000, 5), 1'166'665);
+}
+
+TEST_F(TimelineControllerTest, INV_FRAME_003_CTFromFrameIndex_ExactFrameBoundary) {
+  // Given a frame count
+  // When CT is computed
+  // Then CT is exactly at frame boundary (no fractional drift)
+
+  ASSERT_TRUE(controller_->StartSession());
+
+  int64_t frame_period = controller_->GetFramePeriodUs();
+  int64_t start_ct = 0;
+
+  // Verify 300 frames (10 seconds at 30fps) produces exact CT
+  int64_t expected_ct_300 = 300 * frame_period;
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(start_ct, 300), expected_ct_300);
+
+  // Verify the CT at 300 frames is exactly 10 seconds - 1 frame_period
+  // (because frame 0 is at CT=0, frame 300 is at CT=300*period)
+  EXPECT_EQ(expected_ct_300, 9'999'900);  // 300 * 33333 = 9999900us
+
+  // Verify 3000 frames (100 seconds) still has no drift
+  int64_t expected_ct_3000 = 3000 * frame_period;
+  EXPECT_EQ(controller_->ComputeCTFromFrameIndex(start_ct, 3000), expected_ct_3000);
+  EXPECT_EQ(expected_ct_3000, 99'999'000);  // 3000 * 33333 = 99999000us
+}
+
+TEST_F(TimelineControllerTest, INV_FRAME_003_CTFromFrameIndex_MatchesAdmittedFrameCT) {
+  // Given frames admitted via AdmitFrame
+  // When CT is computed via ComputeCTFromFrameIndex for same frame indices
+  // Then the CTs match (both methods yield identical results)
+
+  ASSERT_TRUE(controller_->StartSession());
+  controller_->BeginSegmentAbsolute(0, 0);
+
+  std::vector<int64_t> admitted_cts;
+  int64_t ct_out = 0;
+
+  // Admit 10 frames and record their CTs
+  for (int i = 0; i < 10; i++) {
+    int64_t mt = (i + 1) * 33'333;  // MT at frame boundaries
+    auto result = controller_->AdmitFrame(mt, ct_out);
+    ASSERT_EQ(result, timing::AdmissionResult::ADMITTED);
+    admitted_cts.push_back(ct_out);
+  }
+
+  // Verify ComputeCTFromFrameIndex produces the same sequence
+  // Note: AdmitFrame assigns CT as MT mapped through segment, then advances cursor
+  // For 1:1 mapping (ct_start=0, mt_start=0), CT = MT
+  // Frame 1 -> CT=33333, Frame 2 -> CT=66666, etc.
+  for (size_t i = 0; i < admitted_cts.size(); i++) {
+    int64_t frame_index = i + 1;  // Frames 1-10
+    int64_t computed_ct = controller_->ComputeCTFromFrameIndex(0, frame_index);
+    EXPECT_EQ(computed_ct, admitted_cts[i])
+        << "Frame " << frame_index << ": computed CT " << computed_ct
+        << " != admitted CT " << admitted_cts[i];
+  }
+}
+
+TEST_F(TimelineControllerTest, INV_FRAME_003_FramePeriodConsistency) {
+  // Given different fps configurations
+  // When ComputeCTFromFrameIndex is called
+  // Then frame_period_us is correctly used
+
+  // Test with 60fps config
+  {
+    auto clock_60 = std::make_shared<TestClock>();
+    clock_60->SetNow(1'000'000'000'000);
+    timing::TimelineConfig config_60;
+    config_60.frame_period_us = 16'667;  // 60fps
+    timing::TimelineController ctrl_60(clock_60, config_60);
+
+    EXPECT_EQ(ctrl_60.GetFramePeriodUs(), 16'667);
+    EXPECT_EQ(ctrl_60.ComputeCTFromFrameIndex(0, 60), 1'000'020);  // 60 frames = 1s
+    EXPECT_EQ(ctrl_60.ComputeCTFromFrameIndex(0, 1), 16'667);      // 1 frame
+  }
+
+  // Test with 24fps config
+  {
+    auto clock_24 = std::make_shared<TestClock>();
+    clock_24->SetNow(1'000'000'000'000);
+    timing::TimelineConfig config_24;
+    config_24.frame_period_us = 41'667;  // 24fps
+    timing::TimelineController ctrl_24(clock_24, config_24);
+
+    EXPECT_EQ(ctrl_24.GetFramePeriodUs(), 41'667);
+    EXPECT_EQ(ctrl_24.ComputeCTFromFrameIndex(0, 24), 1'000'008);  // 24 frames = 1s
+    EXPECT_EQ(ctrl_24.ComputeCTFromFrameIndex(0, 1), 41'667);      // 1 frame
+  }
+}
+
+TEST_F(TimelineControllerTest, INV_FRAME_003_PaddingFramesCTDerivation) {
+  // Simulate structural padding use case:
+  // BlackFrameProducer needs to assign CT to padding frames.
+  // CT must be derived from frame index relative to padding start CT.
+
+  ASSERT_TRUE(controller_->StartSession());
+  controller_->BeginSegmentAbsolute(0, 0);
+
+  int64_t ct_out = 0;
+
+  // Play 100 content frames
+  for (int i = 0; i < 100; i++) {
+    controller_->AdmitFrame((i + 1) * 33'333, ct_out);
+  }
+  int64_t content_end_ct = ct_out;  // CT at end of content
+
+  // Now we need 10 padding frames
+  // Padding starts at content_end_ct + 1 frame_period
+  int64_t padding_start_ct = content_end_ct + 33'333;
+
+  // Compute CT for each padding frame using ComputeCTFromFrameIndex
+  // This is what BlackFrameProducer must do
+  for (int padding_frame = 0; padding_frame < 10; padding_frame++) {
+    int64_t padding_ct = controller_->ComputeCTFromFrameIndex(padding_start_ct, padding_frame);
+
+    // Expected: padding_start_ct + (padding_frame * 33333)
+    int64_t expected_ct = padding_start_ct + (padding_frame * 33'333);
+    EXPECT_EQ(padding_ct, expected_ct)
+        << "Padding frame " << padding_frame << ": computed " << padding_ct
+        << " != expected " << expected_ct;
+  }
+
+  // Final padding frame CT should be:
+  // content_end_ct + 11 * frame_period (1 for start, 10 for frames 0-9)
+  int64_t final_padding_ct = controller_->ComputeCTFromFrameIndex(padding_start_ct, 9);
+  EXPECT_EQ(final_padding_ct, content_end_ct + 10 * 33'333);
 }
 
 }  // namespace retrovue::tests

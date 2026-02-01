@@ -6,6 +6,7 @@
 #include "retrovue/output/MpegTSOutputSink.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 
@@ -23,6 +24,50 @@
 #include <sys/socket.h>  // For send() with MSG_NOSIGNAL
 #endif
 
+// =========================================================================
+// DEBUG INSTRUMENTATION - remove after diagnosis
+// =========================================================================
+enum class MuxBlockReason {
+  NONE,
+  WAITING_FOR_VIDEO,
+  WAITING_FOR_PCR_TIME,
+  READY_TO_EMIT
+};
+
+static bool NoPcrPacing() {
+  static bool checked = false;
+  static bool value = false;
+  if (!checked) {
+    const char* env = std::getenv("RETROVUE_NO_PCR_PACING");
+    value = (env && env[0] == '1');
+    if (value) {
+      std::cout << "[DBG-PACING] RETROVUE_NO_PCR_PACING=1: pacing DISABLED" << std::endl;
+    }
+    checked = true;
+  }
+  return value;
+}
+
+static bool DbgBootstrapWriteEnabled() {
+  static bool checked = false;
+  static bool value = false;
+  if (!checked) {
+    const char* env = std::getenv("RETROVUE_DBG_BOOTSTRAP_WRITE");
+    value = (env && env[0] == '1');
+    checked = true;
+  }
+  return value;
+}
+
+// Helper to write to fd without SIGPIPE (used for magic string before namespace)
+static ssize_t SafeWriteGlobal(int fd, const void* data, size_t len) {
+#if defined(__linux__)
+  return send(fd, data, len, MSG_NOSIGNAL);
+#else
+  return write(fd, data, len);
+#endif
+}
+
 namespace retrovue::output {
 
 MpegTSOutputSink::MpegTSOutputSink(
@@ -34,8 +79,6 @@ MpegTSOutputSink::MpegTSOutputSink(
       name_(name),
       status_(SinkStatus::kIdle),
       stop_requested_(false),
-      had_frames_(false),
-      empty_iterations_(0),
       prebuffer_target_bytes_(0),
       prebuffering_(false) {
 }
@@ -98,6 +141,20 @@ bool MpegTSOutputSink::Start() {
   stop_requested_.store(false, std::memory_order_release);
   mux_thread_ = std::thread(&MpegTSOutputSink::MuxLoop, this);
 
+  // =========================================================================
+  // DEBUG: Socket sanity check - write magic string immediately
+  // =========================================================================
+  {
+    const char magic[] = "TS_TEST\n";
+    ssize_t n = SafeWriteGlobal(fd_, magic, sizeof(magic) - 1);
+    if (n > 0) {
+      std::cout << "[DBG-SOCKET] Magic string written (" << n << " bytes) fd=" << fd_ << std::endl;
+    } else {
+      std::cout << "[DBG-SOCKET] Magic string FAILED: errno=" << errno
+                << " (" << strerror(errno) << ") fd=" << fd_ << std::endl;
+    }
+  }
+
   SetStatus(SinkStatus::kRunning, "Started");
   return true;
 }
@@ -147,27 +204,56 @@ SinkStatus MpegTSOutputSink::GetStatus() const {
 }
 
 void MpegTSOutputSink::ConsumeVideo(const buffer::Frame& frame) {
-  static int consume_count = 0;
-  consume_count++;
-  if (consume_count <= 5 || consume_count % 100 == 0) {
-    std::cout << "[MpegTSOutputSink] ConsumeVideo #" << consume_count
-              << " running=" << (IsRunning() ? "yes" : "no")
-              << " status=" << static_cast<int>(GetStatus()) << std::endl;
-  }
   if (!IsRunning()) return;
+
+  uint64_t v = dbg_video_frames_enqueued_.fetch_add(1, std::memory_order_relaxed) + 1;
   EnqueueVideoFrame(frame);
+
+  auto now = std::chrono::steady_clock::now();
+  auto since_hb = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now - dbg_enqueue_heartbeat_time_).count();
+  if (since_hb >= 1000) {
+    size_t vq = 0, aq = 0;
+    {
+      std::lock_guard<std::mutex> lk(video_queue_mutex_);
+      vq = video_queue_.size();
+    }
+    {
+      std::lock_guard<std::mutex> lk(audio_queue_mutex_);
+      aq = audio_queue_.size();
+    }
+    uint64_t a = dbg_audio_frames_enqueued_.load(std::memory_order_relaxed);
+    std::cout << "[DBG-ENQUEUE] v_enq=" << v << " a_enq=" << a
+              << " vq_size=" << vq << " aq_size=" << aq << std::endl;
+    dbg_enqueue_heartbeat_time_ = now;
+  }
 }
 
 void MpegTSOutputSink::ConsumeAudio(const buffer::AudioFrame& audio_frame) {
-  static int consume_audio_count = 0;
-  consume_audio_count++;
-  if (consume_audio_count <= 5 || consume_audio_count % 100 == 0) {
-    std::cout << "[MpegTSOutputSink] ConsumeAudio #" << consume_audio_count
-              << " running=" << (IsRunning() ? "yes" : "no")
-              << " pts_us=" << audio_frame.pts_us << std::endl;
-  }
   if (!IsRunning()) return;
+
+  dbg_audio_frames_enqueued_.fetch_add(1, std::memory_order_relaxed);
   EnqueueAudioFrame(audio_frame);
+
+  auto now = std::chrono::steady_clock::now();
+  auto since_hb = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now - dbg_enqueue_heartbeat_time_).count();
+  if (since_hb >= 1000) {
+    size_t vq = 0, aq = 0;
+    {
+      std::lock_guard<std::mutex> lk(video_queue_mutex_);
+      vq = video_queue_.size();
+    }
+    {
+      std::lock_guard<std::mutex> lk(audio_queue_mutex_);
+      aq = audio_queue_.size();
+    }
+    uint64_t v = dbg_video_frames_enqueued_.load(std::memory_order_relaxed);
+    uint64_t a = dbg_audio_frames_enqueued_.load(std::memory_order_relaxed);
+    std::cout << "[DBG-ENQUEUE] v_enq=" << v << " a_enq=" << a
+              << " vq_size=" << vq << " aq_size=" << aq << std::endl;
+    dbg_enqueue_heartbeat_time_ = now;
+  }
 }
 
 void MpegTSOutputSink::SetStatusCallback(SinkStatusCallback callback) {
@@ -177,6 +263,10 @@ void MpegTSOutputSink::SetStatusCallback(SinkStatusCallback callback) {
 
 std::string MpegTSOutputSink::GetName() const {
   return name_;
+}
+
+void MpegTSOutputSink::SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback) {
+  on_successor_video_emitted_ = std::move(callback);
 }
 
 void MpegTSOutputSink::MuxLoop() {
@@ -212,23 +302,88 @@ void MpegTSOutputSink::MuxLoop() {
   int audio_emit_count = 0;
   int pacing_wait_count = 0;
 
+  // DEBUG: Mux state tracking (logs only on state change)
+  MuxBlockReason dbg_block_reason = MuxBlockReason::NONE;
+  MuxBlockReason dbg_prev_block_reason = MuxBlockReason::NONE;
+  auto dbg_log_state = [&](MuxBlockReason reason, const std::string& extra = "") {
+    if (reason != dbg_prev_block_reason) {
+      const char* reason_str = "UNKNOWN";
+      switch (reason) {
+        case MuxBlockReason::NONE: reason_str = "NONE"; break;
+        case MuxBlockReason::WAITING_FOR_VIDEO: reason_str = "WAITING_FOR_VIDEO"; break;
+        case MuxBlockReason::WAITING_FOR_PCR_TIME: reason_str = "WAITING_FOR_PCR_TIME"; break;
+        case MuxBlockReason::READY_TO_EMIT: reason_str = "READY_TO_EMIT"; break;
+      }
+      std::cout << "[DBG-MUXSTATE] " << reason_str;
+      if (!extra.empty()) std::cout << " " << extra;
+      std::cout << std::endl;
+      dbg_prev_block_reason = reason;
+    }
+  };
+
   std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Time-driven emission enabled" << std::endl;
 
+  auto dbg_mux_heartbeat_time = std::chrono::steady_clock::now();
+  auto dbg_bootstrap_write_time = std::chrono::steady_clock::now();
+
   while (!stop_requested_.load(std::memory_order_acquire) && fd_ >= 0) {
+    // -----------------------------------------------------------------------
+    // DBG-OUTPUT heartbeat: print once/sec even when no writes (mux stuck)
+    // -----------------------------------------------------------------------
+    auto now_heartbeat = std::chrono::steady_clock::now();
+    auto since_hb = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now_heartbeat - dbg_mux_heartbeat_time).count();
+    if (since_hb >= 1000) {
+      auto since_last_write = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now_heartbeat - dbg_last_write_time_).count();
+      std::cout << "[DBG-OUTPUT] bytes=" << dbg_bytes_written_.load(std::memory_order_relaxed)
+                << " packets=" << dbg_packets_written_.load(std::memory_order_relaxed)
+                << " ms_since_last_write=" << since_last_write << std::endl;
+      dbg_mux_heartbeat_time = now_heartbeat;
+    }
+
     // -----------------------------------------------------------------------
     // Step 1: Peek at next video frame to determine target emit time
     // -----------------------------------------------------------------------
     int64_t next_video_ct_us = -1;
+    size_t vq_size = 0;
+    size_t aq_size = 0;
+    int64_t head_ct_us = -1;
+    int64_t head_pts_us = -1;
     {
       std::lock_guard<std::mutex> lock(video_queue_mutex_);
+      vq_size = video_queue_.size();
       if (!video_queue_.empty()) {
         next_video_ct_us = video_queue_.front().metadata.pts;
+        head_ct_us = video_queue_.front().metadata.pts;
+        head_pts_us = video_queue_.front().metadata.pts;
       }
+    }
+    {
+      std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+      aq_size = audio_queue_.size();
     }
 
     if (next_video_ct_us < 0) {
       // No video available - wait briefly and retry
       // This is the ONLY place we sleep when queue is empty
+      dbg_log_state(MuxBlockReason::WAITING_FOR_VIDEO,
+          "vq=" + std::to_string(vq_size) + " aq=" + std::to_string(aq_size) +
+          " head_ct=" + std::to_string(head_ct_us) +
+          " head_pts=" + std::to_string(head_pts_us));
+      if (DbgBootstrapWriteEnabled()) {
+        auto since_bootstrap = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now_heartbeat - dbg_bootstrap_write_time).count();
+        if (since_bootstrap >= 1000) {
+          const char magic[] = "TS_TEST\n";
+          ssize_t n = SafeWriteGlobal(fd_, magic, sizeof(magic) - 1);
+          if (n > 0) {
+            std::cout << "[DBG-BOOTSTRAP] Magic string repeat (" << n << " bytes) fd="
+                      << fd_ << std::endl;
+          }
+          dbg_bootstrap_write_time = now_heartbeat;
+        }
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
@@ -248,15 +403,37 @@ void MpegTSOutputSink::MuxLoop() {
     // Step 3: Wait until wall clock matches frame's CT (PCR pacing)
     // -----------------------------------------------------------------------
     int64_t ct_delta_us = next_video_ct_us - ct_epoch_us;
-    auto target_wall = wall_epoch + std::chrono::microseconds(ct_delta_us);
-    auto now = std::chrono::steady_clock::now();
 
-    if (now < target_wall) {
+    // INV-P10-CT-DISCONTINUITY: Detect and handle CT jumps (e.g., from queue drops)
+    // If the frame's CT is significantly ahead of expected (> 1 second), reset timing.
+    // This prevents the mux loop from waiting forever when CTs jump due to queue drops.
+    constexpr int64_t kCtDiscontinuityThresholdUs = 1'000'000;  // 1 second
+    auto now = std::chrono::steady_clock::now();
+    int64_t wall_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - wall_epoch).count();
+    int64_t expected_ct_us = ct_epoch_us + wall_elapsed_us;
+    int64_t ct_jump_us = next_video_ct_us - expected_ct_us;
+
+    if (ct_jump_us > kCtDiscontinuityThresholdUs) {
+      std::cout << "[MpegTSOutputSink] INV-P10-CT-DISCONTINUITY: CT jumped ahead by "
+                << (ct_jump_us / 1000) << "ms, resetting timing anchor" << std::endl;
+      wall_epoch = now;
+      ct_epoch_us = next_video_ct_us;
+      ct_delta_us = 0;  // Emit immediately after reset
+    }
+
+    auto target_wall = wall_epoch + std::chrono::microseconds(ct_delta_us);
+
+    if (now < target_wall && !NoPcrPacing()) {
       // Not yet time to emit - sleep until target
       auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(target_wall - now).count();
-      if (pacing_wait_count < 5 || pacing_wait_count % 100 == 0) {
-        std::cout << "[MpegTSOutputSink] PCR-PACE: Waiting " << wait_us
-                  << "us for frame CT=" << next_video_ct_us << std::endl;
+      dbg_log_state(MuxBlockReason::WAITING_FOR_PCR_TIME,
+          "vq=" + std::to_string(vq_size) + " aq=" + std::to_string(aq_size) +
+          " head_ct=" + std::to_string(head_ct_us) + " head_pts=" + std::to_string(head_pts_us) +
+          " wait_us=" + std::to_string(wait_us));
+      // INV-P10-PCR-PACED-MUX: Pacing wait (log first, then every 100)
+      if (pacing_wait_count == 0) {
+        std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Pacing started, first_wait="
+                  << wait_us << "us" << std::endl;
       }
       pacing_wait_count++;
 
@@ -280,6 +457,9 @@ void MpegTSOutputSink::MuxLoop() {
     // -----------------------------------------------------------------------
     // Step 4: Dequeue and encode exactly ONE video frame
     // -----------------------------------------------------------------------
+    dbg_log_state(MuxBlockReason::READY_TO_EMIT,
+        "vq=" + std::to_string(vq_size) + " aq=" + std::to_string(aq_size) +
+        " head_ct=" + std::to_string(head_ct_us) + " head_pts=" + std::to_string(head_pts_us));
     buffer::Frame frame;
     if (DequeueVideoFrame(&frame)) {
       video_emit_count++;
@@ -287,12 +467,18 @@ void MpegTSOutputSink::MuxLoop() {
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
       encoder_->encodeFrame(frame, pts90k);
 
-      if (video_emit_count <= 5 || video_emit_count % 100 == 0) {
-        std::cout << "[MpegTSOutputSink] PCR-PACE: Emitted video #" << video_emit_count
-                  << " CT=" << frame.metadata.pts << "us pts90k=" << pts90k << std::endl;
+      // INV-SWITCH-SUCCESSOR-EMISSION: Notify when a real (non-pad) video
+      // frame has been emitted by the encoder. Pad frames do not count.
+      const bool is_real_frame = (frame.metadata.asset_uri != "pad://black");
+      if (is_real_frame && on_successor_video_emitted_) {
+        on_successor_video_emitted_();
       }
 
-      had_frames_ = true;
+      // INV-P10-PCR-PACED-MUX: Video emission summary (first, then every 100)
+      if (video_emit_count == 1 || video_emit_count % 100 == 0) {
+        std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Video emitted="
+                  << video_emit_count << std::endl;
+      }
 
       // ---------------------------------------------------------------------
       // Step 5: Dequeue and encode all audio with CT <= video CT
@@ -326,41 +512,23 @@ void MpegTSOutputSink::MuxLoop() {
           const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
           encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
 
-          if (audio_emit_count <= 5 || audio_emit_count % 100 == 0) {
-            std::cout << "[MpegTSOutputSink] PCR-PACE: Emitted audio #" << audio_emit_count
-                      << " CT=" << audio_frame.pts_us << "us" << std::endl;
+          // INV-P10-PCR-PACED-MUX: Audio emission summary (first, then every 100)
+          if (audio_emit_count == 1 || audio_emit_count % 100 == 0) {
+            std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Audio emitted="
+                      << audio_emit_count << std::endl;
           }
         }
       }
     }
 
     // -----------------------------------------------------------------------
-    // Step 6: Detect producer switch (empty queues after having frames)
+    // INV-TRANSPORT-CONTINUOUS: No timing reset on queue underflow
     // -----------------------------------------------------------------------
-    bool video_empty, audio_empty;
-    {
-      std::lock_guard<std::mutex> lock(video_queue_mutex_);
-      video_empty = video_queue_.empty();
-    }
-    {
-      std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-      audio_empty = audio_queue_.empty();
-    }
-
-    if (had_frames_ && video_empty && audio_empty) {
-      empty_iterations_++;
-      // Wait several iterations to confirm it's a real switch
-      if (empty_iterations_ >= 3) {  // ~100ms at 33ms per frame
-        encoder_->flushAudio();
-        had_frames_ = false;
-        empty_iterations_ = 0;
-        // Reset timing for next segment
-        timing_initialized = false;
-        std::cout << "[MpegTSOutputSink] PCR-PACE: Segment ended, timing reset" << std::endl;
-      }
-    } else {
-      empty_iterations_ = 0;
-    }
+    // Queue underflow is a transient condition, not a segment boundary.
+    // Timing calibration (wall_epoch, ct_epoch_us) is immutable after first frame.
+    // Segment transitions are invisible to the transport layer.
+    // See: RULE-MUX-001, RULE-MUX-002, INV-NO-LOCAL-EPOCHS
+    // -----------------------------------------------------------------------
   }
 
   std::cout << "[MpegTSOutputSink] MuxLoop exiting, video_emitted=" << video_emit_count
@@ -369,14 +537,10 @@ void MpegTSOutputSink::MuxLoop() {
 
 void MpegTSOutputSink::EnqueueVideoFrame(const buffer::Frame& frame) {
   std::lock_guard<std::mutex> lock(video_queue_mutex_);
-  static int enqueue_count = 0;
-  if (enqueue_count < 5 || enqueue_count % 100 == 0) {
-    std::cout << "[MpegTSOutputSink] EnqueueVideoFrame #" << enqueue_count
-              << " queue_size=" << video_queue_.size() << std::endl;
-  }
-  enqueue_count++;
   if (video_queue_.size() >= kMaxVideoQueueSize) {
     video_queue_.pop();  // Drop oldest frame
+    std::cout << "[DBG-DROP] video_drop=1 reason=QUEUE_FULL vq_size="
+              << video_queue_.size() << std::endl;
   }
   video_queue_.push(frame);
 }
@@ -385,6 +549,8 @@ void MpegTSOutputSink::EnqueueAudioFrame(const buffer::AudioFrame& audio_frame) 
   std::lock_guard<std::mutex> lock(audio_queue_mutex_);
   if (audio_queue_.size() >= kMaxAudioQueueSize) {
     audio_queue_.pop();  // Drop oldest frame
+    std::cout << "[DBG-DROP] audio_drop=1 reason=QUEUE_FULL aq_size="
+              << audio_queue_.size() << std::endl;
   }
   audio_queue_.push(audio_frame);
 }
@@ -490,7 +656,26 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     }
     remaining -= static_cast<size_t>(n);
     p += n;
+
+    // DEBUG: Track successful writes
+    sink->dbg_bytes_written_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+    sink->dbg_last_write_time_ = std::chrono::steady_clock::now();
   }
+
+  // DEBUG: Increment packet count and emit heartbeat (max 1/sec)
+  sink->dbg_packets_written_.fetch_add(1, std::memory_order_relaxed);
+  auto now = std::chrono::steady_clock::now();
+  auto since_last_hb = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now - sink->dbg_output_heartbeat_time_).count();
+  if (since_last_hb >= 1000) {
+    auto since_last_write = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - sink->dbg_last_write_time_).count();
+    std::cout << "[DBG-OUTPUT] bytes_written=" << sink->dbg_bytes_written_.load()
+              << " packets_written=" << sink->dbg_packets_written_.load()
+              << " ms_since_last_write=" << since_last_write << std::endl;
+    sink->dbg_output_heartbeat_time_ = now;
+  }
+
   return buf_size;
 #else
   (void)opaque;

@@ -51,6 +51,10 @@ namespace retrovue::producers::programmatic
     bool start() override;
     void stop() override;
     bool isRunning() const override;
+    void RequestStop() override;
+    bool IsStopped() const override;
+
+    std::optional<AsRunFrameStats> GetAsRunFrameStats() const override;
 
     uint64_t GetFramesProduced() const;
 

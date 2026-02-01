@@ -95,7 +95,7 @@ public:
       {
         std::cerr << "[ChannelManagerStub] Teardown timed out for channel "
                   << runtime.channel_id << ", forcing stop" << std::endl;
-        runtime.producer->ForceStop();
+        runtime.producer->RequestStop();
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));

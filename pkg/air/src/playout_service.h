@@ -94,6 +94,11 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
 
   // Call with stream_mutex_ held or from destructor.
   void DetachStreamLocked(int32_t channel_id, bool force);
+
+  // INV-FINALIZE-LIVE: Create sink (if FD exists), attach, and wire program_output.
+  // Call after SwitchToLive success or AttachStream (late attach path).
+  // Requires stream_mutex_ held.
+  void TryAttachSinkForChannel(int32_t channel_id);
 };
 
 }  // namespace playout

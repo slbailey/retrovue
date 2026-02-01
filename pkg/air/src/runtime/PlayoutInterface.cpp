@@ -43,10 +43,12 @@ InterfaceResult PlayoutInterface::StopChannel(int32_t channel_id) {
 InterfaceResult PlayoutInterface::LoadPreview(
     int32_t channel_id,
     const std::string& asset_path,
-    int64_t start_offset_ms,
-    int64_t hard_stop_time_ms) {
-  // Delegate to domain engine
-  auto result = engine_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
+    int64_t start_frame,
+    int64_t frame_count,
+    int32_t fps_numerator,
+    int32_t fps_denominator) {
+  // Delegate to domain engine (frame-indexed execution INV-FRAME-001/002/003)
+  auto result = engine_->LoadPreview(channel_id, asset_path, start_frame, frame_count, fps_numerator, fps_denominator);
   InterfaceResult interface_result(result.success, result.message);
   interface_result.shadow_decode_started = result.shadow_decode_started;
   interface_result.result_code = result.result_code;  // Phase 8: Forward typed result

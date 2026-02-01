@@ -90,6 +90,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_001_FirstFrameAvailableAtCommit) {
   // Buffer should be empty (shadow mode doesn't write to buffer)
   EXPECT_EQ(ring_buffer.Size(), 0u) << "Buffer should be empty in shadow mode";
 
+  timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Begin segment from preview (Phase 8 step)
   auto pending = timeline_->BeginSegmentFromPreview();
   EXPECT_EQ(pending.mode, PendingSegmentMode::AwaitPreviewFrame);
@@ -99,6 +100,9 @@ TEST_F(Phase9OutputBootstrapTest, G9_001_FirstFrameAvailableAtCommit) {
 
   // INV-P9-FLUSH: Flush cached frame to buffer synchronously
   bool flushed = producer.FlushCachedFrameToBuffer();
+
+  // INV-P8-SUCCESSOR-OBSERVABILITY: Simulate observer (no ProgramOutput in test)
+  timeline_->NotifySuccessorVideoEmitted();
 
   // CRITICAL ASSERTION: Buffer must have ≥1 frame IMMEDIATELY after flush returns
   EXPECT_TRUE(flushed) << "FlushCachedFrameToBuffer should return true";
@@ -146,10 +150,12 @@ TEST_F(Phase9OutputBootstrapTest, G9_002_ReadinessSatisfiedAfterCommit) {
   // Capture initial commit generation
   uint64_t initial_gen = timeline_->GetSegmentCommitGeneration();
 
+  timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Begin segment and flush
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
   producer.FlushCachedFrameToBuffer();
+  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
 
   // INV-P9-BOOTSTRAP-READY check
   uint64_t current_gen = timeline_->GetSegmentCommitGeneration();
@@ -200,6 +206,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_003_NoDeadlockOnSwitch) {
   // Simulate SwitchToLive sequence with timing
   auto switch_start = std::chrono::steady_clock::now();
 
+  timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Step 1: Begin segment from preview
   uint64_t pre_commit_gen = timeline_->GetSegmentCommitGeneration();
   timeline_->BeginSegmentFromPreview();
@@ -209,6 +216,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_003_NoDeadlockOnSwitch) {
 
   // Step 3: Flush cached frame (INV-P9-FLUSH)
   producer.FlushCachedFrameToBuffer();
+  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
 
   // Step 4: Check readiness (simulating watcher)
   uint64_t post_commit_gen = timeline_->GetSegmentCommitGeneration();
@@ -262,10 +270,12 @@ TEST_F(Phase9OutputBootstrapTest, G9_004_OutputTransitionOccurs) {
   }
   ASSERT_TRUE(producer.IsShadowDecodeReady());
 
+  timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Execute switch sequence
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
   producer.FlushCachedFrameToBuffer();
+  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
 
   // Verify frame can be consumed from buffer
   ASSERT_GE(ring_buffer.Size(), 1u);
@@ -312,12 +322,14 @@ TEST_F(Phase9OutputBootstrapTest, INV_P9_FLUSH_Synchronous) {
   }
   ASSERT_TRUE(producer.IsShadowDecodeReady());
 
+  timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
 
   // Measure flush time - should be <10ms (just a buffer push)
   auto flush_start = std::chrono::steady_clock::now();
   bool flushed = producer.FlushCachedFrameToBuffer();
+  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
   auto flush_end = std::chrono::steady_clock::now();
 
   auto flush_duration = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -367,9 +379,11 @@ TEST_F(Phase9OutputBootstrapTest, AudioZeroFrameAcceptable) {
 
   uint64_t pre_commit_gen = timeline_->GetSegmentCommitGeneration();
 
+  timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
   producer.FlushCachedFrameToBuffer();
+  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
 
   // Check bootstrap readiness with potentially zero audio
   uint64_t post_commit_gen = timeline_->GetSegmentCommitGeneration();
@@ -418,10 +432,12 @@ TEST_F(Phase9OutputBootstrapTest, MultiSwitchStability) {
     }
     ASSERT_TRUE(producer1.IsShadowDecodeReady());
 
+    timeline_->SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
     uint64_t gen_before_1 = timeline_->GetSegmentCommitGeneration();
     timeline_->BeginSegmentFromPreview();
     producer1.SetShadowDecodeMode(false);
     producer1.FlushCachedFrameToBuffer();
+    timeline_->NotifySuccessorVideoEmitted();  // Simulate observer
 
     uint64_t gen_after_1 = timeline_->GetSegmentCommitGeneration();
     EXPECT_GT(gen_after_1, gen_before_1) << "First switch should advance generation";
@@ -453,6 +469,7 @@ TEST_F(Phase9OutputBootstrapTest, MultiSwitchStability) {
     timeline_->BeginSegmentFromPreview();
     producer2.SetShadowDecodeMode(false);
     producer2.FlushCachedFrameToBuffer();
+    timeline_->NotifySuccessorVideoEmitted();  // Simulate observer
 
     uint64_t gen_after_2 = timeline_->GetSegmentCommitGeneration();
     EXPECT_GT(gen_after_2, gen_before_2) << "Second switch should advance generation";

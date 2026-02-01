@@ -156,6 +156,10 @@ class ProgramOutput {
   // Per INV-P7-001: Channel PTS must be monotonically increasing.
   int64_t GetLastEmittedPTS() const;
 
+  // Contract-level observability: first emitted PTS for AIR_AS_RUN_FRAME_RANGE.
+  // Set on first real (non-pad) frame; reset when input buffer changes (new segment).
+  int64_t GetFirstEmittedPTS() const;
+
   // Phase 8.4: Optional callback invoked for each frame (e.g. to feed TS mux).
   void SetSideSink(std::function<void(const buffer::Frame&)> fn);
   void ClearSideSink();
@@ -250,6 +254,8 @@ class ProgramOutput {
   bool successor_observer_fired_for_segment_ = false;
 
   int64_t last_pts_;
+  int64_t first_pts_{0};
+  bool first_pts_set_{false};
   int64_t last_frame_time_utc_;
   std::chrono::steady_clock::time_point fallback_last_frame_time_;
 
@@ -278,6 +284,32 @@ class ProgramOutput {
   // can initialize and output can flow. The first pad frame serves as
   // the "bootstrap frame" for SPS/PPS emission.
   bool no_content_segment_ = false;
+
+  // =========================================================================
+  // INV-PACING-ENFORCEMENT-002: RealTimeHoldPolicy state
+  // =========================================================================
+  // Enforces wall-clock pacing with freeze-then-pad behavior.
+  // See: docs/contracts/semantics/RealTimeHoldPolicy.md
+  //
+  // CLAUSE 1: "emit at most one frame per frame period"
+  // CLAUSE 2A: "re-emit last frame" for up to freeze_window
+  // CLAUSE 2B: "emit pad frames" after freeze window exceeded
+  // =========================================================================
+  int64_t pacing_last_emission_us_ = 0;            // Wall-clock of last emission
+  int64_t pacing_frame_period_us_ = 33333;         // 1/fps in microseconds (updated from first frame)
+  buffer::Frame pacing_last_emitted_frame_;        // For freeze re-emission
+  bool pacing_has_last_frame_ = false;             // Whether we have a frame to freeze
+  int64_t pacing_freeze_start_us_ = 0;             // When current freeze episode started
+  bool pacing_in_freeze_mode_ = false;             // Currently in freeze mode
+  static constexpr int64_t kDefaultFreezeWindowUs = 250'000;  // 250ms default
+  int64_t pacing_freeze_window_us_ = kDefaultFreezeWindowUs;
+
+  // Telemetry (CLAUSE 4: mandatory observability)
+  uint64_t pacing_freeze_frames_ = 0;              // Count of freeze re-emissions
+  uint64_t pacing_late_events_ = 0;                // Count of missed deadlines
+  int64_t pacing_freeze_duration_ms_ = 0;          // Current continuous freeze time
+  uint64_t pacing_max_freeze_streak_ = 0;          // Longest consecutive freeze run
+  uint64_t pacing_current_freeze_streak_ = 0;      // Current freeze streak
 
   // =========================================================================
   // INV-PACING-001: Diagnostic probe state for render loop pacing

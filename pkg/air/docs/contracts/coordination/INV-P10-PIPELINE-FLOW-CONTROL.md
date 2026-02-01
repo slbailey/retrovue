@@ -98,22 +98,22 @@ Phase 10 continues until:
 ❌ Either stream drops frames due to asymmetric backpressure
 ```
 
-### 3.2.1 Architectural Rule: Elastic Decode-Level Gating
+### 3.2.1 Architectural Rule: Slot-Based Decode-Level Gating
 
-**RULE-P10-DECODE-GATE**: Flow control must be applied at the earliest admission point (decode/demux), not at push/emit. However, flow control must use **elastic gating with hysteresis** to allow jitter compensation.
+**RULE-P10-DECODE-GATE**: Flow control must be applied at the earliest admission point (decode/demux), not at push/emit. Flow control uses **slot-based gating** (block at capacity, unblock when one slot frees) to maintain smooth producer-consumer flow.
 
 This is a **binding architectural rule** that all producers must follow:
 
 ```
-✅ CORRECT: Elastic gate with bounded decode-ahead
-   WaitForDecodeReady()  ← blocks only when buffer > high-water mark
-     └── av_read_frame()        (resumes at low-water mark = hysteresis)
+✅ CORRECT: Slot-based gate
+   WaitForDecodeReady()  ← blocks only when buffer is at capacity
+     └── av_read_frame()        (resumes when one slot frees)
            ├── audio packet → decode → push (with retry if needed)
            └── video packet → decode → push (with retry if needed)
 
-❌ WRONG: Hard gate that blocks on any fullness (causes buffer starvation)
-   WaitForDecodeReady()  ← blocks immediately when buffer is full
-     └── Downstream hiccup drains buffer before decode resumes
+❌ WRONG: Hysteresis with low-water mark (causes sawtooth stutter)
+   WaitForDecodeReady()  ← blocks at high-water, waits for low-water
+     └── Fill to high-water → hard stop → drain to 2 frames → frantic refill
 
 ❌ WRONG: Gate at push level (causes A/V desync)
    av_read_frame()       ← reads unconditionally
@@ -121,18 +121,18 @@ This is a **binding architectural rule** that all producers must follow:
      └── video packet → decode → WaitForPushReady() → push ← audio ran ahead!
 ```
 
-**Why elastic gating is required:**
-- Hard gating (block when full) removes jitter tolerance
-- Downstream hiccups cause buffer to drain before decode resumes
-- Result: buffer starvation, video stutter, audio silence
-- Elastic gating allows bounded decode-ahead (e.g., 3-5 frames) for jitter compensation
+**Why slot-based gating is required:**
+- Hysteresis gating (block at high-water, resume at low-water) causes sawtooth pattern
+- Sawtooth: fill → hard stop → drain to 2 frames → frantic refill → repeat
+- Result: bursty delivery, VLC stutter, audio clicks
+- Slot-based gating keeps producer-consumer in lockstep when buffer is full
 
-**Hysteresis parameters:**
-- High-water mark: Block when buffer exceeds (capacity - decode_ahead_budget)
-- Low-water mark: Resume when buffer falls below threshold (e.g., 2-3 frames)
-- The gap prevents oscillation between blocking and resuming
+**Slot-based parameters:**
+- Block when buffer is at capacity (Size() >= Capacity())
+- Resume when one slot frees (Size() < Capacity())
+- No hysteresis gap - immediate unblock on any freed slot
 
-**The lesson:** Producers must not read/generate new units of work when downstream cannot accept them. Backpressure must be symmetric in time-equivalent units. But BOUNDED ELASTICITY is required for jitter tolerance.
+**The lesson:** Producers must not read/generate new units of work when downstream cannot accept them. Backpressure must be symmetric in time-equivalent units. Slot-based unblocking eliminates the sawtooth pattern.
 
 ### 3.3 Producer Throttling vs Consumer Capacity
 
@@ -211,27 +211,31 @@ This prevents situations where "video has 2 frames but audio has 200ms buffered"
 
 These decisions are **locked** and must not be reconsidered during Phase 10 implementation:
 
-### 4.0 DOCTRINE: Elastic Buffering is Mandatory
+### 4.0 DOCTRINE: Slot-Based Flow Control Eliminates Sawtooth
 
-> **"Zero dropped frames requires elastic buffering.**
-> **Hard synchronization without jitter tolerance is a bug."**
+> **"Slot-based flow control eliminates sawtooth stuttering.**
+> **Hysteresis with low-water drain is the pattern that causes bursty delivery."**
 
 This is the **cardinal rule** of Phase 10 flow control. It was learned through painful experience:
 
-**The failure mode:** Hard gating (block immediately when buffer is full) removes jitter tolerance. When downstream has any hiccup, the buffer drains before decode can resume. Result: buffer starvation, video stutter, audio silence.
+**The failure mode:** Hysteresis gating (block at high-water, resume at low-water of 2 frames) creates a sawtooth pattern:
+1. Buffer fills to high-water → producer blocks
+2. Consumer drains buffer down to 2 frames
+3. Producer unblocks and frantically refills
+4. Repeat → bursty delivery → VLC stutter → audio clicks
 
-**The solution:** Elastic buffering with hysteresis. Allow bounded decode-ahead (e.g., 5 frames). Block only at high-water mark. Resume at low-water mark. This absorbs downstream jitter while still bounding memory growth.
+**The solution:** Slot-based gating. Block only at capacity. Unblock when one slot frees. Producer and consumer flow in lockstep when buffer is full. No draining phase.
 
 **Why this matters for future producers:**
-- Synthetic producers (Prevue, Weather, Emergency) don't need FFmpeg timing tricks
+- Synthetic producers (Prevue, Weather, Emergency) inherit smooth flow control
 - They just obey the same buffer + CT rules
-- They inherit jitter tolerance for free
+- No sawtooth, no bursty delivery
 - No special-casing per producer type
 
 **Corollary rules:**
-- Never gate on "buffer is full" — gate on "buffer exceeds high-water mark"
-- Never resume on "buffer has space" — resume on "buffer below low-water mark"
-- The gap between thresholds (hysteresis) is load-bearing, not optional
+- Block only at capacity — not at "high-water mark"
+- Resume immediately when one slot frees — not at "low-water mark"
+- No hysteresis gap — immediate unblock maintains steady flow
 
 
 ### 4.1 MasterClock is Authoritative
@@ -259,6 +263,142 @@ This is the **cardinal rule** of Phase 10 flow control. It was learned through p
 - Bursts are fine as long as buffer stays in equilibrium range
 - "Just-in-time decode" is a goal, not a micro-requirement
 - Producer may decode ahead up to budget, pause, repeat
+
+### 4.5 Frame-Based Rendering is Content-Blind
+
+**INV-P10-CONTENT-BLIND**: Frame-based rendering presents exactly the authored frame sequence. No rendering component infers editorial intent from pixel content.
+
+This invariant protects against "helpful" heuristics that would mask content issues:
+
+**Binding Rules:**
+- If `start_frame=N` is requested, frame N is presented — even if N is black
+- AIR does not skip "leader frames", "fade from black", or other transitional content
+- AIR does not detect or compensate for "uninteresting" frames
+- Pixel-semantic diagnostics (e.g., sampling Y plane) are for debugging only, never for logic
+
+**Why this matters:**
+- Broadcast assets commonly have black leader frames, color bars, fade transitions
+- Time-based rendering masked this via seek-decode latency and pacing jitter
+- Frame-based rendering exposes the exact authored sequence — which is correct
+- "Black frames at start" is a schedule/asset problem, not a rendering bug
+
+**How to fix black leader frames:**
+1. **Best:** Add `first_usable_frame` metadata to asset database (Core)
+2. **Acceptable:** Schedule starts at explicit frame offset (e.g., `start_frame=3`)
+3. **Least ideal:** Re-encode asset to remove leader (only for one-off assets)
+
+**AIR must never regress to heuristic forgiveness.** The schedule/asset layer is responsible for editorial decisions about which frames to present.
+
+### 4.6 Sink-Gate is a Flow Control Mechanism
+
+**INV-P10-SINK-GATE**: ProgramOutput must not consume frames before an output sink is attached.
+
+This prevents buffer starvation during the window between `StartChannel` and `AttachStream`:
+- Without this gate, frames are popped but not routed anywhere
+- Buffer drains without pacing, causing underrun before playback even begins
+- Gate pauses frame consumption until OutputBus is connected
+
+**This is NOT:**
+- A quality gate (doesn't inspect frame content)
+- A content gate (doesn't filter frames)
+- A visibility gate (doesn't wait for "interesting" content)
+
+**This IS:**
+- A flow control mechanism to prevent pre-attachment buffer drain
+- Part of decode-depth gating, not content filtering
+
+### 4.7 LIVE State Requires Observable Output
+
+**INV-OUTPUT-READY-BEFORE-LIVE**: A channel MUST NOT enter LIVE state until the output pipeline is observable.
+
+This invariant ensures semantic correctness of the LIVE state:
+- **LIVE** means "viewers can see output"
+- **NOT_READY** means "output not yet observable"
+
+**Enforcement point:** SwitchWatcher auto-complete (PlayoutEngine.cpp)
+
+The SwitchWatcher monitors buffer readiness and auto-completes the switch when thresholds are met. However, buffer readiness alone is insufficient — the output sink must also be attached.
+
+**Binding Rules:**
+- SwitchWatcher MUST NOT set `switch_auto_completed = true` until `IsOutputSinkAttached()` returns true
+- If buffer is ready but sink is not attached, remain in NOT_READY state
+- Core will attach the sink and retry SwitchToLive
+
+**Why this matters:**
+- MPEG-TS output is non-retentive and non-seekable
+- Frames emitted before a viewer connects are irrecoverable
+- Declaring LIVE while unobservable is semantically invalid
+- INV-P10-SINK-GATE preserves frames, but does not define LIVE semantics
+
+**Log signature:**
+```
+[SwitchWatcher] INV-OUTPUT-READY-BEFORE-LIVE: Buffer ready but sink not attached, deferring LIVE commit
+[SwitchWatcher] INV-OUTPUT-READY-BEFORE-LIVE: Sink attached, LIVE commit authorized
+```
+
+### 4.8 Switch Readiness Does Not Require Audio Data
+
+**INV-SWITCH-READINESS**: SwitchToLive may complete when:
+- Video depth >= minimum threshold (2 frames)
+- Output pipeline is attached and ready
+- Audio format is locked (established at channel start)
+
+Audio *data* does NOT need to be present at switch time.
+
+**Rationale:**
+Audio may legitimately lag video due to epoch alignment:
+- Audio frames are skipped until video epoch is established
+- First audio frame may arrive after first video frame
+- This is correct behavior, not an error condition
+
+**Handling audio gap:**
+- Silence padding (INV-P10.5-OUTPUT-SAFETY-RAIL) bridges the gap
+- Real audio replaces silence as frames arrive
+- No timing discontinuity or artifact
+
+**Binding Rules:**
+- Readiness check: `video_depth >= 2` (audio_depth may be 0)
+- SwitchWatcher auto-complete does not wait for audio
+- Audio lag beyond 500ms triggers WARNING log (diagnostic only, does not block)
+
+**Log signatures:**
+```
+# NOT_READY (waiting for video):
+[SwitchToLive] INV-SWITCH-READINESS: NOT_READY (video=1/2, audio=0, waiting for video)
+
+# PASSED (video ready, audio may be 0):
+
+### 4.9 Switch Completion Requires Successor Video Emission (INV-SWITCH-SUCCESSOR-EMISSION)
+
+**INV-SWITCH-SUCCESSOR-EMISSION**: A segment switch is not complete unless at least one real successor video frame has been emitted by the encoder.
+
+"Emitted" means: passed through ProgramOutput, routed through OutputBus, accepted by the encoder/mux. Pad frames do not count.
+
+**Enforcement:**
+- **TimelineController**: When an emission observer is attached (MpegTSOutputSink with callback), `segment_commit_generation_` advances only when `NotifySuccessorVideoEmitted()` is called (from sink after encoding a real frame). When no observer is attached (tests, late attach), commit_gen advances when the mapping locks.
+- **SwitchWatcher**: Does the swap first, then waits for `successor_video_emitted_` before setting `switch_auto_completed`. Hard assert: must not set `switch_auto_completed` without that signal.
+- **Direct path**: Does not return success until `successor_video_emitted_` is true (or no sink attached).
+- **MpegTSOutputSink**: Calls `OnSuccessorVideoEmitted` when a real (non-pad) video frame is encoded; pad frames (`asset_uri == "pad://black"`) do not trigger the callback.
+
+**Binding Rules:**
+- `switch_auto_completed` MUST NOT be set true until successor video emission is observed (or no sink).
+- CT/segment commit (observable via `GetSegmentCommitGeneration()`) MUST NOT advance past the boundary until that emission when an emission observer is attached.
+- Zero-content segments (frame_count=0) set `successor_video_emitted_` immediately (pad-only segment).
+
+**Log signatures:**
+```
+[TimelineController] INV-SWITCH-SUCCESSOR-EMISSION: Segment N commit_gen=M (successor video emitted)
+[SwitchToLive] INV-SWITCH-SUCCESSOR-EMISSION VIOLATION: timeout waiting for successor video emission
+```
+
+**4.8 continued — Switch Readiness log signatures:**
+```
+[SwitchToLive] INV-SWITCH-READINESS: PASSED (video=4/2, audio=0)
+[SwitchWatcher] INV-SWITCH-READINESS: PASSED (video=4/2, audio=3)
+
+# WARNING (audio lag diagnostic):
+[SwitchWatcher] INV-SWITCH-READINESS WARNING: Video ready (depth=4) but audio still missing after 500ms (silence padding active)
+```
 
 ---
 
@@ -439,17 +579,18 @@ All producers (FileProducer, PrevueProducer, WeatherProducer, EmergencyProducer,
 
 ### DOCTRINE (Read This First)
 
-> **"Zero dropped frames requires elastic buffering.**
-> **Hard synchronization without jitter tolerance is a bug."**
+> **"Slot-based flow control eliminates sawtooth stuttering.**
+> **Hysteresis with low-water drain is the pattern that causes bursty delivery."**
 
-Do NOT implement hard gating. Do NOT block when buffer is merely "full". Use elastic flow control with hysteresis (high-water/low-water marks). This is non-negotiable.
+Do NOT use hysteresis gating. Do NOT wait for low-water mark to resume. Use slot-based flow control (block at capacity, unblock when one slot frees). This is non-negotiable.
 
 ### Mandatory Requirements
 
 1. **Producers must not read/generate new units of work when downstream cannot accept them.**
    - Flow control gate BEFORE packet read/frame generation
    - NOT at push/emit level
-   - **BUT: Use ELASTIC gating, not hard gating** (see doctrine above)
+   - **Use SLOT-BASED gating** (block at capacity, unblock when one slot frees)
+   - **Do NOT use hysteresis** (no low-water drain)
 
 2. **Backpressure must be symmetric in time-equivalent units.**
    - Audio and video gated together
@@ -546,6 +687,67 @@ Do NOT implement hard gating. Do NOT block when buffer is merely "full". Use ela
    - VLC drops/mutes audio, then video freezes
    - PCR becomes inconsistent
    - Audio liveness was designed for Phase 9 bootstrap, not steady-state
+
+9. **INV-P10-PAD-REASON: Every pad frame must be classified by root cause.**
+
+   When ProgramOutput emits a pad frame (safety rail), the cause must be logged:
+
+   | PadReason | Meaning |
+   |-----------|---------|
+   | BUFFER_TRULY_EMPTY | Buffer depth is 0, producer is starved |
+   | PRODUCER_GATED | Producer is blocked at flow control gate |
+   | CT_SLOT_SKIPPED | Frame exists but CT is in the future |
+   | FRAME_CT_MISMATCH | Frame CT doesn't match expected output CT |
+   | UNKNOWN | Fallback for unclassified cases |
+
+   Counters (`pads_buffer_empty_`, etc.) track per-reason totals for diagnostics.
+
+10. **INV-NO-PAD-WHILE-DEPTH-HIGH: Pad emission is a violation if buffer depth >= 10.**
+
+   If a pad frame is emitted while video buffer depth is >= 10 frames, this is logged as:
+   ```
+   INV-NO-PAD-WHILE-DEPTH-HIGH VIOLATION: Pad emitted while depth=X >= 10
+   ```
+
+   This indicates a bug in the flow control or CT tracking logic - the buffer has frames
+   but they're not being consumed. Counter: `pad_while_depth_high_`.
+
+11. **INV-P10-FRAME-INDEXED-EXECUTION: Producers track progress by frame index, not elapsed time.**
+
+   Segment execution is frame-bounded. Producers count frames emitted, not time elapsed.
+   CT is derived from frame index via TimelineController. See [INV-FRAME-003](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).
+
+   ```cpp
+   int64_t frames_produced = 0;
+   const int64_t segment_frame_count = segment.frame_count;
+
+   while (frames_produced < segment_frame_count && !stop_requested) {
+       if (!WaitForProduceReady()) break;
+       Frame frame = DecodeNextFrame();
+       frame.ct_us = timeline_controller.ComputeCT(segment_start_ct, frames_produced, fps);
+       Push(frame);
+       frames_produced++;
+   }
+   // Segment complete when frames_produced == segment_frame_count
+   ```
+
+   What is CORRECT:
+   - ✓ Track `frames_produced` as integer counter
+   - ✓ Compare against `segment.frame_count` for completion
+   - ✓ Compute CT from frame index: `ct = epoch + frame_index * frame_duration`
+   - ✓ Padding is additional frames after content
+
+   What is FORBIDDEN:
+   - ❌ Reading wall clock to determine segment progress
+   - ❌ Converting CT to frame index (`frame = (ct - epoch) / frame_duration`)
+   - ❌ Time-based segment completion (`elapsed >= duration`)
+   - ❌ Micro-corrections or adaptive timing
+
+   Why this matters:
+   - Frame-accurate editorial cuts require exact frame counts
+   - Padding must be deterministic (exact frame count, not "fill until time X")
+   - CT → frame conversion introduces rounding errors that accumulate
+   - Frame index is the execution cursor; CT is the timestamp derived from it
 
 ### Common Flow Control Primitive
 

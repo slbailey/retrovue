@@ -40,7 +40,7 @@ This document is a **Coordination Contract**, refining higher-level laws. It doe
 | INV-P8-SWITCH-002 | CT and MT describe same instant at segment start; first frame locks both (type-safe API) |
 | INV-P8-SHADOW-PACE | Shadow caches first frame, waits in place; no run-ahead decode |
 | INV-P8-AUDIO-GATE | Audio gated only while shadow (and in code: while mapping pending) |
-| INV-P8-SEGMENT-COMMIT | First frame admitted → segment commits, owns CT; old segment ForceStop |
+| INV-P8-SEGMENT-COMMIT | First frame admitted → segment commits, owns CT; old segment RequestStop |
 | INV-P8-SEGMENT-COMMIT-EDGE | Generation counter per commit for multi-switch edge detection |
 
 ## 4. Code-referenced (AIR / Core)

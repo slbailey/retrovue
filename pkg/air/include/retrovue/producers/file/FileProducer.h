@@ -175,6 +175,9 @@ namespace retrovue::producers::file
     // Used to detect zero-frame segments for bootstrap frame handling.
     int64_t GetConfiguredFrameCount() const { return config_.frame_count; }
 
+    // Contract-level observability: as-run stats for AIR_AS_RUN_FRAME_RANGE.
+    std::optional<AsRunFrameStats> GetAsRunFrameStats() const override;
+
   private:
     // Main production loop (runs in producer thread).
     void ProduceLoop();

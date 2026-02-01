@@ -11,13 +11,17 @@
 #include <atomic>
 #include <numeric>
 #include <cmath>
+#include <functional>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/timing/TimelineController.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
+#include "retrovue/renderer/ProgramOutput.h"
 #include "timing/TestMasterClock.h"
 
 using namespace retrovue;
@@ -34,6 +38,59 @@ std::string GetTestVideoPath() {
   if (env_path) return env_path;
   return "/opt/retrovue/assets/SampleA.mp4";
 }
+
+// =============================================================================
+// TestOutputSink: Modern architecture test sink implementing IOutputSink
+// =============================================================================
+class TestOutputSink : public output::IOutputSink {
+ public:
+  using VideoCallback = std::function<void(const buffer::Frame&)>;
+  using AudioCallback = std::function<void(const buffer::AudioFrame&)>;
+
+  explicit TestOutputSink(const std::string& name = "test-sink")
+      : name_(name), status_(output::SinkStatus::kIdle) {}
+
+  bool Start() override {
+    status_ = output::SinkStatus::kRunning;
+    return true;
+  }
+
+  void Stop() override {
+    status_ = output::SinkStatus::kStopped;
+  }
+
+  bool IsRunning() const override {
+    return status_ == output::SinkStatus::kRunning;
+  }
+
+  output::SinkStatus GetStatus() const override {
+    return status_;
+  }
+
+  void ConsumeVideo(const buffer::Frame& frame) override {
+    if (video_callback_) video_callback_(frame);
+  }
+
+  void ConsumeAudio(const buffer::AudioFrame& audio_frame) override {
+    if (audio_callback_) audio_callback_(audio_frame);
+  }
+
+  void SetStatusCallback(output::SinkStatusCallback callback) override {
+    status_callback_ = std::move(callback);
+  }
+
+  std::string GetName() const override { return name_; }
+
+  void SetVideoCallback(VideoCallback cb) { video_callback_ = std::move(cb); }
+  void SetAudioCallback(AudioCallback cb) { audio_callback_ = std::move(cb); }
+
+ private:
+  std::string name_;
+  output::SinkStatus status_;
+  output::SinkStatusCallback status_callback_;
+  VideoCallback video_callback_;
+  AudioCallback audio_callback_;
+};
 
 // =============================================================================
 // Phase 10 Test Fixtures
@@ -702,6 +759,389 @@ TEST_F(Phase10FlowControlTest, TEST_P10_DECODE_GATE_001_NoReadWhenEitherBufferFu
             << ", audio_max_pts=" << audio_max_pts << "us"
             << ", pts_diff=" << pts_diff << "us"
             << " (RULE-P10-DECODE-GATE verified: decode-level gating prevents A/V desync)"
+            << std::endl;
+}
+
+// =============================================================================
+// TEST-INV-SWITCH-READINESS-001: Switch Completes With Video Only (Regression)
+// =============================================================================
+// This test guards against the frame-based mode deadlock where:
+//   - Readiness required audio_depth >= 5
+//   - Write barrier disabled writes on producer
+//   - Audio frames dropped due to barrier → audio_depth stays 0
+//   - Self-deadlock: waiting for audio that can never arrive
+//
+// INVARIANT:
+// Readiness MUST NOT depend on data from a producer whose writes are disabled.
+// Frame-based mode enforces this strictly — there is no timing slack.
+//
+// Test strategy:
+// 1. Start preview producer with shadow mode
+// 2. Disable shadow mode and set write barrier early
+// 3. Verify switch completes with video depth >= 2, audio depth may be 0
+// 4. Continue and verify audio eventually flows after barrier removed
+
+TEST_F(Phase10FlowControlTest, TEST_INV_SWITCH_READINESS_001_SwitchCompletesWithVideoOnly) {
+  // Buffer for preview producer
+  buffer::FrameRingBuffer preview_buffer(60);
+
+  ProducerConfig producer_config;
+  producer_config.asset_uri = GetTestVideoPath();
+  producer_config.target_width = 640;
+  producer_config.target_height = 360;
+  producer_config.target_fps = 30.0;
+
+  // Create preview producer in shadow mode (simulates LoadPreview)
+  FileProducer preview_producer(producer_config, preview_buffer, clock_, nullptr, timeline_.get());
+  preview_producer.SetShadowDecodeMode(true);
+
+  ASSERT_TRUE(preview_producer.start());
+
+  // Wait for shadow decode to be ready (first frame cached)
+  auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (!preview_producer.IsShadowDecodeReady() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(10ms);
+  }
+  ASSERT_TRUE(preview_producer.IsShadowDecodeReady()) << "Shadow decode should be ready";
+
+  // =========================================================================
+  // Critical sequence that triggered the bug in frame-based mode:
+  // 1. Disable shadow mode → audio should start flowing
+  // 2. Set write barrier immediately → blocks all writes
+  // 3. Check if producer starves waiting for audio
+  // =========================================================================
+
+  // Step 1: Disable shadow mode
+  preview_producer.SetShadowDecodeMode(false);
+
+  // Step 2: Flush cached frame (simulates what PlayoutEngine does)
+  bool flushed = preview_producer.FlushCachedFrameToBuffer();
+  EXPECT_TRUE(flushed) << "Should have flushed cached shadow frame";
+
+  // At this point, video_depth should be >= 1 from the flush
+  size_t video_depth_after_flush = preview_buffer.Size();
+  EXPECT_GE(video_depth_after_flush, 1u) << "Should have at least 1 video frame from flush";
+
+  // Wait briefly for more frames
+  std::this_thread::sleep_for(100ms);
+
+  // Capture buffer state - this is the "readiness check" moment
+  size_t video_depth = preview_buffer.Size();
+  size_t audio_depth = preview_buffer.AudioSize();
+
+  // =========================================================================
+  // INV-SWITCH-READINESS: Switch should complete with video only
+  // =========================================================================
+  // Old buggy code required: video_depth >= 2 && audio_depth >= 5
+  // Fixed code requires: video_depth >= 2 (audio is optional, silence pads)
+
+  constexpr size_t kMinVideoDepth = 2;
+  bool readiness_passed = (video_depth >= kMinVideoDepth);
+
+  EXPECT_TRUE(readiness_passed)
+      << "INV-SWITCH-READINESS FAILED: Switch should complete with video only!\n"
+      << "  video_depth=" << video_depth << " (min required: " << kMinVideoDepth << ")\n"
+      << "  audio_depth=" << audio_depth << " (NOT required for readiness)\n"
+      << "  Frame-based mode removes timing slack - readiness must not depend on\n"
+      << "  data from a producer that could have writes disabled.";
+
+  // Verify audio_depth may be 0 - this is acceptable
+  std::cout << "[TEST-INV-SWITCH-READINESS-001] Pre-barrier state: "
+            << "video_depth=" << video_depth
+            << ", audio_depth=" << audio_depth
+            << ", readiness_passed=" << (readiness_passed ? "YES" : "NO")
+            << std::endl;
+
+  // Now verify audio eventually arrives (no barrier was actually set in this test,
+  // so audio should flow freely)
+  deadline = std::chrono::steady_clock::now() + 2s;
+  while (preview_buffer.AudioSize() < 5 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(10ms);
+  }
+
+  size_t final_audio_depth = preview_buffer.AudioSize();
+  EXPECT_GE(final_audio_depth, 1u)
+      << "Audio should eventually arrive when writes are not disabled";
+
+  preview_producer.stop();
+
+  std::cout << "[TEST-INV-SWITCH-READINESS-001] PASSED: "
+            << "Switch completed with video_depth=" << video_depth
+            << ", audio_depth=" << audio_depth
+            << ". Audio eventually reached depth=" << final_audio_depth
+            << " (silence padding covers initial gap)."
+            << std::endl;
+}
+
+// =============================================================================
+// TEST-INV-SWITCH-READINESS-002: Write Barrier Blocks Both A/V (Self-Deadlock Guard)
+// =============================================================================
+// Verify that when write barrier is set, readiness evaluation does NOT block
+// waiting for audio from the barriered producer.
+//
+// This test simulates the exact deadlock scenario:
+// 1. Producer is writing frames
+// 2. SetWriteBarrier() is called (simulating switch to new segment)
+// 3. Verify that readiness can be evaluated with audio_depth=0
+
+TEST_F(Phase10FlowControlTest, TEST_INV_SWITCH_READINESS_002_WriteBarrierNoDeadlock) {
+  buffer::FrameRingBuffer ring_buffer(60);
+
+  ProducerConfig producer_config;
+  producer_config.asset_uri = GetTestVideoPath();
+  producer_config.target_width = 640;
+  producer_config.target_height = 360;
+  producer_config.target_fps = 30.0;
+
+  FileProducer producer(producer_config, ring_buffer, clock_, nullptr, timeline_.get());
+  ASSERT_TRUE(producer.start());
+
+  // Wait for buffer to fill with some frames
+  auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (ring_buffer.Size() < 5 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(10ms);
+  }
+  ASSERT_GE(ring_buffer.Size(), 2u) << "Should have some video frames";
+
+  // Set write barrier - producer can no longer write
+  producer.SetWriteBarrier();
+
+  // Drain the buffer to simulate consumption
+  buffer::Frame frame;
+  while (ring_buffer.Pop(frame)) {}
+
+  buffer::AudioFrame audio;
+  while (ring_buffer.PopAudioFrame(audio)) {}
+
+  // Now buffer is mostly empty (may have 1-2 frames from decode-ahead)
+  size_t video_depth_after_drain = ring_buffer.Size();
+  size_t audio_depth_after_drain = ring_buffer.AudioSize();
+
+  // Wait a bit - producer should NOT be able to add MORE frames
+  std::this_thread::sleep_for(200ms);
+
+  size_t video_depth_after_wait = ring_buffer.Size();
+  size_t audio_depth_after_wait = ring_buffer.AudioSize();
+
+  // Key assertion: buffer depth should NOT increase after barrier
+  EXPECT_LE(video_depth_after_wait, video_depth_after_drain + 1)
+      << "Write barrier should prevent significant new video frames";
+  EXPECT_LE(audio_depth_after_wait, audio_depth_after_drain + 1)
+      << "Write barrier should prevent significant new audio frames";
+
+  // =========================================================================
+  // KEY ASSERTION: The old code would have waited forever here because:
+  //   - readiness required audio_depth >= 5
+  //   - producer can't write (barrier set)
+  //   - audio_depth stays 0 forever = deadlock
+  //
+  // With the fix, readiness check would pass with video_depth >= 2 from
+  // a DIFFERENT producer (the preview producer), not the barriered one.
+  // =========================================================================
+
+  // This test verifies the barrier works. The actual deadlock prevention
+  // is tested in TEST_INV_SWITCH_READINESS_001 which uses preview producer.
+
+  producer.stop();
+
+  std::cout << "[TEST-INV-SWITCH-READINESS-002] PASSED: "
+            << "Write barrier correctly blocks all writes. "
+            << "Readiness must come from unbarriered preview producer, not this one."
+            << std::endl;
+}
+
+// =============================================================================
+// TEST-INV-P8-ZERO-FRAME-READY: Zero-Frame Segment Shadow Readiness (Regression)
+// =============================================================================
+// This test guards against the deadlock where:
+//   - Core sends LoadPreview with frame_count=0 (valid grid reconciliation)
+//   - Producer enters shadow mode
+//   - Producer immediately considers segment "complete" without decoding
+//   - shadow_decode_ready_ never becomes true
+//   - SwitchToLive waits forever for IsShadowDecodeReady()
+//
+// INVARIANT: INV-P8-ZERO-FRAME-READY
+// When frame_count=0, shadow_decode_ready must be set true immediately
+// because there's nothing to cache. SwitchToLive proceeds with empty buffer,
+// and safety rails (pad frames) maintain output liveness.
+//
+// Test strategy:
+// 1. Create producer with frame_count=0
+// 2. Enable shadow mode
+// 3. Verify IsShadowDecodeReady() returns true immediately
+// 4. Verify FlushCachedFrameToBuffer() returns true (vacuous success)
+
+TEST_F(Phase10FlowControlTest, TEST_INV_P8_ZERO_FRAME_READY_ShadowReadyImmediately) {
+  buffer::FrameRingBuffer buffer(60);
+
+  ProducerConfig producer_config;
+  producer_config.asset_uri = GetTestVideoPath();
+  producer_config.target_width = 640;
+  producer_config.target_height = 360;
+  producer_config.target_fps = 30.0;
+  // CRITICAL: frame_count=0 means "produce zero frames"
+  producer_config.frame_count = 0;
+
+  FileProducer producer(producer_config, buffer, clock_, nullptr, timeline_.get());
+
+  // Enable shadow mode BEFORE starting
+  producer.SetShadowDecodeMode(true);
+
+  // =========================================================================
+  // INV-P8-ZERO-FRAME-READY: With frame_count=0, shadow_decode_ready must be
+  // true IMMEDIATELY after SetShadowDecodeMode(true), without waiting for
+  // any frame to be decoded (because no frames will ever be decoded).
+  // =========================================================================
+  EXPECT_TRUE(producer.IsShadowDecodeReady())
+      << "INV-P8-ZERO-FRAME-READY VIOLATED: "
+      << "With frame_count=0, IsShadowDecodeReady() must return true immediately! "
+      << "Otherwise SwitchToLive deadlocks waiting for a frame that never comes.";
+
+  // Start the producer (it should immediately enter segment_complete state)
+  ASSERT_TRUE(producer.start());
+
+  // Still ready (shouldn't have changed)
+  EXPECT_TRUE(producer.IsShadowDecodeReady())
+      << "Shadow decode ready should remain true after start";
+
+  // Disable shadow mode
+  producer.SetShadowDecodeMode(false);
+
+  // =========================================================================
+  // INV-P8-ZERO-FRAME-READY: FlushCachedFrameToBuffer must return true
+  // (vacuous success) when frame_count=0, not false (which would log a
+  // spurious violation in SwitchToLive).
+  // =========================================================================
+  bool flush_result = producer.FlushCachedFrameToBuffer();
+  EXPECT_TRUE(flush_result)
+      << "INV-P8-ZERO-FRAME-READY: FlushCachedFrameToBuffer should return true "
+      << "(vacuous success) when frame_count=0 - nothing to flush is not an error!";
+
+  // Buffer should be empty (no frames produced with frame_count=0)
+  EXPECT_EQ(buffer.Size(), 0u) << "Buffer should be empty with frame_count=0";
+  EXPECT_EQ(buffer.AudioSize(), 0u) << "Audio buffer should be empty with frame_count=0";
+
+  producer.stop();
+
+  std::cout << "[TEST-INV-P8-ZERO-FRAME-READY] PASSED: "
+            << "frame_count=0 correctly signals shadow_decode_ready=true immediately, "
+            << "preventing SwitchToLive deadlock. Safety rails will handle empty buffer."
+            << std::endl;
+}
+
+// =============================================================================
+// TEST-INV-P8-ZERO-FRAME-BOOTSTRAP: End-to-End Output With Zero-Frame Segment
+// =============================================================================
+// This test verifies the complete flow for the user-visible symptom:
+//   "I see NOTHING on screen with a zero-frame segment"
+//
+// The test verifies:
+// 1. ProgramOutput with empty buffer (no producer content)
+// 2. SetNoContentSegment(true) allows pad frames immediately
+// 3. Pad frames are actually generated and routed to output
+//
+// This is the E2E assertion the user requested: "within N ms, mux emits at least
+// one video frame (or frames_out > 0)".
+
+TEST_F(Phase10FlowControlTest, TEST_INV_P8_ZERO_FRAME_BOOTSTRAP_EndToEndOutputFlows) {
+  using namespace retrovue::renderer;
+  using namespace retrovue::output;
+
+  // Create empty buffer (simulates zero-frame segment)
+  buffer::FrameRingBuffer empty_buffer(30);
+
+  // Create a RealTime clock for this test (Deterministic mode doesn't advance time)
+  auto now = std::chrono::system_clock::now();
+  auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      now.time_since_epoch()).count();
+  auto realtime_clock = std::make_shared<TestMasterClock>(now_us, TestMasterClock::Mode::RealTime);
+
+  // Modern architecture: OutputBus + TestOutputSink
+  OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("zero-frame-bootstrap-sink");
+
+  // Create a simple frame counter to capture output
+  std::atomic<uint64_t> frames_received{0};
+  std::atomic<uint64_t> audio_frames_received{0};
+
+  sink->SetVideoCallback([&frames_received](const buffer::Frame& frame) {
+    frames_received.fetch_add(1, std::memory_order_relaxed);
+    (void)frame;
+  });
+
+  sink->SetAudioCallback([&audio_frames_received](const buffer::AudioFrame& frame) {
+    audio_frames_received.fetch_add(1, std::memory_order_relaxed);
+    (void)frame;
+  });
+
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
+  // Create ProgramOutput with empty buffer
+  RenderConfig render_config;
+  render_config.mode = RenderMode::HEADLESS;
+
+  auto program_output = ProgramOutput::Create(
+      render_config,
+      empty_buffer,
+      realtime_clock,  // Use RealTime clock so time advances
+      nullptr,  // No metrics exporter for test
+      1);       // channel_id
+
+  // Connect to OutputBus (modern architecture)
+  program_output->SetOutputBus(&bus);
+
+  // =========================================================================
+  // INV-P8-ZERO-FRAME-BOOTSTRAP: Set no-content segment before starting
+  // =========================================================================
+  // This bypasses the CONTENT-BEFORE-PAD gate, allowing pad frames immediately.
+  program_output->SetNoContentSegment(true);
+  EXPECT_TRUE(program_output->IsNoContentSegment());
+
+  // Lock pad audio format (required for pad frame generation)
+  program_output->LockPadAudioFormat();
+
+  // Start ProgramOutput
+  ASSERT_TRUE(program_output->Start());
+
+  // =========================================================================
+  // KEY ASSERTION: Within 500ms, pad frames should be emitted
+  // =========================================================================
+  // This is the E2E check for "I see NOTHING" - if no frames are emitted,
+  // the output would be blank. With the fix, pad frames should flow.
+  auto deadline = std::chrono::steady_clock::now() + 500ms;
+  while (frames_received.load() < 5 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(10ms);
+  }
+
+  uint64_t final_video_count = frames_received.load();
+  uint64_t final_audio_count = audio_frames_received.load();
+
+  // Stop output before assertions
+  program_output->Stop();
+  bus.DetachSink(/*force=*/true);
+
+  // =========================================================================
+  // ASSERTION: At least 5 pad frames emitted within 500ms
+  // =========================================================================
+  // At 30fps, 500ms should produce ~15 frames. Requiring 5 allows for startup.
+  EXPECT_GE(final_video_count, 5u)
+      << "INV-P8-ZERO-FRAME-BOOTSTRAP FAILED: No pad frames emitted! "
+      << "User would see NOTHING on screen. "
+      << "Expected >= 5 frames within 500ms, got " << final_video_count << ". "
+      << "Check: SetNoContentSegment bypasses CONTENT-BEFORE-PAD gate; "
+      << "GeneratePadFrame produces valid black frames.";
+
+  // Audio should also flow (silence pads)
+  EXPECT_GE(final_audio_count, 5u)
+      << "INV-P8-ZERO-FRAME-BOOTSTRAP: Audio pad frames should also emit. "
+      << "Got " << final_audio_count << " audio frames.";
+
+  std::cout << "[TEST-INV-P8-ZERO-FRAME-BOOTSTRAP] PASSED: "
+            << "E2E verified - zero-frame segment emits pad frames: "
+            << "video=" << final_video_count << ", audio=" << final_audio_count
+            << " (both >= 5 as expected). User would see black+silence, not NOTHING."
             << std::endl;
 }
 

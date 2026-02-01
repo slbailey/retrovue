@@ -40,6 +40,8 @@ class FakeProducerBase : public retrovue::producers::IProducer {
   bool start() override;
   void stop() override;
   bool isRunning() const override;
+  void RequestStop() override;
+  bool IsStopped() const override;
 
   // Tick advances the producer by one frame interval.
   // If ShouldEmitFrame() returns true, emits a synthetic frame.

@@ -34,6 +34,7 @@ MetricsHTTPServer::MetricsHTTPServer(int port)
     : port_(port),
       running_(false),
       stop_requested_(false),
+      startup_result_(0),
       server_socket_(INVALID_SOCKET) {
 }
 
@@ -66,14 +67,33 @@ bool MetricsHTTPServer::Start() {
 #endif
 
   stop_requested_.store(false, std::memory_order_release);
-  
+  startup_result_.store(0, std::memory_order_release);  // Reset to pending
+
   server_thread_ = std::make_unique<std::thread>(&MetricsHTTPServer::ServerLoop, this);
-  
-  // Wait a bit for server to start
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  
-  std::cout << "[MetricsHTTPServer] Started on port " << port_ << std::endl;
-  return true;
+
+  // Wait for server thread to signal success or failure (up to 2 seconds)
+  for (int i = 0; i < 200; ++i) {
+    int result = startup_result_.load(std::memory_order_acquire);
+    if (result != 0) {
+      if (result > 0) {
+        std::cout << "[MetricsHTTPServer] Started on port " << port_ << std::endl;
+        return true;
+      } else {
+        // Startup failed - join thread and return false
+        if (server_thread_ && server_thread_->joinable()) {
+          server_thread_->join();
+        }
+        server_thread_.reset();
+        return false;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  // Timeout waiting for startup - treat as failure
+  std::cerr << "[MetricsHTTPServer] Timeout waiting for server startup" << std::endl;
+  Stop();
+  return false;
 }
 
 void MetricsHTTPServer::Stop() {
@@ -105,12 +125,11 @@ void MetricsHTTPServer::Stop() {
 }
 
 void MetricsHTTPServer::ServerLoop() {
-  std::cout << "[MetricsHTTPServer] Server loop started" << std::endl;
-
   // Create socket
   server_socket_ = socket(AF_INET, SOCK_STREAM, 0);
   if (server_socket_ == INVALID_SOCKET) {
     std::cerr << "[MetricsHTTPServer] Failed to create socket" << std::endl;
+    startup_result_.store(-1, std::memory_order_release);
     return;
   }
 
@@ -141,19 +160,22 @@ void MetricsHTTPServer::ServerLoop() {
     std::cerr << "[MetricsHTTPServer] Failed to bind socket to port " << port_ << std::endl;
     CLOSE_SOCKET(server_socket_);
     server_socket_ = INVALID_SOCKET;
+    startup_result_.store(-1, std::memory_order_release);
     return;
   }
 
   // Listen for connections
   if (listen(server_socket_, 5) == SOCKET_ERROR) {
-    std::cerr << "[MetricsHTTPServer] Failed to listen" << std::endl;
+    std::cerr << "[MetricsHTTPServer] Failed to listen on port " << port_ << std::endl;
     CLOSE_SOCKET(server_socket_);
     server_socket_ = INVALID_SOCKET;
+    startup_result_.store(-1, std::memory_order_release);
     return;
   }
 
+  // Signal successful startup to Start()
   running_.store(true, std::memory_order_release);
-  std::cout << "[MetricsHTTPServer] Listening on port " << port_ << std::endl;
+  startup_result_.store(1, std::memory_order_release);
 
   // Accept loop
   while (!stop_requested_.load(std::memory_order_acquire)) {

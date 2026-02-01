@@ -58,13 +58,18 @@ class FakeAirProducerForClockSwitch(Producer):
     def load_preview(
         self,
         asset_path: str,
-        start_offset_ms: int = 0,
-        hard_stop_time_ms: int = 0,
+        start_frame: int,
+        frame_count: int,
+        fps_numerator: int,
+        fps_denominator: int,
     ) -> bool:
+        """Load preview with frame-indexed execution (INV-FRAME-001/002/003)."""
         self.load_preview_calls.append({
             "asset_path": asset_path,
-            "start_offset_ms": start_offset_ms,
-            "hard_stop_time_ms": hard_stop_time_ms,
+            "start_frame": start_frame,
+            "frame_count": frame_count,
+            "fps_numerator": fps_numerator,
+            "fps_denominator": fps_denominator,
         })
         return True
 

@@ -60,6 +60,7 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       last_audio_mux_pts_(AV_NOPTS_VALUE),
       last_input_pts_(AV_NOPTS_VALUE),
       first_frame_encoded_(false),
+      first_keyframe_emitted_(false),
       video_frame_count_(0),
       audio_prime_stall_count_(0),
       avio_opaque_(nullptr),
@@ -991,7 +992,19 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         }
         
         drain_attempts++;
-        
+
+        // INV-AIR-IDR-BEFORE-OUTPUT: Gate output until first keyframe emitted
+        if (!first_keyframe_emitted_) {
+          if (packet_->flags & AV_PKT_FLAG_KEY) {
+            first_keyframe_emitted_ = true;
+          } else {
+            // Block non-keyframe packets until first IDR is emitted
+            std::cerr << "[AIR] INV-AIR-IDR-BEFORE-OUTPUT: BLOCKING output (waiting_for_idr=true)" << std::endl;
+            av_packet_unref(packet_);
+            continue;
+          }
+        }
+
         // Write drained packet
         packet_->stream_index = video_stream_->index;
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
@@ -1054,6 +1067,18 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
 
     packets_processed++;
 
+    // INV-AIR-IDR-BEFORE-OUTPUT: Gate output until first keyframe emitted
+    if (!first_keyframe_emitted_) {
+      if (packet_->flags & AV_PKT_FLAG_KEY) {
+        first_keyframe_emitted_ = true;
+      } else {
+        // Block non-keyframe packets until first IDR is emitted
+        std::cerr << "[AIR] INV-AIR-IDR-BEFORE-OUTPUT: BLOCKING output (waiting_for_idr=true)" << std::endl;
+        av_packet_unref(packet_);
+        continue;
+      }
+    }
+
     // Packet received successfully
     packet_->stream_index = video_stream_->index;
     av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
@@ -1102,6 +1127,7 @@ void EncoderPipeline::close() {
   last_audio_mux_pts_ = AV_NOPTS_VALUE;
   last_input_pts_ = AV_NOPTS_VALUE;
   first_frame_encoded_ = false;
+  first_keyframe_emitted_ = false;
   video_frame_count_ = 0;
 
   if (muxer_opts_) {
@@ -1835,6 +1861,11 @@ void EncoderPipeline::ResetOutputTiming() {
   output_timing_anchor_set_ = false;
   output_timing_anchor_pts_ = 0;
   // anchor_wall_ will be set on next packet
+
+  // INV-AIR-IDR-BEFORE-OUTPUT: Reset keyframe gate on segment switch.
+  // New segment must start with IDR for VLC decodability.
+  first_frame_encoded_ = false;   // Force first frame to be I-frame
+  first_keyframe_emitted_ = false; // Gate output until IDR emitted
 #endif
 }
 

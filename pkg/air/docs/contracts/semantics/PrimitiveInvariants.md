@@ -106,6 +106,8 @@ When `gap` is negative and `fps` reports 0 (measurement overflow), pacing is abs
 | `MasterClock` | Provides time reference; does not enforce timing loops | May be queried for pacing decisions; does not initiate them |
 | `FrameRingBuffer` | Passive data structure; no timing semantics | Must not block or pace based on time |
 
+**Enforcement policy:** See [RealTimeHoldPolicy.md](RealTimeHoldPolicy.md) (INV-PACING-ENFORCEMENT-002) for the no-drop, freeze-then-pad timing policy that refines this invariant.
+
 ---
 
 ## INV-DECODE-RATE-001: Producer Decode Rate Floor

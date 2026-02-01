@@ -9,6 +9,7 @@ Implements ScheduleManager protocol as defined in:
 """
 
 from datetime import datetime, date, time, timedelta
+from fractions import Fraction
 import hashlib
 import math
 
@@ -54,15 +55,25 @@ class SimpleGridScheduleManager:
         Get the program block containing the specified time.
 
         Returns ProgramBlock where: block_start <= at_time < block_end
+        INV-FRAME-002: padding_frames is computed as grid_frames - content_frames.
         """
         block_start = self._floor_to_grid_boundary(at_time)
         block_end = block_start + timedelta(minutes=self._config.grid_minutes)
         segments = self._build_segments(block_start, block_end)
+        fps = self._config.fps
+
+        # INV-FRAME-002: Compute padding in frames
+        grid_duration = (block_end - block_start).total_seconds()
+        grid_frames = int(grid_duration * fps)
+        content_frames = sum(s.frame_count for s in segments)
+        padding_frames = max(0, grid_frames - content_frames)
 
         return ProgramBlock(
             block_start=block_start,
             block_end=block_end,
             segments=segments,
+            fps=fps,
+            padding_frames=padding_frames,
         )
 
     def get_next_program(self, channel_id: str, after_time: datetime) -> ProgramBlock:
@@ -72,15 +83,25 @@ class SimpleGridScheduleManager:
         Boundary behavior:
         - If after_time is exactly on a grid boundary, returns that boundary's block
         - If after_time is between boundaries, returns the next boundary's block
+        INV-FRAME-002: padding_frames is computed as grid_frames - content_frames.
         """
         block_start = self._ceil_to_grid_boundary(after_time)
         block_end = block_start + timedelta(minutes=self._config.grid_minutes)
         segments = self._build_segments(block_start, block_end)
+        fps = self._config.fps
+
+        # INV-FRAME-002: Compute padding in frames
+        grid_duration = (block_end - block_start).total_seconds()
+        grid_frames = int(grid_duration * fps)
+        content_frames = sum(s.frame_count for s in segments)
+        padding_frames = max(0, grid_frames - content_frames)
 
         return ProgramBlock(
             block_start=block_start,
             block_end=block_end,
             segments=segments,
+            fps=fps,
+            padding_frames=padding_frames,
         )
 
     def _floor_to_grid_boundary(self, t: datetime) -> datetime:
@@ -113,24 +134,39 @@ class SimpleGridScheduleManager:
     def _build_segments(
         self, block_start: datetime, block_end: datetime
     ) -> list[PlayoutSegment]:
-        """Build the segment list for a program block."""
+        """
+        Build the segment list for a program block.
+
+        INV-FRAME-001: Uses PlayoutSegment.from_time_based() to convert
+        time boundaries to frame-indexed execution specification.
+        Time-to-frame conversion happens HERE (Core), not at execution (Air).
+        """
+        fps = self._config.fps
         main_show_end = block_start + timedelta(
             seconds=self._config.main_show_duration_seconds
         )
 
-        main_segment = PlayoutSegment(
+        # INV-FRAME-001: Create frame-indexed segment
+        main_segment = PlayoutSegment.from_time_based(
             start_utc=block_start,
             end_utc=main_show_end,
             file_path=self._config.main_show_path,
+            fps=fps,
             seek_offset_seconds=0.0,
+            segment_type="content",
+            allows_padding=False,
         )
 
         if main_show_end < block_end:
-            filler_segment = PlayoutSegment(
+            # INV-FRAME-001: Filler allows padding at block end
+            filler_segment = PlayoutSegment.from_time_based(
                 start_utc=main_show_end,
                 end_utc=block_end,
                 file_path=self._config.filler_path,
+                fps=fps,
                 seek_offset_seconds=0.0,
+                segment_type="filler",
+                allows_padding=True,  # Padding goes after filler if needed
             )
             return [main_segment, filler_segment]
 
@@ -258,17 +294,26 @@ class DailyScheduleManager:
     def _build_segments(
         self, block_start: datetime, block_end: datetime, query_time: datetime
     ) -> list[PlayoutSegment]:
-        """Build the segment list for a program block."""
+        """
+        Build the segment list for a program block.
+
+        INV-FRAME-001: Uses PlayoutSegment.from_time_based() to convert
+        time boundaries to frame-indexed execution specification.
+        """
+        # Default fps for Phase 1 (no fps in config, use 30)
+        fps = Fraction(30, 1)
         program, program_start = self._find_program_at(block_start)
 
         if program is None:
             # Unscheduled slot: filler for entire slot
             return [
-                PlayoutSegment(
+                PlayoutSegment.from_time_based(
                     start_utc=block_start,
                     end_utc=block_end,
                     file_path=self._config.filler_path,
+                    fps=fps,
                     seek_offset_seconds=0.0,
+                    segment_type="filler",
                 )
             ]
 
@@ -282,22 +327,26 @@ class DailyScheduleManager:
         seek_offset = (block_start - program_start).total_seconds()
 
         segments = [
-            PlayoutSegment(
+            PlayoutSegment.from_time_based(
                 start_utc=block_start,
                 end_utc=segment_end,
                 file_path=program.file_path,
+                fps=fps,
                 seek_offset_seconds=seek_offset,
+                segment_type="content",
             )
         ]
 
         # If program ends before block ends, add filler
         if program_end < block_end:
             segments.append(
-                PlayoutSegment(
+                PlayoutSegment.from_time_based(
                     start_utc=program_end,
                     end_utc=block_end,
                     file_path=self._config.filler_path,
+                    fps=fps,
                     seek_offset_seconds=0.0,
+                    segment_type="filler",
                 )
             )
 
@@ -438,17 +487,26 @@ class ScheduleDayScheduleManager:
     def _build_segments(
         self, channel_id: str, block_start: datetime, block_end: datetime
     ) -> list[PlayoutSegment]:
-        """Build the segment list for a program block."""
+        """
+        Build the segment list for a program block.
+
+        INV-FRAME-001: Uses PlayoutSegment.from_time_based() to convert
+        time boundaries to frame-indexed execution specification.
+        """
+        # Default fps for Phase 2 (no fps in config, use 30)
+        fps = Fraction(30, 1)
         entry, entry_start = self._find_entry_at(channel_id, block_start)
 
         if entry is None:
             # Unscheduled slot: filler for entire slot
             return [
-                PlayoutSegment(
+                PlayoutSegment.from_time_based(
                     start_utc=block_start,
                     end_utc=block_end,
                     file_path=self._config.filler_path,
+                    fps=fps,
                     seek_offset_seconds=0.0,
+                    segment_type="filler",
                 )
             ]
 
@@ -462,22 +520,26 @@ class ScheduleDayScheduleManager:
         seek_offset = (block_start - entry_start).total_seconds()
 
         segments = [
-            PlayoutSegment(
+            PlayoutSegment.from_time_based(
                 start_utc=block_start,
                 end_utc=segment_end,
                 file_path=entry.file_path,
+                fps=fps,
                 seek_offset_seconds=seek_offset,
+                segment_type="content",
             )
         ]
 
         # If entry ends before block ends, add filler
         if entry_end < block_end:
             segments.append(
-                PlayoutSegment(
+                PlayoutSegment.from_time_based(
                     start_utc=entry_end,
                     end_utc=block_end,
                     file_path=self._config.filler_path,
+                    fps=fps,
                     seek_offset_seconds=0.0,
+                    segment_type="filler",
                 )
             )
 
@@ -820,17 +882,23 @@ class Phase3ScheduleManager:
         EPG data to produce playout instructions.
 
         INV-P3-010: Playout Is a Pure Projection - this is derivable from EPG.
+        INV-FRAME-001: Uses PlayoutSegment.from_time_based() to convert
+        time boundaries to frame-indexed execution specification.
         """
+        # Default fps for Phase 3 (no fps in config, use 30)
+        fps = Fraction(30, 1)
         slot, slot_start = self._find_resolved_slot_at(channel_id, block_start)
 
         if slot is None:
             # Unscheduled slot: filler for entire slot
             return [
-                PlayoutSegment(
+                PlayoutSegment.from_time_based(
                     start_utc=block_start,
                     end_utc=block_end,
                     file_path=self._config.filler_path,
+                    fps=fps,
                     seek_offset_seconds=0.0,
+                    segment_type="filler",
                 )
             ]
 
@@ -848,22 +916,26 @@ class Phase3ScheduleManager:
         seek_offset = (block_start - slot_start).total_seconds()
 
         segments = [
-            PlayoutSegment(
+            PlayoutSegment.from_time_based(
                 start_utc=block_start,
                 end_utc=segment_end,
                 file_path=slot.resolved_asset.file_path,
+                fps=fps,
                 seek_offset_seconds=seek_offset,
+                segment_type="content",
             )
         ]
 
         # If content ends before block ends, add filler
         if slot_end < block_end:
             segments.append(
-                PlayoutSegment(
+                PlayoutSegment.from_time_based(
                     start_utc=slot_end,
                     end_utc=block_end,
                     file_path=self._config.filler_path,
+                    fps=fps,
                     seek_offset_seconds=0.0,
+                    segment_type="filler",
                 )
             )
 

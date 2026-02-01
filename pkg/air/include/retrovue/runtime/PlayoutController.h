@@ -64,12 +64,17 @@ class PlayoutController {
   // Stop a channel gracefully
   ControllerResult StopChannel(int32_t channel_id);
   
-  // Load a preview asset into shadow decode mode
+  // Load a preview asset into shadow decode mode (frame-indexed execution)
+  // INV-FRAME-001: start_frame is the first frame index within asset (0-based)
+  // INV-FRAME-002: frame_count is the exact number of frames to play
+  // INV-FRAME-003: fps is provided as numerator/denominator for precision
   ControllerResult LoadPreview(
       int32_t channel_id,
       const std::string& asset_path,
-      int64_t start_offset_ms = 0,
-      int64_t hard_stop_time_ms = 0);
+      int64_t start_frame,
+      int64_t frame_count,
+      int32_t fps_numerator,
+      int32_t fps_denominator);
   
   // Switch preview slot to live atomically
   ControllerResult SwitchToLive(int32_t channel_id);

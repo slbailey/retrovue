@@ -211,7 +211,7 @@ void ProgramOutput::SetNoContentSegment(bool value) {
 void ProgramOutput::RenderLoop() {
   std::cout << "[ProgramOutput] Output loop started (mode="
             << (config_.mode == RenderMode::HEADLESS ? "HEADLESS" : "PREVIEW")
-            << ")" << std::endl;
+            << "), RealTimeHoldPolicy ENABLED" << std::endl;
 
   if (!Initialize()) {
     std::cerr << "[ProgramOutput] Failed to initialize" << std::endl;
@@ -225,78 +225,177 @@ void ProgramOutput::RenderLoop() {
     fallback_last_frame_time_ = std::chrono::steady_clock::now();
   }
 
+  // ===========================================================================
+  // INV-PACING-ENFORCEMENT-002: RealTimeHoldPolicy initialization
+  // ===========================================================================
+  // Initialize pacing state for wall-clock gated emission.
+  // Frame period will be updated when we learn it from the first real frame.
+  // ===========================================================================
+  pacing_last_emission_us_ = 0;
+  pacing_frame_period_us_ = pad_frame_duration_us_;  // Default 33333us (30fps)
+
   while (!stop_requested_.load(std::memory_order_acquire)) {
     // =========================================================================
     // INV-P10-SINK-GATE: Don't consume frames until output sink is attached
-    // =========================================================================
-    // If no OutputBus is connected AND no side_sink_ is set, we're in a
-    // pre-attachment phase (between StartChannel and AttachStream). Consuming
-    // frames here would drain the buffer without pacing, causing buffer
-    // starvation and pad frame floods. Wait until a sink is attached.
-    //
-    // Note: side_sink_ is used by tests and the MpegTS path before OutputBus.
     // =========================================================================
     {
       std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
       std::lock_guard<std::mutex> side_lock(side_sink_mutex_);
       if (!output_bus_ && !side_sink_) {
-        // No sink attached yet - yield and retry
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
     }
 
+    // =========================================================================
+    // INV-PACING-ENFORCEMENT-002 CLAUSE 1: Wall-clock pacing
+    // "emit at most one frame per frame period"
+    // "Wall-clock (or MasterClock) is the sole pacing authority"
+    // =========================================================================
+    int64_t now_wall_us = 0;
+    if (clock_) {
+      now_wall_us = clock_->now_utc_us();
+    } else {
+      now_wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    // Calculate next emission deadline
+    int64_t next_deadline_us = 0;
+    if (pacing_last_emission_us_ == 0) {
+      // First iteration - emit immediately, establish baseline
+      next_deadline_us = now_wall_us;
+      pacing_last_emission_us_ = now_wall_us;
+    } else {
+      next_deadline_us = pacing_last_emission_us_ + pacing_frame_period_us_;
+    }
+
+    // =========================================================================
+    // INV-PACING-ENFORCEMENT-002 CLAUSE 1: Wait until deadline
+    // "SHALL NOT emit frames faster than real time"
+    // =========================================================================
+    if (now_wall_us < next_deadline_us) {
+      const int64_t wait_us = next_deadline_us - now_wall_us;
+      if (wait_us > 1000) {  // Only sleep if > 1ms
+        WaitForMicros(clock_, wait_us - 500, &stop_requested_);  // Wake slightly early
+      }
+      // Spin-wait for precise timing
+      while (!stop_requested_.load(std::memory_order_acquire)) {
+        if (clock_) {
+          now_wall_us = clock_->now_utc_us();
+        } else {
+          now_wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+        if (now_wall_us >= next_deadline_us) break;
+        std::this_thread::yield();
+      }
+    }
+
+    if (stop_requested_.load(std::memory_order_acquire)) break;
+
     // Phase 7: Get current buffer pointer under lock to support hot-switching.
-    // The pointer may change during SwitchToLive, so we read it once per iteration.
     buffer::FrameRingBuffer* current_buffer;
     {
       std::lock_guard<std::mutex> lock(input_buffer_mutex_);
       current_buffer = input_buffer_;
     }
 
-    int64_t frame_start_utc = 0;
+    // Record wall time at frame processing start
+    int64_t frame_start_utc = now_wall_us;
     std::chrono::steady_clock::time_point frame_start_fallback;
-    if (clock_) {
-      frame_start_utc = clock_->now_utc_us();
-    } else {
+    if (!clock_) {
       frame_start_fallback = std::chrono::steady_clock::now();
     }
 
     buffer::Frame frame;
     bool using_pad_frame = false;
+    bool using_freeze_frame = false;
 
     // Check buffer depth BEFORE Pop for diagnostic purposes
     size_t video_depth_before_pop = current_buffer->Size();
 
+    // Calculate lateness for telemetry
+    const int64_t frame_lateness_us = now_wall_us - next_deadline_us;
+
     if (!current_buffer->Pop(frame)) {
       // =========================================================================
-      // INV-AIR-CONTENT-BEFORE-PAD: Gate pad emission until first real frame
-      // =========================================================================
-      // Pad frames may ONLY be emitted AFTER at least one real decoded content
-      // frame has been successfully encoded and muxed. This ensures VLC can
-      // decode the stream from the start.
-      //
-      // Evidence: "INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #1" appeared
-      // BEFORE real content, causing VLC to display nothing.
-      //
-      // EXCEPTION (INV-P8-ZERO-FRAME-BOOTSTRAP): When no_content_segment_=true,
-      // pad frames are allowed immediately. The first pad frame acts as the
-      // "bootstrap frame" for encoder initialization. This handles zero-frame
-      // segments where no real content will ever arrive.
+      // INV-AIR-CONTENT-BEFORE-PAD: Gate pad/freeze until first real frame
       // =========================================================================
       if (!first_real_frame_emitted_ && !no_content_segment_) {
-        // Skip pad emission entirely - wait for first real content frame
-        // This is a brief startup delay, not a stall. Once real content arrives,
-        // the gate opens and normal pad behavior resumes.
         static uint64_t content_wait_count = 0;
         if (++content_wait_count == 1 || content_wait_count % 100 == 0) {
           std::cout << "[ProgramOutput] INV-AIR-CONTENT-BEFORE-PAD: Waiting for first real content frame "
                     << "(wait_count=" << content_wait_count << ")" << std::endl;
         }
-        // Brief yield to avoid busy-spinning
-        std::this_thread::sleep_for(std::chrono::microseconds(1000));
+        // Still respect pacing - update emission time even when waiting
+        pacing_last_emission_us_ = now_wall_us;
         continue;
       }
+
+      // =========================================================================
+      // INV-PACING-ENFORCEMENT-002 CLAUSE 2: Freeze-then-Pad
+      // No frame available - apply RealTimeHoldPolicy
+      // =========================================================================
+      if (!pacing_has_last_frame_) {
+        // =====================================================================
+        // Edge case: No frame to freeze (startup before first real frame)
+        // Must emit pad frame directly
+        // =====================================================================
+        goto emit_pad_frame;
+      }
+
+      if (!pacing_in_freeze_mode_) {
+        // =====================================================================
+        // CLAUSE 2A: Start freeze episode
+        // "re-emit the last successfully emitted real frame"
+        // =====================================================================
+        pacing_freeze_start_us_ = now_wall_us;
+        pacing_in_freeze_mode_ = true;
+        pacing_late_events_++;
+
+        std::cout << "[ProgramOutput] INV-PACING-002: FREEZE frame="
+                  << stats_.frames_rendered << " lateness="
+                  << (frame_lateness_us / 1000) << "ms" << std::endl;
+
+        // Re-emit last frame (freeze)
+        frame = pacing_last_emitted_frame_;
+        using_freeze_frame = true;
+        pacing_freeze_frames_++;
+        pacing_current_freeze_streak_++;
+
+      } else if ((now_wall_us - pacing_freeze_start_us_) < pacing_freeze_window_us_) {
+        // =====================================================================
+        // CLAUSE 2A: Continue freeze within window
+        // "Maximum continuous freeze duration: 250ms"
+        // =====================================================================
+        frame = pacing_last_emitted_frame_;
+        using_freeze_frame = true;
+        pacing_freeze_frames_++;
+        pacing_current_freeze_streak_++;
+        pacing_freeze_duration_ms_ = (now_wall_us - pacing_freeze_start_us_) / 1000;
+
+      } else {
+        // =====================================================================
+        // CLAUSE 2B: Freeze window exceeded - switch to pad
+        // "If the freeze window is exceeded... emit pad frames"
+        // =====================================================================
+        std::cout << "[ProgramOutput] INV-PACING-002: PAD after freeze window exceeded ("
+                  << ((now_wall_us - pacing_freeze_start_us_) / 1000) << "ms)" << std::endl;
+
+        // Record max freeze streak
+        if (pacing_current_freeze_streak_ > pacing_max_freeze_streak_) {
+          pacing_max_freeze_streak_ = pacing_current_freeze_streak_;
+        }
+        pacing_current_freeze_streak_ = 0;
+
+        goto emit_pad_frame;
+      }
+
+      // Skip pad frame generation - we're using freeze frame
+      goto frame_ready;
+
+emit_pad_frame:
 
       // =========================================================================
       // INV-P10.5-OUTPUT-SAFETY-RAIL: Emit pad frame when producer is starved
@@ -471,20 +570,51 @@ void ProgramOutput::RenderLoop() {
                     << std::endl;
         }
       }
+
+      // INV-PACING-ENFORCEMENT-002: Skip the real-frame else block
+      goto frame_ready;
     } else {
+      // =========================================================================
+      // INV-PACING-ENFORCEMENT-002 CLAUSE 2: Recovery from freeze mode
+      // "RECOVERED real frame available"
+      // =========================================================================
+      if (pacing_in_freeze_mode_) {
+        std::cout << "[ProgramOutput] INV-PACING-002: RECOVERED real frame available"
+                  << " after " << (pacing_freeze_duration_ms_) << "ms freeze" << std::endl;
+
+        // Record max freeze streak before resetting
+        if (pacing_current_freeze_streak_ > pacing_max_freeze_streak_) {
+          pacing_max_freeze_streak_ = pacing_current_freeze_streak_;
+        }
+        pacing_current_freeze_streak_ = 0;
+        pacing_in_freeze_mode_ = false;
+        pacing_freeze_duration_ms_ = 0;
+      }
+
       // Learn frame parameters from first real frame for future pad frames
       if (!pad_frame_initialized_ && frame.width > 0 && frame.height > 0) {
         pad_frame_width_ = frame.width;
         pad_frame_height_ = frame.height;
         if (frame.metadata.duration > 0.0) {
           pad_frame_duration_us_ = static_cast<int64_t>(frame.metadata.duration * 1'000'000.0);
+          // Also update pacing frame period to match real content
+          pacing_frame_period_us_ = pad_frame_duration_us_;
         }
         pad_frame_initialized_ = true;
         std::cout << "[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Learned pad frame params "
                   << pad_frame_width_ << "x" << pad_frame_height_
                   << " @ " << (1'000'000 / pad_frame_duration_us_) << "fps" << std::endl;
       }
+
+      // =========================================================================
+      // INV-PACING-ENFORCEMENT-002: Record frame for potential freeze re-emission
+      // =========================================================================
+      // Store the real frame so it can be re-emitted if buffer starves.
+      pacing_last_emitted_frame_ = frame;
+      pacing_has_last_frame_ = true;
     }
+
+frame_ready:
 
     double frame_gap_ms = 0.0;
     if (clock_) {
@@ -509,13 +639,14 @@ void ProgramOutput::RenderLoop() {
           remaining_us =
               clock_->scheduled_to_utc_us(frame.metadata.pts) - clock_->now_utc_us();
         }
-      } else if (gap_s < kDropThresholdSeconds &&
-                 current_buffer->Size() > kMinDepthForDrop) {
-        stats_.frames_dropped++;
-        stats_.corrections_total++;
-        PublishMetrics(frame_gap_ms);
-        continue;
       }
+      // =========================================================================
+      // INV-PACING-ENFORCEMENT-002 CLAUSE 3: NO FRAME DROPPING
+      // =========================================================================
+      // The system "SHALL NOT drop or skip real frames" to recover from lateness.
+      // Previous drop logic removed per RealTimeHoldPolicy.
+      // Late frames are emitted immediately; output cadence is preserved.
+      // =========================================================================
     } else {
       auto now = std::chrono::steady_clock::now();
       frame_gap_ms =
@@ -713,6 +844,23 @@ void ProgramOutput::RenderLoop() {
     }
 
     last_pts_ = frame.metadata.pts;
+    // Contract-level observability: first PTS for AIR_AS_RUN_FRAME_RANGE (real frame only).
+    if (!first_pts_set_ && frame.metadata.asset_uri != "pad://black") {
+      first_pts_ = frame.metadata.pts;
+      first_pts_set_ = true;
+    }
+
+    // =========================================================================
+    // INV-PACING-ENFORCEMENT-002: Update emission timestamp for next iteration
+    // =========================================================================
+    // Record wall-clock time of this emission for pacing the next frame.
+    // This ensures exactly one frame per frame period regardless of path taken.
+    if (clock_) {
+      pacing_last_emission_us_ = clock_->now_utc_us();
+    } else {
+      pacing_last_emission_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
   }
 
   Cleanup();
@@ -836,6 +984,9 @@ void ProgramOutput::SetInputBuffer(buffer::FrameRingBuffer* buffer) {
     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
     input_buffer_ = buffer;
   }
+  // Contract-level observability: new segment; reset first PTS for AIR_AS_RUN.
+  first_pts_ = 0;
+  first_pts_set_ = false;
   // INV-P8-SUCCESSOR-OBSERVABILITY: New segment when buffer changes; reset latch.
   {
     std::lock_guard<std::mutex> lock(successor_observer_mutex_);
@@ -853,6 +1004,10 @@ int64_t ProgramOutput::GetLastEmittedPTS() const {
   // Phase 7: Return last emitted PTS for continuity across segment boundaries
   // This is read by SwitchToLive to align the next segment's PTS
   return last_pts_;
+}
+
+int64_t ProgramOutput::GetFirstEmittedPTS() const {
+  return first_pts_set_ ? first_pts_ : 0;
 }
 
 // =============================================================================

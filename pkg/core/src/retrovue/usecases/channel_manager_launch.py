@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -148,15 +149,53 @@ RESULT_CODE_PROTOCOL_VIOLATION = 4  # Caller violated the protocol
 RESULT_CODE_FAILED = 5
 
 
+def log_core_intent_frame_range(
+    *,
+    channel_id: str,
+    segment_id: str,
+    asset_path: str,
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+    CT_start_us: int,
+    MT_start_us: int,
+) -> None:
+    """Emit structured CORE_INTENT_FRAME_RANGE probe (once per segment hand-off to AIR)."""
+    import logging
+    logging.getLogger(__name__).info(
+        "CORE_INTENT_FRAME_RANGE channel_id=%s segment_id=%s asset_path=%s "
+        "start_frame=%s end_frame=%s fps=%s CT_start_us=%s MT_start_us=%s",
+        channel_id, segment_id, asset_path, start_frame, end_frame, fps, CT_start_us, MT_start_us,
+    )
+
+
 def air_load_preview(
     grpc_addr: str,
     channel_id_int: int,
     asset_path: str,
-    start_offset_ms: int = 0,
-    hard_stop_time_ms: int = 0,
+    start_frame: int,
+    frame_count: int,
+    fps_numerator: int,
+    fps_denominator: int,
     timeout_s: int = 90,
 ) -> bool:
-    """Call Air LoadPreview RPC. Returns success. Raises on connection/RPC error.
+    """Call Air LoadPreview RPC with frame-indexed execution (INV-FRAME-001/002/003).
+
+    Args:
+        grpc_addr: gRPC address of Air engine (e.g. "127.0.0.1:50051")
+        channel_id_int: Channel ID as integer
+        asset_path: Fully-qualified path to media file
+        start_frame: First frame index within asset (0-based, INV-FRAME-001)
+        frame_count: Exact number of frames to play (INV-FRAME-002)
+        fps_numerator: Frame rate numerator (e.g. 30000 for 29.97fps, INV-FRAME-003)
+        fps_denominator: Frame rate denominator (e.g. 1001 for 29.97fps, INV-FRAME-003)
+        timeout_s: RPC timeout in seconds
+
+    Returns:
+        True if preview loaded successfully, False otherwise.
+
+    Raises:
+        grpc.RpcError on connection/RPC error.
 
     Phase 8: If result_code is REJECTED_BUSY, logs at INFO level (expected when
     switch is armed) rather than WARNING.
@@ -165,6 +204,11 @@ def air_load_preview(
     import logging
     logger = logging.getLogger(__name__)
 
+    # INV-FRAME-003: Fail fast if fps not provided
+    if fps_denominator <= 0:
+        logger.error("INV-FRAME-003 violation: fps_denominator must be > 0 (got %d)", fps_denominator)
+        return False
+
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
     with grpc.insecure_channel(grpc_addr) as ch:
         stub = playout_pb2_grpc.PlayoutControlStub(ch)
@@ -172,8 +216,10 @@ def air_load_preview(
             playout_pb2.LoadPreviewRequest(
                 channel_id=channel_id_int,
                 asset_path=asset_path,
-                start_offset_ms=start_offset_ms,
-                hard_stop_time_ms=hard_stop_time_ms,
+                start_frame=start_frame,
+                frame_count=frame_count,
+                fps_numerator=fps_numerator,
+                fps_denominator=fps_denominator,
             ),
             timeout=timeout_s,
         )
@@ -215,6 +261,8 @@ def _launch_air_binary(
     socket_path: Path,
     channel_id: str,
     channel_config: ChannelConfig,
+    segment_id: str = "",
+    segment_start_time_utc: str | None = None,
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
 ) -> tuple[ProcessHandle, Path, queue.Queue[Any], str]:
@@ -316,14 +364,25 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"StartChannel failed: {r.message}")
+        # Frame-indexed execution (INV-FRAME-001/002/003)
+        # Convert start_pts_ms to start_frame using channel fps
+        # Default to 30fps if not specified; channel_config provides authoritative fps
+        fps_num = getattr(channel_config.program_format, 'frame_rate_num', 30)
+        fps_den = getattr(channel_config.program_format, 'frame_rate_den', 1)
+        fps = fps_num / fps_den if fps_den > 0 else 30.0
+        start_frame = int((start_pts_ms / 1000.0) * fps) if fps > 0 else 0
+        # frame_count = -1 means play until EOF (initial segment has no predetermined end)
+        frame_count = -1
         r = _rpc(
             "LoadPreview",
             lambda timeout: stub.LoadPreview(
                 playout_pb2.LoadPreviewRequest(
                     channel_id=channel_id_int,
                     asset_path=asset_path,
-                    start_offset_ms=start_pts_ms,
-                    hard_stop_time_ms=0,
+                    start_frame=start_frame,
+                    frame_count=frame_count,
+                    fps_numerator=fps_num,
+                    fps_denominator=fps_den,
                 ),
                 timeout=timeout,
             ),
@@ -331,6 +390,27 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"LoadPreview failed: {r.message}")
+        # Contract-level observability: CORE_INTENT_FRAME_RANGE (once per segment)
+        end_frame = start_frame + frame_count - 1 if frame_count >= 0 else -1
+        MT_start_us = 0
+        if segment_start_time_utc:
+            try:
+                dt = datetime.fromisoformat(segment_start_time_utc.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                MT_start_us = int(dt.timestamp() * 1_000_000)
+            except (ValueError, TypeError):
+                pass
+        log_core_intent_frame_range(
+            channel_id=channel_id,
+            segment_id=segment_id or "",
+            asset_path=asset_path,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            fps=fps,
+            CT_start_us=0,
+            MT_start_us=MT_start_us,
+        )
         # AttachStream before SwitchToLive: Air must have the UDS fd in stream_writers_
         # so that SwitchToLive can start FfmpegLoop and write TS to that fd.
         r = _rpc(
@@ -472,6 +552,8 @@ def launch_air(
         socket_path=socket_path,
         channel_id=channel_id,
         channel_config=config,
+        segment_id=playout_request.get("segment_id", ""),
+        segment_start_time_utc=playout_request.get("start_time_utc"),
         stdout=stdout,
         stderr=stderr,
     )

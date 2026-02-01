@@ -299,12 +299,76 @@ def validate_channels(
             raise typer.Exit(1)
 
 
+def _items_from_config(config_path: "Path") -> list[dict]:
+    """Load channels from config/channels.json when DB is empty."""
+    try:
+        from ...runtime.providers.file_config_provider import FileChannelConfigProvider
+        provider = FileChannelConfigProvider(config_path)
+        ids = provider.list_channel_ids()
+        items = []
+        for cid in ids:
+            cfg = provider.get_channel_config(cid)
+            if cfg:
+                grid_min = cfg.schedule_config.get("grid_minutes", 30) if cfg.schedule_config else 30
+                items.append({
+                    "id": cfg.channel_id,
+                    "name": cfg.name,
+                    "grid_size_minutes": grid_min,
+                    "grid_offset_minutes": 0,
+                    "broadcast_day_start": "06:00",
+                    "is_active": True,
+                    "created_at": None,
+                    "updated_at": None,
+                    "_from_config": True,
+                })
+        return items
+    except Exception:
+        return []
+
+
 @app.command("list")
 def list_channels(
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
-    test_db: bool = typer.Option(False, "--test-db", help="Use test database context"),
+    by_database: bool = typer.Option(
+        False, "--by-database",
+        help="Read channels from database instead of config/channels.json",
+    ),
+    test_db: bool = typer.Option(False, "--test-db", help="Use test database context (only with --by-database)"),
 ):
-    """List all channels (simple view)."""
+    """List all channels (simple view). Uses config/channels.json by default; --by-database uses DB."""
+
+    # Default: use config file (runtime channels). --test-db implies --by-database.
+    use_db = by_database or test_db
+    if not use_db:
+        from ...runtime.config import RuntimeConfig
+        config_path = RuntimeConfig.load().get_channels_config_path()
+        if not config_path.exists():
+            if json_output:
+                typer.echo(json.dumps({"status": "error", "error": f"Config file not found: {config_path}"}, indent=2))
+            else:
+                typer.echo(f"Config file not found: {config_path}", err=True)
+            raise typer.Exit(1)
+        items = _items_from_config(config_path)
+        items.sort(key=lambda x: (x["name"].lower(), x["id"]))
+        for it in items:
+            it.pop("_from_config", None)
+        if json_output:
+            typer.echo(json.dumps({"status": "ok", "total": len(items), "channels": items}, indent=2))
+        else:
+            if not items:
+                typer.echo("No channels in config")
+            else:
+                typer.echo("Channels:")
+                for c in items:
+                    typer.echo(f"  ID: {c['id']}")
+                    typer.echo(f"  Name: {c['name']}")
+                    typer.echo(f"  Grid Size (min): {c['grid_size_minutes']}")
+                    typer.echo(f"  Grid Offset (min): {c['grid_offset_minutes']}")
+                    typer.echo(f"  Broadcast day start: {c['broadcast_day_start']}")
+                    typer.echo(f"  Active: {str(bool(c['is_active'])).lower()}")
+                    typer.echo("")
+                typer.echo(f"Total: {len(items)} channels")
+        return
 
     db_cm = _get_db_context(test_db)
     with db_cm as db:

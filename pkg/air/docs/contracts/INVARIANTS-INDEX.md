@@ -42,7 +42,7 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 
 Truths about correctness and time: CT monotonicity, provenance, determinism, time-blindness, wall-clock correspondence, output safety/liveness semantics, format correctness.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) · Core `ScheduleManagerPhase8Contract.md`
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) · [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) · Core `ScheduleManagerPhase8Contract.md`
 
 ### Primitive Invariants
 
@@ -51,8 +51,19 @@ These are foundational assumptions from which other invariants derive. Violation
 | ID | One-line | Owner | Type |
 |----|----------|-------|------|
 | **INV-PACING-001** | Frame emission rate = target_fps; render loop paced by wall clock, not CPU | `ProgramOutput` | Semantic (Primitive) |
+| **INV-PACING-ENFORCEMENT-002** | No-drop, freeze-then-pad: max 1 frame/period; freeze last frame ≤250ms; then pad; no catch-up, no drops | `ProgramOutput` | Semantic (Enforcement) |
 | **INV-DECODE-RATE-001** | Producer sustains decode rate ≥ target_fps (burst allowed); buffer never drains below low-watermark | `FileProducer` | Semantic (Primitive) |
 | **INV-SEGMENT-CONTENT-001** | Aggregate frame_count of all segments in slot ≥ slot_duration × fps; Core provides content + filler plan | `Core` (external) | Semantic (Primitive) |
+
+### Sink Liveness Invariants
+
+Output sink attachment policy. See [SinkLivenessPolicy.md](semantics/SinkLivenessPolicy.md) for full behavioral contract.
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-P9-SINK-LIVENESS-001** | Pre-attach discard: frames routed to bus without sink are silently discarded (legal) | `OutputBus` | Semantic |
+| **INV-P9-SINK-LIVENESS-002** | Post-attach delivery: after AttachSink succeeds, all frames MUST reach sink until DetachSink | `OutputBus` | Semantic |
+| **INV-P9-SINK-LIVENESS-003** | Sink stability: sink pointer SHALL NOT become null between attach and explicit detach | `OutputBus` | Semantic |
 
 ### Derived Semantic Invariants
 
@@ -90,7 +101,7 @@ These are foundational assumptions from which other invariants derive. Violation
 
 Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, no-deadlock rules, ordering and sequencing that coordinate components.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md)
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md)
 
 | ID | One-line | Type |
 |----|----------|------|
@@ -104,6 +115,9 @@ Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, 
 | INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live MUST wait until preview shadow decode ready | Coordination |
 | INV-P8-EOF-SWITCH | Live producer EOF → switch completes immediately (do not block on buffer depth) | Coordination |
 | INV-P8-PREVIEW-EOF | Preview EOF with frames → complete with lower thresholds (e.g. ≥1 video, ≥1 audio) | Coordination |
+| **INV-P8-SWITCHWATCHER-STOP-TARGET-001** | Switch machinery must not stop/disable/write-barrier successor as result of switch-completion or commit bookkeeping | Coordination |
+| **INV-P8-SWITCHWATCHER-COMMITGEN-EDGE-SAFETY-002** | Post-swap commit-gen transitions must not trigger retirement actions against successor | Coordination |
+| **INV-P8-COMMITGEN-RETIREMENT-SEMANTICS-003** | Retirement decisions must ignore commit-gen transitions representing successor activation or same-segment bookkeeping | Coordination |
 | INV-P8-SHADOW-FLUSH | On leaving shadow: flush cached first frame to buffer immediately | Coordination |
 | INV-P8-ZERO-FRAME-READY | When frame_count=0, signal shadow_decode_ready=true immediately; vacuous flush returns true | Coordination |
 | INV-P8-ZERO-FRAME-BOOTSTRAP | When no_content_segment=true, bypass CONTENT-BEFORE-PAD gate; first pad frame bootstraps encoder | Coordination |
@@ -150,6 +164,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Phase 9** (bootstrap, audio liveness) | [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) |
 | **Phase 10** (flow control, backpressure, mux) | [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) |
 | **Primitive invariants** (pacing, decode rate, content) | [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) |
+| **RealTimeHold** (freeze-then-pad, no-drop policy) | [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) |
 | **Component contracts** | [README.md](semantics/README.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
