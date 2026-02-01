@@ -242,6 +242,11 @@ void ProgramOutput::RenderLoop() {
       std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
       std::lock_guard<std::mutex> side_lock(side_sink_mutex_);
       if (!output_bus_ && !side_sink_) {
+        const int64_t ct_us = clock_ ? clock_->now_utc_us()
+                                     : std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::cout << "[ProgramOutput] INV-P10-SINK-GATE: Frame CT=" << ct_us
+                  << " not consumed - no sink attached" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
