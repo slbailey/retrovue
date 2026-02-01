@@ -42,18 +42,17 @@ namespace retrovue::producers::file
     constexpr int64_t kMicrosecondsPerSecond = 1'000'000;
 
     // ==========================================================================
-    // INV-P10-ELASTIC-FLOW-CONTROL: Bounded decode-ahead with hysteresis
+    // INV-P10-SLOT-BASED-UNBLOCK: Block at capacity, unblock on one slot free
     // ==========================================================================
-    // Instead of blocking immediately when buffer is full, we allow bounded
-    // decode-ahead (jitter tolerance) and only apply backpressure at a high-water
-    // mark. This prevents buffer starvation while still bounding memory growth.
+    // Slot-based flow control eliminates the sawtooth buffer pattern:
+    //   - Block only when buffer is at capacity (not at high-water mark)
+    //   - Unblock immediately when one slot frees (no low-water drain)
+    //   - Producer and consumer flow in lockstep when buffer is full
     //
-    // High water mark: Block decode when buffer exceeds this threshold
-    // Low water mark: Resume decode when buffer falls below this threshold
-    // The gap between them (hysteresis) prevents oscillation.
+    // This replaces the previous hysteresis approach which caused:
+    //   Fill to high-water → hard stop → drain to low-water → frantic refill
+    // The new approach provides smooth, continuous flow.
     // ==========================================================================
-    constexpr size_t kDecodeAheadBudget = 5;  // Max frames to decode ahead of consumer
-    constexpr size_t kLowWaterFrames = 2;     // Resume decode when buffer drops to this
   }
 
 
@@ -102,6 +101,7 @@ namespace retrovue::producers::file
         audio_swr_ctx_(nullptr),
         audio_swr_src_rate_(0),
         audio_swr_src_channels_(0),
+        audio_swr_src_fmt_(-1),  // AV_SAMPLE_FMT_NONE = -1
         effective_seek_target_us_(0),
         stub_pts_counter_(0),
         frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
@@ -118,16 +118,21 @@ namespace retrovue::producers::file
         pad_y_(0),
         video_frame_count_(0),
         video_discard_count_(0),
+        seek_discard_logged_(false),
         audio_frame_count_(0),
         frames_since_producer_start_(0),
         audio_skip_count_(0),
         audio_drop_count_(0),
         audio_mapping_gate_drop_count_(0),
         audio_ungated_logged_(false),
-        scale_diag_count_(0),
         mapping_locked_this_iteration_(false),
         decode_gate_block_count_(0),
-        decode_gate_blocked_(false)
+        decode_gate_blocked_(false),
+        decode_probe_window_start_us_(0),
+        decode_probe_window_frames_(0),
+        decode_probe_last_rate_(0.0),
+        decode_probe_in_seek_(false),
+        decode_rate_violation_logged_(false)
   {
   }
 
@@ -257,14 +262,19 @@ namespace retrovue::producers::file
     EmitEvent("teardown_requested", "");
   }
 
-  void FileProducer::ForceStop()
+  void FileProducer::RequestStop()
   {
     // Phase 7: Hard write barrier - disable writes BEFORE signaling stop
     // This prevents any in-flight frames from being pushed after this point
     writes_disabled_.store(true, std::memory_order_release);
     stop_requested_.store(true, std::memory_order_release);
-    std::cout << "[FileProducer] Force stop requested (writes disabled)" << std::endl;
-    EmitEvent("force_stop", "");
+    std::cout << "[FileProducer] Request stop (writes disabled)" << std::endl;
+    EmitEvent("request_stop", "");
+  }
+
+  bool FileProducer::IsStopped() const
+  {
+    return !isRunning();
   }
 
   void FileProducer::SetWriteBarrier()
@@ -343,92 +353,75 @@ namespace retrovue::producers::file
   // RULE-P10-DECODE-GATE: Architectural rule for all producers
   // ==========================================================================
   //
-  // DOCTRINE: "Zero dropped frames requires elastic buffering.
-  //            Hard synchronization without jitter tolerance is a bug."
+  // DOCTRINE: "Slot-based flow control eliminates sawtooth stuttering."
   //
   // Flow control must be applied at the earliest admission point (decode/demux),
-  // not at push/emit. However, flow control must use ELASTIC gating with
-  // hysteresis to allow jitter compensation:
+  // not at push/emit. Use SLOT-BASED gating (block at capacity, unblock on one
+  // slot free) to maintain smooth producer-consumer flow:
   //
-  // ✅ CORRECT: Elastic gate with bounded decode-ahead
-  //    WaitForDecodeReady()  ← blocks only when buffer > high-water mark
-  //      └── av_read_frame()        (resumes at low-water mark)
+  // ✅ CORRECT: Slot-based gate
+  //    WaitForDecodeReady()  ← blocks only when buffer is at capacity
+  //      └── av_read_frame()        (resumes when one slot frees)
   //            ├── audio packet → decode → push
   //            └── video packet → decode → push
   //
-  // ❌ WRONG: Hard gate that blocks on any fullness (causes buffer starvation)
-  //    Downstream hiccup → buffer drains before decode resumes → stutter
+  // ❌ WRONG: Hysteresis with low-water mark (causes sawtooth stutter)
+  //    Fill to high-water → hard stop → drain to 2 frames → frantic refill
   //
   // ❌ WRONG: Gate at push level (causes A/V desync)
   //    Audio runs ahead while video is blocked
   //
-  // The hysteresis gap between high-water and low-water marks is LOAD-BEARING.
-  // It absorbs downstream jitter while still bounding memory growth.
+  // Slot-based unblocking keeps producer and consumer in lockstep when full.
   // Future producers (Prevue, Weather, Emergency) inherit this for free.
   // ==========================================================================
 
   bool FileProducer::WaitForDecodeReady()
   {
-    // INV-P10-ELASTIC-FLOW-CONTROL: Elastic gate with hysteresis.
-    // - Allow bounded decode-ahead (jitter tolerance)
-    // - Block only at high-water mark
-    // - Resume at low-water mark (hysteresis prevents oscillation)
+    // INV-P10-SLOT-BASED-UNBLOCK: Block only at capacity, unblock on one slot free.
+    // No hysteresis - this eliminates the sawtooth fill/drain pattern that causes
+    // bursty delivery and stuttering.
+    //
+    // Previous behavior (hysteresis):
+    //   Block at high-water (capacity - 5), wait until low-water (2 frames)
+    //   → Sawtooth: fill → hard stop → drain to 2 → frantic refill → repeat
+    //
+    // New behavior (slot-based):
+    //   Block at capacity, unblock when one slot frees
+    //   → Smooth: decode one, push one, block only when truly full
 
     // Check termination conditions first
     if (stop_requested_.load(std::memory_order_acquire)) return false;
     if (writes_disabled_.load(std::memory_order_acquire)) return false;
 
-    // Calculate high-water mark: capacity minus decode-ahead budget
-    // For small buffers (testing), fall back to near-full threshold
     size_t video_capacity = output_buffer_.Capacity();
     size_t audio_capacity = output_buffer_.AudioCapacity();
-
-    // High-water mark: block when buffer is nearly full
-    // For large buffers: capacity - decode_ahead_budget (allows jitter tolerance)
-    // For small buffers: capacity - 1 (preserve space for at least one more frame)
-    size_t video_high_water, audio_high_water;
-    if (video_capacity > kDecodeAheadBudget + 2) {
-      video_high_water = video_capacity - kDecodeAheadBudget;
-    } else {
-      video_high_water = (video_capacity > 1) ? (video_capacity - 1) : video_capacity;
-    }
-
-    if (audio_capacity > kDecodeAheadBudget * 3 + 6) {
-      audio_high_water = audio_capacity - kDecodeAheadBudget * 3;
-    } else {
-      audio_high_water = (audio_capacity > 3) ? (audio_capacity - 3) : audio_capacity;
-    }
-
     size_t video_depth = output_buffer_.Size();
     size_t audio_depth = output_buffer_.AudioSize();
 
-    // Check if we're above high-water mark (need to block)
-    bool video_above_high = video_depth >= video_high_water;
-    bool audio_above_high = audio_depth >= audio_high_water;
+    // Block only when EITHER buffer is at capacity
+    bool video_at_capacity = video_depth >= video_capacity;
+    bool audio_at_capacity = audio_depth >= audio_capacity;
 
-    if (!video_above_high && !audio_above_high) {
-      // Below high-water mark - decode immediately (jitter tolerance)
+    if (!video_at_capacity && !audio_at_capacity) {
+      // At least one slot free in both buffers - decode immediately
       decode_gate_blocked_ = false;
       return true;
     }
 
-    // Above high-water mark - enter blocking state with hysteresis
+    // At capacity - enter blocking state
     bool was_blocked = decode_gate_blocked_;
     decode_gate_blocked_ = true;
 
     if (!was_blocked) {
       decode_gate_block_count_++;
-      std::cout << "[FileProducer] INV-P10-ELASTIC-GATE: Blocking at high-water "
-                << "(video=" << video_depth << "/" << video_high_water
-                << ", audio=" << audio_depth << "/" << audio_high_water
+      std::cout << "[FileProducer] INV-P10-SLOT-GATE: Blocking at capacity "
+                << "(video=" << video_depth << "/" << video_capacity
+                << ", audio=" << audio_depth << "/" << audio_capacity
                 << ", episode=" << decode_gate_block_count_ << ")" << std::endl;
     }
 
-    // Wait until we're at or below LOW-water mark (hysteresis)
-    // For small buffers, low-water = high-water (no hysteresis, simpler behavior)
-    size_t video_low_water = (video_capacity > kDecodeAheadBudget + 2) ? kLowWaterFrames : video_high_water;
-    size_t audio_low_water = (audio_capacity > kDecodeAheadBudget * 3 + 6) ? kLowWaterFrames * 3 : audio_high_water;
-
+    // Wait until ONE slot frees in the full buffer(s)
+    // No low-water mark - resume immediately when space available
     while (true) {
       if (stop_requested_.load(std::memory_order_acquire)) return false;
       if (writes_disabled_.load(std::memory_order_acquire)) return false;
@@ -436,11 +429,17 @@ namespace retrovue::producers::file
       video_depth = output_buffer_.Size();
       audio_depth = output_buffer_.AudioSize();
 
-      // Resume when BOTH are at or below low-water mark
-      if (video_depth <= video_low_water && audio_depth <= audio_low_water) {
-        std::cout << "[FileProducer] INV-P10-ELASTIC-GATE: Released at low-water "
-                  << "(video=" << video_depth << "/" << video_low_water
-                  << ", audio=" << audio_depth << "/" << audio_low_water << ")" << std::endl;
+      // Resume when at least one slot is free in BOTH buffers
+      bool video_has_slot = video_depth < video_capacity;
+      bool audio_has_slot = audio_depth < audio_capacity;
+
+      if (video_has_slot && audio_has_slot) {
+        // Only log if we actually blocked for a significant time
+        if (was_blocked) {
+          std::cout << "[FileProducer] INV-P10-SLOT-GATE: Released "
+                    << "(video=" << video_depth << "/" << video_capacity
+                    << ", audio=" << audio_depth << "/" << audio_capacity << ")" << std::endl;
+        }
         decode_gate_blocked_ = false;
         return true;
       }
@@ -512,8 +511,32 @@ namespace retrovue::producers::file
         continue;
       }
 
-      // Phase 8.6: no fixed segment cutoff. Segment end = natural EOF only (decoder reports no more frames).
-      // hard_stop_time_ms / segment_end_pts are not used to forcibly stop; avoids premature termination and timing drift.
+      // ==========================================================================
+      // INV-P10-FRAME-INDEXED-EXECUTION: Check frame count completion
+      // ==========================================================================
+      // Segment completion is determined by frame count, not elapsed time or EOF.
+      // If frame_count is set (>= 0), stop when we've produced that many frames.
+      // If frame_count is -1, fall back to EOF-based completion (legacy behavior).
+      // ==========================================================================
+      if (config_.frame_count >= 0)
+      {
+        uint64_t produced = frames_produced_.load(std::memory_order_acquire);
+        if (static_cast<int64_t>(produced) >= config_.frame_count)
+        {
+          if (!eof_event_emitted_)
+          {
+            eof_event_emitted_ = true;
+            std::cout << "[FileProducer] Frame count reached (" << produced
+                      << "/" << config_.frame_count << "); segment complete (INV-FRAME-001)" << std::endl;
+            EmitEvent("segment_complete", "frame_count_reached");
+          }
+          // Wait for explicit stop (like EOF behavior in Phase 8.8)
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          continue;
+        }
+      }
+
+      // Phase 8.6: When frame_count is not set (-1), segment end = natural EOF only.
 
       // Check teardown timeout
       if (teardown_requested_.load(std::memory_order_acquire))
@@ -526,9 +549,9 @@ namespace retrovue::producers::file
         }
         if (std::chrono::steady_clock::now() >= teardown_deadline_)
         {
-          std::cout << "[FileProducer] Teardown timeout reached; forcing stop" << std::endl;
+          std::cout << "[FileProducer] Teardown timeout reached; requesting stop" << std::endl;
           EmitEvent("teardown_timeout", "");
-          ForceStop();
+          RequestStop();
           break;
         }
       }
@@ -543,6 +566,37 @@ namespace retrovue::producers::file
           eof_event_emitted_ = true;
           std::cout << "[FileProducer] End of file reached (no more frames to produce); waiting for explicit stop (Phase 8.8)" << std::endl;
           EmitEvent("eof", "");
+
+          // =====================================================================
+          // INV-SEGMENT-CONTENT-001 DIAGNOSTIC PROBE: EOF reached
+          // =====================================================================
+          // Log contract probe data to discriminate between:
+          //   - INV-SEGMENT-CONTENT-001 violation (EOF before segment end)
+          //   - Normal EOF at segment end
+          //
+          // If frame_count was specified and we produced fewer, this is a
+          // potential content depth violation. If frame_count was not specified
+          // (-1), this is just natural EOF which may or may not be a violation
+          // depending on the scheduled slot duration (known only to Core).
+          //
+          // See: docs/contracts/semantics/PrimitiveInvariants.md
+          // =====================================================================
+          const uint64_t produced = frames_produced_.load(std::memory_order_acquire);
+          std::cout << "[FileProducer] INV-SEGMENT-CONTENT-001 PROBE: "
+                    << "eof=true, "
+                    << "frames_produced=" << produced << ", "
+                    << "configured_frame_count=" << config_.frame_count << ", "
+                    << "decode_active=false, "
+                    << "buffer_depth=" << output_buffer_.Size()
+                    << std::endl;
+
+          // Flag potential violation if frame_count was specified but not met
+          if (config_.frame_count > 0 && static_cast<int64_t>(produced) < config_.frame_count) {
+            std::cout << "[FileProducer] INV-SEGMENT-CONTENT-001 POTENTIAL VIOLATION: "
+                      << "EOF before frame_count reached ("
+                      << produced << "/" << config_.frame_count << ")"
+                      << std::endl;
+          }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
@@ -754,12 +808,9 @@ namespace retrovue::producers::file
         // SAR is defined: calculate DAR
         src_aspect = (static_cast<double>(src_width) * sar.num) /
                      (static_cast<double>(src_height) * sar.den);
-        std::cout << "[FileProducer] Using SAR " << sar.num << ":" << sar.den
-                  << " -> DAR " << src_aspect << std::endl;
       } else {
         // No SAR: assume square pixels
         src_aspect = static_cast<double>(src_width) / src_height;
-        std::cout << "[FileProducer] No SAR, using pixel aspect " << src_aspect << std::endl;
       }
       double dst_aspect = static_cast<double>(dst_width) / dst_height;
 
@@ -838,6 +889,20 @@ namespace retrovue::producers::file
       intermediate_frame_->width = scale_width_;
       intermediate_frame_->height = scale_height_;
       intermediate_frame_->format = dst_format;
+    }
+
+    // =========================================================================
+    // INV-P10-SCALE: One-time scale pipeline configuration log
+    // =========================================================================
+    {
+      AVRational sar = codec_ctx_->sample_aspect_ratio;
+      std::cout << "[FileProducer] INV-P10-SCALE: src=" << src_width << "x" << src_height;
+      if (sar.num > 0 && sar.den > 0) {
+        std::cout << " SAR=" << sar.num << ":" << sar.den;
+      }
+      std::cout << " -> scale=" << scale_width_ << "x" << scale_height_
+                << " pad=(" << pad_x_ << "," << pad_y_ << ")"
+                << " -> target=" << dst_width << "x" << dst_height << std::endl;
     }
 
     // Allocate packet
@@ -1114,23 +1179,14 @@ namespace retrovue::producers::file
 
     // Extract frame PTS in microseconds (media-relative)
     int64_t base_pts_us = output_frame.metadata.pts;
-
-    // Debug: log video frame decode with full PTS info for diagnosis
     video_frame_count_++;
-    if (video_frame_count_ <= 10 || video_frame_count_ % 100 == 0)
-    {
-      std::cout << "[FileProducer] VIDEO_PTS raw_ts=" << frame_->pts
-                << " tb=" << format_ctx_->streams[video_stream_index_]->time_base.num
-                << "/" << format_ctx_->streams[video_stream_index_]->time_base.den
-                << " -> pts_us=" << base_pts_us
-                << " target_us=" << effective_seek_target_us_
-                << (base_pts_us < effective_seek_target_us_ ? " DISCARD" : " EMIT")
-                << std::endl;
-    }
 
     // Phase 8: Load shadow mode state early - needed for gating decisions
     bool in_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
 
+    // =========================================================================
+    // INV-SEEK-DISCARD: Keyframe seek discard phase
+    // =========================================================================
     // Phase 6 (INV-P6-004/INV-P6-008): frame admission — discard until PTS >= effective_seek_target
     // SCOPED by Phase 8 (INV-P8-TIME-BLINDNESS): This gating applies ONLY when:
     //   - TimelineController is NOT active (legacy mode), OR
@@ -1147,27 +1203,26 @@ namespace retrovue::producers::file
     if (phase6_gating_active && base_pts_us < effective_seek_target_us_)
     {
       video_discard_count_++;
-      if (video_discard_count_ <= 5 || video_discard_count_ % 100 == 0)
+      // INV-SEEK-DISCARD: Log once at start of discard phase
+      if (!seek_discard_logged_)
       {
-        std::cout << "[FileProducer] DROP_VIDEO_BEFORE_START #" << video_discard_count_
-                  << " pts_us=" << base_pts_us
-                  << " target_us=" << effective_seek_target_us_
-                  << " (need " << ((effective_seek_target_us_ - base_pts_us) / 1000) << "ms more)"
-                  << std::endl;
+        seek_discard_logged_ = true;
+        std::cout << "[FileProducer] INV-SEEK-DISCARD: Discarding to target_pts="
+                  << (effective_seek_target_us_ / 1000) << "ms" << std::endl;
       }
       return true;  // Discard frame; continue decoding
     }
 
-    // Phase 6 (INV-P6-005/INV-P6-ALIGN-FIRST-FRAME): Log first emitted frame accuracy after seek
-    // SCOPED by Phase 8: Only log in legacy/shadow mode. In Phase 8 with TimelineController,
-    // "first frame accuracy" is meaningless - TimelineController assigns CT, not producer.
+    // =========================================================================
+    // INV-SEEK-DISCARD: Completion - log summary when first frame is emitted
+    // =========================================================================
     if (phase6_gating_active && effective_seek_target_us_ > 0 && first_mt_pts_us_ == 0)
     {
       int64_t accuracy_us = base_pts_us - effective_seek_target_us_;
-      std::cout << "[FileProducer] Phase 6: First emitted video frame - target_pts=" << effective_seek_target_us_
-                << "us, first_emitted_pts=" << base_pts_us
-                << "us, accuracy=" << accuracy_us << "us ("
-                << (accuracy_us / 1000) << "ms)" << std::endl;
+      std::cout << "[FileProducer] INV-SEEK-DISCARD: Complete, discarded="
+                << video_discard_count_ << " frames, accuracy="
+                << (accuracy_us / 1000) << "ms (first_emitted=" << base_pts_us << "us)"
+                << std::endl;
 
       std::ostringstream msg;
       msg << "target_pts=" << effective_seek_target_us_ << "us, first_emitted_pts=" << base_pts_us
@@ -1277,14 +1332,42 @@ namespace retrovue::producers::file
 
         case timing::AdmissionResult::REJECTED_LATE:
           // Frame is too late - drop it and continue decoding
-          std::cout << "[FileProducer] Phase 8: Frame rejected (late), MT=" << base_pts_us
-                    << "us, CT_cursor=" << timeline_controller_->GetCTCursor() << "us" << std::endl;
+          // One-shot diagnostic with full context for debugging MT coordinate issues
+          {
+            static bool late_logged_once = false;
+            if (!late_logged_once) {
+              late_logged_once = true;
+              std::cerr << "[FileProducer] INV-P8-MT-MONOTONIC-WITHIN-SEGMENT: Frame REJECTED (late) - "
+                        << "asset=" << config_.asset_uri
+                        << ", producer=" << static_cast<const void*>(this)
+                        << ", raw_pts=" << (frame_ ? frame_->pts : -1)
+                        << ", time_base=" << time_base_
+                        << ", computed_mt_us=" << base_pts_us
+                        << ", mt_start_us=" << timeline_controller_->GetSegmentMTStart()
+                        << ", ct_cursor=" << timeline_controller_->GetCTCursor()
+                        << std::endl;
+            }
+          }
           return true;  // Continue decoding next frame
 
         case timing::AdmissionResult::REJECTED_EARLY:
           // Frame is too early - this is unusual, log and drop
-          std::cout << "[FileProducer] Phase 8: Frame rejected (early), MT=" << base_pts_us
-                    << "us, CT_cursor=" << timeline_controller_->GetCTCursor() << "us" << std::endl;
+          // One-shot diagnostic
+          {
+            static bool early_logged_once = false;
+            if (!early_logged_once) {
+              early_logged_once = true;
+              std::cerr << "[FileProducer] INV-P8-MT-MONOTONIC-WITHIN-SEGMENT: Frame REJECTED (early) - "
+                        << "asset=" << config_.asset_uri
+                        << ", producer=" << static_cast<const void*>(this)
+                        << ", raw_pts=" << (frame_ ? frame_->pts : -1)
+                        << ", time_base=" << time_base_
+                        << ", computed_mt_us=" << base_pts_us
+                        << ", mt_start_us=" << timeline_controller_->GetSegmentMTStart()
+                        << ", ct_cursor=" << timeline_controller_->GetCTCursor()
+                        << std::endl;
+            }
+          }
           return true;  // Continue decoding next frame
 
         case timing::AdmissionResult::REJECTED_NO_MAPPING:
@@ -1440,12 +1523,75 @@ namespace retrovue::producers::file
       }
     }
 
-    uint64_t produced = frames_produced_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (produced <= 5 || produced % 100 == 0)
+    frames_produced_.fetch_add(1, std::memory_order_relaxed);
+
+    // =========================================================================
+    // INV-DECODE-RATE-001 DIAGNOSTIC PROBE: Detect decode rate violations
+    // =========================================================================
+    // Measures decode rate to detect when producer falls behind real-time.
+    // Violation: decode rate < target_fps during steady state (not seek/startup).
+    //
+    // NOTE: This probe only measures SUCCESSFUL frame production. If pacing
+    // violation (INV-PACING-001) is active, decode rate may appear normal while
+    // buffer still drains due to consumption outpacing production.
+    //
+    // See: docs/contracts/semantics/PrimitiveInvariants.md
+    // =========================================================================
     {
-      std::cout << "[FileProducer] Video frame pushed #" << produced
-                << ", pts=" << output_frame.metadata.pts << std::endl;
+      const int64_t now_us = master_clock_ ? master_clock_->now_utc_us()
+                                           : std::chrono::duration_cast<std::chrono::microseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch()).count();
+
+      // Initialize probe on first frame
+      if (decode_probe_window_start_us_ == 0) {
+        decode_probe_window_start_us_ = now_us;
+        decode_probe_window_frames_ = 0;
+      }
+
+      // Track if we're in seek discard phase
+      decode_probe_in_seek_ = (video_discard_count_ > 0 && first_mt_pts_us_ == 0);
+
+      decode_probe_window_frames_++;
+
+      // Check 1-second window for rate measurement
+      const int64_t window_elapsed_us = now_us - decode_probe_window_start_us_;
+      if (window_elapsed_us >= kDecodeProbeWindowUs) {
+        decode_probe_last_rate_ = static_cast<double>(decode_probe_window_frames_) *
+                                  1'000'000.0 / static_cast<double>(window_elapsed_us);
+        const double target_fps = config_.target_fps > 0 ? config_.target_fps : 30.0;
+
+        // Only flag violation if NOT in seek phase and rate is below threshold
+        const bool in_steady_state = !decode_probe_in_seek_ && first_mt_pts_us_ != 0;
+        const bool is_violation = in_steady_state && (decode_probe_last_rate_ < target_fps * 0.9);
+
+        if (is_violation && !decode_rate_violation_logged_) {
+          decode_rate_violation_logged_ = true;
+          std::cout << "[FileProducer] INV-DECODE-RATE-001 VIOLATION DETECTED: "
+                    << "decode_rate=" << decode_probe_last_rate_ << "fps "
+                    << "(target=" << target_fps << "fps), "
+                    << "frames_produced=" << frames_produced_.load()
+                    << ", eof=" << (eof_reached_ ? "true" : "false")
+                    << ", buffer_depth=" << output_buffer_.Size()
+                    << std::endl;
+        }
+
+        // Log probe data periodically (every window)
+        if (frames_produced_.load() % 100 < decode_probe_window_frames_) {
+          std::cout << "[FileProducer] INV-DECODE-RATE-001 PROBE: "
+                    << "rate=" << decode_probe_last_rate_ << "fps, "
+                    << "target=" << target_fps << "fps, "
+                    << "in_seek=" << (decode_probe_in_seek_ ? "true" : "false")
+                    << ", steady_state=" << (in_steady_state ? "true" : "false")
+                    << ", buffer_depth=" << output_buffer_.Size()
+                    << std::endl;
+        }
+
+        // Reset window
+        decode_probe_window_start_us_ = now_us;
+        decode_probe_window_frames_ = 0;
+      }
     }
+
     return true;
   }
 
@@ -1458,31 +1604,6 @@ namespace retrovue::producers::file
 
     // Check if padding needed (aspect preserve)
     bool needs_padding = (intermediate_frame_ != nullptr);
-
-    // Diagnostic for first 5 frames
-    if (++scale_diag_count_ <= 5) {
-      std::cout << "[FileProducer] SCALE_DIAG frame=" << scale_diag_count_
-                << " src=" << frame_->width << "x" << frame_->height
-                << " src_linesize=[" << frame_->linesize[0] << "," << frame_->linesize[1] << "," << frame_->linesize[2] << "]"
-                << " scale=" << scale_width_ << "x" << scale_height_
-                << " pad=(" << pad_x_ << "," << pad_y_ << ")"
-                << " target=" << config_.target_width << "x" << config_.target_height
-                << " target_linesize=[" << scaled_frame_->linesize[0] << "," << scaled_frame_->linesize[1] << "," << scaled_frame_->linesize[2] << "]"
-                << " needs_padding=" << (needs_padding ? "Y" : "N")
-                << std::endl;
-      if (needs_padding && intermediate_frame_) {
-        std::cout << "[FileProducer] SCALE_DIAG intermediate_linesize=["
-                  << intermediate_frame_->linesize[0] << ","
-                  << intermediate_frame_->linesize[1] << ","
-                  << intermediate_frame_->linesize[2] << "]" << std::endl;
-      }
-      // Log first 16 bytes of decoded Y plane
-      std::cout << "[FileProducer] SCALE_DIAG src_Y_first16: ";
-      for (int i = 0; i < 16 && i < frame_->linesize[0]; ++i) {
-        std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)frame_->data[0][i] << " ";
-      }
-      std::cout << std::dec << std::endl;
-    }
 
     // Scale to intermediate dimensions (preserving aspect if needed)
     AVFrame* scale_target = needs_padding ? intermediate_frame_ : scaled_frame_;
@@ -1527,27 +1648,9 @@ namespace retrovue::producers::file
       }
     }
 
-    // Diagnostic for first 5 frames - output data
-    if (scale_diag_count_ <= 5) {
-      // Sample Y plane at content start (after padding)
-      int sample_y = pad_y_;
-      int sample_x = pad_x_;
-      std::cout << "[FileProducer] SCALE_DIAG output_Y at (" << sample_x << "," << sample_y << "): ";
-      uint8_t* row = scaled_frame_->data[0] + sample_y * scaled_frame_->linesize[0];
-      for (int i = sample_x; i < sample_x + 16 && i < config_.target_width; ++i) {
-        std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)row[i] << " ";
-      }
-      std::cout << std::dec << std::endl;
-      // Also sample the pillarbox/letterbox area (should be black = 0 for Y)
-      if (pad_x_ > 0) {
-        std::cout << "[FileProducer] SCALE_DIAG pillarbox_Y at (0,0): ";
-        uint8_t* pbox_row = scaled_frame_->data[0];
-        for (int i = 0; i < std::min(pad_x_, 16); ++i) {
-          std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)pbox_row[i] << " ";
-        }
-        std::cout << std::dec << std::endl;
-      }
-    }
+    // No pixel-level diagnostics here - per INV-P10-CONTENT-BLIND, pixel sampling
+    // does not drive logic and is only useful for debugging specific decode issues.
+    // Frame geometry is logged above; pixel content is the asset's responsibility.
 
     return true;
   }
@@ -1791,6 +1894,24 @@ namespace retrovue::producers::file
       shadow_decode_ready_.store(false, std::memory_order_release);
       cached_first_frame_.reset();
       cached_frame_flushed_.store(false, std::memory_order_release);
+
+      // =========================================================================
+      // INV-P8-ZERO-FRAME-READY: When frame_count == 0, signal ready immediately
+      // =========================================================================
+      // A segment with frame_count=0 is a valid Core-computed scenario (e.g., grid
+      // reconciliation rounds to 0 frames). The producer will never decode a frame
+      // because the segment is "complete" before starting. Without this fix,
+      // SwitchToLive would wait forever for IsShadowDecodeReady() which never fires.
+      //
+      // Fix: Signal ready immediately when there's nothing to cache. SwitchToLive
+      // proceeds, buffer is empty, and safety rails (pad frames) activate.
+      // This preserves the Output Liveness Invariant.
+      // =========================================================================
+      if (config_.frame_count == 0) {
+        shadow_decode_ready_.store(true, std::memory_order_release);
+        std::cout << "[FileProducer] INV-P8-ZERO-FRAME-READY: frame_count=0, "
+                  << "signaling shadow_decode_ready=true immediately" << std::endl;
+      }
     }
   }
 
@@ -1806,6 +1927,18 @@ namespace retrovue::producers::file
     std::lock_guard<std::mutex> lock(shadow_decode_mutex_);
 
     if (!cached_first_frame_) {
+      // =========================================================================
+      // INV-P8-ZERO-FRAME-READY: Vacuous flush success for zero-frame segments
+      // =========================================================================
+      // When frame_count=0, there's nothing to cache and nothing to flush.
+      // Return true (vacuous success) to avoid triggering spurious violation logs.
+      // This is expected behavior, not an error.
+      // =========================================================================
+      if (config_.frame_count == 0) {
+        std::cout << "[FileProducer] INV-P8-ZERO-FRAME-READY: FlushCachedFrameToBuffer "
+                  << "returns true (vacuous) for frame_count=0" << std::endl;
+        return true;
+      }
       std::cout << "[FileProducer] FlushCachedFrameToBuffer: no cached frame" << std::endl;
       return false;
     }
@@ -2178,9 +2311,6 @@ namespace retrovue::producers::file
         audio_frame_count_++;
         frames_since_producer_start_++;
 
-        // Always log first 50 frames after producer start, then every 100
-        bool should_log = (frames_since_producer_start_ <= 50) || (frames_since_producer_start_ % 100 == 0);
-
         // =======================================================================
         // INV-P10-ELASTIC-FLOW-CONTROL: Push with backpressure retry
         // =======================================================================
@@ -2206,17 +2336,6 @@ namespace retrovue::producers::file
 
         received_any = true;
         processed_one = true;  // Phase 6: Exit loop after this frame
-
-        if (should_log)
-        {
-          std::cout << "[FileProducer] Pushed audio frame #" << audio_frame_count_
-                    << " (frames_since_start=" << frames_since_producer_start_ << ")"
-                    << ", base_pts_us=" << base_pts_us
-                    << ", ct_pts_us=" << output_audio_frame.pts_us
-                    << ", samples=" << output_audio_frame.nb_samples
-                    << ", sample_rate=" << output_audio_frame.sample_rate
-                    << std::endl;
-        }
       }
       else
       {
@@ -2271,9 +2390,12 @@ namespace retrovue::producers::file
     }
 
     // Check if we need to create/recreate the resampler
+    // Must also recreate if source FORMAT changes (not just rate/channels)
+    // FFmpeg decoders typically output FLTP (planar float), not S16!
     bool need_new_swr = (audio_swr_ctx_ == nullptr) ||
                         (audio_swr_src_rate_ != src_rate) ||
-                        (audio_swr_src_channels_ != src_channels);
+                        (audio_swr_src_channels_ != src_channels) ||
+                        (audio_swr_src_fmt_ != static_cast<int>(src_fmt));
 
     if (need_new_swr)
     {
@@ -2281,8 +2403,10 @@ namespace retrovue::producers::file
       if (audio_swr_ctx_ != nullptr)
       {
         std::cout << "[FileProducer] INV-P10.5-HOUSE-AUDIO: Source format changed from "
-                  << audio_swr_src_rate_ << "Hz/" << audio_swr_src_channels_ << "ch to "
-                  << src_rate << "Hz/" << src_channels << "ch (resampling to house format)"
+                  << audio_swr_src_rate_ << "Hz/" << audio_swr_src_channels_ << "ch/"
+                  << av_get_sample_fmt_name(static_cast<AVSampleFormat>(audio_swr_src_fmt_)) << " to "
+                  << src_rate << "Hz/" << src_channels << "ch/"
+                  << av_get_sample_fmt_name(src_fmt) << " (resampling to house format)"
                   << std::endl;
         ::SwrContext* old_ctx = audio_swr_ctx_;
         audio_swr_ctx_ = nullptr;
@@ -2291,8 +2415,9 @@ namespace retrovue::producers::file
       else
       {
         std::cout << "[FileProducer] INV-P10.5-HOUSE-AUDIO: Initializing resampler "
-                  << src_rate << "Hz/" << src_channels << "ch -> "
-                  << dst_rate << "Hz/" << dst_channels << "ch" << std::endl;
+                  << src_rate << "Hz/" << src_channels << "ch/"
+                  << av_get_sample_fmt_name(src_fmt) << " -> "
+                  << dst_rate << "Hz/" << dst_channels << "ch/s16" << std::endl;
       }
 
       // Create resampler with newer API; pointer type explicit (::SwrContext*)
@@ -2301,10 +2426,12 @@ namespace retrovue::producers::file
       AVChannelLayout dst_layout;
       av_channel_layout_default(&dst_layout, dst_channels);
 
+      // CRITICAL: Use ACTUAL source format (src_fmt), not hardcoded S16!
+      // Most decoders output FLTP (planar float). Mismatched format = static noise.
       ::SwrContext* new_ctx = nullptr;
       int ret = swr_alloc_set_opts2(&new_ctx,
                                     &dst_layout, AV_SAMPLE_FMT_S16, dst_rate,
-                                    &src_layout, AV_SAMPLE_FMT_S16, src_rate,
+                                    &src_layout, src_fmt, src_rate,
                                     0, nullptr);
       av_channel_layout_uninit(&src_layout);
       av_channel_layout_uninit(&dst_layout);
@@ -2331,6 +2458,7 @@ namespace retrovue::producers::file
       audio_swr_ctx_ = new_ctx;
       audio_swr_src_rate_ = src_rate;
       audio_swr_src_channels_ = src_channels;
+      audio_swr_src_fmt_ = static_cast<int>(src_fmt);
     }
 
     // Calculate output sample count after resampling

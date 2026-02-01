@@ -200,6 +200,14 @@ void ProgramOutput::Stop() {
             << stats_.frames_rendered << std::endl;
 }
 
+void ProgramOutput::SetNoContentSegment(bool value) {
+  no_content_segment_ = value;
+  if (value) {
+    std::cout << "[ProgramOutput] INV-P8-ZERO-FRAME-BOOTSTRAP: No-content segment, "
+              << "pad frames allowed immediately" << std::endl;
+  }
+}
+
 void ProgramOutput::RenderLoop() {
   std::cout << "[ProgramOutput] Output loop started (mode="
             << (config_.mode == RenderMode::HEADLESS ? "HEADLESS" : "PREVIEW")
@@ -218,6 +226,26 @@ void ProgramOutput::RenderLoop() {
   }
 
   while (!stop_requested_.load(std::memory_order_acquire)) {
+    // =========================================================================
+    // INV-P10-SINK-GATE: Don't consume frames until output sink is attached
+    // =========================================================================
+    // If no OutputBus is connected AND no side_sink_ is set, we're in a
+    // pre-attachment phase (between StartChannel and AttachStream). Consuming
+    // frames here would drain the buffer without pacing, causing buffer
+    // starvation and pad frame floods. Wait until a sink is attached.
+    //
+    // Note: side_sink_ is used by tests and the MpegTS path before OutputBus.
+    // =========================================================================
+    {
+      std::lock_guard<std::mutex> bus_lock(output_bus_mutex_);
+      std::lock_guard<std::mutex> side_lock(side_sink_mutex_);
+      if (!output_bus_ && !side_sink_) {
+        // No sink attached yet - yield and retry
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
+    }
+
     // Phase 7: Get current buffer pointer under lock to support hot-switching.
     // The pointer may change during SwitchToLive, so we read it once per iteration.
     buffer::FrameRingBuffer* current_buffer;
@@ -236,7 +264,40 @@ void ProgramOutput::RenderLoop() {
 
     buffer::Frame frame;
     bool using_pad_frame = false;
+
+    // Check buffer depth BEFORE Pop for diagnostic purposes
+    size_t video_depth_before_pop = current_buffer->Size();
+
     if (!current_buffer->Pop(frame)) {
+      // =========================================================================
+      // INV-AIR-CONTENT-BEFORE-PAD: Gate pad emission until first real frame
+      // =========================================================================
+      // Pad frames may ONLY be emitted AFTER at least one real decoded content
+      // frame has been successfully encoded and muxed. This ensures VLC can
+      // decode the stream from the start.
+      //
+      // Evidence: "INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #1" appeared
+      // BEFORE real content, causing VLC to display nothing.
+      //
+      // EXCEPTION (INV-P8-ZERO-FRAME-BOOTSTRAP): When no_content_segment_=true,
+      // pad frames are allowed immediately. The first pad frame acts as the
+      // "bootstrap frame" for encoder initialization. This handles zero-frame
+      // segments where no real content will ever arrive.
+      // =========================================================================
+      if (!first_real_frame_emitted_ && !no_content_segment_) {
+        // Skip pad emission entirely - wait for first real content frame
+        // This is a brief startup delay, not a stall. Once real content arrives,
+        // the gate opens and normal pad behavior resumes.
+        static uint64_t content_wait_count = 0;
+        if (++content_wait_count == 1 || content_wait_count % 100 == 0) {
+          std::cout << "[ProgramOutput] INV-AIR-CONTENT-BEFORE-PAD: Waiting for first real content frame "
+                    << "(wait_count=" << content_wait_count << ")" << std::endl;
+        }
+        // Brief yield to avoid busy-spinning
+        std::this_thread::sleep_for(std::chrono::microseconds(1000));
+        continue;
+      }
+
       // =========================================================================
       // INV-P10.5-OUTPUT-SAFETY-RAIL: Emit pad frame when producer is starved
       // =========================================================================
@@ -248,6 +309,29 @@ void ProgramOutput::RenderLoop() {
       // Producer starvation, EOF, shadow readiness, or gating must NOT stop output.
       // =========================================================================
 
+      // -----------------------------------------------------------------------
+      // INV-P10-PAD-REASON: Classify pad frame cause for diagnostics
+      // -----------------------------------------------------------------------
+      PadReason reason = PadReason::UNKNOWN;
+      if (video_depth_before_pop == 0) {
+        reason = PadReason::BUFFER_TRULY_EMPTY;
+        pads_buffer_empty_++;
+      } else {
+        // Buffer had frames but Pop failed - shouldn't happen with current impl
+        reason = PadReason::UNKNOWN;
+        pads_unknown_++;
+      }
+
+      // -----------------------------------------------------------------------
+      // INV-NO-PAD-WHILE-DEPTH-HIGH: Log violation if pad emitted while depth >= 10
+      // -----------------------------------------------------------------------
+      if (video_depth_before_pop >= kDepthHighThreshold) {
+        pad_while_depth_high_++;
+        std::cout << "[ProgramOutput] INV-NO-PAD-WHILE-DEPTH-HIGH VIOLATION: Pad emitted while depth="
+                  << video_depth_before_pop << " >= " << kDepthHighThreshold
+                  << " (violations=" << pad_while_depth_high_ << ")" << std::endl;
+      }
+
       if (!pad_frame_initialized_) {
         // First time starvation before we've seen any real frames.
         // Use defaults (1920x1080 @ 30fps). Will be corrected on first real frame.
@@ -257,12 +341,21 @@ void ProgramOutput::RenderLoop() {
                   << " @ " << (1'000'000 / pad_frame_duration_us_) << "fps" << std::endl;
       }
 
-      // Compute next PTS based on last emitted PTS + frame duration
-      int64_t pad_pts_us = last_pts_ + pad_frame_duration_us_;
-
-      // If we haven't emitted any frames yet, use current CT
-      if (last_pts_ == 0 && clock_) {
+      // -----------------------------------------------------------------------
+      // INV-PTS-DERIVES-CT: Pad PTS must equal CT at moment of emission
+      // -----------------------------------------------------------------------
+      // Pad frames derive PTS directly from TimelineController (CT).
+      // No local accumulation. No fallback to last_pts_.
+      // This ensures PTS continuity across segment boundaries and producer switches.
+      // See: RULE-PAD-001, RULE-PO-001, INV-NO-LOCAL-EPOCHS
+      // -----------------------------------------------------------------------
+      int64_t pad_pts_us = 0;
+      if (clock_) {
         pad_pts_us = clock_->now_utc_us() - clock_->get_epoch_utc_us();
+      } else {
+        // Fallback: no clock available (should not happen in production)
+        // Use last_pts_ + duration only as emergency fallback
+        pad_pts_us = last_pts_ + pad_frame_duration_us_;
       }
 
       frame = GeneratePadFrame(pad_pts_us);
@@ -271,7 +364,44 @@ void ProgramOutput::RenderLoop() {
 
       if (pad_frames_emitted_ == 1 || pad_frames_emitted_ % 30 == 0) {
         std::cout << "[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #"
-                  << pad_frames_emitted_ << " at PTS=" << pad_pts_us << "us" << std::endl;
+                  << pad_frames_emitted_ << " at PTS=" << pad_pts_us << "us"
+                  << " reason=" << PadReasonToString(reason) << std::endl;
+
+        // =====================================================================
+        // PRIMITIVE INVARIANT DISCRIMINATION PROBE
+        // =====================================================================
+        // When pad frames are emitted, log data needed to identify which
+        // primitive invariant is violated:
+        //   - INV-PACING-001: pad_rate >> real-time, decode_active=true, eof=false
+        //   - INV-DECODE-RATE-001: pad_rate = real-time, decode_active=true, eof=false
+        //   - INV-SEGMENT-CONTENT-001: pad_rate = real-time, decode_active=false, eof=true
+        //
+        // See: docs/contracts/semantics/PrimitiveInvariants.md (Discrimination Matrix)
+        // =====================================================================
+        const int64_t now_us = clock_ ? clock_->now_utc_us()
+                                      : std::chrono::duration_cast<std::chrono::microseconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch()).count();
+
+        // Calculate pad emission rate over recent window
+        double pad_rate_fps = 0.0;
+        if (pacing_probe_window_start_us_ > 0) {
+          const int64_t elapsed_us = now_us - pacing_probe_window_start_us_;
+          if (elapsed_us > 0) {
+            pad_rate_fps = static_cast<double>(pacing_probe_window_frames_) *
+                           1'000'000.0 / static_cast<double>(elapsed_us);
+          }
+        }
+
+        const double target_fps = 1'000'000.0 / static_cast<double>(pad_frame_duration_us_);
+        const bool rate_is_fast = (pad_rate_fps > target_fps * 2.0);
+
+        std::cout << "[ProgramOutput] DISCRIMINATION PROBE: "
+                  << "pad_count=" << pad_frames_emitted_ << ", "
+                  << "emission_rate=" << pad_rate_fps << "fps "
+                  << (rate_is_fast ? "(>>real-time)" : "(~real-time)") << ", "
+                  << "buffer_depth=" << video_depth_before_pop << ", "
+                  << "fast_emissions=" << pacing_probe_fast_emissions_
+                  << std::endl;
       }
 
       // Process any ready audio from buffer (same as before)
@@ -408,6 +538,31 @@ void ProgramOutput::RenderLoop() {
     }
 
     // =========================================================================
+    // INV-AIR-CONTENT-BEFORE-PAD: Mark first real frame as emitted
+    // =========================================================================
+    // Once first real content frame is routed to output, pad frames are allowed.
+    // This ensures VLC receives decodable content (with IDR/SPS/PPS) first.
+    if (!first_real_frame_emitted_) {
+      first_real_frame_emitted_ = true;
+      std::cout << "[ProgramOutput] INV-AIR-CONTENT-BEFORE-PAD: First real content frame emitted, "
+                << "pad frames now allowed. PTS=" << frame.metadata.pts << "us"
+                << " size=" << frame.width << "x" << frame.height << std::endl;
+    }
+
+    // =========================================================================
+    // INV-P8-SUCCESSOR-OBSERVABILITY: Notify observer on first real successor video
+    // =========================================================================
+    // Real video (non-pad) admitted into ProgramOutput. Fire observer exactly once
+    // per segment so TimelineController can advance commit_gen.
+    if (!using_pad_frame && frame.metadata.asset_uri != "pad://black") {
+      std::lock_guard<std::mutex> lock(successor_observer_mutex_);
+      if (on_successor_video_emitted_ && !successor_observer_fired_for_segment_) {
+        successor_observer_fired_for_segment_ = true;
+        on_successor_video_emitted_();
+      }
+    }
+
+    // =========================================================================
     // INV-P9-OUTPUT-CT-GATE: No frame emitted to sink before its CT
     // =========================================================================
     // No audio or video frame may be emitted to any sink before its CT.
@@ -486,6 +641,70 @@ void ProgramOutput::RenderLoop() {
     UpdateStats(render_time_ms, frame_gap_ms);
     PublishMetrics(frame_gap_ms);
 
+    // =========================================================================
+    // INV-PACING-001 DIAGNOSTIC PROBE: Detect render loop pacing violations
+    // =========================================================================
+    // Measures wall-clock time between frame emissions to detect when frames
+    // are emitted at CPU speed instead of target frame rate.
+    //
+    // Violation signature: gap << frame_duration (e.g., <1ms instead of 33ms)
+    // See: docs/contracts/semantics/PrimitiveInvariants.md
+    // =========================================================================
+    {
+      const int64_t now_us = clock_ ? clock_->now_utc_us()
+                                    : std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch()).count();
+
+      // Initialize probe on first emission
+      if (pacing_probe_last_emission_us_ == 0) {
+        pacing_probe_last_emission_us_ = now_us;
+        pacing_probe_window_start_us_ = now_us;
+        pacing_probe_window_frames_ = 0;
+      }
+
+      pacing_probe_total_emissions_++;
+      pacing_probe_window_frames_++;
+
+      // Measure inter-frame gap
+      const int64_t emission_gap_us = now_us - pacing_probe_last_emission_us_;
+      pacing_probe_last_emission_us_ = now_us;
+
+      // Detect pacing violation: gap < threshold * frame_duration
+      const int64_t expected_gap_us = pad_frame_duration_us_;  // ~33333us at 30fps
+      const int64_t violation_threshold_us = static_cast<int64_t>(
+          expected_gap_us * kPacingViolationThreshold);
+
+      if (emission_gap_us > 0 && emission_gap_us < violation_threshold_us &&
+          pacing_probe_total_emissions_ > 1) {
+        pacing_probe_fast_emissions_++;
+      }
+
+      // Check 1-second window for rate measurement
+      const int64_t window_elapsed_us = now_us - pacing_probe_window_start_us_;
+      if (window_elapsed_us >= kPacingProbeWindowUs) {
+        const double window_fps = static_cast<double>(pacing_probe_window_frames_) *
+                                  1'000'000.0 / static_cast<double>(window_elapsed_us);
+        const double target_fps = 1'000'000.0 / static_cast<double>(pad_frame_duration_us_);
+
+        // Log INV-PACING-001 probe data
+        const bool is_violation = (window_fps > target_fps * 2.0);  // 2x = clear violation
+        if (is_violation && !pacing_violation_logged_) {
+          pacing_violation_logged_ = true;
+          std::cout << "[ProgramOutput] INV-PACING-001 VIOLATION DETECTED: "
+                    << "emission_rate=" << window_fps << "fps "
+                    << "(expected=" << target_fps << "fps), "
+                    << "fast_emissions=" << pacing_probe_fast_emissions_ << "/" << pacing_probe_total_emissions_
+                    << ", pad_frames=" << pad_frames_emitted_
+                    << ", using_pad=" << (using_pad_frame ? "true" : "false")
+                    << std::endl;
+        }
+
+        // Reset window
+        pacing_probe_window_start_us_ = now_us;
+        pacing_probe_window_frames_ = 0;
+      }
+    }
+
     if (stats_.frames_rendered % 100 == 0) {
       std::cout << "[ProgramOutput] Rendered " << stats_.frames_rendered
                 << " frames, avg render time: " << stats_.average_render_time_ms << "ms, "
@@ -541,7 +760,15 @@ void ProgramOutput::resetPipeline() {
 
   input_buffer_->Clear();
 
-  last_pts_ = 0;
+  // -------------------------------------------------------------------------
+  // INV-NO-LOCAL-EPOCHS: Do NOT reset timing state
+  // -------------------------------------------------------------------------
+  // Pipeline reset clears buffers only. Timing state (last_pts_, etc.) must
+  // NOT be modified. Pad frames derive PTS from CT, not from last_pts_.
+  // Resetting last_pts_ would create conditions for epoch discontinuity.
+  // See: RULE-PO-002
+  // -------------------------------------------------------------------------
+
   if (clock_) {
     last_frame_time_utc_ = clock_->now_utc_us();
   } else {
@@ -573,7 +800,26 @@ void ProgramOutput::ClearAudioSideSink() {
 
 void ProgramOutput::SetOutputBus(output::OutputBus* bus) {
   std::lock_guard<std::mutex> lock(output_bus_mutex_);
+
+  // INV-P9-NO-BUS-REPLACEMENT: Idempotent - same bus is no-op.
+  if (output_bus_ == bus) {
+    return;
+  }
+
+  // INV-P9-NO-BUS-REPLACEMENT: Changing bus while one is set is a violation.
+  // Once a channel has a bus and sink attached, bus identity must not change.
+  if (output_bus_ != nullptr && bus != nullptr) {
+    std::cerr << "[ProgramOutput] INV-P9-NO-BUS-REPLACEMENT FATAL: SetOutputBus called with "
+              << "different bus (old=" << static_cast<void*>(output_bus_)
+              << " new=" << static_cast<void*>(bus)
+              << "). Bus must not be replaced." << std::endl;
+    std::abort();
+  }
+
   output_bus_ = bus;
+  std::cout << "[DBG-PO] SetOutputBus channel=" << channel_id_
+            << " bus=" << static_cast<void*>(bus)
+            << " (idempotent skip if same)" << std::endl;
   if (bus) {
     std::cout << "[ProgramOutput] OutputBus set (frames will route through bus)" << std::endl;
   }
@@ -586,9 +832,21 @@ void ProgramOutput::ClearOutputBus() {
 }
 
 void ProgramOutput::SetInputBuffer(buffer::FrameRingBuffer* buffer) {
-  std::lock_guard<std::mutex> lock(input_buffer_mutex_);
-  input_buffer_ = buffer;
+  {
+    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+    input_buffer_ = buffer;
+  }
+  // INV-P8-SUCCESSOR-OBSERVABILITY: New segment when buffer changes; reset latch.
+  {
+    std::lock_guard<std::mutex> lock(successor_observer_mutex_);
+    successor_observer_fired_for_segment_ = false;
+  }
   std::cout << "[ProgramOutput] Input buffer redirected (hot-switch)" << std::endl;
+}
+
+void ProgramOutput::SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback) {
+  std::lock_guard<std::mutex> lock(successor_observer_mutex_);
+  on_successor_video_emitted_ = std::move(callback);
 }
 
 int64_t ProgramOutput::GetLastEmittedPTS() const {
