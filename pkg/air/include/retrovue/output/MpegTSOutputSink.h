@@ -13,6 +13,8 @@
 #include <string>
 #include <thread>
 
+#include <functional>
+
 #include "retrovue/output/IOutputSink.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 
@@ -65,6 +67,11 @@ class MpegTSOutputSink : public IOutputSink {
   void SetStatusCallback(SinkStatusCallback callback) override;
   std::string GetName() const override;
 
+  // INV-SWITCH-SUCCESSOR-EMISSION: Callback invoked once per real (non-pad)
+  // video frame encoded. Used to gate segment commit and switch completion.
+  using OnSuccessorVideoEmittedCallback = std::function<void()>;
+  void SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback);
+
  private:
   // Main mux loop (runs in worker thread).
   // Drains frame queues and encodes to MPEG-TS.
@@ -108,16 +115,26 @@ class MpegTSOutputSink : public IOutputSink {
   std::atomic<bool> stop_requested_;
   std::thread mux_thread_;
 
-  // Track if we've had frames (for flush detection on producer switch)
-  bool had_frames_;
-  int empty_iterations_;
-
   // Prebuffer: accumulates encoded data before streaming starts.
   // This absorbs encoder warmup bitrate spikes (fade-ins, scene changes).
   std::vector<uint8_t> prebuffer_;
   size_t prebuffer_target_bytes_;
   std::atomic<bool> prebuffering_;
   mutable std::mutex prebuffer_mutex_;
+
+  // =========================================================================
+  // DEBUG INSTRUMENTATION - remove after diagnosis
+  // =========================================================================
+  std::atomic<uint64_t> dbg_bytes_written_{0};
+  std::atomic<uint64_t> dbg_packets_written_{0};
+  std::atomic<uint64_t> dbg_video_frames_enqueued_{0};
+  std::atomic<uint64_t> dbg_audio_frames_enqueued_{0};
+  std::chrono::steady_clock::time_point dbg_last_write_time_;
+  std::chrono::steady_clock::time_point dbg_output_heartbeat_time_;
+  std::chrono::steady_clock::time_point dbg_enqueue_heartbeat_time_;
+
+  // INV-SWITCH-SUCCESSOR-EMISSION: Called when a real video frame is encoded
+  OnSuccessorVideoEmittedCallback on_successor_video_emitted_;
 };
 
 }  // namespace retrovue::output

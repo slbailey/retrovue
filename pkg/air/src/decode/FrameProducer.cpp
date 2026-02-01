@@ -115,9 +115,9 @@ void FrameProducer::RequestTeardown(std::chrono::milliseconds drain_timeout) {
             << drain_timeout_.count() << " ms)" << std::endl;
 }
 
-void FrameProducer::ForceStop() {
+void FrameProducer::RequestStop() {
   stop_requested_.store(true, std::memory_order_release);
-  std::cout << "[FrameProducer] Force stop requested" << std::endl;
+  std::cout << "[FrameProducer] Request stop" << std::endl;
 }
 
 void FrameProducer::ProduceLoop() {

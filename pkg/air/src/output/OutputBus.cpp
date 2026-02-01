@@ -5,6 +5,7 @@
 
 #include "retrovue/output/OutputBus.h"
 
+#include <chrono>
 #include <iostream>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
@@ -13,7 +14,8 @@
 namespace retrovue::output {
 
 OutputBus::OutputBus(runtime::PlayoutControl* control)
-    : control_(control) {
+    : control_(control),
+      dbg_bus_heartbeat_time_(std::chrono::steady_clock::now()) {
 }
 
 OutputBus::~OutputBus() {
@@ -60,6 +62,10 @@ OutputBusResult OutputBus::AttachSink(std::unique_ptr<IOutputSink> sink, bool re
     control_->OnSinkAttached();
   }
 
+  std::cout << "[DBG-BUS] AttachSink bus=" << static_cast<void*>(this)
+            << " sink=" << static_cast<void*>(sink_.get())
+            << " running=" << (sink_->IsRunning() ? 1 : 0)
+            << " name=" << sink_->GetName() << std::endl;
   std::cout << "[OutputBus] Sink attached: " << sink_->GetName() << std::endl;
   return OutputBusResult(true, "Sink attached: " + sink_->GetName());
 }
@@ -90,6 +96,8 @@ OutputBusResult OutputBus::DetachSink(bool force) {
     control_->OnSinkDetached();
   }
 
+  std::cout << "[DBG-BUS] DetachSink bus=" << static_cast<void*>(this)
+            << " sink=null (was " << sink_name << ")" << std::endl;
   std::cout << "[OutputBus] Sink detached: " << sink_name << std::endl;
   return OutputBusResult(true, "Sink detached: " + sink_name);
 }
@@ -101,20 +109,29 @@ bool OutputBus::IsAttached() const {
 
 void OutputBus::RouteVideo(const buffer::Frame& frame) {
   std::lock_guard<std::mutex> lock(mutex_);
-  static int route_count = 0;
-  route_count++;
-  if (route_count <= 5 || route_count % 100 == 0) {
-    std::cout << "[OutputBus] RouteVideo #" << route_count
-              << " sink_=" << (sink_ ? "yes" : "no")
-              << " running=" << (sink_ && sink_->IsRunning() ? "yes" : "no") << std::endl;
-  }
+  dbg_v_routed_.fetch_add(1, std::memory_order_relaxed);
+
+  // =========================================================================
+  // INV-P9-SINK-LIVENESS policy enforcement
+  // =========================================================================
+  // Per SinkLivenessPolicy.md:
+  //   - Pre-attach: sink_==nullptr is LEGAL; frames silently discarded
+  //   - Post-attach: frames MUST reach sink until explicit DetachSink
+  //
+  // No warning for pre-attach discard - this is expected "hot standby" behavior.
+  // =========================================================================
   if (sink_ && sink_->IsRunning()) {
     sink_->ConsumeVideo(frame);
   }
+  // else: Pre-attach or post-detach discard (silent, legal per INV-P9-SINK-LIVENESS-001)
 }
 
 void OutputBus::RouteAudio(const buffer::AudioFrame& audio_frame) {
   std::lock_guard<std::mutex> lock(mutex_);
+  dbg_a_routed_.fetch_add(1, std::memory_order_relaxed);
+
+  // INV-P9-SINK-LIVENESS: Same policy as RouteVideo
+  // Pre-attach/post-detach discard is silent and legal
   if (sink_ && sink_->IsRunning()) {
     sink_->ConsumeAudio(audio_frame);
   }

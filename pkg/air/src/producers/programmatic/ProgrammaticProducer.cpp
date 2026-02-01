@@ -80,6 +80,29 @@ namespace retrovue::producers::programmatic
     return state_.load(std::memory_order_acquire) == State::RUNNING;
   }
 
+  void ProgrammaticProducer::RequestStop()
+  {
+    // Idempotent: safe to call multiple times (e.g. SwitchToLive path then watcher).
+    if (stop_requested_.load(std::memory_order_acquire)) {
+      return;
+    }
+    stop_requested_.store(true, std::memory_order_release);
+  }
+
+  bool ProgrammaticProducer::IsStopped() const
+  {
+    return !isRunning();
+  }
+
+  std::optional<AsRunFrameStats> ProgrammaticProducer::GetAsRunFrameStats() const
+  {
+    AsRunFrameStats stats;
+    stats.asset_path = config_.asset_uri;
+    stats.start_frame = 0;
+    stats.frames_emitted = GetFramesProduced();
+    return stats;
+  }
+
   uint64_t ProgrammaticProducer::GetFramesProduced() const
   {
     return frames_produced_.load(std::memory_order_acquire);

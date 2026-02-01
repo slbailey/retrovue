@@ -599,3 +599,334 @@ class TestScheduleManagerSpecific:
 
             previous_block_start = block.block_start
             previous_block_end = block.block_end
+
+
+# =============================================================================
+# Frame-Indexed Invariant Tests (INV-FRAME-*)
+# =============================================================================
+
+class TestFrameIndexedInvariants:
+    """
+    Tests for frame-indexed execution invariants.
+
+    These tests verify the Phase 10 frame-accurate playout control:
+    - INV-FRAME-001: Segment boundaries are frame-indexed
+    - INV-FRAME-002: Padding is expressed in frames
+    - INV-FRAME-003: CT derives from frame index (tested in C++ TimelineController)
+    """
+
+    def test_INV_FRAME_001_segment_has_frame_count(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-001: PlayoutSegment MUST have frame_count attribute.
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        for i, segment in enumerate(block.segments):
+            assert hasattr(segment, 'frame_count'), (
+                f"Segment {i} missing frame_count attribute"
+            )
+            assert isinstance(segment.frame_count, int), (
+                f"Segment {i} frame_count must be int, got {type(segment.frame_count)}"
+            )
+            assert segment.frame_count > 0, (
+                f"Segment {i} frame_count must be positive, got {segment.frame_count}"
+            )
+
+    def test_INV_FRAME_001_segment_has_start_frame(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-001: PlayoutSegment MUST have start_frame attribute.
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        for i, segment in enumerate(block.segments):
+            assert hasattr(segment, 'start_frame'), (
+                f"Segment {i} missing start_frame attribute"
+            )
+            assert isinstance(segment.start_frame, int), (
+                f"Segment {i} start_frame must be int, got {type(segment.start_frame)}"
+            )
+            assert segment.start_frame >= 0, (
+                f"Segment {i} start_frame must be non-negative, got {segment.start_frame}"
+            )
+
+    def test_INV_FRAME_001_segment_has_fps(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-001: PlayoutSegment MUST have fps attribute (Fraction).
+        """
+        from fractions import Fraction
+
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        for i, segment in enumerate(block.segments):
+            assert hasattr(segment, 'fps'), (
+                f"Segment {i} missing fps attribute"
+            )
+            assert isinstance(segment.fps, Fraction), (
+                f"Segment {i} fps must be Fraction, got {type(segment.fps)}"
+            )
+            assert segment.fps > 0, (
+                f"Segment {i} fps must be positive, got {segment.fps}"
+            )
+
+    def test_INV_FRAME_001_frame_count_matches_duration(
+        self, schedule_manager: ScheduleManager, simple_config: SimpleGridConfig
+    ):
+        """
+        INV-FRAME-001: frame_count MUST equal int(duration * fps).
+
+        This verifies that Core correctly converts time to frames.
+        """
+        at_time = datetime(2025, 1, 30, 9, 10, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        for i, segment in enumerate(block.segments):
+            duration_seconds = (segment.end_utc - segment.start_utc).total_seconds()
+            expected_frame_count = int(duration_seconds * segment.fps)
+
+            assert segment.frame_count == expected_frame_count, (
+                f"Segment {i}: frame_count {segment.frame_count} != "
+                f"expected {expected_frame_count} (duration={duration_seconds}s, fps={segment.fps})"
+            )
+
+    def test_INV_FRAME_001_main_show_frame_count(
+        self, schedule_manager: ScheduleManager, simple_config: SimpleGridConfig
+    ):
+        """
+        INV-FRAME-001: Main show frame_count matches duration * fps.
+        """
+        from fractions import Fraction
+
+        at_time = datetime(2025, 1, 30, 9, 10, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        main_segment = block.segments[0]
+        expected_frames = int(simple_config.main_show_duration_seconds * simple_config.fps)
+
+        assert main_segment.frame_count == expected_frames, (
+            f"Main show frame_count {main_segment.frame_count} != "
+            f"expected {expected_frames} ({simple_config.main_show_duration_seconds}s * {simple_config.fps}fps)"
+        )
+
+    def test_INV_FRAME_002_program_block_has_padding_frames(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-002: ProgramBlock MUST have padding_frames attribute.
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        assert hasattr(block, 'padding_frames'), (
+            "ProgramBlock missing padding_frames attribute"
+        )
+        assert isinstance(block.padding_frames, int), (
+            f"padding_frames must be int, got {type(block.padding_frames)}"
+        )
+        assert block.padding_frames >= 0, (
+            f"padding_frames must be non-negative, got {block.padding_frames}"
+        )
+
+    def test_INV_FRAME_002_padding_frames_equals_grid_minus_content(
+        self, schedule_manager: ScheduleManager, simple_config: SimpleGridConfig
+    ):
+        """
+        INV-FRAME-002: padding_frames = grid_frames - content_frames.
+
+        This verifies Core computes padding as frame count difference.
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        # Compute expected values
+        grid_duration = (block.block_end - block.block_start).total_seconds()
+        grid_frames = int(grid_duration * block.fps)
+        content_frames = sum(s.frame_count for s in block.segments)
+        expected_padding = max(0, grid_frames - content_frames)
+
+        assert block.padding_frames == expected_padding, (
+            f"padding_frames {block.padding_frames} != expected {expected_padding} "
+            f"(grid={grid_frames} - content={content_frames})"
+        )
+
+    def test_INV_FRAME_002_total_frames_equals_grid_frames(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-002: content_frames + padding_frames = grid_frames.
+
+        This ensures the block is exactly frame-aligned to the grid.
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        # Compute values
+        grid_duration = (block.block_end - block.block_start).total_seconds()
+        grid_frames = int(grid_duration * block.fps)
+        content_frames = sum(s.frame_count for s in block.segments)
+        total_frames = content_frames + block.padding_frames
+
+        assert total_frames == grid_frames, (
+            f"total_frames {total_frames} != grid_frames {grid_frames} "
+            f"(content={content_frames}, padding={block.padding_frames})"
+        )
+
+    def test_INV_FRAME_002_padding_frames_exact_for_grid_reconciliation(
+        self, schedule_manager: ScheduleManager, simple_config: SimpleGridConfig
+    ):
+        """
+        INV-FRAME-002: Padding frames enable exact grid reconciliation.
+
+        For a 30-min grid at 30fps, grid_frames = 30 * 60 * 30 = 54000.
+        Main show of 22 min = 22 * 60 * 30 = 39600 frames.
+        Filler of 8 min = 8 * 60 * 30 = 14400 frames.
+        Total content = 54000 frames = grid, so padding_frames = 0.
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        # Grid is 30 minutes
+        grid_frames = simple_config.grid_minutes * 60 * int(simple_config.fps)
+
+        # Main show + filler should exactly fill the grid
+        content_frames = sum(s.frame_count for s in block.segments)
+
+        if content_frames == grid_frames:
+            assert block.padding_frames == 0, (
+                f"padding_frames should be 0 when content fills grid exactly, "
+                f"got {block.padding_frames}"
+            )
+        else:
+            assert block.padding_frames == grid_frames - content_frames, (
+                f"padding_frames {block.padding_frames} != "
+                f"expected {grid_frames - content_frames}"
+            )
+
+    def test_INV_FRAME_001_from_time_based_factory(self):
+        """
+        INV-FRAME-001: PlayoutSegment.from_time_based() correctly computes frame counts.
+        """
+        from fractions import Fraction
+        from retrovue.runtime.schedule_types import PlayoutSegment
+
+        fps = Fraction(30, 1)
+        start = datetime(2025, 1, 30, 9, 0, 0)
+        end = datetime(2025, 1, 30, 9, 22, 0)  # 22 minutes
+
+        segment = PlayoutSegment.from_time_based(
+            start_utc=start,
+            end_utc=end,
+            file_path="/test/video.mp4",
+            fps=fps,
+        )
+
+        # 22 minutes * 60 seconds * 30 fps = 39600 frames
+        expected_frames = 22 * 60 * 30
+        assert segment.frame_count == expected_frames, (
+            f"frame_count {segment.frame_count} != expected {expected_frames}"
+        )
+        assert segment.start_frame == 0
+        assert segment.fps == fps
+
+    def test_INV_FRAME_001_from_time_based_with_seek_offset(self):
+        """
+        INV-FRAME-001: from_time_based() correctly computes start_frame from seek_offset.
+        """
+        from fractions import Fraction
+        from retrovue.runtime.schedule_types import PlayoutSegment
+
+        fps = Fraction(30, 1)
+        start = datetime(2025, 1, 30, 9, 0, 0)
+        end = datetime(2025, 1, 30, 9, 10, 0)  # 10 minutes
+        seek_offset = 5.0  # 5 seconds into the file
+
+        segment = PlayoutSegment.from_time_based(
+            start_utc=start,
+            end_utc=end,
+            file_path="/test/video.mp4",
+            fps=fps,
+            seek_offset_seconds=seek_offset,
+        )
+
+        # start_frame = seek_offset * fps = 5 * 30 = 150
+        expected_start_frame = int(seek_offset * fps)
+        assert segment.start_frame == expected_start_frame, (
+            f"start_frame {segment.start_frame} != expected {expected_start_frame}"
+        )
+
+    def test_INV_FRAME_001_fractional_fps_frame_count(self):
+        """
+        INV-FRAME-001: Frame count is correct for NTSC-style fractional fps.
+        """
+        from fractions import Fraction
+        from retrovue.runtime.schedule_types import PlayoutSegment
+
+        # NTSC: 30000/1001 ≈ 29.97fps
+        fps = Fraction(30000, 1001)
+        start = datetime(2025, 1, 30, 9, 0, 0)
+        end = datetime(2025, 1, 30, 9, 1, 0)  # 1 minute = 60 seconds
+
+        segment = PlayoutSegment.from_time_based(
+            start_utc=start,
+            end_utc=end,
+            file_path="/test/video.mp4",
+            fps=fps,
+        )
+
+        # int(60 * 30000/1001) = int(1798200/1001) = int(1797.xx) = 1797
+        expected_frames = int(60 * fps)
+        assert segment.frame_count == expected_frames, (
+            f"NTSC frame_count {segment.frame_count} != expected {expected_frames}"
+        )
+
+    def test_INV_FRAME_002_program_block_has_fps(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-002: ProgramBlock MUST have fps attribute.
+        """
+        from fractions import Fraction
+
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+        block = schedule_manager.get_program_at("test-channel", at_time)
+
+        assert hasattr(block, 'fps'), "ProgramBlock missing fps attribute"
+        assert isinstance(block.fps, Fraction), (
+            f"fps must be Fraction, got {type(block.fps)}"
+        )
+
+    def test_INV_FRAME_001_deterministic_frame_conversion(
+        self, schedule_manager: ScheduleManager
+    ):
+        """
+        INV-FRAME-001: Frame count is deterministic (same input = same output).
+        """
+        at_time = datetime(2025, 1, 30, 9, 15, 0)
+
+        # Call 10 times
+        results = [
+            schedule_manager.get_program_at("test-channel", at_time)
+            for _ in range(10)
+        ]
+
+        # All frame counts must be identical
+        first_block = results[0]
+        for i, block in enumerate(results[1:], start=2):
+            for j, (seg, first_seg) in enumerate(zip(block.segments, first_block.segments)):
+                assert seg.frame_count == first_seg.frame_count, (
+                    f"Call {i}, segment {j}: frame_count differs"
+                )
+                assert seg.start_frame == first_seg.start_frame, (
+                    f"Call {i}, segment {j}: start_frame differs"
+                )
+            assert block.padding_frames == first_block.padding_frames, (
+                f"Call {i}: padding_frames differs"
+            )

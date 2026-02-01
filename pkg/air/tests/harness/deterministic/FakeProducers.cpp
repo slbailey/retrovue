@@ -37,6 +37,14 @@ bool FakeProducerBase::isRunning() const {
   return running_.load();
 }
 
+void FakeProducerBase::RequestStop() {
+  running_.store(false);
+}
+
+bool FakeProducerBase::IsStopped() const {
+  return !isRunning();
+}
+
 bool FakeProducerBase::Tick() {
   if (!running_.load()) {
     return false;

@@ -92,7 +92,124 @@ _Related: [Phase 8 Invariants Compiled](../phases/Phase8-Invariants-Compiled.md)
 
 ---
 
-## 6. Summary Table
+## 6. Video Decodability Invariant
+
+**Every segment starts with a decodable keyframe (IDR).**
+
+- AIR is responsible for media decodability: keyframes, SPS/PPS, IDR presence.
+- CORE is NOT responsible for keyframes. Keyframe enforcement is an AIR concern.
+- Safety rails (pad/black frames) are NOT a continuity mechanism for decodability.
+
+**INV-AIR-IDR-BEFORE-OUTPUT: IDR gate at segment start.**
+
+- AIR must not emit any video packets for a segment until an IDR frame has been produced by the encoder for that segment.
+- The gate blocks all video output until `avcodec_receive_packet()` returns a packet with `AV_PKT_FLAG_KEY` set.
+- The gate resets on segment switch (via `ResetOutputTiming()`).
+- Audio may be buffered but is not muxed until the video IDR gate opens.
+
+**Why this is required:**
+
+- Segments may start and end quickly (1-2 frames).
+- Even with `pict_type = AV_PICTURE_TYPE_I` (requesting I-frame), the encoder may buffer frames.
+- Without the gate, non-IDR packets could be emitted before the first keyframe.
+- VLC and other players cannot decode until they receive an IDR frame with SPS/PPS.
+
+**Enforcement:**
+
+- EncoderPipeline tracks `first_keyframe_emitted_` per segment.
+- On `avcodec_receive_packet()` success, if `first_keyframe_emitted_ == false`:
+  - If `packet_->flags & AV_PKT_FLAG_KEY`: set `first_keyframe_emitted_ = true`, proceed.
+  - Else: log violation, discard packet, continue.
+- On segment switch (`ResetOutputTiming()`): reset `first_keyframe_emitted_ = false`.
+
+**Violation log (only on block):**
+
+```
+[AIR] INV-AIR-IDR-BEFORE-OUTPUT: BLOCKING output (waiting_for_idr=true)
+```
+
+**INV-AIR-CONTENT-BEFORE-PAD: Real content gates pad emission.**
+
+- Pad frames may ONLY be emitted AFTER at least one real decoded content frame
+  has been successfully routed to output.
+- This ensures VLC receives decodable content (with IDR/SPS/PPS) FIRST, before
+  any pad frames which may lack keyframe treatment.
+- ProgramOutput tracks `first_real_frame_emitted_` flag:
+  - If false: skip pad emission, wait for real content
+  - If true: pad frames allowed (normal safety rail behavior)
+
+**Evidence that justified this invariant:**
+
+```
+[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #1 at PTS=0us reason=BUFFER_TRULY_EMPTY
+```
+
+This log appeared BEFORE any real content frames, causing VLC to display nothing.
+The pad frames lacked proper decoder initialization (IDR/SPS/PPS), and VLC
+could not recover once the stream started with non-decodable frames.
+
+**Enforcement:**
+
+- ProgramOutput: If `Pop(frame)` fails AND `!first_real_frame_emitted_`:
+  - Do NOT emit pad frame
+  - Brief yield (1ms) and continue loop
+  - Log waiting status periodically
+- ProgramOutput: After routing first real frame:
+  - Set `first_real_frame_emitted_ = true`
+  - Log that pad frames are now allowed
+
+**Relationship to INV-AIR-IDR-BEFORE-OUTPUT:**
+
+These two invariants work together:
+1. **INV-AIR-CONTENT-BEFORE-PAD**: Ensures first frame to encoder is real content (not pad)
+2. **INV-AIR-IDR-BEFORE-OUTPUT**: Ensures first encoded packet is IDR (not P/B frame)
+
+Together they guarantee VLC receives a decodable stream from the start.
+
+---
+
+## 7. Frame Execution Invariant
+
+**Frame index is execution authority; CT is time authority.**
+
+Playout execution is frame-addressed. Segments are bounded by frame counts, not durations. CT is derived from frame index, never the inverse. This enables frame-accurate editorial cuts and deterministic padding.
+
+**INV-FRAME-001: Segment boundaries are frame-indexed.**
+
+- Segments are defined by `start_frame` and `frame_count`, not start/end times.
+- Duration is derived: `duration = frame_count / fps`
+- Time-to-frame conversion happens once, at schedule generation (Core), not at execution (Air).
+
+**INV-FRAME-002: Padding is expressed in frames.**
+
+- Padding quantity is a frame count, never a duration.
+- Core computes: `padding_frames = grid_frames - content_frames`
+- Air executes: exactly `padding_frames` black frames.
+- No rounding, estimation, or adaptive adjustment at execution time.
+
+**INV-FRAME-003: CT derives from frame index.**
+
+- Given epoch CT and frame index, CT is computed:
+  ```
+  ct_us = epoch_ct_us + (frame_index * 1_000_000 * fps.denominator) / fps.numerator
+  ```
+- Frame index is the execution cursor; CT is the timestamp assigned to that cursor position.
+- Air never reads CT and converts to frame index. The direction is always: frame → CT → PTS.
+
+**Relationship to Clock Invariant:**
+
+CT remains the sole time authority (Section 1). Frame index is not a competing time source—it is the discrete execution cursor from which CT is derived. MasterClock owns epoch and "now"; TimelineController maps frame index to CT.
+
+**Structural padding vs failsafe padding:**
+
+- **Structural padding:** Core-planned frame count for grid reconciliation. Bounded, deterministic, part of the playout plan.
+- **Failsafe padding:** Air-initiated when producer underruns (BlackFrameProducer). Unbounded, defensive, not part of the plan.
+
+Both emit black + silence. The distinction is control: structural padding is Core intent executed by Air; failsafe is Air's protective continuity behavior.
+
+---
+
+## 8. Summary Table
 
 | Invariant | Law |
 |-----------|-----|
@@ -101,10 +218,12 @@ _Related: [Phase 8 Invariants Compiled](../phases/Phase8-Invariants-Compiled.md)
 | **Output Liveness** | ProgramOutput never blocks; if no content → deterministic pad (black + silence). |
 | **Audio Format** | Channel defines house audio format; all audio normalized before OutputBus; EncoderPipeline never negotiates format. Contract test: INV-AUDIO-HOUSE-FORMAT-001. |
 | **Switching** | No gaps, no PTS regression, no silence during switches. |
+| **Video Decodability** | Every segment starts with IDR; AIR gates output until keyframe emitted; real content must precede pad frames. Contract tests: INV-AIR-IDR-BEFORE-OUTPUT, INV-AIR-CONTENT-BEFORE-PAD. |
+| **Frame Execution** | Frame index is execution authority; CT derives from frame index (INV-FRAME-001/002/003). |
 
 ---
 
-## 7. Relationship to Other Contracts
+## 9. Relationship to Other Contracts
 
 - **Phase 8 (INV-P8-XXX):** Timeline, CT/MT, segment mapping, write barrier, and output liveness are detailed in [Phase8-Invariants-Compiled](../phases/Phase8-Invariants-Compiled.md) and [ScheduleManagerPhase8Contract](../../../../core/docs/contracts/runtime/ScheduleManagerPhase8Contract.md). This document states the broadcast-grade laws; Phase 8 contracts refine and test them.
 - **Phase 9 / 10:** Bootstrap and pipeline flow control (INV-P10, etc.) must preserve these invariants. See [Phase9-OutputBootstrap](../phases/Phase9-OutputBootstrap.md) and [INV-P10-PIPELINE-FLOW-CONTROL](../phase10/INV-P10-PIPELINE-FLOW-CONTROL.md).

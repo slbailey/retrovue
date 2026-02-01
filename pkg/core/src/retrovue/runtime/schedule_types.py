@@ -10,47 +10,128 @@ MUST import from this module, not redefine locally.
 
 from dataclasses import dataclass
 from datetime import datetime, time
-from typing import Protocol
+from fractions import Fraction
+from typing import Literal, Protocol
 
 
 @dataclass
 class PlayoutSegment:
     """
-    A single file to play with timing information.
+    A single file to play with frame-accurate boundaries.
 
-    A PlayoutSegment represents a time-bounded playback instruction.
-    In later phases, segments may reference partial assets, concatenations,
-    or synthesized outputs.
+    A PlayoutSegment represents a **frame-bounded** playback instruction.
+    Schedule remains time-based (CT/UTC), but execution is frame-indexed.
+    This enables frame-accurate editorial cuts and deterministic padding.
+
+    INV-FRAME-001: Segment boundaries are frame-indexed, not time-derived.
+    INV-FRAME-002: Padding is expressed in frames, not duration.
+
+    MIGRATION NOTE: The frame-indexed fields (start_frame, frame_count, fps) have
+    defaults for backward compatibility. New code SHOULD use from_time_based()
+    which properly computes these values. The defaults (-1, -1, Fraction(30,1))
+    indicate "legacy mode" where Air derives frames from time internally.
     """
+    # Schedule context (time-based, for Core planning)
     start_utc: datetime       # When this segment starts (wall clock)
     end_utc: datetime         # When this segment ends (wall clock)
-    file_path: str            # Path to the media file
-    seek_offset_seconds: float = 0.0  # Where to start in the file
+
+    # Execution specification (frame-based, for Air execution)
+    file_path: str | None     # Path to the media file (None for padding segments)
+
+    # Segment type and padding control
+    segment_type: Literal["content", "filler", "padding"] = "content"
+    allows_padding: bool = False  # Whether padding may follow this segment
+
+    # Legacy compatibility
+    seek_offset_seconds: float = 0.0  # Deprecated: use start_frame instead
+
+    # Frame-indexed execution (INV-FRAME-001)
+    # Defaults provided for backward compatibility - new code uses from_time_based()
+    start_frame: int = 0              # First frame index within asset
+    frame_count: int = -1             # Exact frames to play (-1 = derive from time)
+    fps: Fraction = Fraction(30, 1)   # Frame rate (default 30fps)
 
     @property
     def duration_seconds(self) -> float:
-        """Duration of this segment in seconds."""
-        return (self.end_utc - self.start_utc).total_seconds()
+        """Duration derived from frame_count (not authoritative for execution)."""
+        if self.fps.numerator == 0:
+            return 0.0
+        return float(self.frame_count * self.fps.denominator / self.fps.numerator)
+
+    @classmethod
+    def from_time_based(
+        cls,
+        start_utc: datetime,
+        end_utc: datetime,
+        file_path: str,
+        fps: Fraction,
+        seek_offset_seconds: float = 0.0,
+        segment_type: Literal["content", "filler", "padding"] = "content",
+        allows_padding: bool = False,
+    ) -> "PlayoutSegment":
+        """
+        Create a PlayoutSegment from time-based boundaries.
+
+        Converts time to frame count at construction time (Core).
+        Air receives frame_count and never converts from time.
+        """
+        duration = (end_utc - start_utc).total_seconds()
+        frame_count = int(duration * fps)
+        start_frame = int(seek_offset_seconds * fps)
+        return cls(
+            start_utc=start_utc,
+            end_utc=end_utc,
+            file_path=file_path,
+            start_frame=start_frame,
+            frame_count=frame_count,
+            fps=fps,
+            segment_type=segment_type,
+            allows_padding=allows_padding,
+            seek_offset_seconds=seek_offset_seconds,
+        )
 
 
 @dataclass
 class ProgramBlock:
     """
-    A complete program unit bounded by grid boundaries.
+    A complete program unit bounded by grid boundaries, with frame-accurate execution.
 
     NOTE: ProgramBlock is a Phase 0 abstraction representing one grid slot's
     worth of playout. In later phases, this type may be replaced or wrapped
     by continuous playlog segments that are not grid-bounded. Do not build
     dependencies on grid-bounded semantics beyond Phase 0.
+
+    INV-FRAME-002: padding_frames is computed by Core as grid_frames - content_frames.
+    Air executes exactly this many black frames.
     """
+    # Schedule boundaries (time-based)
     block_start: datetime     # Grid boundary start (e.g., 9:00:00)
     block_end: datetime       # Grid boundary end (e.g., 9:30:00)
+
+    # Execution specification (frame-based)
     segments: list[PlayoutSegment]  # Ordered list of segments
+    fps: Fraction = Fraction(30, 1)  # Channel frame rate (default 30fps)
+    padding_frames: int = 0   # Black frames at block end for grid alignment
 
     @property
     def duration_seconds(self) -> float:
         """Duration of this block in seconds."""
         return (self.block_end - self.block_start).total_seconds()
+
+    @property
+    def total_frames(self) -> int:
+        """Total frames including content and padding."""
+        return sum(s.frame_count for s in self.segments) + self.padding_frames
+
+    @property
+    def content_frames(self) -> int:
+        """Total content frames (excluding padding)."""
+        return sum(s.frame_count for s in self.segments)
+
+    @property
+    def grid_frames(self) -> int:
+        """Expected frames for this grid slot (computed from time, for validation only)."""
+        return int(self.duration_seconds * self.fps)
 
 
 @dataclass
@@ -60,6 +141,8 @@ class SimpleGridConfig:
 
     This is a simplified configuration for proving the core scheduling loop.
     Later phases will use richer configuration from SchedulePlan/ScheduleDay.
+
+    INV-FRAME-001: fps is required for frame-indexed segment generation.
     """
     grid_minutes: int              # Grid slot duration (e.g., 30)
     main_show_path: str            # Path to main show file
@@ -67,6 +150,7 @@ class SimpleGridConfig:
     filler_path: str               # Path to filler file
     filler_duration_seconds: float # Duration of filler (must be >= grid - main)
     programming_day_start_hour: int = 6  # Broadcast day start (default 6 AM)
+    fps: Fraction = Fraction(30, 1)  # Channel frame rate (default 30fps)
 
 
 class ScheduleManager(Protocol):

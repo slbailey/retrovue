@@ -23,15 +23,21 @@ class MasterClock;
 
 namespace retrovue::producers::black {
 
-// BlackFrameProducer is an internal failsafe producer that outputs valid
-// black video frames when the live producer underruns.
+// BlackFrameProducer outputs valid black video frames for two purposes:
+//
+// 1. FAILSAFE MODE (unbounded): When live producer underruns, Air switches to
+//    BlackFrameProducer until Core reasserts control. Duration is unbounded.
+//
+// 2. STRUCTURAL PADDING MODE (bounded): When Core specifies padding_frames,
+//    the producer emits exactly that many frames and stops. Used for grid
+//    reconciliation and frame-accurate editorial boundaries.
 //
 // Per the contract (BlackFrameProducerContract.md):
 // - Produces valid black frames at the PlayoutInstance's ProgramFormat
 // - Produces no audio (silence)
 // - PTS/DTS advance monotonically
-// - Is NOT content and NOT scheduled
-// - Used only when live producer runs out of frames
+// - INV-PAD-EXACT-COUNT: When executing structural padding, emits exactly
+//   the specified frame count, no more, no less.
 //
 // This producer runs its own thread and writes to a FrameRingBuffer.
 // It respects MasterClock for timing (real-time pacing in production,
@@ -58,6 +64,8 @@ class BlackFrameProducer : public retrovue::producers::IProducer {
   bool start() override;
   void stop() override;
   bool isRunning() const override;
+  void RequestStop() override;
+  bool IsStopped() const override;
 
   // Returns the number of black frames produced.
   uint64_t GetFramesProduced() const;
@@ -68,6 +76,22 @@ class BlackFrameProducer : public retrovue::producers::IProducer {
   // Sets the PTS for the next frame (for continuity when entering fallback).
   // Must be called before start() or while stopped.
   void SetInitialPts(int64_t pts_us);
+
+  // ==========================================================================
+  // INV-PAD-EXACT-COUNT: Structural Padding Support
+  // ==========================================================================
+  // Sets the target frame count for structural padding.
+  // When set (>= 0), the producer stops after emitting exactly this many frames.
+  // When -1 (default), the producer runs indefinitely (failsafe mode).
+  // Must be called before start().
+  void SetTargetFrameCount(int64_t frame_count);
+
+  // Returns the target frame count (-1 if unbounded/failsafe mode).
+  int64_t GetTargetFrameCount() const;
+
+  // Returns true if structural padding is complete (all frames emitted).
+  // Only meaningful when target_frame_count >= 0.
+  bool IsPaddingComplete() const;
 
   // Sentinel asset_uri used by BlackFrameProducer.
   // Used by sinks/tests to identify black frames.
@@ -100,6 +124,10 @@ class BlackFrameProducer : public retrovue::producers::IProducer {
   std::atomic<bool> stop_requested_;
   std::atomic<uint64_t> frames_produced_;
   std::atomic<int64_t> next_pts_us_;
+
+  // INV-PAD-EXACT-COUNT: Target frame count for structural padding
+  // -1 = unbounded (failsafe mode), >= 0 = bounded (structural padding)
+  std::atomic<int64_t> target_frame_count_;
 
   // Producer thread
   std::unique_ptr<std::thread> producer_thread_;

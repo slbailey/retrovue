@@ -26,6 +26,24 @@ class ProgramFormat:
     audio_sample_rate: int
     audio_channels: int
 
+    @property
+    def frame_rate_num(self) -> int:
+        """Frame rate numerator (INV-FRAME-003)."""
+        try:
+            parts = self.frame_rate.split("/")
+            return int(parts[0])
+        except (ValueError, IndexError):
+            return 30  # Default to 30fps
+
+    @property
+    def frame_rate_den(self) -> int:
+        """Frame rate denominator (INV-FRAME-003)."""
+        try:
+            parts = self.frame_rate.split("/")
+            return int(parts[1]) if len(parts) > 1 else 1
+        except (ValueError, IndexError):
+            return 1  # Default denominator
+
     def to_json(self) -> str:
         """Serialize to JSON string for AIR gRPC."""
         return json.dumps({

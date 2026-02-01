@@ -147,6 +147,7 @@ TEST(Phase8IntegrationTest, IT_P8_02_SwitchToLiveFirstFrameIsContiguous) {
 
   // Simulate SwitchToLive: BeginSegmentFromPreview (type-safe API)
   // INV-P8-SWITCH-002: Both CT and MT will be locked from first preview frame
+  controller.SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   controller.BeginSegmentFromPreview();
   EXPECT_TRUE(controller.IsMappingPending());
 
@@ -194,6 +195,7 @@ TEST(Phase8IntegrationTest, IT_P8_03_MappingLocksOnFirstAdmittedFrame) {
   timing::TimelineController controller(clock, config);
   ASSERT_TRUE(controller.StartSession());
 
+  controller.SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   // Use BeginSegmentFromPreview (type-safe: both CT and MT pending)
   auto pending = controller.BeginSegmentFromPreview();
   EXPECT_EQ(pending.mode, timing::PendingSegmentMode::AwaitPreviewFrame);
@@ -305,6 +307,7 @@ TEST(Phase8IntegrationTest, IT_P8_05_MappingSkewPrevention) {
   //
   // NEW type-safe approach: BeginSegmentFromPreview locks BOTH CT and MT together
 
+  controller.SetEmissionObserverAttached(true);  // INV-P8-SUCCESSOR-OBSERVABILITY
   controller.BeginSegmentFromPreview();
   EXPECT_TRUE(controller.IsMappingPending());
 

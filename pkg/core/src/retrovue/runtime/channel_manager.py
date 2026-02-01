@@ -257,6 +257,29 @@ class ChannelManager:
         # Phase 8: State machine for clock-driven switching (replaces boolean flags)
         self._switch_state: SwitchState = SwitchState.IDLE
 
+        # =======================================================================
+        # CT-Domain Switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
+        # =======================================================================
+        # Each segment tracks:
+        #   - ct_start_us: when segment began in CT domain
+        #   - frame_count: explicit frame budget (>= 0)
+        #   - frame_duration_us: derived from fps
+        #
+        # Compute: ct_exhaust_us = ct_start_us + (frame_count * frame_duration_us)
+        # Switch thresholds are in CT domain - no UTC conversions needed.
+        self._segment_ct_start_us: int | None = None
+        self._segment_frame_count: int | None = None
+        self._segment_frame_duration_us: int = 33333  # Default 30fps = 33333us per frame
+        self._preload_lead_us: int = 3_000_000  # 3 seconds in microseconds
+        self._switch_lead_us: int = 100_000  # 100ms in microseconds
+
+        # INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION: One-shot violation logging
+        self._segment_readiness_violation_logged: bool = False
+
+        # Track successor segment info for logging/diagnostics
+        self._successor_loaded: bool = False
+        self._successor_asset_path: str | None = None
+
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
 
@@ -273,6 +296,12 @@ class ChannelManager:
         self._segment_end_time_utc = None
         self._switch_state = SwitchState.IDLE
         self._last_switch_at_segment_end_utc = None
+        self._segment_readiness_violation_logged = False
+        # Reset CT-domain state
+        self._segment_ct_start_us = None
+        self._segment_frame_count = None
+        self._successor_loaded = False
+        self._successor_asset_path = None
         self._stop_producer_if_idle()
 
     def _get_current_mode(self) -> str:
@@ -646,6 +675,39 @@ class ChannelManager:
                 self._segment_end_time_utc = None
         self._switch_state = SwitchState.IDLE
 
+        # =======================================================================
+        # CT-Domain State Initialization (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
+        # =======================================================================
+        # Initialize CT-domain tracking for frame-based exhaustion detection.
+        # ct_start_us = 0 because this is the first segment (TimelineController starts at CT=0).
+        # For mid-segment joins, the start_pts offset is handled by AIR seeking.
+        segment = playout_plan[0]
+        config = self.channel_config
+        if config and hasattr(config, 'program_format'):
+            fps_num = getattr(config.program_format, 'frame_rate_num', 30)
+            fps_den = getattr(config.program_format, 'frame_rate_den', 1)
+        else:
+            fps_num, fps_den = 30, 1
+        fps = fps_num / fps_den if fps_den > 0 else 30.0
+
+        self._segment_ct_start_us = 0  # First segment starts at CT=0
+        self._segment_frame_duration_us = int(1_000_000 * fps_den / fps_num) if fps_num > 0 else 33333
+
+        # Get frame_count from segment (INV-SCHED-GRID-FILLER-PADDING requires explicit budget)
+        frame_count = segment.get("frame_count", -1)
+        if frame_count < 0:
+            # Fallback: compute from duration_seconds
+            duration_s = self._segment_duration_seconds(segment)
+            if duration_s > 0:
+                frame_count = int(duration_s * fps)
+            else:
+                frame_count = None  # Unknown - fallback to UTC timing
+        self._segment_frame_count = frame_count if frame_count and frame_count > 0 else None
+
+        # Reset successor tracking
+        self._successor_loaded = False
+        self._successor_asset_path = None
+
     def _segment_duration_seconds(self, segment: dict[str, Any]) -> float:
         """Duration of segment from schedule (seconds). Uses duration_seconds or metadata.segment_seconds."""
         v = segment.get("duration_seconds")
@@ -658,9 +720,14 @@ class ChannelManager:
         """
         Clock-driven segment advancement. Called periodically (e.g. from daemon health loop).
 
-        When now >= segment_end_time, calls SwitchToLive() on Air and advances to the next
-        segment. Preloads next asset before segment end (segment_end_time - preload_lead).
-        Does NOT wait for EOF or inspect decode/presentation state; time alone advances the schedule.
+        INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION:
+        - Preloads successor segment before current segment exhausts its frame budget
+        - Switches to successor before CT reaches exhaustion point
+        - Falls back to UTC timing if CT-domain data is unavailable
+
+        INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY:
+        - If past exhaustion and preview is ready, switch immediately
+        - This prevents pad frames when successor content is available
         """
         if self._channel_state == "STOPPED" or self.active_producer is None:
             return
@@ -678,7 +745,7 @@ class ChannelManager:
             segment_end = segment_end.replace(tzinfo=timezone.utc)
 
         # =======================================================================
-        # Two-phase clock-driven switching (INV-P8-SWITCH-TIMING)
+        # Two-phase clock-driven switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
         # =======================================================================
         # Phase 1: Preload (T - preload_lead, typically 3s before boundary)
         #   - Call LoadPreview() to start filling Air's preview buffer
@@ -689,9 +756,9 @@ class ChannelManager:
         #   - State: PREVIEW_LOADED → SWITCH_ARMED
         #   - Continue polling SwitchToLive() until it returns success
         #
-        # This ensures the switch completes AT the boundary, not before or after.
-        # Switching too early would cut the current segment short.
-        # Switching too late would cause frame discards in Air.
+        # NOTE: Currently uses UTC timing. Full CT-domain switching requires
+        # AIR to expose GetCTCursor RPC. When available, replace UTC comparisons
+        # with: current_ct_us >= ct_exhaust_us - lead_us
         preload_at = segment_end - timedelta(seconds=self._preload_lead_seconds)
         switch_at = segment_end - timedelta(seconds=self._switch_lead_seconds)
 
@@ -702,13 +769,89 @@ class ChannelManager:
                 next_seg = next_plan[0]
                 asset_path = next_seg.get("asset_path")
                 if asset_path:
+                    # Frame-indexed execution (INV-FRAME-001/002/003)
+                    # Get fps from channel config or default to 30fps
+                    config = self.channel_config
+                    if config and hasattr(config, 'program_format'):
+                        fps_num = getattr(config.program_format, 'frame_rate_num', 30)
+                        fps_den = getattr(config.program_format, 'frame_rate_den', 1)
+                    else:
+                        fps_num, fps_den = 30, 1
+                    fps = fps_num / fps_den if fps_den > 0 else 30.0
+
+                    # Convert start_pts_ms to start_frame (direction: time → frame ok here, at schedule boundary)
                     start_pts_ms = int(next_seg.get("start_pts", 0))
-                    ok = producer.load_preview(asset_path, start_offset_ms=start_pts_ms, hard_stop_time_ms=0)
+                    start_frame = int((start_pts_ms / 1000.0) * fps) if fps > 0 else 0
+
+                    # Get frame_count from schedule if available
+                    frame_count = next_seg.get("frame_count", -1)
+                    segment_type = next_seg.get("segment_type", "content")
+
+                    # =========================================================
+                    # INV-SCHED-GRID-FILLER-PADDING: Validate filler frame_count
+                    # =========================================================
+                    # Filler segments MUST have explicit frame_count >= 0.
+                    # frame_count=-1 (play until EOF) is forbidden for filler.
+                    if segment_type == "filler" and frame_count < 0:
+                        self._logger.error(
+                            "INV-SCHED-GRID-FILLER-PADDING VIOLATION: "
+                            "Channel %s filler segment has frame_count=%d (must be >= 0). "
+                            "Filler will play to EOF which may cause buffer starvation. "
+                            "asset=%s",
+                            self.channel_id, frame_count, asset_path,
+                        )
+
+                    # Fallback: compute from duration_seconds if frame_count not explicit
+                    if frame_count < 0:
+                        duration_s = next_seg.get("duration_seconds", 0)
+                        if duration_s > 0:
+                            frame_count = int(duration_s * fps)
+
+                    ok = producer.load_preview(
+                        asset_path,
+                        start_frame=start_frame,
+                        frame_count=frame_count,
+                        fps_numerator=fps_num,
+                        fps_denominator=fps_den,
+                    )
                     if ok:
                         self._switch_state = SwitchState.PREVIEW_LOADED
+                        self._successor_loaded = True
+                        self._successor_asset_path = asset_path
+                        # Contract-level observability: CORE_INTENT_FRAME_RANGE (once per segment)
+                        end_frame = start_frame + frame_count - 1 if frame_count >= 0 else -1
+                        ct_start_us = 0
+                        if self._segment_ct_start_us is not None and self._segment_frame_count is not None:
+                            ct_start_us = self._segment_ct_start_us + (
+                                self._segment_frame_count * self._segment_frame_duration_us
+                            )
+                        mt_start_us = 0
+                        start_time_str = next_seg.get("start_time_utc")
+                        if start_time_str:
+                            try:
+                                dt = datetime.fromisoformat(
+                                    start_time_str.replace("Z", "+00:00")
+                                )
+                                if dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                mt_start_us = int(dt.timestamp() * 1_000_000)
+                            except (ValueError, TypeError):
+                                pass
+                        channel_manager_launch.log_core_intent_frame_range(
+                            channel_id=self.channel_id,
+                            segment_id=next_seg.get("segment_id", ""),
+                            asset_path=asset_path,
+                            start_frame=start_frame,
+                            end_frame=end_frame,
+                            fps=fps,
+                            CT_start_us=ct_start_us,
+                            MT_start_us=mt_start_us,
+                        )
                         self._logger.info(
-                            "Channel %s preload: LoadPreview(%s) at T-%.1fs",
+                            "Channel %s preload: LoadPreview(%s) at T-%.1fs "
+                            "(start_frame=%d, frame_count=%d, type=%s)",
                             self.channel_id, asset_path, (segment_end - now).total_seconds(),
+                            start_frame, frame_count, segment_type,
                         )
 
         # Phase 2: Switch - start calling SwitchToLive at switch_at
@@ -716,8 +859,9 @@ class ChannelManager:
             ok = producer.switch_to_live()
             self._switch_state = SwitchState.SWITCH_ARMED
             self._logger.info(
-                "Channel %s switch armed at T-%.3fs (boundary=%.3fs)",
+                "Channel %s switch armed at T-%.3fs (boundary=%.3fs, successor=%s)",
                 self.channel_id, (segment_end - now).total_seconds(), segment_end.timestamp(),
+                self._successor_asset_path,
             )
             if ok:
                 # Rare: switch completed immediately (buffers were already full)
@@ -732,18 +876,39 @@ class ChannelManager:
             else:
                 # Switch not complete yet (NOT_READY) - keep polling
                 # State remains SWITCH_ARMED; LoadPreview is blocked.
-                # INV-P8-SWITCH-TIMING: If we're past the boundary and still not complete, log warning
-                if now > segment_end:
+                #
+                # INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION:
+                # If we're past the boundary and still not complete, log violation (one-shot).
+                # This indicates successor segment was not ready before CT exhausted
+                # the active segment's frame budget.
+                #
+                # INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY:
+                # Even if past exhaustion, keep trying SwitchToLive. When preview becomes
+                # ready, the switch will succeed immediately on the next poll. This prevents
+                # prolonged pad frame emission when successor content becomes available.
+                #
+                # NOTE: Full implementation of INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY requires
+                # AIR to expose buffer state (live_buffer_empty, preview_ready) via RPC.
+                # Current implementation relies on polling SwitchToLive which will succeed
+                # as soon as preview is ready.
+                if now > segment_end and not self._segment_readiness_violation_logged:
                     delta_ms = (now.timestamp() - segment_end.timestamp()) * 1000
                     self._logger.warning(
-                        "INV-P8-SWITCH-TIMING: Channel %s switch still pending %.1fms AFTER boundary",
-                        self.channel_id, delta_ms,
+                        "INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION VIOLATION: "
+                        "Channel %s exhaustion point passed without successor ready | "
+                        "boundary=%.3fs | now=%.3fs | delta_ms=%.1f | successor_loaded=%s",
+                        self.channel_id, segment_end.timestamp(), now.timestamp(), delta_ms,
+                        self._successor_loaded,
                     )
+                    self._segment_readiness_violation_logged = True
 
     def _handle_switch_complete(
         self, producer: Producer, segment_end: datetime, now: datetime
     ) -> None:
         """Handle switch completion: log timing, advance to next segment."""
+        # Reset one-shot violation flag for next segment
+        self._segment_readiness_violation_logged = False
+
         seg_ts = segment_end.timestamp()
         actual_ts = now.timestamp()
         delta_ms = (actual_ts - seg_ts) * 1000
@@ -772,24 +937,64 @@ class ChannelManager:
 
         self._last_switch_at_segment_end_utc = segment_end
 
+        # Reset successor tracking for next cycle
+        self._successor_loaded = False
+        self._successor_asset_path = None
+
         # Advance to next segment: use end_time_utc from schedule for exact timing.
         next_plan = self.schedule_service.get_playout_plan_now(self.channel_id, segment_end)
         if next_plan:
-            next_end_str = next_plan[0].get("end_time_utc")
+            next_seg = next_plan[0]
+            next_end_str = next_seg.get("end_time_utc")
             if next_end_str:
                 self._segment_end_time_utc = datetime.fromisoformat(next_end_str)
                 if self._segment_end_time_utc.tzinfo is None:
                     self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
             else:
                 # Fallback for legacy schedules
-                next_duration = self._segment_duration_seconds(next_plan[0])
+                next_duration = self._segment_duration_seconds(next_seg)
                 if next_duration > 0:
                     self._segment_end_time_utc = segment_end + timedelta(seconds=next_duration)
                 else:
                     self._segment_end_time_utc = None
+
+            # =======================================================================
+            # CT-Domain State Update (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
+            # =======================================================================
+            # Update CT-domain tracking for the new segment.
+            # New segment's ct_start_us = previous segment's ct_exhaust_us
+            # (CT is continuous across segment boundaries)
+            if self._segment_ct_start_us is not None and self._segment_frame_count is not None:
+                # Advance CT start to previous exhaustion point
+                self._segment_ct_start_us += self._segment_frame_count * self._segment_frame_duration_us
+            else:
+                # Unknown CT state - can't track CT-domain switching
+                self._segment_ct_start_us = None
+
+            # Get frame_count for new segment
+            config = self.channel_config
+            if config and hasattr(config, 'program_format'):
+                fps_num = getattr(config.program_format, 'frame_rate_num', 30)
+                fps_den = getattr(config.program_format, 'frame_rate_den', 1)
+            else:
+                fps_num, fps_den = 30, 1
+            fps = fps_num / fps_den if fps_den > 0 else 30.0
+            self._segment_frame_duration_us = int(1_000_000 * fps_den / fps_num) if fps_num > 0 else 33333
+
+            frame_count = next_seg.get("frame_count", -1)
+            if frame_count < 0:
+                duration_s = self._segment_duration_seconds(next_seg)
+                if duration_s > 0:
+                    frame_count = int(duration_s * fps)
+                else:
+                    frame_count = None
+            self._segment_frame_count = frame_count if frame_count and frame_count > 0 else None
+
             self._switch_state = SwitchState.IDLE
         else:
             self._segment_end_time_utc = None
+            self._segment_ct_start_us = None
+            self._segment_frame_count = None
             self._switch_state = SwitchState.IDLE  # Switch completed, no more segments
 
     def _stop_producer_if_idle(self) -> None:
@@ -1052,54 +1257,136 @@ class MockGridScheduleService:
     ) -> list[dict[str, Any]]:
         """
         Return playout plan using grid + filler model.
-        
-        Logic:
-        - Calculate grid block start (floor to 30-minute grid)
-        - Determine if we're in program or filler segment
-        - Calculate join-in-progress offset
-        - Return playout plan with correct asset and start_pts
+
+        Returns the complete block structure (program + filler) with proper metadata
+        for clock-driven switching. This enables tick() to preload filler into preview
+        BEFORE the program ends.
+
+        INV-PREVIEW-NEVER-EMPTY: CORE must ensure preview has a segment loaded before
+        the current live segment exhausts. Returning both segments allows tick() to
+        determine the successor and preload it in time.
+
+        Returns:
+            List of segments in playback order, starting from the segment containing
+            at_station_time. Each segment includes:
+            - asset_path: Path to media file
+            - start_pts: Join offset in milliseconds (for first segment only)
+            - segment_type: "content" or "filler"
+            - start_time_utc: When segment starts (ISO format)
+            - end_time_utc: When segment ends (ISO format)
+            - duration_seconds: Segment duration
+            - frame_count: Frame budget (fps * duration)
         """
         now = at_station_time
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
-        
-        # Calculate grid block start (30-minute grid)
+
+        # Calculate grid block boundaries
         block_start = self._floor_to_grid(now)
-        
-        # Determine active content and calculate join offset
+        block_end = block_start + timedelta(minutes=self.grid_block_minutes)
+
+        # Segment boundaries within block
+        program_end = block_start + timedelta(seconds=self.program_duration_seconds)
+        filler_duration = (block_end - program_end).total_seconds()
+
+        # Default fps for frame_count calculation (30fps)
+        fps = 30.0
+
+        # Determine which segment we're in and build the segment list
         content_type, start_pts_ms = self._calculate_join_offset(
             now, block_start, self.program_duration_seconds
         )
-        
-        # Select asset path
+
+        segments = []
+
         if content_type == "program":
-            asset_path = self.program_asset_path
+            # Currently in program segment - return program + filler
+            elapsed = (now - block_start).total_seconds()
+            remaining_program = self.program_duration_seconds - elapsed
+
+            program_segment = {
+                "asset_path": self.program_asset_path,
+                "start_pts": start_pts_ms,
+                "segment_type": "content",
+                "start_time_utc": block_start.isoformat(),
+                "end_time_utc": program_end.isoformat(),
+                "duration_seconds": remaining_program,  # Remaining from join point
+                "frame_count": int(remaining_program * fps),
+                "metadata": {
+                    "phase": "mock_grid",
+                    "grid_block_minutes": self.grid_block_minutes,
+                    "full_segment_duration": self.program_duration_seconds,
+                },
+            }
+            segments.append(program_segment)
+
+            # Add filler segment (successor) so tick() can preload it
+            if filler_duration > 0:
+                # INV-SCHED-GRID-FILLER-PADDING: Filler has explicit frame_count
+                filler_frame_count = int(filler_duration * fps)
+                filler_segment = {
+                    "asset_path": self.filler_asset_path,
+                    "start_pts": 0,  # Filler starts at frame 0
+                    "segment_type": "filler",
+                    "start_time_utc": program_end.isoformat(),
+                    "end_time_utc": block_end.isoformat(),
+                    "duration_seconds": filler_duration,
+                    "frame_count": filler_frame_count,
+                    "metadata": {
+                        "phase": "mock_grid",
+                        "grid_block_minutes": self.grid_block_minutes,
+                    },
+                }
+                segments.append(filler_segment)
         else:
-            asset_path = self.filler_asset_path
-            # For filler, calculate absolute offset within filler file
+            # Currently in filler segment
+            # Calculate filler join offset for continuous virtual stream
             filler_offset_seconds = self._calculate_filler_offset(
                 now, self.filler_epoch, self.filler_duration_seconds
             )
-            # Adjust start_pts to account for filler's continuous virtual stream
-            # start_pts_ms is offset within current block's filler segment
-            # Add filler epoch offset to get absolute position in filler file
             block_filler_offset_seconds = start_pts_ms / 1000.0
-            filler_absolute_offset_seconds = (filler_offset_seconds + block_filler_offset_seconds) % self.filler_duration_seconds
-            start_pts_ms = int(filler_absolute_offset_seconds * 1000)
-        
-        # Build playout plan segment
-        segment = {
-            "asset_path": asset_path,
-            "start_pts": start_pts_ms,  # Join-in-progress offset in milliseconds
-            "content_type": content_type,  # "program" or "filler"
-            "block_start_utc": block_start.isoformat(),
-            "metadata": {
-                "phase": "mock_grid",
-                "grid_block_minutes": self.grid_block_minutes,
-            },
-        }
-        
-        return [segment]
+            filler_absolute_offset_seconds = (
+                filler_offset_seconds + block_filler_offset_seconds
+            ) % self.filler_duration_seconds
+
+            elapsed_in_filler = (now - program_end).total_seconds()
+            remaining_filler = filler_duration - elapsed_in_filler
+
+            filler_segment = {
+                "asset_path": self.filler_asset_path,
+                "start_pts": int(filler_absolute_offset_seconds * 1000),
+                "segment_type": "filler",
+                "start_time_utc": program_end.isoformat(),
+                "end_time_utc": block_end.isoformat(),
+                "duration_seconds": remaining_filler,  # Remaining from join point
+                "frame_count": int(remaining_filler * fps),
+                "metadata": {
+                    "phase": "mock_grid",
+                    "grid_block_minutes": self.grid_block_minutes,
+                    "full_segment_duration": filler_duration,
+                },
+            }
+            segments.append(filler_segment)
+
+            # Add NEXT block's program as successor so tick() can preload it
+            next_block_start = block_end
+            next_program_end = next_block_start + timedelta(seconds=self.program_duration_seconds)
+            next_program_segment = {
+                "asset_path": self.program_asset_path,
+                "start_pts": 0,  # Next block starts at frame 0
+                "segment_type": "content",
+                "start_time_utc": next_block_start.isoformat(),
+                "end_time_utc": next_program_end.isoformat(),
+                "duration_seconds": self.program_duration_seconds,
+                "frame_count": int(self.program_duration_seconds * fps),
+                "metadata": {
+                    "phase": "mock_grid",
+                    "grid_block_minutes": self.grid_block_minutes,
+                },
+            }
+            segments.append(next_program_segment)
+
+        return segments
 
 
 class MockAlternatingScheduleService:
@@ -1402,6 +1689,8 @@ class Phase8AirProducer(Producer):
             "mode": "LIVE",
             "channel_id": self.channel_id,
             "metadata": segment.get("metadata", {}),
+            "segment_id": segment.get("segment_id", ""),
+            "start_time_utc": segment.get("start_time_utc"),
         }
 
         try:
@@ -1474,10 +1763,23 @@ class Phase8AirProducer(Producer):
     def load_preview(
         self,
         asset_path: str,
-        start_offset_ms: int = 0,
-        hard_stop_time_ms: int = 0,
+        start_frame: int,
+        frame_count: int,
+        fps_numerator: int,
+        fps_denominator: int,
     ) -> bool:
-        """Load next asset into Air preview slot (clock-driven; no EOF). Returns success."""
+        """Load next asset into Air preview slot (frame-indexed execution, INV-FRAME-001/002/003).
+
+        Args:
+            asset_path: Fully-qualified path to media file
+            start_frame: First frame index within asset (0-based, INV-FRAME-001)
+            frame_count: Exact number of frames to play (INV-FRAME-002)
+            fps_numerator: Frame rate numerator (e.g. 30000 for 29.97fps, INV-FRAME-003)
+            fps_denominator: Frame rate denominator (e.g. 1001 for 29.97fps, INV-FRAME-003)
+
+        Returns:
+            True if preview loaded successfully, False otherwise.
+        """
         if not self._grpc_addr:
             self._logger.warning("Channel %s: load_preview skipped (no grpc_addr)", self.channel_id)
             return False
@@ -1486,8 +1788,10 @@ class Phase8AirProducer(Producer):
                 self._grpc_addr,
                 channel_id_int=self.channel_config.channel_id_int,
                 asset_path=asset_path,
-                start_offset_ms=start_offset_ms,
-                hard_stop_time_ms=hard_stop_time_ms,
+                start_frame=start_frame,
+                frame_count=frame_count,
+                fps_numerator=fps_numerator,
+                fps_denominator=fps_denominator,
             )
             if not ok:
                 self._logger.warning("Channel %s: Air LoadPreview returned success=false", self.channel_id)

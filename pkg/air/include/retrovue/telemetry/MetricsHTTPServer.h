@@ -87,10 +87,13 @@ class MetricsHTTPServer {
   int port_;
   std::atomic<bool> running_;
   std::atomic<bool> stop_requested_;
-  
+
+  // Startup synchronization: ServerLoop signals success/failure to Start()
+  std::atomic<int> startup_result_;  // 0=pending, 1=success, -1=failure
+
   std::unique_ptr<std::thread> server_thread_;
   MetricsCallback metrics_callback_;
-  
+
   // Server socket (platform-specific)
   int server_socket_;
 };

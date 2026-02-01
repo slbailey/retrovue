@@ -264,6 +264,10 @@ namespace retrovue::producers::file
 
   void FileProducer::RequestStop()
   {
+    // Idempotent: safe to call multiple times (e.g. SwitchToLive path then watcher).
+    if (stop_requested_.load(std::memory_order_acquire)) {
+      return;
+    }
     // Phase 7: Hard write barrier - disable writes BEFORE signaling stop
     // This prevents any in-flight frames from being pushed after this point
     writes_disabled_.store(true, std::memory_order_release);
@@ -461,6 +465,15 @@ namespace retrovue::producers::file
   uint64_t FileProducer::GetFramesProduced() const
   {
     return frames_produced_.load(std::memory_order_acquire);
+  }
+
+  std::optional<producers::AsRunFrameStats> FileProducer::GetAsRunFrameStats() const
+  {
+    producers::AsRunFrameStats stats;
+    stats.asset_path = config_.asset_uri;
+    stats.start_frame = config_.start_frame;
+    stats.frames_emitted = GetFramesProduced();
+    return stats;
   }
 
   uint64_t FileProducer::GetBufferFullCount() const

@@ -193,6 +193,16 @@ class TimelineController {
   // This works for 1st, 2nd, Nth switches.
   uint64_t GetSegmentCommitGeneration() const;
 
+  // INV-SWITCH-SUCCESSOR-EMISSION: Segment commit is not observable until at
+  // least one real successor video frame has been emitted by the encoder.
+  // When mapping locks we set commit_pending_successor_emission_; commit_gen
+  // advances only when this is called (from sink after encoding a real frame).
+  void NotifySuccessorVideoEmitted();
+
+  // When true, commit_gen advances only after NotifySuccessorVideoEmitted().
+  // When false (e.g. tests with no sink), commit_gen advances when mapping locks.
+  void SetEmissionObserverAttached(bool attached);
+
   // ========================================================================
   // Frame Admission (Core Phase 8 Operation)
   // ========================================================================
@@ -221,6 +231,10 @@ class TimelineController {
   // Returns the expected CT for the next frame (CT_cursor + frame_period).
   int64_t GetExpectedNextCT() const;
 
+  // Returns the current segment's MT start (for diagnostics).
+  // Returns -1 if no segment mapping is active.
+  int64_t GetSegmentMTStart() const;
+
   // Returns the wall-clock deadline for a given CT position.
   int64_t GetWallClockDeadline(int64_t ct_us) const;
 
@@ -238,6 +252,24 @@ class TimelineController {
 
   // Returns true if lag exceeds catch_up_limit (session should restart).
   bool ShouldRestartSession() const;
+
+  // ========================================================================
+  // INV-FRAME-003: Frame-Indexed CT Computation (for padding)
+  // ========================================================================
+  // CT derives from frame index, never the inverse. This method computes CT
+  // for a given frame index relative to a known starting CT.
+  // Used by structural padding (BlackFrameProducer) to assign CT to black frames.
+  // ========================================================================
+
+  // Computes CT for a given frame index, relative to a start CT.
+  // ct = start_ct + (frame_index * frame_period_us)
+  // This is the ONLY correct way to compute CT for padding frames.
+  int64_t ComputeCTFromFrameIndex(int64_t start_ct_us, int64_t frame_index) const {
+    return start_ct_us + (frame_index * config_.frame_period_us);
+  }
+
+  // Returns the frame period (1/fps) in microseconds.
+  int64_t GetFramePeriodUs() const { return config_.frame_period_us; }
 
   // ========================================================================
   // Statistics
@@ -290,6 +322,11 @@ class TimelineController {
   // Increments exactly once per commit. Allows detecting commit edges across
   // multiple switches (1st, 2nd, Nth).
   uint64_t segment_commit_generation_ = 0;
+
+  // INV-SWITCH-SUCCESSOR-EMISSION: Commit gen does not advance until sink has
+  // emitted at least one real (non-pad) video frame after mapping lock.
+  bool commit_pending_successor_emission_ = false;
+  bool emission_observer_attached_ = false;
 
   // Statistics
   Stats stats_;

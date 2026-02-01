@@ -5,12 +5,15 @@
 
 #include "retrovue/runtime/PlayoutEngine.h"
 
+#include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/MpegTSOutputSink.h"
 #include "retrovue/output/OutputBus.h"
 #include "retrovue/producers/IProducer.h"
 #include "retrovue/producers/file/FileProducer.h"
@@ -41,7 +44,30 @@ namespace {
   std::string MakeCommandId(const char* prefix, int32_t channel_id) {
     return std::string(prefix) + "-" + std::to_string(channel_id);
   }
-  
+
+  // Hypothesis: skip RequestStop when RETROVUE_NO_FORCE_STOP=1 to test if stop kills liveness
+  void MaybeRequestStop(producers::IProducer* producer) {
+    if (!producer) return;
+    const char* e = std::getenv("RETROVUE_NO_FORCE_STOP");
+    if (e && e[0] == '1') {
+      std::cout << "[DBG] RETROVUE_NO_FORCE_STOP=1 skipping RequestStop" << std::endl;
+      return;
+    }
+    producer->RequestStop();
+  }
+
+  // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Never stop the successor.
+  // Call before MaybeRequestStop(target) in the watcher; aborts if target is current live (successor).
+  void AssertNotStoppingSuccessor(producers::IProducer* target,
+                                  producers::IProducer* current_live,
+                                  bool swap_done) {
+    if (swap_done && target == current_live) {
+      std::cerr << "[SwitchWatcher] INV-P8-SWITCHWATCHER-STOP-TARGET-001 VIOLATED: "
+                << "attempted to stop successor (target==live_producer after swap)" << std::endl;
+      std::abort();
+    }
+  }
+
   telemetry::ChannelState ToChannelState(PlayoutControl::RuntimePhase phase) {
     using RuntimePhase = PlayoutControl::RuntimePhase;
     switch (phase) {
@@ -59,6 +85,28 @@ namespace {
         return telemetry::ChannelState::ERROR_STATE;
     }
     return telemetry::ChannelState::STOPPED;
+  }
+
+  // Contract-level observability: AIR_AS_RUN_FRAME_RANGE (once per producer lifecycle end).
+  void LogAirAsRunFrameRange(int32_t channel_id,
+                             const std::string& segment_id,
+                             const std::string& asset_path,
+                             int64_t first_frame_emitted,
+                             int64_t last_frame_emitted,
+                             uint64_t frames_emitted,
+                             int64_t first_pts_us,
+                             int64_t last_pts_us,
+                             const char* termination_reason) {
+    std::cout << "[AIR_AS_RUN_FRAME_RANGE] channel_id=" << channel_id
+              << " segment_id=" << segment_id
+              << " asset_path=" << asset_path
+              << " first_frame_emitted=" << first_frame_emitted
+              << " last_frame_emitted=" << last_frame_emitted
+              << " frames_emitted=" << frames_emitted
+              << " first_pts_us=" << first_pts_us
+              << " last_pts_us=" << last_pts_us
+              << " termination_reason=" << termination_reason
+              << std::endl;
   }
 }  // namespace
 
@@ -89,6 +137,11 @@ struct PlayoutEngine::PlayoutInstance {
   // When commit_gen advances, a new segment has committed → close old segment.
   // This works across multiple switches (1st, 2nd, Nth).
   uint64_t last_seen_commit_gen = 0;
+
+  // INV-SWITCH-SUCCESSOR-EMISSION: True only after at least one real successor
+  // video frame has been emitted by the encoder (routed through OutputBus and
+  // accepted by encoder/mux). Pad frames do not count. Gates switch completion.
+  std::atomic<bool> successor_video_emitted_{false};
 
   // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
@@ -226,7 +279,18 @@ EngineResult PlayoutEngine::StartChannel(
     render_config.mode = renderer::RenderMode::HEADLESS;
     state->program_output = renderer::ProgramOutput::Create(
         render_config, *state->ring_buffer, master_clock_, metrics_exporter_, channel_id);
-    
+
+    // INV-P8-SUCCESSOR-OBSERVABILITY: Wire observer before any segment may commit.
+    // ProgramOutput notifies when first real successor video frame is routed.
+    state->program_output->SetOutputBus(state->output_bus.get());
+    PlayoutInstance* state_ptr = state.get();
+    timing::TimelineController* tc = state->timeline_controller.get();
+    state->program_output->SetOnSuccessorVideoEmitted([state_ptr, tc]() {
+      state_ptr->successor_video_emitted_.store(true, std::memory_order_release);
+      if (tc) tc->NotifySuccessorVideoEmitted();
+    });
+    state->timeline_controller->SetEmissionObserverAttached(true);
+
     // Start control state machine
     const int64_t now = NowUtc(master_clock_);
     if (!state->control->BeginSession(MakeCommandId("start", channel_id), now)) {
@@ -317,7 +381,21 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   
   try {
     const int64_t now = NowUtc(master_clock_);
-    
+
+    // Contract-level observability: AIR_AS_RUN_FRAME_RANGE before stopping producer/output.
+    if (state->live_producer) {
+      auto stats = state->live_producer->GetAsRunFrameStats();
+      if (stats && state->program_output) {
+        const int64_t first_pts_us = state->program_output->GetFirstEmittedPTS();
+        const int64_t last_pts_us = state->program_output->GetLastEmittedPTS();
+        const int64_t last_frame = stats->start_frame + (stats->frames_emitted > 0
+            ? static_cast<int64_t>(stats->frames_emitted) - 1 : 0);
+        LogAirAsRunFrameRange(channel_id, "", stats->asset_path,
+            stats->start_frame, last_frame, stats->frames_emitted,
+            first_pts_us, last_pts_us, "STOP");
+      }
+    }
+
     // Stop control state machine
     if (state->control) {
       state->control->Stop(MakeCommandId("stop", channel_id), now, now);
@@ -394,8 +472,10 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
 EngineResult PlayoutEngine::LoadPreview(
     int32_t channel_id,
     const std::string& asset_path,
-    int64_t start_offset_ms,
-    int64_t hard_stop_time_ms) {
+    int64_t start_frame,
+    int64_t frame_count,
+    int32_t fps_numerator,
+    int32_t fps_denominator) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
   auto it = channels_.find(channel_id);
@@ -436,17 +516,32 @@ EngineResult PlayoutEngine::LoadPreview(
     return result;
   }
 
+  // ==========================================================================
+  // INV-FRAME-001/002/003: Frame-indexed execution
+  // ==========================================================================
+  // Compute legacy time-based values for ProducerConfig (backward compatibility).
+  // Direction: frame → time (never time → frame)
+  double fps = (fps_denominator > 0)
+      ? static_cast<double>(fps_numerator) / static_cast<double>(fps_denominator)
+      : it->second->program_format.GetFrameRateAsDouble();
+  int64_t start_offset_ms = (fps > 0) ? static_cast<int64_t>((start_frame * 1000.0) / fps) : 0;
+  // frame_count is authoritative - no need to convert back to wall-clock time
+  // (hard_stop_time_ms was deprecated, we use frame_count directly now)
+
   try {
     // Create preview producer config
     producers::file::ProducerConfig preview_config;
     preview_config.asset_uri = asset_path;
-    preview_config.target_fps = it->second->program_format.GetFrameRateAsDouble();
+    preview_config.target_fps = fps;
     preview_config.stub_mode = false;
     preview_config.target_width = it->second->program_format.video.width;
     preview_config.target_height = it->second->program_format.video.height;
-    // Phase 6: Enable mid-segment join (seek)
+    // Frame-indexed execution (INV-FRAME-001/002)
+    preview_config.start_frame = start_frame;
+    preview_config.frame_count = frame_count;
+    // Legacy fields for backward compatibility (computed from frame index)
     preview_config.start_offset_ms = start_offset_ms;
-    preview_config.hard_stop_time_ms = hard_stop_time_ms;
+    preview_config.hard_stop_time_ms = 0;  // Deprecated: use frame_count instead
 
     // Create separate preview buffer for pre-fill (no interleaving with live)
     // ==========================================================================
@@ -482,7 +577,8 @@ EngineResult PlayoutEngine::LoadPreview(
         state->timeline_controller.get());
 
     std::cout << "[LoadPreview] Created preview producer for: " << asset_path
-              << " (seek=" << start_offset_ms << "ms)" << std::endl;
+              << " (start_frame=" << start_frame << ", frame_count=" << frame_count
+              << ", fps=" << fps_numerator << "/" << fps_denominator << ")" << std::endl;
 
     // Phase 7 (INV-P7-004): Enable shadow decode mode BEFORE starting.
     // This prevents the preview producer from resetting the master clock epoch.
@@ -508,9 +604,218 @@ EngineResult PlayoutEngine::LoadPreview(
   }
 }
 
+// =============================================================================
+// SpawnSwitchWatcher: Background thread for level-triggered auto-completion
+// =============================================================================
+// Called when SwitchToLive returns NOT_READY. The watcher polls buffer
+// readiness and auto-completes the switch when conditions are met.
+// This makes SwitchToLive level-triggered: Core doesn't need to keep polling.
+void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* state) {
+  constexpr int kPollIntervalMs = 50;
+
+  // Guard: only spawn if not already running
+  state->switch_watcher_stop.store(false);
+  if (state->switch_watcher_running.exchange(true)) {
+    // Already running - don't spawn duplicate
+    return;
+  }
+
+  // ==========================================================================
+  // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Bind retirement target BEFORE watcher starts
+  // ==========================================================================
+  // Capture the producer that should be retired. This ensures we never call
+  // RequestStop on the successor, even if commit-gen detection fires after swap.
+  // The captured pointer is used for all retirement actions; live_producer is
+  // never used for retirement decisions inside the watcher.
+  // ==========================================================================
+  producers::IProducer* producer_to_retire = state->live_producer.get();
+
+  std::cout << "[SwitchWatcher] STARTED (channel=" << channel_id << ")" << std::endl;
+
+  std::thread([this, channel_id, producer_to_retire]() mutable {
+    bool did_complete = false;
+    constexpr size_t kMinVideoDepth = 2;
+    constexpr int kPollIntervalMs = 50;
+    constexpr int kMaxPollAttempts = 200;  // 10 seconds max
+    constexpr int kAudioLagWarnMs = 500;
+    int audio_missing_polls = 0;
+    bool audio_lag_warned = false;
+    bool swap_done = false;  // INV-SWITCH-SUCCESSOR-EMISSION: swap first, then wait for emission
+    bool retirement_done = false;  // INV-P8-SWITCHWATCHER-STOP-TARGET-001: one-shot retirement
+    auto start_time = std::chrono::steady_clock::now();
+
+    for (int attempt = 0; attempt < kMaxPollAttempts; ++attempt) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(kPollIntervalMs));
+
+      std::lock_guard<std::mutex> lock(channels_mutex_);
+      auto it = channels_.find(channel_id);
+      if (it == channels_.end() || !it->second) break;
+
+      auto& s = it->second;
+      if (s->switch_watcher_stop.load()) break;
+      if (!s->switch_in_progress) break;
+
+      buffer::FrameRingBuffer* active_buffer = s->preview_ring_buffer.get();
+      size_t video_depth = active_buffer ? active_buffer->Size() : 0;
+      size_t audio_depth = active_buffer ? active_buffer->AudioSize() : 0;
+
+      // Segment commit detection (silent unless closing old producer)
+      // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Only trigger retirement BEFORE swap
+      // and only on the bound producer_to_retire (never live_producer).
+      bool commit_detected = false;
+      if (s->timeline_controller) {
+        uint64_t current_commit_gen = s->timeline_controller->GetSegmentCommitGeneration();
+        if (current_commit_gen > s->last_seen_commit_gen) {
+          commit_detected = true;
+          s->last_seen_commit_gen = current_commit_gen;
+          // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Use bound target, not live_producer
+          // Only retire if: (1) not yet retired, (2) swap hasn't happened yet
+          if (!retirement_done && !swap_done && producer_to_retire) {
+            AssertNotStoppingSuccessor(producer_to_retire, s->live_producer.get(), swap_done);
+            MaybeRequestStop(producer_to_retire);
+            retirement_done = true;
+            std::cout << "[SwitchWatcher] INV-P8-STOP-TARGET: Retirement triggered "
+                      << "(commit_gen edge, pre-swap)" << std::endl;
+          }
+        }
+      }
+
+      bool bootstrap_ready = commit_detected && (video_depth >= 1);
+      bool live_producer_eof = s->live_producer && s->live_producer->IsEOF();
+      bool preview_producer_eof = s->preview_producer && s->preview_producer->IsEOF();
+      bool readiness_passed = (video_depth >= kMinVideoDepth);
+      bool preview_eof_with_frames = preview_producer_eof && video_depth >= 1;
+
+      // INV-P8-SWITCH-READINESS: Warn if audio missing too long (one-shot)
+      if (video_depth >= kMinVideoDepth && audio_depth == 0) {
+        audio_missing_polls++;
+        if (!audio_lag_warned && (audio_missing_polls * kPollIntervalMs) >= kAudioLagWarnMs) {
+          std::cerr << "[SwitchWatcher] INV-P8-SWITCH-READINESS: WARNING audio_missing_ms="
+                    << (audio_missing_polls * kPollIntervalMs) << " (silence padding active)"
+                    << std::endl;
+          audio_lag_warned = true;
+        }
+      } else {
+        audio_missing_polls = 0;
+      }
+
+      if (readiness_passed || bootstrap_ready || live_producer_eof || preview_eof_with_frames) {
+        // INV-SWITCH-SUCCESSOR-EMISSION: Do swap first so successor frames can flow;
+        // only set switch_auto_completed after at least one real successor video
+        // frame has been emitted by the encoder (pad frames do not count).
+        if (!swap_done) {
+          // INV-OUTPUT-READY-BEFORE-LIVE: Log once if sink not attached
+          if (!IsOutputSinkAttachedLocked(channel_id)) {
+            static bool sink_warn_logged = false;
+            if (!sink_warn_logged) {
+              std::cout << "[SwitchWatcher] INV-OUTPUT-READY-BEFORE-LIVE: "
+                        << "committing without sink (late attach expected)" << std::endl;
+              sink_warn_logged = true;
+            }
+          }
+
+          // Redirect output to preview buffer
+          if (!s->program_output || !s->preview_ring_buffer) {
+            std::cerr << "[SwitchWatcher] INV-P8-SWITCH-READINESS: ABORT "
+                      << "reason=" << (!s->program_output ? "NO_OUTPUT" : "NO_BUFFER")
+                      << std::endl;
+            continue;
+          }
+
+          // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Use bound target, not live_producer
+          if (!retirement_done && producer_to_retire) {
+            AssertNotStoppingSuccessor(producer_to_retire, s->live_producer.get(), swap_done);
+            MaybeRequestStop(producer_to_retire);
+            retirement_done = true;
+            std::cout << "[SwitchWatcher] INV-P8-STOP-TARGET: Retirement triggered "
+                      << "(readiness passed, pre-swap)" << std::endl;
+          }
+
+          // Capture PTS for as-run log before redirect (SetInputBuffer resets first_pts).
+          const int64_t first_pts_us = s->program_output ? s->program_output->GetFirstEmittedPTS() : 0;
+          const int64_t last_pts_us = s->program_output ? s->program_output->GetLastEmittedPTS() : 0;
+
+          s->program_output->SetInputBuffer(s->preview_ring_buffer.get());
+          std::swap(s->ring_buffer, s->preview_ring_buffer);
+
+          auto old_producer = std::move(s->live_producer);
+          s->live_producer = std::move(s->preview_producer);
+          s->live_asset_path = s->preview_asset_path;
+          s->preview_producer.reset();
+          s->preview_asset_path.clear();
+
+          // Contract-level observability: AIR_AS_RUN_FRAME_RANGE using retired producer (not live).
+          if (old_producer) {
+            auto stats = old_producer->GetAsRunFrameStats();
+            if (stats) {
+              const int64_t last_frame = stats->start_frame + (stats->frames_emitted > 0
+                  ? static_cast<int64_t>(stats->frames_emitted) - 1 : 0);
+              LogAirAsRunFrameRange(channel_id, "", stats->asset_path,
+                  stats->start_frame, last_frame, stats->frames_emitted,
+                  first_pts_us, last_pts_us, "WATCHER_RETIRE");
+            }
+            std::thread([producer = std::move(old_producer)]() mutable {
+              producer.reset();
+            }).detach();
+          }
+
+          swap_done = true;
+          continue;  // Next iteration: wait for successor_video_emitted_
+        }
+
+        // INV-P8-SUCCESSOR-OBSERVABILITY: Completion ONLY via observer signal.
+        // ProgramOutput fires observer when first real successor video is routed.
+        if (!s->successor_video_emitted_.load(std::memory_order_acquire)) {
+          continue;
+        }
+
+        // INV-P8-SUCCESSOR-OBSERVABILITY: Hard invariant - commit_gen never advances without
+        // successor_emitted. If we reached here with swap_done, successor_video_emitted_ must
+        // be true (observer fired). Fatal check.
+        if (!s->successor_video_emitted_.load(std::memory_order_acquire)) {
+          std::cerr << "[SwitchWatcher] INV-P8-SUCCESSOR-OBSERVABILITY FATAL: "
+                    << "switch_auto_completed would be set with successor_emitted=false" << std::endl;
+          std::abort();
+        }
+
+        s->switch_in_progress = false;
+        s->switch_target_asset.clear();
+        s->switch_auto_completed = true;
+        s->switch_watcher_running.store(false);
+
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time).count();
+        std::cout << "[SwitchWatcher] INV-P8-SWITCH-READINESS: COMPLETE "
+                  << "(video=" << video_depth << ", audio=" << audio_depth
+                  << ", elapsed_ms=" << elapsed_ms << ", asset=" << s->live_asset_path << ")"
+                  << std::endl;
+        did_complete = true;
+        break;  // Exit loop; lock released
+      }
+    }
+
+    // INV-FINALIZE-LIVE: Wire program_output to output_bus (late attach path)
+    // Call after releasing channels_mutex_ to avoid deadlock.
+    if (did_complete) {
+      FinalizeLiveOutput(channel_id);
+      return;
+    }
+
+    // Timeout - this is a potential invariant violation
+    {
+      std::lock_guard<std::mutex> lock(channels_mutex_);
+      auto it = channels_.find(channel_id);
+      if (it != channels_.end() && it->second) {
+        it->second->switch_watcher_running.store(false);
+      }
+    }
+    std::cerr << "[SwitchWatcher] INV-P8-SWITCH-READINESS: TIMEOUT after 10s" << std::endl;
+  }).detach();
+}
+
 EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
-  std::lock_guard<std::mutex> lock(channels_mutex_);
-  
+  std::unique_lock<std::mutex> lock(channels_mutex_);
+
   auto it = channels_.find(channel_id);
   if (it == channels_.end()) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
@@ -543,6 +848,11 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   // we'd incorrectly return an error.
   if (state->switch_auto_completed) {
     std::cout << "[SwitchToLive] Switch was auto-completed by watcher" << std::endl;
+    bool bus_exists = (state->output_bus != nullptr);
+    bool sink_attached = bus_exists && state->output_bus->IsAttached();
+    std::cout << "[DBG-SWITCH] auto_completed=true bus_connected="
+              << (bus_exists ? "yes" : "no")
+              << " sink_attached=" << (sink_attached ? "yes" : "no") << std::endl;
     state->switch_auto_completed = false;  // Reset for next switch
     EngineResult result(true, "Switch auto-completed for channel " + std::to_string(channel_id));
     result.pts_contiguous = true;
@@ -582,12 +892,8 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
         bool shadow_ready = state->preview_producer->IsShadowDecodeReady();
         if (shadow_ready) {
           // Shadow is ready! Fall through to execute the switch sequence.
-          std::cout << "[SwitchToLive] Shadow now ready, executing deferred switch sequence"
-                    << std::endl;
-          // Don't return - fall through to the switch sequence at line ~684
         } else {
-          // Still waiting for shadow decode
-          std::cout << "[SwitchToLive] Still waiting for shadow decode (switch armed)" << std::endl;
+          // Still waiting for shadow decode - silent return (polling is expected)
           EngineResult result(false, "Switch armed; waiting for shadow decode");
           result.error_code = "NOT_READY_SHADOW_PENDING";
           result.result_code = ResultCode::kNotReady;
@@ -599,71 +905,69 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
         size_t preview_video_depth = state->preview_ring_buffer ? state->preview_ring_buffer->Size() : 0;
         size_t preview_audio_depth = state->preview_ring_buffer ? state->preview_ring_buffer->AudioSize() : 0;
         constexpr size_t kMinPreviewVideoDepth = 2;
-        constexpr size_t kMinPreviewAudioDepth = 5;
+        // =========================================================================
+        // INV-SWITCH-READINESS: Audio data NOT required for switch completion
+        // =========================================================================
+        // Audio may legitimately lag video due to epoch alignment (audio frames
+        // are skipped until video epoch is established). Silence padding handles
+        // the gap until real audio arrives.
+        // =========================================================================
 
-        if (preview_video_depth < kMinPreviewVideoDepth || preview_audio_depth < kMinPreviewAudioDepth) {
+        if (preview_video_depth < kMinPreviewVideoDepth) {
           // =====================================================================
           // Phase 8 (INV-P8-EOF-SWITCH): Check if live or preview producer is at EOF
           // =====================================================================
           // When live producer reaches EOF, we MUST complete the switch regardless
           // of preview buffer depth. Blocking forever leads to infinite stall.
           //
-          // INV-P8-PREVIEW-EOF: When preview producer hits EOF with any frames,
-          // complete with lower thresholds. This handles short assets or edge cases.
+          // INV-P8-PREVIEW-EOF: When preview producer hits EOF with any video frames,
+          // complete with lower thresholds. Audio not required (silence padding used).
           bool live_producer_eof = state->live_producer && state->live_producer->IsEOF();
           bool preview_producer_eof = state->preview_producer && state->preview_producer->IsEOF();
-          bool preview_eof_with_frames = preview_producer_eof && preview_video_depth >= 1 && preview_audio_depth >= 1;
+          bool preview_eof_with_frames = preview_producer_eof && preview_video_depth >= 1;
 
           if (live_producer_eof) {
             std::cout << "[SwitchToLive] INV-P8-EOF-SWITCH: Live producer at EOF, "
-                      << "forcing completion (video=" << preview_video_depth
-                      << ", audio=" << preview_audio_depth << ")" << std::endl;
+                      << "forcing completion (video=" << preview_video_depth << ")" << std::endl;
             // Fall through to complete - don't return NOT_READY
           } else if (preview_eof_with_frames) {
             std::cout << "[SwitchToLive] INV-P8-PREVIEW-EOF: Preview producer at EOF, "
-                      << "forcing completion with available frames (video=" << preview_video_depth
-                      << ", audio=" << preview_audio_depth << ")" << std::endl;
+                      << "completing with available video (depth=" << preview_video_depth << ")" << std::endl;
             // Fall through to complete - don't return NOT_READY
           } else {
-            // Still filling - return NOT_READY without verbose logging
-            // Watcher thread will auto-complete when ready
-            EngineResult result(false, "Switch in progress; awaiting buffer fill (video="
-                + std::to_string(preview_video_depth) + "/" + std::to_string(kMinPreviewVideoDepth)
-                + ", audio=" + std::to_string(preview_audio_depth) + "/" + std::to_string(kMinPreviewAudioDepth) + ")");
+            // Still filling - spawn watcher if not already running, then return NOT_READY
+            // BUG FIX: The watcher was only spawned in the first-time path, not here.
+            // This caused NOT_READY to never transition to READY.
+            if (!state->switch_watcher_running.load()) {
+              SpawnSwitchWatcher(channel_id, state.get());
+            }
+            std::cout << "[SwitchToLive] INV-SWITCH-READINESS: NOT_READY "
+                      << "(video=" << preview_video_depth << "/" << kMinPreviewVideoDepth
+                      << ", audio=" << preview_audio_depth << ", waiting for video)" << std::endl;
+            EngineResult result(false, "Switch in progress; awaiting video buffer fill (video="
+                + std::to_string(preview_video_depth) + "/" + std::to_string(kMinPreviewVideoDepth) + ")");
             result.error_code = "NOT_READY_IN_PROGRESS";
-            result.result_code = ResultCode::kNotReady;  // Transient: don't panic, don't retry aggressively
+            result.result_code = ResultCode::kNotReady;
             return result;
           }
         } else {
           // Buffer is ready - fall through to complete the switch
-          std::cout << "[SwitchToLive] Transition ready, completing switch (video="
-                    << preview_video_depth << ", audio=" << preview_audio_depth << ")" << std::endl;
+          std::cout << "[SwitchToLive] INV-SWITCH-READINESS: PASSED "
+                    << "(video=" << preview_video_depth << "/" << kMinPreviewVideoDepth
+                    << ", audio=" << preview_audio_depth << ")" << std::endl;
         }
       }
     }
 
-    std::cout << "[SwitchToLive] === SWITCH START ===" << std::endl;
-    std::cout << "[SwitchToLive] Old live: " << state->live_asset_path << std::endl;
-    std::cout << "[SwitchToLive] New preview: " << state->preview_asset_path << std::endl;
-
-    size_t old_buffer_depth = state->ring_buffer ? state->ring_buffer->Size() : 0;
     size_t preview_depth_before = state->preview_ring_buffer ? state->preview_ring_buffer->Size() : 0;
-    bool preview_running = state->preview_producer && state->preview_producer->isRunning();
 
-    std::cout << "[SwitchToLive] Old buffer depth: " << old_buffer_depth << " frames" << std::endl;
-    std::cout << "[SwitchToLive] Preview buffer depth: " << preview_depth_before << " frames" << std::endl;
-    std::cout << "[SwitchToLive] Preview producer running: " << (preview_running ? "YES" : "NO") << std::endl;
-
-    // Phase 7 (P7-ARCH-003): Readiness is a precondition to switching.
+    // Phase 7 (P7-ARCH-003): Video readiness is a precondition to switching.
     // Never switch if preview buffer is empty - would cause renderer stall.
-    // Check BOTH video AND audio readiness to prevent A/V desync at boundary.
+    // INV-SWITCH-READINESS: Audio data NOT required (silence padding used).
     constexpr size_t kMinPreviewVideoDepth = 2;   // At least 2 video frames
-    constexpr size_t kMinPreviewAudioDepth = 5;   // ~100ms audio at typical rates
 
     size_t preview_audio_depth = state->preview_ring_buffer ?
         state->preview_ring_buffer->AudioSize() : 0;
-
-    std::cout << "[SwitchToLive] Preview audio depth: " << preview_audio_depth << " frames" << std::endl;
 
     // ==========================================================================
     // Phase 8 Shadow→Live Handshake (CANONICAL STATE MACHINE)
@@ -726,31 +1030,25 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
       // ==========================================================================
       bool shadow_ready = state->preview_producer->IsShadowDecodeReady();
       if (!shadow_ready) {
-        // Preview hasn't cached its first frame yet - don't proceed with barrier/segment
-        // BUT we DO mark switch as in-progress to guard against LoadPreview (INV-P8-SWITCH-ARMED)
-        // Live continues running with the old segment mapping
+        // Mark switch as in-progress (one-shot log)
         if (!state->switch_in_progress) {
           state->switch_in_progress = true;
           state->switch_target_asset = state->preview_asset_path;
-          std::cout << "[SwitchToLive] INV-P8-SWITCH-ARMED: Switch armed for "
-                    << state->switch_target_asset << " (waiting for shadow decode)" << std::endl;
+          state->successor_video_emitted_.store(false, std::memory_order_release);
+          std::cout << "[SwitchToLive] INV-P8-SWITCH-READINESS: NOT_READY "
+                    << "(shadow_pending=true, asset=" << state->switch_target_asset << ")"
+                    << std::endl;
         }
-        std::cout << "[SwitchToLive] INV-P8-WRITE-BARRIER-DEFERRED: Preview not ready "
-                  << "(shadow_decode_ready=false), waiting for first frame to cache"
-                  << std::endl;
         EngineResult result(false, "Preview producer not ready - waiting for shadow decode");
         result.error_code = "NOT_READY_SHADOW_PENDING";
         result.result_code = ResultCode::kNotReady;
         return result;
       }
 
-      std::cout << "[SwitchToLive] Preview shadow decode ready, proceeding with switch"
-                << std::endl;
-
-      // Legacy path: AlignPTS for systems without TimelineController
+      // Legacy path: AlignPTS for systems without TimelineController (silent)
+      int64_t target_next_pts = 0;
       if (!state->timeline_controller) {
         int64_t last_emitted_pts = 0;
-        int64_t target_next_pts = 0;
         if (state->program_output) {
           last_emitted_pts = state->program_output->GetLastEmittedPTS();
           if (last_emitted_pts > 0) {
@@ -761,351 +1059,170 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
         }
         if (target_next_pts > 0) {
           state->preview_producer->AlignPTS(target_next_pts);
-          std::cout << "[SwitchToLive] Legacy PTS alignment: target=" << target_next_pts << std::endl;
         }
       }
 
-      // Step 2: BeginSegmentFromPreview() - MUST happen before disabling shadow
-      // INV-P8-SWITCH-001: Mapping must be pending before preview fills
-      // INV-P8-SWITCH-002: Preview owns BOTH CT and MT (locked together on first frame)
+      // =========================================================================
+      // INV-P8-WRITE-BARRIER-BEFORE-SEGMENT: Set write barrier on live producer
+      // BEFORE beginning new segment. This prevents live producer frames from
+      // racing to AdmitFrame during the pending->committed window and either:
+      //   (a) locking the mapping with wrong MT, or
+      //   (b) being rejected as "late" after preview locks the mapping
       //
-      // Critical insight: We cannot precompute CT_start because wall clock advances
-      // between this call and when the first preview frame is admitted. By using
-      // BeginSegmentFromPreview(), the first preview frame locks BOTH CT and MT
-      // to values that describe the SAME instant.
-      //
-      // The type-safe API makes the dangerous state (CT from live, MT from preview)
-      // literally unrepresentable - there's no way to set one without the other.
-      if (state->timeline_controller) {
-        // Idempotency: only begin segment if not already pending
-        if (!state->timeline_controller->IsMappingPending()) {
-          auto pending = state->timeline_controller->BeginSegmentFromPreview();
-          std::cout << "[SwitchToLive] Step 2: BeginSegmentFromPreview() - segment_id="
-                    << pending.id << ", mode=AwaitPreviewFrame (INV-P8-SWITCH-002)" << std::endl;
-        } else {
-          std::cout << "[SwitchToLive] Step 2: Segment already pending (idempotent)" << std::endl;
-        }
-      }
-
-      // Step 3: Disable shadow mode - frames will now use the new segment mapping
-      state->preview_producer->SetShadowDecodeMode(false);
-      std::cout << "[SwitchToLive] Step 3: Shadow mode disabled" << std::endl;
-
-      // Step 3a (INV-P8-SHADOW-FLUSH): Immediately flush cached frame to buffer.
-      // This ensures the buffer has at least one frame for the readiness check,
-      // eliminating the race between SwitchWatcher polling and producer thread waking.
-      // Because we checked IsShadowDecodeReady() above, we KNOW there's a cached frame.
-      if (state->preview_producer->FlushCachedFrameToBuffer()) {
-        std::cout << "[SwitchToLive] Step 3a: Cached shadow frame flushed to buffer" << std::endl;
-      } else {
-        // This should not happen if IsShadowDecodeReady() was true
-        std::cerr << "[SwitchToLive] WARNING: Flush failed despite shadow_decode_ready=true"
-                  << std::endl;
-      }
-
-      // Step 4: Write barrier on live producer AFTER preview has locked the mapping
-      // INV-P8-WRITE-BARRIER-DEFERRED: The flush above locked the new segment mapping.
-      // NOW it's safe to barrier the old live producer - preview is feeding the timeline.
+      // IMPORTANT:
+      // Write barrier MUST be set before BeginSegmentFromPreview().
+      // Segment ownership transfer requires exclusive writer semantics.
+      // Reordering this reintroduces MT/CT race conditions.
+      // =========================================================================
       if (state->live_producer && state->timeline_controller) {
         state->live_producer->SetWriteBarrier();
-        std::cout << "[SwitchToLive] Step 4: Write barrier set on live producer "
-                  << "(AFTER preview locked mapping)" << std::endl;
       }
 
-      // Step 5: REFRESH depths after flush (fix stale values bug)
-      // The depths captured at the start of SwitchToLive are now stale.
+      // BeginSegmentFromPreview (silent - internal step)
+      if (state->timeline_controller) {
+        if (!state->timeline_controller->IsMappingPending()) {
+          state->timeline_controller->BeginSegmentFromPreview();
+        }
+      }
+
+      // Disable shadow mode and flush cached frame
+      state->preview_producer->SetShadowDecodeMode(false);
+
+      // INV-P8-SHADOW-FLUSH: Flush cached frame to buffer
+      if (!state->preview_producer->FlushCachedFrameToBuffer()) {
+        std::cerr << "[SwitchToLive] INV-P8-SHADOW-FLUSH: VIOLATED "
+                  << "(shadow_ready=true, flush_returned=false)" << std::endl;
+      }
+
+      // =========================================================================
+      // INV-P8-ZERO-FRAME-BOOTSTRAP: Signal no-content segment to ProgramOutput
+      // =========================================================================
+      // When frame_count=0, no real content will ever arrive. We must tell
+      // ProgramOutput to allow pad frames immediately (bypass CONTENT-BEFORE-PAD).
+      // The first pad frame acts as "bootstrap frame" for encoder initialization.
+      // =========================================================================
+      if (state->preview_producer->GetConfiguredFrameCount() == 0) {
+        if (state->program_output) {
+          state->program_output->SetNoContentSegment(true);
+          std::cout << "[SwitchToLive] INV-P8-ZERO-FRAME-BOOTSTRAP: frame_count=0, "
+                    << "enabling pad frames for bootstrap" << std::endl;
+        }
+        // INV-SWITCH-SUCCESSOR-EMISSION: Zero-content segment has no real frames;
+        // allow switch completion without encoder emission (pad-only segment).
+        state->successor_video_emitted_.store(true, std::memory_order_release);
+      } else {
+        // Reset for segments with real content
+        if (state->program_output) {
+          state->program_output->SetNoContentSegment(false);
+        }
+      }
+
+      // Refresh depths and mark transition in-progress
       preview_depth_before = state->preview_ring_buffer ? state->preview_ring_buffer->Size() : 0;
       preview_audio_depth = state->preview_ring_buffer ? state->preview_ring_buffer->AudioSize() : 0;
-      std::cout << "[SwitchToLive] Step 5: Refreshed depths after flush (video="
-                << preview_depth_before << ", audio=" << preview_audio_depth << ")" << std::endl;
-
-      // Step 6: Mark transition as in-progress for idempotency guard
       state->switch_in_progress = true;
       state->switch_target_asset = state->preview_asset_path;
-
-      // INV-P8-SEGMENT-COMMIT-EDGE: Capture current generation to detect when it advances
+      state->successor_video_emitted_.store(false, std::memory_order_release);
       state->last_seen_commit_gen = state->timeline_controller ?
           state->timeline_controller->GetSegmentCommitGeneration() : 0;
 
-      // Step 7: Spawn watcher thread for level-triggered auto-completion (Option A)
-      // The watcher polls readiness and auto-completes when conditions are met.
-      // This makes SwitchToLive level-triggered: Core doesn't need to keep polling.
-      // Guard: only spawn if not already running
-      state->switch_watcher_stop.store(false);
-      if (!state->switch_watcher_running.exchange(true)) {
-        std::thread([this, channel_id]() {
-          constexpr size_t kMinVideoDepth = 2;
-          constexpr size_t kMinAudioDepth = 5;
-          constexpr int kPollIntervalMs = 50;
-          constexpr int kMaxPollAttempts = 200;  // 10 seconds max
+      // Spawn watcher for auto-completion
+      SpawnSwitchWatcher(channel_id, state.get());
 
-          for (int attempt = 0; attempt < kMaxPollAttempts; ++attempt) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kPollIntervalMs));
-
-            std::lock_guard<std::mutex> lock(channels_mutex_);
-            auto it = channels_.find(channel_id);
-            if (it == channels_.end() || !it->second) break;
-
-            auto& s = it->second;
-            if (s->switch_watcher_stop.load()) break;
-            if (!s->switch_in_progress) break;  // Already completed by another path
-
-            // Check readiness
-            size_t video_depth = s->preview_ring_buffer ? s->preview_ring_buffer->Size() : 0;
-            size_t audio_depth = s->preview_ring_buffer ? s->preview_ring_buffer->AudioSize() : 0;
-
-            // =========================================================================
-            // INV-P8-SEGMENT-COMMIT-EDGE: Detect segment commit via generation counter
-            // =========================================================================
-            // In broadcast terms, "commit" is when the new segment locks its mapping and
-            // becomes the authoritative owner of CT. At commit, the old segment is DEAD
-            // and must be hard-closed immediately. This is separate from buffer readiness.
-            //
-            // We use a generation counter (not state) to detect commit EDGES:
-            //   - Captures current gen at switch start
-            //   - Detects when gen advances (commit happened)
-            //   - Works for 1st, 2nd, Nth switches
-            //
-            // Invariant: One segment owns CT at any time. After commit:
-            //   - New segment owns CT (mapping locked)
-            //   - Old segment is dead (producer stopped, cannot emit to timeline)
-            // =========================================================================
-            bool commit_detected = false;
-            if (s->timeline_controller) {
-              uint64_t current_commit_gen = s->timeline_controller->GetSegmentCommitGeneration();
-              if (current_commit_gen > s->last_seen_commit_gen) {
-                // Commit edge detected - generation advanced
-                commit_detected = true;
-                s->last_seen_commit_gen = current_commit_gen;
-
-                std::cout << "[SwitchWatcher] INV-P8-SEGMENT-COMMIT-EDGE: Segment "
-                          << s->timeline_controller->GetActiveSegmentId()
-                          << " committed (gen=" << current_commit_gen
-                          << "), closing old segment" << std::endl;
-
-                // Hard-close old segment: force-stop old producer immediately
-                // (it already has write barrier, but this ensures clean shutdown)
-                if (s->live_producer) {
-                  s->live_producer->ForceStop();
-                  std::cout << "[SwitchWatcher] Old producer force-stopped (segment closed)"
-                            << std::endl;
-                }
-              }
-            }
-
-            // =========================================================================
-            // INV-P9-BOOTSTRAP-READY: Readiness = commit + ≥1 video frame
-            // =========================================================================
-            // Phase 9 breaks the deadlock where output routing waits for deep buffering
-            // but deep buffering requires output routing to proceed. At commit time,
-            // the cached shadow frame has been flushed (INV-P9-FLUSH), so video_depth >= 1.
-            //
-            // Bootstrap readiness: commit detected AND at least 1 video frame.
-            // Audio zero-frames is acceptable during bootstrap (§3.2 Phase 9 contract).
-            // =========================================================================
-            bool bootstrap_ready = commit_detected && (video_depth >= 1);
-            if (bootstrap_ready) {
-              std::cout << "[SwitchWatcher] INV-P9-BOOTSTRAP-READY: commit_gen="
-                        << s->last_seen_commit_gen << ", video_depth=" << video_depth
-                        << ", audio_depth=" << audio_depth << " → READY (bootstrap)"
-                        << std::endl;
-            }
-
-            // =========================================================================
-            // Phase 8 (INV-P8-EOF-SWITCH): EOF on live or preview forces switch completion
-            // =========================================================================
-            // When the live producer reaches EOF, the switch MUST complete immediately
-            // regardless of preview buffer depth. Blocking on buffer depth when live
-            // is exhausted causes infinite stall (nothing feeding the output).
-            //
-            // INV-P8-PREVIEW-EOF: When PREVIEW producer hits EOF with any frames available,
-            // complete with lower thresholds (>=1 video, >=1 audio). This handles:
-            //   - Very short preview assets
-            //   - Preview that consumed too much during shadow mode (now fixed)
-            // Some A/V hiccups are acceptable - they're better than indefinite stall.
-            bool live_producer_eof = s->live_producer && s->live_producer->IsEOF();
-            bool preview_producer_eof = s->preview_producer && s->preview_producer->IsEOF();
-            bool readiness_passed = (video_depth >= kMinVideoDepth && audio_depth >= kMinAudioDepth);
-
-            // INV-P8-PREVIEW-EOF: Lower thresholds when preview is at EOF
-            bool preview_eof_with_frames = preview_producer_eof && video_depth >= 1 && audio_depth >= 1;
-
-            if (live_producer_eof && !readiness_passed) {
-              std::cout << "[SwitchWatcher] INV-P8-EOF-SWITCH: Live producer at EOF, "
-                        << "forcing switch completion (video=" << video_depth
-                        << ", audio=" << audio_depth << ")" << std::endl;
-            }
-
-            if (preview_eof_with_frames && !readiness_passed) {
-              std::cout << "[SwitchWatcher] INV-P8-PREVIEW-EOF: Preview producer at EOF, "
-                        << "forcing switch with available frames (video=" << video_depth
-                        << ", audio=" << audio_depth << ")" << std::endl;
-            }
-
-            if (readiness_passed || bootstrap_ready || live_producer_eof || preview_eof_with_frames) {
-              if (readiness_passed && !bootstrap_ready) {
-                std::cout << "[SwitchWatcher] Readiness PASSED (steady-state: video=" << video_depth
-                          << ", audio=" << audio_depth << "), auto-completing switch" << std::endl;
-              }
-
-              // === Auto-complete the switch (copy of completion logic) ===
-              // Signal old producer to stop
-              if (s->live_producer) {
-                s->live_producer->ForceStop();
-              }
-
-              // Redirect ProgramOutput to preview buffer
-              if (s->program_output && s->preview_ring_buffer) {
-                s->program_output->SetInputBuffer(s->preview_ring_buffer.get());
-              }
-
-              // Swap buffer ownership
-              std::swap(s->ring_buffer, s->preview_ring_buffer);
-
-              // Promote preview producer to live
-              auto old_producer = std::move(s->live_producer);
-              s->live_producer = std::move(s->preview_producer);
-              s->live_asset_path = s->preview_asset_path;
-              s->preview_producer.reset();
-              s->preview_asset_path.clear();
-
-              // Clean up old producer in background
-              if (old_producer) {
-                std::thread([producer = std::move(old_producer)]() mutable {
-                  producer.reset();
-                }).detach();
-              }
-
-              // Mark completion and clear watcher flag
-              s->switch_in_progress = false;
-              s->switch_target_asset.clear();
-              s->switch_auto_completed = true;
-              s->switch_watcher_running.store(false);
-
-              std::cout << "[SwitchWatcher] === AUTO-SWITCH COMPLETE ===" << std::endl;
-              std::cout << "[SwitchWatcher] Now playing: " << s->live_asset_path << std::endl;
-              return;  // Done
-            }
-          }
-          // Timed out or cancelled - clear watcher flag
-          {
-            std::lock_guard<std::mutex> lock(channels_mutex_);
-            auto it = channels_.find(channel_id);
-            if (it != channels_.end() && it->second) {
-              it->second->switch_watcher_running.store(false);
-            }
-          }
-          std::cout << "[SwitchWatcher] Timed out or cancelled" << std::endl;
-        }).detach();  // Detach immediately
-      }
-
-      // Step 8: Return NOT_READY - this is INTENTIONAL, not a failure
-      // Core will retry after buffer fills. Include depth for visibility.
-      std::cout << "[SwitchToLive] Step 8: NOT_READY - transition started, buffer filling "
-                << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth << ")"
-                << std::endl;
+      // INV-P8-SWITCH-READINESS: NOT_READY (one-shot log, watcher handles completion)
+      std::cout << "[SwitchToLive] INV-P8-SWITCH-READINESS: NOT_READY "
+                << "(video=" << preview_depth_before << ", watcher_spawned=true)" << std::endl;
       EngineResult result(false, "Transition started; mapping locked, waiting for buffer to fill readiness threshold");
       result.error_code = "NOT_READY_TRANSITION_STARTED";
-      result.result_code = ResultCode::kNotReady;  // Transient: don't panic
+      result.result_code = ResultCode::kNotReady;
       return result;
     }
 
     if (preview_depth_before < kMinPreviewVideoDepth) {
-      std::cerr << "[SwitchToLive] BLOCKED: preview video not ready (depth="
-                << preview_depth_before << ", required=" << kMinPreviewVideoDepth
-                << ") - P7-ARCH-003" << std::endl;
+      // Silent - watcher will handle completion
       EngineResult result(false, "SwitchToLive blocked: preview video not ready");
       result.error_code = "NOT_READY_VIDEO";
-      result.result_code = ResultCode::kNotReady;  // Transient: buffer still filling
+      result.result_code = ResultCode::kNotReady;
       return result;
     }
 
-    if (preview_audio_depth < kMinPreviewAudioDepth) {
-      std::cerr << "[SwitchToLive] BLOCKED: preview audio not ready (depth="
-                << preview_audio_depth << ", required=" << kMinPreviewAudioDepth
-                << ") - P7-ARCH-003" << std::endl;
-      EngineResult result(false, "SwitchToLive blocked: preview audio not ready");
-      result.error_code = "NOT_READY_AUDIO";
-      result.result_code = ResultCode::kNotReady;  // Transient: buffer still filling
-      return result;
-    }
+    // Direct completion path (immediate readiness)
+    state->successor_video_emitted_.store(false, std::memory_order_release);
 
-    std::cout << "[SwitchToLive] Readiness check PASSED (video=" << preview_depth_before
-              << ", audio=" << preview_audio_depth << ")" << std::endl;
+    // Capture PTS before redirect (SetInputBuffer resets first_pts).
+    const int64_t first_pts_us = state->program_output ? state->program_output->GetFirstEmittedPTS() : 0;
+    const int64_t last_pts_us = state->program_output ? state->program_output->GetLastEmittedPTS() : 0;
 
-    // Phase 8: Write barrier and BeginSegment already happened during shadow->live transition.
-    // No need to repeat here.
+    MaybeRequestStop(state->live_producer.get());
+    auto old_producer = std::move(state->live_producer);
 
-    // Step 1: Signal old Live producer to stop (non-blocking).
-    // Per Phase 7: Do NOT block on join() - old producer may be stuck in buffer backoff.
-    // Instead, signal stop and let it die naturally. The unique_ptr will be released
-    // after we move preview_producer to live_producer.
-    if (state->live_producer) {
-      std::cout << "[SwitchToLive] Signaling old live producer to stop (non-blocking)..." << std::endl;
-      state->live_producer->ForceStop();  // Sets stop_requested_ immediately
-      // Do NOT call stop() here - it blocks on join() and can deadlock
-      // The old producer will be released when we assign preview_producer to live_producer
-    }
-
-    // Step 2: Redirect ProgramOutput to read from preview's buffer.
-    // Per contract: no draining - old buffer frames are discarded.
-    if (state->program_output && state->preview_ring_buffer) {
-      std::cout << "[SwitchToLive] Redirecting ProgramOutput to preview buffer" << std::endl;
-      state->program_output->SetInputBuffer(state->preview_ring_buffer.get());
-    }
-
-    // Step 3: Swap buffer ownership. After this:
-    // - ring_buffer owns what was preview's buffer (ProgramOutput now reads this)
-    // - preview_ring_buffer owns the old buffer (will be cleared on next LoadPreview)
-    std::swap(state->ring_buffer, state->preview_ring_buffer);
-
-    // Step 4: Phase 7 PTS Continuity - Log alignment info for diagnostics.
-    // Note: AlignPTS was already called when transitioning from shadow mode (above).
-    // This just logs the final values for debugging.
-    int64_t last_emitted_pts = 0;
-    int64_t target_next_pts = 0;
-    if (state->program_output) {
-      last_emitted_pts = state->program_output->GetLastEmittedPTS();
-      if (last_emitted_pts > 0) {
-        double fps = state->program_format.GetFrameRateAsDouble();
-        int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
-        target_next_pts = last_emitted_pts + frame_period_us;
-        std::cout << "[SwitchToLive] Phase 7 PTS alignment: last_pts=" << last_emitted_pts
-                  << " target_next_pts=" << target_next_pts
-                  << " frame_period=" << frame_period_us << "us" << std::endl;
+    // Contract-level observability: AIR_AS_RUN_FRAME_RANGE using retired producer (not live).
+    if (old_producer) {
+      auto stats = old_producer->GetAsRunFrameStats();
+      if (stats) {
+        const int64_t last_frame = stats->start_frame + (stats->frames_emitted > 0
+            ? static_cast<int64_t>(stats->frames_emitted) - 1 : 0);
+        LogAirAsRunFrameRange(channel_id, "", stats->asset_path,
+            stats->start_frame, last_frame, stats->frames_emitted,
+            first_pts_us, last_pts_us, "RETIRE_REQUESTED");
       }
     }
 
-    // Step 5: Promote preview producer to live.
-    // Move old producer to temporary so destructor doesn't block the switch.
-    // The old producer's destructor calls stop() which joins the thread - we do this
-    // in a background thread to avoid blocking the switch.
-    auto old_producer = std::move(state->live_producer);
+    if (state->program_output && state->preview_ring_buffer) {
+      state->program_output->SetInputBuffer(state->preview_ring_buffer.get());
+    }
+
+    std::swap(state->ring_buffer, state->preview_ring_buffer);
+
     state->live_producer = std::move(state->preview_producer);
     state->live_asset_path = state->preview_asset_path;
     state->preview_producer.reset();
     state->preview_asset_path.clear();
 
-    // Clean up old producer in background thread to avoid blocking
     if (old_producer) {
       std::thread([producer = std::move(old_producer)]() mutable {
-        // Destructor will call stop() which joins the thread
         producer.reset();
       }).detach();
     }
 
-    // Clear switch-in-progress guard and stop watcher thread
+    // Clear switch state
     state->switch_in_progress = false;
     state->switch_target_asset.clear();
-    state->switch_watcher_stop.store(true);  // Signal watcher to exit
-    // Note: Don't join here - watcher will exit on its own
+    state->switch_watcher_stop.store(true);
 
-    std::cout << "[SwitchToLive] === SWITCH COMPLETE ===" << std::endl;
-    std::cout << "[SwitchToLive] Now playing: " << state->live_asset_path << std::endl;
+    // INV-P8-SWITCH-READINESS: COMPLETE (direct path)
+    std::cout << "[SwitchToLive] INV-P8-SWITCH-READINESS: COMPLETE "
+              << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
+              << ", asset=" << state->live_asset_path << ")" << std::endl;
+    bool bus_exists = (state->output_bus != nullptr);
+    bool sink_attached = bus_exists && state->output_bus->IsAttached();
+    std::cout << "[DBG-SWITCH] auto_completed=false bus_connected="
+              << (bus_exists ? "yes" : "no")
+              << " sink_attached=" << (sink_attached ? "yes" : "no") << std::endl;
+
+    // INV-P8-SUCCESSOR-OBSERVABILITY: Do not return success until observer confirms
+    // at least one real successor video frame routed. Completion ONLY via observer.
+    constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
+    const auto wait_start = std::chrono::steady_clock::now();
+    PlayoutInstance* state_ptr = state.get();
+    while (!state_ptr->successor_video_emitted_.load(std::memory_order_acquire)) {
+      lock.unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      lock.lock();
+      it = channels_.find(channel_id);
+      if (it == channels_.end() || !it->second) {
+        return EngineResult(false, "Channel " + std::to_string(channel_id) + " lost during switch wait");
+      }
+      state_ptr = it->second.get();
+      if (std::chrono::steady_clock::now() - wait_start > kSuccessorEmitWaitTimeout) {
+        std::cerr << "[SwitchToLive] INV-SWITCH-SUCCESSOR-EMISSION VIOLATION: timeout waiting for successor video emission" << std::endl;
+        return EngineResult(false, "INV-SWITCH-SUCCESSOR-EMISSION: timeout waiting for successor video emission");
+      }
+    }
 
     EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
     result.pts_contiguous = true;
-    result.live_start_pts = target_next_pts;
+    result.live_start_pts = 0;  // Direct completion - no PTS alignment needed
     result.result_code = ResultCode::kOk;
 
     return result;
@@ -1211,7 +1328,18 @@ EngineResult PlayoutEngine::AttachOutputSink(
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " has no OutputBus");
   }
 
+  // INV-P8-SUCCESSOR-OBSERVABILITY: Observer is wired at StartChannel (ProgramOutput).
+  // No sink-specific callback; observation happens when ProgramOutput routes real frames.
+  //
+  // INV-P9-NO-BUS-REPLACEMENT: Always attach to existing bus (state->output_bus).
+  // Bus is created once at StartChannel and never replaced.
+  std::cout << "[AttachOutputSink] channel=" << channel_id
+            << " bus=" << static_cast<void*>(state->output_bus.get())
+            << " attaching to existing bus" << std::endl;
   auto result = state->output_bus->AttachSink(std::move(sink), replace_existing);
+  std::cout << "[AttachOutputSink] channel=" << channel_id
+            << " result=" << (result.success ? "OK" : "FAIL")
+            << " sink_attached=" << state->output_bus->IsAttached() << std::endl;
   return EngineResult(result.success, result.message);
 }
 
@@ -1232,18 +1360,25 @@ EngineResult PlayoutEngine::DetachOutputSink(int32_t channel_id, bool force) {
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " has no OutputBus (idempotent)");
   }
 
+  // INV-P8-SUCCESSOR-OBSERVABILITY: Observer stays attached (owned by ProgramOutput).
+  // Only cleared on StopChannel/EndSession.
   auto result = state->output_bus->DetachSink(force);
   return EngineResult(result.success, result.message);
 }
 
+// NOTE: Do not call IsOutputSinkAttached() while holding channels_mutex_;
+// use IsOutputSinkAttachedLocked() instead to avoid deadlock.
 bool PlayoutEngine::IsOutputSinkAttached(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
+  return IsOutputSinkAttachedLocked(channel_id);
+}
 
+bool PlayoutEngine::IsOutputSinkAttachedLocked(int32_t channel_id) const {
+  // Caller must hold channels_mutex_
   auto it = channels_.find(channel_id);
   if (it == channels_.end() || !it->second || !it->second->output_bus) {
     return false;
   }
-
   return it->second->output_bus->IsAttached();
 }
 
@@ -1269,7 +1404,7 @@ std::optional<ProgramFormat> PlayoutEngine::GetProgramFormat(int32_t channel_id)
   return it->second->program_format;
 }
 
-void PlayoutEngine::ConnectRendererToOutputBus(int32_t channel_id) {
+void PlayoutEngine::FinalizeLiveOutput(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
   auto it = channels_.find(channel_id);
@@ -1278,10 +1413,27 @@ void PlayoutEngine::ConnectRendererToOutputBus(int32_t channel_id) {
   }
 
   auto& state = it->second;
-  if (state->program_output && state->output_bus) {
-    state->program_output->SetOutputBus(state->output_bus.get());
-    std::cout << "[PlayoutEngine] Renderer connected to OutputBus for channel " << channel_id << std::endl;
+
+  // INV-P9-NO-BUS-REPLACEMENT: OutputBus is created once at StartChannel, never replaced.
+  // Do NOT create a new bus here; use the existing one from channel state.
+  if (!state->output_bus) {
+    std::cout << "[FinalizeLiveOutput] channel=" << channel_id
+              << " no OutputBus (control_surface_only or not yet started)" << std::endl;
+    return;
   }
+
+  if (state->program_output) {
+    state->program_output->SetOutputBus(state->output_bus.get());
+    bool attached = state->output_bus->IsAttached();
+    std::cout << "[FinalizeLiveOutput] channel=" << channel_id
+              << " bus=" << static_cast<void*>(state->output_bus.get())
+              << " sink_attached=" << attached
+              << " (INV-P9-SINK-LIVENESS: must remain true until Detach/Stop)" << std::endl;
+  }
+}
+
+void PlayoutEngine::ConnectRendererToOutputBus(int32_t channel_id) {
+  FinalizeLiveOutput(channel_id);
 }
 
 void PlayoutEngine::DisconnectRendererFromOutputBus(int32_t channel_id) {

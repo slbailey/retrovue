@@ -217,15 +217,28 @@ namespace retrovue
     {
       const int32_t channel_id = request->channel_id();
       const std::string &asset_path = request->asset_path();
-      const int64_t start_offset_ms = request->start_offset_ms();
-      const int64_t hard_stop_time_ms = request->hard_stop_time_ms();
+      // Frame-indexed execution (INV-FRAME-001/002/003)
+      const int64_t start_frame = request->start_frame();
+      const int64_t frame_count = request->frame_count();
+      const int32_t fps_numerator = request->fps_numerator();
+      const int32_t fps_denominator = request->fps_denominator();
+
+      // INV-FRAME-003: Reject if fps not provided (denominator 0 is invalid)
+      if (fps_denominator <= 0) {
+        response->set_success(false);
+        response->set_message("INV-FRAME-003 violation: fps_denominator must be > 0");
+        response->set_result_code(RESULT_CODE_PROTOCOL_VIOLATION);
+        std::cout << "[LoadPreview] Rejected: fps_denominator=" << fps_denominator << std::endl;
+        return grpc::Status::OK;
+      }
 
       std::cout << "[LoadPreview] Request received: channel_id=" << channel_id
                 << ", asset_path=" << asset_path
-                << ", start_offset_ms=" << start_offset_ms
-                << ", hard_stop_time_ms=" << hard_stop_time_ms << std::endl;
+                << ", start_frame=" << start_frame
+                << ", frame_count=" << frame_count
+                << ", fps=" << fps_numerator << "/" << fps_denominator << std::endl;
 
-      auto result = interface_->LoadPreview(channel_id, asset_path, start_offset_ms, hard_stop_time_ms);
+      auto result = interface_->LoadPreview(channel_id, asset_path, start_frame, frame_count, fps_numerator, fps_denominator);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -248,6 +261,7 @@ namespace retrovue
                                                   const SwitchToLiveRequest *request,
                                                   SwitchToLiveResponse *response)
     {
+      std::cout << "[DBG-SWITCH] enter SwitchToLive" << std::endl;
       const int32_t channel_id = request->channel_id();
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
@@ -263,68 +277,73 @@ namespace retrovue
       if (!result.success) {
         std::cout << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
                   << static_cast<int>(result.result_code) << ")" << std::endl;
+        std::cout << "[DBG-SWITCH] returning" << std::endl;
         return grpc::Status::OK;
       }
 
-      // Phase 9.0: Create and attach MpegTSOutputSink on first SwitchToLive (if stream attached)
+      // INV-FINALIZE-LIVE: Create sink (if FD exists), attach, wire program_output
+      // Same path for normal completion and watcher auto-completion.
+      std::cout << "[DBG-SWITCH] about to lock" << std::endl;
       {
         std::lock_guard<std::mutex> lock(stream_mutex_);
-        auto it = stream_states_.find(channel_id);
-        if (it != stream_states_.end() && it->second && it->second->fd >= 0)
-        {
-          StreamState* state = it->second.get();
-
-          // Only create sink if not in control_surface_only mode and sink not yet attached
-          // Query engine for sink attachment state (gRPC doesn't track output runtime state)
-          if (!control_surface_only_ && !interface_->IsOutputSinkAttached(channel_id))
-          {
-            std::optional<std::string> path = interface_->GetLiveAssetPath(channel_id);
-            if (path && !path->empty())
-            {
-              // Create MpegTSOutputSink with encoding config from ProgramFormat
-              auto program_format_opt = interface_->GetProgramFormat(channel_id);
-              if (!program_format_opt) {
-                std::cerr << "[SwitchToLive] Failed to get ProgramFormat for channel " << channel_id << std::endl;
-                return grpc::Status::OK;
-              }
-              
-              const auto& program_format = *program_format_opt;
-              playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
-              config.stub_mode = false;
-              config.persistent_mux = false;  // Resend headers at keyframes for late-joining clients
-              config.target_fps = program_format.GetFrameRateAsDouble();
-              config.target_width = program_format.video.width;
-              config.target_height = program_format.video.height;
-              config.bitrate = 5000000;
-              config.gop_size = 30;
-
-              std::string sink_name = "channel-" + std::to_string(channel_id) + "-mpeg-ts";
-              auto sink = std::make_unique<output::MpegTSOutputSink>(
-                  state->fd, config, sink_name);
-
-              // Attach sink via engine's OutputBus (engine owns sink lifecycle)
-              auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink), false);
-              if (attach_result.success)
-              {
-                std::cout << "[SwitchToLive] MpegTSOutputSink attached for channel " << channel_id << std::endl;
-
-                // Connect program output to OutputBus so frames flow to the sink
-                interface_->ConnectRendererToOutputBus(channel_id);
-                std::cout << "[SwitchToLive] Program output connected to OutputBus for channel " << channel_id << std::endl;
-              }
-              else
-              {
-                std::cerr << "[SwitchToLive] Failed to attach sink: " << attach_result.message << std::endl;
-              }
-            }
-          }
-        }
+        std::cout << "[DBG-SWITCH] lock acquired" << std::endl;
+        TryAttachSinkForChannel(channel_id);
       }
 
       std::cout << "[SwitchToLive] Channel " << channel_id
                 << " switch " << (result.success ? "succeeded" : "failed")
                 << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous << std::endl;
+      std::cout << "[DBG-SWITCH] returning" << std::endl;
       return grpc::Status::OK;
+    }
+
+    void PlayoutControlImpl::TryAttachSinkForChannel(int32_t channel_id)
+    {
+      // Requires stream_mutex_ held
+      auto it = stream_states_.find(channel_id);
+      if (it == stream_states_.end() || !it->second || it->second->fd < 0)
+        return;
+
+      StreamState* state = it->second.get();
+
+      if (control_surface_only_ || interface_->IsOutputSinkAttached(channel_id))
+        return;
+
+      std::optional<std::string> path = interface_->GetLiveAssetPath(channel_id);
+      if (!path || path->empty())
+        return;
+
+      auto program_format_opt = interface_->GetProgramFormat(channel_id);
+      if (!program_format_opt) {
+        std::cerr << "[TryAttachSinkForChannel] Failed to get ProgramFormat for channel "
+                  << channel_id << std::endl;
+        return;
+      }
+
+      const auto& program_format = *program_format_opt;
+      playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
+      config.stub_mode = false;
+      config.persistent_mux = false;
+      config.target_fps = program_format.GetFrameRateAsDouble();
+      config.target_width = program_format.video.width;
+      config.target_height = program_format.video.height;
+      config.bitrate = 5000000;
+      config.gop_size = 30;
+
+      std::string sink_name = "channel-" + std::to_string(channel_id) + "-mpeg-ts";
+      auto sink = std::make_unique<output::MpegTSOutputSink>(state->fd, config, sink_name);
+
+      auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink), false);
+      if (attach_result.success) {
+        std::cout << "[TryAttachSinkForChannel] MpegTSOutputSink attached for channel "
+                  << channel_id << std::endl;
+        interface_->ConnectRendererToOutputBus(channel_id);
+        std::cout << "[TryAttachSinkForChannel] INV-FINALIZE-LIVE: output wired for channel "
+                  << channel_id << std::endl;
+      } else {
+        std::cerr << "[TryAttachSinkForChannel] Failed to attach: " << attach_result.message
+                  << std::endl;
+      }
     }
 
     void PlayoutControlImpl::DetachStreamLocked(int32_t channel_id, bool force)
@@ -446,6 +465,9 @@ namespace retrovue
       }
 
       stream_states_[channel_id] = std::move(state);
+
+      // INV-FINALIZE-LIVE: Late attach path — if channel is already live, wire sink now
+      TryAttachSinkForChannel(channel_id);
 
       response->set_success(true);
       response->set_message("Attached");

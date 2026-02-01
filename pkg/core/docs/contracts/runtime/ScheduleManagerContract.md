@@ -55,32 +55,74 @@ Different channels MAY have different grid sizes and configurations.
 
 ### PlayoutSegment
 
-A single file to play with timing information.
+A single file to play with frame-accurate boundaries.
 
-A PlayoutSegment represents a time-bounded playback instruction. In later phases, segments may reference partial assets, concatenations, or synthesized outputs.
+A PlayoutSegment represents a **frame-bounded** playback instruction. Schedule remains time-based (CT/UTC), but execution is frame-indexed. This enables frame-accurate editorial cuts and deterministic padding. See [INV-FRAME-001](../../../../air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md).
 
 ```python
+from fractions import Fraction
+
 @dataclass
 class PlayoutSegment:
+    # Schedule context (time-based, for Core planning)
     start_utc: datetime       # When this segment starts (wall clock)
     end_utc: datetime         # When this segment ends (wall clock)
-    file_path: str            # Path to the media file
-    seek_offset_seconds: float = 0.0  # Where to start in the file
+
+    # Execution specification (frame-based, for Air execution)
+    file_path: str            # Path to the media file (None for padding)
+    start_frame: int          # First frame index within asset
+    frame_count: int          # Exact number of frames to play
+    fps: Fraction             # Exact frame rate, e.g. Fraction(30000, 1001)
+
+    # Padding control
+    segment_type: Literal["content", "filler", "padding"] = "content"
+    allows_padding: bool = False  # Whether padding may follow this segment
+
+    # Derived (for compatibility, not authoritative)
+    @property
+    def seek_offset_seconds(self) -> float:
+        """Derived from start_frame for backward compatibility."""
+        return float(self.start_frame * self.fps.denominator / self.fps.numerator)
+
+    @property
+    def duration_seconds(self) -> float:
+        """Derived from frame_count, not authoritative."""
+        return float(self.frame_count * self.fps.denominator / self.fps.numerator)
 ```
+
+**INV-SM-FRAME-001:** Time fields (`start_utc`, `end_utc`) are for schedule planning. Frame fields (`start_frame`, `frame_count`, `fps`) are authoritative for execution. Air executes frame counts; CT is derived from frame index.
 
 ### ProgramBlock (Phase 0 Only)
 
 > **NOTE:** `ProgramBlock` is a Phase 0 abstraction representing one grid slot's worth of playout. In later phases, this type may be replaced or wrapped by continuous playlog segments that are not grid-bounded. Do not build dependencies on grid-bounded semantics beyond Phase 0.
 
-A complete program unit bounded by grid boundaries.
+A complete program unit bounded by grid boundaries, with frame-accurate execution.
 
 ```python
 @dataclass
 class ProgramBlock:
+    # Schedule boundaries (time-based)
     block_start: datetime     # Grid boundary start (e.g., 9:00:00)
     block_end: datetime       # Grid boundary end (e.g., 9:30:00)
+
+    # Execution specification (frame-based)
     segments: list[PlayoutSegment]  # Ordered list of segments
+    fps: Fraction             # Channel frame rate
+    padding_frames: int = 0   # Black frames at block end for grid alignment
+
+    @property
+    def total_frames(self) -> int:
+        """Total frames including content and padding."""
+        return sum(s.frame_count for s in self.segments) + self.padding_frames
+
+    @property
+    def grid_frames(self) -> int:
+        """Expected frames for this grid slot."""
+        duration = (self.block_end - self.block_start).total_seconds()
+        return int(duration * self.fps)
 ```
+
+**INV-SM-FRAME-002:** `padding_frames` is computed by Core as `grid_frames - content_frames`. Air executes exactly this many black frames. See [INV-FRAME-002](../../../../air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md).
 
 ### Terminology Note
 
@@ -262,6 +304,318 @@ GIVEN a ProgramBlock
 THEN main_show segment duration MUST equal main_show_duration_seconds
 AND main_show MUST NOT be truncated
 ```
+
+### INV-SCHED-GRID-FILLER-PADDING: Deterministic Filler Frame Budget
+
+**Status:** Authoritative (frame-based execution)
+
+Filler is deterministic padding, not looping content. For every grid block:
+
+```
+frames(program_content) + frames(filler) == grid_block_frames
+```
+
+Where:
+- `grid_block_frames` is fixed by the schedule (e.g., 60s @ 30fps = 1800 frames)
+- Program content may under-run the block
+- Filler pads the remaining frames exactly
+
+**Required Semantics:**
+
+1. **Filler is deterministic padding**
+   - Filler is NOT looping content
+   - Filler is NOT a continuous channel
+   - Filler is NOT governed by EOF semantics of normal assets
+   - EOF after `frame_count` frames is expected and successful
+
+2. **Filler always starts at frame 0**
+   - No carry-over state from previous filler usage
+   - No resume behavior
+   - No dependency on previous grid blocks
+
+3. **Filler has an explicit frame budget**
+   - Filler MUST be instantiated with:
+     ```
+     start_frame = 0
+     frame_count = grid_block_frames - program_frames_emitted
+     ```
+   - Producer emits exactly `frame_count` frames, then reports EOF
+   - This EOF is SUCCESS, not an error
+
+4. **Filler must NOT rely on output safety rails**
+   - Safety rails (black frames, silence injection, padding) are for:
+     - Violations
+     - Mis-scheduling
+     - Fault tolerance
+   - Safety rails MUST NOT be part of normal filler operation
+
+5. **Grid boundary is authoritative**
+   - Grid boundaries define segment termination
+   - NOT asset EOF
+   - NOT producer exhaustion
+   - NOT output sink state
+
+**Architectural Placement:**
+
+This invariant belongs in scheduling/planning (Core), not in:
+- FileProducer (AIR)
+- TimelineController (AIR)
+- Output safety rails (AIR)
+
+Correct ownership:
+```
+Schedule → ScheduleItem → PlannedSegment(frame_count)
+```
+
+Playout (AIR) executes this plan; it does not infer it.
+
+**Enforcement (CRITICAL):**
+
+1. **`frame_count >= 0` is mandatory for filler segments**
+   - `frame_count=-1` means "play until EOF" which is non-deterministic
+   - Filler duration depends on file length, not schedule intent
+   - CORE MUST reject `frame_count < 0` at plan build time AND at LoadPreview time
+
+2. **CORE MUST calculate filler frame budget explicitly:**
+   ```
+   filler_frames_needed = grid_block_frames - content_frames_emitted
+   ```
+
+3. **Filler looping by segmentation:**
+   If the filler asset cannot supply `filler_frames_needed` frames from `start_frame`,
+   CORE MUST expand filler into multiple segments that total exactly the needed frames:
+   ```
+   Example: filler_needed=1800, filler_file_total=900, start_frame=687
+
+   → segments:
+     filler.mp4 start=687 count=213  (remaining from start_frame)
+     filler.mp4 start=0   count=900  (full loop)
+     filler.mp4 start=0   count=687  (partial to complete budget)
+   ```
+   This preserves "avoid repeating first seconds" behavior while guaranteeing
+   deterministic frame counts.
+
+4. **Validation at LoadPreview time:**
+   - If `frame_count < 0` for a filler segment, reject with error
+   - If `frame_count > remaining_file_frames`, log warning (AIR may pad as last resort)
+
+**Non-Responsibility Clause:**
+
+This invariant guarantees frame budget correctness at schedule time.
+It does NOT guarantee runtime availability or readiness of filler frames.
+Runtime readiness is governed by [INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION](#inv-playout-switch-before-exhaustion-runtime).
+
+**Verification:**
+
+```
+GIVEN a ProgramBlock with segments
+THEN SUM(segment.frame_count for segment in block.segments) + block.padding_frames
+     == grid_block_frames
+```
+
+**Why Frame-Based Execution Exposed This:**
+
+Frame-based execution eliminates timing slack that previously masked violations:
+- Time-based pacing had tolerance windows
+- Filler could loop 2.1x and get cut mid-frame — nobody noticed
+- Grid boundaries were "soft" (~60.02s ≈ 60s)
+
+With frame-indexed execution:
+- Grid block = exactly N frames, not "about M seconds"
+- Filler loop count becomes non-deterministic (depends on decode timing)
+- EOF semantics matter: is EOF at frame 899 an error or success?
+
+The frame model requires explicit answers that time-based execution papered over.
+
+### INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION: CT-Domain Switching
+
+**Status:** Authoritative (runtime execution)
+
+CORE must ensure the successor segment is promoted to live no later than `ct_exhaust_us - switch_lead_us`.
+
+**Problem Statement:**
+
+CORE's switching decision was historically based on *intended* segment end time (grid boundary).
+But the live producer ends at *actual* segment exhaustion (EOF or frame_count reached).
+The system lacked a rule that actual exhaustion overrides intended timing.
+
+**CT-Domain Scheduling (no UTC conversions):**
+
+Each segment tracks:
+- `ct_start_us`: when segment began in CT domain
+- `frame_count`: explicit frame budget (>= 0, never -1)
+- `frame_duration_us`: derived from fps (e.g., 33333us for 30fps)
+
+Compute exhaustion point:
+```
+ct_exhaust_us = ct_start_us + (frame_count * frame_duration_us)
+```
+
+Derive switch thresholds (in CT domain):
+```
+ct_preload_us = ct_exhaust_us - preload_lead_us
+ct_switch_us  = ct_exhaust_us - switch_lead_us
+```
+
+The tick loop compares `current_ct_us` against these CT thresholds.
+**No epoch/wall-clock conversions needed.** This matches the MasterClock / single time authority model.
+
+**Required Guarantees:**
+
+1. **Preload triggered by CT threshold**
+   - When `current_ct_us >= ct_preload_us`, call `LoadPreview()` for successor
+   - `preload_lead_us` must be sufficient for gRPC latency + producer init + buffer filling
+
+2. **Switch triggered by CT threshold**
+   - When `current_ct_us >= ct_switch_us`, call `SwitchToLive()`
+   - `switch_lead_us` should be small (e.g., 100ms = 100000us)
+
+3. **Exhaustion overrides intended timing**
+   - If segment reaches EOF before `ct_exhaust_us` (e.g., file was shorter than expected),
+     actual exhaustion overrides intended timing
+   - See INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY for emergency handling
+
+**Invariant Violation Detection:**
+
+```
+IF current_ct_us > ct_exhaust_us AND switch_to_live() returns NOT_READY
+THEN LOG "INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION VIOLATION:
+          Channel {id} CT exhaustion passed without successor ready.
+          ct_exhaust_us={us}, current_ct_us={us}, delta_us={us}"
+```
+
+**Diagnostic Logging (each tick):**
+
+```
+[segment_id={id}] ct_now={us} ct_exhaust={us} time_to_exhaust={us} successor_loaded={bool} preview_ready={bool}
+```
+
+**Relationship to Other Invariants:**
+
+- Depends on: INV-SCHED-GRID-FILLER-PADDING (frame budget must be explicit)
+- Supplements: INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY (emergency fast-path)
+
+### INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY: Emergency Fast-Path
+
+**Status:** Authoritative (runtime safety)
+
+If AIR is emitting pad frames (BUFFER_TRULY_EMPTY) and preview has frames ready,
+CORE must call `SwitchToLive()` immediately.
+
+**Rationale:**
+
+Even with perfect budgeting, real systems encounter oddities:
+- Short files (asset shorter than metadata claimed)
+- Truncated assets (incomplete downloads)
+- Decode aborts (codec errors)
+
+Black frames are a **safety rail for violations**, not a pacing mechanism.
+This invariant ensures that if something goes wrong, recovery is immediate when possible.
+
+**Required Behavior:**
+
+```
+IF AIR reports live_buffer_empty=true
+AND preview_buffer_ready=true
+THEN CORE MUST call SwitchToLive() immediately
+     (even if ct_switch_us hasn't been reached)
+```
+
+**Implementation:**
+
+CORE should query AIR for buffer state OR receive a callback/signal when:
+- Live buffer becomes empty (BUFFER_TRULY_EMPTY)
+- Preview buffer becomes ready
+
+When both conditions are true simultaneously, bypass normal CT-threshold switching
+and execute immediate switch.
+
+**Diagnostic Logging:**
+
+```
+[EMERGENCY SWITCH] Channel {id}: live-starved + preview-ready.
+  Switching immediately. ct_now={us}, ct_switch_scheduled={us}, early_by={us}
+```
+
+**Relationship to Other Invariants:**
+
+- Safety net for: INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION
+- Turns pad frames into: true safety rail (not continuity mechanism)
+- Does NOT excuse: violations of INV-SCHED-GRID-FILLER-PADDING
+
+### INV-PREVIEW-NEVER-EMPTY: Preview Starvation is a CORE Violation
+
+**Status:** Authoritative (CORE responsibility)
+
+**CORE must ensure that AIR's preview buffer always has a segment loaded before
+the current live segment exhausts.** Preview starvation (BUFFER_TRULY_EMPTY with
+no preview ready) is a CORE invariant violation, NOT an AIR fallback condition.
+
+**Hard Invariant:**
+
+```
+AIR treats all segments equally.
+From AIR's POV, filler is just another segment.
+AIR only emits black frames when:
+  - Live output has no frames AND
+  - Preview has no frames
+AIR must NEVER be responsible for loading, requesting, or reasoning about filler.
+```
+
+**CORE Responsibilities (non-negotiable):**
+
+1. **CORE must ensure that some playable segment (program OR filler) is always
+   loaded into preview before it is needed.**
+
+2. **CORE must never allow the output pipeline to reach a state where preview
+   is empty during scheduled playout.**
+
+3. **Grid padding, filler timing, and continuity are CORE concerns only.**
+
+**Root Cause of Violations:**
+
+Preview starvation occurs when:
+- ScheduleService fails to return successor segment metadata (end_time_utc, frame_count)
+- tick() cannot determine when to preload (exits early if _segment_end_time_utc is None)
+- Filler is never loaded into preview before program ends
+
+**Required ScheduleService Behavior:**
+
+ScheduleService implementations MUST return:
+1. **Complete block structure:** Both current AND successor segments
+2. **Segment timing:** `end_time_utc` for each segment (required for preload scheduling)
+3. **Frame budget:** `frame_count` for each segment (required for CT-domain exhaustion)
+4. **Segment type:** `segment_type` field ("content" or "filler")
+
+Example response when querying during program segment:
+```python
+[
+    {"asset_path": "program.mp4", "end_time_utc": "...", "segment_type": "content", ...},
+    {"asset_path": "filler.mp4", "end_time_utc": "...", "segment_type": "filler", ...}
+]
+```
+
+This allows tick() to see the successor and preload it 3 seconds before the boundary.
+
+**Diagnostic Logging:**
+
+```
+[PREVIEW STARVATION] Channel {id}: live exhausted with no preview ready.
+  This is a CORE scheduling failure, not an AIR condition.
+  ScheduleService must return successor segment with end_time_utc.
+```
+
+**What This Invariant Does NOT Cover:**
+
+- AIR internal buffer management (AIR's concern)
+- Decode timing or buffer fill rates (AIR's concern)
+- Frame rate conversion or timing correction (AIR's concern)
+
+**Relationship to Other Invariants:**
+
+- Root cause of: INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY triggers
+- Depends on: INV-SCHED-GRID-FILLER-PADDING (filler has explicit frame budget)
+- Depends on: INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION (preload timing)
 
 ### INV-SM-006: Jump-In Anywhere
 

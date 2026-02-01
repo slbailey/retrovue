@@ -179,6 +179,21 @@ uint64_t TimelineController::GetSegmentCommitGeneration() const {
   return segment_commit_generation_;
 }
 
+void TimelineController::SetEmissionObserverAttached(bool attached) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  emission_observer_attached_ = attached;
+}
+
+void TimelineController::NotifySuccessorVideoEmitted() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!commit_pending_successor_emission_) return;
+  commit_pending_successor_emission_ = false;
+  segment_commit_generation_++;
+  std::cout << "[TimelineController] INV-SWITCH-SUCCESSOR-EMISSION: Segment "
+            << current_segment_id_ << " commit_gen=" << segment_commit_generation_
+            << " (successor video emitted)" << std::endl;
+}
+
 // ============================================================================
 // Frame Admission
 // ============================================================================
@@ -228,16 +243,22 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
     // INV-P8-SEGMENT-COMMIT: This segment now owns the timeline
     current_segment_id_ = committed_segment_id;
 
-    // INV-P8-SEGMENT-COMMIT-EDGE: Increment generation for edge detection
-    // This is the ONE place where commit generation advances.
-    segment_commit_generation_++;
+    // INV-P8-SUCCESSOR-OBSERVABILITY: commit_gen advances ONLY after observer confirms
+    // at least one real successor video frame. Refuse to commit without observer.
+    if (!emission_observer_attached_) {
+      std::cerr << "[TimelineController] INV-P8-SUCCESSOR-OBSERVABILITY FATAL: Segment "
+                << committed_segment_id << " commit attempted without observer. "
+                << "Observer MUST be registered before segment may commit." << std::endl;
+      std::abort();
+    }
+    commit_pending_successor_emission_ = true;
 
     // Clear pending state - segment is now active
     pending_segment_ = std::nullopt;
 
     std::cout << "[TimelineController] INV-P8-SEGMENT-COMMIT: Segment "
-              << current_segment_id_ << " now owns CT (commit_gen="
-              << segment_commit_generation_ << ")" << std::endl;
+              << current_segment_id_ << " owns CT (commit_gen pending successor emission)"
+              << std::endl;
   }
 
   if (!segment_mapping_) {
@@ -284,28 +305,14 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
   // Check if too late
   if (delta < -config_.late_threshold_us) {
     stats_.frames_rejected_late++;
-    // Enhanced diagnostic logging for debugging segment switching issues
-    std::cerr << "[TimelineController] Frame REJECTED (late): MT=" << media_time_us
-              << ", CT_computed=" << ct_frame_us
-              << ", CT_expected=" << ct_expected_us
-              << ", delta=" << delta << "us"
-              << " | Mapping: CT_start=" << segment_mapping_->ct_segment_start_us
-              << ", MT_start=" << segment_mapping_->mt_segment_start_us
-              << " (check caller for asset path)" << std::endl;
+    // Diagnostic moved to FileProducer (has producer identity and asset path)
     return AdmissionResult::REJECTED_LATE;
   }
 
   // Check if too early
   if (delta > config_.early_threshold_us) {
     stats_.frames_rejected_early++;
-    // Enhanced diagnostic logging for debugging segment switching issues
-    std::cerr << "[TimelineController] Frame REJECTED (early): MT=" << media_time_us
-              << ", CT_computed=" << ct_frame_us
-              << ", CT_expected=" << ct_expected_us
-              << ", delta=" << delta << "us"
-              << " | Mapping: CT_start=" << segment_mapping_->ct_segment_start_us
-              << ", MT_start=" << segment_mapping_->mt_segment_start_us
-              << " (check caller for asset path)" << std::endl;
+    // Diagnostic moved to FileProducer (has producer identity and asset path)
     return AdmissionResult::REJECTED_EARLY;
   }
 
@@ -335,6 +342,11 @@ int64_t TimelineController::GetEpoch() const {
 int64_t TimelineController::GetExpectedNextCT() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return ct_cursor_us_ + config_.frame_period_us;
+}
+
+int64_t TimelineController::GetSegmentMTStart() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return segment_mapping_ ? segment_mapping_->mt_segment_start_us : -1;
 }
 
 int64_t TimelineController::GetWallClockDeadline(int64_t ct_us) const {

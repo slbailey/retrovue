@@ -70,7 +70,7 @@ These invariants govern how the TimelineController maps media time (MT) to chann
 
 - **INV-P8-SEGMENT-COMMIT: Explicit segment commit with timeline ownership**
   - When a segment's mapping locks (first frame admitted), that segment **commits** and takes exclusive ownership of CT.
-  - The old segment is dead at this instant and must be closed (ForceStop).
+  - The old segment is dead at this instant and must be closed (RequestStop).
   - Commit is tracked via:
     - `current_segment_id_`: The ID of the segment that owns CT (0 = none).
     - `HasSegmentCommitted()`: Returns true if a segment has committed (state-based).

@@ -7,8 +7,11 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <functional>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/OutputBus.h"
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/runtime/PlayoutEngine.h"
@@ -22,6 +25,69 @@ using namespace retrovue::tests;
 namespace {
 
 using retrovue::tests::RegisterExpectedDomainCoverage;
+
+// =============================================================================
+// TestOutputSink: Modern architecture test sink implementing IOutputSink
+// =============================================================================
+// This sink receives frames through the OutputBus and invokes callbacks for
+// test observation. It replaces the legacy SideSink pattern.
+// =============================================================================
+class TestOutputSink : public output::IOutputSink {
+ public:
+  using VideoCallback = std::function<void(const buffer::Frame&)>;
+  using AudioCallback = std::function<void(const buffer::AudioFrame&)>;
+
+  explicit TestOutputSink(const std::string& name = "test-sink")
+      : name_(name), status_(output::SinkStatus::kIdle) {}
+
+  bool Start() override {
+    status_ = output::SinkStatus::kRunning;
+    return true;
+  }
+
+  void Stop() override {
+    status_ = output::SinkStatus::kStopped;
+  }
+
+  bool IsRunning() const override {
+    return status_ == output::SinkStatus::kRunning;
+  }
+
+  output::SinkStatus GetStatus() const override {
+    return status_;
+  }
+
+  void ConsumeVideo(const buffer::Frame& frame) override {
+    if (video_callback_) {
+      video_callback_(frame);
+    }
+  }
+
+  void ConsumeAudio(const buffer::AudioFrame& audio_frame) override {
+    if (audio_callback_) {
+      audio_callback_(audio_frame);
+    }
+  }
+
+  void SetStatusCallback(output::SinkStatusCallback callback) override {
+    status_callback_ = std::move(callback);
+  }
+
+  std::string GetName() const override {
+    return name_;
+  }
+
+  // Test-specific methods
+  void SetVideoCallback(VideoCallback cb) { video_callback_ = std::move(cb); }
+  void SetAudioCallback(AudioCallback cb) { audio_callback_ = std::move(cb); }
+
+ private:
+  std::string name_;
+  output::SinkStatus status_;
+  output::SinkStatusCallback status_callback_;
+  VideoCallback video_callback_;
+  AudioCallback audio_callback_;
+};
 
 // Default ProgramFormat JSON for tests (1080p30, 48kHz stereo)
 constexpr const char* kDefaultProgramFormatJson = R"({"video":{"width":1920,"height":1080,"frame_rate":"30/1"},"audio":{"sample_rate":48000,"channels":2}})";
@@ -51,7 +117,7 @@ class OutputSwitchingContractTest : public BaseContractTest {
 
 TEST_F(OutputSwitchingContractTest, OS_001_OutputReadsFromExactlyOneBuffer) {
   // This test verifies that after SetInputBuffer, ProgramOutput reads from the new buffer.
-  // We use nullptr clock to disable timing logic and just consume frames as fast as possible.
+  // Uses modern OutputBus architecture with TestOutputSink.
 
   buffer::FrameRingBuffer live_buffer(60);
   buffer::FrameRingBuffer preview_buffer(60);
@@ -75,6 +141,25 @@ TEST_F(OutputSwitchingContractTest, OS_001_OutputReadsFromExactlyOneBuffer) {
 
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
 
+  // Modern architecture: OutputBus + TestOutputSink
+  output::OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("os-001-sink");
+
+  std::atomic<int> live_frames{0};
+  std::atomic<int> preview_frames{0};
+
+  sink->SetVideoCallback([&](const buffer::Frame& frame) {
+    if (frame.metadata.asset_uri == "live://asset") {
+      live_frames++;
+    } else if (frame.metadata.asset_uri == "preview://asset") {
+      preview_frames++;
+    }
+  });
+
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
   // nullptr clock disables timing logic - frames consumed as fast as they arrive
   renderer::RenderConfig config;
   config.mode = renderer::RenderMode::HEADLESS;
@@ -82,16 +167,8 @@ TEST_F(OutputSwitchingContractTest, OS_001_OutputReadsFromExactlyOneBuffer) {
       config, live_buffer, nullptr, metrics, /*channel_id=*/1);
   ASSERT_NE(output, nullptr);
 
-  std::atomic<int> live_frames{0};
-  std::atomic<int> preview_frames{0};
-
-  output->SetSideSink([&](const buffer::Frame& frame) {
-    if (frame.metadata.asset_uri == "live://asset") {
-      live_frames++;
-    } else if (frame.metadata.asset_uri == "preview://asset") {
-      preview_frames++;
-    }
-  });
+  // Connect to OutputBus (modern architecture)
+  output->SetOutputBus(&bus);
 
   ASSERT_TRUE(output->Start());
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -112,6 +189,7 @@ TEST_F(OutputSwitchingContractTest, OS_001_OutputReadsFromExactlyOneBuffer) {
   EXPECT_GT(preview_frames.load(), 0) << "Should consume frames from preview buffer after redirect";
 
   output->Stop();
+  bus.DetachSink(/*force=*/true);
 }
 
 // =============================================================================
@@ -136,18 +214,15 @@ TEST_F(OutputSwitchingContractTest, OS_002_HotSwitchIsImmediate) {
 
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
 
-  // nullptr clock - frames consumed immediately
-  renderer::RenderConfig config;
-  config.mode = renderer::RenderMode::HEADLESS;
-  auto output = renderer::ProgramOutput::Create(
-      config, live_buffer, nullptr, metrics, /*channel_id=*/2);
-  ASSERT_NE(output, nullptr);
+  // Modern architecture: OutputBus + TestOutputSink
+  output::OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("os-002-sink");
 
   std::atomic<bool> saw_preview_frame{false};
   auto switch_time = std::chrono::steady_clock::now();
   std::atomic<int64_t> first_preview_frame_delay_us{0};
 
-  output->SetSideSink([&](const buffer::Frame& frame) {
+  sink->SetVideoCallback([&](const buffer::Frame& frame) {
     if (frame.metadata.asset_uri == "preview://ready" && !saw_preview_frame.load()) {
       saw_preview_frame = true;
       auto now = std::chrono::steady_clock::now();
@@ -155,6 +230,19 @@ TEST_F(OutputSwitchingContractTest, OS_002_HotSwitchIsImmediate) {
           now - switch_time).count();
     }
   });
+
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
+  // nullptr clock - frames consumed immediately
+  renderer::RenderConfig config;
+  config.mode = renderer::RenderMode::HEADLESS;
+  auto output = renderer::ProgramOutput::Create(
+      config, live_buffer, nullptr, metrics, /*channel_id=*/2);
+  ASSERT_NE(output, nullptr);
+
+  output->SetOutputBus(&bus);
 
   ASSERT_TRUE(output->Start());
   // Live buffer is empty, so output waits
@@ -175,6 +263,7 @@ TEST_F(OutputSwitchingContractTest, OS_002_HotSwitchIsImmediate) {
       << "First preview frame should appear within 50ms of switch (immediate)";
 
   output->Stop();
+  bus.DetachSink(/*force=*/true);
 }
 
 // =============================================================================
@@ -205,6 +294,19 @@ TEST_F(OutputSwitchingContractTest, OS_003_PreviewMustHaveFramesBeforeSwitch) {
 
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
 
+  // Modern architecture: OutputBus + TestOutputSink
+  output::OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("os-003-sink");
+
+  std::atomic<int> frames_consumed{0};
+  sink->SetVideoCallback([&](const buffer::Frame&) {
+    frames_consumed++;
+  });
+
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
   // nullptr clock - frames consumed immediately
   renderer::RenderConfig config;
   config.mode = renderer::RenderMode::HEADLESS;
@@ -212,10 +314,7 @@ TEST_F(OutputSwitchingContractTest, OS_003_PreviewMustHaveFramesBeforeSwitch) {
       config, live_buffer, nullptr, metrics, /*channel_id=*/3);
   ASSERT_NE(output, nullptr);
 
-  std::atomic<int> frames_consumed{0};
-  output->SetSideSink([&](const buffer::Frame&) {
-    frames_consumed++;
-  });
+  output->SetOutputBus(&bus);
 
   ASSERT_TRUE(output->Start());
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -228,6 +327,7 @@ TEST_F(OutputSwitchingContractTest, OS_003_PreviewMustHaveFramesBeforeSwitch) {
       << "Should consume pre-loaded frames from preview immediately";
 
   output->Stop();
+  bus.DetachSink(/*force=*/true);
 }
 
 // =============================================================================
@@ -256,12 +356,21 @@ TEST_F(OutputSwitchingContractTest, OS_004_SwitchDoesNotDrainOldBuffer) {
 
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
 
+  // Modern architecture: OutputBus + TestOutputSink
+  output::OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("os-004-sink");
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
   // nullptr clock - frames consumed as fast as possible
   renderer::RenderConfig config;
   config.mode = renderer::RenderMode::HEADLESS;
   auto output = renderer::ProgramOutput::Create(
       config, live_buffer, nullptr, metrics, /*channel_id=*/4);
   ASSERT_NE(output, nullptr);
+
+  output->SetOutputBus(&bus);
 
   ASSERT_TRUE(output->Start());
 
@@ -283,6 +392,7 @@ TEST_F(OutputSwitchingContractTest, OS_004_SwitchDoesNotDrainOldBuffer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
   output->Stop();
+  bus.DetachSink(/*force=*/true);
 }
 
 // =============================================================================
@@ -320,6 +430,22 @@ TEST_F(OutputSwitchingContractTest, OS_005_SwitchOccursOnDecodedFrames) {
 
   auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
 
+  // Modern architecture: OutputBus + TestOutputSink
+  output::OutputBus bus;
+  auto sink = std::make_unique<TestOutputSink>("os-005-sink");
+
+  std::vector<std::string> source_sequence;
+  std::mutex sequence_mutex;
+
+  sink->SetVideoCallback([&](const buffer::Frame& frame) {
+    std::lock_guard<std::mutex> lock(sequence_mutex);
+    source_sequence.push_back(frame.metadata.asset_uri);
+  });
+
+  sink->Start();
+  auto attach_result = bus.AttachSink(std::move(sink));
+  ASSERT_TRUE(attach_result.success) << attach_result.message;
+
   // nullptr clock - frames consumed immediately
   renderer::RenderConfig config;
   config.mode = renderer::RenderMode::HEADLESS;
@@ -327,13 +453,7 @@ TEST_F(OutputSwitchingContractTest, OS_005_SwitchOccursOnDecodedFrames) {
       config, buffer_a, nullptr, metrics, /*channel_id=*/5);
   ASSERT_NE(output, nullptr);
 
-  std::vector<std::string> source_sequence;
-  std::mutex sequence_mutex;
-
-  output->SetSideSink([&](const buffer::Frame& frame) {
-    std::lock_guard<std::mutex> lock(sequence_mutex);
-    source_sequence.push_back(frame.metadata.asset_uri);
-  });
+  output->SetOutputBus(&bus);
 
   ASSERT_TRUE(output->Start());
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -343,6 +463,7 @@ TEST_F(OutputSwitchingContractTest, OS_005_SwitchOccursOnDecodedFrames) {
   std::this_thread::sleep_for(std::chrono::milliseconds(80));
 
   output->Stop();
+  bus.DetachSink(/*force=*/true);
 
   // Verify we got decoded frames from both buffers
   std::lock_guard<std::mutex> lock(sequence_mutex);
@@ -446,7 +567,8 @@ TEST_F(OutputSwitchingContractTest, Integration_FullSwitchCycleViaEngine) {
   ASSERT_TRUE(start_result.success) << start_result.message;
 
   // LoadPreview - in real mode, this creates preview_ring_buffer and starts shadow decode
-  auto load_result = interface->LoadPreview(10, "test://asset.mp4", 0, 0);
+  // Frame-indexed execution (INV-FRAME-001/002/003)
+  auto load_result = interface->LoadPreview(10, "test://asset.mp4", 0, -1, 30, 1);
   ASSERT_TRUE(load_result.success) << load_result.message;
 
   // SwitchToLive - in real mode, this redirects ProgramOutput to preview's buffer

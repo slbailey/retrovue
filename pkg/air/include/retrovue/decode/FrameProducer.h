@@ -85,11 +85,14 @@ class FrameProducer {
   // Initiates a graceful teardown with bounded drain timeout.
   void RequestTeardown(std::chrono::milliseconds drain_timeout);
 
-  // Forces the producer to stop immediately (used when teardown times out).
-  void ForceStop();
+  // Lifecycle: revoke right to publish; wind down (used when teardown times out).
+  void RequestStop();
 
   // Returns true if the producer is currently running.
   bool IsRunning() const { return running_.load(std::memory_order_acquire); }
+
+  // Returns true if the producer has stopped.
+  bool IsStopped() const { return !IsRunning(); }
 
   // Returns the total number of frames produced.
   uint64_t GetFramesProduced() const { 

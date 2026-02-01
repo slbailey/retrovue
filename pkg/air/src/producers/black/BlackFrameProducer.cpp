@@ -35,7 +35,8 @@ BlackFrameProducer::BlackFrameProducer(buffer::FrameRingBuffer& output_buffer,
       state_(State::STOPPED),
       stop_requested_(false),
       frames_produced_(0),
-      next_pts_us_(initial_pts_us) {
+      next_pts_us_(initial_pts_us),
+      target_frame_count_(-1) {  // -1 = unbounded (failsafe mode)
   // Extract video parameters from format
   target_width_ = format_.video.width > 0 ? format_.video.width : 1920;
   target_height_ = format_.video.height > 0 ? format_.video.height : 1080;
@@ -110,6 +111,18 @@ bool BlackFrameProducer::isRunning() const {
   return state_.load(std::memory_order_acquire) == State::RUNNING;
 }
 
+void BlackFrameProducer::RequestStop() {
+  // Idempotent: safe to call multiple times (e.g. SwitchToLive path then watcher).
+  if (stop_requested_.load(std::memory_order_acquire)) {
+    return;
+  }
+  stop_requested_.store(true, std::memory_order_release);
+}
+
+bool BlackFrameProducer::IsStopped() const {
+  return !isRunning();
+}
+
 uint64_t BlackFrameProducer::GetFramesProduced() const {
   return frames_produced_.load(std::memory_order_acquire);
 }
@@ -122,14 +135,52 @@ void BlackFrameProducer::SetInitialPts(int64_t pts_us) {
   next_pts_us_.store(pts_us, std::memory_order_release);
 }
 
+void BlackFrameProducer::SetTargetFrameCount(int64_t frame_count) {
+  target_frame_count_.store(frame_count, std::memory_order_release);
+}
+
+int64_t BlackFrameProducer::GetTargetFrameCount() const {
+  return target_frame_count_.load(std::memory_order_acquire);
+}
+
+bool BlackFrameProducer::IsPaddingComplete() const {
+  int64_t target = target_frame_count_.load(std::memory_order_acquire);
+  if (target < 0) {
+    return false;  // Unbounded mode never "completes"
+  }
+  uint64_t produced = frames_produced_.load(std::memory_order_acquire);
+  return static_cast<int64_t>(produced) >= target;
+}
+
 void BlackFrameProducer::ProduceLoop() {
+  int64_t target = target_frame_count_.load(std::memory_order_acquire);
   std::cout << "[BlackFrameProducer] Started. Format: " << target_width_ << "x"
-            << target_height_ << " @ " << target_fps_ << " fps" << std::endl;
+            << target_height_ << " @ " << target_fps_ << " fps"
+            << ", target_frames=" << (target < 0 ? "unbounded" : std::to_string(target))
+            << std::endl;
 
   while (!stop_requested_.load(std::memory_order_acquire)) {
     if (state_.load(std::memory_order_acquire) != State::RUNNING) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
+    }
+
+    // ==========================================================================
+    // INV-PAD-EXACT-COUNT: Check if structural padding is complete
+    // ==========================================================================
+    // If target_frame_count is set (>= 0), stop after emitting that many frames.
+    // This is structural padding mode (bounded, deterministic).
+    // If target_frame_count is -1, run indefinitely (failsafe mode).
+    // ==========================================================================
+    target = target_frame_count_.load(std::memory_order_acquire);
+    if (target >= 0) {
+      uint64_t produced = frames_produced_.load(std::memory_order_acquire);
+      if (static_cast<int64_t>(produced) >= target) {
+        std::cout << "[BlackFrameProducer] Structural padding complete: "
+                  << produced << "/" << target << " frames (INV-PAD-EXACT-COUNT)"
+                  << std::endl;
+        break;  // Exit loop - structural padding complete
+      }
     }
 
     ProduceBlackFrame();

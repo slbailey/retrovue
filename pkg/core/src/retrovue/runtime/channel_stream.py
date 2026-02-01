@@ -505,3 +505,53 @@ def generate_ts_stream(client_queue: Queue[bytes]) -> Any:
             # Client disconnected
             break
 
+
+async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
+    """
+    INV-IO-DRAIN-REALTIME: Async generator for live TS streaming.
+
+    This async version yields to the event loop between chunks to ensure:
+    - Non-blocking streaming
+    - Backpressure-aware draining
+    - Regular yielding to event loop
+    - Flush-friendly chunk cadence
+    - Clean disconnect semantics
+
+    Args:
+        client_queue: Queue receiving TS chunks from ChannelStream
+
+    Yields:
+        TS data chunks (bytes)
+    """
+    import asyncio
+
+    consecutive_timeouts = 0
+    max_consecutive_timeouts = 20  # 10 seconds at 0.5s timeout
+    loop = asyncio.get_event_loop()
+
+    while True:
+        try:
+            # Use run_in_executor to make the blocking get() async-friendly
+            chunk = await loop.run_in_executor(
+                None,
+                lambda: client_queue.get(timeout=0.1)  # Short timeout for responsiveness
+            )
+            consecutive_timeouts = 0
+            if not chunk:  # EOF signal
+                break
+            yield chunk
+            # Yield to event loop after each chunk for flush opportunity
+            await asyncio.sleep(0)
+        except Empty:
+            consecutive_timeouts += 1
+            if consecutive_timeouts >= max_consecutive_timeouts * 5:  # Adjusted for shorter timeout
+                _logger.debug("generate_ts_stream_async exiting due to timeout")
+                break
+            # Yield to event loop even when queue is empty
+            await asyncio.sleep(0.01)
+            continue
+        except GeneratorExit:
+            break
+        except asyncio.CancelledError:
+            break
+

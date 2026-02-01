@@ -101,15 +101,19 @@ message ApiVersion {
 }
 
 // LoadPreviewRequest carries the next PlayoutSegment into the preview slot.
-// Segment semantics (see Phase 4 contract):
-//   - start_offset_ms: media-relative only, never wall-clock. Air seeks by offset.
-//   - hard_stop_time_ms: authoritative. If present, end_offset/duration never overrides it. Air may stop at or before this time, but must never play past it (encoder latency, PTS rounding, real hardware). Broadcast: <= boundary only.
+// Frame-indexed execution (INV-FRAME-001/002/003):
+//   - start_frame: First frame index within asset (0-based). Air seeks to this frame.
+//   - frame_count: Exact number of frames to play. Air stops after this count.
+//   - fps_numerator/fps_denominator: Frame rate as rational (e.g. 30000/1001 = 29.97fps).
 // SwitchToLive remains unchanged (no segment payload).
+// INVARIANT: Core MUST provide frame-indexed fields. Air rejects requests without them.
 message LoadPreviewRequest {
   int32 channel_id = 1;           // Target channel.
   string asset_path = 2;          // Fully-qualified media file path.
-  int64 start_offset_ms = 3;      // Media-relative start position within the asset (milliseconds). Never wall-clock. Join-in-progress.
-  int64 hard_stop_time_ms = 4;    // Wall-clock time when this segment must stop (epoch milliseconds). Authoritative. Engine may stop at or before this time; must never play past it.
+  int64 start_frame = 3;          // First frame index within asset (0-based). INV-FRAME-001.
+  int64 frame_count = 4;          // Exact number of frames to play. INV-FRAME-002.
+  int32 fps_numerator = 5;        // Frame rate numerator (e.g. 30000 for 29.97fps).
+  int32 fps_denominator = 6;      // Frame rate denominator (e.g. 1001 for 29.97fps).
 }
 
 // LoadPreviewResponse reports the result of loading the preview asset.

@@ -38,6 +38,9 @@ class StubProducer : public retrovue::producers::IProducer {
 
   bool isRunning() const override { return running_.load(); }
 
+  void RequestStop() override { running_.store(false); }
+  bool IsStopped() const override { return !running_.load(); }
+
   const SegmentParams& segmentParams() const { return params_; }
   int startCount() const { return start_count_.load(); }
   int stopCount() const { return stop_count_.load(); }
