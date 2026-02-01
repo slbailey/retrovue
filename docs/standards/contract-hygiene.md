@@ -42,6 +42,33 @@ If the contract references internal names, method signatures, or implementation 
 
 ---
 
+## Phase docs and canonical rule authority
+
+Phase docs (e.g. `docs/archive/phases/*`, `pkg/*/docs/archive/phases/*`) are **historical** and **may not be normative**. Normative authority resides in laws and contracts.
+
+### Policy
+
+1. **Phase docs are historical.** Phase documents record phased development intent and decisions. They MAY contain rules, but those rules are not authoritative unless linked to a canonical source.
+
+2. **Rules in phase docs MUST link to canonical IDs.** Any rule stated in a phase doc MUST include a link to its canonical LAW or CONTRACT id (e.g. `LAW-002`, `AIR-004`, `PE-CTL-002`). Example:
+
+   ```markdown
+   **Rule:** SwitchToLive with no preview loaded MUST return error. See [PlayoutEngineContract PE-CTL-002](../contracts/semantics/PlayoutEngineContract.md#switchtolive).
+   ```
+
+3. **New rules go only to canonical docs.** New rules MUST be added only to canonical docs (laws in `*/*/docs/contracts/laws/`, contracts in `*/*/docs/contracts/`) and referenced from phase docs. Phase docs MUST NOT be the sole source of a new normative rule.
+
+### Document hierarchy
+
+| Layer   | Authority | Location                          |
+|---------|-----------|-----------------------------------|
+| Laws    | Supreme   | `pkg/air/docs/contracts/laws/`    |
+| Contracts| Primary  | `pkg/*/docs/contracts/**`         |
+| Phase docs | Reference | `*/*/docs/archive/phases/*`   |
+| Runbooks| Operational | `*/*/docs/*.md` (non-contract) |
+
+---
+
 ## PR Review Checklist
 
 Before approving any contract change, verify:

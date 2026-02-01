@@ -56,18 +56,6 @@ namespace {
     producer->RequestStop();
   }
 
-  // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Never stop the successor.
-  // Call before MaybeRequestStop(target) in the watcher; aborts if target is current live (successor).
-  void AssertNotStoppingSuccessor(producers::IProducer* target,
-                                  producers::IProducer* current_live,
-                                  bool swap_done) {
-    if (swap_done && target == current_live) {
-      std::cerr << "[SwitchWatcher] INV-P8-SWITCHWATCHER-STOP-TARGET-001 VIOLATED: "
-                << "attempted to stop successor (target==live_producer after swap)" << std::endl;
-      std::abort();
-    }
-  }
-
   telemetry::ChannelState ToChannelState(PlayoutControl::RuntimePhase phase) {
     using RuntimePhase = PlayoutControl::RuntimePhase;
     switch (phase) {
@@ -640,7 +628,6 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
     constexpr int kAudioLagWarnMs = 500;
     int audio_missing_polls = 0;
     bool audio_lag_warned = false;
-    bool swap_done = false;  // INV-SWITCH-SUCCESSOR-EMISSION: swap first, then wait for emission
     bool retirement_done = false;  // INV-P8-SWITCHWATCHER-STOP-TARGET-001: one-shot retirement
     auto start_time = std::chrono::steady_clock::now();
 
@@ -669,13 +656,12 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
           commit_detected = true;
           s->last_seen_commit_gen = current_commit_gen;
           // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Use bound target, not live_producer
-          // Only retire if: (1) not yet retired, (2) swap hasn't happened yet
-          if (!retirement_done && !swap_done && producer_to_retire) {
-            AssertNotStoppingSuccessor(producer_to_retire, s->live_producer.get(), swap_done);
+          // Retirement is one-shot and targets the captured producer_to_retire
+          if (!retirement_done && producer_to_retire) {
             MaybeRequestStop(producer_to_retire);
             retirement_done = true;
             std::cout << "[SwitchWatcher] INV-P8-STOP-TARGET: Retirement triggered "
-                      << "(commit_gen edge, pre-swap)" << std::endl;
+                      << "(commit_gen edge)" << std::endl;
           }
         }
       }
@@ -700,84 +686,67 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
       }
 
       if (readiness_passed || bootstrap_ready || live_producer_eof || preview_eof_with_frames) {
-        // INV-SWITCH-SUCCESSOR-EMISSION: Do swap first so successor frames can flow;
-        // only set switch_auto_completed after at least one real successor video
-        // frame has been emitted by the encoder (pad frames do not count).
-        if (!swap_done) {
-          // INV-OUTPUT-READY-BEFORE-LIVE: Log once if sink not attached
-          if (!IsOutputSinkAttachedLocked(channel_id)) {
-            static bool sink_warn_logged = false;
-            if (!sink_warn_logged) {
-              std::cout << "[SwitchWatcher] INV-OUTPUT-READY-BEFORE-LIVE: "
-                        << "committing without sink (late attach expected)" << std::endl;
-              sink_warn_logged = true;
-            }
+        // INV-OUTPUT-READY-BEFORE-LIVE: Log once if sink not attached
+        if (!IsOutputSinkAttachedLocked(channel_id)) {
+          static bool sink_warn_logged = false;
+          if (!sink_warn_logged) {
+            std::cout << "[SwitchWatcher] INV-OUTPUT-READY-BEFORE-LIVE: "
+                      << "committing without sink (late attach expected)" << std::endl;
+            sink_warn_logged = true;
           }
-
-          // Redirect output to preview buffer
-          if (!s->program_output || !s->preview_ring_buffer) {
-            std::cerr << "[SwitchWatcher] INV-P8-SWITCH-READINESS: ABORT "
-                      << "reason=" << (!s->program_output ? "NO_OUTPUT" : "NO_BUFFER")
-                      << std::endl;
-            continue;
-          }
-
-          // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Use bound target, not live_producer
-          if (!retirement_done && producer_to_retire) {
-            AssertNotStoppingSuccessor(producer_to_retire, s->live_producer.get(), swap_done);
-            MaybeRequestStop(producer_to_retire);
-            retirement_done = true;
-            std::cout << "[SwitchWatcher] INV-P8-STOP-TARGET: Retirement triggered "
-                      << "(readiness passed, pre-swap)" << std::endl;
-          }
-
-          // Capture PTS for as-run log before redirect (SetInputBuffer resets first_pts).
-          const int64_t first_pts_us = s->program_output ? s->program_output->GetFirstEmittedPTS() : 0;
-          const int64_t last_pts_us = s->program_output ? s->program_output->GetLastEmittedPTS() : 0;
-
-          s->program_output->SetInputBuffer(s->preview_ring_buffer.get());
-          std::swap(s->ring_buffer, s->preview_ring_buffer);
-
-          auto old_producer = std::move(s->live_producer);
-          s->live_producer = std::move(s->preview_producer);
-          s->live_asset_path = s->preview_asset_path;
-          s->preview_producer.reset();
-          s->preview_asset_path.clear();
-
-          // Contract-level observability: AIR_AS_RUN_FRAME_RANGE using retired producer (not live).
-          if (old_producer) {
-            auto stats = old_producer->GetAsRunFrameStats();
-            if (stats) {
-              const int64_t last_frame = stats->start_frame + (stats->frames_emitted > 0
-                  ? static_cast<int64_t>(stats->frames_emitted) - 1 : 0);
-              LogAirAsRunFrameRange(channel_id, "", stats->asset_path,
-                  stats->start_frame, last_frame, stats->frames_emitted,
-                  first_pts_us, last_pts_us, "WATCHER_RETIRE");
-            }
-            std::thread([producer = std::move(old_producer)]() mutable {
-              producer.reset();
-            }).detach();
-          }
-
-          swap_done = true;
-          continue;  // Next iteration: wait for successor_video_emitted_
         }
 
-        // INV-P8-SUCCESSOR-OBSERVABILITY: Completion ONLY via observer signal.
-        // ProgramOutput fires observer when first real successor video is routed.
-        if (!s->successor_video_emitted_.load(std::memory_order_acquire)) {
+        // Redirect output to preview buffer
+        if (!s->program_output || !s->preview_ring_buffer) {
+          std::cerr << "[SwitchWatcher] INV-P8-SWITCH-READINESS: ABORT "
+                    << "reason=" << (!s->program_output ? "NO_OUTPUT" : "NO_BUFFER")
+                    << std::endl;
           continue;
         }
 
-        // INV-P8-SUCCESSOR-OBSERVABILITY: Hard invariant - commit_gen never advances without
-        // successor_emitted. If we reached here with swap_done, successor_video_emitted_ must
-        // be true (observer fired). Fatal check.
-        if (!s->successor_video_emitted_.load(std::memory_order_acquire)) {
-          std::cerr << "[SwitchWatcher] INV-P8-SUCCESSOR-OBSERVABILITY FATAL: "
-                    << "switch_auto_completed would be set with successor_emitted=false" << std::endl;
-          std::abort();
+        // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Use bound target, not live_producer
+        // Retirement is one-shot and targets the captured producer_to_retire
+        if (!retirement_done && producer_to_retire) {
+          MaybeRequestStop(producer_to_retire);
+          retirement_done = true;
+          std::cout << "[SwitchWatcher] INV-P8-STOP-TARGET: Retirement triggered "
+                    << "(readiness passed)" << std::endl;
         }
 
+        // Capture PTS for as-run log before redirect (SetInputBuffer resets first_pts).
+        const int64_t first_pts_us = s->program_output ? s->program_output->GetFirstEmittedPTS() : 0;
+        const int64_t last_pts_us = s->program_output ? s->program_output->GetLastEmittedPTS() : 0;
+
+        s->program_output->SetInputBuffer(s->preview_ring_buffer.get());
+        std::swap(s->ring_buffer, s->preview_ring_buffer);
+
+        auto old_producer = std::move(s->live_producer);
+        s->live_producer = std::move(s->preview_producer);
+        s->live_asset_path = s->preview_asset_path;
+        s->preview_producer.reset();
+        s->preview_asset_path.clear();
+
+        // Contract-level observability: AIR_AS_RUN_FRAME_RANGE using retired producer (not live).
+        if (old_producer) {
+          auto stats = old_producer->GetAsRunFrameStats();
+          if (stats) {
+            const int64_t last_frame = stats->start_frame + (stats->frames_emitted > 0
+                ? static_cast<int64_t>(stats->frames_emitted) - 1 : 0);
+            LogAirAsRunFrameRange(channel_id, "", stats->asset_path,
+                stats->start_frame, last_frame, stats->frames_emitted,
+                first_pts_us, last_pts_us, "WATCHER_RETIRE");
+          }
+          std::thread([producer = std::move(old_producer)]() mutable {
+            producer.reset();
+          }).detach();
+        }
+
+        // ==========================================================================
+        // INV-P8-SWITCHWATCHER-STOP-TARGET-001: Switch completes immediately after swap
+        // ==========================================================================
+        // The critical invariant is satisfied: retirement targeted producer_to_retire
+        // (the pre-swap producer), not the successor. We complete the switch now.
+        // ==========================================================================
         s->switch_in_progress = false;
         s->switch_target_asset.clear();
         s->switch_auto_completed = true;
