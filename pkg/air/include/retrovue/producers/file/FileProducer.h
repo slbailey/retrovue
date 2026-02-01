@@ -45,6 +45,7 @@ namespace retrovue::producers::file
   };
 
   // ProducerConfig holds configuration for file producer (Phase 6A.2 segment params).
+  // INV-FRAME-001: Segment boundaries are frame-indexed, not time-derived.
   struct ProducerConfig
   {
     std::string asset_uri;       // URI or path to video file
@@ -53,8 +54,14 @@ namespace retrovue::producers::file
     double target_fps;           // Target frames per second (e.g., 30.0)
     bool stub_mode;              // If true, generate fake frames instead of decoding
     int tcp_port;                // TCP port for FFmpeg streaming (stub mode)
-    int64_t start_offset_ms;     // Phase 8.2: media time (ms); first emitted frame has pts_ms >= this
-    int64_t hard_stop_time_ms;   // Phase 8.2: wall-clock epoch ms; stop when MasterClock.now_utc_ms() >= this
+
+    // Frame-indexed execution (INV-P10-FRAME-INDEXED-EXECUTION)
+    int64_t start_frame;         // First frame index within asset to decode
+    int64_t frame_count;         // Exact number of frames to produce (-1 = until EOF)
+
+    // Legacy time-based fields (deprecated, for backward compatibility)
+    int64_t start_offset_ms;     // Deprecated: use start_frame instead
+    int64_t hard_stop_time_ms;   // Deprecated: use frame_count instead
 
     ProducerConfig()
         : target_width(1920),
@@ -62,6 +69,8 @@ namespace retrovue::producers::file
           target_fps(30.0),
           stub_mode(false),
           tcp_port(12345),
+          start_frame(0),
+          frame_count(-1),       // -1 means until EOF (legacy behavior)
           start_offset_ms(0),
           hard_stop_time_ms(0) {}
   };
@@ -108,12 +117,11 @@ namespace retrovue::producers::file
     bool start() override;
     void stop() override;
     bool isRunning() const override;
+    void RequestStop() override;
+    bool IsStopped() const override;
 
     // Initiates graceful teardown with bounded drain timeout.
     void RequestTeardown(std::chrono::milliseconds drain_timeout);
-
-    // Forces immediate stop (used when teardown times out).
-    void ForceStop();
 
     // Phase 8: Sets write barrier without stopping the producer.
     // Used when switching segments - old producer can decode but not write.
@@ -163,6 +171,10 @@ namespace retrovue::producers::file
     // Used by INV-P8-EOF-SWITCH to detect when live producer is exhausted.
     bool IsEOF() const;
 
+    // INV-P8-ZERO-FRAME-READY: Returns configured frame count.
+    // Used to detect zero-frame segments for bootstrap frame handling.
+    int64_t GetConfiguredFrameCount() const { return config_.frame_count; }
+
   private:
     // Main production loop (runs in producer thread).
     void ProduceLoop();
@@ -202,7 +214,7 @@ namespace retrovue::producers::file
     std::atomic<ProducerState> state_;
     std::atomic<bool> stop_requested_;
     std::atomic<bool> teardown_requested_;
-    std::atomic<bool> writes_disabled_;  // Phase 7: Hard write barrier for ForceStop
+    std::atomic<bool> writes_disabled_;  // Phase 7: Hard write barrier for RequestStop
     std::atomic<uint64_t> frames_produced_;
     std::atomic<uint64_t> buffer_full_count_;
     std::atomic<uint64_t> decode_errors_;
@@ -254,6 +266,7 @@ namespace retrovue::producers::file
     ::SwrContext* audio_swr_ctx_;
     int audio_swr_src_rate_;      // Source sample rate for current swr context
     int audio_swr_src_channels_;  // Source channels for current swr context
+    int audio_swr_src_fmt_;       // Source sample format (AVSampleFormat) for current swr context
 
     // Phase 8.2: derived segment end (media PTS in us). -1 = not set. Set when segment goes live.
     int64_t segment_end_pts_us_;
@@ -280,13 +293,13 @@ namespace retrovue::producers::file
     // These track progress within a single producer's lifetime
     int video_frame_count_;       // Total video frames decoded
     int video_discard_count_;     // Video frames discarded before seek target
+    bool seek_discard_logged_;    // INV-SEEK-DISCARD: Log once at start of discard phase
     int audio_frame_count_;       // Total audio frames processed
     int frames_since_producer_start_;  // Frames since this producer started
     int audio_skip_count_;        // Audio frames skipped waiting for video epoch
     int audio_drop_count_;        // Audio frames dropped due to buffer full
     int audio_mapping_gate_drop_count_;  // Phase 8: Audio dropped while segment mapping pending
     bool audio_ungated_logged_;   // Whether we've logged audio ungating (one-shot)
-    int scale_diag_count_;        // Scale diagnostic log counter
 
     // INV-P8-AUDIO-GATE Fix #2: Track if mapping locked this iteration.
     // When video AdmitFrame() locks the mapping, audio on the same iteration
@@ -296,9 +309,23 @@ namespace retrovue::producers::file
     // RULE-P10-DECODE-GATE: Count of decode-gate blocking episodes for metrics
     int decode_gate_block_count_;
 
-    // INV-P10-ELASTIC-FLOW-CONTROL: Hysteresis state for elastic gating
-    // When true, we're in a blocking episode and must wait for low-water mark
+    // INV-P10-SLOT-BASED-UNBLOCK: Track blocking state for slot-based gating
+    // When true, we're blocked at capacity waiting for one slot to free
     bool decode_gate_blocked_;
+
+    // ==========================================================================
+    // INV-DECODE-RATE-001: Diagnostic probe state for decode rate monitoring
+    // ==========================================================================
+    // Tracks decode rate to detect when producer falls behind real-time.
+    // Violation: decode rate < target_fps during steady state (not seek/startup).
+    // See: docs/contracts/semantics/PrimitiveInvariants.md
+    // ==========================================================================
+    int64_t decode_probe_window_start_us_ = 0;     // Start of current measurement window
+    uint64_t decode_probe_window_frames_ = 0;      // Frames decoded in current window
+    double decode_probe_last_rate_ = 0.0;          // Last measured decode rate (fps)
+    bool decode_probe_in_seek_ = false;            // True while discarding to seek target
+    bool decode_rate_violation_logged_ = false;    // Log violation once per episode
+    static constexpr int64_t kDecodeProbeWindowUs = 1'000'000;  // 1-second window
 
     // ==========================================================================
     // INV-P10-BACKPRESSURE-SYMMETRIC: Unified A/V gating

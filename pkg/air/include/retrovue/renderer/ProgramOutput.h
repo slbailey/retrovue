@@ -77,6 +77,31 @@ struct RenderStats {
         frame_gap_ms(0.0) {}
 };
 
+// =============================================================================
+// INV-P10-PAD-REASON: Classification of pad frame causes for diagnostics
+// =============================================================================
+// Every pad frame emission must be classified by root cause.
+// This enables correlation with gating, CT tracking, and buffer state.
+enum class PadReason {
+  BUFFER_TRULY_EMPTY,    // Buffer depth is 0, producer is starved
+  PRODUCER_GATED,        // Buffer has frames but producer is blocked at gate
+  CT_SLOT_SKIPPED,       // Frame exists but CT mismatch caused skip
+  FRAME_CT_MISMATCH,     // Frame CT doesn't match expected output CT
+  UNKNOWN                // Fallback for unclassified cases
+};
+
+// Converts PadReason to string for logging
+inline const char* PadReasonToString(PadReason reason) {
+  switch (reason) {
+    case PadReason::BUFFER_TRULY_EMPTY: return "BUFFER_TRULY_EMPTY";
+    case PadReason::PRODUCER_GATED: return "PRODUCER_GATED";
+    case PadReason::CT_SLOT_SKIPPED: return "CT_SLOT_SKIPPED";
+    case PadReason::FRAME_CT_MISMATCH: return "FRAME_CT_MISMATCH";
+    case PadReason::UNKNOWN: return "UNKNOWN";
+    default: return "UNKNOWN";
+  }
+}
+
 // ProgramOutput consumes frames from the ring buffer and delivers program signal.
 //
 // Design:
@@ -145,6 +170,12 @@ class ProgramOutput {
   void SetOutputBus(output::OutputBus* bus);
   void ClearOutputBus();
 
+  // INV-P8-SUCCESSOR-OBSERVABILITY: Segment emission observer callback.
+  // Called exactly once when first real (non-pad) successor video frame is routed.
+  // Must be registered before any segment may commit.
+  using OnSuccessorVideoEmittedCallback = std::function<void()>;
+  void SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback);
+
   // Factory method to create appropriate output based on mode.
   static std::unique_ptr<ProgramOutput> Create(
       const RenderConfig& config,
@@ -212,9 +243,57 @@ class ProgramOutput {
   mutable std::mutex output_bus_mutex_;
   output::OutputBus* output_bus_ = nullptr;  // Not owned
 
+  // INV-P8-SUCCESSOR-OBSERVABILITY: Observer callback for first real video emission.
+  // Fires once per segment; latches after first real frame routed.
+  mutable std::mutex successor_observer_mutex_;
+  OnSuccessorVideoEmittedCallback on_successor_video_emitted_;
+  bool successor_observer_fired_for_segment_ = false;
+
   int64_t last_pts_;
   int64_t last_frame_time_utc_;
   std::chrono::steady_clock::time_point fallback_last_frame_time_;
+
+  // =========================================================================
+  // INV-AIR-CONTENT-BEFORE-PAD: First real content frame gates pad emission
+  // =========================================================================
+  // Pad frames may ONLY be emitted AFTER at least one real decoded content
+  // frame has been successfully encoded and muxed. This ensures:
+  //   1. First emitted frame is a real content frame (with IDR/SPS/PPS)
+  //   2. VLC can decode the stream from the start
+  //   3. Pad frames (which may lack keyframe treatment) don't corrupt decoder state
+  //
+  // Evidence: Log shows "INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #1"
+  // BEFORE any real content frames, causing VLC to display nothing.
+  //
+  // EXCEPTION: When no_content_segment_=true (zero-frame segment), pad frames
+  // are allowed immediately. The first pad frame acts as the "bootstrap frame"
+  // for encoder initialization. See INV-P8-ZERO-FRAME-BOOTSTRAP.
+  bool first_real_frame_emitted_ = false;
+
+  // =========================================================================
+  // INV-P8-ZERO-FRAME-BOOTSTRAP: Allow pad frames when no content expected
+  // =========================================================================
+  // When a segment has frame_count=0, no real content will ever arrive.
+  // In this case, pad frames must be allowed immediately so the encoder
+  // can initialize and output can flow. The first pad frame serves as
+  // the "bootstrap frame" for SPS/PPS emission.
+  bool no_content_segment_ = false;
+
+  // =========================================================================
+  // INV-PACING-001: Diagnostic probe state for render loop pacing
+  // =========================================================================
+  // Tracks wall-clock time between frame emissions to detect pacing violations.
+  // Violation: emission rate >> target_fps (CPU speed instead of frame rate).
+  // See: docs/contracts/semantics/PrimitiveInvariants.md
+  // =========================================================================
+  int64_t pacing_probe_last_emission_us_ = 0;      // Wall-clock time of last emission
+  uint64_t pacing_probe_fast_emissions_ = 0;       // Count of emissions faster than threshold
+  uint64_t pacing_probe_total_emissions_ = 0;      // Total emissions for rate calculation
+  int64_t pacing_probe_window_start_us_ = 0;       // Start of current measurement window
+  uint64_t pacing_probe_window_frames_ = 0;        // Frames in current measurement window
+  static constexpr int64_t kPacingProbeWindowUs = 1'000'000;  // 1-second window
+  static constexpr double kPacingViolationThreshold = 0.5;    // Gap < 50% of frame_duration = violation
+  bool pacing_violation_logged_ = false;           // Log violation once per episode
 
   // =========================================================================
   // INV-P10.5-OUTPUT-SAFETY-RAIL: Pad frame state
@@ -226,6 +305,21 @@ class ProgramOutput {
   int pad_frame_height_ = 1080;
   int64_t pad_frame_duration_us_ = 33333;  // Default 30fps
   uint64_t pad_frames_emitted_ = 0;  // Metric: retrovue_pad_frames_emitted_total
+
+  // =========================================================================
+  // INV-P10-PAD-REASON: Correlation counters by pad reason
+  // =========================================================================
+  // Per-reason counters for diagnostic correlation with gating and CT state.
+  uint64_t pads_buffer_empty_ = 0;       // BUFFER_TRULY_EMPTY
+  uint64_t pads_producer_gated_ = 0;     // PRODUCER_GATED (not currently detectable)
+  uint64_t pads_ct_skipped_ = 0;         // CT_SLOT_SKIPPED
+  uint64_t pads_ct_mismatch_ = 0;        // FRAME_CT_MISMATCH
+  uint64_t pads_unknown_ = 0;            // UNKNOWN fallback
+
+  // INV-NO-PAD-WHILE-DEPTH-HIGH: Violation counter
+  // Incremented when pad is emitted while video buffer depth >= 10
+  uint64_t pad_while_depth_high_ = 0;
+  static constexpr size_t kDepthHighThreshold = 10;
 
   // =========================================================================
   // INV-P10.5-AUDIO-FORMAT-LOCK: Pad audio format is FIXED at channel start
@@ -250,6 +344,24 @@ class ProgramOutput {
   // Must be called before any frames are emitted.
   void LockPadAudioFormat() {
     audio_format_locked_ = true;
+  }
+
+  // INV-AIR-CONTENT-BEFORE-PAD: Check if first real frame has been emitted.
+  // Used by diagnostics and tests to verify pad gating.
+  bool HasEmittedRealFrame() const {
+    return first_real_frame_emitted_;
+  }
+
+  // INV-P8-ZERO-FRAME-BOOTSTRAP: Set when segment has no real content.
+  // When true, pad frames are allowed immediately (bypasses CONTENT-BEFORE-PAD).
+  // The first pad frame acts as "bootstrap frame" for encoder initialization.
+  // Call with true when switching to a zero-frame segment.
+  // Call with false when switching to a segment with real content.
+  void SetNoContentSegment(bool value);
+
+  // Returns true if current segment has no content (frame_count=0).
+  bool IsNoContentSegment() const {
+    return no_content_segment_;
   }
 
   // Called on segment boundary to reset pad audio phase accumulator.
