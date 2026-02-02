@@ -62,10 +62,6 @@ OutputBusResult OutputBus::AttachSink(std::unique_ptr<IOutputSink> sink, bool re
     control_->OnSinkAttached();
   }
 
-  std::cout << "[DBG-BUS] AttachSink bus=" << static_cast<void*>(this)
-            << " sink=" << static_cast<void*>(sink_.get())
-            << " running=" << (sink_->IsRunning() ? 1 : 0)
-            << " name=" << sink_->GetName() << std::endl;
   std::cout << "[OutputBus] Sink attached: " << sink_->GetName() << std::endl;
   return OutputBusResult(true, "Sink attached: " + sink_->GetName());
 }
@@ -96,8 +92,6 @@ OutputBusResult OutputBus::DetachSink(bool force) {
     control_->OnSinkDetached();
   }
 
-  std::cout << "[DBG-BUS] DetachSink bus=" << static_cast<void*>(this)
-            << " sink=null (was " << sink_name << ")" << std::endl;
   std::cout << "[OutputBus] Sink detached: " << sink_name << std::endl;
   return OutputBusResult(true, "Sink detached: " + sink_name);
 }
