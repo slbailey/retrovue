@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <thread>
+#include <unordered_map>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
@@ -58,6 +59,14 @@ static bool DbgBootstrapWriteEnabled() {
   }
   return value;
 }
+
+// INV-P9-BOOT-LIVENESS: Sink attach time per instance (keyed by this) for first-TS latency log
+static std::unordered_map<void*, std::chrono::steady_clock::time_point> g_sink_attach_time;
+static std::mutex g_sink_attach_mutex;
+
+// INV-P9-AUDIO-LIVENESS: Header write time (us since epoch) per sink for first-audio log
+static std::unordered_map<void*, int64_t> g_header_write_time_us;
+static std::mutex g_header_write_mutex;
 
 // Helper to write to fd without SIGPIPE (used for magic string before namespace)
 static ssize_t SafeWriteGlobal(int fd, const void* data, size_t len) {
@@ -155,6 +164,10 @@ bool MpegTSOutputSink::Start() {
     }
   }
 
+  {
+    std::lock_guard<std::mutex> lock(g_sink_attach_mutex);
+    g_sink_attach_time[this] = std::chrono::steady_clock::now();
+  }
   SetStatus(SinkStatus::kRunning, "Started");
   return true;
 }
@@ -512,6 +525,18 @@ void MpegTSOutputSink::MuxLoop() {
           const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
           encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
 
+          // INV-P9-AUDIO-LIVENESS: Log when audio stream goes live (first audio packet after header)
+          if (audio_emit_count == 1) {
+            int64_t header_write_time = 0;
+            {
+              std::lock_guard<std::mutex> lock(g_header_write_mutex);
+              auto it = g_header_write_time_us.find(this);
+              if (it != g_header_write_time_us.end()) header_write_time = it->second;
+            }
+            std::cout << "[MpegTSOutputSink] INV-P9-AUDIO-LIVENESS: Audio stream live, first_audio_pts="
+                      << audio_frame.pts_us << ", header_write_time=" << header_write_time << std::endl;
+          }
+
           // INV-P10-PCR-PACED-MUX: Audio emission summary (first, then every 100)
           if (audio_emit_count == 1 || audio_emit_count % 100 == 0) {
             std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Audio emitted="
@@ -660,6 +685,29 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     // DEBUG: Track successful writes
     sink->dbg_bytes_written_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
     sink->dbg_last_write_time_ = std::chrono::steady_clock::now();
+  }
+
+  // INV-P9-BOOT-LIVENESS: Log when first decodable TS packet is emitted after sink attach
+  if (sink->dbg_packets_written_.load(std::memory_order_relaxed) == 0) {
+    auto now_wall = std::chrono::system_clock::now();
+    auto now_steady = std::chrono::steady_clock::now();
+    int64_t wall_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        now_wall.time_since_epoch()).count();
+    {
+      std::lock_guard<std::mutex> lock(g_header_write_mutex);
+      g_header_write_time_us[sink] = wall_time_us;
+    }
+    int latency_ms = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_sink_attach_mutex);
+      auto it = g_sink_attach_time.find(sink);
+      if (it != g_sink_attach_time.end()) {
+        latency_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now_steady - it->second).count());
+      }
+    }
+    std::cout << "[MpegTSOutputSink] INV-P9-BOOT-LIVENESS: First decodable TS emitted at wall_time="
+              << wall_time_us << ", latency_ms=" << latency_ms << std::endl;
   }
 
   // DEBUG: Increment packet count and emit heartbeat (max 1/sec)
