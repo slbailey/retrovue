@@ -1,3 +1,5 @@
+<!-- NOTE: This is a legacy file. The authoritative Canonical Rule Ledger is at: [docs/contracts/CANONICAL_RULE_LEDGER.md](docs/contracts/CANONICAL_RULE_LEDGER.md) -->
+
 # Canonical Rule Ledger
 
 Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical rule lists contributing source `rule_id`s.

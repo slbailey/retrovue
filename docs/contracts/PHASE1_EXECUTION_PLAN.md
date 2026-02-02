@@ -95,10 +95,11 @@ Assert: All packets are I or P frames; codec_ctx->max_b_frames == 0
 | **INV-P9-BOOT-LIVENESS** | Yes | Yes | ✅ Log added (P1-MS-001) |
 | **INV-P9-AUDIO-LIVENESS** | Yes | Yes | ✅ Log added (P1-MS-002) |
 | **LAW-VIDEO-DECODABILITY** | Yes | Yes | ✅ Verified (P1-MS-003) |
+| **INV-P9-TS-EMISSION-LIVENESS** | Yes | Yes | ✅ Logs + test added (P1-MS-004, P1-MS-005, P1-MS-006, P1-MS-007) |
 
 ### Tests to Add — MpegTSOutputSink
 
-None required — tests exist.
+- [x] `TEST_INV_P9_TS_EMISSION_LIVENESS_500ms` — First TS within 500ms of PCR-PACE init (P1-MS-007)
 
 ### Logs to Add — MpegTSOutputSink
 
@@ -111,6 +112,11 @@ None required — tests exist.
 ```
 [MpegTSOutputSink] INV-P9-AUDIO-LIVENESS: Audio stream live, first_audio_pts=%ld, header_write_time=%ld
 ```
+
+**INV-P9-TS-EMISSION-LIVENESS logs (P1-MS-004, P1-MS-005, P1-MS-006):**
+- PCR-PACE init: `INV-P9-TS-EMISSION-LIVENESS: PCR-PACE initialized, deadline=500ms`
+- Success: `INV-P9-TS-EMISSION-LIVENESS: First TS emitted at %dms (OK)`
+- Violation: `INV-P9-TS-EMISSION-LIVENESS VIOLATION: No TS after %dms, blocking_reason=%s, vq=%d, aq=%d`
 
 ---
 
@@ -170,6 +176,7 @@ None required — tests exist.
 | EncoderPipeline | `pkg/air/tests/contracts/MpegTSPlayoutSink/MpegTSPlayoutSinkContractTests.cpp` | `pkg/air/src/playout_sinks/mpegts/EncoderPipeline.cpp` |
 | MpegTSOutputSink | `pkg/air/tests/contracts/Phase9OutputBootstrapTests.cpp` | `pkg/air/src/output/MpegTSOutputSink.cpp` |
 | PlayoutEngine | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` | `pkg/air/src/runtime/PlayoutEngine.cpp` |
+| FileProducer | `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` | `pkg/air/src/producers/file/FileProducer.cpp` |
 
 ---
 
