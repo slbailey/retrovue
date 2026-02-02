@@ -1,0 +1,139 @@
+# Phase 11: Broadcast-Grade Timing Compliance
+
+This phase implements invariants identified by the 2026-02-01 Systems Contract Audit to achieve broadcast-grade timing compliance.
+
+## Foundational Principle: Authority Hierarchy
+
+**LAW-AUTHORITY-HIERARCHY** (Supreme Law)
+
+> Clock authority supersedes frame completion for switch execution.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Clock (LAW-CLOCK)        → WHEN transitions occur [AUTHORITY]│
+│ 2. Frame (LAW-FRAME-EXEC)   → HOW precisely cuts happen [EXEC]  │
+│ 3. Content (INV-SEGMENT-*)  → WHETHER sufficient [VALIDATION]   │
+│                               (clock does NOT wait)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**All Phase 11 work implements this hierarchy.** Code that inverts it (waiting for frame completion before clock-scheduled switch) is the root cause of the observed violations.
+
+## Background
+
+The audit identified gaps between current implementation and broadcast-grade requirements:
+- Grid boundaries missed by >1 video frame
+- Frame-accurate cuts occurring late relative to absolute boundary time
+- Audio discontinuities from queue backpressure
+- Control-plane logic using poll/retry instead of declarative intent
+
+**Root Cause:** Frame-based rules were incorrectly treated as authority (decision-makers) rather than execution (precision mechanisms). This caused code to wait for frame completion before executing clock-scheduled transitions.
+
+## Phase Structure
+
+| Phase | Description | Tasks | Risk | Dependencies |
+|-------|-------------|-------|------|--------------|
+| 11A | Audio Sample Continuity | 5 | Low | None |
+| 11B | Boundary Timing Observability | 6 | Very Low | None |
+| 11C | Declarative Boundary Protocol | 5 | Medium | None |
+| 11D | Deadline-Authoritative Switching | 8 | High | 11C |
+| 11E | Prefeed Timing Contract | 5 | Medium | 11D |
+
+**Total: 29 tasks**
+
+## Execution Order
+
+Phases 11A, 11B, and 11C can proceed in parallel. Phase 11D requires 11C. Phase 11E requires 11D.
+
+```
+11A (Audio) ──────────────────────────────────────┐
+11B (Observability) ──────────────────────────────┤
+11C (Proto) ──────────────────────────────────────┼──► 11D (Enforcement) ──► 11E (Prefeed)
+```
+
+## Task Index
+
+### Phase 11A: Audio Sample Continuity
+
+| Task | Type | Owner | Description |
+|------|------|-------|-------------|
+| [P11A-001](P11A-001.md) | AUDIT | AIR | Audit current audio queue behavior under backpressure |
+| [P11A-002](P11A-002.md) | LOG | AIR | Add audio sample drop detection and logging |
+| [P11A-003](P11A-003.md) | FIX | AIR | Implement audio queue overflow → producer throttle |
+| [P11A-004](P11A-004.md) | TEST | AIR | Contract test: audio samples never dropped |
+| [P11A-005](P11A-005.md) | FIX | AIR | Update backpressure invariant to include audio |
+
+### Phase 11B: Boundary Timing Observability
+
+| Task | Type | Owner | Description |
+|------|------|-------|-------------|
+| [P11B-001](P11B-001.md) | FIX | AIR | Add switch_completion_time_ms to response |
+| [P11B-002](P11B-002.md) | LOG | AIR | Log boundary tolerance violations |
+| [P11B-003](P11B-003.md) | METRICS | AIR | Add switch_boundary_delta_ms histogram |
+| [P11B-004](P11B-004.md) | METRICS | AIR | Add switch_boundary_violations_total counter |
+| [P11B-005](P11B-005.md) | OPS | Ops | Baseline current boundary timing |
+| [P11B-006](P11B-006.md) | OPS | Ops | Analyze baseline timing data |
+
+### Phase 11C: Declarative Boundary Protocol
+
+| Task | Type | Owner | Description |
+|------|------|-------|-------------|
+| [P11C-001](P11C-001.md) | PROTO | Proto | Add target_boundary_time_ms to proto |
+| [P11C-002](P11C-002.md) | BUILD | Build | Regenerate proto stubs |
+| [P11C-003](P11C-003.md) | LOG | AIR | Parse and log target_boundary_time_ms |
+| [P11C-004](P11C-004.md) | FIX | Core | Populate target_boundary_time_ms from schedule |
+| [P11C-005](P11C-005.md) | TEST | Test | Integration test: target flows Core→AIR |
+
+### Phase 11D: Deadline-Authoritative Switching
+
+| Task | Type | Owner | Description |
+|------|------|-------|-------------|
+| [P11D-001](P11D-001.md) | FIX | AIR | Schedule switch via MasterClock |
+| [P11D-002](P11D-002.md) | FIX | AIR | Execute switch at deadline regardless of readiness |
+| [P11D-003](P11D-003.md) | FIX | AIR | Use safety rails if not ready at deadline |
+| [P11D-004](P11D-004.md) | FIX | AIR | Replace NOT_READY with PROTOCOL_VIOLATION |
+| [P11D-005](P11D-005.md) | FIX | Core | Remove SwitchToLive retry loop |
+| [P11D-006](P11D-006.md) | FIX | Core | Ensure LoadPreview with sufficient lead time |
+| [P11D-007](P11D-007.md) | TEST | Test | Contract test: switch within 1 frame of boundary |
+| [P11D-008](P11D-008.md) | TEST | Test | Contract test: late prefeed → PROTOCOL_VIOLATION |
+
+### Phase 11E: Prefeed Timing Contract
+
+| Task | Type | Owner | Description |
+|------|------|-------|-------------|
+| [P11E-001](P11E-001.md) | FIX | Core | Define MIN_PREFEED_LEAD_TIME_MS constant |
+| [P11E-002](P11E-002.md) | FIX | Core | Issue LoadPreview at correct trigger time |
+| [P11E-003](P11E-003.md) | LOG | Core | Log violations if lead time insufficient |
+| [P11E-004](P11E-004.md) | METRICS | Core | Add prefeed_lead_time_ms histogram |
+| [P11E-005](P11E-005.md) | TEST | Test | Contract test: all LoadPreview with sufficient lead time |
+
+## New Invariants
+
+| Invariant | Description |
+|-----------|-------------|
+| INV-BOUNDARY-TOLERANCE-001 | Grid transitions within 1 frame of boundary |
+| INV-BOUNDARY-DECLARED-001 | SwitchToLive carries target_boundary_time_ms |
+| INV-AUDIO-SAMPLE-CONTINUITY-001 | No audio drops under backpressure |
+| INV-CONTROL-NO-POLL-001 | No poll/retry for switch readiness |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch at declared time regardless of readiness |
+
+## Rules Downgraded from Authority to Execution
+
+| Rule | Old Interpretation | New Interpretation |
+|------|-------------------|-------------------|
+| LAW-FRAME-EXECUTION | "Frame index is execution authority" | Governs HOW cuts happen, not WHEN. Subordinate to LAW-CLOCK. |
+| INV-FRAME-001 | "Boundaries are frame-indexed, not time-based" | Frame-indexed for execution precision. Does not delay clock-scheduled transitions. |
+| INV-FRAME-003 | "CT derives from frame index" | CT derivation within segment. Frame completion does not gate switch execution. |
+
+## Rules Demoted to Diagnostic Goals
+
+| Rule | New Status | Reason |
+|------|------------|--------|
+| INV-SWITCH-READINESS | Diagnostic goal | Superseded by deadline-authoritative semantics |
+| INV-SWITCH-SUCCESSOR-EMISSION | Diagnostic goal | Superseded by deadline-authoritative semantics |
+
+## Reference
+
+- [CANONICAL_RULE_LEDGER.md](../../CANONICAL_RULE_LEDGER.md) — Authoritative rule definitions
+- [PHASE1_EXECUTION_PLAN.md](../../PHASE1_EXECUTION_PLAN.md) — Overall execution plan
+- [PHASE1_TASKS.md](../../PHASE1_TASKS.md) — Task tracking

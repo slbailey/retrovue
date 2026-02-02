@@ -74,7 +74,7 @@ One task = one rule = one responsibility.
 
 ## PlayoutEngine
 
-| Task ID | Rule ID | Type | File(s) to Modify | Done Criteria |
+| Task ID | Rule ID | Type | File(s) to Modify | Done Criteria |create 
 |---------|---------|------|-------------------|---------------|
 | **P1-PE-001** | INV-P8-ZERO-FRAME-BOOTSTRAP | LOG | `pkg/air/src/runtime/PlayoutEngine.cpp` | Log emitted when zero-frame segment detected and CONTENT-BEFORE-PAD gate bypassed. |
 | **P1-PE-002** | INV-P9-BOOTSTRAP-READY | VERIFY | `pkg/air/tests/contracts/Phase9OutputBootstrapTests.cpp` | Confirmed: G9_002 test asserts readiness = commit + ≥1 video frame. |
@@ -171,3 +171,68 @@ When completing a task:
 | `docs/contracts/PHASE1_EXECUTION_PLAN.md` | Detailed execution context |
 | `docs/contracts/ENFORCEMENT_ROADMAP.md` | Phase 1 rule selection rationale |
 | `docs/contracts/CANONICAL_RULE_LEDGER.md` | Authoritative rule definitions |
+
+---
+
+## Post-Phase 1: Broadcast-Grade Timing Audit (2026-02-01)
+
+A formal audit on 2026-02-01 identified broadcast-grade timing violations. This resulted in:
+
+### Critical: Authority Hierarchy Established (LAW-AUTHORITY-HIERARCHY)
+
+The audit identified a fundamental contradiction between clock-based rules and frame-based rules. This has been resolved by establishing an explicit authority hierarchy:
+
+```
+LAW-AUTHORITY-HIERARCHY (Supreme)
+"Clock authority supersedes frame completion for switch execution."
+
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Clock (LAW-CLOCK)        → WHEN transitions occur [AUTHORITY]│
+│ 2. Frame (LAW-FRAME-EXEC)   → HOW precisely cuts happen [EXEC]  │
+│ 3. Content (INV-SEGMENT-*)  → WHETHER sufficient [VALIDATION]   │
+│                               (clock does NOT wait)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Anti-Pattern (BUG):** Code that waits for frame completion before executing a clock-scheduled switch.
+
+**Correct Pattern:** Schedule switch at clock time. If content isn't ready, use safety rails (pad/silence). Never delay the clock.
+
+### Rules Downgraded from Authority to Execution
+
+| Rule ID | Old Interpretation | New Interpretation |
+|---------|-------------------|-------------------|
+| **LAW-FRAME-EXECUTION** | "Frame index is execution authority" | Governs execution precision (HOW), not timing (WHEN). Subordinate to LAW-CLOCK. |
+| **INV-FRAME-001** | "Boundaries are frame-indexed, not time-based" | Frame-indexed for execution precision. Does not delay clock-scheduled transitions. |
+| **INV-FRAME-003** | "CT derives from frame index" | CT derivation within segment. Frame completion does not gate switch execution. |
+
+### Rules Demoted to Diagnostic Goals
+
+| Rule ID | Superseded By | Reason |
+|---------|---------------|--------|
+| **INV-SWITCH-READINESS** | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch completes at declared boundary time, not when readiness conditions met |
+| **INV-SWITCH-SUCCESSOR-EMISSION** | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch completes at declared boundary time, not when successor frame emitted |
+
+### Amendments to Existing Rules
+
+| Rule ID | Amendment |
+|---------|-----------|
+| **LAW-SWITCHING** | Added: "Transitions MUST complete within one video frame duration of scheduled absolute boundary time." |
+| **INV-P10-BACKPRESSURE-SYMMETRIC** | Added: "Audio samples MUST NOT be dropped due to queue backpressure." |
+| **INV-P8-SWITCH-TIMING** | Promoted to Layer 2 Coordination; strengthened to require completion within 1 frame |
+| **INV-OUTPUT-READY-BEFORE-LIVE** | Clarified: "observable" includes safety rail output (pad frames) |
+
+### New Phase 11 Tasks
+
+Implementation is tracked in **CANONICAL_RULE_LEDGER.md § Phased Implementation Plan**.
+
+| Phase | Tasks | New Invariants |
+|-------|-------|----------------|
+| **11A** | P11A-001 through P11A-005 | INV-AUDIO-SAMPLE-CONTINUITY-001 |
+| **11B** | P11B-001 through P11B-006 | INV-BOUNDARY-TOLERANCE-001 (observability) |
+| **11C** | P11C-001 through P11C-005 | INV-BOUNDARY-DECLARED-001 |
+| **11D** | P11D-001 through P11D-008 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001, INV-CONTROL-NO-POLL-001 |
+| **11E** | P11E-001 through P11E-005 | (Core prefeed contract) |
+
+**Total new tasks:** 29
+**Estimated effort:** 13-19 days
