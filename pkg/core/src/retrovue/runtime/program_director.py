@@ -422,10 +422,14 @@ class ProgramDirector:
             try:
                 with self._managers_lock:
                     managers = list(self._managers.values())
+                deferred_destroy: list[str] = []
                 for manager in managers:
                     try:
                         manager.check_health()
                         manager.tick()
+                        # P12-CORE-006: Poll for deferred teardown completion; destroy channel when ready
+                        if getattr(manager, "deferred_teardown_triggered", lambda: False)() is True:
+                            deferred_destroy.append(manager.channel_id)
                     except Exception as e:
                         self._logger.warning(
                             "Health check failed for channel %s: %s",
@@ -433,6 +437,12 @@ class ProgramDirector:
                             e,
                             exc_info=True,
                         )
+                for channel_id in deferred_destroy:
+                    self._logger.info(
+                        "[channel %s] Deferred teardown ready; destroying ChannelManager",
+                        channel_id,
+                    )
+                    self._stop_channel_internal(channel_id)
             except Exception as e:
                 self._logger.warning("Health check loop error: %s", e, exc_info=True)
 
@@ -984,7 +994,14 @@ class ProgramDirector:
             except Exception as e:
                 self._logger.debug("tune_out on cleanup: %s", e)
             if to_stop:
-                self.stop_channel(channel_id)
+                # P12-CORE-006 INV-VIEWER-COUNT-ADVISORY-001: Route through _request_teardown (immediate vs deferred)
+                if manager._request_teardown(reason="viewer_inactive"):
+                    self.stop_channel(channel_id)
+                else:
+                    self._logger.info(
+                        "Teardown deferred for channel %s (transient boundary state)",
+                        channel_id,
+                    )
                 to_stop.stop()
 
         async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
