@@ -67,6 +67,8 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-TEARDOWN-NO-NEW-WORK-001 | INV-TEARDOWN-STABLE-STATE-001 | **Enforces** — no new boundary work scheduled when teardown is pending |
 | INV-VIEWER-COUNT-ADVISORY-001 | LAW-AUTHORITY-HIERARCHY, INV-TEARDOWN-STABLE-STATE-001 | **Clarifies** — viewer count triggers but does not force teardown during transient states |
 | INV-LIVE-SESSION-AUTHORITY-001 | INV-BOUNDARY-LIFECYCLE-001 | **Defines** — channel is durably live only when `_boundary_state == LIVE` |
+| INV-TERMINAL-SCHEDULER-HALT-001 | INV-BOUNDARY-LIFECYCLE-001, Phase 12 §7 | **Extends** — FAILED_TERMINAL is intent-absorbing, not just transition-absorbing; no scheduling intent after terminal failure |
+| INV-TERMINAL-TIMER-CLEARED-001 | INV-TERMINAL-SCHEDULER-HALT-001 | **Enforces** — prevents ghost timer execution after terminal failure; timers cancelled on FAILED_TERMINAL entry |
 
 ---
 
@@ -1075,24 +1077,30 @@ This section documents the phased implementation of invariants added by the 2026
 - INV-TEARDOWN-NO-NEW-WORK-001 (no new boundary work when teardown pending)
 - INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions)
 - INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state)
+- INV-TERMINAL-SCHEDULER-HALT-001 (no scheduling intent after FAILED_TERMINAL)
+- INV-TERMINAL-TIMER-CLEARED-001 (timers cancelled on FAILED_TERMINAL entry)
 
 **Implementation Tasks:**
 
 | Task ID | Description | Owner | Blocked By | Status |
 |---------|-------------|-------|------------|--------|
-| P12-CORE-001 | Add teardown state fields to ChannelManager | Core | — | — |
-| P12-CORE-002 | Implement `_request_teardown()` guard | Core | P12-CORE-001 | — |
-| P12-CORE-003 | Integrate deferred teardown into state transitions | Core | P12-CORE-002 | — |
-| P12-CORE-004 | Add grace timeout enforcement to `tick()` | Core | P12-CORE-002 | — |
-| P12-CORE-005 | Block new work when teardown pending | Core | P12-CORE-002 | — |
-| P12-CORE-006 | Update ProgramDirector viewer disconnect handler | Core | P12-CORE-002 | — |
-| P12-CORE-007 | Add `is_live` property | Core | P12-CORE-001 | — |
-| P12-TEST-001 | Contract test: teardown blocked in transient states | Test | P12-CORE-003 | — |
-| P12-TEST-002 | Contract test: deferred teardown executes on LIVE | Test | P12-CORE-003 | — |
-| P12-TEST-003 | Contract test: grace timeout forces FAILED_TERMINAL | Test | P12-CORE-004 | — |
-| P12-TEST-004 | Contract test: no new work when teardown pending | Test | P12-CORE-005 | — |
-| P12-TEST-005 | Contract test: viewer disconnect defers during transition | Test | P12-CORE-006 | — |
-| P12-TEST-006 | Contract test: liveness only in LIVE state | Test | P12-CORE-007 | — |
+| P12-CORE-001 | Add teardown state fields to ChannelManager | Core | — | **Done** |
+| P12-CORE-002 | Implement `_request_teardown()` guard | Core | P12-CORE-001 | **Done** |
+| P12-CORE-003 | Integrate deferred teardown into state transitions | Core | P12-CORE-002 | **Done** |
+| P12-CORE-004 | Add grace timeout enforcement to `tick()` | Core | P12-CORE-002 | **Done** |
+| P12-CORE-005 | Block new work when teardown pending | Core | P12-CORE-002 | **Done** |
+| P12-CORE-006 | Update ProgramDirector viewer disconnect handler | Core | P12-CORE-002 | **Done** |
+| P12-CORE-007 | Add `is_live` property | Core | P12-CORE-001 | **Done** |
+| P12-CORE-008 | Implement terminal scheduler halt | Core | P12-CORE-005 | — |
+| P12-CORE-009 | Clear timers on FAILED_TERMINAL entry | Core | P12-CORE-008 | — |
+| P12-TEST-001 | Contract test: teardown blocked in transient states | Test | P12-CORE-003 | **Done** |
+| P12-TEST-002 | Contract test: deferred teardown executes on LIVE | Test | P12-CORE-003 | **Done** |
+| P12-TEST-003 | Contract test: grace timeout forces FAILED_TERMINAL | Test | P12-CORE-004 | **Done** |
+| P12-TEST-004 | Contract test: no new work when teardown pending | Test | P12-CORE-005 | **Done** |
+| P12-TEST-005 | Contract test: viewer disconnect defers during transition | Test | P12-CORE-006 | **Done** |
+| P12-TEST-006 | Contract test: liveness only in LIVE state | Test | P12-CORE-007 | **Done** |
+| P12-TEST-007 | Contract test: scheduler halts in FAILED_TERMINAL | Test | P12-CORE-008 | — |
+| P12-TEST-008 | Contract test: timers cleared on FAILED_TERMINAL | Test | P12-CORE-009 | — |
 
 **Exit Criteria:**
 - Teardown blocked during transient states (PLANNED, PRELOAD_ISSUED, SWITCH_SCHEDULED, SWITCH_ISSUED)
@@ -1101,6 +1109,8 @@ This section documents the phased implementation of invariants added by the 2026
 - No new boundary work scheduled when teardown pending
 - Viewer disconnect routes through `_request_teardown()`
 - `is_live` property returns True only in LIVE state
+- No scheduling intent generated after FAILED_TERMINAL (fully absorbing)
+- Transient timers cancelled on FAILED_TERMINAL entry
 
 **Risk:** Low — Additive changes; does not modify Phase 8 or Phase 11 semantics
 
@@ -1200,6 +1210,7 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 
 | Date | Auditor | Scope | Summary |
 |------|---------|-------|---------|
+| 2026-02-02 | Systems Contract Authority | Phase 12 Terminal Semantics Amendment | Added INV-TERMINAL-SCHEDULER-HALT-001 (intent-absorbing: no scheduling intent after FAILED_TERMINAL) and INV-TERMINAL-TIMER-CLEARED-001 (timers cancelled on terminal entry). Introduced canonical terminology: "fully absorbing" = transition-absorbing + intent-absorbing. Clarified allowed operations in FAILED_TERMINAL (health, metrics, diagnostics). Incident-derived: scheduler continued generating intent after terminal failure, causing spurious log errors. |
 | 2026-02-02 | Systems Contract Authority | Phase 12 Creation | Created Phase 12: Live Session Authority & Teardown Semantics. Added 5 invariants: INV-TEARDOWN-STABLE-STATE-001 (teardown deferred in transient states), INV-TEARDOWN-GRACE-TIMEOUT-001 (bounded deferral), INV-TEARDOWN-NO-NEW-WORK-001 (no new work when pending), INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions), INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state). Incident-derived: Core tore down channel during SWITCH_ISSUED causing AIR encoder deadlock and audio queue overflow. 7 implementation tasks (P12-CORE-001–007), 6 test tasks (P12-TEST-001–006). |
 | 2026-02-02 | Systems Contract Authority | P11F-007–P11F-009 completion | P11F-007: test_channel_manager_boundary_lifecycle.py (allowed/illegal/terminal-absorbing/LIVE non-absorbing). P11F-008: test_channel_manager_oneshot.py (duplicate suppression, tick guard, exactly-once). P11F-009: test_channel_manager_terminal.py (exception→FAILED_TERMINAL, no re-arm, tick cannot retry, diagnostics). 71 runtime tests pass. Phase 11F complete. |
 | 2026-02-02 | Systems Contract Authority | P11F-003–P11F-006 completion | P11F-003: try/except Exception in switch issuance → FAILED_TERMINAL; no retry. P11F-004: _guard_switch_issuance; tick early-return for SWITCH_ISSUED/LIVE/FAILED_TERMINAL. P11F-005: optional event_loop; call_later path when set; Timer fallback. P11F-006: _plan_boundary_ms set/cleared/validated; mismatch → FAILED_TERMINAL. 32 runtime tests passed. |

@@ -917,6 +917,26 @@ class ChannelManager:
         boundary_s = math.ceil(earliest_s / segment_seconds) * segment_seconds
         return epoch_utc + timedelta(seconds=boundary_s)
 
+    def _cancel_transient_timers(self) -> None:
+        """
+        P12-CORE-009 INV-TERMINAL-TIMER-CLEARED-001: Cancel all transient boundary timers.
+        Called when entering FAILED_TERMINAL to prevent ghost timer callbacks. Idempotent.
+        """
+        cancelled = False
+        with self._switch_issue_timer_lock:
+            if self._switch_issue_timer is not None:
+                self._switch_issue_timer.cancel()
+                self._switch_issue_timer = None
+                cancelled = True
+        if self._switch_handle is not None:
+            self._switch_handle.cancel()
+            self._switch_handle = None
+            cancelled = True
+        if cancelled:
+            self._logger.info(
+                "INV-TERMINAL-TIMER-CLEARED-001: Cancelled transient timers on terminal entry",
+            )
+
     def _transition_boundary_state(self, new_state: BoundaryState) -> None:
         """P11F-002 INV-BOUNDARY-LIFECYCLE-001: Enforce unidirectional transitions; illegal → FAILED_TERMINAL."""
         old_state = self._boundary_state
@@ -931,6 +951,8 @@ class ChannelManager:
             self._pending_fatal = SchedulingError(
                 f"Illegal boundary state transition: {old_state.name} -> {new_state.name}"
             )
+            # P12-CORE-009 INV-TERMINAL-TIMER-CLEARED-001: Cancel transient timers before deferred teardown
+            self._cancel_transient_timers()
             # P12-CORE-003: FAILED_TERMINAL is stable; trigger deferred teardown if pending
             if self._teardown_pending:
                 self._logger.info(
@@ -944,6 +966,9 @@ class ChannelManager:
             new_state.name,
         )
         self._boundary_state = new_state
+        # P12-CORE-009 INV-TERMINAL-TIMER-CLEARED-001: Cancel transient timers on FAILED_TERMINAL entry
+        if new_state == BoundaryState.FAILED_TERMINAL:
+            self._cancel_transient_timers()
         if new_state == BoundaryState.NONE:
             self._plan_boundary_ms = None
         # P12-CORE-003 INV-TEARDOWN-STABLE-STATE-001: Entering stable state with teardown pending → execute deferred
@@ -1179,6 +1204,12 @@ class ChannelManager:
         if self._teardown_pending:
             self._logger.debug(
                 "INV-TEARDOWN-NO-NEW-WORK-001: Skipping boundary work (teardown pending)",
+            )
+            return
+        # P12-CORE-008 INV-TERMINAL-SCHEDULER-HALT-001: Skip boundary work when terminal failure
+        if self._boundary_state == BoundaryState.FAILED_TERMINAL:
+            self._logger.debug(
+                "INV-TERMINAL-SCHEDULER-HALT-001: Skipping boundary work (terminal failure)",
             )
             return
         # P11D-011: Re-raise fatal from deadline callback (e.g. late issuance or AIR rejection)

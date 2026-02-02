@@ -67,6 +67,10 @@ It sets clear rules for lifecycle transitions and teardown.
   <dd>
     Orderly destruction of channel resources (Core's manager, AIR comms, playout pipeline). Not instantaneous—a negotiated lifecycle event.
   </dd>
+  <dt><b>Scheduling Intent</b></dt>
+  <dd>
+    Any operation that (a) allocates resources for future boundary work, (b) sends control-plane RPCs to AIR, (c) registers timers for boundary lifecycle operations, or (d) would require a boundary state transition to complete. Examples: LoadPreview, SwitchToLive, segment planning.
+  </dd>
 </dl>
 
 ---
@@ -134,6 +138,8 @@ Viewer count controls session start/end, but never interrupts an in-progress bou
 | `SWITCH_ISSUED`  | Transient         | ❌ No                  |
 | `LIVE`           | Stable            | ✔️ Yes                 |
 | `FAILED_TERMINAL`| Stable            | ✔️ Yes                 |
+
+> **Terminal Failure Semantics:** `FAILED_TERMINAL` is not merely "stable for teardown"—it is the **end of the boundary's lifecycle**. No scheduling intent is valid after entering `FAILED_TERMINAL`. The boundary is dead; only teardown and observability may proceed. See §7 for full terminal semantics.
 
 ### 4.3 Why Teardown Is Forbidden in Transient States
 
@@ -223,10 +229,12 @@ Here, nothing in flight—destruction is safe.
 
 ### 6.3 `INV-TEARDOWN-NO-NEW-WORK-001`
 
-- **Definition:**  
+- **Definition:**
   With `_teardown_pending`, Core must not schedule new boundary work: _no new_ `LoadPreview`, `SwitchToLive`, or segment planning.
-- **Rationale:**  
+- **Rationale:**
   New work would prolong transient, defeating teardown deferral.
+- **Relationship:**
+  This invariant addresses teardown lifecycle (`_teardown_pending`). For scheduler halt after terminal failure, see `INV-TERMINAL-SCHEDULER-HALT-001`. Both conditions independently block new work; both MUST be checked.
 
 ### 6.4 `INV-LIVE-SESSION-AUTHORITY-001`
 
@@ -239,20 +247,69 @@ Here, nothing in flight—destruction is safe.
 
 ### 6.5 `INV-VIEWER-COUNT-ADVISORY-001`
 
-- **Definition:**  
+- **Definition:**
   Viewer count is _advisory_, not authoritative, for teardown during transient states.
   Zero viewers must **trigger** (not force) teardown request.
-- **Rationale:**  
+- **Rationale:**
   Viewer count is Core-only metric—does not account for AIR's in-flight ops.
+
+### 6.6 `INV-TERMINAL-SCHEDULER-HALT-001`
+
+- **Definition:**
+  Once `_boundary_state == FAILED_TERMINAL`, Core MUST NOT generate new **scheduling intent**.
+- **Scheduling intent** is any operation that:
+  1. Allocates resources for future boundary work (e.g., preview buffers)
+  2. Sends control-plane RPCs to AIR (e.g., LoadPreview, SwitchToLive)
+  3. Registers timers for boundary lifecycle operations
+  4. Would require a boundary state transition to complete
+- **Explicitly allowed in `FAILED_TERMINAL`:**
+  - Health check evaluation and reporting
+  - Metrics collection and export
+  - Diagnostic state reads
+  - Logging
+  - Teardown coordination
+- **Enforcement:**
+  All scheduling entry points (`tick()`, explicit plan methods) MUST check for `FAILED_TERMINAL` and return early before evaluating boundary logic. This check is independent of `_teardown_pending`.
+- **Rationale:**
+  `FAILED_TERMINAL` means the session is dead. Scheduling intent is meaningless without a live boundary. Continuing to generate intent wastes resources, produces spurious log errors, and contradicts the semantic meaning of "unrecoverable failure."
+
+### 6.7 `INV-TERMINAL-TIMER-CLEARED-001`
+
+- **Definition:**
+  Upon transition to `FAILED_TERMINAL`, all pending transient operation timers MUST be cancelled immediately. This includes:
+  - Switch issuance timers (`_switch_handle`)
+  - LoadPreview scheduling timers
+  - Any deadline-scheduled boundary callbacks
+- **Enforcement:**
+  `_transition_boundary_state()` MUST cancel all transient timers when `new_state == FAILED_TERMINAL`.
+- **Rationale:**
+  Ghost timers firing after terminal failure generate spurious errors and may attempt operations against a dead boundary. Clearing timers on terminal entry ensures clean shutdown semantics.
 
 ---
 
 ## 7. Failure Handling
 
+### 7.0 Absorbing Properties (Canonical Terminology)
+
+`FAILED_TERMINAL` is the only **fully absorbing** state in the boundary lifecycle:
+
+| Property | Scope | Invariant | Meaning |
+|----------|-------|-----------|---------|
+| **Transition-absorbing** | State machine | INV-BOUNDARY-LIFECYCLE-001 | No state transitions out |
+| **Intent-absorbing** | Scheduler | INV-TERMINAL-SCHEDULER-HALT-001 | No scheduling intent may be generated |
+| **Timer-cleared** | Transient ops | INV-TERMINAL-TIMER-CLEARED-001 | All pending timers cancelled on entry |
+
+A state that is both transition-absorbing and intent-absorbing is called **fully absorbing**.
+
 ### 7.1 `FAILED_TERMINAL` Definition
 
-`FAILED_TERMINAL` is an _absorbing_ boundary: unrecoverable. Transition reasons:
+`FAILED_TERMINAL` is a fully absorbing boundary state indicating unrecoverable failure. Once entered:
 
+- **Transition-absorbing:** No boundary state transitions are permitted (INV-BOUNDARY-LIFECYCLE-001)
+- **Intent-absorbing:** No scheduling intent may be generated (INV-TERMINAL-SCHEDULER-HALT-001)
+- **Timer-cleared:** All transient operation timers are cancelled (INV-TERMINAL-TIMER-CLEARED-001)
+
+**Transition reasons:**
 - Illegal state transition (per invariant violations)
 - Switch issuance exception
 - Duplicate command into terminal state
@@ -261,9 +318,21 @@ Here, nothing in flight—destruction is safe.
 
 ### 7.2 `FAILED_TERMINAL` Properties
 
-- **Absorbing:** no transitions out
-- **Stable:** teardown permitted
-- **Diagnostic:** `_pending_fatal` contains reason
+| Property | Meaning |
+|----------|---------|
+| **Transition-absorbing** | No transitions out (INV-BOUNDARY-LIFECYCLE-001) |
+| **Intent-absorbing** | No scheduling intent may be generated (INV-TERMINAL-SCHEDULER-HALT-001) |
+| **Timer-cleared** | Transient timers cancelled on entry (INV-TERMINAL-TIMER-CLEARED-001) |
+| **Stable** | Teardown permitted |
+| **Observable** | Health checks, metrics, diagnostics allowed |
+| **Diagnostic** | `_pending_fatal` contains failure reason |
+
+**Valid operations in `FAILED_TERMINAL`:**
+- Teardown coordination and resource cleanup
+- Health check reporting
+- Metrics export
+- Diagnostic state reads
+- Logging
 
 ### 7.3 Grace Timeout Behavior
 

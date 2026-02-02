@@ -103,3 +103,9 @@ Observation: after FAILED_TERMINAL, scheduler still attempted LoadPreview and sw
 Insight: terminal boundary must absorb all scheduling intent, not just transitions
 New rule: FAILED_TERMINAL short-circuits tick() and planning paths
 Outcome: terminal failure becomes contained, not noisy
+
+[Spec Gap Discovered by Enforcement]
+Observation: FAILED_TERMINAL blocked transitions but tick still generated doomed scheduling intent
+Insight: terminal must be absorbing for scheduler intent, not just state transitions
+New invariant: INV-TERMINAL-SCHEDULER-HALT-001
+Outcome: terminal becomes quiet + contained; only teardown/diagnostics remain
