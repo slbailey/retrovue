@@ -55,12 +55,20 @@ One task = one rule = one responsibility.
 | **P1-MS-001** | INV-P9-BOOT-LIVENESS | LOG | `pkg/air/src/output/MpegTSOutputSink.cpp` | Log emitted with wall_time and latency_ms when first decodable TS packet sent. |
 | **P1-MS-002** | INV-P9-AUDIO-LIVENESS | LOG | `pkg/air/src/output/MpegTSOutputSink.cpp` | Log emitted with first_audio_pts and header_write_time when audio stream goes live. |
 | **P1-MS-003** | LAW-VIDEO-DECODABILITY | VERIFY | `pkg/air/tests/contracts/Phase84PersistentMpegTsMuxTests.cpp` | Confirmed: test asserts IDR present at segment boundary, TS valid with 0x47 sync. |
+| **P1-MS-004** | INV-P9-TS-EMISSION-LIVENESS | LOG | `pkg/air/src/output/MpegTSOutputSink.cpp` | Log `INV-P9-TS-EMISSION-LIVENESS: PCR-PACE initialized, deadline=500ms` emitted when PCR timing starts. |
+| **P1-MS-005** | INV-P9-TS-EMISSION-LIVENESS | LOG | `pkg/air/src/output/MpegTSOutputSink.cpp` | Log `INV-P9-TS-EMISSION-LIVENESS: First TS emitted at {X}ms (OK)` emitted when first TS written within deadline. |
+| **P1-MS-006** | INV-P9-TS-EMISSION-LIVENESS | LOG | `pkg/air/src/output/MpegTSOutputSink.cpp` | Log `INV-P9-TS-EMISSION-LIVENESS VIOLATION: No TS after {X}ms, blocking_reason={...}, vq={N}, aq={M}` when 500ms exceeded. |
+| **P1-MS-007** | INV-P9-TS-EMISSION-LIVENESS | TEST | `pkg/air/tests/contracts/Phase9OutputBootstrapTests.cpp` | Test asserts first TS bytes emitted within 500ms of PCR-PACE init. |
 
 ### MpegTSOutputSink Checklist
 
 - [x] P1-MS-001: Add LOG for INV-P9-BOOT-LIVENESS
 - [x] P1-MS-002: Add LOG for INV-P9-AUDIO-LIVENESS
 - [x] P1-MS-003: VERIFY LAW-VIDEO-DECODABILITY IDR-first test
+- [x] P1-MS-004: Add LOG for INV-P9-TS-EMISSION-LIVENESS PCR-PACE init
+- [x] P1-MS-005: Add LOG for INV-P9-TS-EMISSION-LIVENESS success
+- [x] P1-MS-006: Add LOG for INV-P9-TS-EMISSION-LIVENESS violation
+- [x] P1-MS-007: Add TEST for INV-P9-TS-EMISSION-LIVENESS 500ms bound
 
 ---
 
@@ -78,14 +86,32 @@ One task = one rule = one responsibility.
 
 ---
 
+## FileProducer
+
+| Task ID | Rule ID | Type | File(s) to Modify | Done Criteria |
+|---------|---------|------|-------------------|---------------|
+| **P1-FP-001** | INV-P10-AUDIO-VIDEO-GATE | LOG | `pkg/air/src/producers/file/FileProducer.cpp` | Log `INV-P10-AUDIO-VIDEO-GATE: Video epoch set, awaiting first audio (deadline=100ms)` at VIDEO_EPOCH_SET. |
+| **P1-FP-002** | INV-P10-AUDIO-VIDEO-GATE | LOG | `pkg/air/src/producers/file/FileProducer.cpp` | Log `INV-P10-AUDIO-VIDEO-GATE: First audio queued at {X}ms after video epoch` when audio arrives within deadline. |
+| **P1-FP-003** | INV-P10-AUDIO-VIDEO-GATE | LOG | `pkg/air/src/producers/file/FileProducer.cpp` | Log `INV-P10-AUDIO-VIDEO-GATE VIOLATION: No audio after {X}ms (deadline=100ms), aq=0` when 100ms exceeded. |
+| **P1-FP-004** | INV-P10-AUDIO-VIDEO-GATE | TEST | `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` | Test asserts first audio frame queued within 100ms of VIDEO_EPOCH_SET. |
+
+### FileProducer Checklist
+
+- [x] P1-FP-001: Add LOG for INV-P10-AUDIO-VIDEO-GATE video epoch start
+- [x] P1-FP-002: Add LOG for INV-P10-AUDIO-VIDEO-GATE success
+- [x] P1-FP-003: Add LOG for INV-P10-AUDIO-VIDEO-GATE violation
+- [x] P1-FP-004: Add TEST for INV-P10-AUDIO-VIDEO-GATE 100ms bound
+
+---
+
 ## Summary
 
 | Type | Count | Task IDs |
 |------|-------|----------|
-| **TEST** | 6 | P1-PO-001, P1-PO-002, P1-PO-005, P1-EP-001, P1-EP-003, P1-EP-004 |
-| **LOG** | 5 | P1-PO-003, P1-EP-002, P1-MS-001, P1-MS-002, P1-PE-001 |
+| **TEST** | 8 | P1-PO-001, P1-PO-002, P1-PO-005, P1-EP-001, P1-EP-003, P1-EP-004, P1-MS-007, P1-FP-004 |
+| **LOG** | 11 | P1-PO-003, P1-EP-002, P1-MS-001, P1-MS-002, P1-MS-004, P1-MS-005, P1-MS-006, P1-PE-001, P1-FP-001, P1-FP-002, P1-FP-003 |
 | **VERIFY** | 5 | P1-PO-004, P1-PO-005, P1-EP-005, P1-MS-003, P1-PE-002 |
-| **Total** | 15 | — |
+| **Total** | 23 | — |
 
 ---
 
@@ -125,8 +151,16 @@ When completing a task:
 | P1-MS-001 | 2026-02-01 | 820c7d5 |
 | P1-MS-002 | 2026-02-01 | 820c7d5 |
 | P1-MS-003 | 2026-02-01 | 820c7d5 |
+| P1-MS-004 | 2026-02-01 | local |
+| P1-MS-005 | 2026-02-01 | local |
+| P1-MS-006 | 2026-02-01 | local |
+| P1-MS-007 | 2026-02-01 | local |
 | P1-PE-001 | 2026-02-01 | 9dab4cd |
 | P1-PE-002 | 2026-02-01 | 9dab4cd |
+| P1-FP-001 | 2026-02-01 | local |
+| P1-FP-002 | 2026-02-01 | local |
+| P1-FP-003 | 2026-02-01 | local |
+| P1-FP-004 | 2026-02-01 | local |
 
 ---
 

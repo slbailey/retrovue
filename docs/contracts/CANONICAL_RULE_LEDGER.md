@@ -42,6 +42,9 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-STARVATION-FAILSAFE-001 | LAW-OUTPUT-LIVENESS | **Operationalizes** — defines bounded time for pad emission |
 | INV-P9-BOOTSTRAP-READY | INV-SWITCH-READINESS | **Bootstrap minimum** — P9 requires ≥1 frame; full readiness requires ≥2 |
 | INV-P10-SINK-GATE | INV-P9-SINK-LIVENESS-001 | **Complementary** — SINK-GATE prevents consumption; SINK-LIVENESS describes routing after attachment |
+| INV-P9-TS-EMISSION-LIVENESS | INV-P9-BOOT-LIVENESS | **Refines** — adds specific 500ms deadline to "bounded time" |
+| INV-P10-AUDIO-VIDEO-GATE | LAW-OUTPUT-LIVENESS | **Prevents violation** — ensures audio availability so mux can emit TS |
+| LAW-RUNTIME-AUDIO-AUTHORITY | LAW-AUDIO-FORMAT | **Operationalizes** — defines producer-authoritative mode enforcement |
 
 ---
 
@@ -63,6 +66,7 @@ Laws are non-negotiable. All contracts must conform to these laws.
 | **LAW-OBS-003** | LAW | AIR | RUNTIME | No | Yes | — |
 | **LAW-OBS-004** | LAW | AIR | RUNTIME | No | Yes | — |
 | **LAW-OBS-005** | LAW | AIR | RUNTIME | No | Yes | — |
+| **LAW-RUNTIME-AUDIO-AUTHORITY** | LAW | PlayoutEngine | RUNTIME | No | Yes | — |
 
 ### Law Definitions
 
@@ -80,6 +84,7 @@ Laws are non-negotiable. All contracts must conform to these laws.
 | LAW-OBS-003 | Result evidence — every action has outcome log | ObservabilityParityLaw |
 | LAW-OBS-004 | Timing evidence — significant events have timestamps | ObservabilityParityLaw |
 | LAW-OBS-005 | Boundary evidence — phase/state transitions are logged | ObservabilityParityLaw |
+| LAW-RUNTIME-AUDIO-AUTHORITY | When producer_audio_authoritative=true, producer MUST emit audio ≥90% of nominal rate, or mode auto-downgrades to silence-injection | Incident 2026-02-01 |
 
 ---
 
@@ -266,6 +271,7 @@ Write barriers, switch orchestration, readiness, backpressure.
 | **INV-P9-BOOT-LIVENESS** | CONTRACT | MpegTSOutputSink | P9 | Yes | No | — |
 | **INV-P9-AUDIO-LIVENESS** | CONTRACT | MpegTSOutputSink | P9 | Yes | No | — |
 | **INV-P9-PCR-AUDIO-MASTER** | CONTRACT | MpegTSOutputSink | P9 | Yes | No | — |
+| **INV-P9-TS-EMISSION-LIVENESS** | CONTRACT | MpegTSOutputSink | P9 | No | Yes | — |
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
@@ -276,6 +282,7 @@ Write barriers, switch orchestration, readiness, backpressure.
 | INV-P9-BOOT-LIVENESS | Newly attached sink emits decodable TS within bounded time |
 | INV-P9-AUDIO-LIVENESS | From header written, output contains continuous monotonic audio PTS |
 | INV-P9-PCR-AUDIO-MASTER | Audio owns PCR at startup |
+| INV-P9-TS-EMISSION-LIVENESS | First decodable TS packet MUST be emitted within 500ms of PCR-PACE timing initialization |
 
 ### Phase 10 Coordination
 
@@ -290,6 +297,7 @@ Write barriers, switch orchestration, readiness, backpressure.
 | **INV-SWITCH-READINESS** | CONTRACT | PlayoutEngine | P10 | No | Yes | — |
 | **INV-SWITCH-SUCCESSOR-EMISSION** | CONTRACT | TimelineController | P10 | Yes | Yes | — |
 | **RULE-P10-DECODE-GATE** | CONTRACT | FileProducer | P10 | No | Yes | RULE_HARVEST #39 |
+| **INV-P10-AUDIO-VIDEO-GATE** | CONTRACT | FileProducer | P10 | No | Yes | — |
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
@@ -302,6 +310,7 @@ Write barriers, switch orchestration, readiness, backpressure.
 | INV-SWITCH-READINESS | SwitchToLive completes when video ≥2, sink attached, format locked *(full readiness; INV-P9-BOOTSTRAP-READY defines bootstrap minimum of ≥1 frame)* |
 | INV-SWITCH-SUCCESSOR-EMISSION | Switch not complete until real successor video frame emitted |
 | RULE-P10-DECODE-GATE | Slot-based gating at decode level; block at capacity, unblock when one slot frees |
+| INV-P10-AUDIO-VIDEO-GATE | When segment video epoch is established, first audio frame MUST be queued within 100ms |
 
 ---
 
@@ -387,13 +396,13 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 
 | Layer | Total Rules | With Tests | Coverage |
 |-------|-------------|------------|----------|
-| Layer 0 (Laws) | 11 | 6 | 55% |
+| Layer 0 (Laws) | 12 | 6 | 50% |
 | Layer 1 (Semantic) | 32 | 25 | 78% |
-| Layer 2 (Coordination) | 32 | 26 | 81% |
+| Layer 2 (Coordination) | 34 | 26 | 76% |
 | Layer 3 (Diagnostic) | 5 | 0 | 0% |
 | Cross-Domain | 4 | 1 | 25% |
 | Proposed | 14 | 0 | 0% |
-| **Total** | **98** | **58** | **59%** |
+| **Total** | **101** | **58** | **57%** |
 
 ---
 
@@ -401,13 +410,13 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 
 | Layer | Total Rules | With Logs | Coverage |
 |-------|-------------|-----------|----------|
-| Layer 0 (Laws) | 11 | 7 | 64% |
+| Layer 0 (Laws) | 12 | 8 | 67% |
 | Layer 1 (Semantic) | 32 | 9 | 28% |
-| Layer 2 (Coordination) | 32 | 8 | 25% |
+| Layer 2 (Coordination) | 34 | 10 | 29% |
 | Layer 3 (Diagnostic) | 5 | 5 | 100% |
 | Cross-Domain | 4 | 2 | 50% |
 | Proposed | 14 | 12 | 86% |
-| **Total** | **98** | **43** | **44%** |
+| **Total** | **101** | **46** | **46%** |
 
 ---
 

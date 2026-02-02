@@ -27,6 +27,8 @@ Rules that must be enforced immediately to prevent viewer-visible failures.
 | **LAW-AUDIO-FORMAT** | House format enforced at encoder. Violation = audio encode failure mid-stream. |
 | **INV-AUDIO-HOUSE-FORMAT-001** | Reject non-house audio. Violation = encoder crash or garbled audio. |
 | **INV-P9-AUDIO-LIVENESS** | Continuous monotonic audio PTS from header. Violation = audio drops to silence. |
+| **INV-P9-TS-EMISSION-LIVENESS** | First TS within 500ms of PCR-PACE init. Violation = viewer connects, waits 5+ seconds. |
+| **INV-P10-AUDIO-VIDEO-GATE** | Audio queued within 100ms of video epoch. Violation = mux blocked, no TS bytes flow. |
 
 ---
 
@@ -55,6 +57,7 @@ Rules that prevent drift, resource exhaustion, and operational degradation over 
 | **LAW-SWITCHING** | No gaps, no PTS regression at switch. Violation = glitch every segment boundary. |
 | **INV-SWITCH-READINESS** | Switch when video≥2, sink attached, format locked. Violation = glitch on every switch. |
 | **INV-SWITCH-SUCCESSOR-EMISSION** | Switch complete when real successor frame emitted. Violation = stale frame lingers. |
+| **LAW-RUNTIME-AUDIO-AUTHORITY** | Producer audio ≥90% rate or auto-downgrade. Violation = indefinite mux stall. |
 
 ---
 
@@ -90,8 +93,8 @@ Rules that improve debugging, observability, and operational trust.
 
 | Phase | Focus | Rule Count |
 |-------|-------|------------|
-| **Phase 1** | Prevent black/silence | 13 |
-| **Phase 2** | Stabilize long-running | 19 |
+| **Phase 1** | Prevent black/silence | 15 |
+| **Phase 2** | Stabilize long-running | 20 |
 | **Phase 3** | Diagnostics/confidence | 20 |
 
 ---

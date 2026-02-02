@@ -9,10 +9,17 @@
 #include <atomic>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/output/MpegTSOutputSink.h"
 #include "retrovue/producers/file/FileProducer.h"
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/timing/TimelineController.h"
 #include "timing/TestMasterClock.h"
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using namespace retrovue;
 using namespace retrovue::producers::file;
@@ -481,6 +488,102 @@ TEST_F(Phase9OutputBootstrapTest, MultiSwitchStability) {
     producer2.stop();
   }
 }
+
+// =============================================================================
+// TEST_INV_P9_TS_EMISSION_LIVENESS_500ms (P1-MS-007)
+// =============================================================================
+// Given: MpegTSOutputSink with PCR-PACE mode enabled
+// When: Sink is attached and PCR timing is initialized (first video frame fed)
+// Then: First TS bytes are written within 500ms
+// Contract: INV-P9-TS-EMISSION-LIVENESS
+
+#if defined(__linux__) || defined(__APPLE__)
+TEST_F(Phase9OutputBootstrapTest, TEST_INV_P9_TS_EMISSION_LIVENESS_500ms) {
+  int sock_fds[2];
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fds), 0) << "socketpair() failed";
+  int read_fd = sock_fds[0];
+  int write_fd = sock_fds[1];
+
+  retrovue::playout_sinks::mpegts::MpegTSPlayoutSinkConfig config;
+  config.target_width = 1920;
+  config.target_height = 1080;
+  config.bitrate = 4000000;
+  config.target_fps = 30.0;
+  config.gop_size = 30;
+  config.stub_mode = false;
+
+  retrovue::output::MpegTSOutputSink sink(
+      write_fd, config, "test-inv-p9-ts-emission-liveness");
+
+  ASSERT_TRUE(sink.Start()) << "MpegTSOutputSink Start failed";
+
+  // Build one video frame (YUV gray) and one audio frame (house format)
+  retrovue::buffer::Frame video_frame;
+  video_frame.width = config.target_width;
+  video_frame.height = config.target_height;
+  video_frame.data.resize(
+      static_cast<size_t>(video_frame.width * video_frame.height * 3 / 2), 128);
+  video_frame.metadata.pts = 0;
+  video_frame.metadata.has_ct = true;
+  video_frame.metadata.asset_uri = "test://frame0";
+
+  retrovue::buffer::AudioFrame audio_frame;
+  audio_frame.sample_rate = 48000;
+  audio_frame.channels = 2;
+  audio_frame.nb_samples = 1024;
+  audio_frame.pts_us = 0;
+  audio_frame.data.resize(1024 * 2 * sizeof(int16_t), 0);
+
+  auto t0 = std::chrono::steady_clock::now();
+  sink.ConsumeVideo(video_frame);
+  sink.ConsumeAudio(audio_frame);
+
+  // Feed a few more frames so encoder flushes TS data (mux may buffer until first chunk)
+  for (int i = 1; i <= 5; ++i) {
+    video_frame.metadata.pts = i * 33333;
+    audio_frame.pts_us = i * 21333;
+    sink.ConsumeVideo(video_frame);
+    sink.ConsumeAudio(audio_frame);
+  }
+
+  // Read until we see TS sync byte 0x47 or timeout 600ms
+  std::vector<uint8_t> buf(188 * 10);
+  int64_t bytes_read = 0;
+  auto deadline = std::chrono::steady_clock::now() + 600ms;
+  while (std::chrono::steady_clock::now() < deadline) {
+    struct pollfd pfd = { read_fd, POLLIN, 0 };
+    int r = poll(&pfd, 1, 50);
+    if (r > 0 && (pfd.revents & POLLIN)) {
+      ssize_t n = read(read_fd, buf.data(), buf.size());
+      if (n > 0) {
+        bytes_read += n;
+        for (ssize_t i = 0; i < n; ++i) {
+          if (buf[static_cast<size_t>(i)] == 0x47) {
+            auto t1 = std::chrono::steady_clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                t1 - t0).count();
+            sink.Stop();
+            close(read_fd);
+            close(write_fd);
+            EXPECT_GT(bytes_read, 0) << "Should have read TS bytes";
+            EXPECT_LE(elapsed_ms, 500)
+                << "INV-P9-TS-EMISSION-LIVENESS: First TS must be emitted within 500ms of "
+                << "PCR-PACE init, took " << elapsed_ms << "ms";
+            return;
+          }
+        }
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  sink.Stop();
+  close(read_fd);
+  close(write_fd);
+  ADD_FAILURE() << "INV-P9-TS-EMISSION-LIVENESS: No TS sync byte 0x47 within 600ms (bytes_read="
+                << bytes_read << ")";
+}
+#endif
 
 // =============================================================================
 // INV-P9-AUDIO-LIVENESS Tests
