@@ -215,6 +215,7 @@ class ProgramDirector:
         self._producer_factory: Optional[Callable[..., Any]] = None
         self._health_check_stop: Optional[threading.Event] = None
         self._health_check_thread: Optional[Thread] = None
+        # P11D-009: boundaries are feasible at planning time; 1s tick cadence is sufficient
         self._health_check_interval_seconds = 1.0
         self._embedded_clock: Optional[Any] = None  # MasterClock with now_utc() for ChannelManagers
         self._test_mode = os.getenv("RETROVUE_TEST_MODE") == "1"

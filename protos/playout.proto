@@ -126,13 +126,16 @@ message LoadPreviewResponse {
 
 // SwitchToLiveRequest identifies the channel to switch from preview to live.
 // P11C-001: INV-BOUNDARY-DECLARED-001 — Core declares target boundary time.
+// P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation.
 message SwitchToLiveRequest {
   int32 channel_id = 1;     // Target channel.
   int64 target_boundary_time_ms = 2;  // Wall-clock ms when switch should occur (0 = immediate/legacy)
+  int64 issued_at_time_ms = 3;  // Wall-clock ms when Core issued this request (for lead-time evaluation)
 }
 
 // SwitchToLiveResponse reports the result of the switch operation.
 // P11B-001: INV-BOUNDARY-TOLERANCE-001 observability — completion time for delta measurement.
+// P11D-004: violation_reason when result_code is PROTOCOL_VIOLATION.
 message SwitchToLiveResponse {
   bool success = 1;
   string message = 2;
@@ -141,6 +144,7 @@ message SwitchToLiveResponse {
   uint64 live_start_pts = 4;
   ResultCode result_code = 5;      // Phase 8: Typed result for Core to distinguish states
   int64 switch_completion_time_ms = 6;  // Wall-clock ms when switch actually completed
+  string violation_reason = 7;     // P11D-004: Populated when result_code is PROTOCOL_VIOLATION
 }
 
 // Phase 8: Typed result codes for control operations

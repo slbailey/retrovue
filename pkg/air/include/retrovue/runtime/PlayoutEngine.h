@@ -76,6 +76,7 @@ struct EngineResult {
   bool pts_contiguous = false;
   uint64_t live_start_pts = 0;
   int64_t switch_completion_time_ms = 0;  // P11B-001: wall-clock ms when switch completed
+  std::string violation_reason;  // P11D-004: when result_code is kProtocolViolation
 
   EngineResult(bool s, const std::string& msg)
       : success(s), message(msg) {}
@@ -119,7 +120,8 @@ class PlayoutEngine {
       int32_t fps_denominator);
   
   // P11C-001: target_boundary_time_ms from Core (0 = immediate/legacy). P11B-001: result.switch_completion_time_ms set on success.
-  EngineResult SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms = 0);
+  // P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation (0 = legacy/receipt-time).
+  EngineResult SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms = 0, int64_t issued_at_time_ms = 0);
   
   // Phase 8.1: live asset path set after SwitchToLive (for stream TS source)
   std::optional<std::string> GetLiveAssetPath(int32_t channel_id);
@@ -181,6 +183,11 @@ class PlayoutEngine {
   // Helper: Spawn background SwitchWatcher thread for auto-completion.
   // Called when SwitchToLive returns NOT_READY to ensure readiness polling.
   void SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* state);
+
+  // P11D-001/002/003: Execute switch at deadline (clock-authoritative). Caller must hold lock.
+  // Never returns NOT_READY; uses safety rails (SetNoContentSegment) when preview not ready.
+  EngineResult ExecuteSwitchAtDeadline(int32_t channel_id, int64_t target_boundary_time_ms,
+                                      std::unique_lock<std::mutex>& lock);
 
   // Helper: Check if output sink is attached (caller must hold channels_mutex_).
   bool IsOutputSinkAttachedLocked(int32_t channel_id) const;

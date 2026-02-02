@@ -273,6 +273,9 @@ The following rules were demoted from **completion gates** to **diagnostic goals
 | INV-BOUNDARY-TOLERANCE-001 | Grid transitions within 1 frame of boundary | 11B, 11D |
 | INV-BOUNDARY-DECLARED-001 | SwitchToLive carries `target_boundary_time_ms` | 11C |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | No audio drops under backpressure | 11A |
+| INV-SCHED-PLAN-BEFORE-EXEC-001 | Scheduling feasibility at planning time, not runtime | 11D |
+| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | First boundary must satisfy startup latency constraint | 11D |
+| INV-SWITCH-ISSUANCE-DEADLINE-001 | Switch issuance deadline-scheduled, not cadence-detected | 11D |
 | INV-CONTROL-NO-POLL-001 | No poll/retry for switch readiness | 11D, 11E |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch at declared time regardless of readiness | 11D |
 
@@ -287,6 +290,8 @@ See **CANONICAL_RULE_LEDGER.md § Phased Implementation Plan** for full details.
 | **11C** | Declarative boundary protocol (proto) | None | Medium |
 | **11D** | Deadline-authoritative switching | 11C | High |
 | **11E** | Prefeed timing contract | 11D | Medium |
+
+**Status:** Phase 11D closed 2026-02-02 (P11D-001 through P11D-012). See docs/contracts/tasks/phase11/README.md.
 
 **Execution Order:**
 1. Parallel: 11A + 11B + 11C

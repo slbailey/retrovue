@@ -31,6 +31,8 @@ namespace {
   constexpr size_t kDefaultBufferSize = 60; // 60 frames (~2 seconds at 30fps)
   constexpr size_t kReadyDepth = 3; // Minimum buffer depth for ready state
   constexpr auto kReadyTimeout = std::chrono::seconds(2);
+  // P11D-004: Minimum lead time (ms) between SwitchToLive receipt and target_boundary_time_ms.
+  constexpr int64_t kMinPrefeedLeadTimeMs = 5000;
   
   int64_t NowUtc(const std::shared_ptr<timing::MasterClock>& clock) {
     if (clock) {
@@ -782,7 +784,7 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
   }).detach();
 }
 
-EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms) {
+EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms, int64_t issued_at_time_ms) {
   std::unique_lock<std::mutex> lock(channels_mutex_);
 
   auto it = channels_.find(channel_id);
@@ -872,6 +874,63 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
     EngineResult result(false, "No preview producer loaded for channel " + std::to_string(channel_id));
     result.result_code = ResultCode::kProtocolViolation;
     return result;
+  }
+
+  // P11D-001/004: Deadline-authoritative mode — schedule switch at target time
+  if (target_boundary_time_ms > 0) {
+    const int64_t now_us = NowUtc(master_clock_);
+    const int64_t now_ms = now_us / 1000;
+    // P11D-012: INV-LEADTIME-MEASUREMENT-001 — use issuance time for lead-time evaluation, not receipt time
+    // This ensures RPC transport latency does not consume the lead time budget.
+    const int64_t evaluation_time_ms = (issued_at_time_ms > 0) ? issued_at_time_ms : now_ms;
+    const int64_t lead_time_ms = target_boundary_time_ms - evaluation_time_ms;
+    // Log transport delta for clock skew detection
+    if (issued_at_time_ms > 0) {
+      const int64_t transport_delta_ms = now_ms - issued_at_time_ms;
+      std::cout << "[SwitchToLive] INV-LEADTIME-MEASUREMENT-001: issued_at_time_ms=" << issued_at_time_ms
+                << " receipt_time_ms=" << now_ms
+                << " transport_delta_ms=" << transport_delta_ms
+                << " lead_time_ms=" << lead_time_ms
+                << " MIN_PREFEED_LEAD_TIME_MS=" << kMinPrefeedLeadTimeMs << std::endl;
+      if (transport_delta_ms < -1000 || transport_delta_ms > 1000) {
+        std::cout << "[SwitchToLive] WARN: Clock skew detected (transport_delta_ms=" << transport_delta_ms << ")" << std::endl;
+      }
+    } else {
+      std::cout << "[SwitchToLive] AIR on receipt (legacy): air_now_ms=" << now_ms
+                << " target_boundary_time_ms=" << target_boundary_time_ms
+                << " lead_time_ms=" << lead_time_ms
+                << " MIN_PREFEED_LEAD_TIME_MS=" << kMinPrefeedLeadTimeMs << std::endl;
+    }
+    if (lead_time_ms < kMinPrefeedLeadTimeMs) {
+      std::cout << "[PlayoutEngine] INV-CONTROL-NO-POLL-001 VIOLATION: SwitchToLive received with insufficient lead time ("
+                << lead_time_ms << " ms < " << kMinPrefeedLeadTimeMs << " ms required)" << std::endl;
+      EngineResult result(false, "Insufficient prefeed lead time");
+      result.result_code = ResultCode::kProtocolViolation;
+      result.violation_reason = "Insufficient prefeed lead time";
+      return result;
+    }
+    std::cout << "[PlayoutEngine] INV-SWITCH-DEADLINE-AUTHORITATIVE-001: Switch scheduled for " << target_boundary_time_ms << std::endl;
+    lock.unlock();
+    const int64_t target_us = target_boundary_time_ms * 1000;
+    if (master_clock_) {
+      master_clock_->WaitUntilUtcUs(target_us);
+    } else {
+      const auto now_sys = std::chrono::system_clock::now();
+      const int64_t now_sys_us = std::chrono::duration_cast<std::chrono::microseconds>(now_sys.time_since_epoch()).count();
+      const int64_t remaining_us = target_us - now_sys_us;
+      if (remaining_us > 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(remaining_us));
+      }
+    }
+    lock.lock();
+    it = channels_.find(channel_id);
+    if (it == channels_.end() || !it->second) {
+      return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found after wait");
+    }
+    if (!it->second->preview_producer) {
+      return EngineResult(false, "No preview producer for channel " + std::to_string(channel_id) + " at deadline");
+    }
+    return ExecuteSwitchAtDeadline(channel_id, target_boundary_time_ms, lock);
   }
 
   try {
@@ -1252,6 +1311,163 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
     ex_result.result_code = ResultCode::kFailed;
     return ex_result;
   }
+}
+
+EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t target_boundary_time_ms,
+                                                   std::unique_lock<std::mutex>& lock) {
+  // P11D-001/002/003: Caller holds lock; execute switch at deadline regardless of readiness.
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second) {
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
+  }
+  PlayoutInstance* state = it->second.get();
+  if (!state->preview_producer) {
+    return EngineResult(false, "No preview producer for channel " + std::to_string(channel_id));
+  }
+
+  constexpr size_t kMinPreviewVideoDepth = 2;
+  const bool is_shadow_mode = state->preview_producer->IsShadowDecodeMode();
+  const bool shadow_ready = state->preview_producer->IsShadowDecodeReady();
+  const size_t preview_video_depth = state->preview_ring_buffer ? state->preview_ring_buffer->Size() : 0;
+  const bool live_eof = state->live_producer && state->live_producer->IsEOF();
+  const bool preview_eof = state->preview_producer && state->preview_producer->IsEOF();
+  const bool preview_eof_with_frames = preview_eof && preview_video_depth >= 1;
+  const bool ready = (is_shadow_mode ? shadow_ready : true) &&
+      (preview_video_depth >= kMinPreviewVideoDepth || live_eof || preview_eof_with_frames);
+
+  if (!ready) {
+    std::cout << "[PlayoutEngine] INV-SWITCH-DEADLINE-AUTHORITATIVE-001 VIOLATION: Switch executed at deadline but preview not ready. Using safety rails." << std::endl;
+    if (metrics_exporter_) {
+      metrics_exporter_->IncrementSwitchDeadlineNotReady(channel_id);
+    }
+    if (state->program_output) {
+      state->program_output->SetNoContentSegment(true);
+    }
+    std::cout << "[PlayoutEngine] Safety rails engaged for channel " << channel_id << std::endl;
+    state->successor_video_emitted_.store(true, std::memory_order_release);
+  }
+
+  std::cout << "[PlayoutEngine] INV-SWITCH-DEADLINE-AUTHORITATIVE-001: Executing scheduled switch at " << target_boundary_time_ms
+            << ", readiness=" << (ready ? "true" : "false") << std::endl;
+
+  if (is_shadow_mode) {
+    if (!shadow_ready) {
+      // At deadline we still do handshake; preview may have cached frame by now or we rely on safety rails
+      (void)0;
+    }
+    if (!state->timeline_controller) {
+      int64_t last_emitted_pts = 0;
+      if (state->program_output) {
+        last_emitted_pts = state->program_output->GetLastEmittedPTS();
+        if (last_emitted_pts > 0) {
+          double fps = state->program_format.GetFrameRateAsDouble();
+          int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+          state->preview_producer->AlignPTS(last_emitted_pts + frame_period_us);
+        }
+      }
+    }
+    if (state->live_producer && state->timeline_controller) {
+      state->live_producer->SetWriteBarrier();
+    }
+    if (state->timeline_controller && !state->timeline_controller->IsMappingPending()) {
+      state->timeline_controller->BeginSegmentFromPreview();
+    }
+    state->preview_producer->SetShadowDecodeMode(false);
+    (void)state->preview_producer->FlushCachedFrameToBuffer();
+    if (state->preview_producer->GetConfiguredFrameCount() == 0) {
+      if (state->program_output) {
+        state->program_output->SetNoContentSegment(true);
+      }
+      state->successor_video_emitted_.store(true, std::memory_order_release);
+    }
+  }
+
+  size_t preview_depth_before = state->preview_ring_buffer ? state->preview_ring_buffer->Size() : 0;
+  size_t preview_audio_depth = state->preview_ring_buffer ? state->preview_ring_buffer->AudioSize() : 0;
+
+  state->successor_video_emitted_.store(ready ? false : true, std::memory_order_release);
+  const int64_t first_pts_us = state->program_output ? state->program_output->GetFirstEmittedPTS() : 0;
+  const int64_t last_pts_us = state->program_output ? state->program_output->GetLastEmittedPTS() : 0;
+
+  MaybeRequestStop(state->live_producer.get());
+  std::unique_ptr<producers::file::FileProducer> old_producer = std::move(state->live_producer);
+
+  if (old_producer) {
+    auto stats = old_producer->GetAsRunFrameStats();
+    if (stats) {
+      const int64_t last_frame = stats->start_frame + (stats->frames_emitted > 0
+          ? static_cast<int64_t>(stats->frames_emitted) - 1 : 0);
+      LogAirAsRunFrameRange(channel_id, "", stats->asset_path,
+          stats->start_frame, last_frame, stats->frames_emitted,
+          first_pts_us, last_pts_us, "RETIRE_REQUESTED");
+    }
+  }
+
+  if (state->program_output && state->preview_ring_buffer) {
+    state->program_output->SetInputBuffer(state->preview_ring_buffer.get());
+  }
+  std::swap(state->ring_buffer, state->preview_ring_buffer);
+
+  state->live_producer = std::move(state->preview_producer);
+  state->live_asset_path = state->preview_asset_path;
+  state->preview_producer.reset();
+  state->preview_asset_path.clear();
+
+  if (old_producer) {
+    std::thread([producer = std::move(old_producer)]() mutable {
+      producer.reset();
+    }).detach();
+  }
+
+  state->switch_in_progress = false;
+  state->switch_target_asset.clear();
+  state->switch_watcher_stop.store(true);
+
+  std::cout << "[SwitchToLive] INV-SWITCH-DEADLINE-AUTHORITATIVE-001: COMPLETE "
+            << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
+            << ", asset=" << state->live_asset_path << ", safety_rail=" << (!ready ? "true" : "false") << ")" << std::endl;
+
+  PlayoutInstance* state_ptr = state;
+  constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
+  const auto wait_start = std::chrono::steady_clock::now();
+  while (!state_ptr->successor_video_emitted_.load(std::memory_order_acquire)) {
+    lock.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    lock.lock();
+    it = channels_.find(channel_id);
+    if (it == channels_.end() || !it->second) {
+      return EngineResult(false, "Channel " + std::to_string(channel_id) + " lost during switch wait");
+    }
+    state_ptr = it->second.get();
+    if (std::chrono::steady_clock::now() - wait_start > kSuccessorEmitWaitTimeout) {
+      std::cerr << "[SwitchToLive] INV-SWITCH-SUCCESSOR-EMISSION VIOLATION: timeout waiting for successor video emission" << std::endl;
+      return EngineResult(false, "INV-SWITCH-SUCCESSOR-EMISSION: timeout waiting for successor video emission");
+    }
+  }
+
+  EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
+  result.pts_contiguous = true;
+  result.live_start_pts = 0;
+  result.result_code = ResultCode::kOk;
+  // P11D-007: Return ACTUAL completion time (MasterClock when switch completed), not target
+  result.switch_completion_time_ms = NowUtc(master_clock_) / 1000;
+  if (metrics_exporter_) {
+    const int64_t actual_ms = result.switch_completion_time_ms;
+    const int64_t delta_ms = actual_ms - target_boundary_time_ms;
+    const int64_t tolerance_ms = 33;
+    if (delta_ms > tolerance_ms) {
+      std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001 VIOLATION: Switch completed " << delta_ms
+                << "ms late (target=" << target_boundary_time_ms << ", actual=" << actual_ms
+                << ", tolerance=" << tolerance_ms << "ms)" << std::endl;
+      metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+      metrics_exporter_->IncrementBoundaryViolations(channel_id);
+    } else {
+      std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001: Switch on time (delta=" << delta_ms
+                << "ms, tolerance=" << tolerance_ms << "ms)" << std::endl;
+      metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+    }
+  }
+  return result;
 }
 
 std::optional<std::string> PlayoutEngine::GetLiveAssetPath(int32_t channel_id) {

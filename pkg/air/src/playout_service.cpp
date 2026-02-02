@@ -263,10 +263,11 @@ namespace retrovue
     {
       const int32_t channel_id = request->channel_id();
       const int64_t target_boundary_time_ms = request->target_boundary_time_ms();  // P11C-001 (0 = legacy)
+      const int64_t issued_at_time_ms = request->issued_at_time_ms();  // P11D-012: INV-LEADTIME-MEASUREMENT-001
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
 
-      auto result = interface_->SwitchToLive(channel_id, target_boundary_time_ms);
+      auto result = interface_->SwitchToLive(channel_id, target_boundary_time_ms, issued_at_time_ms);
 
       response->set_success(result.success);
       response->set_message(result.message);
@@ -275,6 +276,9 @@ namespace retrovue
       response->set_result_code(MapResultCode(result.result_code));  // Phase 8: Typed result
       if (result.switch_completion_time_ms != 0) {
         response->set_switch_completion_time_ms(result.switch_completion_time_ms);  // P11B-001
+      }
+      if (!result.violation_reason.empty()) {
+        response->set_violation_reason(result.violation_reason);  // P11D-004
       }
 
       if (!result.success) {

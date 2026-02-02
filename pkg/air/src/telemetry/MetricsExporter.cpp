@@ -310,6 +310,18 @@ void MetricsExporter::IncrementBoundaryViolations(int32_t channel_id) {
   queue_cv_.notify_one();
 }
 
+void MetricsExporter::IncrementSwitchDeadlineNotReady(int32_t channel_id) {
+  Event event{};
+  event.type = Event::Type::kIncrementSwitchDeadlineNotReady;
+  event.channel_id = channel_id;
+  if (!event_queue_.Push(event)) {
+    queue_overflow_total_.fetch_add(1, std::memory_order_acq_rel);
+    return;
+  }
+  submitted_events_.fetch_add(1, std::memory_order_acq_rel);
+  queue_cv_.notify_one();
+}
+
 bool MetricsExporter::GetChannelMetrics(int32_t channel_id,
                                         ChannelMetrics& metrics) const {
   if (kMetricsExporterVerbose) {
@@ -428,6 +440,9 @@ void MetricsExporter::ProcessEvent(const Event& event) {
       break;
     case Event::Type::kIncrementBoundaryViolations:
       switch_boundary_violations_[event.channel_id]++;
+      break;
+    case Event::Type::kIncrementSwitchDeadlineNotReady:
+      switch_deadline_not_ready_[event.channel_id]++;
       break;
   }
 }
@@ -574,6 +589,13 @@ std::string MetricsExporter::GenerateMetricsText() const {
   oss << "# TYPE retrovue_switch_boundary_violations_total counter\n";
   for (const auto& [channel_id, count] : switch_boundary_violations_) {
     oss << "retrovue_switch_boundary_violations_total{channel_id=\"" << channel_id << "\"} " << count << "\n";
+  }
+
+  // P11D-003: Switches at deadline with preview not ready (safety rails)
+  oss << "\n# HELP retrovue_switch_deadline_not_ready_total Switches executed at deadline with preview not ready\n";
+  oss << "# TYPE retrovue_switch_deadline_not_ready_total counter\n";
+  for (const auto& [ch_id, cnt] : switch_deadline_not_ready_) {
+    oss << "retrovue_switch_deadline_not_ready_total{channel_id=\"" << ch_id << "\"} " << cnt << "\n";
   }
 
   return oss.str();

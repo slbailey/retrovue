@@ -2,8 +2,8 @@
 
 **Status:** Authoritative
 **Purpose:** Single source of truth for all active rules governing RetroVue Core and AIR
-**Last Updated:** 2026-02-01
-**Last Audit:** 2026-02-01 (Broadcast-Grade Timing Compliance Audit)
+**Last Updated:** 2026-02-02
+**Last Audit:** 2026-02-02 (Scheduling Feasibility Invariant); Phase 11D closed 2026-02-02
 
 This ledger enumerates every active rule in the RetroVue system. If a rule is not in this ledger, it is not enforced. If code disagrees with a rule in this ledger, the code is wrong.
 
@@ -49,7 +49,11 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-BOUNDARY-TOLERANCE-001 | LAW-SWITCHING | **Operationalizes** — adds frame-level timing tolerance to switching law |
 | INV-BOUNDARY-DECLARED-001 | LAW-SWITCHING | **Operationalizes** — requires declarative boundary time in protocol |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | LAW-AUDIO-FORMAT, INV-P10-BACKPRESSURE-SYMMETRIC | **Refines** — explicitly forbids audio sample drops under backpressure |
-| INV-CONTROL-NO-POLL-001 | AIR-010 (Prefeed Ordering) | **Operationalizes** — forbids poll/retry semantics for switch readiness |
+| INV-SCHED-PLAN-BEFORE-EXEC-001 | LAW-AUTHORITY-HIERARCHY | **Derives** — scheduling feasibility determined before execution; runtime MUST NOT discover or repair infeasible boundaries |
+| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | INV-SCHED-PLAN-BEFORE-EXEC-001, INV-CONTROL-NO-POLL-001, LAW-AUTHORITY-HIERARCHY | **Derives** — startup latency is a schedule content constraint; first boundary must account for launch overhead without offsetting planning_time |
+| INV-SWITCH-ISSUANCE-DEADLINE-001 | LAW-AUTHORITY-HIERARCHY, INV-SWITCH-DEADLINE-AUTHORITATIVE-001, INV-CONTROL-NO-POLL-001 | **Derives** — if switch execution is deadline-authoritative, switch issuance must also be deadline-scheduled; cadence-based detection is forbidden |
+| INV-LEADTIME-MEASUREMENT-001 | LAW-AUTHORITY-HIERARCHY, INV-CONTROL-NO-POLL-001, INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | **Derives** — lead-time feasibility uses issuance timestamp, not receipt time; transport jitter must not affect feasibility |
+| INV-CONTROL-NO-POLL-001 | AIR-010 (Prefeed Ordering), INV-SCHED-PLAN-BEFORE-EXEC-001 | **Operationalizes** — forbids poll/retry semantics for switch readiness; presupposes planning-time feasibility |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | INV-BOUNDARY-DECLARED-001, LAW-CLOCK, LAW-AUTHORITY-HIERARCHY | **Refines** — AIR executes at declared time regardless of readiness; clock supersedes frame completion |
 | LAW-FRAME-EXECUTION | LAW-AUTHORITY-HIERARCHY | **Subordinate** — governs execution precision (HOW), not transition timing (WHEN); clock authority takes precedence |
 | INV-FRAME-001 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — frame-indexed boundaries for execution, not for delaying clock-scheduled transitions |
@@ -338,6 +342,10 @@ These invariants were added to address observed violations of broadcast-grade ti
 | **INV-BOUNDARY-TOLERANCE-001** | CONTRACT | PlayoutEngine | P8 | No | Yes | — |
 | **INV-BOUNDARY-DECLARED-001** | CONTRACT | Core + AIR | P8 | No | Yes | — |
 | **INV-AUDIO-SAMPLE-CONTINUITY-001** | CONTRACT | FileProducer, FrameRingBuffer | RUNTIME | No | Yes | — |
+| **INV-SCHED-PLAN-BEFORE-EXEC-001** | CONTRACT | Core | SCHEDULE-TIME | No | Yes | — |
+| **INV-STARTUP-BOUNDARY-FEASIBILITY-001** | CONTRACT | Core | SCHEDULE-TIME | No | Yes | — |
+| **INV-SWITCH-ISSUANCE-DEADLINE-001** | CONTRACT | Core | RUNTIME | No | Yes | — |
+| **INV-LEADTIME-MEASUREMENT-001** | CONTRACT | Core + AIR | P8 | No | Yes | — |
 | **INV-CONTROL-NO-POLL-001** | CONTRACT | Core | RUNTIME | No | Yes | — |
 | **INV-SWITCH-DEADLINE-AUTHORITATIVE-001** | CONTRACT | PlayoutEngine | P8 | No | Yes | — |
 
@@ -346,8 +354,198 @@ These invariants were added to address observed violations of broadcast-grade ti
 | INV-BOUNDARY-TOLERANCE-001 | Grid boundary transitions MUST complete within one video frame duration (33.33ms at 30fps) of the absolute scheduled boundary time |
 | INV-BOUNDARY-DECLARED-001 | SwitchToLive MUST include `target_boundary_time_ms` parameter; Core declares intent, AIR executes at that time |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | Audio sample continuity MUST be preserved; audio samples MUST NOT be dropped due to queue backpressure; overflow triggers producer throttling |
+| INV-SCHED-PLAN-BEFORE-EXEC-001 | Scheduling feasibility MUST be determined once, at planning time. Only boundaries that are already feasible by construction may enter execution. Runtime MUST NOT discover, repair, delay, or re-evaluate boundary feasibility. |
+| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | The first scheduled boundary MUST satisfy `boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME`. This is a constraint on schedule content, not on planning_time. |
+| INV-SWITCH-ISSUANCE-DEADLINE-001 | SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. |
+| INV-LEADTIME-MEASUREMENT-001 | Prefeed lead time MUST be evaluated using the issuance timestamp supplied by Core (`issued_at_time_ms`), not AIR receipt time. Transport jitter MUST NOT affect feasibility determination. |
 | INV-CONTROL-NO-POLL-001 | Core MUST NOT poll AIR for switch readiness; NOT_READY indicates protocol error (prefeed too late), not a condition to retry |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | When `target_boundary_time_ms` is provided, AIR MUST execute the switch at that wall-clock time ± 1 frame; internal readiness is AIR's responsibility |
+
+#### INV-STARTUP-BOUNDARY-FEASIBILITY-001 (Full Definition)
+
+At channel startup, a non-zero interval elapses between schedule planning (station_utc) and the moment Core can issue execution-time commands (LoadPreview, SwitchToLive). This interval includes AIR process spawn, ChannelManager initialization, gRPC channel establishment, and protocol handshake.
+
+The schedule or playout plan MUST supply a first boundary whose scheduled time satisfies:
+
+```
+boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME
+```
+
+Where:
+- `station_utc` is the planning time (unmodified)
+- `startup_latency` is a bounded, declared upper limit on channel launch overhead
+- `MIN_PREFEED_LEAD_TIME` is the minimum lead time required by INV-CONTROL-NO-POLL-001
+
+If no such boundary exists in the schedule, planning MUST fail immediately with a FATAL error, because runtime execution has no legal mechanism to recover from startup infeasibility.
+
+**Derivation:**
+
+| Parent Rule | Relationship |
+|-------------|--------------|
+| LAW-AUTHORITY-HIERARCHY | Clock authority is absolute; startup overhead does not suspend the clock |
+| INV-SCHED-PLAN-BEFORE-EXEC-001 | Feasibility is determined at planning time; schedule content must be feasible by construction |
+| INV-CONTROL-NO-POLL-001 | No retry or poll semantics; if first boundary cannot be honored, there is no recovery |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch executes at declared time; startup delay does not shift the boundary |
+
+**Rationale:**
+
+When INV-SCHED-PLAN-BEFORE-EXEC-001 is correctly enforced, runtime cannot compensate for infeasible boundaries. If the first boundary is infeasible due to startup latency, the channel will FATAL at runtime—correctly, per contract. This invariant makes the constraint explicit at the schedule/plan level, allowing planning to fail early rather than at runtime.
+
+**Non-Goals (Explicitly Forbidden):**
+
+This invariant does NOT permit:
+- Offsetting `planning_time` to absorb startup latency
+- Adding margin to `planning_time` calculations
+- Delaying, padding, or adjusting the first boundary at runtime
+- Retry or re-planning after startup begins
+- Tick-based discovery of startup infeasibility
+- "Soft" failures that allow degraded startup
+
+**Operational Implication:**
+
+Schedules must be constructed such that the first boundary of any startable segment is far enough in the future to accommodate startup overhead. This is a constraint on schedule generation and content selection, not on runtime behavior. Mock and test schedules are subject to the same startup feasibility constraint as production schedules.
+
+#### INV-SWITCH-ISSUANCE-DEADLINE-001 (Full Definition)
+
+If switch execution is deadline-authoritative (INV-SWITCH-DEADLINE-AUTHORITATIVE-001), then switch issuance must also be deadline-scheduled. The timing of SwitchToLive issuance MUST NOT depend on runtime loop frequency, tick cadence, or scheduling jitter.
+
+**Definition of "deadline-scheduled":** The issuance is registered once with the event loop as a timed callback or task at plan time; it is not discovered later by periodic checks.
+
+Core MUST compute a single, deterministic issuance time for each boundary:
+
+```
+issue_at = boundary_time - MIN_PREFEED_LEAD_TIME
+```
+
+SwitchToLive MUST be issued no later than `issue_at`; issuing earlier is permitted. Late issuance (after `issue_at`) is a violation and MUST be treated as fatal. The issuance MUST NOT be triggered by cadence-based polling that detects `now >= issue_at`.
+
+**Derivation:**
+
+| Parent Rule | Relationship |
+|-------------|--------------|
+| LAW-AUTHORITY-HIERARCHY | Clock authority is absolute; issuance timing derives from clock, not loop frequency |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Execution is deadline-bound; issuance must be equally precise |
+| INV-CONTROL-NO-POLL-001 | No poll/retry semantics; extends to issuance timing |
+
+**Rationale:**
+
+Deadline-authoritative execution is undermined if issuance timing depends on runtime cadence. A tick loop running at 1-second intervals introduces up to 1 second of jitter. Padding lead times to absorb jitter reintroduces the timing luck that deadline-authoritative semantics were designed to eliminate. The only correct solution is deadline-scheduled issuance.
+
+**Non-Goals (Explicitly Forbidden):**
+
+This invariant does NOT permit:
+- Cadence-based detection (`if now >= switch_at` in a tick loop)
+- Tick-jitter padding or lead-time inflation to absorb loop frequency
+- Loop-frequency-dependent correctness
+- Runtime "catch-up" issuance after missed cadence
+- Health-check-triggered switch issuance
+- Polling-based approximation of deadline timing
+- Using `asyncio.sleep(delay)` without an underlying deadline primitive
+
+**Anti-Patterns (FORBIDDEN):**
+
+```python
+# WRONG: Cadence-based detection in tick loop
+async def tick(self):
+    now = datetime.now(timezone.utc)
+    if now >= self._switch_at:  # VIOLATION: cadence-based detection
+        await self._issue_switch_to_live()
+```
+
+```python
+# WRONG: Inflating lead time to absorb tick jitter
+_switch_lead_seconds = MIN_PREFEED_LEAD_TIME + 1  # VIOLATION: jitter padding
+```
+
+```python
+# WRONG: Loop frequency determines correctness
+async def run(self):
+    while True:
+        await asyncio.sleep(0.5)  # VIOLATION: correctness depends on sleep interval
+        self._check_pending_switches()
+```
+
+```python
+# WRONG: Catch-up issuance after missed cadence
+if now > switch_at and not switch_issued:
+    logger.warning("late issuance")  # VIOLATION: runtime catch-up
+    await self._issue_switch_to_live()
+```
+
+**Correct Pattern:**
+
+```python
+# RIGHT: Deadline-scheduled issuance via event loop primitive
+def _schedule_switch_issuance(self, boundary_time: datetime) -> None:
+    issue_at = boundary_time - MIN_PREFEED_LEAD_TIME
+    delay = (issue_at - datetime.now(timezone.utc)).total_seconds()
+
+    # Register timed callback at plan time; event loop fires at deadline
+    self._loop.call_later(delay, self._issue_switch_to_live_callback, boundary_time)
+```
+
+**Operational Implication:**
+
+Switch issuance is a scheduled event, not a detected condition. Core computes `issue_at` once when the boundary is planned, registers a timed callback with the event loop to fire at that time, and issues SwitchToLive when the callback executes. No tick loop, health check, or cadence-based mechanism participates in issuance timing.
+
+#### INV-LEADTIME-MEASUREMENT-001 (Full Definition)
+
+Prefeed lead time MUST be evaluated using the issuance timestamp supplied by Core, not AIR's receipt time. Transport jitter (RPC latency, scheduling delays) MUST NOT affect feasibility determination.
+
+**Protocol Requirement:**
+
+SwitchToLiveRequest MUST include `issued_at_time_ms` (epoch milliseconds, station/master clock basis). Core populates this field with the wall-clock time at the moment SwitchToLive is issued. If `issued_at_time_ms` is absent or zero, receipt-time evaluation applies for backward compatibility only; this mode is deprecated and MUST NOT be relied upon by Core.
+
+**Feasibility Evaluation:**
+
+AIR MUST compute lead time as:
+
+```
+lead_time_ms = target_boundary_time_ms - issued_at_time_ms
+```
+
+AIR MUST enforce:
+
+```
+lead_time_ms >= kMinPrefeedLeadTimeMs
+```
+
+AIR MUST NOT use receipt time for feasibility. Receipt time MAY be logged for diagnostics.
+
+**Clock Skew Detection:**
+
+AIR MUST compute and log transport skew:
+
+```
+skew_ms = receipt_time_ms - issued_at_time_ms
+```
+
+If `skew_ms > 250`, AIR MUST log `PROTOCOL_CLOCK_SKEW` warning. This indicates clock divergence or excessive transport delay, but does NOT affect feasibility determination.
+
+**Derivation:**
+
+| Parent Rule | Relationship |
+|-------------|--------------|
+| LAW-AUTHORITY-HIERARCHY | Clock authority is absolute; measurement basis must be unambiguous |
+| INV-CONTROL-NO-POLL-001 | No retry; feasibility must be deterministic at issuance |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Execution is deadline-bound; feasibility check must not introduce jitter |
+
+**Rationale:**
+
+If Core issues SwitchToLive at exactly `boundary_time - MIN_PREFEED_LEAD_TIME`, and AIR evaluates using receipt time, any non-zero RPC latency causes `lead_time_AIR < MIN_PREFEED`, guaranteeing rejection. The only stable measurement basis is the issuance timestamp, which Core controls and includes in the request.
+
+**Non-Goals (Explicitly Forbidden):**
+
+- Using AIR receipt time for feasibility determination
+- Adding jitter padding to MIN_PREFEED_LEAD_TIME
+- Silently compensating for clock skew
+- Retrying on PROTOCOL_VIOLATION
+
+**Log Format:**
+
+```
+[AIR] INV-LEADTIME-MEASUREMENT-001: issued_at_ms=%ld receipt_ms=%ld target_ms=%ld lead_time_ms=%ld min_required_ms=%ld skew_ms=%ld result=%s
+```
 
 ### Phase 9 Coordination
 
@@ -492,11 +690,11 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 |-------|-------------|------------|----------|
 | Layer 0 (Laws) | 14 | 6 | 43% |
 | Layer 1 (Semantic) | 32 | 25 | 78% |
-| Layer 2 (Coordination) | 40 | 26 | 65% |
+| Layer 2 (Coordination) | 44 | 26 | 59% |
 | Layer 3 (Diagnostic) | 5 | 0 | 0% |
 | Cross-Domain | 3 | 1 | 33% |
 | Proposed | 14 | 0 | 0% |
-| **Total** | **107** | **58** | **54%** |
+| **Total** | **111** | **58** | **52%** |
 
 ---
 
@@ -506,11 +704,11 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 |-------|-------------|-----------|----------|
 | Layer 0 (Laws) | 14 | 9 | 64% |
 | Layer 1 (Semantic) | 32 | 9 | 28% |
-| Layer 2 (Coordination) | 40 | 16 | 40% |
+| Layer 2 (Coordination) | 44 | 20 | 45% |
 | Layer 3 (Diagnostic) | 5 | 5 | 100% |
 | Cross-Domain | 3 | 1 | 33% |
 | Proposed | 14 | 12 | 86% |
-| **Total** | **107** | **52** | **49%** |
+| **Total** | **111** | **56** | **50%** |
 
 ---
 
@@ -632,7 +830,7 @@ This section documents the phased implementation of invariants added by the 2026
 
 ---
 
-### Phase 11D: Deadline-Authoritative Switching (Enforcement)
+### Phase 11D: Deadline-Authoritative Switching (Enforcement) — **Closed 2026-02-02**
 
 **Goal:** AIR executes switch at declared boundary time regardless of readiness.
 
@@ -640,6 +838,10 @@ This section documents the phased implementation of invariants added by the 2026
 - INV-SWITCH-DEADLINE-AUTHORITATIVE-001
 - INV-BOUNDARY-TOLERANCE-001 (enforcement)
 - INV-CONTROL-NO-POLL-001 (enforcement)
+- INV-SCHED-PLAN-BEFORE-EXEC-001 (planning-time feasibility)
+- INV-STARTUP-BOUNDARY-FEASIBILITY-001
+- INV-SWITCH-ISSUANCE-DEADLINE-001
+- INV-LEADTIME-MEASUREMENT-001 (observability: Core/AIR delta logging)
 
 **Implementation Tasks:**
 
@@ -650,9 +852,13 @@ This section documents the phased implementation of invariants added by the 2026
 | P11D-003 | AIR: If not ready at deadline, use safety rails (pad/silence) and log violation | AIR | P11D-002 |
 | P11D-004 | AIR: Deprecate NOT_READY response; replace with PROTOCOL_VIOLATION if prefeed late | AIR | P11D-002 |
 | P11D-005 | Core: Remove SwitchToLive retry loop; treat NOT_READY as fatal | Core | P11D-004 |
-| P11D-006 | Core: Ensure LoadPreview issued with sufficient lead time | Core | P11D-005 |
+| P11D-009 | Core: Enforce planning-time feasibility (INV-SCHED-PLAN-BEFORE-EXEC-001) | Core | P11D-005 |
+| P11D-010 | Core: Enforce startup boundary feasibility (INV-STARTUP-BOUNDARY-FEASIBILITY-001) | Core | P11D-009 |
+| P11D-011 | Core: Deadline-scheduled switch issuance (INV-SWITCH-ISSUANCE-DEADLINE-001) | Core | P11D-010 |
+| P11D-006 | Core: Ensure LoadPreview issued with sufficient lead time | Core | P11D-005, P11D-009, P11D-010, P11D-011 |
 | P11D-007 | Contract test: switch executes within 1 frame of declared boundary | Test | P11D-002 |
 | P11D-008 | Contract test: late prefeed results in PROTOCOL_VIOLATION, not retry | Test | P11D-004 |
+| P11D-012 | Core + AIR: Delta logging for lead-time / clock skew (INV-LEADTIME-MEASUREMENT-001 observability) | Core + AIR | P11D-011 |
 
 **Exit Criteria:**
 - All switches execute within 1 frame of declared boundary time
@@ -737,5 +943,9 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 
 | Date | Auditor | Scope | Summary |
 |------|---------|-------|---------|
+| 2026-02-02 | Systems Contract Authority | Lead-Time Measurement Basis | Added INV-LEADTIME-MEASUREMENT-001: Prefeed lead time evaluated using issuance timestamp (`issued_at_time_ms`), not AIR receipt time. Receipt-time evaluation makes threshold issuance mathematically impossible under non-zero RPC latency. Proto extended with `issued_at_time_ms` field. |
+| 2026-02-02 | Systems Contract Authority | Switch Issuance Deadline | Added INV-SWITCH-ISSUANCE-DEADLINE-001: SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. Derives from LAW-AUTHORITY-HIERARCHY and INV-SWITCH-DEADLINE-AUTHORITATIVE-001. |
+| 2026-02-02 | Systems Contract Authority | Startup Feasibility | Added INV-STARTUP-BOUNDARY-FEASIBILITY-001: First scheduled boundary must satisfy `boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME`. Startup latency is a schedule content constraint, not a planning_time offset. Derives from INV-SCHED-PLAN-BEFORE-EXEC-001 and LAW-AUTHORITY-HIERARCHY. Runtime has no legal recovery mechanism for startup infeasibility. |
+| 2026-02-02 | Systems Contract Authority | Scheduling Feasibility | Added INV-SCHED-PLAN-BEFORE-EXEC-001: Scheduling feasibility MUST be determined at planning time. Boundaries that cannot satisfy lead-time constraints MUST be rejected during planning, not discovered at runtime. Supports INV-CONTROL-NO-POLL-001 and INV-BOUNDARY-DECLARED-001. Scheduling errors are planning errors. |
 | 2026-02-01 | Systems Contract Authority | Authority Hierarchy | **CRITICAL AMENDMENT:** Added LAW-AUTHORITY-HIERARCHY establishing "clock supersedes frame completion for switch execution." Resolved contradiction between clock-based rules (LAW-CLOCK, LAW-SWITCHING) and frame-based rules (LAW-FRAME-EXECUTION, INV-FRAME-001, INV-FRAME-003). Downgraded frame rules from "authority" to "execution precision." Added Authority Model diagram. |
 | 2026-02-01 | Systems Contract Authority | Broadcast-Grade Timing | Added 5 invariants (INV-BOUNDARY-TOLERANCE-001, INV-BOUNDARY-DECLARED-001, INV-AUDIO-SAMPLE-CONTINUITY-001, INV-CONTROL-NO-POLL-001, INV-SWITCH-DEADLINE-AUTHORITATIVE-001). Amended LAW-SWITCHING, INV-P10-BACKPRESSURE-SYMMETRIC, INV-P8-SWITCH-TIMING. Promoted INV-P8-SWITCH-TIMING to Layer 2. Defined 5-phase implementation plan (11A-11E). |
