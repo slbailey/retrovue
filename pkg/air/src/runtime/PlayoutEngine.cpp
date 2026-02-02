@@ -1073,8 +1073,8 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
       if (state->preview_producer->GetConfiguredFrameCount() == 0) {
         if (state->program_output) {
           state->program_output->SetNoContentSegment(true);
-          std::cout << "[SwitchToLive] INV-P8-ZERO-FRAME-BOOTSTRAP: frame_count=0, "
-                    << "enabling pad frames for bootstrap" << std::endl;
+          std::cout << "[PlayoutEngine] INV-P8-ZERO-FRAME-BOOTSTRAP: Zero-frame segment detected, "
+                    << "CONTENT-BEFORE-PAD gate bypassed" << std::endl;
         }
         // INV-SWITCH-SUCCESSOR-EMISSION: Zero-content segment has no real frames;
         // allow switch completion without encoder emission (pad-only segment).

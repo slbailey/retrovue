@@ -1,6 +1,6 @@
 # Phase 1 Atomic Task List
 
-**Status:** Actionable
+**Status:** ✅ Complete
 **Source:** PHASE1_EXECUTION_PLAN.md
 **Last Updated:** 2026-02-01
 
@@ -20,11 +20,11 @@ One task = one rule = one responsibility.
 
 ### ProgramOutput Checklist
 
-- [ ] P1-PO-001: Add TEST for INV-STARVATION-FAILSAFE-001
-- [ ] P1-PO-002: Add TEST for INV-P10-SINK-GATE
-- [ ] P1-PO-003: Add LOG for INV-P10-SINK-GATE
-- [ ] P1-PO-004: VERIFY LAW-OUTPUT-LIVENESS test assertion
-- [ ] P1-PO-005: VERIFY INV-AIR-CONTENT-BEFORE-PAD; if FAIL add TEST in same task
+- [x] P1-PO-001: Add TEST for INV-STARVATION-FAILSAFE-001
+- [x] P1-PO-002: Add TEST for INV-P10-SINK-GATE
+- [x] P1-PO-003: Add LOG for INV-P10-SINK-GATE
+- [x] P1-PO-004: VERIFY LAW-OUTPUT-LIVENESS test assertion
+- [x] P1-PO-005: VERIFY INV-AIR-CONTENT-BEFORE-PAD; if FAIL add TEST in same task
 
 ---
 
@@ -40,11 +40,11 @@ One task = one rule = one responsibility.
 
 ### EncoderPipeline Checklist
 
-- [ ] P1-EP-001: Add TEST for LAW-AUDIO-FORMAT
-- [ ] P1-EP-002: Add LOG for LAW-AUDIO-FORMAT
-- [ ] P1-EP-003: Add TEST for INV-AUDIO-HOUSE-FORMAT-001 rejection
-- [ ] P1-EP-004: Add TEST for INV-ENCODER-NO-B-FRAMES-001
-- [ ] P1-EP-005: VERIFY INV-AIR-IDR-BEFORE-OUTPUT gate reset test
+- [x] P1-EP-001: Add TEST for LAW-AUDIO-FORMAT
+- [x] P1-EP-002: Add LOG for LAW-AUDIO-FORMAT
+- [x] P1-EP-003: Add TEST for INV-AUDIO-HOUSE-FORMAT-001 rejection
+- [x] P1-EP-004: Add TEST for INV-ENCODER-NO-B-FRAMES-001
+- [x] P1-EP-005: VERIFY INV-AIR-IDR-BEFORE-OUTPUT gate reset test
 
 ---
 
@@ -58,9 +58,9 @@ One task = one rule = one responsibility.
 
 ### MpegTSOutputSink Checklist
 
-- [ ] P1-MS-001: Add LOG for INV-P9-BOOT-LIVENESS
-- [ ] P1-MS-002: Add LOG for INV-P9-AUDIO-LIVENESS
-- [ ] P1-MS-003: VERIFY LAW-VIDEO-DECODABILITY IDR-first test
+- [x] P1-MS-001: Add LOG for INV-P9-BOOT-LIVENESS
+- [x] P1-MS-002: Add LOG for INV-P9-AUDIO-LIVENESS
+- [x] P1-MS-003: VERIFY LAW-VIDEO-DECODABILITY IDR-first test
 
 ---
 
@@ -73,8 +73,8 @@ One task = one rule = one responsibility.
 
 ### PlayoutEngine Checklist
 
-- [ ] P1-PE-001: Add LOG for INV-P8-ZERO-FRAME-BOOTSTRAP
-- [ ] P1-PE-002: VERIFY INV-P9-BOOTSTRAP-READY test (G9_002)
+- [x] P1-PE-001: Add LOG for INV-P8-ZERO-FRAME-BOOTSTRAP
+- [x] P1-PE-002: VERIFY INV-P9-BOOTSTRAP-READY test (G9_002)
 
 ---
 
@@ -112,7 +112,21 @@ When completing a task:
 
 | Task ID | Completed | Commit |
 |---------|-----------|--------|
-| — | — | — |
+| P1-PO-001 | 2026-02-01 | 2853a5a |
+| P1-PO-002 | 2026-02-01 | 2853a5a |
+| P1-PO-003 | 2026-02-01 | 2853a5a |
+| P1-PO-004 | 2026-02-01 | 2853a5a |
+| P1-PO-005 | 2026-02-01 | 2853a5a |
+| P1-EP-001 | 2026-02-01 | 6423dc7 |
+| P1-EP-002 | 2026-02-01 | 6423dc7 |
+| P1-EP-003 | 2026-02-01 | 6423dc7 |
+| P1-EP-004 | 2026-02-01 | 6423dc7 |
+| P1-EP-005 | 2026-02-01 | 6423dc7 |
+| P1-MS-001 | 2026-02-01 | 820c7d5 |
+| P1-MS-002 | 2026-02-01 | 820c7d5 |
+| P1-MS-003 | 2026-02-01 | 820c7d5 |
+| P1-PE-001 | 2026-02-01 | 9dab4cd |
+| P1-PE-002 | 2026-02-01 | 9dab4cd |
 
 ---
 
