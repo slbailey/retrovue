@@ -202,3 +202,92 @@ Phase 1 is complete when:
 | `docs/contracts/ENFORCEMENT_ROADMAP.md` | Source of Phase 1 rule list |
 | `docs/contracts/CANONICAL_RULE_LEDGER.md` | Authoritative rule definitions |
 | `docs/contracts/GAP_REMEDIATION_PLAN.md` | Detailed remediation context |
+
+---
+
+## Post-Phase 1: Broadcast-Grade Timing Audit (2026-02-01)
+
+Following Phase 1 completion, a formal audit identified broadcast-grade timing violations requiring additional invariants. This work is tracked as **Phase 11** (11A-11E).
+
+### Critical: Authority Hierarchy Established (LAW-AUTHORITY-HIERARCHY)
+
+The audit identified a fundamental contradiction between clock-based rules (LAW-CLOCK, LAW-SWITCHING) and frame-based rules (LAW-FRAME-EXECUTION, INV-FRAME-001, INV-FRAME-003). This has been **definitively resolved** by establishing an explicit authority hierarchy:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LAW-AUTHORITY-HIERARCHY                       │
+│         "Clock authority supersedes frame completion"            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   LAW-CLOCK   │    │ LAW-SWITCHING │    │LAW-FRAME-EXEC │
+│ WHEN things   │    │ WHEN switch   │    │ HOW precisely │
+│ happen        │    │ executes      │    │ cuts happen   │
+│ [AUTHORITY]   │    │ [AUTHORITY]   │    │ [EXECUTION]   │
+└───────────────┘    └───────────────┘    └───────────────┘
+                              │
+                              ▼
+                    ┌───────────────┐
+                    │INV-SEGMENT-   │
+                    │CONTENT-001    │
+                    │ WHETHER       │
+                    │ sufficient    │
+                    │ [VALIDATION]  │
+                    │ (clock does   │
+                    │  not wait)    │
+                    └───────────────┘
+```
+
+**Key Principle:** If frame completion and clock deadline conflict, **clock wins**. Frame-based rules describe *how to execute* within a segment, not *whether to execute* a scheduled transition.
+
+**Anti-Pattern (BUG):** Code that waits for frame completion before executing a clock-scheduled switch. This inverts the hierarchy and causes boundary timing violations.
+
+**Correct Pattern:** Schedule switch at clock time. If content isn't ready, use safety rails (pad/silence). Never delay the clock.
+
+### Rules Downgraded from Authority to Execution
+
+| Rule ID | Old Interpretation | New Interpretation |
+|---------|-------------------|-------------------|
+| **LAW-FRAME-EXECUTION** | "Frame index is execution authority" | Governs execution precision (HOW), not timing (WHEN). Subordinate to LAW-CLOCK. |
+| **INV-FRAME-001** | "Boundaries are frame-indexed, not time-based" | Frame-indexed for execution precision. Does not delay clock-scheduled transitions. |
+| **INV-FRAME-003** | "CT derives from frame index" | CT derivation within segment. Frame completion does not gate switch execution. |
+
+### Rules Demoted to Diagnostic Goals
+
+The following rules were demoted from **completion gates** to **diagnostic goals** because they conflict with deadline-authoritative switching semantics:
+
+| Rule ID | Old Role | New Role | Superseded By |
+|---------|----------|----------|---------------|
+| **INV-SWITCH-READINESS** | Completion gate | Diagnostic goal | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 |
+| **INV-SWITCH-SUCCESSOR-EMISSION** | Completion gate | Diagnostic goal | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 |
+
+**Impact:** These rules still exist and should still be logged/measured, but they no longer gate switch completion. Switches complete at the declared boundary time regardless of readiness state.
+
+### New Invariants Added (Phase 11)
+
+| Rule ID | Description | Phase |
+|---------|-------------|-------|
+| INV-BOUNDARY-TOLERANCE-001 | Grid transitions within 1 frame of boundary | 11B, 11D |
+| INV-BOUNDARY-DECLARED-001 | SwitchToLive carries `target_boundary_time_ms` | 11C |
+| INV-AUDIO-SAMPLE-CONTINUITY-001 | No audio drops under backpressure | 11A |
+| INV-CONTROL-NO-POLL-001 | No poll/retry for switch readiness | 11D, 11E |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch at declared time regardless of readiness | 11D |
+
+### Phase 11 Implementation Plan
+
+See **CANONICAL_RULE_LEDGER.md § Phased Implementation Plan** for full details.
+
+| Phase | Goal | Dependencies | Risk |
+|-------|------|--------------|------|
+| **11A** | Audio sample continuity | None | Low |
+| **11B** | Boundary timing observability | None | Very Low |
+| **11C** | Declarative boundary protocol (proto) | None | Medium |
+| **11D** | Deadline-authoritative switching | 11C | High |
+| **11E** | Prefeed timing contract | 11D | Medium |
+
+**Execution Order:**
+1. Parallel: 11A + 11B + 11C
+2. Sequential: 11D → 11E

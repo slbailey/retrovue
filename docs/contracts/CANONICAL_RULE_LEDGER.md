@@ -3,6 +3,7 @@
 **Status:** Authoritative
 **Purpose:** Single source of truth for all active rules governing RetroVue Core and AIR
 **Last Updated:** 2026-02-01
+**Last Audit:** 2026-02-01 (Broadcast-Grade Timing Compliance Audit)
 
 This ledger enumerates every active rule in the RetroVue system. If a rule is not in this ledger, it is not enforced. If code disagrees with a rule in this ledger, the code is wrong.
 
@@ -40,17 +41,84 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-P8-OUTPUT-001 | LAW-OUTPUT-LIVENESS | **Refines** — adds "explicit flush, bounded delivery" to liveness guarantee |
 | INV-AUDIO-HOUSE-FORMAT-001 | LAW-AUDIO-FORMAT | **Test obligation** — contract test verifying the law |
 | INV-STARVATION-FAILSAFE-001 | LAW-OUTPUT-LIVENESS | **Operationalizes** — defines bounded time for pad emission |
-| INV-P9-BOOTSTRAP-READY | INV-SWITCH-READINESS | **Bootstrap minimum** — P9 requires ≥1 frame; full readiness requires ≥2 |
+| INV-P9-BOOTSTRAP-READY | INV-SWITCH-READINESS | **Bootstrap minimum** — P9 requires ≥1 frame; full readiness goal is ≥2. *(Note: INV-SWITCH-READINESS demoted to diagnostic goal per audit 2026-02-01)* |
 | INV-P10-SINK-GATE | INV-P9-SINK-LIVENESS-001 | **Complementary** — SINK-GATE prevents consumption; SINK-LIVENESS describes routing after attachment |
 | INV-P9-TS-EMISSION-LIVENESS | INV-P9-BOOT-LIVENESS | **Refines** — adds specific 500ms deadline to "bounded time" |
 | INV-P10-AUDIO-VIDEO-GATE | LAW-OUTPUT-LIVENESS | **Prevents violation** — ensures audio availability so mux can emit TS |
 | LAW-RUNTIME-AUDIO-AUTHORITY | LAW-AUDIO-FORMAT | **Operationalizes** — defines producer-authoritative mode enforcement |
+| INV-BOUNDARY-TOLERANCE-001 | LAW-SWITCHING | **Operationalizes** — adds frame-level timing tolerance to switching law |
+| INV-BOUNDARY-DECLARED-001 | LAW-SWITCHING | **Operationalizes** — requires declarative boundary time in protocol |
+| INV-AUDIO-SAMPLE-CONTINUITY-001 | LAW-AUDIO-FORMAT, INV-P10-BACKPRESSURE-SYMMETRIC | **Refines** — explicitly forbids audio sample drops under backpressure |
+| INV-CONTROL-NO-POLL-001 | AIR-010 (Prefeed Ordering) | **Operationalizes** — forbids poll/retry semantics for switch readiness |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | INV-BOUNDARY-DECLARED-001, LAW-CLOCK, LAW-AUTHORITY-HIERARCHY | **Refines** — AIR executes at declared time regardless of readiness; clock supersedes frame completion |
+| LAW-FRAME-EXECUTION | LAW-AUTHORITY-HIERARCHY | **Subordinate** — governs execution precision (HOW), not transition timing (WHEN); clock authority takes precedence |
+| INV-FRAME-001 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — frame-indexed boundaries for execution, not for delaying clock-scheduled transitions |
+| INV-FRAME-003 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — CT derivation within segment; frame completion does not gate switch execution |
+
+---
+
+## Authority Model (Canonical)
+
+This section defines the authoritative model for resolving apparent conflicts between time-based and frame-based rules.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LAW-AUTHORITY-HIERARCHY                       │
+│         "Clock authority supersedes frame completion"            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   LAW-CLOCK   │    │ LAW-SWITCHING │    │LAW-FRAME-EXEC │
+│               │    │               │    │               │
+│ WHEN things   │    │ WHEN switch   │    │ HOW precisely │
+│ happen        │    │ executes      │    │ cuts happen   │
+│               │    │ (± 1 frame)   │    │               │
+│ [AUTHORITY]   │    │ [AUTHORITY]   │    │ [EXECUTION]   │
+└───────────────┘    └───────────────┘    └───────────────┘
+                              │
+                              ▼
+                    ┌───────────────┐
+                    │INV-SEGMENT-   │
+                    │CONTENT-001    │
+                    │               │
+                    │ WHETHER       │
+                    │ content is    │
+                    │ sufficient    │
+                    │               │
+                    │ [VALIDATION]  │
+                    │ (clock does   │
+                    │  not wait)    │
+                    └───────────────┘
+```
+
+**Key Principle:** If frame completion and clock deadline conflict, clock wins. Frame-based rules describe *how to execute* within a segment, not *whether to execute* a scheduled transition.
+
+**Anti-Pattern (BUG):** Code that waits for frame completion before executing a clock-scheduled switch. This inverts the hierarchy and causes boundary timing violations.
+
+**Correct Pattern:** Schedule switch at clock time. If content isn't ready, use safety rails (pad/silence). Never delay the clock.
 
 ---
 
 ## Layer 0 — Constitutional Laws
 
 Laws are non-negotiable. All contracts must conform to these laws.
+
+### Authority Hierarchy (Supreme)
+
+| Rule ID | Classification | Owner | Enforcement | Test | Log | Supersedes |
+|---------|---------------|-------|-------------|------|-----|------------|
+| **LAW-AUTHORITY-HIERARCHY** | LAW | System | ARCHITECTURE | No | No | — |
+
+| Rule ID | One-Line Definition | Source |
+|---------|---------------------|--------|
+| LAW-AUTHORITY-HIERARCHY | **Clock authority supersedes frame completion for switch execution.** Clock (LAW-CLOCK) decides WHEN transitions occur. Frame boundary (LAW-FRAME-EXECUTION) decides HOW precisely cuts happen. Frame count (INV-SEGMENT-CONTENT-001) decides WHETHER content is sufficient, but clock does not wait for frame completion. | Audit 2026-02-01 |
+
+**Rationale:** This hierarchy resolves the apparent contradiction between clock-based and frame-based rules. Without this hierarchy, code may incorrectly wait for frame completion before executing a clock-scheduled transition, causing the exact boundary timing violations observed in production.
+
+### Core Laws
 
 | Rule ID | Classification | Owner | Enforcement | Test | Log | Supersedes |
 |---------|---------------|-------|-------------|------|-----|------------|
@@ -76,9 +144,9 @@ Laws are non-negotiable. All contracts must conform to these laws.
 | LAW-TIMELINE | TimelineController owns CT mapping; producers are time-blind after lock | PlayoutInvariants §2 |
 | LAW-OUTPUT-LIVENESS | ProgramOutput never blocks; if no content → deterministic pad (black + silence) | PlayoutInvariants §3 |
 | LAW-AUDIO-FORMAT | Channel defines house format; all audio normalized before OutputBus; EncoderPipeline never negotiates | PlayoutInvariants §4 |
-| LAW-SWITCHING | No gaps, no PTS regression, no silence during switches | PlayoutInvariants §5 |
+| LAW-SWITCHING | No gaps, no PTS regression, no silence during switches. **Transitions MUST complete within one video frame duration of scheduled absolute boundary time.** | PlayoutInvariants §5 |
 | LAW-VIDEO-DECODABILITY | Every segment starts with IDR; real content gates pad; AIR owns keyframes | PlayoutInvariants §6 |
-| LAW-FRAME-EXECUTION | Frame index is execution authority; CT derives from frame index | PlayoutInvariants §7 *(Reclassified to CONTRACT: architectural choice, not broadcast-grade guarantee)* |
+| LAW-FRAME-EXECUTION | Frame index governs execution precision (HOW cuts happen), not transition timing (WHEN cuts happen). CT derives from frame index within a segment. **Does not override LAW-CLOCK for switch timing.** | PlayoutInvariants §7 *(Reclassified to CONTRACT; subordinate to LAW-AUTHORITY-HIERARCHY)* |
 | LAW-OBS-001 | Intent evidence — every significant action has intent log | ObservabilityParityLaw |
 | LAW-OBS-002 | Correlation evidence — related events share correlation ID | ObservabilityParityLaw |
 | LAW-OBS-003 | Result evidence — every action has outcome log | ObservabilityParityLaw |
@@ -203,9 +271,9 @@ Truths about correctness and time.
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
-| INV-FRAME-001 | Segment boundaries are frame-indexed, not time-based |
+| INV-FRAME-001 | Segment boundaries are frame-indexed for execution precision. **Does not delay clock-scheduled transitions.** *(Execution-level, not authority-level per LAW-AUTHORITY-HIERARCHY)* |
 | INV-FRAME-002 | Padding is expressed in frames, never duration |
-| INV-FRAME-003 | CT derives from frame index: ct = epoch + (frame_index × frame_duration) |
+| INV-FRAME-003 | CT derives from frame index within a segment: ct = epoch + (frame_index × frame_duration). **Frame completion does not gate switch execution.** *(Execution-level, not authority-level per LAW-AUTHORITY-HIERARCHY)* |
 | INV-P10-FRAME-INDEXED-EXECUTION | Producers track progress by frame index, not elapsed time |
 
 ---
@@ -259,6 +327,27 @@ Write barriers, switch orchestration, readiness, backpressure.
 | INV-P8-AV-SYNC | Audio gated until video locks mapping (no audio ahead of video at switch) |
 | INV-P8-AUDIO-PRIME-001 | No header until first audio; no video encode before header written |
 | INV-P8-IO-UDS-001 | UDS/output must not block on prebuffer; prebuffering disabled for UDS |
+| INV-P8-SWITCH-TIMING | Core: switch at boundary; **MUST complete within one frame of boundary**; violation log if >1 frame late |
+
+### Broadcast-Grade Timing Invariants (Audit 2026-02-01)
+
+These invariants were added to address observed violations of broadcast-grade timing requirements.
+
+| Rule ID | Classification | Owner | Enforcement | Test | Log | Supersedes |
+|---------|---------------|-------|-------------|------|-----|------------|
+| **INV-BOUNDARY-TOLERANCE-001** | CONTRACT | PlayoutEngine | P8 | No | Yes | — |
+| **INV-BOUNDARY-DECLARED-001** | CONTRACT | Core + AIR | P8 | No | Yes | — |
+| **INV-AUDIO-SAMPLE-CONTINUITY-001** | CONTRACT | FileProducer, FrameRingBuffer | RUNTIME | No | Yes | — |
+| **INV-CONTROL-NO-POLL-001** | CONTRACT | Core | RUNTIME | No | Yes | — |
+| **INV-SWITCH-DEADLINE-AUTHORITATIVE-001** | CONTRACT | PlayoutEngine | P8 | No | Yes | — |
+
+| Rule ID | One-Line Definition |
+|---------|---------------------|
+| INV-BOUNDARY-TOLERANCE-001 | Grid boundary transitions MUST complete within one video frame duration (33.33ms at 30fps) of the absolute scheduled boundary time |
+| INV-BOUNDARY-DECLARED-001 | SwitchToLive MUST include `target_boundary_time_ms` parameter; Core declares intent, AIR executes at that time |
+| INV-AUDIO-SAMPLE-CONTINUITY-001 | Audio sample continuity MUST be preserved; audio samples MUST NOT be dropped due to queue backpressure; overflow triggers producer throttling |
+| INV-CONTROL-NO-POLL-001 | Core MUST NOT poll AIR for switch readiness; NOT_READY indicates protocol error (prefeed too late), not a condition to retry |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | When `target_boundary_time_ms` is provided, AIR MUST execute the switch at that wall-clock time ± 1 frame; internal readiness is AIR's responsibility |
 
 ### Phase 9 Coordination
 
@@ -294,21 +383,21 @@ Write barriers, switch orchestration, readiness, backpressure.
 | **INV-P10-NO-SILENCE-INJECTION** | CONTRACT | MpegTSOutputSink | P10 | No | No | — |
 | **INV-P10-SINK-GATE** | CONTRACT | ProgramOutput | P10 | No | No | — |
 | **INV-OUTPUT-READY-BEFORE-LIVE** | CONTRACT | PlayoutEngine | P10 | No | Yes | — |
-| **INV-SWITCH-READINESS** | CONTRACT | PlayoutEngine | P10 | No | Yes | — |
-| **INV-SWITCH-SUCCESSOR-EMISSION** | CONTRACT | TimelineController | P10 | Yes | Yes | — |
+| **INV-SWITCH-READINESS** | CONTRACT | PlayoutEngine | P10 | No | Yes | — | *DEMOTED to diagnostic goal; see Superseded Rules* |
+| **INV-SWITCH-SUCCESSOR-EMISSION** | CONTRACT | TimelineController | P10 | Yes | Yes | — | *DEMOTED to diagnostic goal; see Superseded Rules* |
 | **RULE-P10-DECODE-GATE** | CONTRACT | FileProducer | P10 | No | Yes | RULE_HARVEST #39 |
 | **INV-P10-AUDIO-VIDEO-GATE** | CONTRACT | FileProducer | P10 | No | Yes | — |
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
-| INV-P10-BACKPRESSURE-SYMMETRIC | When buffer full, both audio and video throttled symmetrically |
+| INV-P10-BACKPRESSURE-SYMMETRIC | When buffer full, both audio and video throttled symmetrically. **Audio samples MUST NOT be dropped due to queue backpressure; overflow MUST cause producer throttling.** |
 | INV-P10-PRODUCER-THROTTLE | Producer decode rate governed by consumer capacity, not decoder speed |
 | INV-P10-BUFFER-EQUILIBRIUM | Buffer depth oscillates around target, not unbounded or zero |
 | INV-P10-NO-SILENCE-INJECTION | Audio liveness disabled when PCR-paced mux active |
 | INV-P10-SINK-GATE | ProgramOutput must not consume frames before sink attached *(complementary to INV-P9-SINK-LIVENESS-001: SINK-GATE prevents consumption; SINK-LIVENESS describes routing)* |
-| INV-OUTPUT-READY-BEFORE-LIVE | Channel must not enter LIVE until output pipeline observable |
-| INV-SWITCH-READINESS | SwitchToLive completes when video ≥2, sink attached, format locked *(full readiness; INV-P9-BOOTSTRAP-READY defines bootstrap minimum of ≥1 frame)* |
-| INV-SWITCH-SUCCESSOR-EMISSION | Switch not complete until real successor video frame emitted |
+| INV-OUTPUT-READY-BEFORE-LIVE | Channel must not enter LIVE until output pipeline observable *(includes safety rail output; does not require real content)* |
+| INV-SWITCH-READINESS | **DIAGNOSTIC GOAL:** Switch SHOULD have video ≥2, sink attached, format locked. *(No longer a completion gate; superseded by INV-SWITCH-DEADLINE-AUTHORITATIVE-001 for completion semantics)* |
+| INV-SWITCH-SUCCESSOR-EMISSION | **DIAGNOSTIC GOAL:** Real successor video frame SHOULD be emitted at switch. *(No longer a completion gate; switch completes at declared boundary time per INV-SWITCH-DEADLINE-AUTHORITATIVE-001)* |
 | RULE-P10-DECODE-GATE | Slot-based gating at decode level; block at capacity, unblock when one slot frees |
 | INV-P10-AUDIO-VIDEO-GATE | When segment video epoch is established, first audio frame MUST be queued within 100ms |
 
@@ -366,14 +455,14 @@ These invariants are drafted from RULE_HARVEST analysis and await promotion to c
 | **RULE-CANONICAL-GATING** | CONTRACT | Core + AIR | SCHEDULE-TIME, P8 | Yes | Yes | RULE_HARVEST #52,#53,#58-60; absorbs INV-CANONICAL-CONTENT-ONLY-001 |
 | **RULE-CORE-RUNTIME-READONLY** | CONTRACT | Core | RUNTIME | No | No | RULE_HARVEST #49,#56,#57 |
 | **RULE-CORE-PLAYLOG-AUTHORITY** | CONTRACT | Core | RUNTIME | No | No | RULE_HARVEST #55 |
-| **INV-P8-SWITCH-TIMING** | CONTRACT | Core | RUNTIME | No | Yes | — |
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
 | RULE-CANONICAL-GATING | Only assets with canonical=true may be scheduled (Core) and played (AIR); dual enforcement |
 | RULE-CORE-RUNTIME-READONLY | Runtime services treat config tables as immutable |
 | RULE-CORE-PLAYLOG-AUTHORITY | Only ScheduleService writes playlog_event; ChannelManager reads only |
-| INV-P8-SWITCH-TIMING | Core: switch at boundary; log if pending after boundary *(moved from Layer 3 Diagnostic)* |
+
+*Note: INV-P8-SWITCH-TIMING promoted to Layer 2 Coordination as of 2026-02-01 audit.*
 
 ---
 
@@ -389,6 +478,11 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 | RULE_HARVEST #37 (≤33ms latency p95) | — | OBSOLETE: Phase 10 uses different metrics |
 | RULE_HARVEST #39 (3-tick backpressure) | RULE-P10-DECODE-GATE | Replaced by slot-based flow control |
 | RULE_HARVEST #45 (2-3 frame lead) | INV-P10-BUFFER-EQUILIBRIUM | Replaced by configurable buffer depth |
+| INV-SWITCH-READINESS (as completion gate) | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch completes at declared boundary time, not when readiness conditions met. Retained as diagnostic goal. |
+| INV-SWITCH-SUCCESSOR-EMISSION (as completion gate) | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch completes at declared boundary time, not when successor frame emitted. Retained as diagnostic goal. |
+| INV-FRAME-001 (as authority) | LAW-AUTHORITY-HIERARCHY | Frame-indexed boundaries describe execution precision, not decision authority. Clock decides WHEN; frames decide HOW. |
+| INV-FRAME-003 (as authority) | LAW-AUTHORITY-HIERARCHY | CT derivation within segment does not gate switch execution. Frame completion does not delay clock-scheduled transitions. |
+| LAW-FRAME-EXECUTION (as decision authority) | LAW-AUTHORITY-HIERARCHY | Frame index governs execution precision within a segment. Subordinate to clock authority for transition timing. |
 
 ---
 
@@ -396,13 +490,13 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 
 | Layer | Total Rules | With Tests | Coverage |
 |-------|-------------|------------|----------|
-| Layer 0 (Laws) | 12 | 6 | 50% |
+| Layer 0 (Laws) | 14 | 6 | 43% |
 | Layer 1 (Semantic) | 32 | 25 | 78% |
-| Layer 2 (Coordination) | 34 | 26 | 76% |
+| Layer 2 (Coordination) | 40 | 26 | 65% |
 | Layer 3 (Diagnostic) | 5 | 0 | 0% |
-| Cross-Domain | 4 | 1 | 25% |
+| Cross-Domain | 3 | 1 | 33% |
 | Proposed | 14 | 0 | 0% |
-| **Total** | **101** | **58** | **57%** |
+| **Total** | **107** | **58** | **54%** |
 
 ---
 
@@ -410,13 +504,13 @@ These rules from RULE_HARVEST are explicitly superseded and should not be enforc
 
 | Layer | Total Rules | With Logs | Coverage |
 |-------|-------------|-----------|----------|
-| Layer 0 (Laws) | 12 | 8 | 67% |
+| Layer 0 (Laws) | 14 | 9 | 64% |
 | Layer 1 (Semantic) | 32 | 9 | 28% |
-| Layer 2 (Coordination) | 34 | 10 | 29% |
+| Layer 2 (Coordination) | 40 | 16 | 40% |
 | Layer 3 (Diagnostic) | 5 | 5 | 100% |
-| Cross-Domain | 4 | 2 | 50% |
+| Cross-Domain | 3 | 1 | 33% |
 | Proposed | 14 | 12 | 86% |
-| **Total** | **101** | **46** | **46%** |
+| **Total** | **107** | **52** | **49%** |
 
 ---
 
@@ -449,3 +543,199 @@ This ledger is the single source of truth. When adding new rules:
 8. Update coverage summaries
 
 **Rule:** If code enforces a rule not in this ledger, the code is wrong. If this ledger lists a rule that code does not enforce, the code is wrong.
+
+---
+
+## Phased Implementation Plan (Audit 2026-02-01)
+
+This section documents the phased implementation of invariants added by the 2026-02-01 Broadcast-Grade Timing Compliance Audit.
+
+### Phase 11A: Audio Sample Continuity (Foundation)
+
+**Goal:** Eliminate audio discontinuities caused by queue backpressure.
+
+**Invariants:**
+- INV-AUDIO-SAMPLE-CONTINUITY-001
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By |
+|---------|-------------|-------|------------|
+| P11A-001 | Audit current audio queue behavior under backpressure | AIR | — |
+| P11A-002 | Add audio sample drop detection and logging | AIR | P11A-001 |
+| P11A-003 | Implement audio queue overflow → producer throttle (no drops) | AIR | P11A-002 |
+| P11A-004 | Contract test: audio samples never dropped under backpressure | AIR | P11A-003 |
+| P11A-005 | Update INV-P10-BACKPRESSURE-SYMMETRIC enforcement to include audio | AIR | P11A-003 |
+
+**Exit Criteria:**
+- No audio sample drops observed under 10-minute stress test
+- Contract test passes: audio continuity preserved during queue full conditions
+- Metric: `audio_samples_dropped_total = 0` during normal operation
+
+**Risk:** Low — Localized to AIR audio queue management
+
+---
+
+### Phase 11B: Boundary Timing Observability (Instrumentation)
+
+**Goal:** Make boundary timing violations observable before enforcing them.
+
+**Invariants:**
+- INV-P8-SWITCH-TIMING (strengthened)
+- INV-BOUNDARY-TOLERANCE-001 (observability only)
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By |
+|---------|-------------|-------|------------|
+| P11B-001 | Add `switch_completion_time_ms` to SwitchToLive response | AIR | — |
+| P11B-002 | Log `INV-BOUNDARY-TOLERANCE-001 VIOLATION` when switch >1 frame late | AIR | P11B-001 |
+| P11B-003 | Add metric: `switch_boundary_delta_ms` histogram | AIR | P11B-001 |
+| P11B-004 | Add metric: `switch_boundary_violations_total` counter | AIR | P11B-002 |
+| P11B-005 | Baseline current boundary timing across test channels | Ops | P11B-003 |
+| P11B-006 | Analyze baseline: what % of switches are >1 frame late? | Ops | P11B-005 |
+
+**Exit Criteria:**
+- Boundary timing is observable in logs and metrics
+- Baseline established for current timing accuracy
+- No enforcement changes; observability only
+
+**Risk:** Very Low — Logging and metrics only; no behavioral change
+
+---
+
+### Phase 11C: Declarative Boundary Protocol (Proto Change)
+
+**Goal:** Enable Core to declare switch boundary time to AIR.
+
+**Invariants:**
+- INV-BOUNDARY-DECLARED-001
+- INV-CONTROL-NO-POLL-001 (partial — protocol support)
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By |
+|---------|-------------|-------|------------|
+| P11C-001 | Add `target_boundary_time_ms` field to SwitchToLiveRequest proto | Proto | — |
+| P11C-002 | Regenerate proto stubs (Python + C++) | Build | P11C-001 |
+| P11C-003 | AIR: Parse and log `target_boundary_time_ms` (no enforcement yet) | AIR | P11C-002 |
+| P11C-004 | Core: Populate `target_boundary_time_ms` from schedule | Core | P11C-002 |
+| P11C-005 | Add integration test: target_boundary_time_ms flows Core→AIR | Test | P11C-003, P11C-004 |
+
+**Exit Criteria:**
+- Proto includes `target_boundary_time_ms`
+- Core sends boundary time in every SwitchToLive
+- AIR logs receipt of boundary time
+- No enforcement changes; protocol readiness only
+
+**Risk:** Medium — Proto change affects Core/AIR interface; requires coordinated deployment
+
+---
+
+### Phase 11D: Deadline-Authoritative Switching (Enforcement)
+
+**Goal:** AIR executes switch at declared boundary time regardless of readiness.
+
+**Invariants:**
+- INV-SWITCH-DEADLINE-AUTHORITATIVE-001
+- INV-BOUNDARY-TOLERANCE-001 (enforcement)
+- INV-CONTROL-NO-POLL-001 (enforcement)
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By |
+|---------|-------------|-------|------------|
+| P11D-001 | AIR: Schedule switch for `target_boundary_time_ms` via MasterClock | AIR | P11C-003 |
+| P11D-002 | AIR: Execute switch at deadline even if readiness not achieved | AIR | P11D-001 |
+| P11D-003 | AIR: If not ready at deadline, use safety rails (pad/silence) and log violation | AIR | P11D-002 |
+| P11D-004 | AIR: Deprecate NOT_READY response; replace with PROTOCOL_VIOLATION if prefeed late | AIR | P11D-002 |
+| P11D-005 | Core: Remove SwitchToLive retry loop; treat NOT_READY as fatal | Core | P11D-004 |
+| P11D-006 | Core: Ensure LoadPreview issued with sufficient lead time | Core | P11D-005 |
+| P11D-007 | Contract test: switch executes within 1 frame of declared boundary | Test | P11D-002 |
+| P11D-008 | Contract test: late prefeed results in PROTOCOL_VIOLATION, not retry | Test | P11D-004 |
+
+**Exit Criteria:**
+- All switches execute within 1 frame of declared boundary time
+- No poll/retry pattern in Core for SwitchToLive
+- Prefeed timing violations are logged as protocol errors
+- 10-minute multi-switch test passes with 0 boundary violations
+
+**Risk:** High — Fundamental change to switch semantics; requires extensive testing
+
+**Rollback Plan:** Feature flag `use_deadline_authoritative_switch` defaults to false; can be enabled per-channel
+
+---
+
+### Phase 11E: Prefeed Timing Contract (Core Obligation)
+
+**Goal:** Core guarantees prefeed arrives with sufficient lead time.
+
+**Invariants:**
+- INV-CONTROL-NO-POLL-001 (Core enforcement)
+- AIR-010 (Prefeed Ordering) — amended
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By |
+|---------|-------------|-------|------------|
+| P11E-001 | Define `MIN_PREFEED_LEAD_TIME_MS` constant (e.g., 5000ms) | Core | — |
+| P11E-002 | Core: Issue LoadPreview at `boundary_time - MIN_PREFEED_LEAD_TIME_MS` | Core | P11E-001 |
+| P11E-003 | Core: Log violation if LoadPreview issued with <MIN_PREFEED_LEAD_TIME_MS | Core | P11E-002 |
+| P11E-004 | Core: Add metric `prefeed_lead_time_ms` histogram | Core | P11E-002 |
+| P11E-005 | Contract test: all LoadPreview calls have ≥MIN_PREFEED_LEAD_TIME_MS | Test | P11E-003 |
+
+**Exit Criteria:**
+- All LoadPreview calls issued with ≥5 seconds lead time
+- Late prefeed is logged as Core scheduling error
+- No scheduling scenarios where prefeed cannot meet lead time
+
+**Risk:** Medium — Requires Core scheduler changes; affects schedule lookahead
+
+---
+
+### Phase Dependency Graph
+
+```
+Phase 11A (Audio Continuity)      ─────────────────────────────────┐
+                                                                    │
+Phase 11B (Observability)         ──────────────────────────────┐  │
+                                                                 │  │
+Phase 11C (Proto Change)          ─────────────────────────┐    │  │
+                                                            │    │  │
+                                                            v    v  v
+Phase 11D (Deadline Enforcement)  ◄─────────────────────────────────┤
+                                                                    │
+Phase 11E (Prefeed Contract)      ◄─────────────────────────────────┘
+```
+
+- **11A** can proceed immediately (no dependencies)
+- **11B** can proceed immediately (no dependencies)
+- **11C** can proceed immediately (proto change)
+- **11D** requires 11C complete (needs proto field)
+- **11E** requires 11D complete (enforcement semantics must be clear)
+
+### Recommended Execution Order
+
+1. **Parallel:** 11A + 11B + 11C (no dependencies between them)
+2. **Sequential:** 11D (after 11C)
+3. **Sequential:** 11E (after 11D)
+
+### Summary Timeline
+
+| Phase | Description | Dependencies | Risk | Est. Effort |
+|-------|-------------|--------------|------|-------------|
+| 11A | Audio Sample Continuity | None | Low | 2-3 days |
+| 11B | Boundary Timing Observability | None | Very Low | 1-2 days |
+| 11C | Declarative Boundary Protocol | None | Medium | 2-3 days |
+| 11D | Deadline-Authoritative Switching | 11C | High | 5-7 days |
+| 11E | Prefeed Timing Contract | 11D | Medium | 3-4 days |
+| **Total** | | | | **13-19 days** |
+
+---
+
+## Audit History
+
+| Date | Auditor | Scope | Summary |
+|------|---------|-------|---------|
+| 2026-02-01 | Systems Contract Authority | Authority Hierarchy | **CRITICAL AMENDMENT:** Added LAW-AUTHORITY-HIERARCHY establishing "clock supersedes frame completion for switch execution." Resolved contradiction between clock-based rules (LAW-CLOCK, LAW-SWITCHING) and frame-based rules (LAW-FRAME-EXECUTION, INV-FRAME-001, INV-FRAME-003). Downgraded frame rules from "authority" to "execution precision." Added Authority Model diagram. |
+| 2026-02-01 | Systems Contract Authority | Broadcast-Grade Timing | Added 5 invariants (INV-BOUNDARY-TOLERANCE-001, INV-BOUNDARY-DECLARED-001, INV-AUDIO-SAMPLE-CONTINUITY-001, INV-CONTROL-NO-POLL-001, INV-SWITCH-DEADLINE-AUTHORITATIVE-001). Amended LAW-SWITCHING, INV-P10-BACKPRESSURE-SYMMETRIC, INV-P8-SWITCH-TIMING. Promoted INV-P8-SWITCH-TIMING to Layer 2. Defined 5-phase implementation plan (11A-11E). |
