@@ -69,6 +69,20 @@ _ALLOWED_BOUNDARY_TRANSITIONS: dict[BoundaryState, set[BoundaryState]] = {
     BoundaryState.FAILED_TERMINAL: set(),
 }
 
+# P12-CORE-001 INV-TEARDOWN-STABLE-STATE-001: Teardown deferred until boundary state stable.
+_STABLE_STATES: set[BoundaryState] = {
+    BoundaryState.NONE,
+    BoundaryState.LIVE,
+    BoundaryState.FAILED_TERMINAL,
+}
+_TRANSIENT_STATES: set[BoundaryState] = {
+    BoundaryState.PLANNED,
+    BoundaryState.PRELOAD_ISSUED,
+    BoundaryState.SWITCH_SCHEDULED,
+    BoundaryState.SWITCH_ISSUED,
+}
+_TEARDOWN_GRACE_TIMEOUT: timedelta = timedelta(seconds=10)
+
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse
 from uvicorn import Config, Server
@@ -290,6 +304,11 @@ class ChannelManager:
         self._teardown_timeout_seconds = 5.0
         self._teardown_started_station: float | None = None
         self._teardown_reason: str | None = None
+        # P12-CORE-001 INV-TEARDOWN-STABLE-STATE-001: Deferred teardown state scaffolding
+        self._teardown_pending: bool = False
+        self._teardown_deadline: datetime | None = None
+        # P12-CORE-003: Signal to ProgramDirector that deferred teardown executed (poll and destroy)
+        self._deferred_teardown_triggered: bool = False
         
         # Mock grid configuration (when using mock grid schedule)
         self._mock_grid_block_minutes = 30  # Fixed 30-minute grid
@@ -360,6 +379,11 @@ class ChannelManager:
         self._segment_end_time_utc = None
         self._switch_state = SwitchState.IDLE
         self._boundary_state = BoundaryState.NONE
+        # P12-CORE-001/003: Clear deferred teardown state on explicit stop
+        self._teardown_pending = False
+        self._teardown_deadline = None
+        self._teardown_reason = None
+        self._deferred_teardown_triggered = False
         self._last_switch_at_segment_end_utc = None
         self._segment_readiness_violation_logged = False
         # P11D-011 / P11F-005: Cancel deadline-scheduled switch issuance (Timer or call_later handle)
@@ -377,6 +401,42 @@ class ChannelManager:
         self._successor_loaded = False
         self._successor_asset_path = None
         self._stop_producer_if_idle()
+
+    def _request_teardown(self, reason: str) -> bool:
+        """
+        P12-CORE-002 INV-TEARDOWN-STABLE-STATE-001: Request permission to teardown.
+
+        Returns True if teardown may proceed (boundary state is stable).
+        Returns False if teardown must be deferred (transient state) or already pending.
+        Does NOT execute teardown; caller decides what to do with the result.
+        Idempotent: second call while pending is a no-op (does not extend deadline).
+        """
+        if self._teardown_pending:
+            self._logger.debug(
+                "INV-TEARDOWN-STABLE-STATE-001: Teardown already pending (reason=%s)",
+                reason,
+            )
+            return False
+        if self._boundary_state in _STABLE_STATES:
+            self._logger.info(
+                "INV-TEARDOWN-STABLE-STATE-001: Teardown permitted (state=%s, reason=%s)",
+                self._boundary_state.name,
+                reason,
+            )
+            return True
+        now = self.clock.now_utc()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        self._teardown_pending = True
+        self._teardown_deadline = now + _TEARDOWN_GRACE_TIMEOUT
+        self._teardown_reason = reason
+        self._logger.warning(
+            "INV-TEARDOWN-STABLE-STATE-001: Teardown DEFERRED (state=%s, reason=%s, deadline=%s)",
+            self._boundary_state.name,
+            reason,
+            self._teardown_deadline.isoformat(),
+        )
+        return False
 
     def _get_current_mode(self) -> str:
         """Ask ProgramDirector which mode this channel must be in."""
@@ -691,6 +751,13 @@ class ChannelManager:
 
     def _ensure_producer_running(self) -> None:
         """Enforce 'channel goes on-air'."""
+        # P12-CORE-005 INV-TEARDOWN-NO-NEW-WORK-001: Do not start when teardown pending
+        if self._teardown_pending:
+            self._logger.warning(
+                "INV-TEARDOWN-NO-NEW-WORK-001: Cannot start channel %s (teardown pending)",
+                self.channel_id,
+            )
+            return
         required_mode = self._get_current_mode()
 
         # If there's an active producer and it's both in the correct mode and healthy, we're done.
@@ -864,6 +931,12 @@ class ChannelManager:
             self._pending_fatal = SchedulingError(
                 f"Illegal boundary state transition: {old_state.name} -> {new_state.name}"
             )
+            # P12-CORE-003: FAILED_TERMINAL is stable; trigger deferred teardown if pending
+            if self._teardown_pending:
+                self._logger.info(
+                    "INV-TEARDOWN-STABLE-STATE-001: Deferred teardown now permitted (state=FAILED_TERMINAL)",
+                )
+                self._execute_deferred_teardown()
             return
         self._logger.info(
             "INV-BOUNDARY-LIFECYCLE-001: Boundary transition %s -> %s",
@@ -873,6 +946,47 @@ class ChannelManager:
         self._boundary_state = new_state
         if new_state == BoundaryState.NONE:
             self._plan_boundary_ms = None
+        # P12-CORE-003 INV-TEARDOWN-STABLE-STATE-001: Entering stable state with teardown pending → execute deferred
+        if self._teardown_pending and new_state in _STABLE_STATES:
+            self._logger.info(
+                "INV-TEARDOWN-STABLE-STATE-001: Deferred teardown now permitted (state=%s)",
+                new_state.name,
+            )
+            self._execute_deferred_teardown()
+
+    def _execute_deferred_teardown(self) -> None:
+        """
+        P12-CORE-003: Execute deferred teardown (called when boundary enters stable state).
+        Clears pending state and signals ProgramDirector to destroy channel (poll deferred_teardown_triggered).
+        MUST NOT call _request_teardown() or recurse into state transitions.
+        """
+        was_state = self._boundary_state
+        reason = self._teardown_reason or "unspecified"
+        self._logger.info(
+            "INV-TEARDOWN-STABLE-STATE-001: Executing deferred teardown (was_state=%s, reason=%s)",
+            was_state.name,
+            reason,
+        )
+        self._teardown_pending = False
+        self._teardown_deadline = None
+        self._teardown_reason = None
+        self._deferred_teardown_triggered = True
+
+    def deferred_teardown_triggered(self) -> bool:
+        """P12-CORE-003/006: True when deferred teardown executed; ProgramDirector should destroy channel."""
+        return self._deferred_teardown_triggered
+
+    @property
+    def is_live(self) -> bool:
+        """
+        P12-CORE-007 INV-LIVE-SESSION-AUTHORITY-001: True only when durably live.
+
+        A channel is durably live only when _boundary_state == LIVE. Before LIVE, session is
+        provisional; FAILED_TERMINAL and NONE are not live. Use this property for external
+        liveness queries (metrics, EPG, overlays). is_live == False does NOT mean channel is
+        stopped—it means session is provisional or dead.
+        """
+        return self._boundary_state == BoundaryState.LIVE
 
     def _guard_switch_issuance(self, boundary_time: datetime) -> bool:
         """P11F-004 INV-SWITCH-ISSUANCE-ONESHOT-001: Returns True if issuance is allowed."""
@@ -1041,6 +1155,32 @@ class ChannelManager:
         - If past exhaustion and preview is ready, switch immediately
         - This prevents pad frames when successor content is available
         """
+        # P12-CORE-004 INV-TEARDOWN-GRACE-TIMEOUT-001: Grace timeout check FIRST (before any other tick logic)
+        if self._teardown_pending and self._teardown_deadline is not None:
+            now = self.clock.now_utc()
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            if now >= self._teardown_deadline:
+                requested_at = self._teardown_deadline - _TEARDOWN_GRACE_TIMEOUT
+                duration = (now - requested_at).total_seconds()
+                reason = self._teardown_reason or "unspecified"
+                self._logger.warning(
+                    "INV-TEARDOWN-GRACE-TIMEOUT-001: Grace timeout expired in state %s after %.1fs (reason=%s)",
+                    self._boundary_state.name,
+                    duration,
+                    reason,
+                )
+                self._pending_fatal = SchedulingError(
+                    f"Teardown grace timeout in state {self._boundary_state.name}"
+                )
+                self._transition_boundary_state(BoundaryState.FAILED_TERMINAL)
+                return
+        # P12-CORE-005 INV-TEARDOWN-NO-NEW-WORK-001: Skip boundary work when teardown pending
+        if self._teardown_pending:
+            self._logger.debug(
+                "INV-TEARDOWN-NO-NEW-WORK-001: Skipping boundary work (teardown pending)",
+            )
+            return
         # P11D-011: Re-raise fatal from deadline callback (e.g. late issuance or AIR rejection)
         if self._pending_fatal is not None:
             e = self._pending_fatal
