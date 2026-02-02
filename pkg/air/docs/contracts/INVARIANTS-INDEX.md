@@ -36,6 +36,7 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 | **Audio Format** | Channel defines house format; all audio normalized before OutputBus; EncoderPipeline never negotiates. Contract test: **INV-AUDIO-HOUSE-FORMAT-001**. | Law |
 | **Switching** | No gaps, no PTS regression, no silence during switches. | Law |
 | **Observability Parity** | Intent, correlation, result, timing, and boundary evidence (LAW-OBS-001 through LAW-OBS-005). | Law |
+| **LAW-RUNTIME-AUDIO-AUTHORITY** | When producer_audio_authoritative=true, producer MUST emit audio ≥90% of nominal rate, or mode auto-downgrades to silence-injection. | Law |
 
 **Source:** [ObservabilityParityLaw.md](laws/ObservabilityParityLaw.md)
 
@@ -135,10 +136,12 @@ Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, 
 | INV-P9-BOOT-LIVENESS | Newly attached sink must emit decodable TS within bounded time, even if audio not yet available. Test: G9_001, G9_004 | Coordination |
 | INV-P9-AUDIO-LIVENESS | From header written, output must contain continuous, monotonic audio PTS with correct pacing (silence if no decoded audio yet). Test: AUDIO_LIVENESS_001/002/003 | Coordination |
 | INV-P9-PCR-AUDIO-MASTER | Audio owns PCR at startup. Test: PCR_AUDIO_MASTER_001/002, VLC_STARTUP_SMOKE | Coordination |
+| **INV-P9-TS-EMISSION-LIVENESS** | First decodable TS packet MUST be emitted within 500ms of PCR-PACE timing initialization. Refines INV-P9-BOOT-LIVENESS. | Coordination |
 | INV-P10-BACKPRESSURE-SYMMETRIC | When buffer full, both audio and video throttled symmetrically | Coordination |
 | INV-P10-PRODUCER-THROTTLE | Producer decode rate governed by consumer capacity, not decoder speed | Coordination |
 | INV-P10-BUFFER-EQUILIBRIUM | Buffer depth must oscillate around target, not grow unbounded or drain to zero | Coordination |
 | INV-P10-NO-SILENCE-INJECTION | Audio liveness must be disabled when PCR-paced mux is active | Coordination |
+| **INV-P10-AUDIO-VIDEO-GATE** | When segment video epoch is established, first audio frame MUST be queued within 100ms. Complements INV-P8-AV-SYNC. | Coordination |
 
 ---
 

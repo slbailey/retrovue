@@ -1145,4 +1145,57 @@ TEST_F(Phase10FlowControlTest, TEST_INV_P8_ZERO_FRAME_BOOTSTRAP_EndToEndOutputFl
             << std::endl;
 }
 
+// =============================================================================
+// TEST_INV_P10_AUDIO_VIDEO_GATE_100ms (P1-FP-004)
+// =============================================================================
+// Given: FileProducer decoding a segment with audio and video
+// When: Video epoch is set (VIDEO_EPOCH_SET) — proxy: first video frame in buffer
+// Then: First audio frame is queued within 100ms
+// Contract: INV-P10-AUDIO-VIDEO-GATE
+
+TEST_F(Phase10FlowControlTest, TEST_INV_P10_AUDIO_VIDEO_GATE_100ms) {
+  buffer::FrameRingBuffer ring_buffer(60);
+
+  ProducerConfig producer_config;
+  producer_config.asset_uri = GetTestVideoPath();
+  producer_config.target_width = 640;
+  producer_config.target_height = 360;
+  producer_config.target_fps = 30.0;
+
+  FileProducer producer(producer_config, ring_buffer, clock_, nullptr, timeline_.get());
+  ASSERT_TRUE(producer.start());
+
+  // Wait for first video frame (video epoch set at or before first frame push)
+  auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (ring_buffer.Size() < 1 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(10ms);
+  }
+  ASSERT_GE(ring_buffer.Size(), 1u) << "Need at least one video frame (video epoch set)";
+
+  auto t0 = std::chrono::steady_clock::now();
+
+  // Wait for first audio frame with timeout 150ms
+  deadline = std::chrono::steady_clock::now() + 150ms;
+  while (ring_buffer.AudioSize() < 1 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(5ms);
+  }
+
+  auto t1 = std::chrono::steady_clock::now();
+  auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+  EXPECT_GT(ring_buffer.AudioSize(), 0u)
+      << "INV-P10-AUDIO-VIDEO-GATE: First audio frame must be queued within 100ms of video epoch";
+
+  EXPECT_LE(elapsed_ms, 100)
+      << "INV-P10-AUDIO-VIDEO-GATE: First audio queued at " << elapsed_ms
+      << "ms after video epoch (deadline=100ms)";
+
+  producer.stop();
+
+  std::cout << "[TEST-INV-P10-AUDIO-VIDEO-GATE-100ms] "
+            << "elapsed_ms=" << elapsed_ms
+            << ", audio_depth=" << ring_buffer.AudioSize()
+            << std::endl;
+}
+
 }  // namespace

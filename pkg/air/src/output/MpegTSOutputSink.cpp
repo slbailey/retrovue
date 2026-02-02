@@ -10,6 +10,7 @@
 #include <iostream>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
@@ -67,6 +68,11 @@ static std::mutex g_sink_attach_mutex;
 // INV-P9-AUDIO-LIVENESS: Header write time (us since epoch) per sink for first-audio log
 static std::unordered_map<void*, int64_t> g_header_write_time_us;
 static std::mutex g_header_write_mutex;
+
+// INV-P9-TS-EMISSION-LIVENESS: PCR-PACE init time per sink for 500ms deadline (P1-MS-004/005/006)
+static std::unordered_map<void*, std::chrono::steady_clock::time_point> g_pcr_pace_init_time;
+static std::mutex g_pcr_pace_init_mutex;
+static std::unordered_set<void*> g_ts_emission_violation_logged;
 
 // Helper to write to fd without SIGPIPE (used for magic string before namespace)
 static ssize_t SafeWriteGlobal(int fd, const void* data, size_t len) {
@@ -202,6 +208,13 @@ void MpegTSOutputSink::Stop() {
   {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     while (!audio_queue_.empty()) audio_queue_.pop();
+  }
+
+  // Clear INV-P9-TS-EMISSION-LIVENESS state so next Start() gets fresh deadline
+  {
+    std::lock_guard<std::mutex> lock(g_pcr_pace_init_mutex);
+    g_pcr_pace_init_time.erase(this);
+    g_ts_emission_violation_logged.erase(this);
   }
 
   SetStatus(SinkStatus::kStopped, "Stopped");
@@ -377,6 +390,30 @@ void MpegTSOutputSink::MuxLoop() {
       aq_size = audio_queue_.size();
     }
 
+    // INV-P9-TS-EMISSION-LIVENESS (P1-MS-006): Log violation once if 500ms elapsed without first TS
+    if (timing_initialized) {
+      auto now_viol = std::chrono::steady_clock::now();
+      int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now_viol - wall_epoch).count();
+      if (elapsed_ms >= 500 && dbg_bytes_written_.load(std::memory_order_relaxed) == 0) {
+        bool already_logged = false;
+        {
+          std::lock_guard<std::mutex> lock(g_pcr_pace_init_mutex);
+          already_logged = (g_ts_emission_violation_logged.count(this) > 0);
+          if (!already_logged) g_ts_emission_violation_logged.insert(this);
+        }
+        if (!already_logged) {
+          const char* reason = "unknown";
+          if (aq_size == 0 && vq_size > 0) reason = "audio";
+          else if (vq_size == 0 && aq_size > 0) reason = "video";
+          else if (vq_size == 0 && aq_size == 0) reason = "encoder";
+          std::cout << "[MpegTSOutputSink] INV-P9-TS-EMISSION-LIVENESS VIOLATION: No TS after "
+                    << static_cast<int>(elapsed_ms) << "ms, blocking_reason=" << reason
+                    << ", vq=" << vq_size << ", aq=" << aq_size << std::endl;
+        }
+      }
+    }
+
     if (next_video_ct_us < 0) {
       // No video available - wait briefly and retry
       // This is the ONLY place we sleep when queue is empty
@@ -408,8 +445,13 @@ void MpegTSOutputSink::MuxLoop() {
       wall_epoch = std::chrono::steady_clock::now();
       ct_epoch_us = next_video_ct_us;
       timing_initialized = true;
+      {
+        std::lock_guard<std::mutex> lock(g_pcr_pace_init_mutex);
+        g_pcr_pace_init_time[this] = wall_epoch;
+      }
       std::cout << "[MpegTSOutputSink] PCR-PACE: Timing initialized, ct_epoch_us="
                 << ct_epoch_us << std::endl;
+      std::cout << "[MpegTSOutputSink] INV-P9-TS-EMISSION-LIVENESS: PCR-PACE initialized, deadline=500ms" << std::endl;
     }
 
     // -----------------------------------------------------------------------
@@ -708,6 +750,20 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     }
     std::cout << "[MpegTSOutputSink] INV-P9-BOOT-LIVENESS: First decodable TS emitted at wall_time="
               << wall_time_us << ", latency_ms=" << latency_ms << std::endl;
+    // INV-P9-TS-EMISSION-LIVENESS (P1-MS-005): Log success when first TS within 500ms of PCR-PACE init
+    {
+      std::lock_guard<std::mutex> lock(g_pcr_pace_init_mutex);
+      auto it = g_pcr_pace_init_time.find(sink);
+      if (it != g_pcr_pace_init_time.end()) {
+        int elapsed_pcr_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now_steady - it->second).count());
+        if (elapsed_pcr_ms <= 500) {
+          std::cout << "[MpegTSOutputSink] INV-P9-TS-EMISSION-LIVENESS: First TS emitted at "
+                    << elapsed_pcr_ms << "ms (OK)" << std::endl;
+        }
+      }
+    }
   }
 
   // DEBUG: Increment packet count and emit heartbeat (max 1/sec)

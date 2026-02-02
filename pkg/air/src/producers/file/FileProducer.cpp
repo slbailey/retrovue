@@ -10,8 +10,11 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
 // FFmpeg headers are C; keep type unambiguous (::SwrContext everywhere).
 extern "C" {
@@ -40,6 +43,11 @@ namespace retrovue::producers::file
   {
     constexpr int64_t kProducerBackoffUs = 10'000; // 10ms backoff when buffer is full
     constexpr int64_t kMicrosecondsPerSecond = 1'000'000;
+
+    // INV-P10-AUDIO-VIDEO-GATE (P1-FP-001/002/003): video epoch time per producer for 100ms deadline
+    std::unordered_map<void*, std::chrono::steady_clock::time_point> g_video_epoch_time;
+    std::mutex g_video_epoch_mutex;
+    std::unordered_set<void*> g_p10_av_gate_violation_logged;
 
     // ==========================================================================
     // INV-P10-SLOT-BASED-UNBLOCK: Block at capacity, unblock on one slot free
@@ -1415,6 +1423,11 @@ namespace retrovue::producers::file
       // Log MT (base_pts_us), not CT (frame_pts_us) - this is what we store
       std::cout << "[FileProducer] VIDEO_EPOCH_SET first_mt_pts_us=" << base_pts_us
                 << " (CT=" << frame_pts_us << ") target_us=" << effective_seek_target_us_ << std::endl;
+      {
+        std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
+        g_video_epoch_time[this] = std::chrono::steady_clock::now();
+      }
+      std::cout << "[FileProducer] INV-P10-AUDIO-VIDEO-GATE: Video epoch set, awaiting first audio (deadline=100ms)" << std::endl;
 
       // Phase 8: If TimelineController is active, it owns the epoch.
       // Producer is "time-blind" and should not set epoch.
@@ -1464,6 +1477,21 @@ namespace retrovue::producers::file
           }
         } else if (shadow_mode) {
           std::cout << "[FileProducer] Shadow mode: inheriting existing epoch (no reset)" << std::endl;
+        }
+      }
+    }
+
+    // INV-P10-AUDIO-VIDEO-GATE (P1-FP-003): Log violation once if 100ms elapsed without first audio
+    if (first_mt_pts_us_ != 0 && !audio_ungated_logged_) {
+      std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
+      auto it = g_video_epoch_time.find(this);
+      if (it != g_video_epoch_time.end()) {
+        int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - it->second).count());
+        if (elapsed_ms >= 100 && g_p10_av_gate_violation_logged.find(this) == g_p10_av_gate_violation_logged.end()) {
+          g_p10_av_gate_violation_logged.insert(this);
+          std::cout << "[FileProducer] INV-P10-AUDIO-VIDEO-GATE VIOLATION: No audio after "
+                    << elapsed_ms << "ms (deadline=100ms), aq=0" << std::endl;
         }
       }
     }
@@ -2255,6 +2283,18 @@ namespace retrovue::producers::file
           {
             std::cout << "[FileProducer] AUDIO_UNGATED first_audio_pts_us=" << base_pts_us
                       << " aligned_to_video_pts_us=" << first_mt_pts_us_ << std::endl;
+            {
+              std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
+              auto it = g_video_epoch_time.find(this);
+              if (it != g_video_epoch_time.end()) {
+                int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - it->second).count());
+                if (elapsed_ms <= 100) {
+                  std::cout << "[FileProducer] INV-P10-AUDIO-VIDEO-GATE: First audio queued at "
+                            << elapsed_ms << "ms after video epoch" << std::endl;
+                }
+              }
+            }
             audio_ungated_logged_ = true;
           }
 
