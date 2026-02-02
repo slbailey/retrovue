@@ -82,6 +82,8 @@ _TRANSIENT_STATES: set[BoundaryState] = {
     BoundaryState.SWITCH_ISSUED,
 }
 _TEARDOWN_GRACE_TIMEOUT: timedelta = timedelta(seconds=10)
+# P12-CORE-011 INV-STARTUP-CONVERGENCE-001: Max time to achieve first boundary; expiry → FAILED_TERMINAL (P12-CORE-013).
+MAX_STARTUP_CONVERGENCE_WINDOW: timedelta = timedelta(seconds=120)
 
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -309,7 +311,10 @@ class ChannelManager:
         self._teardown_deadline: datetime | None = None
         # P12-CORE-003: Signal to ProgramDirector that deferred teardown executed (poll and destroy)
         self._deferred_teardown_triggered: bool = False
-        
+        # P12-CORE-011 INV-STARTUP-CONVERGENCE-001: Startup convergence until first successful boundary
+        self._converged: bool = False
+        self._convergence_deadline: datetime | None = None
+
         # Mock grid configuration (when using mock grid schedule)
         self._mock_grid_block_minutes = 30  # Fixed 30-minute grid
         self._mock_grid_program_asset_path: str | None = None  # Set from daemon config
@@ -384,6 +389,8 @@ class ChannelManager:
         self._teardown_deadline = None
         self._teardown_reason = None
         self._deferred_teardown_triggered = False
+        self._converged = False
+        self._convergence_deadline = None
         self._last_switch_at_segment_end_utc = None
         self._segment_readiness_violation_logged = False
         # P11D-011 / P11F-005: Cancel deadline-scheduled switch issuance (Timer or call_later handle)
@@ -800,9 +807,15 @@ class ChannelManager:
         self.runtime_state.producer_started_at = station_time
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
+        # P12-CORE-010 INV-SESSION-CREATION-UNGATED-001: Session creation never gated on boundary feasibility.
+        self._logger.info(
+            "INV-SESSION-CREATION-UNGATED-001: Session created for viewer at %s",
+            station_time.isoformat() if hasattr(station_time, "isoformat") else station_time,
+        )
+
         # Clock-driven switching: use end_time_utc from schedule for exact grid boundary timing.
         # P11D-009 INV-SCHED-PLAN-BEFORE-EXEC-001: planning_time = station_utc (actual current station time).
-        # P11D-010 INV-STARTUP-BOUNDARY-FEASIBILITY-001: first boundary >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME.
+        # P12-CORE-010: Boundary feasibility is evaluated after session creation (in tick/convergence); do not gate here.
         station_utc = station_time if station_time.tzinfo else station_time.replace(tzinfo=timezone.utc)
         planning_time = station_utc
         startup_min_lead = STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME
@@ -811,7 +824,7 @@ class ChannelManager:
             self._segment_end_time_utc = datetime.fromisoformat(end_time_str)
             if self._segment_end_time_utc.tzinfo is None:
                 self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
-            # Discard if earlier than startup feasibility; replace with first feasible when grid available
+            # When grid available, replace infeasible first boundary with first feasible; otherwise keep schedule value.
             if (self._segment_end_time_utc - planning_time) < startup_min_lead:
                 segment_seconds_meta = playout_plan[0].get("metadata", {}).get("segment_seconds")
                 if segment_seconds_meta and segment_seconds_meta > 0:
@@ -819,13 +832,9 @@ class ChannelManager:
                     self._segment_end_time_utc = self._first_feasible_boundary(
                         planning_time, float(segment_seconds_meta), epoch_utc, min_lead_timedelta=startup_min_lead
                     )
-                else:
-                    raise SchedulingError(
-                        "INV-STARTUP-BOUNDARY-FEASIBILITY-001 FATAL: No feasible first boundary "
-                        "(end_time_utc < station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME, no segment_seconds)."
-                    )
+                # Else: keep _segment_end_time_utc from schedule; feasibility evaluated in tick/convergence (P12-CORE-012).
         else:
-            # Fallback for legacy/mock schedules without end_time_utc: select first boundary satisfying startup feasibility
+            # Fallback for legacy/mock schedules without end_time_utc.
             segment_seconds_meta = playout_plan[0].get("metadata", {}).get("segment_seconds")
             if segment_seconds_meta and segment_seconds_meta > 0:
                 epoch_utc = datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
@@ -838,13 +847,7 @@ class ChannelManager:
                     self._segment_end_time_utc = station_utc + timedelta(seconds=duration_s)
                 else:
                     self._segment_end_time_utc = None
-        # P11D-010: First boundary must satisfy startup feasibility; otherwise planning fails FATAL.
-        if self._segment_end_time_utc is not None and (self._segment_end_time_utc - planning_time) < startup_min_lead:
-            raise SchedulingError(
-                "INV-STARTUP-BOUNDARY-FEASIBILITY-001 FATAL: First boundary at "
-                f"{self._segment_end_time_utc.isoformat()} is infeasible for startup at {planning_time.isoformat()} "
-                f"(required >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME)."
-            )
+        # P12-CORE-010: Do not raise on infeasible first boundary; session is created; convergence handles skip (P12-CORE-012).
         self._switch_state = SwitchState.IDLE
         # P11F-002: Boundary state PLANNED when we have first boundary; switch timer scheduled after LoadPreview
         # P11F-006: Store plan-derived boundary for INV-BOUNDARY-DECLARED-MATCHES-PLAN-001
@@ -884,6 +887,10 @@ class ChannelManager:
         # Reset successor tracking
         self._successor_loaded = False
         self._successor_asset_path = None
+
+        # P12-CORE-011 INV-STARTUP-CONVERGENCE-001: Session created; convergence until first boundary
+        self._converged = False
+        self._convergence_deadline = self.clock.now_utc() + MAX_STARTUP_CONVERGENCE_WINDOW
 
     def _segment_duration_seconds(self, segment: dict[str, Any]) -> float:
         """Duration of segment from schedule (seconds). Uses duration_seconds or metadata.segment_seconds."""
@@ -966,6 +973,13 @@ class ChannelManager:
             new_state.name,
         )
         self._boundary_state = new_state
+        # P12-CORE-011 INV-STARTUP-CONVERGENCE-001: First successful boundary → converged
+        if new_state == BoundaryState.LIVE and not self._converged:
+            self._converged = True
+            self._convergence_deadline = None
+            self._logger.info(
+                "INV-STARTUP-CONVERGENCE-001: Session converged after first boundary",
+            )
         # P12-CORE-009 INV-TERMINAL-TIMER-CLEARED-001: Cancel transient timers on FAILED_TERMINAL entry
         if new_state == BoundaryState.FAILED_TERMINAL:
             self._cancel_transient_timers()
@@ -1001,6 +1015,61 @@ class ChannelManager:
         """P12-CORE-003/006: True when deferred teardown executed; ProgramDirector should destroy channel."""
         return self._deferred_teardown_triggered
 
+    def _check_convergence_timeout(self) -> bool:
+        """
+        P12-CORE-013 INV-STARTUP-CONVERGENCE-001: Returns True if session should continue, False if timed out.
+
+        If not converged and convergence_deadline has expired, transitions to FAILED_TERMINAL and returns False.
+        """
+        if self._converged:
+            return True
+        if self._convergence_deadline is None:
+            return True
+        now = self.clock.now_utc()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        if now >= self._convergence_deadline:
+            self._logger.error(
+                "INV-STARTUP-CONVERGENCE-001 FATAL: Convergence timeout expired "
+                "after %s without successful boundary transition",
+                MAX_STARTUP_CONVERGENCE_WINDOW,
+            )
+            self._pending_fatal = SchedulingError(
+                "Startup convergence timeout: no boundary executed within window"
+            )
+            self._transition_boundary_state(BoundaryState.FAILED_TERMINAL)
+            return False
+        return True
+
+    def _advance_to_next_boundary_after_skip(self, skipped_boundary_time: datetime) -> None:
+        """
+        P12-CORE-012: After skipping an infeasible boundary, set _segment_end_time_utc to the next boundary.
+
+        Uses get_playout_plan_now at skipped_boundary_time; does not change boundary state or switch state.
+        """
+        next_plan = self.schedule_service.get_playout_plan_now(self.channel_id, skipped_boundary_time)
+        if next_plan:
+            next_seg = next_plan[0]
+            next_end_str = next_seg.get("end_time_utc")
+            if next_end_str:
+                self._segment_end_time_utc = datetime.fromisoformat(next_end_str)
+                if self._segment_end_time_utc.tzinfo is None:
+                    self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
+                self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+            else:
+                next_duration = self._segment_duration_seconds(next_seg)
+                if next_duration > 0:
+                    if skipped_boundary_time.tzinfo is None:
+                        skipped_boundary_time = skipped_boundary_time.replace(tzinfo=timezone.utc)
+                    self._segment_end_time_utc = skipped_boundary_time + timedelta(seconds=next_duration)
+                    self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+                else:
+                    self._segment_end_time_utc = None
+                    self._plan_boundary_ms = None
+        else:
+            self._segment_end_time_utc = None
+            self._plan_boundary_ms = None
+
     @property
     def is_live(self) -> bool:
         """
@@ -1012,6 +1081,16 @@ class ChannelManager:
         stopped—it means session is provisional or dead.
         """
         return self._boundary_state == BoundaryState.LIVE
+
+    @property
+    def converged(self) -> bool:
+        """
+        P12-CORE-011 INV-STARTUP-CONVERGENCE-001: True after first successful boundary transition.
+
+        During startup convergence (_converged False), infeasible boundaries are skipped.
+        Once True, never reverts for this session.
+        """
+        return self._converged
 
     def _guard_switch_issuance(self, boundary_time: datetime) -> bool:
         """P11F-004 INV-SWITCH-ISSUANCE-ONESHOT-001: Returns True if issuance is allowed."""
@@ -1238,6 +1317,31 @@ class ChannelManager:
         segment_end = self._segment_end_time_utc
         if segment_end.tzinfo is None:
             segment_end = segment_end.replace(tzinfo=timezone.utc)
+
+        # P12-CORE-013 INV-STARTUP-CONVERGENCE-001: Convergence timeout (before boundary work)
+        if not self._check_convergence_timeout():
+            return
+
+        # P12-CORE-012 INV-STARTUP-CONVERGENCE-001: Infeasible boundary → skip (pre-convergence) or FATAL (post-convergence)
+        lead_time = segment_end - now
+        if lead_time < MIN_PREFEED_LEAD_TIME:
+            if not self._converged:
+                self._logger.info(
+                    "STARTUP_BOUNDARY_SKIPPED: boundary=%s lead_time=%s min_required=%s",
+                    segment_end.isoformat(),
+                    lead_time,
+                    MIN_PREFEED_LEAD_TIME,
+                )
+                self._advance_to_next_boundary_after_skip(segment_end)
+                return
+            self._logger.error(
+                "INV-STARTUP-BOUNDARY-FEASIBILITY-001 FATAL: Infeasible boundary post-convergence",
+            )
+            self._pending_fatal = SchedulingError(
+                "Infeasible boundary post-convergence: boundary_time < now + MIN_PREFEED_LEAD_TIME"
+            )
+            self._transition_boundary_state(BoundaryState.FAILED_TERMINAL)
+            return
 
         # =======================================================================
         # Two-phase clock-driven switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
