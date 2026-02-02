@@ -21,12 +21,13 @@ from pathlib import Path
 from typing import Any
 
 
-# P11D-006: Minimum lead time between issuing SwitchToLive and target boundary (must match AIR kMinPrefeedLeadTimeMs).
-MIN_PREFEED_LEAD_TIME = timedelta(seconds=5)
-# P11D-010 INV-STARTUP-BOUNDARY-FEASIBILITY-001: Bounded upper limit on channel launch overhead (AIR spawn, gRPC, handshake).
-# First boundary MUST satisfy boundary_time >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME. Declared, not measured.
-# 7s so first boundary leaves cushion for 1s health-check cadence when issuing SwitchToLive.
-STARTUP_LATENCY = timedelta(seconds=7)
+# P11E-001: Single source for prefeed/startup timing (env RETROVUE_MIN_PREFEED_LEAD_TIME_MS).
+from .constants import (
+    MIN_PREFEED_LEAD_TIME,
+    MIN_PREFEED_LEAD_TIME_MS,
+    SCHEDULING_BUFFER_SECONDS,
+    STARTUP_LATENCY,
+)
 
 
 class SwitchState(Enum):
@@ -67,6 +68,14 @@ import os
 
 if TYPE_CHECKING:
     from retrovue.runtime.metrics import ChannelMetricsSample, MetricsPublisher
+
+# P11E-004: Prefeed/switch lead time metrics (None if prometheus_client not installed)
+from .metrics import (
+    prefeed_lead_time_ms,
+    prefeed_lead_time_violations_total,
+    switch_lead_time_ms,
+    switch_lead_time_violations_total,
+)
 
 
 # ----------------------------------------------------------------------
@@ -266,8 +275,10 @@ class ChannelManager:
 
         # Clock-driven segment switching (schedule advances because time advanced, not EOF).
         self._segment_end_time_utc: datetime | None = None  # When current segment ends (from schedule)
-        # P11D-006: LoadPreview at T-7s so AIR has ≥MIN_PREFEED_LEAD_TIME before SwitchToLive
-        self._preload_lead_seconds: float = max(7.0, MIN_PREFEED_LEAD_TIME.total_seconds() + 2.0)
+        # P11E-002: LoadPreview at boundary - MIN_PREFEED_LEAD_TIME - SCHEDULING_BUFFER (trigger time).
+        self._preload_lead_seconds: float = max(
+            7.0, MIN_PREFEED_LEAD_TIME.total_seconds() + SCHEDULING_BUFFER_SECONDS
+        )
         # P11D-011 INV-SWITCH-ISSUANCE-DEADLINE-001: Issuance is deadline-scheduled (issue_at = boundary - MIN_PREFEED_LEAD_TIME).
         self._switch_lead_seconds: float = MIN_PREFEED_LEAD_TIME.total_seconds()
         self._last_switch_at_segment_end_utc: datetime | None = None  # Guard: fire switch_to_live() once per segment
@@ -968,6 +979,28 @@ class ChannelManager:
                         duration_s = next_seg.get("duration_seconds", 0)
                         if duration_s > 0:
                             frame_count = int(duration_s * fps)
+
+                    # P11E-003/004: Lead time at LoadPreview issuance; log violation and record metrics.
+                    load_preview_lead = segment_end - now
+                    load_preview_lead_ms = int(load_preview_lead.total_seconds() * 1000)
+                    if prefeed_lead_time_ms is not None:
+                        prefeed_lead_time_ms.labels(channel_id=self.channel_id).observe(
+                            load_preview_lead_ms
+                        )
+                    if load_preview_lead < MIN_PREFEED_LEAD_TIME:
+                        self._logger.error(
+                            "INV-CONTROL-NO-POLL-001 VIOLATION: LoadPreview issued with insufficient lead time. "
+                            "channel_id=%s, boundary=%s, lead_time_ms=%d, min_required_ms=%d. "
+                            "This is a Core scheduling bug.",
+                            self.channel_id,
+                            segment_end.isoformat(),
+                            load_preview_lead_ms,
+                            MIN_PREFEED_LEAD_TIME_MS,
+                        )
+                        if prefeed_lead_time_violations_total is not None:
+                            prefeed_lead_time_violations_total.labels(
+                                channel_id=self.channel_id
+                            ).inc()
 
                     ok = producer.load_preview(
                         asset_path,
@@ -1969,6 +2002,26 @@ class Phase8AirProducer(Producer):
             self._logger.info(
                 "INV-CONTROL-NO-POLL-001: Switch scheduled for %d", target_ms
             )
+            # P11E-003/004: Lead time at SwitchToLive issuance; log violation and record metrics.
+            now_utc = datetime.now(timezone.utc)
+            switch_lead = target_boundary_time_utc - now_utc
+            switch_lead_ms = int(switch_lead.total_seconds() * 1000)
+            if switch_lead_time_ms is not None:
+                switch_lead_time_ms.labels(channel_id=self.channel_id).observe(switch_lead_ms)
+            if switch_lead < MIN_PREFEED_LEAD_TIME:
+                self._logger.error(
+                    "INV-CONTROL-NO-POLL-001 VIOLATION: SwitchToLive issued too late. "
+                    "channel_id=%s, boundary=%s, lead_time_ms=%d, min_required_ms=%d. "
+                    "AIR may return PROTOCOL_VIOLATION.",
+                    self.channel_id,
+                    target_boundary_time_utc.isoformat(),
+                    switch_lead_ms,
+                    MIN_PREFEED_LEAD_TIME_MS,
+                )
+                if switch_lead_time_violations_total is not None:
+                    switch_lead_time_violations_total.labels(
+                        channel_id=self.channel_id
+                    ).inc()
         try:
             ok, _result_code, _violation_reason = channel_manager_launch.air_switch_to_live(
                 self._grpc_addr,
