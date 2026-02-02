@@ -38,17 +38,18 @@ The audit identified gaps between current implementation and broadcast-grade req
 | 11C | Declarative Boundary Protocol | 5 | Medium | None |
 | 11D | Deadline-Authoritative Switching | 12 | High | 11C |
 | 11E | Prefeed Timing Contract | 5 | Medium | 11D |
+| 11F | Boundary Lifecycle State Machine | 9 | Medium | 11E |
 
-**Total: 33 tasks**
+**Total: 42 tasks**
 
 ## Execution Order
 
-Phases 11A, 11B, and 11C can proceed in parallel. Phase 11D requires 11C. Phase 11E requires 11D.
+Phases 11A, 11B, and 11C can proceed in parallel. Phase 11D requires 11C. Phase 11E requires 11D. Phase 11F requires 11E.
 
 ```
 11A (Audio) ──────────────────────────────────────┐
 11B (Observability) ──────────────────────────────┤
-11C (Proto) ──────────────────────────────────────┼──► 11D (Enforcement) ──► 11E (Prefeed)
+11C (Proto) ──────────────────────────────────────┼──► 11D (Enforcement) ──► 11E (Prefeed) ──► 11F (Lifecycle)
 ```
 
 **Important Dependency Clarification:**
@@ -125,6 +126,20 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | [P11E-004](P11E-004.md) | METRICS | Core | Add prefeed_lead_time_ms histogram |
 | [P11E-005](P11E-005.md) | TEST | Test | Contract test: all LoadPreview with sufficient lead time |
 
+### Phase 11F: Boundary Lifecycle State Machine
+
+| Task | Type | Owner | Description |
+|------|------|-------|-------------|
+| [P11F-001](P11F-001.md) | FIX | Core | Fix _MIN_PREFEED_LEAD_TIME_MS typo |
+| [P11F-002](P11F-002.md) | FIX | Core | Add BoundaryState enum and transition enforcement |
+| [P11F-003](P11F-003.md) | FIX | Core | Terminal exception handling in switch issuance |
+| [P11F-004](P11F-004.md) | FIX | Core | One-shot guard to prevent duplicate issuance |
+| [P11F-005](P11F-005.md) | FIX | Core | Replace threading.Timer with loop.call_later() |
+| [P11F-006](P11F-006.md) | FIX | Core | Plan-boundary match validation |
+| [P11F-007](P11F-007.md) | TEST | Test | Contract test: boundary lifecycle transitions |
+| [P11F-008](P11F-008.md) | TEST | Test | Contract test: duplicate issuance suppression |
+| [P11F-009](P11F-009.md) | TEST | Test | Contract test: terminal exception handling |
+
 ## New Invariants
 
 | Invariant | Description |
@@ -137,6 +152,10 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | INV-SWITCH-ISSUANCE-DEADLINE-001 | Switch issuance deadline-scheduled, not cadence-detected |
 | INV-CONTROL-NO-POLL-001 | No poll/retry for switch readiness |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch at declared time regardless of readiness |
+| INV-SWITCH-ISSUANCE-TERMINAL-001 | Exception during issuance → FAILED_TERMINAL (11F) |
+| INV-SWITCH-ISSUANCE-ONESHOT-001 | Exactly one issuance per boundary (11F) |
+| INV-BOUNDARY-LIFECYCLE-001 | Unidirectional boundary state machine (11F) |
+| INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | target_boundary_ms must match plan (11F) |
 
 ## Rules Downgraded from Authority to Execution
 
@@ -155,6 +174,7 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 
 ## Reference
 
+- [PHASE11.md](../../PHASE11.md) — **Architectural contract** (authority hierarchy, invariants, lifecycle; same style as PHASE12.md)
 - [CANONICAL_RULE_LEDGER.md](../../CANONICAL_RULE_LEDGER.md) — Authoritative rule definitions
-- [PHASE1_EXECUTION_PLAN.md](../../PHASE1_EXECUTION_PLAN.md) — Overall execution plan
-- [PHASE1_TASKS.md](../../PHASE1_TASKS.md) — Task tracking
+- [PHASE11_EXECUTION_PLAN.md](../../PHASE11_EXECUTION_PLAN.md) — Phase 11 execution plan (authority hierarchy, 11A–11F)
+- [PHASE11_TASKS.md](../../PHASE11_TASKS.md) — Phase 11 task list and checklists
