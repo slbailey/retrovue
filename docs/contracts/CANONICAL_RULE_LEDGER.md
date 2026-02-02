@@ -3,7 +3,7 @@
 **Status:** Authoritative
 **Purpose:** Single source of truth for all active rules governing RetroVue Core and AIR
 **Last Updated:** 2026-02-02
-**Last Audit:** 2026-02-02 (Boundary Lifecycle Hardening); Phase 11D closed 2026-02-02; Phase 11E closed 2026-02-02; Phase 11F created 2026-02-02; P11F-001–P11F-009 completed 2026-02-02
+**Last Audit:** 2026-02-02 (Live Session Authority); Phase 11F completed 2026-02-02; Phase 12 created 2026-02-02
 
 This ledger enumerates every active rule in the RetroVue system. If a rule is not in this ledger, it is not enforced. If code disagrees with a rule in this ledger, the code is wrong.
 
@@ -62,6 +62,11 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-SWITCH-ISSUANCE-ONESHOT-001 | INV-SWITCH-ISSUANCE-DEADLINE-001, INV-CONTROL-NO-POLL-001 | **Enforces** — SwitchToLive is issued exactly once per boundary; duplicates are suppressed or fatal |
 | INV-BOUNDARY-LIFECYCLE-001 | LAW-AUTHORITY-HIERARCHY, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — boundary state transitions are unidirectional; illegal transitions force FAILED_TERMINAL |
 | INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | INV-BOUNDARY-DECLARED-001, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — target_boundary_ms must equal plan-derived boundary, not `now + X` |
+| INV-TEARDOWN-STABLE-STATE-001 | LAW-AUTHORITY-HIERARCHY, INV-BOUNDARY-LIFECYCLE-001 | **Enforces** — teardown deferred until boundary state is stable; transient states block immediate teardown |
+| INV-TEARDOWN-GRACE-TIMEOUT-001 | INV-TEARDOWN-STABLE-STATE-001 | **Bounds** — deferred teardown cannot wait indefinitely; grace timeout forces FAILED_TERMINAL |
+| INV-TEARDOWN-NO-NEW-WORK-001 | INV-TEARDOWN-STABLE-STATE-001 | **Enforces** — no new boundary work scheduled when teardown is pending |
+| INV-VIEWER-COUNT-ADVISORY-001 | LAW-AUTHORITY-HIERARCHY, INV-TEARDOWN-STABLE-STATE-001 | **Clarifies** — viewer count triggers but does not force teardown during transient states |
+| INV-LIVE-SESSION-AUTHORITY-001 | INV-BOUNDARY-LIFECYCLE-001 | **Defines** — channel is durably live only when `_boundary_state == LIVE` |
 
 ---
 
@@ -1058,6 +1063,49 @@ This section documents the phased implementation of invariants added by the 2026
 
 ---
 
+### Phase 12: Live Session Authority & Teardown Semantics
+
+**Goal:** Define when teardown is permitted and enforce deferred teardown during transient boundary states.
+
+**Governing Document:** [PHASE12.md](./PHASE12.md)
+
+**Invariants:**
+- INV-TEARDOWN-STABLE-STATE-001 (teardown deferred in transient states)
+- INV-TEARDOWN-GRACE-TIMEOUT-001 (bounded deferral; timeout forces FAILED_TERMINAL)
+- INV-TEARDOWN-NO-NEW-WORK-001 (no new boundary work when teardown pending)
+- INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions)
+- INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state)
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By | Status |
+|---------|-------------|-------|------------|--------|
+| P12-CORE-001 | Add teardown state fields to ChannelManager | Core | — | — |
+| P12-CORE-002 | Implement `_request_teardown()` guard | Core | P12-CORE-001 | — |
+| P12-CORE-003 | Integrate deferred teardown into state transitions | Core | P12-CORE-002 | — |
+| P12-CORE-004 | Add grace timeout enforcement to `tick()` | Core | P12-CORE-002 | — |
+| P12-CORE-005 | Block new work when teardown pending | Core | P12-CORE-002 | — |
+| P12-CORE-006 | Update ProgramDirector viewer disconnect handler | Core | P12-CORE-002 | — |
+| P12-CORE-007 | Add `is_live` property | Core | P12-CORE-001 | — |
+| P12-TEST-001 | Contract test: teardown blocked in transient states | Test | P12-CORE-003 | — |
+| P12-TEST-002 | Contract test: deferred teardown executes on LIVE | Test | P12-CORE-003 | — |
+| P12-TEST-003 | Contract test: grace timeout forces FAILED_TERMINAL | Test | P12-CORE-004 | — |
+| P12-TEST-004 | Contract test: no new work when teardown pending | Test | P12-CORE-005 | — |
+| P12-TEST-005 | Contract test: viewer disconnect defers during transition | Test | P12-CORE-006 | — |
+| P12-TEST-006 | Contract test: liveness only in LIVE state | Test | P12-CORE-007 | — |
+
+**Exit Criteria:**
+- Teardown blocked during transient states (PLANNED, PRELOAD_ISSUED, SWITCH_SCHEDULED, SWITCH_ISSUED)
+- Teardown permitted in stable states (NONE, LIVE, FAILED_TERMINAL)
+- Grace timeout forces FAILED_TERMINAL after 10s deferral
+- No new boundary work scheduled when teardown pending
+- Viewer disconnect routes through `_request_teardown()`
+- `is_live` property returns True only in LIVE state
+
+**Risk:** Low — Additive changes; does not modify Phase 8 or Phase 11 semantics
+
+---
+
 ### Phase Dependency Graph
 
 ```
@@ -1072,7 +1120,9 @@ Phase 11D (Deadline Enforcement)  ◄──────────────�
                                                                     │
 Phase 11E (Prefeed Contract)      ◄─────────────────────────────────┤
                                                                     │
-Phase 11F (Lifecycle Hardening)   ◄─────────────────────────────────┘
+Phase 11F (Lifecycle Hardening)   ◄─────────────────────────────────┤
+                                                                    │
+Phase 12 (Teardown Semantics)     ◄─────────────────────────────────┘
 ```
 
 - **11A** can proceed immediately (no dependencies)
@@ -1081,6 +1131,7 @@ Phase 11F (Lifecycle Hardening)   ◄──────────────�
 - **11D** requires 11C complete (needs proto field)
 - **11E** requires 11D complete (enforcement semantics must be clear)
 - **11F** requires 11E complete (builds on prefeed contract)
+- **12** requires 11F complete (builds on BoundaryState enum)
 
 ### Recommended Execution Order
 
@@ -1088,6 +1139,7 @@ Phase 11F (Lifecycle Hardening)   ◄──────────────�
 2. **Sequential:** 11D (after 11C)
 3. **Sequential:** 11E (after 11D)
 4. **Sequential:** 11F (after 11E)
+5. **Sequential:** 12 (after 11F)
 
 ### Summary Timeline
 
@@ -1099,7 +1151,8 @@ Phase 11F (Lifecycle Hardening)   ◄──────────────�
 | 11D | Deadline-Authoritative Switching | 11C | High | 5-7 days |
 | 11E | Prefeed Timing Contract | 11D | Medium | 3-4 days |
 | 11F | Boundary Lifecycle Hardening | 11E | Medium | 2-3 days |
-| **Total** | | | | **15-22 days** |
+| 12 | Live Session Authority & Teardown | 11F | Low | 2-3 days |
+| **Total** | | | | **17-25 days** |
 
 ---
 
@@ -1147,6 +1200,7 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 
 | Date | Auditor | Scope | Summary |
 |------|---------|-------|---------|
+| 2026-02-02 | Systems Contract Authority | Phase 12 Creation | Created Phase 12: Live Session Authority & Teardown Semantics. Added 5 invariants: INV-TEARDOWN-STABLE-STATE-001 (teardown deferred in transient states), INV-TEARDOWN-GRACE-TIMEOUT-001 (bounded deferral), INV-TEARDOWN-NO-NEW-WORK-001 (no new work when pending), INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions), INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state). Incident-derived: Core tore down channel during SWITCH_ISSUED causing AIR encoder deadlock and audio queue overflow. 7 implementation tasks (P12-CORE-001–007), 6 test tasks (P12-TEST-001–006). |
 | 2026-02-02 | Systems Contract Authority | P11F-007–P11F-009 completion | P11F-007: test_channel_manager_boundary_lifecycle.py (allowed/illegal/terminal-absorbing/LIVE non-absorbing). P11F-008: test_channel_manager_oneshot.py (duplicate suppression, tick guard, exactly-once). P11F-009: test_channel_manager_terminal.py (exception→FAILED_TERMINAL, no re-arm, tick cannot retry, diagnostics). 71 runtime tests pass. Phase 11F complete. |
 | 2026-02-02 | Systems Contract Authority | P11F-003–P11F-006 completion | P11F-003: try/except Exception in switch issuance → FAILED_TERMINAL; no retry. P11F-004: _guard_switch_issuance; tick early-return for SWITCH_ISSUED/LIVE/FAILED_TERMINAL. P11F-005: optional event_loop; call_later path when set; Timer fallback. P11F-006: _plan_boundary_ms set/cleared/validated; mismatch → FAILED_TERMINAL. 32 runtime tests passed. |
 | 2026-02-02 | Systems Contract Authority | P11F-002 completion | P11F-002 done: BoundaryState enum and _ALLOWED_BOUNDARY_TRANSITIONS; _transition_boundary_state(); all boundary transitions wired (PLANNED→PRELOAD_ISSUED→SWITCH_SCHEDULED→SWITCH_ISSUED→LIVE→PLANNED/NONE). Switch timer moved to after LoadPreview. Illegal transition → FAILED_TERMINAL tested. Unblocks P11F-003, P11F-004, P11F-005, P11F-006. |
