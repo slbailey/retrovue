@@ -35,6 +35,7 @@ extern "C" {
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSink.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
+#include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/producers/file/FileProducer.h"
 #include "../../fixtures/EventBusStub.h"
 #include "timing/TestMasterClock.h"
@@ -2251,7 +2252,7 @@ namespace
     
     EXPECT_GT(packet_count, 10u) << "Should have multiple aligned TS packets";
     
-    // Verify no partial packets at end (if size is not multiple of 188)
+  // Verify no partial packets at end (if size is not multiple of 188)
     size_t remainder = received_data.size() % 188;
     if (remainder > 0) {
       // Last partial packet should not have sync byte
@@ -2259,9 +2260,236 @@ namespace
       // But ideally, we should have complete packets
       std::cout << "[FE-023] Note: " << remainder << " bytes remain (partial packet)" << std::endl;
     }
-    
+
     producer_->stop();
     sink_->stop();
+#else
+    GTEST_SKIP() << "FFmpeg not available";
+#endif
+  }
+
+  // -------------------------------------------------------------------------
+  // LAW-AUDIO-FORMAT (P1-EP-001): EncoderPipeline rejects non-house audio
+  // -------------------------------------------------------------------------
+  // Capture callback for EncoderPipeline TS output (counts audio PES packets)
+  struct LAW_AUDIO_FORMAT_Capture {
+    std::vector<uint8_t> captured_data;
+    std::atomic<int> audio_pes_count{0};
+
+    static int WriteCallback(void* opaque, uint8_t* buf, int buf_size) {
+      auto* self = reinterpret_cast<LAW_AUDIO_FORMAT_Capture*>(opaque);
+      self->captured_data.insert(self->captured_data.end(), buf, buf + buf_size);
+      for (int i = 0; i + 4 < buf_size; ++i) {
+        if (buf[i] == 0x00 && buf[i+1] == 0x00 && buf[i+2] == 0x01) {
+          uint8_t stream_id = buf[i+3];
+          if ((stream_id >= 0xC0 && stream_id <= 0xDF) || stream_id == 0xBD) {
+            self->audio_pes_count++;
+          }
+        }
+      }
+      return buf_size;
+    }
+  };
+
+  // Rule: LAW-AUDIO-FORMAT (P1-EP-001) EncoderPipeline rejects non-house format
+  // Given: EncoderPipeline configured with house format (48000 Hz, stereo, AAC)
+  // When: Audio frame with sample_rate = 44100 Hz is submitted
+  // Then: encodeAudioFrame returns false, no audio packet produced, encoder remains valid
+  TEST_F(MpegTSPlayoutSinkContractTest, TEST_LAW_AUDIO_FORMAT_RejectsNonHouseFormat)
+  {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+    MpegTSPlayoutSinkConfig ep_config;
+    ep_config.target_width = 1920;
+    ep_config.target_height = 1080;
+    ep_config.bitrate = 4000000;
+    ep_config.target_fps = 30.0;
+    ep_config.gop_size = 30;
+    ep_config.stub_mode = false;
+    ep_config.enable_audio = true;
+
+    LAW_AUDIO_FORMAT_Capture capture;
+    EncoderPipeline pipeline(ep_config);
+    bool opened = pipeline.open(ep_config, &capture, LAW_AUDIO_FORMAT_Capture::WriteCallback);
+    ASSERT_TRUE(opened) << "EncoderPipeline must open with house format (48kHz)";
+    ASSERT_TRUE(pipeline.IsInitialized());
+
+    int audio_pes_before = capture.audio_pes_count.load();
+
+    // 1. Submit audio frame with non-house sample rate (44100 Hz)
+    retrovue::buffer::AudioFrame non_house_frame;
+    non_house_frame.sample_rate = 44100;
+    non_house_frame.channels = 2;
+    non_house_frame.nb_samples = 1024;
+    non_house_frame.data.resize(1024 * 2 * sizeof(int16_t), 0);
+
+    int64_t pts90k = 0;
+    bool encode_result = pipeline.encodeAudioFrame(non_house_frame, pts90k);
+    EXPECT_FALSE(encode_result) << "encodeAudioFrame must return error for non-house format (44100 Hz)";
+
+    // 2. No audio packet produced for that rejected frame
+    EXPECT_EQ(capture.audio_pes_count.load(), audio_pes_before)
+        << "No audio packet must be produced when non-house format is rejected";
+
+    // 3. Encoder remains valid: accept a valid house-format frame after rejection
+    retrovue::buffer::AudioFrame house_frame;
+    house_frame.sample_rate = 48000;
+    house_frame.channels = 2;
+    house_frame.nb_samples = 1024;
+    house_frame.data.resize(1024 * 2 * sizeof(int16_t), 0);
+
+    bool valid_result = pipeline.encodeAudioFrame(house_frame, pts90k + 1920);
+    EXPECT_TRUE(valid_result) << "Encoder must still accept valid house-format frames after rejection";
+
+    pipeline.close();
+#else
+    GTEST_SKIP() << "FFmpeg not available - LAW-AUDIO-FORMAT test requires EncoderPipeline";
+#endif
+  }
+
+  // Rule: INV-AUDIO-HOUSE-FORMAT-001 (P1-EP-003) Explicit rejection of non-house audio
+  // Given: EncoderPipeline initialized with house sample rate (48000)
+  // When: Audio frame with sample_rate = 22050 is submitted
+  // Then: Encoder explicitly rejects the frame (return value indicates rejection, not silent drop)
+  TEST_F(MpegTSPlayoutSinkContractTest, TEST_INV_AUDIO_HOUSE_FORMAT_001_ExplicitRejection)
+  {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+    constexpr int kHouseSampleRate = 48000;
+    constexpr int kWrongSampleRate = 22050;
+
+    MpegTSPlayoutSinkConfig ep_config;
+    ep_config.target_width = 1920;
+    ep_config.target_height = 1080;
+    ep_config.bitrate = 4000000;
+    ep_config.target_fps = 30.0;
+    ep_config.gop_size = 30;
+    ep_config.stub_mode = false;
+    ep_config.enable_audio = true;
+
+    LAW_AUDIO_FORMAT_Capture capture;
+    EncoderPipeline pipeline(ep_config);
+    bool opened = pipeline.open(ep_config, &capture, LAW_AUDIO_FORMAT_Capture::WriteCallback);
+    ASSERT_TRUE(opened) << "EncoderPipeline must open with house format (48kHz)";
+    ASSERT_TRUE(pipeline.IsInitialized());
+
+    int audio_pes_before = capture.audio_pes_count.load();
+
+    retrovue::buffer::AudioFrame wrong_rate_frame;
+    wrong_rate_frame.sample_rate = kWrongSampleRate;
+    wrong_rate_frame.channels = 2;
+    wrong_rate_frame.nb_samples = 1024;
+    wrong_rate_frame.data.resize(1024 * 2 * sizeof(int16_t), 0);
+
+    int64_t pts90k = 0;
+    bool encode_result = pipeline.encodeAudioFrame(wrong_rate_frame, pts90k);
+
+    ASSERT_FALSE(encode_result) << "encodeAudioFrame must indicate rejection (false) for sample_rate != house_sample_rate";
+    EXPECT_EQ(capture.audio_pes_count.load(), audio_pes_before)
+        << "Frame must not be silently consumed; no audio packet produced";
+    EXPECT_EQ(capture.audio_pes_count.load(), 0)
+        << "No resampling occurred; rejected frame produced no output";
+
+    pipeline.close();
+#else
+    GTEST_SKIP() << "FFmpeg not available - INV-AUDIO-HOUSE-FORMAT-001 test requires EncoderPipeline";
+#endif
+  }
+
+  // -------------------------------------------------------------------------
+  // INV-ENCODER-NO-B-FRAMES-001 (P1-EP-004): Encoder produces only I and P frames
+  // -------------------------------------------------------------------------
+  struct NO_B_FRAMES_Capture {
+    std::vector<uint8_t> captured_data;
+    static int WriteCallback(void* opaque, uint8_t* buf, int buf_size) {
+      auto* self = reinterpret_cast<NO_B_FRAMES_Capture*>(opaque);
+      self->captured_data.insert(self->captured_data.end(), buf, buf + buf_size);
+      return buf_size;
+    }
+  };
+
+  TEST_F(MpegTSPlayoutSinkContractTest, TEST_INV_ENCODER_NO_B_FRAMES_001)
+  {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+    MpegTSPlayoutSinkConfig ep_config;
+    ep_config.target_width = 640;
+    ep_config.target_height = 480;
+    ep_config.bitrate = 5000000;
+    ep_config.target_fps = 30.0;
+    ep_config.gop_size = 30;
+    ep_config.stub_mode = false;
+    ep_config.enable_audio = false;
+    ep_config.persistent_mux = true;
+
+    NO_B_FRAMES_Capture capture;
+    EncoderPipeline pipeline(ep_config);
+    ASSERT_TRUE(pipeline.open(ep_config, &capture, NO_B_FRAMES_Capture::WriteCallback));
+    ASSERT_TRUE(pipeline.IsInitialized());
+
+    auto frames = FrameFactory::CreateFrameSequence(0, 33333, 60);
+    ASSERT_GE(frames.size(), 60u);
+    ASSERT_TRUE(pipeline.encodeFrame(frames[0], 0));
+    for (size_t i = 1; i < 60; ++i) {
+      int64_t pts90k = (frames[i].metadata.pts * 90000) / 1'000'000;
+      ASSERT_TRUE(pipeline.encodeFrame(frames[i], pts90k));
+    }
+    pipeline.close();
+
+    if (capture.captured_data.size() < 188) {
+      GTEST_SKIP() << "No TS output (libx264 required)";
+    }
+
+    const char* tmp = "/tmp/p1_ep004_no_bframes.ts";
+    FILE* f = fopen(tmp, "wb");
+    ASSERT_NE(f, nullptr);
+    size_t n = fwrite(capture.captured_data.data(), 1, capture.captured_data.size(), f);
+    fclose(f);
+    ASSERT_EQ(n, capture.captured_data.size());
+
+    AVFormatContext* fmt = nullptr;
+    ASSERT_GE(avformat_open_input(&fmt, tmp, nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(fmt, nullptr), 0);
+
+    int vid_idx = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+      if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        vid_idx = static_cast<int>(i);
+        break;
+      }
+    }
+    ASSERT_GE(vid_idx, 0);
+
+    const AVCodec* dec = avcodec_find_decoder(fmt->streams[vid_idx]->codecpar->codec_id);
+    ASSERT_NE(dec, nullptr);
+    AVCodecContext* dec_ctx = avcodec_alloc_context3(dec);
+    ASSERT_NE(dec_ctx, nullptr);
+    ASSERT_GE(avcodec_parameters_to_context(dec_ctx, fmt->streams[vid_idx]->codecpar), 0);
+    ASSERT_GE(avcodec_open2(dec_ctx, dec, nullptr), 0);
+
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    int i_count = 0, p_count = 0, b_count = 0;
+    while (av_read_frame(fmt, pkt) >= 0) {
+      if (pkt->stream_index != vid_idx) {
+        av_packet_unref(pkt);
+        continue;
+      }
+      if (avcodec_send_packet(dec_ctx, pkt) == 0) {
+        while (avcodec_receive_frame(dec_ctx, frame) == 0) {
+          if (frame->pict_type == AV_PICTURE_TYPE_B) b_count++;
+          else if (frame->pict_type == AV_PICTURE_TYPE_I) i_count++;
+          else if (frame->pict_type == AV_PICTURE_TYPE_P) p_count++;
+        }
+      }
+      av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+    av_frame_free(&frame);
+    avcodec_free_context(&dec_ctx);
+    avformat_close_input(&fmt);
+    unlink(tmp);
+
+    ASSERT_EQ(b_count, 0) << "INV-ENCODER-NO-B-FRAMES-001: Encoder must not produce B-frames";
+    EXPECT_GT(i_count, 0) << "Expected at least one I-frame";
+    EXPECT_GT(p_count, 0) << "Expected at least one P-frame (mix of I and P)";
 #else
     GTEST_SKIP() << "FFmpeg not available";
 #endif
