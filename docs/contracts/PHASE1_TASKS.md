@@ -276,3 +276,15 @@ Implementation is tracked in **CANONICAL_RULE_LEDGER.md § Phased Implementation
 - [x] P11D-010: Core startup boundary feasibility (INV-STARTUP-BOUNDARY-FEASIBILITY-001)
 - [x] P11D-011: Core deadline-scheduled switch issuance (INV-SWITCH-ISSUANCE-DEADLINE-001)
 - [x] P11D-012: Core + AIR delta logging for lead-time / clock skew (INV-LEADTIME-MEASUREMENT-001 observability)
+
+#### Phase 11F Checklist (Boundary Lifecycle Hardening)
+
+- [x] P11F-001: Fix `_MIN_PREFEED_LEAD_TIME_MS` typo → `MIN_PREFEED_LEAD_TIME_MS` (Done 2026-02-02)
+- [x] P11F-002: Add BoundaryState enum and transition enforcement (Done 2026-02-02)
+- [x] P11F-003: Implement terminal exception handling in switch issuance (Done 2026-02-02)
+- [x] P11F-004: Add one-shot guard to prevent duplicate issuance (Done 2026-02-02)
+- [x] P11F-005: Replace threading.Timer with loop.call_later() (Done 2026-02-02)
+- [x] P11F-006: Add plan-boundary match validation (Done 2026-02-02)
+- [x] P11F-007: Contract test: boundary lifecycle transitions (Done 2026-02-02)
+- [x] P11F-008: Contract test: duplicate issuance suppression (Done 2026-02-02)
+- [x] P11F-009: Contract test: terminal exception handling (Done 2026-02-02)

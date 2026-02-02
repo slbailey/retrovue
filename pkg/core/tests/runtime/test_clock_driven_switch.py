@@ -18,6 +18,7 @@ import pytest
 
 from retrovue.runtime.clock import ControllableMasterClock
 from retrovue.runtime.channel_manager import (
+    BoundaryState,
     ChannelManager,
     MockAlternatingScheduleService,
     Phase8ProgramDirector,
@@ -180,3 +181,31 @@ def test_channel_switches_on_clock_not_eof(tmp_path: Any) -> None:
     clock.advance_to(30.0)
     manager.tick()
     assert len(fake_producer.switch_to_live_calls) >= 1
+
+
+def test_illegal_boundary_transition_forces_failed_terminal(tmp_path: Any) -> None:
+    """P11F-002 INV-BOUNDARY-LIFECYCLE-001: Illegal transition forces FAILED_TERMINAL."""
+    sample_a = str(tmp_path / "SampleA.mp4")
+    (tmp_path / "SampleA.mp4").write_bytes(b"")
+    clock = ControllableMasterClock()
+    schedule = MockAlternatingScheduleService(
+        clock=clock,
+        asset_a_path=sample_a,
+        asset_b_path=sample_a,
+        segment_seconds=10.0,
+    )
+    channel_id = MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID
+    ok, err = schedule.load_schedule(channel_id)
+    assert ok, err
+    manager = ChannelManager(
+        channel_id=channel_id,
+        clock=clock,
+        schedule_service=schedule,
+        program_director=Phase8ProgramDirector(),
+    )
+    assert manager._boundary_state == BoundaryState.NONE
+    # Illegal: NONE -> LIVE not allowed (only NONE -> PLANNED)
+    manager._transition_boundary_state(BoundaryState.LIVE)
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+    assert manager._pending_fatal is not None
+    assert "Illegal boundary state transition" in str(manager._pending_fatal)

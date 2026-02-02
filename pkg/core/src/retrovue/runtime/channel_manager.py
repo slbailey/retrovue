@@ -46,6 +46,29 @@ class SwitchState(Enum):
     PREVIEW_LOADED = auto() # Preview loaded, ready for SwitchToLive
     SWITCH_ARMED = auto()   # SwitchToLive called, awaiting auto-complete
 
+
+# P11F-002 INV-BOUNDARY-LIFECYCLE-001: Unidirectional boundary state machine.
+class BoundaryState(Enum):
+    """P11F-002: Boundary lifecycle. Illegal transitions force FAILED_TERMINAL."""
+    NONE = auto()              # No boundary planned
+    PLANNED = auto()           # Boundary computed, LoadPreview scheduled
+    PRELOAD_ISSUED = auto()    # LoadPreview sent to AIR
+    SWITCH_SCHEDULED = auto()  # Switch timer registered (one-shot)
+    SWITCH_ISSUED = auto()     # SwitchToLive sent to AIR
+    LIVE = auto()              # AIR confirmed switch complete
+    FAILED_TERMINAL = auto()   # Unrecoverable failure (absorbing)
+
+
+_ALLOWED_BOUNDARY_TRANSITIONS: dict[BoundaryState, set[BoundaryState]] = {
+    BoundaryState.NONE: {BoundaryState.PLANNED},
+    BoundaryState.PLANNED: {BoundaryState.PRELOAD_ISSUED, BoundaryState.FAILED_TERMINAL},
+    BoundaryState.PRELOAD_ISSUED: {BoundaryState.SWITCH_SCHEDULED, BoundaryState.FAILED_TERMINAL},
+    BoundaryState.SWITCH_SCHEDULED: {BoundaryState.SWITCH_ISSUED, BoundaryState.FAILED_TERMINAL},
+    BoundaryState.SWITCH_ISSUED: {BoundaryState.LIVE, BoundaryState.FAILED_TERMINAL},
+    BoundaryState.LIVE: {BoundaryState.NONE, BoundaryState.PLANNED},
+    BoundaryState.FAILED_TERMINAL: set(),
+}
+
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse
 from uvicorn import Config, Server
@@ -226,6 +249,7 @@ class ChannelManager:
         clock: MasterClock,
         schedule_service: ScheduleService,
         program_director: ProgramDirector,
+        event_loop: asyncio.AbstractEventLoop | None = None,
     ):
         """
         Initialize the ChannelManager for a specific channel.
@@ -235,11 +259,15 @@ class ChannelManager:
             clock: MasterClock for authoritative time
             schedule_service: ScheduleService for read-only access to current playout plan
             program_director: ProgramDirector for global policy/mode
+            event_loop: Optional event loop for P11F-005; when set, switch issuance uses call_later instead of threading.Timer
         """
         self.channel_id = channel_id
         self.clock = clock
         self.schedule_service = schedule_service
         self.program_director = program_director
+        self._loop: asyncio.AbstractEventLoop | None = event_loop
+        # P11F-005: asyncio handle when using event loop (cancel on teardown)
+        self._switch_handle: asyncio.TimerHandle | None = None
 
         # Track active tuning sessions (viewer_id -> session data)
         self.viewer_sessions: dict[str, dict[str, Any]] = {}
@@ -288,6 +316,10 @@ class ChannelManager:
         self._pending_fatal: BaseException | None = None  # Set by timer callback if late/fatal; tick() re-raises
         # Phase 8: State machine for clock-driven switching (replaces boolean flags)
         self._switch_state: SwitchState = SwitchState.IDLE
+        # P11F-002 INV-BOUNDARY-LIFECYCLE-001: Unidirectional boundary state machine
+        self._boundary_state: BoundaryState = BoundaryState.NONE
+        # P11F-006 INV-BOUNDARY-DECLARED-MATCHES-PLAN-001: Plan-derived boundary (ms) for validation
+        self._plan_boundary_ms: int | None = None
 
         # =======================================================================
         # CT-Domain Switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
@@ -327,13 +359,17 @@ class ChannelManager:
         self._channel_state = "STOPPED"
         self._segment_end_time_utc = None
         self._switch_state = SwitchState.IDLE
+        self._boundary_state = BoundaryState.NONE
         self._last_switch_at_segment_end_utc = None
         self._segment_readiness_violation_logged = False
-        # P11D-011: Cancel deadline-scheduled switch issuance
+        # P11D-011 / P11F-005: Cancel deadline-scheduled switch issuance (Timer or call_later handle)
         with self._switch_issue_timer_lock:
             if self._switch_issue_timer is not None:
                 self._switch_issue_timer.cancel()
                 self._switch_issue_timer = None
+        if self._switch_handle is not None:
+            self._switch_handle.cancel()
+            self._switch_handle = None
         self._pending_fatal = None
         # Reset CT-domain state
         self._segment_ct_start_us = None
@@ -743,9 +779,11 @@ class ChannelManager:
                 f"(required >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME)."
             )
         self._switch_state = SwitchState.IDLE
-        # P11D-011: Schedule switch issuance at plan time (deadline-scheduled, not cadence-detected)
+        # P11F-002: Boundary state PLANNED when we have first boundary; switch timer scheduled after LoadPreview
+        # P11F-006: Store plan-derived boundary for INV-BOUNDARY-DECLARED-MATCHES-PLAN-001
         if self._segment_end_time_utc is not None:
-            self._schedule_switch_issuance(self._segment_end_time_utc)
+            self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+            self._transition_boundary_state(BoundaryState.PLANNED)
 
         # =======================================================================
         # CT-Domain State Initialization (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
@@ -812,41 +850,124 @@ class ChannelManager:
         boundary_s = math.ceil(earliest_s / segment_seconds) * segment_seconds
         return epoch_utc + timedelta(seconds=boundary_s)
 
+    def _transition_boundary_state(self, new_state: BoundaryState) -> None:
+        """P11F-002 INV-BOUNDARY-LIFECYCLE-001: Enforce unidirectional transitions; illegal → FAILED_TERMINAL."""
+        old_state = self._boundary_state
+        allowed = _ALLOWED_BOUNDARY_TRANSITIONS.get(old_state, set())
+        if new_state not in allowed:
+            self._logger.error(
+                "INV-BOUNDARY-LIFECYCLE-001 VIOLATION: Illegal transition %s -> %s",
+                old_state.name,
+                new_state.name,
+            )
+            self._boundary_state = BoundaryState.FAILED_TERMINAL
+            self._pending_fatal = SchedulingError(
+                f"Illegal boundary state transition: {old_state.name} -> {new_state.name}"
+            )
+            return
+        self._logger.info(
+            "INV-BOUNDARY-LIFECYCLE-001: Boundary transition %s -> %s",
+            old_state.name,
+            new_state.name,
+        )
+        self._boundary_state = new_state
+        if new_state == BoundaryState.NONE:
+            self._plan_boundary_ms = None
+
+    def _guard_switch_issuance(self, boundary_time: datetime) -> bool:
+        """P11F-004 INV-SWITCH-ISSUANCE-ONESHOT-001: Returns True if issuance is allowed."""
+        if self._boundary_state in (
+            BoundaryState.SWITCH_ISSUED,
+            BoundaryState.LIVE,
+        ):
+            self._logger.warning(
+                "INV-SWITCH-ISSUANCE-ONESHOT-001: Suppressed duplicate issuance for %s (state=%s)",
+                boundary_time.isoformat(),
+                self._boundary_state.name,
+            )
+            return False
+        if self._boundary_state == BoundaryState.FAILED_TERMINAL:
+            self._logger.error(
+                "INV-SWITCH-ISSUANCE-ONESHOT-001 FATAL: Attempted issuance for %s but boundary is FAILED_TERMINAL",
+                boundary_time.isoformat(),
+            )
+            self._pending_fatal = SchedulingError(
+                f"Attempted switch issuance for failed boundary {boundary_time}"
+            )
+            return False
+        return True
+
     def _schedule_switch_issuance(self, boundary_time: datetime) -> None:
-        """P11D-011 INV-SWITCH-ISSUANCE-DEADLINE-001: Register switch issuance at plan time; event fires at issue_at."""
+        """P11D-011 INV-SWITCH-ISSUANCE-DEADLINE-001: Register switch issuance; P11F-005: use call_later when loop set."""
         if boundary_time.tzinfo is None:
             boundary_time = boundary_time.replace(tzinfo=timezone.utc)
-        # Issue slightly earlier than strict deadline to absorb RPC latency (earlier is permitted)
         _ISSUANCE_BUFFER = timedelta(seconds=0.5)
         issue_at = boundary_time - MIN_PREFEED_LEAD_TIME - _ISSUANCE_BUFFER
         now = self.clock.now_utc()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
-        delay = (issue_at - now).total_seconds()
+        delay_s = (issue_at - now).total_seconds()
+        if self._loop is not None:
+            self._loop.call_soon_thread_safe(
+                self._schedule_switch_issuance_on_loop,
+                boundary_time,
+                delay_s,
+            )
+            return
         with self._switch_issue_timer_lock:
             if self._switch_issue_timer is not None:
                 self._switch_issue_timer.cancel()
                 self._switch_issue_timer = None
-        if delay <= 0:
+        if delay_s <= 0:
             self._on_switch_issue_deadline(boundary_time)
             return
-        timer = threading.Timer(delay, self._on_switch_issue_deadline, args=[boundary_time])
+        timer = threading.Timer(delay_s, self._on_switch_issue_deadline, args=[boundary_time])
         with self._switch_issue_timer_lock:
             self._switch_issue_timer = timer
         timer.start()
 
+    def _schedule_switch_issuance_on_loop(
+        self, boundary_time: datetime, delay_s: float
+    ) -> None:
+        """P11F-005: Runs on event loop thread; schedules _on_switch_issue_deadline via call_later."""
+        if self._loop is None:
+            return
+        if self._switch_handle is not None:
+            self._switch_handle.cancel()
+            self._switch_handle = None
+        if delay_s <= 0:
+            self._on_switch_issue_deadline(boundary_time)
+            return
+        self._switch_handle = self._loop.call_later(
+            delay_s,
+            self._on_switch_issue_deadline,
+            boundary_time,
+        )
+        self._logger.info(
+            "INV-SWITCH-ISSUANCE-DEADLINE-001: Switch scheduled for %s (delay=%.2fs)",
+            boundary_time.isoformat(),
+            delay_s,
+        )
+
     def _on_switch_issue_deadline(self, boundary_time: datetime) -> None:
-        """P11D-011: Called at issue_at = boundary_time - MIN_PREFEED_LEAD_TIME (runs in timer thread or sync)."""
+        """P11D-011: Called at issue_at. P11F-003: Failure is TERMINAL. P11F-004: Guard one-shot."""
+        # P11F-004: One-shot guard — suppress duplicate or FATAL if already terminal
+        if not self._guard_switch_issuance(boundary_time):
+            return
+        # Clear timer/handle (fired)
+        with self._switch_issue_timer_lock:
+            self._switch_issue_timer = None
+        if self._switch_handle is not None:
+            self._switch_handle = None
         now = self.clock.now_utc()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         issue_at = boundary_time - MIN_PREFEED_LEAD_TIME
         if boundary_time.tzinfo is None:
             boundary_time = boundary_time.replace(tzinfo=timezone.utc)
-        with self._switch_issue_timer_lock:
-            self._switch_issue_timer = None
         # Timer may fire a few ms late; treat as late only if >50ms past issue_at (timer resolution, not lead inflation)
         if (now - issue_at).total_seconds() > 0.05:
+            self._boundary_state = BoundaryState.FAILED_TERMINAL
             self._pending_fatal = SchedulingError(
                 "INV-SWITCH-ISSUANCE-DEADLINE-001 FATAL: Late issuance (issue_at was "
                 f"{issue_at.isoformat()}, now={now.isoformat()}). Issuance must be deadline-scheduled."
@@ -863,18 +984,40 @@ class ChannelManager:
             return
         if self._switch_state != SwitchState.PREVIEW_LOADED:
             return
+        # P11F-006: target_boundary_ms MUST match plan-derived boundary
+        target_boundary_ms = int(boundary_time.timestamp() * 1000)
+        if self._plan_boundary_ms is not None and target_boundary_ms != self._plan_boundary_ms:
+            self._logger.error(
+                "INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 FATAL: target_boundary_ms=%d does not match plan boundary=%d",
+                target_boundary_ms,
+                self._plan_boundary_ms,
+            )
+            self._boundary_state = BoundaryState.FAILED_TERMINAL
+            self._pending_fatal = SchedulingError(
+                f"Boundary mismatch: target={target_boundary_ms}, plan={self._plan_boundary_ms}"
+            )
+            return
+        self._transition_boundary_state(BoundaryState.SWITCH_ISSUED)
+        # P11F-003 INV-SWITCH-ISSUANCE-TERMINAL-001: Any exception → FAILED_TERMINAL; no retry
         try:
             ok = producer.switch_to_live(target_boundary_time_utc=boundary_time)
-        except (channel_manager_launch.SwitchTimingError, channel_manager_launch.SwitchProtocolError) as e:
+        except Exception as e:
+            self._logger.error(
+                "INV-SWITCH-ISSUANCE-TERMINAL-001 FATAL: Switch issuance failed for boundary %s: %s",
+                boundary_time.isoformat(),
+                e,
+            )
+            self._boundary_state = BoundaryState.FAILED_TERMINAL
             self._pending_fatal = SchedulingError(
-                f"Infeasible boundary at {boundary_time}: boundary could not be honored (AIR: {e}). "
-                "Scheduling must reject at planning time."
+                f"Switch issuance failed for boundary {boundary_time}: {e}"
             )
             self._pending_fatal.__cause__ = e
-            self._logger.error(
-                "INV-SCHED-PLAN-BEFORE-EXEC-001 FATAL: Infeasible boundary reached runtime | "
-                "channel=%s boundary=%s AIR rejected: %s",
-                self.channel_id, boundary_time.isoformat(), e,
+            return
+        if not ok:
+            # AIR returned not ready / protocol violation — treat as terminal
+            self._boundary_state = BoundaryState.FAILED_TERMINAL
+            self._pending_fatal = SchedulingError(
+                f"SwitchToLive returned False for boundary {boundary_time}"
             )
             return
         self._switch_state = SwitchState.SWITCH_ARMED
@@ -903,6 +1046,13 @@ class ChannelManager:
             e = self._pending_fatal
             self._pending_fatal = None
             raise e
+        # P11F-004 INV-SWITCH-ISSUANCE-ONESHOT-001: Never re-evaluate boundary already processed
+        if self._boundary_state in (
+            BoundaryState.SWITCH_ISSUED,
+            BoundaryState.LIVE,
+            BoundaryState.FAILED_TERMINAL,
+        ):
+            return
         if self._channel_state == "STOPPED" or self.active_producer is None:
             return
         producer = self.active_producer
@@ -1010,9 +1160,14 @@ class ChannelManager:
                         fps_denominator=fps_den,
                     )
                     if ok:
+                        self._transition_boundary_state(BoundaryState.PRELOAD_ISSUED)
                         self._switch_state = SwitchState.PREVIEW_LOADED
                         self._successor_loaded = True
                         self._successor_asset_path = asset_path
+                        # P11D-011: Schedule switch issuance after LoadPreview (P11F-002: PRELOAD_ISSUED → SWITCH_SCHEDULED)
+                        if self._segment_end_time_utc is not None:
+                            self._schedule_switch_issuance(self._segment_end_time_utc)
+                        self._transition_boundary_state(BoundaryState.SWITCH_SCHEDULED)
                         # Contract-level observability: CORE_INTENT_FRAME_RANGE (once per segment)
                         end_frame = start_frame + frame_count - 1 if frame_count >= 0 else -1
                         ct_start_us = 0
@@ -1090,6 +1245,7 @@ class ChannelManager:
         self, producer: Producer, segment_end: datetime, now: datetime
     ) -> None:
         """Handle switch completion: log timing, advance to next segment."""
+        self._transition_boundary_state(BoundaryState.LIVE)
         # Reset one-shot violation flag for next segment
         self._segment_readiness_violation_logged = False
 
@@ -1175,14 +1331,17 @@ class ChannelManager:
             self._segment_frame_count = frame_count if frame_count and frame_count > 0 else None
 
             self._switch_state = SwitchState.IDLE
-            # P11D-011: Schedule next switch issuance at plan time (deadline-scheduled)
+            # P11F-002: LIVE → PLANNED when we have next boundary; switch timer scheduled in tick() after LoadPreview
+            # P11F-006: Store plan-derived boundary for next switch
             if self._segment_end_time_utc is not None:
-                self._schedule_switch_issuance(self._segment_end_time_utc)
+                self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+            self._transition_boundary_state(BoundaryState.PLANNED)
         else:
             self._segment_end_time_utc = None
             self._segment_ct_start_us = None
             self._segment_frame_count = None
             self._switch_state = SwitchState.IDLE  # Switch completed, no more segments
+            self._transition_boundary_state(BoundaryState.NONE)
 
     def _stop_producer_if_idle(self) -> None:
         """Stop the Producer if there are no active viewers."""

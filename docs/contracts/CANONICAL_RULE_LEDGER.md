@@ -3,7 +3,7 @@
 **Status:** Authoritative
 **Purpose:** Single source of truth for all active rules governing RetroVue Core and AIR
 **Last Updated:** 2026-02-02
-**Last Audit:** 2026-02-02 (Scheduling Feasibility Invariant); Phase 11D closed 2026-02-02; Phase 11E closed 2026-02-02
+**Last Audit:** 2026-02-02 (Boundary Lifecycle Hardening); Phase 11D closed 2026-02-02; Phase 11E closed 2026-02-02; Phase 11F created 2026-02-02; P11F-001–P11F-009 completed 2026-02-02
 
 This ledger enumerates every active rule in the RetroVue system. If a rule is not in this ledger, it is not enforced. If code disagrees with a rule in this ledger, the code is wrong.
 
@@ -58,6 +58,10 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | LAW-FRAME-EXECUTION | LAW-AUTHORITY-HIERARCHY | **Subordinate** — governs execution precision (HOW), not transition timing (WHEN); clock authority takes precedence |
 | INV-FRAME-001 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — frame-indexed boundaries for execution, not for delaying clock-scheduled transitions |
 | INV-FRAME-003 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — CT derivation within segment; frame completion does not gate switch execution |
+| INV-SWITCH-ISSUANCE-TERMINAL-001 | INV-SWITCH-ISSUANCE-DEADLINE-001, LAW-AUTHORITY-HIERARCHY | **Enforces** — exception during switch issuance is terminal; boundary transitions to FAILED_TERMINAL |
+| INV-SWITCH-ISSUANCE-ONESHOT-001 | INV-SWITCH-ISSUANCE-DEADLINE-001, INV-CONTROL-NO-POLL-001 | **Enforces** — SwitchToLive is issued exactly once per boundary; duplicates are suppressed or fatal |
+| INV-BOUNDARY-LIFECYCLE-001 | LAW-AUTHORITY-HIERARCHY, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — boundary state transitions are unidirectional; illegal transitions force FAILED_TERMINAL |
+| INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | INV-BOUNDARY-DECLARED-001, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — target_boundary_ms must equal plan-derived boundary, not `now + X` |
 
 ---
 
@@ -348,6 +352,10 @@ These invariants were added to address observed violations of broadcast-grade ti
 | **INV-LEADTIME-MEASUREMENT-001** | CONTRACT | Core + AIR | P8 | No | Yes | — |
 | **INV-CONTROL-NO-POLL-001** | CONTRACT | Core | RUNTIME | No | Yes | — |
 | **INV-SWITCH-DEADLINE-AUTHORITATIVE-001** | CONTRACT | PlayoutEngine | P8 | No | Yes | — |
+| **INV-SWITCH-ISSUANCE-TERMINAL-001** | CONTRACT | ChannelManager | RUNTIME | No | Yes | — |
+| **INV-SWITCH-ISSUANCE-ONESHOT-001** | CONTRACT | ChannelManager | RUNTIME | No | Yes | — |
+| **INV-BOUNDARY-LIFECYCLE-001** | CONTRACT | ChannelManager | RUNTIME | No | Yes | — |
+| **INV-BOUNDARY-DECLARED-MATCHES-PLAN-001** | CONTRACT | ChannelManager | RUNTIME | No | Yes | — |
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
@@ -358,8 +366,12 @@ These invariants were added to address observed violations of broadcast-grade ti
 | INV-STARTUP-BOUNDARY-FEASIBILITY-001 | The first scheduled boundary MUST satisfy `boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME`. This is a constraint on schedule content, not on planning_time. |
 | INV-SWITCH-ISSUANCE-DEADLINE-001 | SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. |
 | INV-LEADTIME-MEASUREMENT-001 | Prefeed lead time MUST be evaluated using the issuance timestamp supplied by Core (`issued_at_time_ms`), not AIR receipt time. Transport jitter MUST NOT affect feasibility determination. |
-| INV-CONTROL-NO-POLL-001 | Core MUST NOT poll AIR for switch readiness; NOT_READY indicates protocol error (prefeed too late), not a condition to retry |
+| INV-CONTROL-NO-POLL-001 | Core MUST NOT poll AIR for switch readiness; NOT_READY indicates protocol error (prefeed too late), not a condition to retry. Tick-based reissuance is forbidden. |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | When `target_boundary_time_ms` is provided, AIR MUST execute the switch at that wall-clock time ± 1 frame; internal readiness is AIR's responsibility |
+| INV-SWITCH-ISSUANCE-TERMINAL-001 | Exception during SwitchToLive issuance MUST transition boundary to FAILED_TERMINAL state. No retry, no re-arm. |
+| INV-SWITCH-ISSUANCE-ONESHOT-001 | SwitchToLive MUST be issued exactly once per boundary. Duplicate attempts are suppressed; duplicate into FAILED_TERMINAL is fatal. |
+| INV-BOUNDARY-LIFECYCLE-001 | Boundary state transitions MUST be unidirectional (NONE→PLANNED→...→LIVE or →FAILED_TERMINAL). Illegal transitions force FAILED_TERMINAL. |
+| INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | target_boundary_ms sent to AIR MUST equal the boundary computed from the active playout plan, NOT a derived `now + X` value. |
 
 #### INV-STARTUP-BOUNDARY-FEASIBILITY-001 (Full Definition)
 
@@ -545,6 +557,115 @@ If Core issues SwitchToLive at exactly `boundary_time - MIN_PREFEED_LEAD_TIME`, 
 
 ```
 [AIR] INV-LEADTIME-MEASUREMENT-001: issued_at_ms=%ld receipt_ms=%ld target_ms=%ld lead_time_ms=%ld min_required_ms=%ld skew_ms=%ld result=%s
+```
+
+#### INV-SWITCH-ISSUANCE-TERMINAL-001 (Full Definition)
+
+Exception during SwitchToLive issuance MUST transition the boundary to FAILED_TERMINAL state. No retry, no re-arm, no tick-based reissuance.
+
+**Trigger:**
+Any exception in `_on_switch_issue_deadline()` or `_issue_switch_to_live()`.
+
+**Behavior:**
+1. Log FATAL with `INV-SWITCH-ISSUANCE-TERMINAL-001`
+2. Transition boundary state to `FAILED_TERMINAL`
+3. Set `_pending_fatal = SchedulingError(...)`
+4. Do NOT re-register timer
+5. Do NOT allow tick to retry
+
+**Rationale:**
+Per INV-SCHED-PLAN-BEFORE-EXEC-001, boundaries are feasible by construction. An exception during issuance indicates a system error (bug, network failure, invalid state), not a recoverable condition. Retry would violate INV-CONTROL-NO-POLL-001 and INV-SWITCH-ISSUANCE-ONESHOT-001.
+
+**Log Format:**
+```
+INV-SWITCH-ISSUANCE-TERMINAL-001 FATAL: Switch issuance failed for boundary %s: %s
+```
+
+#### INV-SWITCH-ISSUANCE-ONESHOT-001 (Full Definition)
+
+SwitchToLive MUST be issued exactly once per boundary. Duplicate issuance attempts are suppressed. Duplicate into FAILED_TERMINAL is treated as a control-flow bug (FATAL).
+
+**Trigger:**
+Any attempt to issue SwitchToLive when boundary state ≥ SWITCH_ISSUED.
+
+**Behavior:**
+- If state is `SWITCH_ISSUED` or `LIVE`: suppress, log warning
+- If state is `FAILED_TERMINAL`: log FATAL, set `_pending_fatal`
+
+**Guard Implementation:**
+```python
+def _guard_switch_issuance(self, boundary_time: datetime) -> bool:
+    if self._boundary_state in (BoundaryState.SWITCH_ISSUED, BoundaryState.LIVE):
+        self._logger.warning("INV-SWITCH-ISSUANCE-ONESHOT-001: Suppressed duplicate")
+        return False
+    if self._boundary_state == BoundaryState.FAILED_TERMINAL:
+        self._logger.error("INV-SWITCH-ISSUANCE-ONESHOT-001 FATAL: Duplicate into terminal")
+        self._pending_fatal = SchedulingError(...)
+        return False
+    return True
+```
+
+**Rationale:**
+One-shot issuance is a corollary of deadline-scheduled semantics. If issuance is timer-scheduled at plan time, there is exactly one timer firing. Duplicate attempts indicate broken control flow (tick-based detection, exception swallowing, or state machine violation).
+
+#### INV-BOUNDARY-LIFECYCLE-001 (Full Definition)
+
+Boundary state transitions MUST be unidirectional and follow the defined state machine. Illegal transitions force immediate transition to FAILED_TERMINAL.
+
+**State Machine:**
+```
+NONE → PLANNED → PRELOAD_ISSUED → SWITCH_SCHEDULED → SWITCH_ISSUED → LIVE
+                                                                      ↑
+Any state ──────────────────────────────────────────────────→ FAILED_TERMINAL
+```
+
+**Allowed Transitions:**
+| From | To |
+|------|----|
+| NONE | PLANNED |
+| PLANNED | PRELOAD_ISSUED, FAILED_TERMINAL |
+| PRELOAD_ISSUED | SWITCH_SCHEDULED, FAILED_TERMINAL |
+| SWITCH_SCHEDULED | SWITCH_ISSUED, FAILED_TERMINAL |
+| SWITCH_ISSUED | LIVE, FAILED_TERMINAL |
+| LIVE | NONE, PLANNED (next boundary) |
+| FAILED_TERMINAL | (absorbing) |
+
+**Terminal States:**
+- `LIVE`: Success terminal for this boundary; next boundary can be planned
+- `FAILED_TERMINAL`: Failure terminal; absorbing, no exit
+
+**Behavior on Violation:**
+1. Log `INV-BOUNDARY-LIFECYCLE-001 VIOLATION: Illegal transition %s -> %s`
+2. Force transition to `FAILED_TERMINAL`
+3. Set `_pending_fatal`
+
+#### INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 (Full Definition)
+
+The `target_boundary_ms` sent to AIR MUST equal the boundary computed from the active playout plan (segment boundary, block boundary), NOT a derived `now + X` value.
+
+**Trigger:**
+When constructing SwitchToLiveRequest.
+
+**Enforcement:**
+```python
+plan_boundary_ms = self._get_plan_boundary_ms()  # From segment_end
+target_boundary_ms = int(boundary_time.timestamp() * 1000)
+
+if plan_boundary_ms is not None and target_boundary_ms != plan_boundary_ms:
+    self._logger.error(
+        "INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 FATAL: target=%d plan=%d",
+        target_boundary_ms, plan_boundary_ms
+    )
+    self._transition_boundary_state(BoundaryState.FAILED_TERMINAL)
+    return
+```
+
+**Rationale:**
+Boundaries derived from `now + lead_time` drift with execution timing and retry attempts. Plan-derived boundaries are deterministic and auditable. This invariant prevents a class of "looks fine but drifts" bugs where switch timing gradually diverges from schedule intent.
+
+**Log Format:**
+```
+INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 FATAL: target_boundary_ms=%d does not match plan boundary=%d
 ```
 
 ### Phase 9 Coordination
@@ -899,7 +1020,90 @@ This section documents the phased implementation of invariants added by the 2026
 
 ---
 
+### Phase 11F: Boundary Lifecycle State Machine (Core Hardening)
+
+**Goal:** Enforce terminal failure semantics and one-shot issuance for boundaries.
+
+**Invariants:**
+- INV-SWITCH-ISSUANCE-TERMINAL-001 (exception → FAILED_TERMINAL)
+- INV-SWITCH-ISSUANCE-ONESHOT-001 (exactly once per boundary)
+- INV-BOUNDARY-LIFECYCLE-001 (unidirectional state machine)
+- INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 (target must match plan)
+- INV-SWITCH-ISSUANCE-DEADLINE-001 (tightened: loop.call_later, not threading.Timer)
+- INV-CONTROL-NO-POLL-001 (tightened: tick-based reissuance forbidden)
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By | Status |
+|---------|-------------|-------|------------|--------|
+| P11F-001 | Fix `_MIN_PREFEED_LEAD_TIME_MS` typo in channel_manager_launch.py | Core | — | **Done** 2026-02-02 |
+| P11F-002 | Add BoundaryState enum and transition enforcement | Core | P11F-001 | **Done** 2026-02-02 |
+| P11F-003 | Implement terminal exception handling in switch issuance | Core | P11F-002 | **Done** 2026-02-02 |
+| P11F-004 | Add one-shot guard to prevent duplicate issuance | Core | P11F-002 | **Done** 2026-02-02 |
+| P11F-005 | Replace threading.Timer with loop.call_later() | Core | P11F-002 | **Done** 2026-02-02 |
+| P11F-006 | Add plan-boundary match validation | Core | P11F-002 | **Done** 2026-02-02 |
+| P11F-007 | Contract test: boundary lifecycle transitions | Test | P11F-003, P11F-004 | **Done** 2026-02-02 |
+| P11F-008 | Contract test: duplicate issuance suppression | Test | P11F-004 | **Done** 2026-02-02 |
+| P11F-009 | Contract test: terminal exception handling | Test | P11F-003 | **Done** 2026-02-02 |
+
+**Exit Criteria:**
+- Boundary state machine enforced with unidirectional transitions
+- Exception during issuance transitions to FAILED_TERMINAL (no retry)
+- Duplicate issuance attempts suppressed; duplicate into terminal is fatal
+- Switch issuance uses loop.call_later(), not threading.Timer
+- target_boundary_ms validated against plan-derived boundary
+- No tick-based switch detection patterns in codebase
+
+**Risk:** Medium — Changes Core control flow; requires careful exception handling
+
+---
+
 ### Phase Dependency Graph
+
+```
+Phase 11A (Audio Continuity)      ─────────────────────────────────┐
+                                                                    │
+Phase 11B (Observability)         ──────────────────────────────┐  │
+                                                                 │  │
+Phase 11C (Proto Change)          ─────────────────────────┐    │  │
+                                                            │    │  │
+                                                            v    v  v
+Phase 11D (Deadline Enforcement)  ◄─────────────────────────────────┤
+                                                                    │
+Phase 11E (Prefeed Contract)      ◄─────────────────────────────────┤
+                                                                    │
+Phase 11F (Lifecycle Hardening)   ◄─────────────────────────────────┘
+```
+
+- **11A** can proceed immediately (no dependencies)
+- **11B** can proceed immediately (no dependencies)
+- **11C** can proceed immediately (proto change)
+- **11D** requires 11C complete (needs proto field)
+- **11E** requires 11D complete (enforcement semantics must be clear)
+- **11F** requires 11E complete (builds on prefeed contract)
+
+### Recommended Execution Order
+
+1. **Parallel:** 11A + 11B + 11C (no dependencies between them)
+2. **Sequential:** 11D (after 11C)
+3. **Sequential:** 11E (after 11D)
+4. **Sequential:** 11F (after 11E)
+
+### Summary Timeline
+
+| Phase | Description | Dependencies | Risk | Est. Effort |
+|-------|-------------|--------------|------|-------------|
+| 11A | Audio Sample Continuity | None | Low | 2-3 days |
+| 11B | Boundary Timing Observability | None | Very Low | 1-2 days |
+| 11C | Declarative Boundary Protocol | None | Medium | 2-3 days |
+| 11D | Deadline-Authoritative Switching | 11C | High | 5-7 days |
+| 11E | Prefeed Timing Contract | 11D | Medium | 3-4 days |
+| 11F | Boundary Lifecycle Hardening | 11E | Medium | 2-3 days |
+| **Total** | | | | **15-22 days** |
+
+---
+
+## Audit History
 
 ```
 Phase 11A (Audio Continuity)      ─────────────────────────────────┐
@@ -943,6 +1147,11 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 
 | Date | Auditor | Scope | Summary |
 |------|---------|-------|---------|
+| 2026-02-02 | Systems Contract Authority | P11F-007–P11F-009 completion | P11F-007: test_channel_manager_boundary_lifecycle.py (allowed/illegal/terminal-absorbing/LIVE non-absorbing). P11F-008: test_channel_manager_oneshot.py (duplicate suppression, tick guard, exactly-once). P11F-009: test_channel_manager_terminal.py (exception→FAILED_TERMINAL, no re-arm, tick cannot retry, diagnostics). 71 runtime tests pass. Phase 11F complete. |
+| 2026-02-02 | Systems Contract Authority | P11F-003–P11F-006 completion | P11F-003: try/except Exception in switch issuance → FAILED_TERMINAL; no retry. P11F-004: _guard_switch_issuance; tick early-return for SWITCH_ISSUED/LIVE/FAILED_TERMINAL. P11F-005: optional event_loop; call_later path when set; Timer fallback. P11F-006: _plan_boundary_ms set/cleared/validated; mismatch → FAILED_TERMINAL. 32 runtime tests passed. |
+| 2026-02-02 | Systems Contract Authority | P11F-002 completion | P11F-002 done: BoundaryState enum and _ALLOWED_BOUNDARY_TRANSITIONS; _transition_boundary_state(); all boundary transitions wired (PLANNED→PRELOAD_ISSUED→SWITCH_SCHEDULED→SWITCH_ISSUED→LIVE→PLANNED/NONE). Switch timer moved to after LoadPreview. Illegal transition → FAILED_TERMINAL tested. Unblocks P11F-003, P11F-004, P11F-005, P11F-006. |
+| 2026-02-02 | Systems Contract Authority | P11F-001 completion | P11F-001 done: typo `_MIN_PREFEED_LEAD_TIME_MS` → `MIN_PREFEED_LEAD_TIME_MS` verified absent; `channel_manager_launch.py` uses `MIN_PREFEED_LEAD_TIME_MS` only. Tests: test_prefeed_timing, test_clock_driven_switch (9 passed). Unblocks P11F-002. |
+| 2026-02-02 | Systems Contract Authority | Boundary Lifecycle Hardening | Added Phase 11F: INV-SWITCH-ISSUANCE-TERMINAL-001 (exception → FAILED_TERMINAL), INV-SWITCH-ISSUANCE-ONESHOT-001 (one-shot issuance), INV-BOUNDARY-LIFECYCLE-001 (state machine), INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 (plan validation). Tightened INV-CONTROL-NO-POLL-001 to forbid tick-based reissuance. Fixed `_MIN_PREFEED_LEAD_TIME_MS` typo. Incident-derived: retry cascade caused negative lead-time violations. |
 | 2026-02-02 | Systems Contract Authority | Lead-Time Measurement Basis | Added INV-LEADTIME-MEASUREMENT-001: Prefeed lead time evaluated using issuance timestamp (`issued_at_time_ms`), not AIR receipt time. Receipt-time evaluation makes threshold issuance mathematically impossible under non-zero RPC latency. Proto extended with `issued_at_time_ms` field. |
 | 2026-02-02 | Systems Contract Authority | Switch Issuance Deadline | Added INV-SWITCH-ISSUANCE-DEADLINE-001: SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. Derives from LAW-AUTHORITY-HIERARCHY and INV-SWITCH-DEADLINE-AUTHORITATIVE-001. |
 | 2026-02-02 | Systems Contract Authority | Startup Feasibility | Added INV-STARTUP-BOUNDARY-FEASIBILITY-001: First scheduled boundary must satisfy `boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME`. Startup latency is a schedule content constraint, not a planning_time offset. Derives from INV-SCHED-PLAN-BEFORE-EXEC-001 and LAW-AUTHORITY-HIERARCHY. Runtime has no legal recovery mechanism for startup infeasibility. |
