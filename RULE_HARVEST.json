@@ -1,82 +1,642 @@
 [
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "MpegTSPlayoutSink MUST inherit from IPlayoutSink.", "implied_behavior": "Sink must implement common interface for lifecycle and operations", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Every sink must: Own the timing loop; Use master clock–driven playout; Consume decoded frames; Implement buffer underflow/overflow policies; Never block producer", "implied_behavior": "Sink owns timing loop, queries MasterClock, pulls frames when PTS due, handles buffer conditions, non-blocking", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Critical Rule**: Network backpressure → frames must be dropped, never delayed", "implied_behavior": "On TCP buffer full, drop frame and log; never block on write", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "write(): Must NOT block", "implied_behavior": "Socket writes must be non-blocking", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "If format is unsupported → ERROR_UNSUPPORTED_PIXEL_FORMAT; Sink logs error and enters fault state; Sink does not crash or drop frames silently", "implied_behavior": "Unsupported pixel format causes defined error and fault state, no silent drop", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Encoder MUST NOT produce B-frames", "implied_behavior": "Encoder outputs only I and P frames", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Encoder PTS MUST be calculated from MasterClock, not from producer frame metadata", "implied_behavior": "PTS derived from MasterClock, not producer metadata", "affected_subsystem": "air", "category": "clock", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: GOP structure MUST be fixed and deterministic", "implied_behavior": "Fixed GOP size, no adaptive GOP", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: SPS and PPS MUST be sent at least every keyframe", "implied_behavior": "SPS/PPS with every IDR frame", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Encoder MUST use strict CBR or capped VBR", "implied_behavior": "Bitrate bounded, within ±10% of target", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Sink MUST never block the producer thread", "implied_behavior": "Sink uses non-blocking Pop; producer never waits on sink", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Producer MUST never block the sink thread", "implied_behavior": "Producer uses non-blocking Push; sink never waits on producer", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Sink MUST drop frames when behind schedule by more than threshold", "implied_behavior": "Drop frames when >2 frames behind at 30fps", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Sink MUST log desync event when behind schedule by more than threshold", "implied_behavior": "Log and increment desync counter when >50ms behind", "affected_subsystem": "air", "category": "telemetry", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "**Rule**: Sink MUST sleep when ahead of schedule by more than threshold", "implied_behavior": "Soft-wait when >5ms ahead of frame deadline", "affected_subsystem": "air", "category": "clock", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "The sink must only obtain time from MasterClock; must not call std::chrono::steady_clock::now()", "implied_behavior": "All timing from MasterClock, no direct system clock", "affected_subsystem": "air", "category": "clock", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Start() returns true on first call, false if already running", "implied_behavior": "Start idempotent; second Start returns false", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Stop() is idempotent (safe to call multiple times)", "implied_behavior": "Multiple Stop calls are safe", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Teardown MUST complete within maximum drain timeout", "implied_behavior": "Default 3s drain timeout; force stop on expiry", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Encoder MUST be flushed during teardown to ensure all frames are encoded", "implied_behavior": "Flush encoder on teardown before close", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Muxer MUST be closed gracefully to ensure MPEG-TS stream is properly terminated", "implied_behavior": "Write trailer, close output gracefully", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Sink thread MUST be destroyed deterministically within timeout", "implied_behavior": "Thread joins within 5s; no resource leak", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-001: Sink must support clean start, stop, and teardown operations", "implied_behavior": "Lifecycle contract for start/stop/teardown", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-002: Sink must pull decoded frames from buffer in order (FIFO)", "implied_behavior": "FIFO frame order; PTS monotonically increasing", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-003: Sink must query MasterClock and output frames at the correct time", "implied_behavior": "Clock-driven output; sleep when ahead, drop when behind", "affected_subsystem": "air", "category": "clock", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-006: Sink must handle empty buffer gracefully by waiting, not crashing", "implied_behavior": "Increment buffer_empty_count, wait 10ms, retry", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-007: Sink must handle buffer overrun gracefully by dropping late frames", "implied_behavior": "Drop late frames; increment counters; no crash", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Once status is Faulted, it remains latched until explicit reset or full teardown", "implied_behavior": "Fault state persists; no silent recovery", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "The sink does not emit gRPC events or metrics directly", "implied_behavior": "MetricsExporter aggregates; sink only tracks internal stats", "affected_subsystem": "air", "category": "telemetry", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Do NOT Block on Buffer Pop", "implied_behavior": "Non-blocking pop with wait and retry", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Do NOT Use Blocking I/O in Sink Thread", "implied_behavior": "Non-blocking or async network I/O only", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Do NOT Skip Timing Checks", "implied_behavior": "Query MasterClock before each frame output", "affected_subsystem": "air", "category": "clock", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Do NOT Start Sink Multiple Times", "implied_behavior": "Check IsRunning before Start; avoid duplicate threads", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Do NOT Modify Configuration After Construction", "implied_behavior": "Config immutable after construction", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Does not schedule content; Does not decode frames; Does not manage channel state", "implied_behavior": "Sink is pure encode/stream; no scheduling or decoding", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md", "exact_quote": "Guarantees: Producer-to-renderer latency ≤ 33 ms (p95) for 30 fps channels", "implied_behavior": "Bounded latency between producer and renderer", "affected_subsystem": "air", "category": "orchestration", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md", "exact_quote": "Frame deadlines never missed due to cumulative drift; loop applies corrective pacing", "implied_behavior": "MasterClock drift used for corrective pacing", "affected_subsystem": "air", "category": "clock", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md", "exact_quote": "Back-pressure resolved within three ticks; otherwise escalated to Playout Control", "implied_behavior": "Back-pressure cleared in 3 ticks or escalate", "affected_subsystem": "air", "category": "orchestration", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md", "exact_quote": "Loop starvation detection triggers fail-safe in ≤100 ms", "implied_behavior": "Starvation detected and fail-safe within 100ms", "affected_subsystem": "air", "category": "orchestration", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md", "exact_quote": "Start() / Stop() – guarantees graceful teardown within 500 ms", "implied_behavior": "Orchestration teardown completes within 500ms", "affected_subsystem": "air", "category": "lifecycle", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/runtime/phase6.md", "exact_quote": "MasterClock remains the authoritative source of station time", "implied_behavior": "MasterClock is sole time authority", "affected_subsystem": "both", "category": "clock", "confidence": "high"},
-  {"source_file": "docs/legacy/air/runtime/phase6.md", "exact_quote": "When viewer count reaches zero the control plane issues RequestTeardown", "implied_behavior": "Teardown triggered when no viewers", "affected_subsystem": "both", "category": "lifecycle", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/milestones/Phase1_Skeleton.md", "exact_quote": "Proto contract compliance validated against PLAYOUT_API_VERSION = \"1.0.0\"", "implied_behavior": "Proto version must match", "affected_subsystem": "air", "category": "other", "confidence": "high"},
-  {"source_file": "docs/legacy/air/developer/Phase2_Goals.md", "exact_quote": "Maintain a 2-3 frame lead ahead of Renderer consumption", "implied_behavior": "Producer keeps 2-3 frame buffer ahead of renderer", "affected_subsystem": "air", "category": "producer", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/developer/Phase2_Goals.md", "exact_quote": "Avoid blocking gRPC or telemetry threads", "implied_behavior": "Decode thread must not block control plane", "affected_subsystem": "air", "category": "orchestration", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/developer/Phase2_Goals.md", "exact_quote": "Fixed-size circular buffer (baseline: 60 frames); Atomic read/write indices and non-blocking push/pop", "implied_behavior": "60-frame ring buffer, lock-free, non-blocking", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/developer/Phase2_Goals.md", "exact_quote": "Overflow/underflow raise Prometheus counters and warning logs", "implied_behavior": "Buffer conditions must be observable via metrics and logs", "affected_subsystem": "air", "category": "telemetry", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "Runtime code is forbidden from altering core configuration tables", "implied_behavior": "Channel, template, etc. are read-only for runtime", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "The tables channels, templates, template_blocks, schedule_days, playlog_events have been removed and must not be reintroduced", "implied_behavior": "Legacy table names forbidden; use new schema", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "Unique constraint on (channel_id, schedule_date) ensures one template per channel per broadcast day", "implied_behavior": "One template per channel per day", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "ScheduleService is forbidden to schedule any catalog_asset where canonical=false", "implied_behavior": "Only canonical assets schedulable", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "ChannelManager is forbidden to playout any catalog_asset where canonical=false", "implied_behavior": "Runtime must not play non-canonical content", "affected_subsystem": "both", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "Promotion into the broadcast catalog is an explicit operator act via retrovue assets promote", "implied_behavior": "Only CLI promotion makes content schedulable", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/data/broadcast-schema.md", "exact_quote": "ChannelManager must never invent rows in playlog_event", "implied_behavior": "Playlog written only by ScheduleService", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "Broadcast Domain configuration data is read-only for runtime services", "implied_behavior": "Only CLI and AdminService may modify config tables", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "ScheduleService, ChannelManager, ProgramDirector are pure consumers", "implied_behavior": "Runtime does not mutate infrastructure", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "Only catalog entries with canonical=true are eligible to be scheduled", "implied_behavior": "Canonical gating for scheduling", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "ScheduleService is forbidden from scheduling non-canonical content", "implied_behavior": "Scheduler must only use canonical assets", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "ChannelManager must not play unapproved media", "implied_behavior": "Runtime plays only approved catalog entries", "affected_subsystem": "both", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "ScheduleService is forbidden from mutating infrastructure tables", "implied_behavior": "Scheduler is read-only for config", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "ScheduleService.build_playout_horizon() must source candidates only from the broadcast catalog (canonical=true)", "implied_behavior": "Never source from Library Domain directly for scheduling", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md", "exact_quote": "All scheduling domain tests MUST use Postgres as the database backend. SQLite is not permitted", "implied_behavior": "Postgres only for scheduling tests", "affected_subsystem": "core", "category": "other", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md", "exact_quote": "Tests MUST run Alembic migrations before execution. Programmatic table creation is forbidden", "implied_behavior": "Use migrations for schema; no create_all()", "affected_subsystem": "core", "category": "other", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md", "exact_quote": "Tests must not drop entire schemas or databases during cleanup", "implied_behavior": "Logical data cleanup only; no schema drops", "affected_subsystem": "core", "category": "other", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/architecture/Directories.md", "exact_quote": "New code must not depend on src_legacy", "implied_behavior": "Legacy code is quarantine; no new dependencies", "affected_subsystem": "core", "category": "other", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/architecture/Directories.md", "exact_quote": "CLI commands: retrovue runtime masterclock (validation), not retrovue masterclock add", "implied_behavior": "Runtime infrastructure gets diagnostic commands under retrovue runtime", "affected_subsystem": "core", "category": "other", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/architecture/Directories.md", "exact_quote": "No DB writes originate from adapters", "implied_behavior": "Adapters are read-only; usecases perform writes", "affected_subsystem": "core", "category": "other", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/architecture/Directories.md", "exact_quote": "Orchestration only—no core logic, query composition, or random SQL in CLI", "implied_behavior": "CLI wires to usecases; no business logic in CLI", "affected_subsystem": "core", "category": "other", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "ScheduleService is forbidden from directly reaching into Library Domain data when selecting something to air", "implied_behavior": "Scheduler uses only broadcast catalog, never Library Domain", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "All runtime services must treat infrastructure tables as immutable", "implied_behavior": "No runtime mutations of config tables", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/bootstrap.md", "exact_quote": "Adding something to the Library Domain does NOT make it schedulable. The operator must still promote it", "implied_behavior": "Library and Broadcast Domain are separate; promotion required", "affected_subsystem": "core", "category": "scheduling", "confidence": "high"},
-  {"source_file": "pkg/core/docs/archive/developer/database-schema.md", "exact_quote": "All content must have an actual playable media file as its foundation", "implied_behavior": "Physical media file required for content", "affected_subsystem": "core", "category": "scheduling", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/developer/database-schema.md", "exact_quote": "Exactly one of these must be set (enforced by CHECK constraint)", "implied_behavior": "media_files polymorphic FK: exactly one of movie_id or episode_id", "affected_subsystem": "core", "category": "other", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/developer/_AssetImplementationOversightPlan.md", "exact_quote": "All new assets must start at new or enriching", "implied_behavior": "Asset state machine: new/enriching initial states", "affected_subsystem": "core", "category": "lifecycle", "confidence": "medium"},
-  {"source_file": "pkg/core/docs/archive/developer/_AssetImplementationOversightPlan.md", "exact_quote": "Ingest must never leave an updated asset in ready", "implied_behavior": "State leaks forbidden; ready only via explicit path", "affected_subsystem": "core", "category": "lifecycle", "confidence": "medium"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-004: Sink must encode decoded frames into valid H.264 NAL units", "implied_behavior": "Valid H.264 output; SPS/PPS, decodable bitstream", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-008: Sink statistics must accurately reflect operational state", "implied_behavior": "frames_sent, frames_dropped, late_frames, errors tracked", "affected_subsystem": "air", "category": "telemetry", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "FE-015: Sink must produce a playable MPEG-TS stream that can be verified in VLC", "implied_behavior": "Valid MPEG-TS, PAT/PMT, correct PTS/DTS", "affected_subsystem": "air", "category": "output", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "Error Classification (FE-005): All errors must be detected, classified, and logged", "implied_behavior": "Recoverable errors must not cause sink fault; unrecoverable must not be ignored", "affected_subsystem": "air", "category": "lifecycle", "confidence": "high"},
-  {"source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md", "exact_quote": "pts must increase within a single asset stream", "implied_behavior": "PTS monotonicity within asset", "affected_subsystem": "air", "category": "output", "confidence": "high"}
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "MpegTSPlayoutSink MUST inherit from IPlayoutSink.",
+    "implied_behavior": "Sink must implement common interface for lifecycle and operations",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Every sink must: Own the timing loop; Use master clock–driven playout; Consume decoded frames; Implement buffer underflow/overflow policies; Never block producer",
+    "implied_behavior": "Sink owns timing loop, queries MasterClock, pulls frames when PTS due, handles buffer conditions, non-blocking",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Critical Rule**: Network backpressure → frames must be dropped, never delayed",
+    "implied_behavior": "On TCP buffer full, drop frame and log; never block on write",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "write(): Must NOT block",
+    "implied_behavior": "Socket writes must be non-blocking",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "If format is unsupported → ERROR_UNSUPPORTED_PIXEL_FORMAT; Sink logs error and enters fault state; Sink does not crash or drop frames silently",
+    "implied_behavior": "Unsupported pixel format causes defined error and fault state, no silent drop",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Encoder MUST NOT produce B-frames",
+    "implied_behavior": "Encoder outputs only I and P frames",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Encoder PTS MUST be calculated from MasterClock, not from producer frame metadata",
+    "implied_behavior": "PTS derived from MasterClock, not producer metadata",
+    "affected_subsystem": "air",
+    "category": "clock",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: GOP structure MUST be fixed and deterministic",
+    "implied_behavior": "Fixed GOP size, no adaptive GOP",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: SPS and PPS MUST be sent at least every keyframe",
+    "implied_behavior": "SPS/PPS with every IDR frame",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Encoder MUST use strict CBR or capped VBR",
+    "implied_behavior": "Bitrate bounded, within ±10% of target",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Sink MUST never block the producer thread",
+    "implied_behavior": "Sink uses non-blocking Pop; producer never waits on sink",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Producer MUST never block the sink thread",
+    "implied_behavior": "Producer uses non-blocking Push; sink never waits on producer",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Sink MUST drop frames when behind schedule by more than threshold",
+    "implied_behavior": "Drop frames when >2 frames behind at 30fps",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Sink MUST log desync event when behind schedule by more than threshold",
+    "implied_behavior": "Log and increment desync counter when >50ms behind",
+    "affected_subsystem": "air",
+    "category": "telemetry",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "**Rule**: Sink MUST sleep when ahead of schedule by more than threshold",
+    "implied_behavior": "Soft-wait when >5ms ahead of frame deadline",
+    "affected_subsystem": "air",
+    "category": "clock",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "The sink must only obtain time from MasterClock; must not call std::chrono::steady_clock::now()",
+    "implied_behavior": "All timing from MasterClock, no direct system clock",
+    "affected_subsystem": "air",
+    "category": "clock",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Start() returns true on first call, false if already running",
+    "implied_behavior": "Start idempotent; second Start returns false",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Stop() is idempotent (safe to call multiple times)",
+    "implied_behavior": "Multiple Stop calls are safe",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Teardown MUST complete within maximum drain timeout",
+    "implied_behavior": "Default 3s drain timeout; force stop on expiry",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Encoder MUST be flushed during teardown to ensure all frames are encoded",
+    "implied_behavior": "Flush encoder on teardown before close",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Muxer MUST be closed gracefully to ensure MPEG-TS stream is properly terminated",
+    "implied_behavior": "Write trailer, close output gracefully",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Sink thread MUST be destroyed deterministically within timeout",
+    "implied_behavior": "Thread joins within 5s; no resource leak",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-001: Sink must support clean start, stop, and teardown operations",
+    "implied_behavior": "Lifecycle contract for start/stop/teardown",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-002: Sink must pull decoded frames from buffer in order (FIFO)",
+    "implied_behavior": "FIFO frame order; PTS monotonically increasing",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-003: Sink must query MasterClock and output frames at the correct time",
+    "implied_behavior": "Clock-driven output; sleep when ahead, drop when behind",
+    "affected_subsystem": "air",
+    "category": "clock",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-006: Sink must handle empty buffer gracefully by waiting, not crashing",
+    "implied_behavior": "Increment buffer_empty_count, wait 10ms, retry",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-007: Sink must handle buffer overrun gracefully by dropping late frames",
+    "implied_behavior": "Drop late frames; increment counters; no crash",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Once status is Faulted, it remains latched until explicit reset or full teardown",
+    "implied_behavior": "Fault state persists; no silent recovery",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "The sink does not emit gRPC events or metrics directly",
+    "implied_behavior": "MetricsExporter aggregates; sink only tracks internal stats",
+    "affected_subsystem": "air",
+    "category": "telemetry",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Do NOT Block on Buffer Pop",
+    "implied_behavior": "Non-blocking pop with wait and retry",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Do NOT Use Blocking I/O in Sink Thread",
+    "implied_behavior": "Non-blocking or async network I/O only",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Do NOT Skip Timing Checks",
+    "implied_behavior": "Query MasterClock before each frame output",
+    "affected_subsystem": "air",
+    "category": "clock",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Do NOT Start Sink Multiple Times",
+    "implied_behavior": "Check IsRunning before Start; avoid duplicate threads",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Do NOT Modify Configuration After Construction",
+    "implied_behavior": "Config immutable after construction",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Does not schedule content; Does not decode frames; Does not manage channel state",
+    "implied_behavior": "Sink is pure encode/stream; no scheduling or decoding",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md",
+    "exact_quote": "Guarantees: Producer-to-renderer latency ≤ 33 ms (p95) for 30 fps channels",
+    "implied_behavior": "Bounded latency between producer and renderer",
+    "affected_subsystem": "air",
+    "category": "orchestration",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md",
+    "exact_quote": "Frame deadlines never missed due to cumulative drift; loop applies corrective pacing",
+    "implied_behavior": "MasterClock drift used for corrective pacing",
+    "affected_subsystem": "air",
+    "category": "clock",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md",
+    "exact_quote": "Back-pressure resolved within three ticks; otherwise escalated to Playout Control",
+    "implied_behavior": "Back-pressure cleared in 3 ticks or escalate",
+    "affected_subsystem": "air",
+    "category": "orchestration",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md",
+    "exact_quote": "Loop starvation detection triggers fail-safe in ≤100 ms",
+    "implied_behavior": "Starvation detected and fail-safe within 100ms",
+    "affected_subsystem": "air",
+    "category": "orchestration",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/OrchestrationLoopDomain.md",
+    "exact_quote": "Start() / Stop() – guarantees graceful teardown within 500 ms",
+    "implied_behavior": "Orchestration teardown completes within 500ms",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/runtime/phase6.md",
+    "exact_quote": "MasterClock remains the authoritative source of station time",
+    "implied_behavior": "MasterClock is sole time authority",
+    "affected_subsystem": "both",
+    "category": "clock",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/runtime/phase6.md",
+    "exact_quote": "When viewer count reaches zero the control plane issues RequestTeardown",
+    "implied_behavior": "Teardown triggered when no viewers",
+    "affected_subsystem": "both",
+    "category": "lifecycle",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/milestones/Phase1_Skeleton.md",
+    "exact_quote": "Proto contract compliance validated against PLAYOUT_API_VERSION = \"1.0.0\"",
+    "implied_behavior": "Proto version must match",
+    "affected_subsystem": "air",
+    "category": "other",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/developer/Phase2_Goals.md",
+    "exact_quote": "Maintain a 2-3 frame lead ahead of Renderer consumption",
+    "implied_behavior": "Producer keeps 2-3 frame buffer ahead of renderer",
+    "affected_subsystem": "air",
+    "category": "producer",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/developer/Phase2_Goals.md",
+    "exact_quote": "Avoid blocking gRPC or telemetry threads",
+    "implied_behavior": "Decode thread must not block control plane",
+    "affected_subsystem": "air",
+    "category": "orchestration",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/developer/Phase2_Goals.md",
+    "exact_quote": "Fixed-size circular buffer (baseline: 60 frames); Atomic read/write indices and non-blocking push/pop",
+    "implied_behavior": "60-frame ring buffer, lock-free, non-blocking",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/developer/Phase2_Goals.md",
+    "exact_quote": "Overflow/underflow raise Prometheus counters and warning logs",
+    "implied_behavior": "Buffer conditions must be observable via metrics and logs",
+    "affected_subsystem": "air",
+    "category": "telemetry",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "Runtime code is forbidden from altering core configuration tables",
+    "implied_behavior": "Channel, template, etc. are read-only for runtime",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "The tables channels, templates, template_blocks, schedule_days, playlog_events have been removed and must not be reintroduced",
+    "implied_behavior": "Legacy table names forbidden; use new schema",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "Unique constraint on (channel_id, schedule_date) ensures one template per channel per broadcast day",
+    "implied_behavior": "One template per channel per day",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "ScheduleService is forbidden to schedule any catalog_asset where canonical=false",
+    "implied_behavior": "Only canonical assets schedulable",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "ChannelManager is forbidden to playout any catalog_asset where canonical=false",
+    "implied_behavior": "Runtime must not play non-canonical content",
+    "affected_subsystem": "both",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "Promotion into the broadcast catalog is an explicit operator act via retrovue assets promote",
+    "implied_behavior": "Only CLI promotion makes content schedulable",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "exact_quote": "ChannelManager must never invent rows in playlog_event",
+    "implied_behavior": "Playlog written only by ScheduleService",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "Broadcast Domain configuration data is read-only for runtime services",
+    "implied_behavior": "Only CLI and AdminService may modify config tables",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "ScheduleService, ChannelManager, ProgramDirector are pure consumers",
+    "implied_behavior": "Runtime does not mutate infrastructure",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "Only catalog entries with canonical=true are eligible to be scheduled",
+    "implied_behavior": "Canonical gating for scheduling",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "ScheduleService is forbidden from scheduling non-canonical content",
+    "implied_behavior": "Scheduler must only use canonical assets",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "ChannelManager must not play unapproved media",
+    "implied_behavior": "Runtime plays only approved catalog entries",
+    "affected_subsystem": "both",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "ScheduleService is forbidden from mutating infrastructure tables",
+    "implied_behavior": "Scheduler is read-only for config",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "ScheduleService.build_playout_horizon() must source candidates only from the broadcast catalog (canonical=true)",
+    "implied_behavior": "Never source from Library Domain directly for scheduling",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md",
+    "exact_quote": "All scheduling domain tests MUST use Postgres as the database backend. SQLite is not permitted",
+    "implied_behavior": "Postgres only for scheduling tests",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md",
+    "exact_quote": "Tests MUST run Alembic migrations before execution. Programmatic table creation is forbidden",
+    "implied_behavior": "Use migrations for schema; no create_all()",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md",
+    "exact_quote": "Tests must not drop entire schemas or databases during cleanup",
+    "implied_behavior": "Logical data cleanup only; no schema drops",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "exact_quote": "New code must not depend on src_legacy",
+    "implied_behavior": "Legacy code is quarantine; no new dependencies",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "exact_quote": "CLI commands: retrovue runtime masterclock (validation), not retrovue masterclock add",
+    "implied_behavior": "Runtime infrastructure gets diagnostic commands under retrovue runtime",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "exact_quote": "No DB writes originate from adapters",
+    "implied_behavior": "Adapters are read-only; usecases perform writes",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "exact_quote": "Orchestration only—no core logic, query composition, or random SQL in CLI",
+    "implied_behavior": "CLI wires to usecases; no business logic in CLI",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "ScheduleService is forbidden from directly reaching into Library Domain data when selecting something to air",
+    "implied_behavior": "Scheduler uses only broadcast catalog, never Library Domain",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "All runtime services must treat infrastructure tables as immutable",
+    "implied_behavior": "No runtime mutations of config tables",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "exact_quote": "Adding something to the Library Domain does NOT make it schedulable. The operator must still promote it",
+    "implied_behavior": "Library and Broadcast Domain are separate; promotion required",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "high"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/database-schema.md",
+    "exact_quote": "All content must have an actual playable media file as its foundation",
+    "implied_behavior": "Physical media file required for content",
+    "affected_subsystem": "core",
+    "category": "scheduling",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/database-schema.md",
+    "exact_quote": "Exactly one of these must be set (enforced by CHECK constraint)",
+    "implied_behavior": "media_files polymorphic FK: exactly one of movie_id or episode_id",
+    "affected_subsystem": "core",
+    "category": "other",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/_AssetImplementationOversightPlan.md",
+    "exact_quote": "All new assets must start at new or enriching",
+    "implied_behavior": "Asset state machine: new/enriching initial states",
+    "affected_subsystem": "core",
+    "category": "lifecycle",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "pkg/core/docs/archive/developer/_AssetImplementationOversightPlan.md",
+    "exact_quote": "Ingest must never leave an updated asset in ready",
+    "implied_behavior": "State leaks forbidden; ready only via explicit path",
+    "affected_subsystem": "core",
+    "category": "lifecycle",
+    "confidence": "medium"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-004: Sink must encode decoded frames into valid H.264 NAL units",
+    "implied_behavior": "Valid H.264 output; SPS/PPS, decodable bitstream",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-008: Sink statistics must accurately reflect operational state",
+    "implied_behavior": "frames_sent, frames_dropped, late_frames, errors tracked",
+    "affected_subsystem": "air",
+    "category": "telemetry",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "FE-015: Sink must produce a playable MPEG-TS stream that can be verified in VLC",
+    "implied_behavior": "Valid MPEG-TS, PAT/PMT, correct PTS/DTS",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "Error Classification (FE-005): All errors must be detected, classified, and logged",
+    "implied_behavior": "Recoverable errors must not cause sink fault; unrecoverable must not be ignored",
+    "affected_subsystem": "air",
+    "category": "lifecycle",
+    "confidence": "high"
+  },
+  {
+    "source_file": "docs/legacy/air/domain/MpegTSPlayoutSinkDomain.md",
+    "exact_quote": "pts must increase within a single asset stream",
+    "implied_behavior": "PTS monotonicity within asset",
+    "affected_subsystem": "air",
+    "category": "output",
+    "confidence": "high"
+  }
 ]

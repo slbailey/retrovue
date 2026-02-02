@@ -61,7 +61,9 @@
       "severity": "high",
       "normative_text": "LoadPreviewResponse SHOULD have shadow_decode_started == true when applicable.",
       "phase_applicability": "6",
-      "observability_requirements": ["LoadPreviewResponse.shadow_decode_started"],
+      "observability_requirements": [
+        "LoadPreviewResponse.shadow_decode_started"
+      ],
       "testability_notes": "Assert LoadPreviewResponse.shadow_decode_started == true."
     },
     {
@@ -77,7 +79,9 @@
       "severity": "high",
       "normative_text": "SwitchToLiveResponse SHOULD have pts_contiguous == true when implemented.",
       "phase_applicability": "6",
-      "observability_requirements": ["SwitchToLiveResponse.pts_contiguous"],
+      "observability_requirements": [
+        "SwitchToLiveResponse.pts_contiguous"
+      ],
       "testability_notes": "Assert SwitchToLiveResponse.pts_contiguous == true."
     },
     {
@@ -1053,7 +1057,10 @@
       "severity": "critical",
       "normative_text": "Output timing MUST follow MasterClock; frames MUST output when frame.pts <= current_time; future PTS held; late frames dropped.",
       "phase_applicability": "7+",
-      "observability_requirements": ["late_frames", "frames_dropped"],
+      "observability_requirements": [
+        "late_frames",
+        "frames_dropped"
+      ],
       "testability_notes": "test_sink_timing; harness missing."
     },
     {
@@ -1117,7 +1124,10 @@
       "severity": "high",
       "normative_text": "Empty buffer MUST increment buffer_empty_count; sink MUST back off (no spin); MUST resume when frames available.",
       "phase_applicability": "7+",
-      "observability_requirements": ["buffer_empty_count", "sink_buffer_empty_total"],
+      "observability_requirements": [
+        "buffer_empty_count",
+        "sink_buffer_empty_total"
+      ],
       "testability_notes": "test_sink_buffer_handling; harness missing."
     },
     {
@@ -1133,7 +1143,12 @@
       "severity": "high",
       "normative_text": "Frames beyond threshold MUST be dropped; late_frames and frames_dropped MUST increment.",
       "phase_applicability": "7+",
-      "observability_requirements": ["late_frames", "frames_dropped", "sink_late_frames_total", "sink_frames_dropped_total"],
+      "observability_requirements": [
+        "late_frames",
+        "frames_dropped",
+        "sink_late_frames_total",
+        "sink_frames_dropped_total"
+      ],
       "testability_notes": "test_sink_buffer_handling; harness missing."
     },
     {
@@ -1181,7 +1196,10 @@
       "severity": "high",
       "normative_text": "Recoverable errors MUST be logged; counters updated; operation MUST continue.",
       "phase_applicability": "7+",
-      "observability_requirements": ["sink_encoding_errors_total", "sink_network_errors_total"],
+      "observability_requirements": [
+        "sink_encoding_errors_total",
+        "sink_network_errors_total"
+      ],
       "testability_notes": "test_sink_error_handling; harness missing."
     },
     {
@@ -1197,7 +1215,9 @@
       "severity": "high",
       "normative_text": "Fault state MUST persist until explicit reset; MUST NOT auto-recover from faults.",
       "phase_applicability": "7+",
-      "observability_requirements": ["sink_status"],
+      "observability_requirements": [
+        "sink_status"
+      ],
       "testability_notes": "test_sink_error_handling; harness missing."
     },
     {
@@ -1213,7 +1233,16 @@
       "severity": "med",
       "normative_text": "Sink SHOULD export sink_frames_sent_total, sink_frames_dropped_total, sink_late_frames_total, sink_encoding_errors_total, sink_network_errors_total, sink_buffer_empty_total, sink_running, sink_status.",
       "phase_applicability": "7+",
-      "observability_requirements": ["sink_frames_sent_total", "sink_frames_dropped_total", "sink_late_frames_total", "sink_encoding_errors_total", "sink_network_errors_total", "sink_buffer_empty_total", "sink_running", "sink_status"],
+      "observability_requirements": [
+        "sink_frames_sent_total",
+        "sink_frames_dropped_total",
+        "sink_late_frames_total",
+        "sink_encoding_errors_total",
+        "sink_network_errors_total",
+        "sink_buffer_empty_total",
+        "sink_running",
+        "sink_status"
+      ],
       "testability_notes": "Assert metrics exported; harness missing."
     },
     {
@@ -1277,7 +1306,9 @@
       "severity": "high",
       "normative_text": "Empty buffer MUST increment buffer_underruns; sink MUST back off 2-5ms; MUST NOT spin or high CPU.",
       "phase_applicability": "7+",
-      "observability_requirements": ["buffer_underruns"],
+      "observability_requirements": [
+        "buffer_underruns"
+      ],
       "testability_notes": "Start with empty buffer; verify counter and worker alive; harness missing."
     },
     {
@@ -1293,7 +1324,9 @@
       "severity": "high",
       "normative_text": "Frames beyond late threshold MUST be dropped; late_frame_drops MUST increment.",
       "phase_applicability": "7+",
-      "observability_requirements": ["late_frame_drops"],
+      "observability_requirements": [
+        "late_frame_drops"
+      ],
       "testability_notes": "Advance clock past deadline; verify drop and counter; harness missing."
     },
     {
@@ -1341,7 +1374,11 @@
       "severity": "critical",
       "normative_text": "Tick skew MUST remain within ±1ms for 99% of ticks; producer→renderer latency p95 MUST be ≤ 33ms; missed MasterClock callback MUST trigger immediate catch-up tick.",
       "phase_applicability": "7+",
-      "observability_requirements": ["orchestration_tick_skew_ms", "orchestration_latency_ms", "orchestration_tick_violation_total"],
+      "observability_requirements": [
+        "orchestration_tick_skew_ms",
+        "orchestration_latency_ms",
+        "orchestration_tick_violation_total"
+      ],
       "testability_notes": "Drive ticks 5 min with jitter; assert skew and latency; harness missing."
     },
     {
@@ -1357,7 +1394,11 @@
       "severity": "high",
       "normative_text": "Underrun MUST transition to buffering and restore within ≤3 ticks; overrun MUST drain within ≤3 ticks; recovery time MUST be ≤ 100ms.",
       "phase_applicability": "7+",
-      "observability_requirements": ["orchestration_backpressure_events_total", "orchestration_backpressure_recovery_ms", "orchestration_backpressure_unresolved"],
+      "observability_requirements": [
+        "orchestration_backpressure_events_total",
+        "orchestration_backpressure_recovery_ms",
+        "orchestration_backpressure_unresolved"
+      ],
       "testability_notes": "Force underrun then overrun; assert recovery; harness missing."
     },
     {
@@ -1373,7 +1414,11 @@
       "severity": "critical",
       "normative_text": "Starvation MUST be detected within ≤100ms; teardown MUST complete within ≤500ms.",
       "phase_applicability": "7+",
-      "observability_requirements": ["orchestration_starvation_alert_total", "orchestration_teardown_duration_ms", "orchestration_teardown_violation"],
+      "observability_requirements": [
+        "orchestration_starvation_alert_total",
+        "orchestration_teardown_duration_ms",
+        "orchestration_teardown_violation"
+      ],
       "testability_notes": "Block 150ms; issue Stop; assert detection and teardown; harness missing."
     }
   ]
