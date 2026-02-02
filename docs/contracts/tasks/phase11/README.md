@@ -51,6 +51,20 @@ Phases 11A, 11B, and 11C can proceed in parallel. Phase 11D requires 11C. Phase 
 11C (Proto) ──────────────────────────────────────┼──► 11D (Enforcement) ──► 11E (Prefeed)
 ```
 
+**Important Dependency Clarification:**
+
+P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
+- Do NOT block Phase 11D code implementation
+- DO block production enablement of `use_deadline_authoritative_switch=true`
+
+**Deployment Sequence:**
+1. Implement all Phase 11D code (feature flag defaults OFF)
+2. Deploy to production with flag OFF
+3. Complete P11B-005: Collect 24h baseline metrics
+4. Complete P11B-006: Analyze baseline, make GO/NO-GO recommendation
+5. If GO → Enable feature flag in production
+6. If NO-GO → Address identified issues first
+
 ## Task Index
 
 ### Phase 11A: Audio Sample Continuity

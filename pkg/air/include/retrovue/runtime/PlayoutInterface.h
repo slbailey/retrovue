@@ -39,6 +39,7 @@ struct InterfaceResult {
   // For SwitchToLive
   bool pts_contiguous = false;
   uint64_t live_start_pts = 0;
+  int64_t switch_completion_time_ms = 0;  // P11B-001
 
   InterfaceResult(bool s, const std::string& msg);
 };
@@ -79,8 +80,8 @@ class PlayoutInterface {
       int32_t fps_numerator,
       int32_t fps_denominator);
   
-  // Switch preview slot to live atomically
-  InterfaceResult SwitchToLive(int32_t channel_id);
+  // Switch preview slot to live atomically. P11C-001: target_boundary_time_ms from request (0 = legacy).
+  InterfaceResult SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms = 0);
   
   // Phase 8.1: live asset path after SwitchToLive (for stream TS source)
   std::optional<std::string> GetLiveAssetPath(int32_t channel_id);

@@ -285,6 +285,31 @@ void MetricsExporter::RecordDeliveryStatus(Transport transport,
   queue_cv_.notify_one();
 }
 
+void MetricsExporter::RecordSwitchBoundaryDelta(int32_t channel_id, int64_t delta_ms) {
+  Event event{};
+  event.type = Event::Type::kRecordSwitchBoundaryDelta;
+  event.channel_id = channel_id;
+  event.switch_boundary_delta_ms = delta_ms;
+  if (!event_queue_.Push(event)) {
+    queue_overflow_total_.fetch_add(1, std::memory_order_acq_rel);
+    return;
+  }
+  submitted_events_.fetch_add(1, std::memory_order_acq_rel);
+  queue_cv_.notify_one();
+}
+
+void MetricsExporter::IncrementBoundaryViolations(int32_t channel_id) {
+  Event event{};
+  event.type = Event::Type::kIncrementBoundaryViolations;
+  event.channel_id = channel_id;
+  if (!event_queue_.Push(event)) {
+    queue_overflow_total_.fetch_add(1, std::memory_order_acq_rel);
+    return;
+  }
+  submitted_events_.fetch_add(1, std::memory_order_acq_rel);
+  queue_cv_.notify_one();
+}
+
 bool MetricsExporter::GetChannelMetrics(int32_t channel_id,
                                         ChannelMetrics& metrics) const {
   if (kMetricsExporterVerbose) {
@@ -398,6 +423,12 @@ void MetricsExporter::ProcessEvent(const Event& event) {
       }
       break;
     }
+    case Event::Type::kRecordSwitchBoundaryDelta:
+      switch_boundary_deltas_ms_[event.channel_id].push_back(event.switch_boundary_delta_ms);
+      break;
+    case Event::Type::kIncrementBoundaryViolations:
+      switch_boundary_violations_[event.channel_id]++;
+      break;
   }
 }
 
@@ -510,6 +541,39 @@ std::string MetricsExporter::GenerateMetricsText() const {
     }
     oss << "retrovue_metrics_delivery_latency_ms{transport=\"" << transport_name << "\"} "
         << ComputePercentile(data.latencies_ms, 0.95) << "\n";
+  }
+
+  // P11B-003: Switch boundary delta histogram (INV-BOUNDARY-TOLERANCE-001). Buckets are cumulative (le).
+  static const std::vector<int64_t> kBoundaryDeltaBuckets = {0, 10, 20, 33, 50, 100, 200, 500, 1000, 5000};
+  oss << "\n# HELP retrovue_switch_boundary_delta_ms Time delta between scheduled boundary and switch completion (ms)\n";
+  oss << "# TYPE retrovue_switch_boundary_delta_ms histogram\n";
+  for (const auto& [channel_id, deltas] : switch_boundary_deltas_ms_) {
+    std::vector<int64_t> counts(kBoundaryDeltaBuckets.size() + 1, 0);
+    int64_t sum = 0;
+    for (int64_t d : deltas) {
+      sum += d;
+      size_t b = 0;
+      for (; b < kBoundaryDeltaBuckets.size() && d > kBoundaryDeltaBuckets[b]; ++b) {}
+      for (size_t i = b; i <= kBoundaryDeltaBuckets.size(); ++i) {
+        counts[i]++;
+      }
+    }
+    for (size_t i = 0; i < kBoundaryDeltaBuckets.size(); ++i) {
+      oss << "retrovue_switch_boundary_delta_ms_bucket{channel_id=\"" << channel_id
+          << "\",le=\"" << kBoundaryDeltaBuckets[i] << "\"} " << counts[i] << "\n";
+    }
+    oss << "retrovue_switch_boundary_delta_ms_bucket{channel_id=\"" << channel_id
+        << "\",le=\"+Inf\"} " << counts[kBoundaryDeltaBuckets.size()] << "\n";
+    oss << "retrovue_switch_boundary_delta_ms_sum{channel_id=\"" << channel_id << "\"} " << sum << "\n";
+    oss << "retrovue_switch_boundary_delta_ms_count{channel_id=\"" << channel_id << "\"} "
+        << deltas.size() << "\n";
+  }
+
+  // P11B-004: Boundary violations counter
+  oss << "\n# HELP retrovue_switch_boundary_violations_total Switches that exceeded 1-frame tolerance\n";
+  oss << "# TYPE retrovue_switch_boundary_violations_total counter\n";
+  for (const auto& [channel_id, count] : switch_boundary_violations_) {
+    oss << "retrovue_switch_boundary_violations_total{channel_id=\"" << channel_id << "\"} " << count << "\n";
   }
 
   return oss.str();

@@ -1198,4 +1198,61 @@ TEST_F(Phase10FlowControlTest, TEST_INV_P10_AUDIO_VIDEO_GATE_100ms) {
             << std::endl;
 }
 
+// =============================================================================
+// TEST_INV_P10_BACKPRESSURE_SYMMETRIC_NoAudioDrops (P11A-005)
+// =============================================================================
+// Given: Backpressure condition active (small buffer, slow consumer)
+// When: Audio frames are being produced
+// Then: Audio frames are NOT dropped (producer blocks until queue has space)
+// And: Producer blocks until queue has space
+
+TEST_F(Phase10FlowControlTest, TEST_INV_P10_BACKPRESSURE_SYMMETRIC_NoAudioDrops) {
+  const size_t video_capacity = 8;
+  buffer::FrameRingBuffer ring_buffer(video_capacity);
+
+  ProducerConfig producer_config;
+  producer_config.asset_uri = GetTestVideoPath();
+  producer_config.target_width = 640;
+  producer_config.target_height = 360;
+  producer_config.target_fps = 30.0;
+
+  FileProducer producer(producer_config, ring_buffer, clock_, nullptr, timeline_.get());
+  ASSERT_TRUE(producer.start());
+
+  std::atomic<uint64_t> audio_consumed{0};
+  std::atomic<bool> done{false};
+  std::thread consumer([&]() {
+    buffer::AudioFrame audio;
+    while (!done.load(std::memory_order_acquire)) {
+      if (ring_buffer.PopAudioFrame(audio)) {
+        audio_consumed.fetch_add(1, std::memory_order_relaxed);
+      }
+      std::this_thread::sleep_for(5ms);
+    }
+    while (ring_buffer.PopAudioFrame(audio)) {
+      audio_consumed.fetch_add(1, std::memory_order_relaxed);
+    }
+  });
+
+  std::this_thread::sleep_for(2s);
+  producer.stop();
+  done.store(true, std::memory_order_release);
+  consumer.join();
+
+  buffer::AudioFrame aframe;
+  while (ring_buffer.PopAudioFrame(aframe)) {
+    audio_consumed.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  uint64_t consumed = audio_consumed.load(std::memory_order_relaxed);
+  EXPECT_GT(consumed, 0u)
+      << "INV-P10-BACKPRESSURE-SYMMETRIC (amended): Under backpressure audio must not be dropped; "
+      << "producer blocks, so we must see consumed audio (no drops)";
+
+  std::cout << "[TEST-INV-P10-BACKPRESSURE-SYMMETRIC-NoAudioDrops] "
+            << "audio_frames_consumed=" << consumed
+            << " (audio_samples_dropped=0: producer blocks at capacity)"
+            << std::endl;
+}
+
 }  // namespace

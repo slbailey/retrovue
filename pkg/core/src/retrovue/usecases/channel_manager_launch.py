@@ -248,10 +248,16 @@ def air_load_preview(
     return r.success
 
 
-def air_switch_to_live(grpc_addr: str, channel_id_int: int, timeout_s: int = 30) -> tuple[bool, int]:
+def air_switch_to_live(
+    grpc_addr: str,
+    channel_id_int: int,
+    timeout_s: int = 30,
+    target_boundary_time_ms: int = 0,
+) -> tuple[bool, int]:
     """Call Air SwitchToLive RPC. Returns (success, result_code). Raises on connection/RPC error.
 
     Phase 8: Returns result_code so caller can distinguish NOT_READY (transient) from errors.
+    P11C-001: target_boundary_time_ms is the scheduled grid boundary (wall-clock ms). 0 = legacy/immediate.
     """
     import grpc
 
@@ -259,7 +265,10 @@ def air_switch_to_live(grpc_addr: str, channel_id_int: int, timeout_s: int = 30)
     with grpc.insecure_channel(grpc_addr) as ch:
         stub = playout_pb2_grpc.PlayoutControlStub(ch)
         r = stub.SwitchToLive(
-            playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
+            playout_pb2.SwitchToLiveRequest(
+                channel_id=channel_id_int,
+                target_boundary_time_ms=target_boundary_time_ms,
+            ),
             timeout=timeout_s,
         )
     result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
@@ -454,7 +463,10 @@ def _launch_air_binary(
             r = _rpc(
                 "SwitchToLive",
                 lambda timeout: stub.SwitchToLive(
-                    playout_pb2.SwitchToLiveRequest(channel_id=channel_id_int),
+                    playout_pb2.SwitchToLiveRequest(
+                        channel_id=channel_id_int,
+                        target_boundary_time_ms=0,  # Legacy: immediate switch at launch
+                    ),
                     timeout=timeout,
                 ),
                 _RPC_CONTROL_S,

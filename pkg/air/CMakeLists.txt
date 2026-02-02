@@ -211,6 +211,8 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/Phase9OutputBootstrapTests.cpp
   tests/contracts/Phase10PipelineFlowControlTests.cpp
   tests/contracts/Phase10FrameIndexedExecutionTests.cpp
+  tests/contracts/Phase11AudioContinuityTests.cpp
+  tests/contracts/BoundaryDeclarationTests.cpp
   # INV-PACING-001: Primitive invariant contract tests (locks pacing as solved)
   tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp
   # INV-P9-SINK-LIVENESS: Sink liveness policy contract tests

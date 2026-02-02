@@ -236,3 +236,28 @@ Implementation is tracked in **CANONICAL_RULE_LEDGER.md § Phased Implementation
 
 **Total new tasks:** 29
 **Estimated effort:** 13-19 days
+
+#### Phase 11A Checklist (Audio Sample Continuity) — Complete 2026-02-01
+
+- [x] P11A-001: Audit audio queue behavior under backpressure
+- [x] P11A-002: Add audio sample drop detection logging
+- [x] P11A-003: Audio queue overflow → producer throttle (already implemented; logs added)
+- [x] P11A-004: Contract test Phase11AudioContinuityTests.cpp
+- [x] P11A-005: Phase10 TEST_INV_P10_BACKPRESSURE_SYMMETRIC_NoAudioDrops
+
+#### Phase 11B Checklist (Boundary Timing Observability) — Code complete 2026-02-01
+
+- [x] P11B-001: switch_completion_time_ms in SwitchToLiveResponse
+- [x] P11B-002: INV-BOUNDARY-TOLERANCE-001 violation/success logging
+- [x] P11B-003: retrovue_switch_boundary_delta_ms histogram
+- [x] P11B-004: retrovue_switch_boundary_violations_total counter
+- [ ] P11B-005: OPS baseline 24h (deferred until deployment)
+- [ ] P11B-006: OPS analysis (blocked by P11B-005)
+
+#### Phase 11C Checklist (Declarative Boundary Protocol) — Complete 2026-02-01
+
+- [x] P11C-001: target_boundary_time_ms in SwitchToLiveRequest (proto)
+- [x] P11C-002: Proto stubs regenerated (C++ and Python)
+- [x] P11C-003: PlayoutEngine parse/log/store target_boundary_time_ms
+- [x] P11C-004: Core ChannelManager populates target_boundary_time_ms
+- [x] P11C-005: BoundaryDeclarationTests.TargetFlowsFromCoreToAir

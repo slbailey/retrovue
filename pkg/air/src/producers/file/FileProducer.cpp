@@ -2367,11 +2367,17 @@ namespace retrovue::producers::file
 
         // =======================================================================
         // INV-P10-ELASTIC-FLOW-CONTROL: Push with backpressure retry
+        // P11A-002: INV-AUDIO-SAMPLE-CONTINUITY-001 observability
         // =======================================================================
         // Elastic gating allows bounded decode-ahead, so push may occasionally fail
         // if buffer fills between gate check and push. Retry with backpressure.
+        static thread_local bool audio_backpressure_logged = false;
         while (!output_buffer_.PushAudioFrame(output_audio_frame))
         {
+          if (!audio_backpressure_logged) {
+            std::cout << "[FileProducer] Audio backpressure: blocking at queue capacity" << std::endl;  // P11A-002/003
+            audio_backpressure_logged = true;
+          }
           if (stop_requested_.load(std::memory_order_acquire)) {
             av_frame_unref(audio_frame_);
             return received_any;
@@ -2386,6 +2392,10 @@ namespace retrovue::producers::file
           } else {
             std::this_thread::yield();
           }
+        }
+        if (audio_backpressure_logged) {
+          std::cout << "[FileProducer] Audio backpressure: released" << std::endl;  // P11A-002/003
+          audio_backpressure_logged = false;
         }
 
         received_any = true;
