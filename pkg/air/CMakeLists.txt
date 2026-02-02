@@ -141,6 +141,9 @@ set(AIR_CORE_SOURCES
   src/producers/programmatic/ProgrammaticProducer.cpp
   src/producers/black/BlackFrameProducer.cpp
   src/playout_sinks/mpegts/EncoderPipeline.cpp
+  src/playout_sinks/mpegts/MpegTSPlayoutSink.cpp
+  src/playout_sinks/mpegts/PTSController.cpp
+  src/playout_sinks/mpegts/TsOutputSink.cpp
   # Phase 9.0: OutputBus/OutputSink architecture
   src/output/OutputBus.cpp
   src/output/MpegTSOutputSink.cpp
@@ -214,6 +217,7 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/PrimitiveInvariants/SinkLivenessContractTests.cpp
   # INV-P8-PRODUCER-CONTINUITY: Producer handoff continuity contract tests
   tests/contracts/ProducerContinuity/ProducerContinuityContractTests.cpp
+  tests/contracts/MpegTSPlayoutSink/MpegTSPlayoutSinkContractTests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp

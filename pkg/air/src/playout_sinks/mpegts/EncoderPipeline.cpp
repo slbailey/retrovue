@@ -1407,10 +1407,8 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   // EncoderPipeline never negotiates or resamples. All audio (including pad)
   // must be house format. Normalization is upstream (FileProducer, etc.).
   if (!audio_frame.IsHouseFormat()) {
-    std::cerr << "[EncoderPipeline] INV-AUDIO-HOUSE-FORMAT-001 VIOLATION: "
-              << "Audio not in house format. Got " << input_sample_rate << "Hz/"
-              << input_channels << "ch; expected " << buffer::kHouseAudioSampleRate << "Hz/"
-              << buffer::kHouseAudioChannels << "ch. Rejecting frame. Fix upstream." << std::endl;
+    std::cerr << "[EncoderPipeline] LAW-AUDIO-FORMAT VIOLATION: Received format=" << input_sample_rate
+              << " Hz, expected house_format=" << buffer::kHouseAudioSampleRate << " Hz" << std::endl;
     return false;
   }
 

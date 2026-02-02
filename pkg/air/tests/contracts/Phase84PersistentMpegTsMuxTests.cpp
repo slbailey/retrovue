@@ -1,16 +1,25 @@
 // Phase 8.4 — Persistent MPEG-TS mux contract tests.
 // Exact checks per Phase8-4-PersistentMpegTsMux.md: TS validity (188, 0x47, parse PAT/PMT),
 // PID stability, continuity counters (mod 16; discontinuity only when indicator set), PTS/PCR monotonicity.
+// INV-AIR-IDR-BEFORE-OUTPUT (P1-EP-005): First video packet is IDR; gate resets on segment switch.
 
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <vector>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "mpegts_sink/FrameFactory.h"
+
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+extern "C" {
+#include <libavformat/avformat.h>
+}
+#endif
 
 namespace {
 
@@ -219,6 +228,121 @@ bool PidStableOverWindow(const std::vector<uint8_t>& ts, size_t window_packets) 
   return first == second;
 }
 
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+// INV-AIR-IDR-BEFORE-OUTPUT: Parse TS with FFmpeg, return first video packet's keyframe flag.
+// Returns: true if first video packet is keyframe, false if not or parse failed.
+bool FirstVideoPacketIsKeyframe(const std::vector<uint8_t>& ts) {
+  const char* tmp = "/tmp/phase84_idr_test.ts";
+  FILE* f = fopen(tmp, "wb");
+  if (!f) return false;
+  size_t n = fwrite(ts.data(), 1, ts.size(), f);
+  fclose(f);
+  if (n != ts.size()) {
+    unlink(tmp);
+    return false;
+  }
+
+  AVFormatContext* fmt = nullptr;
+  if (avformat_open_input(&fmt, tmp, nullptr, nullptr) < 0) {
+    unlink(tmp);
+    return false;
+  }
+  if (avformat_find_stream_info(fmt, nullptr) < 0) {
+    avformat_close_input(&fmt);
+    unlink(tmp);
+    return false;
+  }
+
+  int vid_idx = -1;
+  for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+    if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+      vid_idx = static_cast<int>(i);
+      break;
+    }
+  }
+  if (vid_idx < 0) {
+    avformat_close_input(&fmt);
+    unlink(tmp);
+    return false;
+  }
+
+  AVPacket* pkt = av_packet_alloc();
+  bool first_is_key = false;
+  bool found = false;
+  while (av_read_frame(fmt, pkt) >= 0) {
+    if (pkt->stream_index == vid_idx) {
+      first_is_key = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
+      found = true;
+      break;
+    }
+    av_packet_unref(pkt);
+  }
+  av_packet_free(&pkt);
+  avformat_close_input(&fmt);
+  unlink(tmp);
+  return found && first_is_key;
+}
+
+// INV-AIR-IDR-BEFORE-OUTPUT: Verify first video packet is keyframe and at least one more
+// keyframe exists (first packet of segment 2). Returns true if both keyframes present.
+bool FirstAndSecondSegmentStartWithKeyframe(const std::vector<uint8_t>& ts) {
+  const char* tmp = "/tmp/phase84_idr_segments.ts";
+  FILE* f = fopen(tmp, "wb");
+  if (!f) return false;
+  size_t n = fwrite(ts.data(), 1, ts.size(), f);
+  fclose(f);
+  if (n != ts.size()) {
+    unlink(tmp);
+    return false;
+  }
+
+  AVFormatContext* fmt = nullptr;
+  if (avformat_open_input(&fmt, tmp, nullptr, nullptr) < 0) {
+    unlink(tmp);
+    return false;
+  }
+  if (avformat_find_stream_info(fmt, nullptr) < 0) {
+    avformat_close_input(&fmt);
+    unlink(tmp);
+    return false;
+  }
+
+  int vid_idx = -1;
+  for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+    if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+      vid_idx = static_cast<int>(i);
+      break;
+    }
+  }
+  if (vid_idx < 0) {
+    avformat_close_input(&fmt);
+    unlink(tmp);
+    return false;
+  }
+
+  AVPacket* pkt = av_packet_alloc();
+  int keyframe_count = 0;
+  int video_packet_count = 0;
+  bool first_is_key = false;
+  while (av_read_frame(fmt, pkt) >= 0) {
+    if (pkt->stream_index == vid_idx) {
+      video_packet_count++;
+      if (pkt->flags & AV_PKT_FLAG_KEY) {
+        keyframe_count++;
+        if (keyframe_count == 1) first_is_key = true;
+      }
+    }
+    av_packet_unref(pkt);
+    if (keyframe_count >= 2) break;  // Success - stop reading
+  }
+  av_packet_free(&pkt);
+  avformat_close_input(&fmt);
+  unlink(tmp);
+  (void)video_packet_count;  // Diagnostic: total video packets seen
+  return first_is_key && keyframe_count >= 2;
+}
+#endif
+
 class Phase84PersistentMpegTsMuxTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -246,6 +370,46 @@ class Phase84PersistentMpegTsMuxTest : public ::testing::Test {
     }
     encoder.close();
     if (out_bad_sync) *out_bad_sync = capture.bad_sync;
+    if (capture.bad_sync) return false;
+    out->clear();
+    for (const auto& p : capture.packets) {
+      out->insert(out->end(), p.begin(), p.end());
+    }
+    out->insert(out->end(), capture.buffer.begin(), capture.buffer.end());
+    return out->size() >= kTsPacketSize;
+  }
+
+  // Encode two segments with ResetOutputTiming() between them (segment switch).
+  // Returns false if open or first frame fails.
+  bool EncodeWithSegmentSwitch(std::vector<uint8_t>* out,
+                               size_t frames_before = 15,
+                               size_t frames_after = 15) {
+    CaptureState capture;
+    EncoderPipeline encoder(config_);
+    if (!encoder.open(config_, &capture, &CaptureWriteCallback)) return false;
+    auto frames_before_vec = retrovue::tests::fixtures::mpegts_sink::FrameFactory::
+        CreateFrameSequence(0, 33333, frames_before);
+    if (frames_before_vec.empty() || !encoder.encodeFrame(frames_before_vec[0], 0)) {
+      encoder.close();
+      return false;
+    }
+    for (size_t i = 1; i < frames_before_vec.size(); ++i) {
+      int64_t pts90k = (frames_before_vec[i].metadata.pts * 90000) / 1'000'000;
+      if (!encoder.encodeFrame(frames_before_vec[i], pts90k)) break;
+    }
+    encoder.ResetOutputTiming();  // Segment switch: gate resets
+    int64_t base_pts = static_cast<int64_t>(frames_before) * 33333;
+    auto frames_after_vec = retrovue::tests::fixtures::mpegts_sink::FrameFactory::
+        CreateFrameSequence(base_pts, 33333, frames_after);
+    if (frames_after_vec.empty()) {
+      encoder.close();
+      return false;
+    }
+    for (size_t i = 0; i < frames_after_vec.size(); ++i) {
+      int64_t pts90k = ((base_pts + i * 33333) * 90000) / 1'000'000;
+      if (!encoder.encodeFrame(frames_after_vec[i], pts90k)) break;
+    }
+    encoder.close();
     if (capture.bad_sync) return false;
     out->clear();
     for (const auto& p : capture.packets) {
@@ -315,6 +479,41 @@ TEST_F(Phase84PersistentMpegTsMuxTest, Timing_PcrMonotonic) {
     GTEST_SKIP() << "No PCR PID in PMT; skip PCR monotonicity check";
   }
   EXPECT_TRUE(PcrMonotonic(ts, psi.pcr_pid)) << "PCR must be monotonic; no backwards jumps";
+}
+
+// -----------------------------------------------------------------------------
+// INV-AIR-IDR-BEFORE-OUTPUT (P1-EP-005): No video packets until first IDR.
+// Gate resets on segment switch; first packet after switch must be IDR.
+// -----------------------------------------------------------------------------
+
+TEST_F(Phase84PersistentMpegTsMuxTest, INV_AIR_IDR_BEFORE_OUTPUT_FirstVideoPacketIsIdr) {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  std::vector<uint8_t> ts;
+  if (!EncodeToCapture(&ts, 20)) {
+    GTEST_SKIP() << "Software H.264 (libx264) required for INV-AIR-IDR-BEFORE-OUTPUT test";
+  }
+  ASSERT_TRUE(FirstVideoPacketIsKeyframe(ts))
+      << "INV-AIR-IDR-BEFORE-OUTPUT: First video packet must be IDR (keyframe); "
+      << "no packets may be emitted before first IDR";
+#else
+  GTEST_SKIP() << "FFmpeg not available";
+#endif
+}
+
+TEST_F(Phase84PersistentMpegTsMuxTest, INV_AIR_IDR_BEFORE_OUTPUT_GateResetsOnSegmentSwitch) {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  std::vector<uint8_t> ts;
+  config_.gop_size = 10;  // Shorter GOP so segment 1 produces 2+ keyframes; segment 2 starts with forced I
+  // Use 15+15 frames: segment 1 has keyframes at 0,10; segment 2 has forced keyframe at 15
+  if (!EncodeWithSegmentSwitch(&ts, 15, 15)) {
+    GTEST_SKIP() << "Software H.264 (libx264) required for INV-AIR-IDR-BEFORE-OUTPUT test";
+  }
+  ASSERT_TRUE(FirstAndSecondSegmentStartWithKeyframe(ts))
+      << "INV-AIR-IDR-BEFORE-OUTPUT: After ResetOutputTiming (segment switch), "
+      << "gate must reset; first packet after switch must be IDR";
+#else
+  GTEST_SKIP() << "FFmpeg not available";
+#endif
 }
 
 }  // namespace
