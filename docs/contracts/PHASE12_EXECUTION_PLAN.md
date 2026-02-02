@@ -103,6 +103,11 @@ Phase 12 is purely runtime state. No database migrations or persistent storage c
 | P12-TEST-004 | Contract test: no new work when teardown pending | `test_channel_manager_teardown.py` | INV-TEARDOWN-NO-NEW-WORK-001 | P12-CORE-005 |
 | P12-TEST-005 | Contract test: viewer disconnect defers during transition | `test_channel_manager_teardown.py` | INV-VIEWER-COUNT-ADVISORY-001 | P12-CORE-006 |
 | P12-TEST-006 | Contract test: liveness only reported in LIVE state | `test_channel_manager_teardown.py` | INV-LIVE-SESSION-AUTHORITY-001 | P12-CORE-007 |
+| **Terminal Semantics Amendment (2026-02)** ||||
+| P12-CORE-008 | Add FAILED_TERMINAL check to halt scheduling intent | `channel_manager.py` | INV-TERMINAL-SCHEDULER-HALT-001 | P12-CORE-005 |
+| P12-CORE-009 | Cancel transient timers on FAILED_TERMINAL entry | `channel_manager.py` | INV-TERMINAL-TIMER-CLEARED-001 | P12-CORE-008 |
+| P12-TEST-007 | Contract test: scheduler halts in FAILED_TERMINAL | `test_channel_manager_teardown.py` | INV-TERMINAL-SCHEDULER-HALT-001 | P12-CORE-008 |
+| P12-TEST-008 | Contract test: timers cancelled on FAILED_TERMINAL | `test_channel_manager_teardown.py` | INV-TERMINAL-TIMER-CLEARED-001 | P12-CORE-009 |
 
 ### 3.1 Dependency Graph
 
@@ -122,6 +127,17 @@ P12-TEST-001  P12-TEST-003  P12-TEST-004  P12-TEST-005
 P12-TEST-002
 
 P12-CORE-001 ──► P12-CORE-007 ──► P12-TEST-006
+
+                    ┌──────────────────────┐
+                    │  Terminal Semantics  │
+                    │  Amendment (2026-02) │
+                    └──────────────────────┘
+                              │
+P12-CORE-005 ──► P12-CORE-008 ──► P12-CORE-009
+                (Scheduler halt)  (Timer clear)
+                      │                │
+                      ▼                ▼
+                P12-TEST-007     P12-TEST-008
 ```
 
 ---
@@ -190,14 +206,16 @@ Phase 12 execution plan **does not** address:
 
 | Metric | Value |
 |--------|-------|
-| Core implementation tasks | 7 |
-| Contract tests | 6 (minimum) |
+| Core implementation tasks | 9 |
+| Contract tests | 8 (minimum) |
 | New runtime state fields | 3 |
-| Invariants enforced | 5 |
+| Invariants enforced | 7 |
 
 **Critical path:** P12-CORE-001 → P12-CORE-002 → P12-CORE-003 (enables deferred teardown) → P12-TEST-001/002 (validates correctness)
 
-**Exit criteria:** All contract tests pass; no teardown during transient states observable in logs; no AIR orphanment incidents.
+**Terminal semantics path:** P12-CORE-005 → P12-CORE-008 (scheduler halt) → P12-CORE-009 (timer clear) → P12-TEST-007/008 (validates absorbing properties)
+
+**Exit criteria:** All contract tests pass; no teardown during transient states observable in logs; no AIR orphanment incidents; no scheduling intent after FAILED_TERMINAL; no ghost timer callbacks.
 
 ---
 

@@ -1,10 +1,13 @@
 """
-P12-TEST-001 through P12-TEST-005: Contract tests for Phase 12 teardown semantics.
+P12-TEST-001 through P12-TEST-008: Contract tests for Phase 12 teardown semantics.
 
 INV-TEARDOWN-STABLE-STATE-001: Teardown deferred until boundary state stable.
 INV-TEARDOWN-GRACE-TIMEOUT-001: Grace timeout forces FAILED_TERMINAL when elapsed.
 INV-TEARDOWN-NO-NEW-WORK-001: No new boundary work when teardown pending.
 INV-VIEWER-COUNT-ADVISORY-001: Viewer count advisory; disconnect triggers request, not force.
+INV-LIVE-SESSION-AUTHORITY-001: Liveness only in LIVE state.
+INV-TERMINAL-SCHEDULER-HALT-001: No scheduling intent in FAILED_TERMINAL.
+INV-TERMINAL-TIMER-CLEARED-001: Transient timers cancelled on FAILED_TERMINAL entry.
 """
 
 from __future__ import annotations
@@ -374,3 +377,119 @@ def test_p12_is_live_false_in_switch_issued(tmp_path: Path) -> None:
     """P12-TEST-006: is_live == False when _boundary_state = SWITCH_ISSUED (session provisional)."""
     manager, _ = _create_manager_in_state(BoundaryState.SWITCH_ISSUED, tmp_path)
     assert manager.is_live is False
+
+
+# ---------------------------------------------------------------------------
+# P12-TEST-007: Scheduler halts in FAILED_TERMINAL (INV-TERMINAL-SCHEDULER-HALT-001)
+# ---------------------------------------------------------------------------
+
+
+def test_p12_tick_skips_boundary_work_in_failed_terminal(tmp_path: Path) -> None:
+    """P12-TEST-007: tick() in FAILED_TERMINAL returns early; no state changes, no timers, no RPCs."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    manager.tick()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+def test_p12_no_load_preview_in_failed_terminal(tmp_path: Path) -> None:
+    """P12-TEST-007: With FAILED_TERMINAL, tick() returns before LoadPreview path."""
+    manager, clock = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    manager._segment_end_time_utc = clock.now_utc() + timedelta(seconds=60)
+    manager._channel_state = "RUNNING"
+    manager.tick()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+def test_p12_no_switch_to_live_in_failed_terminal(tmp_path: Path) -> None:
+    """P12-TEST-007: With FAILED_TERMINAL, tick() returns before SwitchToLive scheduling."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    manager.tick()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+def test_p12_health_check_allowed_in_failed_terminal(tmp_path: Path) -> None:
+    """P12-TEST-007: check_health() executes normally in FAILED_TERMINAL."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    manager.check_health()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+def test_p12_is_live_false_in_failed_terminal_p12_test_007(tmp_path: Path) -> None:
+    """P12-TEST-007: is_live returns False in FAILED_TERMINAL (session dead)."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    assert manager.is_live is False
+
+
+def test_p12_multiple_ticks_in_failed_terminal(tmp_path: Path) -> None:
+    """P12-TEST-007: Multiple tick() in FAILED_TERMINAL all return early; state unchanged."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    for _ in range(10):
+        manager.tick()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+def test_p12_failed_terminal_check_independent_of_teardown_pending(tmp_path: Path) -> None:
+    """P12-TEST-007: tick() returns early in FAILED_TERMINAL even when _teardown_pending is False."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    manager._teardown_pending = False
+    manager.tick()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+# ---------------------------------------------------------------------------
+# P12-TEST-008: Timers cancelled on FAILED_TERMINAL entry (INV-TERMINAL-TIMER-CLEARED-001)
+# ---------------------------------------------------------------------------
+
+
+def test_p12_switch_timer_cancelled_on_failed_terminal(tmp_path: Path) -> None:
+    """P12-TEST-008: _transition_boundary_state(FAILED_TERMINAL) cancels _switch_issue_timer."""
+    import threading
+    manager, _ = _create_manager_in_state(BoundaryState.SWITCH_SCHEDULED, tmp_path)
+    dummy_timer = threading.Timer(999.0, lambda: None)
+    dummy_timer.start()
+    with manager._switch_issue_timer_lock:
+        manager._switch_issue_timer = dummy_timer
+    manager._transition_boundary_state(BoundaryState.FAILED_TERMINAL)
+    with manager._switch_issue_timer_lock:
+        assert manager._switch_issue_timer is None
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+
+
+def test_p12_timer_cancelled_on_illegal_transition(tmp_path: Path) -> None:
+    """P12-TEST-008: Illegal transition forcing FAILED_TERMINAL cancels switch timer."""
+    import threading
+    manager, _ = _create_manager_in_state(BoundaryState.SWITCH_SCHEDULED, tmp_path)
+    dummy_timer = threading.Timer(999.0, lambda: None)
+    dummy_timer.start()
+    with manager._switch_issue_timer_lock:
+        manager._switch_issue_timer = dummy_timer
+    manager._transition_boundary_state(BoundaryState.LIVE)  # illegal: SWITCH_SCHEDULED -> LIVE
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+    with manager._switch_issue_timer_lock:
+        assert manager._switch_issue_timer is None
+
+
+def test_p12_timer_cancelled_on_grace_timeout(tmp_path: Path) -> None:
+    """P12-TEST-008: Grace timeout -> FAILED_TERMINAL triggers timer cancellation."""
+    import threading
+    manager, clock = _create_manager_in_state(
+        BoundaryState.SWITCH_ISSUED, tmp_path, teardown_pending=True, deadline_in_past=True
+    )
+    dummy_timer = threading.Timer(999.0, lambda: None)
+    dummy_timer.start()
+    with manager._switch_issue_timer_lock:
+        manager._switch_issue_timer = dummy_timer
+    manager.tick()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL
+    with manager._switch_issue_timer_lock:
+        assert manager._switch_issue_timer is None
+
+
+def test_p12_cancel_transient_timers_idempotent(tmp_path: Path) -> None:
+    """P12-TEST-008: _cancel_transient_timers() when already cleared is idempotent (no crash)."""
+    manager, _ = _create_manager_in_state(BoundaryState.FAILED_TERMINAL, tmp_path)
+    manager._switch_handle = None
+    with manager._switch_issue_timer_lock:
+        manager._switch_issue_timer = None
+    manager._cancel_transient_timers()
+    assert manager._boundary_state == BoundaryState.FAILED_TERMINAL

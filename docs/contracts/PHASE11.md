@@ -297,7 +297,7 @@ _Phase 11 does **not** address_:
 _Phase 11 defined and implemented clock-authoritative, broadcast-grade timing:_
 
 - **LAW-AUTHORITY-HIERARCHY:** Clock decides WHEN; frame rules decide HOW; content rules validate WHETHER—clock does not wait.
-- **Declarative protocol:** target_boundary_time_ms flows Core → AIR; switch execution at that time.
+- **Declarative protocol:** target_bmaoundary_time_ms flows Core → AIR; switch execution at that time.
 - **No poll/retry:** Issuance deadline-scheduled; one-shot per boundary; exception → FAILED_TERMINAL.
 - **Boundary lifecycle:** Unidirectional state machine (11F); illegal or duplicate transitions → FAILED_TERMINAL.
 - **Prefeed contract:** LoadPreview at boundary − MIN_PREFEED_LEAD_TIME_MS; violation logged, not retried.
