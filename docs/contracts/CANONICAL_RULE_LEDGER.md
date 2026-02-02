@@ -3,7 +3,7 @@
 **Status:** Authoritative
 **Purpose:** Single source of truth for all active rules governing RetroVue Core and AIR
 **Last Updated:** 2026-02-02
-**Last Audit:** 2026-02-02 (Scheduling Feasibility Invariant); Phase 11D closed 2026-02-02
+**Last Audit:** 2026-02-02 (Scheduling Feasibility Invariant); Phase 11D closed 2026-02-02; Phase 11E closed 2026-02-02
 
 This ledger enumerates every active rule in the RetroVue system. If a rule is not in this ledger, it is not enforced. If code disagrees with a rule in this ledger, the code is wrong.
 
@@ -872,7 +872,7 @@ This section documents the phased implementation of invariants added by the 2026
 
 ---
 
-### Phase 11E: Prefeed Timing Contract (Core Obligation)
+### Phase 11E: Prefeed Timing Contract (Core Obligation) — **Closed 2026-02-02**
 
 **Goal:** Core guarantees prefeed arrives with sufficient lead time.
 

@@ -91,4 +91,36 @@ class MetricsPublisher(PaceParticipant):
             return (station_now - self._last_publish_station) <= self._aggregation_window
 
 
+# P11E-004: Prefeed/switch lead time metrics (INV-CONTROL-NO-POLL-001)
+try:
+    from prometheus_client import Counter, Histogram
+
+    _PREFEED_BUCKETS = [500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 10000, 15000, 30000]
+    prefeed_lead_time_ms = Histogram(
+        "retrovue_prefeed_lead_time_ms",
+        "Lead time in ms between LoadPreview and target boundary",
+        ["channel_id"],
+        buckets=_PREFEED_BUCKETS,
+    )
+    prefeed_lead_time_violations_total = Counter(
+        "retrovue_prefeed_lead_time_violations_total",
+        "Count of LoadPreview calls with insufficient lead time",
+        ["channel_id"],
+    )
+    switch_lead_time_ms = Histogram(
+        "retrovue_switch_lead_time_ms",
+        "Lead time in ms between SwitchToLive and target boundary",
+        ["channel_id"],
+        buckets=_PREFEED_BUCKETS,
+    )
+    switch_lead_time_violations_total = Counter(
+        "retrovue_switch_lead_time_violations_total",
+        "Count of SwitchToLive calls with insufficient lead time",
+        ["channel_id"],
+    )
+except ImportError:
+    prefeed_lead_time_ms = None
+    prefeed_lead_time_violations_total = None
+    switch_lead_time_ms = None
+    switch_lead_time_violations_total = None
 

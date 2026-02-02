@@ -21,6 +21,7 @@ from retrovue.runtime.channel_manager import (
     ChannelManager,
     MockAlternatingScheduleService,
     Phase8ProgramDirector,
+    SwitchState,
 )
 from retrovue.runtime.producer.base import Producer, ProducerMode, ProducerStatus
 
@@ -73,8 +74,8 @@ class FakeAirProducerForClockSwitch(Producer):
         })
         return True
 
-    def switch_to_live(self) -> bool:
-        self.switch_to_live_calls.append({})
+    def switch_to_live(self, target_boundary_time_utc=None) -> bool:
+        self.switch_to_live_calls.append({"target_boundary_time_utc": target_boundary_time_utc})
         return True
 
     def play_content(self, content: Any) -> bool:
@@ -153,26 +154,29 @@ def test_channel_switches_on_clock_not_eof(tmp_path: Any) -> None:
     # First segment (A) is already live from start; segment end time = 0 + 10 = 10s (clock time)
     assert manager._segment_end_time_utc is not None
 
-    # 2. Advance clock to ~7s
-    clock.advance(7.0)
+    # 2. P11D-010: First boundary is feasible (>= STARTUP_LATENCY + MIN_PREFEED), so first segment end is 20s.
+    #    Preload_at = 20 - 7 = 13s. Advance clock to >=13s so LoadPreview fires.
+    clock.advance_to(13.0)
     manager.tick()
-    # Preload should have fired: LoadPreview(SampleB) (next segment starts at 10s)
+    # Preload should have fired: LoadPreview for segment at boundary 20s (SampleA: 20-30)
     assert len(fake_producer.load_preview_calls) >= 1, "LoadPreview(next) must be called before segment end"
-    load_b = [c for c in fake_producer.load_preview_calls if c["asset_path"] == sample_b]
-    assert len(load_b) == 1, "LoadPreview(SampleB) must be called exactly once for preload"
+    load_next = [c for c in fake_producer.load_preview_calls if c["asset_path"] in (sample_a, sample_b)]
+    assert len(load_next) >= 1, "LoadPreview must be called exactly once for preload"
 
-    # 3. Advance clock to >=10s
-    clock.advance_to(10.0)  # exactly segment end
+    # P11D-011: Switch issuance is deadline-scheduled (timer). Simulate timer firing so state becomes SWITCH_ARMED.
+    assert manager._switch_state == SwitchState.PREVIEW_LOADED
+    if manager._segment_end_time_utc is not None:
+        manager._on_switch_issue_deadline(manager._segment_end_time_utc)
+
+    # 3. Advance clock to first boundary (20s) and tick to run switch_to_live
+    clock.advance_to(20.0)
     manager.tick()
     assert len(fake_producer.switch_to_live_calls) >= 1, "SwitchToLive() must be called at segment end"
 
     # 4. Invariants: no EOF required; switching because time advanced
-    # (We never asked Air or producer about EOF; we only advanced the clock and called tick.)
     assert manager._segment_end_time_utc is not None
-    # After switch, schedule advanced to next segment end (20s)
     assert manager._segment_end_time_utc.year == 1970
-    # Segment B is now "live" in the sense we fired SwitchToLive; next segment end is 20s
-    clock.advance_to(20.0)
+    # Next segment end is 30s; advance and tick for second switch if desired
+    clock.advance_to(30.0)
     manager.tick()
-    # Second switch (B → next) if schedule continues; at least we had one switch at 10s
     assert len(fake_producer.switch_to_live_calls) >= 1

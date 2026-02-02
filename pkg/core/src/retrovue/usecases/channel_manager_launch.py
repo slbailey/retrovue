@@ -260,8 +260,8 @@ def air_load_preview(
     return r.success
 
 
-# For delta logging only; must match channel_manager.MIN_PREFEED_LEAD_TIME (5s).
-_MIN_PREFEED_LEAD_TIME_MS = 5000
+# P11E-001: Single source for MIN_PREFEED_LEAD_TIME_MS (env RETROVUE_MIN_PREFEED_LEAD_TIME_MS).
+from retrovue.runtime.constants import MIN_PREFEED_LEAD_TIME_MS
 
 
 def air_switch_to_live(
@@ -288,7 +288,7 @@ def air_switch_to_live(
             issued_at_time_ms,
             target_boundary_time_ms,
             lead_time_ms,
-            _MIN_PREFEED_LEAD_TIME_MS,
+            MIN_PREFEED_LEAD_TIME_MS,
         )
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
@@ -498,7 +498,7 @@ def _launch_air_binary(
         lead_time_ms = launch_target_ms - issued_at_time_ms
         logging.getLogger(__name__).info(
             "[SwitchToLive] Core issuing (launch): issued_at_ms=%d target_boundary_ms=%d lead_time_ms=%d MIN_PREFEED_LEAD_TIME_MS=%d",
-            issued_at_time_ms, launch_target_ms, lead_time_ms, _MIN_PREFEED_LEAD_TIME_MS,
+            issued_at_time_ms, launch_target_ms, lead_time_ms, MIN_PREFEED_LEAD_TIME_MS,
         )
         r = _rpc(
             "SwitchToLive",
