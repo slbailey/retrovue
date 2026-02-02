@@ -261,7 +261,6 @@ namespace retrovue
                                                   const SwitchToLiveRequest *request,
                                                   SwitchToLiveResponse *response)
     {
-      std::cout << "[DBG-SWITCH] enter SwitchToLive" << std::endl;
       const int32_t channel_id = request->channel_id();
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
@@ -277,23 +276,19 @@ namespace retrovue
       if (!result.success) {
         std::cout << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
                   << static_cast<int>(result.result_code) << ")" << std::endl;
-        std::cout << "[DBG-SWITCH] returning" << std::endl;
         return grpc::Status::OK;
       }
 
       // INV-FINALIZE-LIVE: Create sink (if FD exists), attach, wire program_output
       // Same path for normal completion and watcher auto-completion.
-      std::cout << "[DBG-SWITCH] about to lock" << std::endl;
       {
         std::lock_guard<std::mutex> lock(stream_mutex_);
-        std::cout << "[DBG-SWITCH] lock acquired" << std::endl;
         TryAttachSinkForChannel(channel_id);
       }
 
       std::cout << "[SwitchToLive] Channel " << channel_id
                 << " switch " << (result.success ? "succeeded" : "failed")
                 << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous << std::endl;
-      std::cout << "[DBG-SWITCH] returning" << std::endl;
       return grpc::Status::OK;
     }
 

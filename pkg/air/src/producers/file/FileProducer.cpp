@@ -1616,8 +1616,9 @@ namespace retrovue::producers::file
                     << std::endl;
         }
 
-        // Log probe data periodically (every window)
-        if (frames_produced_.load() % 100 < decode_probe_window_frames_) {
+        // Log probe data only when approaching violation threshold (rate < 95% of target)
+        const bool approaching_violation = in_steady_state && (decode_probe_last_rate_ < target_fps * 0.95);
+        if (approaching_violation) {
           std::cout << "[FileProducer] INV-DECODE-RATE-001 PROBE: "
                     << "rate=" << decode_probe_last_rate_ << "fps, "
                     << "target=" << target_fps << "fps, "

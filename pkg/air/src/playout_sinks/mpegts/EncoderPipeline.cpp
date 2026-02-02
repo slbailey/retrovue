@@ -1257,14 +1257,6 @@ int EncoderPipeline::AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size) {
 }
 
 int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
-  static int write_count = 0;
-  static int64_t total_bytes = 0;
-  write_count++;
-  total_bytes += buf_size;
-  if (write_count <= 5 || write_count % 100 == 0) {
-    std::cout << "[EncoderPipeline] AVIO_WRITE #" << write_count
-              << " bytes=" << buf_size << " total=" << total_bytes << std::endl;
-  }
   if (!avio_write_callback_) return -1;
   return avio_write_callback_(avio_opaque_, buf, buf_size);
 }

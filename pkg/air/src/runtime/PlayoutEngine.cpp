@@ -817,11 +817,6 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   // we'd incorrectly return an error.
   if (state->switch_auto_completed) {
     std::cout << "[SwitchToLive] Switch was auto-completed by watcher" << std::endl;
-    bool bus_exists = (state->output_bus != nullptr);
-    bool sink_attached = bus_exists && state->output_bus->IsAttached();
-    std::cout << "[DBG-SWITCH] auto_completed=true bus_connected="
-              << (bus_exists ? "yes" : "no")
-              << " sink_attached=" << (sink_attached ? "yes" : "no") << std::endl;
     state->switch_auto_completed = false;  // Reset for next switch
     EngineResult result(true, "Switch auto-completed for channel " + std::to_string(channel_id));
     result.pts_contiguous = true;
@@ -1163,11 +1158,6 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
     std::cout << "[SwitchToLive] INV-P8-SWITCH-READINESS: COMPLETE "
               << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
               << ", asset=" << state->live_asset_path << ")" << std::endl;
-    bool bus_exists = (state->output_bus != nullptr);
-    bool sink_attached = bus_exists && state->output_bus->IsAttached();
-    std::cout << "[DBG-SWITCH] auto_completed=false bus_connected="
-              << (bus_exists ? "yes" : "no")
-              << " sink_attached=" << (sink_attached ? "yes" : "no") << std::endl;
 
     // INV-P8-SUCCESSOR-OBSERVABILITY: Do not return success until observer confirms
     // at least one real successor video frame routed. Completion ONLY via observer.

@@ -749,10 +749,6 @@ frame_ready:
         }
       }
     }
-    if (audio_frames_consumed > 0 && stats_.frames_rendered % 100 == 0) {
-      std::cout << "[ProgramOutput] Consumed " << audio_frames_consumed
-                << " audio frames for video frame #" << stats_.frames_rendered << std::endl;
-    }
 
     int64_t frame_end_utc = 0;
     std::chrono::steady_clock::time_point frame_end_fallback;
@@ -841,12 +837,6 @@ frame_ready:
       }
     }
 
-    if (stats_.frames_rendered % 100 == 0) {
-      std::cout << "[ProgramOutput] Rendered " << stats_.frames_rendered
-                << " frames, avg render time: " << stats_.average_render_time_ms << "ms, "
-                << "fps: " << stats_.current_render_fps
-                << ", gap: " << frame_gap_ms << "ms" << std::endl;
-    }
 
     last_pts_ = frame.metadata.pts;
     // Contract-level observability: first PTS for AIR_AS_RUN_FRAME_RANGE (real frame only).
@@ -970,9 +960,6 @@ void ProgramOutput::SetOutputBus(output::OutputBus* bus) {
   }
 
   output_bus_ = bus;
-  std::cout << "[DBG-PO] SetOutputBus channel=" << channel_id_
-            << " bus=" << static_cast<void*>(bus)
-            << " (idempotent skip if same)" << std::endl;
   if (bus) {
     std::cout << "[ProgramOutput] OutputBus set (frames will route through bus)" << std::endl;
   }

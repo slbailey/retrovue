@@ -181,6 +181,157 @@ DOCUMENTATION RULES
 - Phase documents are coordination contracts, not laws. They refine Layer 0 laws; they do not override them.
 - Developer and overview docs are non-authoritative. They inform and explain; they do not define required behavior.
 
+────────────────────────
+INCIDENT ANALYSIS (CONTRACTS-FIRST)
+────────────────────────
+When analyzing runtime logs or incidents, ALWAYS use the contracts-first, logs-as-evidence methodology:
+
+1. IDENTIFY CONTRACT VIOLATIONS FIRST
+   - Scan for INV-* patterns (violations are the primary signal)
+   - Categorize by invariant ID (INV-P8-*, INV-P9-*, INV-P10-*, etc.)
+   - Count occurrences and extract parameters
+   - These are the "what went wrong" — not symptoms, but contract breaches
+
+2. RECONSTRUCT TIMELINE
+   - Build a chronological sequence of events from log timestamps
+   - Mark the boundary/trigger point (e.g., segment switch, EOF, etc.)
+   - Identify what happened BEFORE vs AFTER the expected event
+   - Calculate actual vs expected timing deltas
+
+3. TRACE CAUSAL CHAIN
+   - Start from the violation and work backwards
+   - Identify the component that violated the contract
+   - Find the upstream event that caused the component to fail
+   - Continue until you reach the root cause (often: timing, resource exhaustion, or metadata mismatch)
+
+4. CATEGORIZE LOG LINES
+   | Category | Definition | Action |
+   |----------|------------|--------|
+   | Contract Proof | INV-* logs showing compliance | KEEP |
+   | Contract Violation | INV-* VIOLATION logs | KEEP (critical) |
+   | Phase/State Transition | State machine changes | KEEP |
+   | Progress/Debug | DBG-*, counters, heartbeats | EVALUATE for noise |
+
+5. PRODUCE ACTIONABLE OUTPUT
+   - Root cause statement (one sentence)
+   - Evidence chain (which logs prove it)
+   - Recommendations with priority (P0/P1/P2)
+   - Log noise reduction opportunities (RATE-LIMIT, DELETE, GUARD)
+
+6. LOG NOISE ACTIONS
+   | Action | When to use |
+   |--------|-------------|
+   | DELETE | Log provides no diagnostic value |
+   | DEMOTE | Useful for deep debugging only; hide by default |
+   | RATE-LIMIT | Valuable but fires too often (e.g., 1/sec max) |
+   | GUARD | Only emit when approaching violation threshold |
+
+Example violation categories:
+- INV-P8-*: Phase 8 (switching, timeline, segment ownership)
+- INV-P9-*: Phase 9 (sink liveness, TS emission, boot liveness)
+- INV-P10-*: Phase 10 (audio-video gate, PCR pacing, scaling)
+- INV-SEGMENT-*: Segment content and frame count invariants
+- INV-DECODE-*: Decode rate and producer health
+
+────────────────────────
+CONTRACTS-FIRST AUDITING
+────────────────────────
+When auditing logs, analyzing behavior, or reviewing code changes, validate against the Canonical Rule Ledger:
+
+Source of truth: docs/contracts/CANONICAL_RULE_LEDGER.md
+
+AUDIT PRINCIPLES:
+- Logs exist ONLY for: (1) Contract proof, (2) Contract violation, (3) Phase/state transitions
+- Any log not serving one of those purposes is NOISE
+- If code enforces behavior not in the ledger, the code is wrong
+- If the ledger lists a rule code doesn't enforce, the code is wrong
+
+AUDIT WORKFLOW:
+1. Read the Canonical Rule Ledger first
+2. Classify each log/behavior against ledger entries
+3. Identify gaps (behaviors without contracts, contracts without enforcement)
+4. Output execution-ready directives
+
+AUDIT OUTPUT FORMAT (by subsystem):
+```
+Subsystem: [component name]
+- DELETE: [exact log pattern]
+- GUARD: [exact log pattern] → [condition when to emit]
+- DEMOTE: [exact log pattern] → TRACE
+- RATE-LIMIT: [exact log pattern] → [max frequency]
+- CONSOLIDATE: [patterns] → [single canonical log line]
+- KEEP: [pattern] (ledger rule ID)
+```
+
+CONSTRAINTS:
+- Do NOT propose architecture changes during audit
+- Do NOT write code during audit (that comes later)
+- Output must be suitable for direct execution
+
+────────────────────────
+INVARIANT DISCOVERY & PROMOTION
+────────────────────────
+When incidents reveal missing contracts or behaviors that SHOULD be invariants:
+
+1. IDENTIFY CANDIDATE INVARIANTS
+   From incident analysis, look for:
+   - Implicit assumptions that were violated
+   - Timing requirements that aren't codified
+   - Resource limits that caused failures
+   - Cross-component contracts that aren't documented
+
+2. DRAFT INVARIANT PROPOSAL
+   For each candidate:
+   ```
+   | Field | Value |
+   |-------|-------|
+   | Proposed ID | INV-[PHASE]-[NAME]-NNN |
+   | Classification | CONTRACT |
+   | Owner | [Component] |
+   | Enforcement | [Phase: P8/P9/P10/RUNTIME/etc.] |
+   | One-Line Definition | [Clear, testable statement] |
+   | Derives From | [Parent LAW or CONTRACT if any] |
+   | Evidence | [Incident that revealed need] |
+   ```
+
+3. PROMOTION WORKFLOW
+   a. Add to "Proposed Invariants" section in CANONICAL_RULE_LEDGER.md
+   b. Create implementation task for:
+      - Code enforcement (if not present)
+      - Test coverage
+      - Log coverage (proof + violation)
+   c. After implementation verified, promote to appropriate Layer
+
+4. TASK CREATION FORMAT
+   For each invariant requiring implementation:
+   ```
+   Task: Implement [INV-ID]
+   Description: [One-line definition]
+   Acceptance Criteria:
+   - [ ] Code enforces invariant
+   - [ ] Test exists proving compliance
+   - [ ] Test exists proving violation detection
+   - [ ] Log emitted on violation (if Log=Yes in ledger)
+   - [ ] Ledger updated (Test=Yes, promoted from Proposed)
+   ```
+
+INVARIANT NAMING CONVENTIONS:
+- INV-P8-*: Phase 8 (timeline, switching, segment)
+- INV-P9-*: Phase 9 (output bootstrap, sink liveness)
+- INV-P10-*: Phase 10 (steady-state, flow control)
+- INV-SEGMENT-*: Content and frame invariants
+- INV-DECODE-*: Decoder health
+- INV-SINK-*: Output sink behavior
+- INV-ENCODER-*: Encoding constraints
+- LAW-*: Constitutional (rarely added)
+
+PROMOTION CRITERIA:
+- Invariant has clear, testable definition
+- At least one incident or test case demonstrates need
+- Owner component identified
+- Does not duplicate existing rule (check Derivation Notes)
+- Enforcement phase is unambiguous
+
 ACKNOWLEDGEMENT:
 Confirm understanding of AIR as a single-session C++ playout engine with explicit buses, strict timing control, and gRPC-defined boundaries.
 Do not proceed until accepted.
