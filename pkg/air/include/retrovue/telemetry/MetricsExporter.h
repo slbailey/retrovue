@@ -123,6 +123,12 @@ class MetricsExporter {
   // Records delivery status for a transport.
   void RecordDeliveryStatus(Transport transport, bool success, double latency_ms);
 
+  // P11B-003: Histogram of switch boundary timing delta (ms). Enables p50/p95/p99 analysis.
+  void RecordSwitchBoundaryDelta(int32_t channel_id, int64_t delta_ms);
+
+  // P11B-004: Counter of boundary tolerance violations (switch >1 frame late).
+  void IncrementBoundaryViolations(int32_t channel_id);
+
   // Gets the current metrics for a channel.
   // Returns false if channel doesn't exist.
   bool GetChannelMetrics(int32_t channel_id, ChannelMetrics& metrics) const;
@@ -141,6 +147,8 @@ class MetricsExporter {
       kRegisterDescriptor,
       kDeprecateDescriptor,
       kRecordTransport,
+      kRecordSwitchBoundaryDelta,
+      kIncrementBoundaryViolations,
     };
 
     Type type;
@@ -151,6 +159,7 @@ class MetricsExporter {
     Transport transport = Transport::kGrpcStream;
     bool transport_success = true;
     double transport_latency_ms = 0.0;
+    int64_t switch_boundary_delta_ms = 0;  // P11B-003
   };
 
   class EventQueue {
@@ -202,6 +211,10 @@ class MetricsExporter {
     std::vector<double> latencies_ms;
   };
   std::map<Transport, TransportData> transport_data_;
+
+  // P11B-003/004: Switch boundary timing (INV-BOUNDARY-TOLERANCE-001)
+  std::map<int32_t, std::vector<int64_t>> switch_boundary_deltas_ms_;
+  std::map<int32_t, uint64_t> switch_boundary_violations_;
 };
 
 }  // namespace retrovue::telemetry

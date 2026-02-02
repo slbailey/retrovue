@@ -75,6 +75,7 @@ struct EngineResult {
   // For SwitchToLive
   bool pts_contiguous = false;
   uint64_t live_start_pts = 0;
+  int64_t switch_completion_time_ms = 0;  // P11B-001: wall-clock ms when switch completed
 
   EngineResult(bool s, const std::string& msg)
       : success(s), message(msg) {}
@@ -117,7 +118,8 @@ class PlayoutEngine {
       int32_t fps_numerator,
       int32_t fps_denominator);
   
-  EngineResult SwitchToLive(int32_t channel_id);
+  // P11C-001: target_boundary_time_ms from Core (0 = immediate/legacy). P11B-001: result.switch_completion_time_ms set on success.
+  EngineResult SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms = 0);
   
   // Phase 8.1: live asset path set after SwitchToLive (for stream TS source)
   std::optional<std::string> GetLiveAssetPath(int32_t channel_id);

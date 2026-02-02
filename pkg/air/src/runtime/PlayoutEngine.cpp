@@ -782,7 +782,7 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
   }).detach();
 }
 
-EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
+EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms) {
   std::unique_lock<std::mutex> lock(channels_mutex_);
 
   auto it = channels_.find(channel_id);
@@ -793,6 +793,14 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
   auto& state = it->second;
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+  }
+
+  // P11C-003: INV-BOUNDARY-DECLARED-001 — log receipt of target boundary time
+  if (target_boundary_time_ms > 0) {
+    std::cout << "[PlayoutEngine] INV-BOUNDARY-DECLARED-001: SwitchToLive received with target_boundary_time_ms="
+              << target_boundary_time_ms << std::endl;
+  } else {
+    std::cout << "[PlayoutEngine] INV-BOUNDARY-DECLARED-001: SwitchToLive received without target (legacy mode)" << std::endl;
   }
   
   if (control_surface_only_) {
@@ -805,6 +813,24 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
     EngineResult result(true, "Switched to live for channel " + std::to_string(channel_id));
     result.pts_contiguous = true;
     result.live_start_pts = 0;
+    auto completion_time = std::chrono::steady_clock::now();
+    result.switch_completion_time_ms = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(completion_time.time_since_epoch()).count());
+    if (target_boundary_time_ms > 0 && metrics_exporter_) {
+      int64_t delta_ms = result.switch_completion_time_ms - target_boundary_time_ms;
+      const int64_t tolerance_ms = 33;
+      if (delta_ms > tolerance_ms) {
+        std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001 VIOLATION: Switch completed " << delta_ms
+                  << "ms late (target=" << target_boundary_time_ms << ", actual=" << result.switch_completion_time_ms
+                  << ", tolerance=" << tolerance_ms << "ms)" << std::endl;
+        metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+        metrics_exporter_->IncrementBoundaryViolations(channel_id);
+      } else {
+        std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001: Switch on time (delta=" << delta_ms
+                  << "ms, tolerance=" << tolerance_ms << "ms)" << std::endl;
+        metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+      }
+    }
     return result;
   }
 
@@ -821,6 +847,24 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
     EngineResult result(true, "Switch auto-completed for channel " + std::to_string(channel_id));
     result.pts_contiguous = true;
     result.result_code = ResultCode::kOk;
+    auto completion_time = std::chrono::steady_clock::now();
+    result.switch_completion_time_ms = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(completion_time.time_since_epoch()).count());
+    if (target_boundary_time_ms > 0 && metrics_exporter_) {
+      int64_t delta_ms = result.switch_completion_time_ms - target_boundary_time_ms;
+      const int64_t tolerance_ms = 33;
+      if (delta_ms > tolerance_ms) {
+        std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001 VIOLATION: Switch completed " << delta_ms
+                  << "ms late (target=" << target_boundary_time_ms << ", actual=" << result.switch_completion_time_ms
+                  << ", tolerance=" << tolerance_ms << "ms)" << std::endl;
+        metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+        metrics_exporter_->IncrementBoundaryViolations(channel_id);
+      } else {
+        std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001: Switch on time (delta=" << delta_ms
+                  << "ms, tolerance=" << tolerance_ms << "ms)" << std::endl;
+        metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+      }
+    }
     return result;
   }
 
@@ -1183,6 +1227,24 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id) {
     result.pts_contiguous = true;
     result.live_start_pts = 0;  // Direct completion - no PTS alignment needed
     result.result_code = ResultCode::kOk;
+    auto completion_time = std::chrono::steady_clock::now();
+    result.switch_completion_time_ms = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(completion_time.time_since_epoch()).count());
+    if (target_boundary_time_ms > 0 && metrics_exporter_) {
+      int64_t delta_ms = result.switch_completion_time_ms - target_boundary_time_ms;
+      const int64_t tolerance_ms = 33;
+      if (delta_ms > tolerance_ms) {
+        std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001 VIOLATION: Switch completed " << delta_ms
+                  << "ms late (target=" << target_boundary_time_ms << ", actual=" << result.switch_completion_time_ms
+                  << ", tolerance=" << tolerance_ms << "ms)" << std::endl;
+        metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+        metrics_exporter_->IncrementBoundaryViolations(channel_id);
+      } else {
+        std::cout << "[PlayoutEngine] INV-BOUNDARY-TOLERANCE-001: Switch on time (delta=" << delta_ms
+                  << "ms, tolerance=" << tolerance_ms << "ms)" << std::endl;
+        metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
+      }
+    }
 
     return result;
   } catch (const std::exception& e) {

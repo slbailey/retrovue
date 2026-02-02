@@ -856,7 +856,7 @@ class ChannelManager:
 
         # Phase 2: Switch - start calling SwitchToLive at switch_at
         if self._switch_state == SwitchState.PREVIEW_LOADED and now >= switch_at:
-            ok = producer.switch_to_live()
+            ok = producer.switch_to_live(target_boundary_time_utc=segment_end)  # P11C-004
             self._switch_state = SwitchState.SWITCH_ARMED
             self._logger.info(
                 "Channel %s switch armed at T-%.3fs (boundary=%.3fs, successor=%s)",
@@ -870,7 +870,7 @@ class ChannelManager:
 
         # Phase 3: Poll for switch completion while SWITCH_ARMED
         if self._switch_state == SwitchState.SWITCH_ARMED and segment_end != self._last_switch_at_segment_end_utc:
-            ok = producer.switch_to_live()
+            ok = producer.switch_to_live(target_boundary_time_utc=segment_end)  # P11C-004
             if ok:
                 self._handle_switch_complete(producer, segment_end, now)
             else:
@@ -1800,18 +1800,28 @@ class Phase8AirProducer(Producer):
             self._logger.warning("Channel %s: LoadPreview failed: %s", self.channel_id, e)
             return False
 
-    def switch_to_live(self) -> bool:
+    def switch_to_live(self, target_boundary_time_utc: datetime | None = None) -> bool:
         """Promote Air preview to live (clock-driven; no EOF). Returns success.
 
         Phase 8: Uses result_code to distinguish NOT_READY (transient, expected)
         from errors. NOT_READY logs at DEBUG level; errors log at WARNING.
+        P11C-004: INV-BOUNDARY-DECLARED-001 — pass target_boundary_time_utc so Air can measure timing.
         """
         if not self._grpc_addr:
             self._logger.warning("Channel %s: switch_to_live skipped (no grpc_addr)", self.channel_id)
             return False
+        target_ms = 0
+        if target_boundary_time_utc is not None:
+            target_ms = int(target_boundary_time_utc.timestamp() * 1000)
+            self._logger.info(
+                "INV-BOUNDARY-DECLARED-001: Declaring switch at target_boundary_time_ms=%d",
+                target_ms,
+            )
         try:
             ok, result_code = channel_manager_launch.air_switch_to_live(
-                self._grpc_addr, channel_id_int=self.channel_config.channel_id_int
+                self._grpc_addr,
+                channel_id_int=self.channel_config.channel_id_int,
+                target_boundary_time_ms=target_ms,
             )
             if not ok:
                 # Phase 8: NOT_READY is expected (transient), log at DEBUG

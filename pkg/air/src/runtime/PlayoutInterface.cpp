@@ -55,13 +55,14 @@ InterfaceResult PlayoutInterface::LoadPreview(
   return interface_result;
 }
 
-InterfaceResult PlayoutInterface::SwitchToLive(int32_t channel_id) {
-  // Delegate to domain engine
-  auto result = engine_->SwitchToLive(channel_id);
+InterfaceResult PlayoutInterface::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms) {
+  // Delegate to domain engine (P11C-001: target_boundary_time_ms; P11B-001: result.switch_completion_time_ms)
+  auto result = engine_->SwitchToLive(channel_id, target_boundary_time_ms);
   InterfaceResult interface_result(result.success, result.message);
   interface_result.pts_contiguous = result.pts_contiguous;
   interface_result.live_start_pts = result.live_start_pts;
   interface_result.result_code = result.result_code;  // Phase 8: Forward typed result
+  interface_result.switch_completion_time_ms = result.switch_completion_time_ms;
   return interface_result;
 }
 

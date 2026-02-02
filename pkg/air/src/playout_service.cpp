@@ -262,16 +262,20 @@ namespace retrovue
                                                   SwitchToLiveResponse *response)
     {
       const int32_t channel_id = request->channel_id();
+      const int64_t target_boundary_time_ms = request->target_boundary_time_ms();  // P11C-001 (0 = legacy)
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
 
-      auto result = interface_->SwitchToLive(channel_id);
+      auto result = interface_->SwitchToLive(channel_id, target_boundary_time_ms);
 
       response->set_success(result.success);
       response->set_message(result.message);
       response->set_pts_contiguous(result.pts_contiguous);
       response->set_live_start_pts(result.live_start_pts);
       response->set_result_code(MapResultCode(result.result_code));  // Phase 8: Typed result
+      if (result.switch_completion_time_ms != 0) {
+        response->set_switch_completion_time_ms(result.switch_completion_time_ms);  // P11B-001
+      }
 
       if (!result.success) {
         std::cout << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
