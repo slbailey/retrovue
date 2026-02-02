@@ -69,6 +69,9 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-LIVE-SESSION-AUTHORITY-001 | INV-BOUNDARY-LIFECYCLE-001 | **Defines** — channel is durably live only when `_boundary_state == LIVE` |
 | INV-TERMINAL-SCHEDULER-HALT-001 | INV-BOUNDARY-LIFECYCLE-001, Phase 12 §7 | **Extends** — FAILED_TERMINAL is intent-absorbing, not just transition-absorbing; no scheduling intent after terminal failure |
 | INV-TERMINAL-TIMER-CLEARED-001 | INV-TERMINAL-SCHEDULER-HALT-001 | **Enforces** — prevents ghost timer execution after terminal failure; timers cancelled on FAILED_TERMINAL entry |
+| INV-SESSION-CREATION-UNGATED-001 | LAW-AUTHORITY-HIERARCHY, Phase 12 §8 | **Defines** — session creation not gated on boundary feasibility; viewer tune-in always creates session if resources available |
+| INV-STARTUP-CONVERGENCE-001 | INV-SESSION-CREATION-UNGATED-001, Phase 12 §8 | **Defines** — infeasible boundaries skipped during startup convergence; session must converge within bounded window |
+| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | INV-SCHED-PLAN-BEFORE-EXEC-001, INV-STARTUP-CONVERGENCE-001 | **Amended** — applies to boundary commitment, not session creation; pre-convergence infeasibility causes skip, post-convergence infeasibility is FATAL |
 
 ---
 
@@ -1079,6 +1082,9 @@ This section documents the phased implementation of invariants added by the 2026
 - INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state)
 - INV-TERMINAL-SCHEDULER-HALT-001 (no scheduling intent after FAILED_TERMINAL)
 - INV-TERMINAL-TIMER-CLEARED-001 (timers cancelled on FAILED_TERMINAL entry)
+- INV-SESSION-CREATION-UNGATED-001 (session creation not gated on boundary feasibility)
+- INV-STARTUP-CONVERGENCE-001 (infeasible boundaries skipped during startup convergence)
+- INV-STARTUP-BOUNDARY-FEASIBILITY-001 **amended** (applies to boundary commitment, not session creation)
 
 **Implementation Tasks:**
 
@@ -1101,6 +1107,15 @@ This section documents the phased implementation of invariants added by the 2026
 | P12-TEST-006 | Contract test: liveness only in LIVE state | Test | P12-CORE-007 | **Done** |
 | P12-TEST-007 | Contract test: scheduler halts in FAILED_TERMINAL | Test | P12-CORE-008 | — |
 | P12-TEST-008 | Contract test: timers cleared on FAILED_TERMINAL | Test | P12-CORE-009 | — |
+| **Startup Convergence Amendment** |||||
+| P12-CORE-010 | Ungate session creation from boundary feasibility | Core | P12-CORE-001 | — |
+| P12-CORE-011 | Implement startup convergence tracking (`_converged` flag) | Core | P12-CORE-010 | — |
+| P12-CORE-012 | Implement boundary skip logic during convergence | Core | P12-CORE-011 | — |
+| P12-CORE-013 | Add convergence timeout enforcement | Core | P12-CORE-011 | — |
+| P12-TEST-009 | Contract test: session creation ungated | Test | P12-CORE-010 | — |
+| P12-TEST-010 | Contract test: boundary skip during convergence | Test | P12-CORE-012 | — |
+| P12-TEST-011 | Contract test: convergence timeout forces FAILED_TERMINAL | Test | P12-CORE-013 | — |
+| P12-TEST-012 | Contract test: post-convergence feasibility enforced | Test | P12-CORE-011 | — |
 
 **Exit Criteria:**
 - Teardown blocked during transient states (PLANNED, PRELOAD_ISSUED, SWITCH_SCHEDULED, SWITCH_ISSUED)
@@ -1111,6 +1126,10 @@ This section documents the phased implementation of invariants added by the 2026
 - `is_live` property returns True only in LIVE state
 - No scheduling intent generated after FAILED_TERMINAL (fully absorbing)
 - Transient timers cancelled on FAILED_TERMINAL entry
+- Session creation never returns 503 due to boundary timing
+- Infeasible boundaries skipped during startup convergence (logged, not fatal)
+- Session converges within MAX_STARTUP_CONVERGENCE_WINDOW or enters FAILED_TERMINAL
+- Post-convergence boundary infeasibility is FATAL
 
 **Risk:** Low — Additive changes; does not modify Phase 8 or Phase 11 semantics
 
@@ -1210,6 +1229,7 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 
 | Date | Auditor | Scope | Summary |
 |------|---------|-------|---------|
+| 2026-02-02 | Systems Contract Authority | Phase 12 Startup Convergence Amendment | Added INV-SESSION-CREATION-UNGATED-001 (session creation not gated on boundary feasibility) and INV-STARTUP-CONVERGENCE-001 (infeasible boundaries skipped during startup convergence). Amended INV-STARTUP-BOUNDARY-FEASIBILITY-001 to apply to boundary commitment, not session creation. New terminology: Session Creation, Boundary Commitment, Startup Convergence, Converged Session. Added PHASE12.md §8 (Startup Convergence Semantics). 4 implementation tasks (P12-CORE-010–013), 4 test tasks (P12-TEST-009–012). Incident-derived: Core returned 503 on viewer tune-in due to boundary feasibility check, despite content being immediately playable. Root cause: conflation of session creation with boundary commitment. |
 | 2026-02-02 | Systems Contract Authority | Phase 12 Terminal Semantics Amendment | Added INV-TERMINAL-SCHEDULER-HALT-001 (intent-absorbing: no scheduling intent after FAILED_TERMINAL) and INV-TERMINAL-TIMER-CLEARED-001 (timers cancelled on terminal entry). Introduced canonical terminology: "fully absorbing" = transition-absorbing + intent-absorbing. Clarified allowed operations in FAILED_TERMINAL (health, metrics, diagnostics). Incident-derived: scheduler continued generating intent after terminal failure, causing spurious log errors. |
 | 2026-02-02 | Systems Contract Authority | Phase 12 Creation | Created Phase 12: Live Session Authority & Teardown Semantics. Added 5 invariants: INV-TEARDOWN-STABLE-STATE-001 (teardown deferred in transient states), INV-TEARDOWN-GRACE-TIMEOUT-001 (bounded deferral), INV-TEARDOWN-NO-NEW-WORK-001 (no new work when pending), INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions), INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state). Incident-derived: Core tore down channel during SWITCH_ISSUED causing AIR encoder deadlock and audio queue overflow. 7 implementation tasks (P12-CORE-001–007), 6 test tasks (P12-TEST-001–006). |
 | 2026-02-02 | Systems Contract Authority | P11F-007–P11F-009 completion | P11F-007: test_channel_manager_boundary_lifecycle.py (allowed/illegal/terminal-absorbing/LIVE non-absorbing). P11F-008: test_channel_manager_oneshot.py (duplicate suppression, tick guard, exactly-once). P11F-009: test_channel_manager_terminal.py (exception→FAILED_TERMINAL, no re-arm, tick cannot retry, diagnostics). 71 runtime tests pass. Phase 11F complete. |

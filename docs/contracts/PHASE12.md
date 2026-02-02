@@ -71,6 +71,22 @@ It sets clear rules for lifecycle transitions and teardown.
   <dd>
     Any operation that (a) allocates resources for future boundary work, (b) sends control-plane RPCs to AIR, (c) registers timers for boundary lifecycle operations, or (d) would require a boundary state transition to complete. Examples: LoadPreview, SwitchToLive, segment planning.
   </dd>
+  <dt><b>Session Creation</b></dt>
+  <dd>
+    Launching AIR, attaching output, beginning playback at current schedule position. This is a <b>resource allocation</b> event, not a scheduling event. Session creation is distinct from boundary commitment.
+  </dd>
+  <dt><b>Boundary Commitment</b></dt>
+  <dd>
+    Registering a future boundary for transition execution (arming LoadPreview and SwitchToLive). Subject to feasibility constraints. A boundary that is not committed is not attempted.
+  </dd>
+  <dt><b>Startup Convergence</b></dt>
+  <dd>
+    The interval from session creation until the first successful boundary transition. During this period, infeasible boundaries are skipped rather than causing session failure. Startup convergence applies only to a newly created session and ends permanently after the first committed boundary executes successfully. A session cannot re-enter convergence.
+  </dd>
+  <dt><b>Converged Session</b></dt>
+  <dd>
+    A session that has completed at least one clean boundary transition. Subject to full steady-state invariants. All boundaries after convergence must satisfy normal feasibility requirements.
+  </dd>
 </dl>
 
 ---
@@ -285,6 +301,46 @@ Here, nothing in flight—destruction is safe.
 - **Rationale:**
   Ghost timers firing after terminal failure generate spurious errors and may attempt operations against a dead boundary. Clearing timers on terminal entry ensures clean shutdown semantics.
 
+### 6.8 `INV-SESSION-CREATION-UNGATED-001`
+
+- **Definition:**
+  Session creation (viewer tune-in) MUST NOT be gated on boundary feasibility. A session may be created whenever:
+  1. A viewer requests playout
+  2. Resources are available (AIR can be launched)
+  3. Schedule data exists for the current time
+- **What this means:**
+  - Core MUST NOT return 503/reject due to upcoming boundary timing
+  - Core MUST compute current segment and seek offset
+  - Core MUST launch AIR and begin playback immediately
+  - Boundary feasibility is evaluated *after* session creation, not before
+- **Rationale:**
+  Session creation is orthogonal to boundary execution. A viewer tuning in mid-segment is entitled to receive that segment's content regardless of when the next transition occurs. Refusing to play content that is already "in progress" on the schedule timeline violates LAW-AUTHORITY-HIERARCHY.
+
+### 6.9 `INV-STARTUP-CONVERGENCE-001`
+
+- **Definition:**
+  A session is in "startup convergence" from creation until the first successful boundary transition. During convergence:
+  1. **Infeasible boundaries are skipped**, not fatal
+  2. **Current segment playback continues** across skipped boundaries
+  3. **The session MUST converge** within `MAX_STARTUP_CONVERGENCE_WINDOW`
+  4. **Failure to converge** transitions the session to `FAILED_TERMINAL`
+- **Boundary skip criteria:**
+  A boundary is skipped during startup convergence if `boundary_time < now + MIN_PREFEED_LEAD_TIME` at the time of evaluation.
+- **Skipped boundary semantics:**
+  - No LoadPreview is issued for the skipped boundary
+  - No SwitchToLive is scheduled for the skipped boundary
+  - Current segment continues playing past the boundary time
+  - The skip is logged as `STARTUP_BOUNDARY_SKIPPED` (not a violation)
+  - The next boundary is evaluated for feasibility
+- **Convergence window:**
+  `MAX_STARTUP_CONVERGENCE_WINDOW` is an upper bound to guarantee eventual correctness, not a target duration. Default: 120 seconds.
+- **Per-session scope:**
+  Startup convergence applies only to a newly created session and ends permanently after the first committed boundary executes successfully. A session cannot re-enter convergence mid-lifecycle.
+- **Enforcement:**
+  Core tracks `_converged` flag (initially False). After first successful boundary transition, `_converged = True`. All subsequent boundaries subject to full INV-STARTUP-BOUNDARY-FEASIBILITY-001.
+- **Rationale:**
+  Startup is not a boundary transition. Joining a segment already in progress is a seek operation. The system must "play something now" over startup perfection. But convergence cannot be indefinite—eventually the session must execute a clean boundary or fail.
+
 ---
 
 ## 7. Failure Handling
@@ -358,18 +414,120 @@ _Teardown may be 10s late, but never waits forever._
 
 ---
 
-## 8. AIR Coordination _(Non-Normative)_
+## 8. Startup Convergence Semantics
+
+This section defines the semantics of session startup and the convergence period before steady-state operation.
+
+### 8.1 Session Creation vs Boundary Commitment
+
+These are distinct lifecycle events with different requirements:
+
+| Event | What It Does | Gating Requirement |
+|-------|--------------|-------------------|
+| **Session Creation** | Launch AIR, attach output, begin playback at current offset | Resources available, schedule exists |
+| **Boundary Commitment** | Arm LoadPreview and SwitchToLive for a future boundary | Lead time feasibility |
+
+Session creation MUST NOT be gated on boundary commitment feasibility.
+
+### 8.2 Startup Convergence State Machine
+
+```
+                    ┌────────────────────────────────────────────┐
+                    │           STARTUP_CONVERGENCE              │
+                    │                                            │
+Session ──────────► │  • Current segment plays at correct offset │
+Created             │  • Infeasible boundaries skipped           │
+                    │  • Waiting for first feasible boundary     │
+                    │  • _converged = False                      │
+                    │                                            │
+                    └─────────────┬──────────────────────────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                    ▼                           ▼
+           ┌────────────────┐        ┌───────────────────┐
+           │   CONVERGED    │        │  FAILED_TERMINAL  │
+           │                │        │                   │
+           │ • First clean  │        │ • No boundary     │
+           │   boundary     │        │   converged in    │
+           │   executed     │        │   MAX_WINDOW      │
+           │ • _converged   │        │ • Session dead    │
+           │   = True       │        │                   │
+           │ • Full Phase   │        │                   │
+           │   12 rules     │        │                   │
+           └────────────────┘        └───────────────────┘
+```
+
+### 8.3 Boundary Evaluation During Convergence
+
+When a session starts mid-segment:
+
+```
+on session_create(viewer_request):
+    segment = get_current_segment(now)
+    seek_offset = compute_offset(segment, now)
+    launch_air(segment, seek_offset)       # Always succeeds (ungated)
+
+    _converged = False
+    evaluate_next_boundary()
+
+on evaluate_next_boundary():
+    boundary = get_next_boundary(now)
+
+    if boundary.time >= now + MIN_PREFEED_LEAD_TIME:
+        commit_boundary(boundary)          # Arm for transition
+    elif not _converged:
+        log("STARTUP_BOUNDARY_SKIPPED", boundary)
+        # Continue current segment; evaluate next boundary at boundary.time
+    else:
+        # Post-convergence: infeasibility is fatal
+        transition_to_failed_terminal("INV-STARTUP-BOUNDARY-FEASIBILITY-001")
+```
+
+### 8.4 What "Skip Boundary" Means
+
+When a boundary is skipped during startup convergence:
+
+1. **No LoadPreview is issued** for that boundary
+2. **No SwitchToLive is scheduled** for that boundary
+3. **Current segment continues playing** past the boundary time
+4. **At the boundary time**, Core evaluates the *next* boundary
+5. **The skipped boundary is logged** as `STARTUP_BOUNDARY_SKIPPED`, not counted as a violation
+
+**Important:** This is NOT the same as a failed boundary. A failed boundary means we *attempted* the transition and it failed. A skipped boundary means we *chose not to attempt* it because it was infeasible by construction.
+
+### 8.5 Relationship to INV-STARTUP-BOUNDARY-FEASIBILITY-001
+
+The existing invariant (defined in CANONICAL_RULE_LEDGER.md) is **amended** by this section:
+
+| Before Amendment | After Amendment |
+|------------------|-----------------|
+| First boundary must be feasible or session creation fails | First boundary feasibility evaluated after session creation |
+| Infeasibility is FATAL at startup | Infeasibility during convergence causes skip, not FATAL |
+| Session rejected if boundary timing insufficient | Session created; boundary skipped; next boundary evaluated |
+
+**Post-convergence:** INV-STARTUP-BOUNDARY-FEASIBILITY-001 applies in full. Infeasible boundaries after convergence are FATAL (planning error).
+
+### 8.6 Explicit Non-Goals
+
+- **Startup convergence does not guarantee alignment with program boundaries before convergence completes.** The viewer may see content that spans a schedule boundary without a clean transition. This is acceptable startup behavior.
+- **Startup convergence is not a recovery mechanism.** It applies only to initial session creation, not to sessions that have failed and are being restarted.
+- **Skipped boundaries do not count toward viewer experience guarantees.** The first *clean* transition is the first transition that matters for quality metrics.
+
+---
+
+## 9. AIR Coordination _(Non-Normative)_
 
 Optional AIR-side best practices (not required, but valuable):
 
-### 8.1 Output Established Ack
+### 9.1 Output Established Ack
 
 - AIR may explicitly report when output is _reliably_ flowing
 - Core can use this to set `LIVE` with greater confidence
 
 _Without this: Core can only infer `LIVE` after SwitchToLive completes._
 
-### 8.2 Drain Command
+### 9.2 Drain Command
 
 AIR may implement “drain”:
 
@@ -381,46 +539,60 @@ AIR may implement “drain”:
 This ensures graceful teardown (last frames delivered, not dropped).  
 _No drain: teardown is abrupt but still correct._
 
-### 8.3 Teardown Ack
+### 9.3 Teardown Ack
 
-AIR may acknowledge teardown, letting Core confirm AIR released all resources (e.g., files, sockets).  
+AIR may acknowledge teardown, letting Core confirm AIR released all resources (e.g., files, sockets).
 Without ack: Core uses timeouts.
 
 ---
 
-## 9. Out-of-Scope
+## 10. Out-of-Scope
 
 _Phase 12 does **not** address_:
 
-- **9.1 Implementation details:**  
+- **10.1 Implementation details:**
   Timeout durations (10s is default, not spec), buffer sizes, threading, error-retry logic
 
-- **9.2 Phase 8 timing:**  
+- **10.2 Phase 8 timing:**
   Epochs, CT/MT mapping, switch deadlines, prefeed time
 
-- **9.3 Multi-channel:**  
+- **10.3 Multi-channel:**
   Channel prioritization, cascading teardown, resource sharing
 
-- **9.4 Viewer experience during transient state:**  
+- **10.4 Viewer experience during transient state:**
   What viewers see (e.g., cached content, client timeout behavior)
 
-- **9.5 Operational tooling:**  
+- **10.5 Operational tooling:**
   Monitoring/stats around deferred teardowns, grace timeouts, manual overrides
+
+- **10.6 Startup viewer experience:**
+  What viewers see during startup convergence (e.g., content spanning boundaries, initial seek accuracy)
+
+- **10.7 Startup retry/recovery:**
+  Re-entering convergence after session failure. Startup convergence is one-shot per session.
 
 ---
 
-## 10. ✨ Summary
+## 11. ✨ Summary
 
 _Phase 12 defines who is in charge, and when:_
 
 - **Core:** controls session existence, initiates teardown
 - **AIR:** controls switch execution and live confirmation
-- **Teardown:** forbidden in transient states &rarr; always deferred
+- **Teardown:** forbidden in transient states → always deferred
+- **Startup:** session creation ungated; boundaries evaluated after launch
 
-The _key insight_:  
-Viewer count alone cannot interrupt time-authoritative playout. Scheduled transitions must be allowed to complete or fail terminally before teardown. This ensures encoder correctness, prevents resource leaks, and keeps system states well-defined.
+The _key insights_:
 
-**Phase 12 + Phase 8**  
-= Full, rigorous specification for live playout session management.
+1. **Viewer count is advisory** during transient states. Scheduled transitions must complete or fail terminally before teardown.
+
+2. **Session creation is ungated.** A viewer tuning in is entitled to content immediately. Boundary feasibility is evaluated after launch, not before.
+
+3. **Startup convergence permits imperfection.** Infeasible boundaries during convergence are skipped, not fatal. The session must converge within a bounded window.
+
+4. **Filler is not special.** The current segment—whether primary or filler—is valid content. Playing it is never a violation.
+
+**Phase 12 + Phase 8**
+= Full, rigorous specification for live playout session management, from tune-in through teardown.
 
 <!-- End of pretty Phase 12 -->
