@@ -1,6 +1,6 @@
 # Phase 1 Execution Plan: Prevent Black/Silence
 
-**Status:** Actionable
+**Status:** ✅ Complete
 **Source:** ENFORCEMENT_ROADMAP.md Phase 1 rules
 **Last Updated:** 2026-02-01
 
@@ -10,12 +10,12 @@ Checklist grouped by subsystem. Status derived from Canonical Rule Ledger and te
 
 ## ProgramOutput
 
-| Rule ID | Test Exists? | Log Exists? | Action Required |
-|---------|--------------|-------------|-----------------|
-| **LAW-OUTPUT-LIVENESS** | Yes | Yes | **VERIFY** — Confirm test asserts "never blocks; no content → pad" explicitly |
-| **INV-STARVATION-FAILSAFE-001** | No | Yes | **ADD TEST** |
-| **INV-P10-SINK-GATE** | No | No | **ADD BOTH** |
-| **INV-AIR-CONTENT-BEFORE-PAD** | Yes | Yes | **VERIFY** — Test exists in Phase10PipelineFlowControlTests |
+| Rule ID | Test Exists? | Log Exists? | Status |
+|---------|--------------|-------------|--------|
+| **LAW-OUTPUT-LIVENESS** | Yes | Yes | ✅ Verified (P1-PO-004) |
+| **INV-STARVATION-FAILSAFE-001** | Yes | Yes | ✅ Test added (P1-PO-001) |
+| **INV-P10-SINK-GATE** | Yes | Yes | ✅ Both added (P1-PO-002, P1-PO-003) |
+| **INV-AIR-CONTENT-BEFORE-PAD** | Yes | Yes | ✅ Verified + test added (P1-PO-005) |
 
 ### Tests to Add — ProgramOutput
 
@@ -46,12 +46,12 @@ Assert: Buffer depth unchanged; no ConsumeVideo call
 
 ## EncoderPipeline
 
-| Rule ID | Test Exists? | Log Exists? | Action Required |
-|---------|--------------|-------------|-----------------|
-| **LAW-AUDIO-FORMAT** | No | No | **ADD TEST** |
-| **INV-AUDIO-HOUSE-FORMAT-001** | Partial | Yes | **ADD TEST** — Test exists but only checks format acceptance, not rejection |
-| **INV-ENCODER-NO-B-FRAMES-001** | No | Yes | **ADD TEST** |
-| **INV-AIR-IDR-BEFORE-OUTPUT** | Yes | Yes | **VERIFY** — Confirm gate reset on switch is tested |
+| Rule ID | Test Exists? | Log Exists? | Status |
+|---------|--------------|-------------|--------|
+| **LAW-AUDIO-FORMAT** | Yes | Yes | ✅ Test + log added (P1-EP-001, P1-EP-002) |
+| **INV-AUDIO-HOUSE-FORMAT-001** | Yes | Yes | ✅ Test added (P1-EP-003) |
+| **INV-ENCODER-NO-B-FRAMES-001** | Yes | Yes | ✅ Test added (P1-EP-004) |
+| **INV-AIR-IDR-BEFORE-OUTPUT** | Yes | Yes | ✅ Verified (P1-EP-005) |
 
 ### Tests to Add — EncoderPipeline
 
@@ -90,11 +90,11 @@ Assert: All packets are I or P frames; codec_ctx->max_b_frames == 0
 
 ## MpegTSOutputSink
 
-| Rule ID | Test Exists? | Log Exists? | Action Required |
-|---------|--------------|-------------|-----------------|
-| **INV-P9-BOOT-LIVENESS** | Yes | No | **ADD LOG** |
-| **INV-P9-AUDIO-LIVENESS** | Yes | No | **ADD LOG** |
-| **LAW-VIDEO-DECODABILITY** | Yes | Yes | **VERIFY** — Confirm IDR-first is tested at segment boundary |
+| Rule ID | Test Exists? | Log Exists? | Status |
+|---------|--------------|-------------|--------|
+| **INV-P9-BOOT-LIVENESS** | Yes | Yes | ✅ Log added (P1-MS-001) |
+| **INV-P9-AUDIO-LIVENESS** | Yes | Yes | ✅ Log added (P1-MS-002) |
+| **LAW-VIDEO-DECODABILITY** | Yes | Yes | ✅ Verified (P1-MS-003) |
 
 ### Tests to Add — MpegTSOutputSink
 
@@ -116,10 +116,10 @@ None required — tests exist.
 
 ## PlayoutEngine / Bootstrap
 
-| Rule ID | Test Exists? | Log Exists? | Action Required |
-|---------|--------------|-------------|-----------------|
-| **INV-P9-BOOTSTRAP-READY** | Yes | Yes | **VERIFY** — G9_002 test exists in Phase9OutputBootstrapTests |
-| **INV-P8-ZERO-FRAME-BOOTSTRAP** | Yes | No | **ADD LOG** |
+| Rule ID | Test Exists? | Log Exists? | Status |
+|---------|--------------|-------------|--------|
+| **INV-P9-BOOTSTRAP-READY** | Yes | Yes | ✅ Verified (P1-PE-002) |
+| **INV-P8-ZERO-FRAME-BOOTSTRAP** | Yes | Yes | ✅ Log added (P1-PE-001) |
 
 ### Tests to Add — PlayoutEngine
 
@@ -136,29 +136,29 @@ None required — tests exist.
 
 ## Summary Checklist
 
-### Tests to Add (5)
+### Tests Added (5) ✅
 
-- [ ] `TEST-INV-STARVATION-FAILSAFE-001` — ProgramOutput starvation → pad within bounded time
-- [ ] `TEST-INV-P10-SINK-GATE` — No consumption before sink attached
-- [ ] `TEST-LAW-AUDIO-FORMAT` — Non-house audio rejected at encoder
-- [ ] `TEST-INV-AUDIO-HOUSE-FORMAT-001-REJECTION` — Explicit rejection path tested
-- [ ] `TEST-INV-ENCODER-NO-B-FRAMES-001` — No B-frames in output
+- [x] `TEST-INV-STARVATION-FAILSAFE-001` — ProgramOutput starvation → pad within bounded time
+- [x] `TEST-INV-P10-SINK-GATE` — No consumption before sink attached
+- [x] `TEST-LAW-AUDIO-FORMAT` — Non-house audio rejected at encoder
+- [x] `TEST-INV-AUDIO-HOUSE-FORMAT-001-REJECTION` — Explicit rejection path tested
+- [x] `TEST-INV-ENCODER-NO-B-FRAMES-001` — No B-frames in output
 
-### Logs to Add (5)
+### Logs Added (5) ✅
 
-- [ ] `INV-P10-SINK-GATE` — Log when frame not consumed due to no sink
-- [ ] `LAW-AUDIO-FORMAT` — Log when non-house format rejected
-- [ ] `INV-P9-BOOT-LIVENESS` — Log first decodable TS emission with latency
-- [ ] `INV-P9-AUDIO-LIVENESS` — Log audio stream liveness confirmation
-- [ ] `INV-P8-ZERO-FRAME-BOOTSTRAP` — Log zero-frame segment gate bypass
+- [x] `INV-P10-SINK-GATE` — Log when frame not consumed due to no sink
+- [x] `LAW-AUDIO-FORMAT` — Log when non-house format rejected
+- [x] `INV-P9-BOOT-LIVENESS` — Log first decodable TS emission with latency
+- [x] `INV-P9-AUDIO-LIVENESS` — Log audio stream liveness confirmation
+- [x] `INV-P8-ZERO-FRAME-BOOTSTRAP` — Log zero-frame segment gate bypass
 
-### Tests to Verify (5)
+### Tests Verified (5) ✅
 
-- [ ] `LAW-OUTPUT-LIVENESS` — Confirm "never blocks" assertion exists
-- [ ] `INV-AIR-CONTENT-BEFORE-PAD` — Confirm gate logic tested (Phase10PipelineFlowControlTests)
-- [ ] `INV-AIR-IDR-BEFORE-OUTPUT` — Confirm gate reset on switch tested
-- [ ] `LAW-VIDEO-DECODABILITY` — Confirm IDR-first at segment boundary tested
-- [ ] `INV-P9-BOOTSTRAP-READY` — Confirm G9_002 covers commit + ≥1 frame
+- [x] `LAW-OUTPUT-LIVENESS` — Confirm "never blocks" assertion exists
+- [x] `INV-AIR-CONTENT-BEFORE-PAD` — Confirm gate logic tested (Phase10PipelineFlowControlTests)
+- [x] `INV-AIR-IDR-BEFORE-OUTPUT` — Confirm gate reset on switch tested
+- [x] `LAW-VIDEO-DECODABILITY` — Confirm IDR-first at segment boundary tested
+- [x] `INV-P9-BOOTSTRAP-READY` — Confirm G9_002 covers commit + ≥1 frame
 
 ---
 
@@ -177,10 +177,12 @@ None required — tests exist.
 
 Phase 1 is complete when:
 
-1. All 5 tests added and passing
-2. All 5 logs instrumented and emitting
-3. All 5 verification items confirmed
+1. ✅ All 5 tests added and passing
+2. ✅ All 5 logs instrumented and emitting
+3. ✅ All 5 verification items confirmed
 4. Zero Phase 1 rule violations in CI
+
+**Status:** Phase 1 implementation complete (2026-02-01).
 
 **Release Gate:** Any Phase 1 violation is a release blocker.
 
