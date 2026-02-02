@@ -231,7 +231,7 @@ Implementation is tracked in **CANONICAL_RULE_LEDGER.md § Phased Implementation
 | **11A** | P11A-001 through P11A-005 | INV-AUDIO-SAMPLE-CONTINUITY-001 |
 | **11B** | P11B-001 through P11B-006 | INV-BOUNDARY-TOLERANCE-001 (observability) |
 | **11C** | P11C-001 through P11C-005 | INV-BOUNDARY-DECLARED-001 |
-| **11D** | P11D-001 through P11D-008 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001, INV-CONTROL-NO-POLL-001 |
+| **11D** | P11D-001 through P11D-012 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001, INV-CONTROL-NO-POLL-001, INV-SCHED-PLAN-BEFORE-EXEC-001, INV-STARTUP-BOUNDARY-FEASIBILITY-001, INV-SWITCH-ISSUANCE-DEADLINE-001, INV-LEADTIME-MEASUREMENT-001 (observability) |
 | **11E** | P11E-001 through P11E-005 | (Core prefeed contract) |
 
 **Total new tasks:** 29
@@ -261,3 +261,18 @@ Implementation is tracked in **CANONICAL_RULE_LEDGER.md § Phased Implementation
 - [x] P11C-003: PlayoutEngine parse/log/store target_boundary_time_ms
 - [x] P11C-004: Core ChannelManager populates target_boundary_time_ms
 - [x] P11C-005: BoundaryDeclarationTests.TargetFlowsFromCoreToAir
+
+#### Phase 11D Checklist (Deadline-Authoritative Switching) — Closed 2026-02-02
+
+- [x] P11D-001: AIR schedule switch via MasterClock
+- [x] P11D-002: AIR execute switch at deadline regardless of readiness
+- [x] P11D-003: AIR safety rails if not ready at deadline
+- [x] P11D-004: AIR PROTOCOL_VIOLATION for insufficient lead time
+- [x] P11D-005: Core remove SwitchToLive retry loop
+- [x] P11D-006: Core LoadPreview with sufficient lead time
+- [x] P11D-007: Contract test switch within 1 frame of boundary
+- [x] P11D-008: Contract test late prefeed → PROTOCOL_VIOLATION
+- [x] P11D-009: Core planning-time feasibility (INV-SCHED-PLAN-BEFORE-EXEC-001)
+- [x] P11D-010: Core startup boundary feasibility (INV-STARTUP-BOUNDARY-FEASIBILITY-001)
+- [x] P11D-011: Core deadline-scheduled switch issuance (INV-SWITCH-ISSUANCE-DEADLINE-001)
+- [x] P11D-012: Core + AIR delta logging for lead-time / clock skew (INV-LEADTIME-MEASUREMENT-001 observability)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import collections
 import importlib.util
 import json
+import logging
 import os
 import queue
 import socket
@@ -154,6 +155,17 @@ RESULT_CODE_PROTOCOL_VIOLATION = 4  # Caller violated the protocol
 RESULT_CODE_FAILED = 5
 
 
+# P11D-005: Exceptions for SwitchToLive protocol (no retry)
+class SwitchTimingError(Exception):
+    """Raised when SwitchToLive issued with insufficient lead time (PROTOCOL_VIOLATION)."""
+    pass
+
+
+class SwitchProtocolError(Exception):
+    """Raised when AIR protocol contract violated (e.g. deprecated NOT_READY in deadline mode)."""
+    pass
+
+
 def log_core_intent_frame_range(
     *,
     channel_id: str,
@@ -248,18 +260,36 @@ def air_load_preview(
     return r.success
 
 
+# For delta logging only; must match channel_manager.MIN_PREFEED_LEAD_TIME (5s).
+_MIN_PREFEED_LEAD_TIME_MS = 5000
+
+
 def air_switch_to_live(
     grpc_addr: str,
     channel_id_int: int,
     timeout_s: int = 30,
     target_boundary_time_ms: int = 0,
-) -> tuple[bool, int]:
-    """Call Air SwitchToLive RPC. Returns (success, result_code). Raises on connection/RPC error.
+) -> tuple[bool, int, str]:
+    """Call Air SwitchToLive RPC. Returns (success, result_code, violation_reason). Raises on failure.
 
-    Phase 8: Returns result_code so caller can distinguish NOT_READY (transient) from errors.
+    P11D-005: INV-CONTROL-NO-POLL-001 — no retry. PROTOCOL_VIOLATION → SwitchTimingError;
+    NOT_READY → SwitchProtocolError (deprecated in deadline-authoritative mode).
     P11C-001: target_boundary_time_ms is the scheduled grid boundary (wall-clock ms). 0 = legacy/immediate.
     """
     import grpc
+
+    # P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation
+    issued_at_time_ms = int(time.time() * 1000)
+
+    if target_boundary_time_ms > 0:
+        lead_time_ms = target_boundary_time_ms - issued_at_time_ms
+        logging.getLogger(__name__).info(
+            "[SwitchToLive] Core issuing: issued_at_ms=%d target_boundary_ms=%d lead_time_ms=%d MIN_PREFEED_LEAD_TIME_MS=%d",
+            issued_at_time_ms,
+            target_boundary_time_ms,
+            lead_time_ms,
+            _MIN_PREFEED_LEAD_TIME_MS,
+        )
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
     with grpc.insecure_channel(grpc_addr) as ch:
@@ -268,11 +298,20 @@ def air_switch_to_live(
             playout_pb2.SwitchToLiveRequest(
                 channel_id=channel_id_int,
                 target_boundary_time_ms=target_boundary_time_ms,
+                issued_at_time_ms=issued_at_time_ms,
             ),
             timeout=timeout_s,
         )
     result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
-    return (r.success, result_code)
+    violation_reason = getattr(r, 'violation_reason', '') or ''
+    if r.success:
+        return (True, result_code, violation_reason)
+    # P11D-005: Treat PROTOCOL_VIOLATION and NOT_READY as fatal (no retry)
+    if result_code == RESULT_CODE_PROTOCOL_VIOLATION:
+        raise SwitchTimingError(violation_reason or "Insufficient prefeed lead time")
+    if result_code == RESULT_CODE_NOT_READY:
+        raise SwitchProtocolError("Unexpected NOT_READY in deadline-authoritative mode")
+    raise RuntimeError(r.message)
 
 
 def _launch_air_binary(
@@ -450,68 +489,37 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"AttachStream failed: {r.message}")
-        # Phase 7/8: SwitchToLive may return NOT_READY if preview buffer isn't filled yet.
-        # This is a transient state - retry with backoff until success or timeout.
-        # Phase 8: Use result_code for reliable detection (no message parsing).
-        _SWITCH_RETRY_ATTEMPTS = 20  # ~10 seconds total with backoff
-        _SWITCH_RETRY_BACKOFF_MS = 500  # Start at 500ms between retries
-        switch_ok = False
-        last_message = ""
-        first_not_ready_logged = False
-        switch_start_time = time.monotonic()
-        for attempt in range(_SWITCH_RETRY_ATTEMPTS):
-            r = _rpc(
-                "SwitchToLive",
-                lambda timeout: stub.SwitchToLive(
-                    playout_pb2.SwitchToLiveRequest(
-                        channel_id=channel_id_int,
-                        target_boundary_time_ms=0,  # Legacy: immediate switch at launch
-                    ),
-                    timeout=timeout,
+        # P11D-005/006: Single SwitchToLive call, no retry. Use deadline path so AIR never returns NOT_READY.
+        # Launch: target = now + 6s so AIR waits then ExecuteSwitchAtDeadline.
+        # We use 6s (not 5s) to provide margin for RPC latency; kMinPrefeedLeadTimeMs = 5000.
+        # P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation
+        issued_at_time_ms = int(time.time() * 1000)
+        launch_target_ms = issued_at_time_ms + 6000
+        lead_time_ms = launch_target_ms - issued_at_time_ms
+        logging.getLogger(__name__).info(
+            "[SwitchToLive] Core issuing (launch): issued_at_ms=%d target_boundary_ms=%d lead_time_ms=%d MIN_PREFEED_LEAD_TIME_MS=%d",
+            issued_at_time_ms, launch_target_ms, lead_time_ms, _MIN_PREFEED_LEAD_TIME_MS,
+        )
+        r = _rpc(
+            "SwitchToLive",
+            lambda timeout: stub.SwitchToLive(
+                playout_pb2.SwitchToLiveRequest(
+                    channel_id=channel_id_int,
+                    target_boundary_time_ms=launch_target_ms,
+                    issued_at_time_ms=issued_at_time_ms,
                 ),
-                _RPC_CONTROL_S,
-            )
-            if r.success:
-                switch_ok = True
-                elapsed_ms = (time.monotonic() - switch_start_time) * 1000
-                import logging
-                logging.getLogger(__name__).info(
-                    "SwitchToLive succeeded after %d attempts (%.0fms)", attempt + 1, elapsed_ms
-                )
-                break
-            last_message = r.message
-            # Phase 8: Use result_code for reliable retry detection
+                timeout=timeout,
+            ),
+            _RPC_CONTROL_S,
+        )
+        if not r.success:
             result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
-            is_retryable = (result_code == RESULT_CODE_NOT_READY)
-            # Fallback to message parsing for backward compatibility
-            if not is_retryable:
-                msg_lower = r.message.lower()
-                is_retryable = (
-                    "not ready" in msg_lower or
-                    "NOT_READY" in r.message or
-                    "preparing" in msg_lower or
-                    "transition started" in msg_lower or
-                    "waiting for preview" in msg_lower or
-                    "switch in progress" in msg_lower or
-                    "awaiting buffer" in msg_lower
-                )
-            if is_retryable:
-                if not first_not_ready_logged:
-                    import logging
-                    logging.getLogger(__name__).info(
-                        "SwitchToLive NOT_READY (attempt 1): %s - retrying up to %d times",
-                        r.message, _SWITCH_RETRY_ATTEMPTS
-                    )
-                    first_not_ready_logged = True
-                time.sleep(_SWITCH_RETRY_BACKOFF_MS / 1000.0)
-                continue
-            # Other errors are fatal
+            violation_reason = getattr(r, 'violation_reason', '') or ''
+            if result_code == RESULT_CODE_PROTOCOL_VIOLATION:
+                raise SwitchTimingError(violation_reason or "Insufficient prefeed lead time")
+            if result_code == RESULT_CODE_NOT_READY:
+                raise SwitchProtocolError("Unexpected NOT_READY in deadline-authoritative mode")
             raise RuntimeError(f"SwitchToLive failed: {r.message}")
-        if not switch_ok:
-            elapsed_ms = (time.monotonic() - switch_start_time) * 1000
-            raise RuntimeError(
-                f"SwitchToLive timed out after {_SWITCH_RETRY_ATTEMPTS} attempts ({elapsed_ms:.0f}ms): {last_message}"
-            )
 
     try:
         conn = reader_socket_queue.get(timeout=_UDS_ACCEPT_S)

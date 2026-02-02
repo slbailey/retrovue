@@ -10,6 +10,7 @@ This is an internal implementation detail. The public-facing product is RetroVue
 from __future__ import annotations
 
 import asyncio
+import math
 import json
 import sys
 import threading
@@ -18,6 +19,14 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
+
+
+# P11D-006: Minimum lead time between issuing SwitchToLive and target boundary (must match AIR kMinPrefeedLeadTimeMs).
+MIN_PREFEED_LEAD_TIME = timedelta(seconds=5)
+# P11D-010 INV-STARTUP-BOUNDARY-FEASIBILITY-001: Bounded upper limit on channel launch overhead (AIR spawn, gRPC, handshake).
+# First boundary MUST satisfy boundary_time >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME. Declared, not measured.
+# 7s so first boundary leaves cushion for 1s health-check cadence when issuing SwitchToLive.
+STARTUP_LATENCY = timedelta(seconds=7)
 
 
 class SwitchState(Enum):
@@ -117,6 +126,12 @@ class NoScheduleDataError(ChannelManagerError):
     This is considered an upstream scheduling failure, NOT permission for
     ChannelManager to improvise content.
     """
+
+    pass
+
+
+class SchedulingError(ChannelManagerError):
+    """P11D-006: Raised when scheduling would violate INV-CONTROL-NO-POLL-001 (e.g. insufficient lead time)."""
 
     pass
 
@@ -251,9 +266,15 @@ class ChannelManager:
 
         # Clock-driven segment switching (schedule advances because time advanced, not EOF).
         self._segment_end_time_utc: datetime | None = None  # When current segment ends (from schedule)
-        self._preload_lead_seconds: float = 3.0  # Load next segment this many seconds before segment end
-        self._switch_lead_seconds: float = 0.100  # Start calling SwitchToLive this many seconds before segment end (100ms)
+        # P11D-006: LoadPreview at T-7s so AIR has ≥MIN_PREFEED_LEAD_TIME before SwitchToLive
+        self._preload_lead_seconds: float = max(7.0, MIN_PREFEED_LEAD_TIME.total_seconds() + 2.0)
+        # P11D-011 INV-SWITCH-ISSUANCE-DEADLINE-001: Issuance is deadline-scheduled (issue_at = boundary - MIN_PREFEED_LEAD_TIME).
+        self._switch_lead_seconds: float = MIN_PREFEED_LEAD_TIME.total_seconds()
         self._last_switch_at_segment_end_utc: datetime | None = None  # Guard: fire switch_to_live() once per segment
+        # P11D-011: Deadline-scheduled switch issuance (not cadence-detected)
+        self._switch_issue_timer: threading.Timer | None = None
+        self._switch_issue_timer_lock: threading.Lock = threading.Lock()
+        self._pending_fatal: BaseException | None = None  # Set by timer callback if late/fatal; tick() re-raises
         # Phase 8: State machine for clock-driven switching (replaces boolean flags)
         self._switch_state: SwitchState = SwitchState.IDLE
 
@@ -297,6 +318,12 @@ class ChannelManager:
         self._switch_state = SwitchState.IDLE
         self._last_switch_at_segment_end_utc = None
         self._segment_readiness_violation_logged = False
+        # P11D-011: Cancel deadline-scheduled switch issuance
+        with self._switch_issue_timer_lock:
+            if self._switch_issue_timer is not None:
+                self._switch_issue_timer.cancel()
+                self._switch_issue_timer = None
+        self._pending_fatal = None
         # Reset CT-domain state
         self._segment_ct_start_us = None
         self._segment_frame_count = None
@@ -660,20 +687,54 @@ class ChannelManager:
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
         # Clock-driven switching: use end_time_utc from schedule for exact grid boundary timing.
-        # DO NOT calculate from station_time + duration - that's wrong for mid-segment joins.
+        # P11D-009 INV-SCHED-PLAN-BEFORE-EXEC-001: planning_time = station_utc (actual current station time).
+        # P11D-010 INV-STARTUP-BOUNDARY-FEASIBILITY-001: first boundary >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME.
+        station_utc = station_time if station_time.tzinfo else station_time.replace(tzinfo=timezone.utc)
+        planning_time = station_utc
+        startup_min_lead = STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME
         end_time_str = playout_plan[0].get("end_time_utc")
         if end_time_str:
             self._segment_end_time_utc = datetime.fromisoformat(end_time_str)
             if self._segment_end_time_utc.tzinfo is None:
                 self._segment_end_time_utc = self._segment_end_time_utc.replace(tzinfo=timezone.utc)
+            # Discard if earlier than startup feasibility; replace with first feasible when grid available
+            if (self._segment_end_time_utc - planning_time) < startup_min_lead:
+                segment_seconds_meta = playout_plan[0].get("metadata", {}).get("segment_seconds")
+                if segment_seconds_meta and segment_seconds_meta > 0:
+                    epoch_utc = datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+                    self._segment_end_time_utc = self._first_feasible_boundary(
+                        planning_time, float(segment_seconds_meta), epoch_utc, min_lead_timedelta=startup_min_lead
+                    )
+                else:
+                    raise SchedulingError(
+                        "INV-STARTUP-BOUNDARY-FEASIBILITY-001 FATAL: No feasible first boundary "
+                        "(end_time_utc < station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME, no segment_seconds)."
+                    )
         else:
-            # Fallback for legacy schedules without end_time_utc
-            duration_s = self._segment_duration_seconds(playout_plan[0])
-            if duration_s > 0:
-                self._segment_end_time_utc = station_time + timedelta(seconds=duration_s)
+            # Fallback for legacy/mock schedules without end_time_utc: select first boundary satisfying startup feasibility
+            segment_seconds_meta = playout_plan[0].get("metadata", {}).get("segment_seconds")
+            if segment_seconds_meta and segment_seconds_meta > 0:
+                epoch_utc = datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+                self._segment_end_time_utc = self._first_feasible_boundary(
+                    planning_time, float(segment_seconds_meta), epoch_utc, min_lead_timedelta=startup_min_lead
+                )
             else:
-                self._segment_end_time_utc = None
+                duration_s = self._segment_duration_seconds(playout_plan[0])
+                if duration_s > 0:
+                    self._segment_end_time_utc = station_utc + timedelta(seconds=duration_s)
+                else:
+                    self._segment_end_time_utc = None
+        # P11D-010: First boundary must satisfy startup feasibility; otherwise planning fails FATAL.
+        if self._segment_end_time_utc is not None and (self._segment_end_time_utc - planning_time) < startup_min_lead:
+            raise SchedulingError(
+                "INV-STARTUP-BOUNDARY-FEASIBILITY-001 FATAL: First boundary at "
+                f"{self._segment_end_time_utc.isoformat()} is infeasible for startup at {planning_time.isoformat()} "
+                f"(required >= station_utc + STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME)."
+            )
         self._switch_state = SwitchState.IDLE
+        # P11D-011: Schedule switch issuance at plan time (deadline-scheduled, not cadence-detected)
+        if self._segment_end_time_utc is not None:
+            self._schedule_switch_issuance(self._segment_end_time_utc)
 
         # =======================================================================
         # CT-Domain State Initialization (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION)
@@ -716,6 +777,103 @@ class ChannelManager:
         v = segment.get("metadata", {}).get("segment_seconds")
         return float(v) if v is not None else 0.0
 
+    def _first_feasible_boundary(
+        self,
+        planning_time: datetime,
+        segment_seconds: float,
+        epoch_utc: datetime,
+        min_lead_timedelta: timedelta | None = None,
+    ) -> datetime:
+        """P11D-009/010: First boundary feasible by construction, aligned to grid.
+
+        Planning discards any boundary earlier than planning_time + min_lead.
+        Default min_lead = MIN_PREFEED_LEAD_TIME. At channel launch pass min_lead_timedelta =
+        STARTUP_LATENCY + MIN_PREFEED_LEAD_TIME for INV-STARTUP-BOUNDARY-FEASIBILITY-001.
+        """
+        lead = min_lead_timedelta if min_lead_timedelta is not None else MIN_PREFEED_LEAD_TIME
+        min_lead_seconds = lead.total_seconds()
+        earliest_feasible = planning_time + timedelta(seconds=min_lead_seconds)
+        if epoch_utc.tzinfo is None:
+            epoch_utc = epoch_utc.replace(tzinfo=timezone.utc)
+        if earliest_feasible.tzinfo is None:
+            earliest_feasible = earliest_feasible.replace(tzinfo=timezone.utc)
+        earliest_s = (earliest_feasible - epoch_utc).total_seconds()
+        boundary_s = math.ceil(earliest_s / segment_seconds) * segment_seconds
+        return epoch_utc + timedelta(seconds=boundary_s)
+
+    def _schedule_switch_issuance(self, boundary_time: datetime) -> None:
+        """P11D-011 INV-SWITCH-ISSUANCE-DEADLINE-001: Register switch issuance at plan time; event fires at issue_at."""
+        if boundary_time.tzinfo is None:
+            boundary_time = boundary_time.replace(tzinfo=timezone.utc)
+        # Issue slightly earlier than strict deadline to absorb RPC latency (earlier is permitted)
+        _ISSUANCE_BUFFER = timedelta(seconds=0.5)
+        issue_at = boundary_time - MIN_PREFEED_LEAD_TIME - _ISSUANCE_BUFFER
+        now = self.clock.now_utc()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        delay = (issue_at - now).total_seconds()
+        with self._switch_issue_timer_lock:
+            if self._switch_issue_timer is not None:
+                self._switch_issue_timer.cancel()
+                self._switch_issue_timer = None
+        if delay <= 0:
+            self._on_switch_issue_deadline(boundary_time)
+            return
+        timer = threading.Timer(delay, self._on_switch_issue_deadline, args=[boundary_time])
+        with self._switch_issue_timer_lock:
+            self._switch_issue_timer = timer
+        timer.start()
+
+    def _on_switch_issue_deadline(self, boundary_time: datetime) -> None:
+        """P11D-011: Called at issue_at = boundary_time - MIN_PREFEED_LEAD_TIME (runs in timer thread or sync)."""
+        now = self.clock.now_utc()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        issue_at = boundary_time - MIN_PREFEED_LEAD_TIME
+        if boundary_time.tzinfo is None:
+            boundary_time = boundary_time.replace(tzinfo=timezone.utc)
+        with self._switch_issue_timer_lock:
+            self._switch_issue_timer = None
+        # Timer may fire a few ms late; treat as late only if >50ms past issue_at (timer resolution, not lead inflation)
+        if (now - issue_at).total_seconds() > 0.05:
+            self._pending_fatal = SchedulingError(
+                "INV-SWITCH-ISSUANCE-DEADLINE-001 FATAL: Late issuance (issue_at was "
+                f"{issue_at.isoformat()}, now={now.isoformat()}). Issuance must be deadline-scheduled."
+            )
+            self._logger.error(
+                "INV-SWITCH-ISSUANCE-DEADLINE-001 FATAL: Late switch issuance | channel=%s boundary=%s",
+                self.channel_id, boundary_time.isoformat(),
+            )
+            return
+        producer = self.active_producer
+        if producer is None or self._channel_state == "STOPPED":
+            return
+        if self._segment_end_time_utc != boundary_time:
+            return
+        if self._switch_state != SwitchState.PREVIEW_LOADED:
+            return
+        try:
+            ok = producer.switch_to_live(target_boundary_time_utc=boundary_time)
+        except (channel_manager_launch.SwitchTimingError, channel_manager_launch.SwitchProtocolError) as e:
+            self._pending_fatal = SchedulingError(
+                f"Infeasible boundary at {boundary_time}: boundary could not be honored (AIR: {e}). "
+                "Scheduling must reject at planning time."
+            )
+            self._pending_fatal.__cause__ = e
+            self._logger.error(
+                "INV-SCHED-PLAN-BEFORE-EXEC-001 FATAL: Infeasible boundary reached runtime | "
+                "channel=%s boundary=%s AIR rejected: %s",
+                self.channel_id, boundary_time.isoformat(), e,
+            )
+            return
+        self._switch_state = SwitchState.SWITCH_ARMED
+        self._logger.info(
+            "Channel %s switch armed at deadline T-%.3fs (boundary=%.3fs, successor=%s)",
+            self.channel_id, (boundary_time - now).total_seconds(), boundary_time.timestamp(),
+            self._successor_asset_path,
+        )
+        # Completion is polled by tick() Phase 3; do not call _handle_switch_complete from timer thread
+
     def tick(self) -> None:
         """
         Clock-driven segment advancement. Called periodically (e.g. from daemon health loop).
@@ -729,6 +887,11 @@ class ChannelManager:
         - If past exhaustion and preview is ready, switch immediately
         - This prevents pad frames when successor content is available
         """
+        # P11D-011: Re-raise fatal from deadline callback (e.g. late issuance or AIR rejection)
+        if self._pending_fatal is not None:
+            e = self._pending_fatal
+            self._pending_fatal = None
+            raise e
         if self._channel_state == "STOPPED" or self.active_producer is None:
             return
         producer = self.active_producer
@@ -760,7 +923,6 @@ class ChannelManager:
         # AIR to expose GetCTCursor RPC. When available, replace UTC comparisons
         # with: current_ct_us >= ct_exhaust_us - lead_us
         preload_at = segment_end - timedelta(seconds=self._preload_lead_seconds)
-        switch_at = segment_end - timedelta(seconds=self._switch_lead_seconds)
 
         # Phase 1: Preload - load next asset into preview buffer
         if self._switch_state == SwitchState.IDLE and now >= preload_at:
@@ -854,19 +1016,8 @@ class ChannelManager:
                             start_frame, frame_count, segment_type,
                         )
 
-        # Phase 2: Switch - start calling SwitchToLive at switch_at
-        if self._switch_state == SwitchState.PREVIEW_LOADED and now >= switch_at:
-            ok = producer.switch_to_live(target_boundary_time_utc=segment_end)  # P11C-004
-            self._switch_state = SwitchState.SWITCH_ARMED
-            self._logger.info(
-                "Channel %s switch armed at T-%.3fs (boundary=%.3fs, successor=%s)",
-                self.channel_id, (segment_end - now).total_seconds(), segment_end.timestamp(),
-                self._successor_asset_path,
-            )
-            if ok:
-                # Rare: switch completed immediately (buffers were already full)
-                self._handle_switch_complete(producer, segment_end, now)
-                return
+        # Phase 2: Switch issuance is deadline-scheduled (P11D-011 INV-SWITCH-ISSUANCE-DEADLINE-001),
+        # not cadence-detected. _schedule_switch_issuance(boundary) was called at plan time; timer fires at issue_at.
 
         # Phase 3: Poll for switch completion while SWITCH_ARMED
         if self._switch_state == SwitchState.SWITCH_ARMED and segment_end != self._last_switch_at_segment_end_utc:
@@ -991,6 +1142,9 @@ class ChannelManager:
             self._segment_frame_count = frame_count if frame_count and frame_count > 0 else None
 
             self._switch_state = SwitchState.IDLE
+            # P11D-011: Schedule next switch issuance at plan time (deadline-scheduled)
+            if self._segment_end_time_utc is not None:
+                self._schedule_switch_issuance(self._segment_end_time_utc)
         else:
             self._segment_end_time_utc = None
             self._segment_ct_start_us = None
@@ -1803,9 +1957,8 @@ class Phase8AirProducer(Producer):
     def switch_to_live(self, target_boundary_time_utc: datetime | None = None) -> bool:
         """Promote Air preview to live (clock-driven; no EOF). Returns success.
 
-        Phase 8: Uses result_code to distinguish NOT_READY (transient, expected)
-        from errors. NOT_READY logs at DEBUG level; errors log at WARNING.
-        P11C-004: INV-BOUNDARY-DECLARED-001 — pass target_boundary_time_utc so Air can measure timing.
+        P11D-005: INV-CONTROL-NO-POLL-001 — no retry. PROTOCOL_VIOLATION or NOT_READY raise.
+        P11C-004: INV-BOUNDARY-DECLARED-001 — pass target_boundary_time_utc so Air executes at deadline.
         """
         if not self._grpc_addr:
             self._logger.warning("Channel %s: switch_to_live skipped (no grpc_addr)", self.channel_id)
@@ -1814,25 +1967,21 @@ class Phase8AirProducer(Producer):
         if target_boundary_time_utc is not None:
             target_ms = int(target_boundary_time_utc.timestamp() * 1000)
             self._logger.info(
-                "INV-BOUNDARY-DECLARED-001: Declaring switch at target_boundary_time_ms=%d",
-                target_ms,
+                "INV-CONTROL-NO-POLL-001: Switch scheduled for %d", target_ms
             )
         try:
-            ok, result_code = channel_manager_launch.air_switch_to_live(
+            ok, _result_code, _violation_reason = channel_manager_launch.air_switch_to_live(
                 self._grpc_addr,
                 channel_id_int=self.channel_config.channel_id_int,
                 target_boundary_time_ms=target_ms,
             )
-            if not ok:
-                # Phase 8: NOT_READY is expected (transient), log at DEBUG
-                if result_code == channel_manager_launch.RESULT_CODE_NOT_READY:
-                    self._logger.debug("Channel %s: SwitchToLive NOT_READY (transient)", self.channel_id)
-                else:
-                    self._logger.warning(
-                        "Channel %s: Air SwitchToLive returned success=false (result_code=%d)",
-                        self.channel_id, result_code
-                    )
             return ok
+        except channel_manager_launch.SwitchTimingError as e:
+            self._logger.error("Channel %s: INV-CONTROL-NO-POLL-001 VIOLATION: %s", self.channel_id, e)
+            raise
+        except channel_manager_launch.SwitchProtocolError as e:
+            self._logger.error("Channel %s: INV-CONTROL-NO-POLL-001 VIOLATION: %s", self.channel_id, e)
+            raise
         except Exception as e:
             self._logger.warning("Channel %s: SwitchToLive failed: %s", self.channel_id, e)
             return False

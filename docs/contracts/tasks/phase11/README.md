@@ -36,10 +36,10 @@ The audit identified gaps between current implementation and broadcast-grade req
 | 11A | Audio Sample Continuity | 5 | Low | None |
 | 11B | Boundary Timing Observability | 6 | Very Low | None |
 | 11C | Declarative Boundary Protocol | 5 | Medium | None |
-| 11D | Deadline-Authoritative Switching | 8 | High | 11C |
+| 11D | Deadline-Authoritative Switching | 12 | High | 11C |
 | 11E | Prefeed Timing Contract | 5 | Medium | 11D |
 
-**Total: 29 tasks**
+**Total: 33 tasks**
 
 ## Execution Order
 
@@ -98,7 +98,7 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | [P11C-004](P11C-004.md) | FIX | Core | Populate target_boundary_time_ms from schedule |
 | [P11C-005](P11C-005.md) | TEST | Test | Integration test: target flows Core→AIR |
 
-### Phase 11D: Deadline-Authoritative Switching
+### Phase 11D: Deadline-Authoritative Switching — **Closed 2026-02-02**
 
 | Task | Type | Owner | Description |
 |------|------|-------|-------------|
@@ -110,6 +110,10 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | [P11D-006](P11D-006.md) | FIX | Core | Ensure LoadPreview with sufficient lead time |
 | [P11D-007](P11D-007.md) | TEST | Test | Contract test: switch within 1 frame of boundary |
 | [P11D-008](P11D-008.md) | TEST | Test | Contract test: late prefeed → PROTOCOL_VIOLATION |
+| [P11D-009](P11D-009.md) | FIX | Core | Enforce planning-time feasibility (INV-SCHED-PLAN-BEFORE-EXEC-001) |
+| [P11D-010](P11D-010.md) | FIX | Core | Enforce startup boundary feasibility (INV-STARTUP-BOUNDARY-FEASIBILITY-001) |
+| [P11D-011](P11D-011.md) | FIX | Core | Deadline-scheduled switch issuance (INV-SWITCH-ISSUANCE-DEADLINE-001) |
+| [P11D-012](P11D-012.md) | FIX | Core+AIR | Lead-time measurement / delta logging (INV-LEADTIME-MEASUREMENT-001) |
 
 ### Phase 11E: Prefeed Timing Contract
 
@@ -128,6 +132,9 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | INV-BOUNDARY-TOLERANCE-001 | Grid transitions within 1 frame of boundary |
 | INV-BOUNDARY-DECLARED-001 | SwitchToLive carries target_boundary_time_ms |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | No audio drops under backpressure |
+| INV-SCHED-PLAN-BEFORE-EXEC-001 | Scheduling feasibility determined at planning time, not runtime |
+| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | First boundary must satisfy startup latency + MIN_PREFEED_LEAD_TIME |
+| INV-SWITCH-ISSUANCE-DEADLINE-001 | Switch issuance deadline-scheduled, not cadence-detected |
 | INV-CONTROL-NO-POLL-001 | No poll/retry for switch readiness |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Switch at declared time regardless of readiness |
 

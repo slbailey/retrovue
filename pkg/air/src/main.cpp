@@ -58,11 +58,11 @@ ServerConfig ParseArgs(int argc, char** argv) {
 }
 
 void RunServer(const ServerConfig& config) {
-  // Create and start metrics exporter
+  // Create and start metrics exporter (non-fatal: continue without metrics if port in use)
   auto metrics_exporter = std::make_shared<retrovue::telemetry::MetricsExporter>(9308);
   if (!metrics_exporter->Start()) {
-    std::cerr << "Failed to start metrics exporter" << std::endl;
-    return;
+    std::cerr << "Warning: metrics server failed to start (port 9308 may be in use), continuing without metrics"
+              << std::endl;
   }
 
   const auto epoch_now = std::chrono::duration_cast<std::chrono::microseconds>(

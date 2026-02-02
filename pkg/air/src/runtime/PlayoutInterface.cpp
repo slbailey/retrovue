@@ -55,14 +55,16 @@ InterfaceResult PlayoutInterface::LoadPreview(
   return interface_result;
 }
 
-InterfaceResult PlayoutInterface::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms) {
-  // Delegate to domain engine (P11C-001: target_boundary_time_ms; P11B-001: result.switch_completion_time_ms)
-  auto result = engine_->SwitchToLive(channel_id, target_boundary_time_ms);
+InterfaceResult PlayoutInterface::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms, int64_t issued_at_time_ms) {
+  // Delegate to domain engine (P11C-001: target_boundary_time_ms; P11B-001: result.switch_completion_time_ms; P11D-004: violation_reason)
+  // P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation
+  auto result = engine_->SwitchToLive(channel_id, target_boundary_time_ms, issued_at_time_ms);
   InterfaceResult interface_result(result.success, result.message);
   interface_result.pts_contiguous = result.pts_contiguous;
   interface_result.live_start_pts = result.live_start_pts;
-  interface_result.result_code = result.result_code;  // Phase 8: Forward typed result
+  interface_result.result_code = result.result_code;
   interface_result.switch_completion_time_ms = result.switch_completion_time_ms;
+  interface_result.violation_reason = result.violation_reason;
   return interface_result;
 }
 
