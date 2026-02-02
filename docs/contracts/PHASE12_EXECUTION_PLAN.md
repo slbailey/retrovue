@@ -108,6 +108,15 @@ Phase 12 is purely runtime state. No database migrations or persistent storage c
 | P12-CORE-009 | Cancel transient timers on FAILED_TERMINAL entry | `channel_manager.py` | INV-TERMINAL-TIMER-CLEARED-001 | P12-CORE-008 |
 | P12-TEST-007 | Contract test: scheduler halts in FAILED_TERMINAL | `test_channel_manager_teardown.py` | INV-TERMINAL-SCHEDULER-HALT-001 | P12-CORE-008 |
 | P12-TEST-008 | Contract test: timers cancelled on FAILED_TERMINAL | `test_channel_manager_teardown.py` | INV-TERMINAL-TIMER-CLEARED-001 | P12-CORE-009 |
+| **Startup Convergence Amendment (2026-02)** ||||
+| P12-CORE-010 | Ungate session creation from boundary feasibility | `channel_manager.py`, `channel_manager_launch.py` | INV-SESSION-CREATION-UNGATED-001 | P12-CORE-001 |
+| P12-CORE-011 | Implement startup convergence tracking (`_converged` flag) | `channel_manager.py` | INV-STARTUP-CONVERGENCE-001 | P12-CORE-010 |
+| P12-CORE-012 | Implement boundary skip logic during convergence | `channel_manager.py` | INV-STARTUP-CONVERGENCE-001 | P12-CORE-011 |
+| P12-CORE-013 | Add convergence timeout enforcement | `channel_manager.py` | INV-STARTUP-CONVERGENCE-001 | P12-CORE-011 |
+| P12-TEST-009 | Contract test: session creation ungated | `test_channel_manager_startup.py` | INV-SESSION-CREATION-UNGATED-001 | P12-CORE-010 |
+| P12-TEST-010 | Contract test: boundary skip during convergence | `test_channel_manager_startup.py` | INV-STARTUP-CONVERGENCE-001 | P12-CORE-012 |
+| P12-TEST-011 | Contract test: convergence timeout forces FAILED_TERMINAL | `test_channel_manager_startup.py` | INV-STARTUP-CONVERGENCE-001 | P12-CORE-013 |
+| P12-TEST-012 | Contract test: post-convergence feasibility enforced | `test_channel_manager_startup.py` | INV-STARTUP-CONVERGENCE-001 | P12-CORE-011 |
 
 ### 3.1 Dependency Graph
 
@@ -138,6 +147,68 @@ P12-CORE-005 ──► P12-CORE-008 ──► P12-CORE-009
                       │                │
                       ▼                ▼
                 P12-TEST-007     P12-TEST-008
+
+                    ┌──────────────────────┐
+                    │  Startup Convergence │
+                    │  Amendment (2026-02) │
+                    └──────────────────────┘
+                              │
+P12-CORE-001 ──► P12-CORE-010 ──► P12-CORE-011
+                (Ungate session)  (Convergence flag)
+                      │                │
+                      ▼          ┌─────┴─────┐
+                P12-TEST-009     ▼           ▼
+                           P12-CORE-012  P12-CORE-013
+                           (Boundary skip) (Timeout)
+                                 │           │
+                                 ▼           ▼
+                           P12-TEST-010  P12-TEST-011
+                                 │
+                                 ▼
+                           P12-TEST-012
+```
+
+### 3.2 Next Tasks Possible (Startup Convergence Amendment)
+
+**Prerequisites met:** P12-CORE-001 through P12-CORE-009 and P12-TEST-001 through P12-TEST-008 are complete. The following branch is unblocked.
+
+**Core and test status:** P12-CORE-010 through P12-CORE-013 and P12-TEST-009 through P12-TEST-012 are **complete** (2026-02-02). Startup Convergence Amendment fully implemented.
+
+**Entry point:** P12-CORE-010 (depends only on P12-CORE-001 ✅).
+
+**Recommended order:**
+
+| Step | Task ID | Purpose | Blocked By |
+|------|---------|---------|------------|
+| 1 | P12-CORE-010 | Ungate session creation from boundary feasibility | P12-CORE-001 ✅ |
+| 2 | P12-CORE-011 | Implement startup convergence tracking (`_converged` flag) | P12-CORE-010 ✅ |
+| 3a | P12-CORE-012 | Boundary skip logic during convergence | P12-CORE-011 ✅ |
+| 3b | P12-CORE-013 | Convergence timeout enforcement | P12-CORE-011 ✅ |
+| 4 | P12-TEST-009 | Contract test: session creation ungated | P12-CORE-010 ✅ |
+| 5 | P12-TEST-010 | Contract test: boundary skip during convergence | P12-CORE-012 ✅ |
+| 6 | P12-TEST-011 | Contract test: convergence timeout forces FAILED_TERMINAL | P12-CORE-013 ✅ |
+| 7 | P12-TEST-012 | Contract test: post-convergence feasibility enforced | P12-CORE-011 ✅ |
+
+**Parallelism:** After P12-CORE-011, P12-CORE-012 and P12-CORE-013 can be done in parallel. P12-TEST-009 can be started as soon as P12-CORE-010 is done; P12-TEST-010/011/012 after their respective Core tasks.
+
+**Minimal critical path:** P12-CORE-001 → P12-CORE-010 → P12-CORE-011 → (P12-CORE-012 | P12-CORE-013) → P12-TEST-009/010/011/012
+
+**Next possible dependency chain (Startup Convergence):**
+
+```
+P12-CORE-001 ✅ ──► P12-CORE-010 ──► P12-CORE-011
+                    (Ungate session)  (_converged flag)
+                          │                │
+                          ▼          ┌─────┴─────┐
+                    P12-TEST-009     ▼           ▼
+                           P12-CORE-012  P12-CORE-013
+                           (Boundary skip) (Timeout)
+                                 │           │
+                                 ▼           ▼
+                           P12-TEST-010  P12-TEST-011
+                                 │
+                                 ▼
+                           P12-TEST-012
 ```
 
 ---
@@ -206,16 +277,18 @@ Phase 12 execution plan **does not** address:
 
 | Metric | Value |
 |--------|-------|
-| Core implementation tasks | 9 |
-| Contract tests | 8 (minimum) |
-| New runtime state fields | 3 |
-| Invariants enforced | 7 |
+| Core implementation tasks | 13 |
+| Contract tests | 12 (minimum) |
+| New runtime state fields | 5 |
+| Invariants enforced | 9 |
 
 **Critical path:** P12-CORE-001 → P12-CORE-002 → P12-CORE-003 (enables deferred teardown) → P12-TEST-001/002 (validates correctness)
 
 **Terminal semantics path:** P12-CORE-005 → P12-CORE-008 (scheduler halt) → P12-CORE-009 (timer clear) → P12-TEST-007/008 (validates absorbing properties)
 
-**Exit criteria:** All contract tests pass; no teardown during transient states observable in logs; no AIR orphanment incidents; no scheduling intent after FAILED_TERMINAL; no ghost timer callbacks.
+**Startup convergence path:** P12-CORE-001 → P12-CORE-010 (ungate session) → P12-CORE-011 (convergence flag) → P12-CORE-012/013 (skip/timeout) → P12-TEST-009/010/011/012 (validates convergence)
+
+**Exit criteria:** All contract tests pass; no teardown during transient states observable in logs; no AIR orphanment incidents; no scheduling intent after FAILED_TERMINAL; no ghost timer callbacks; session creation never blocked by boundary timing; infeasible boundaries skipped during convergence.
 
 ---
 
