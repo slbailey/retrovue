@@ -1478,6 +1478,7 @@ namespace retrovue::producers::file
       // ==========================================================================
       uint64_t shadow_audio_buffered = 0;
       uint64_t shadow_video_buffered = 0;
+      bool video_preroll_complete = false;  // INV-P8-SHADOW-PREROLL-STOP: Stop video decode when buffer full
       std::cout << "[FileProducer] INV-P8-SHADOW-PREROLL: Entering "
                 << "(audio_depth=" << output_buffer_.AudioSize()
                 << ", video_depth=" << output_buffer_.Size() << ")" << std::endl;
@@ -1535,7 +1536,18 @@ namespace retrovue::producers::file
           // Decode video frames during shadow preroll so the buffer is populated
           // at switch time. First frame is already cached; subsequent frames fill
           // the buffer for seamless playback after the switch.
+          //
+          // INV-P8-SHADOW-PREROLL-STOP: Once video buffer is full, STOP decoding
+          // video packets entirely. This prevents frame_ from advancing past the
+          // buffered content, which would cause REJECTED_EARLY after the switch.
           // =======================================================================
+          if (video_preroll_complete) {
+            // Video buffer already full - discard packet without decoding
+            // This prevents frame_ from advancing past buffered content
+            av_packet_unref(packet_);
+            continue;
+          }
+
           video_packets_processed_++;
           ret = avcodec_send_packet(codec_ctx_, packet_);
           av_packet_unref(packet_);
@@ -1563,6 +1575,7 @@ namespace retrovue::producers::file
 
               // Check video buffer capacity before push
               if (output_buffer_.IsFull()) {
+                video_preroll_complete = true;  // INV-P8-SHADOW-PREROLL-STOP: Mark complete
                 break;  // Buffer full, preroll complete for video
               }
 
@@ -1595,6 +1608,34 @@ namespace retrovue::producers::file
                   << "skipping to next frame" << std::endl;
         // Frame was already pushed by FlushCachedFrameToBuffer(), skip this frame
         return true;  // Return success to continue producing next frame
+      }
+
+      // =========================================================================
+      // INV-P8-SHADOW-STALE-FRAME-DISCARD: Handle flush failure due to buffer full
+      // =========================================================================
+      // If we reach here, cached_frame_flushed_ is false, meaning FlushCachedFrameToBuffer
+      // either wasn't called or failed. If the buffer is full, the flush failed because
+      // there was no room for the cached frame (frame 624). In this case:
+      //   - Buffer contains frames 625-684 (shadow preroll content)
+      //   - frame_ holds the last decoded frame (684 or later)
+      //   - The cached frame (624) is NOT in the buffer
+      //
+      // We must NOT process frame_ through AdmitFrame because:
+      //   1. The segment mapping expects frames starting at the cached frame's MT
+      //   2. frame_ is past the buffered content, would be REJECTED_EARLY
+      //   3. This would cause buffer starvation and pad frame emission
+      //
+      // Solution: Discard frame_ and return. ProgramOutput will consume the buffered
+      // frames (625-684). The missing cached frame (624) is a gap, but better than
+      // total buffer starvation. The TimelineController will handle the MT discontinuity.
+      // =========================================================================
+      if (output_buffer_.IsFull()) {
+        std::cout << "[FileProducer] INV-P8-SHADOW-STALE-FRAME-DISCARD: Buffer full after shadow exit, "
+                  << "discarding stale frame_ (MT=" << base_pts_us << "us) to prevent REJECTED_EARLY cascade"
+                  << std::endl;
+        // Don't process frame_ - it's past the buffer content
+        // Return true to continue producing (will decode fresh frames)
+        return true;
       }
 
       // Shadow disabled - update local variable so this frame goes through AdmitFrame
@@ -2360,7 +2401,31 @@ namespace retrovue::producers::file
           cached_frame_flushed_.store(true, std::memory_order_release);
           return true;
         } else {
-          std::cerr << "[FileProducer] WARNING: FlushCachedFrameToBuffer buffer full" << std::endl;
+          // =========================================================================
+          // INV-P8-SHADOW-FLUSH-BUFFER-FULL: Buffer full during flush
+          // =========================================================================
+          // The buffer filled during shadow preroll before flush was called.
+          // This means frames 625+ are already in the buffer, but frame 624 (the
+          // cached first frame) couldn't be inserted.
+          //
+          // We must handle this gracefully:
+          // 1. Log a warning about the dropped frame
+          // 2. Clear cached_first_frame_ to prevent orphan
+          // 3. Set cached_frame_flushed_=true so producer thread discards frame_
+          //    (which is past the buffered content and would cause REJECTED_EARLY)
+          // 4. Return true to indicate switch can proceed (with 1 frame gap)
+          //
+          // The alternative (returning false) causes worse problems: the producer
+          // thread would try to use frame_ which is far ahead, causing a cascade
+          // of REJECTED_EARLY and eventual buffer starvation with pad frames.
+          // =========================================================================
+          std::cerr << "[FileProducer] INV-P8-SHADOW-FLUSH-BUFFER-FULL: Buffer full (depth="
+                    << output_buffer_.Size() << "), cached frame MT=" << media_time_us
+                    << "us dropped. Buffer contains subsequent frames; accepting 1-frame gap."
+                    << std::endl;
+          cached_first_frame_.reset();
+          cached_frame_flushed_.store(true, std::memory_order_release);
+          return true;  // Proceed with switch despite dropped frame
         }
       } else {
         std::cerr << "[FileProducer] WARNING: FlushCachedFrameToBuffer frame rejected by AdmitFrame: "

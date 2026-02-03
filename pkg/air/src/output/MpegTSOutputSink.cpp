@@ -115,14 +115,15 @@ bool MpegTSOutputSink::Start() {
   std::cout << "[MpegTSOutputSink] Prebuffering DISABLED (INV-P8-IO-UDS-001)" << std::endl;
 
   // =========================================================================
-  // INV-P10-PCR-PACED-MUX: Disable audio liveness injection
+  // INV-P9-IMMEDIATE-OUTPUT: Keep audio liveness ENABLED at startup
   // =========================================================================
-  // With PCR-paced mux, producer audio is authoritative. Silence injection
-  // would create competing audio sources, causing PTS discontinuities.
-  // If audio queue is empty, the mux loop stalls (correct behavior).
+  // Professional broadcast systems output decodable content immediately.
+  // At startup, we emit pad frames + silence until real content is ready.
+  // Silence injection is only disabled AFTER real audio is confirmed flowing.
+  // This prevents MuxLoop stalls when audio queue is empty at startup.
   // =========================================================================
-  encoder_->SetAudioLivenessEnabled(false);
-  std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Silence injection DISABLED" << std::endl;
+  encoder_->SetAudioLivenessEnabled(true);
+  std::cout << "[MpegTSOutputSink] INV-P9-IMMEDIATE-OUTPUT: Silence injection ENABLED (until real audio flows)" << std::endl;
 
   // Start mux thread
   stop_requested_.store(false, std::memory_order_release);
@@ -367,13 +368,14 @@ void MpegTSOutputSink::MuxLoop() {
         }
 
         // =====================================================================
-        // INV-P9-STEADY-008: Disable silence injection on steady-state entry
+        // INV-P9-IMMEDIATE-OUTPUT: Do NOT disable silence injection yet
         // =====================================================================
-        // Silence injection MUST be disabled when steady-state begins.
-        // Producer audio is the ONLY audio source.
-        // When audio queue is empty, mux MUST stall (video waits with audio).
+        // Silence injection remains ENABLED until real audio is confirmed.
+        // This ensures decodable output (pad + silence) from the first frame.
+        // The transition to producer-authoritative audio happens when the
+        // first real audio packet is emitted (see audio emit path below).
         // =====================================================================
-        silence_injection_disabled_.store(true, std::memory_order_release);
+        // silence_injection_disabled_ stays false until real audio flows
 
         // Log with evidence fields for contract verification and testing
         std::cout << "[MpegTSOutputSink] INV-P9-STEADY-STATE: entered"
@@ -383,10 +385,7 @@ void MpegTSOutputSink::MuxLoop() {
                   << " aq_depth=" << aq_size
                   << " wall_epoch_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
                          wall_epoch.time_since_epoch()).count()
-                  << std::endl;
-
-        // INV-P9-STEADY-008: Log proof that silence injection is disabled
-        std::cout << "[MpegTSOutputSink] INV-P9-STEADY-008: silence_injection_disabled=true"
+                  << " silence_injection=ENABLED_UNTIL_REAL_AUDIO"
                   << std::endl;
 
         // P9-OPT-002: Report steady-state active to metrics
@@ -629,6 +628,20 @@ void MpegTSOutputSink::MuxLoop() {
             }
             std::cout << "[MpegTSOutputSink] INV-P9-AUDIO-LIVENESS: Audio stream live, first_audio_pts="
                       << audio_frame.pts_us << ", header_write_time=" << header_write_time << std::endl;
+
+            // =====================================================================
+            // INV-P9-IMMEDIATE-OUTPUT: Transition to producer-authoritative audio
+            // =====================================================================
+            // Now that real audio is flowing, disable silence injection.
+            // From this point, if audio queue is empty, MuxLoop will stall
+            // (correct behavior once real audio is established).
+            // =====================================================================
+            silence_injection_disabled_.store(true, std::memory_order_release);
+            if (encoder_) {
+              encoder_->SetAudioLivenessEnabled(false);
+            }
+            std::cout << "[MpegTSOutputSink] INV-P9-IMMEDIATE-OUTPUT: Real audio confirmed, "
+                      << "silence injection DISABLED (producer audio authoritative)" << std::endl;
           }
 
         }

@@ -349,6 +349,22 @@ int64_t TimelineController::GetSegmentMTStart() const {
   return segment_mapping_ ? segment_mapping_->mt_segment_start_us : -1;
 }
 
+void TimelineController::AdvanceCursorForPreBufferedFrames(size_t frame_count) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  if (frame_count == 0) {
+    return;
+  }
+
+  int64_t advance_us = static_cast<int64_t>(frame_count) * config_.frame_period_us;
+  int64_t old_cursor = ct_cursor_us_;
+  ct_cursor_us_ += advance_us;
+
+  std::cout << "[TimelineController] INV-P8-SHADOW-PREROLL-SYNC: ct_cursor advanced by "
+            << frame_count << " frames (" << advance_us << "us): "
+            << old_cursor << "us -> " << ct_cursor_us_ << "us" << std::endl;
+}
+
 int64_t TimelineController::GetWallClockDeadline(int64_t ct_us) const {
   std::lock_guard<std::mutex> lock(mutex_);
   return epoch_us_ + ct_us;
