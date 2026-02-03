@@ -299,6 +299,13 @@ void ProgramOutput::RenderLoop() {
 
     if (stop_requested_.load(std::memory_order_acquire)) break;
 
+    // =========================================================================
+    // INV-P9-STEADY-005: Check buffer equilibrium (P9-CORE-008)
+    // =========================================================================
+    // Monitor buffer depth during steady-state and warn if outside [1, 2N].
+    // Rate-limited internally to 1-second samples; logs rate-limited to 5 seconds.
+    CheckBufferEquilibrium();
+
     // Phase 7: Get current buffer pointer under lock to support hot-switching.
     buffer::FrameRingBuffer* current_buffer;
     {
@@ -324,6 +331,12 @@ void ProgramOutput::RenderLoop() {
     const int64_t frame_lateness_us = now_wall_us - next_deadline_us;
 
     if (!current_buffer->Pop(frame)) {
+      // P8-FILL-002 INV-P8-CONTENT-DEFICIT-FILL-001: Content deficit (EOF before boundary)
+      // Emit pad immediately when buffer empty; no freeze window.
+      if (content_deficit_active_ptr_ && content_deficit_active_ptr_->load(std::memory_order_acquire) && first_real_frame_emitted_) {
+        goto emit_pad_frame;
+      }
+
       // =========================================================================
       // INV-AIR-CONTENT-BEFORE-PAD: Gate pad/freeze until first real frame
       // =========================================================================
@@ -427,13 +440,23 @@ emit_pad_frame:
       }
 
       // -----------------------------------------------------------------------
-      // INV-NO-PAD-WHILE-DEPTH-HIGH: Log violation if pad emitted while depth >= 10
+      // INV-P9-STEADY-004: No Pad While Depth High
+      // -----------------------------------------------------------------------
+      // Pad frame emission while buffer depth >= 10 is a CONTRACT VIOLATION.
+      // Log with: depth, steady-state flag, timestamp, violation count.
       // -----------------------------------------------------------------------
       if (video_depth_before_pop >= kDepthHighThreshold) {
         pad_while_depth_high_++;
-        std::cout << "[ProgramOutput] INV-NO-PAD-WHILE-DEPTH-HIGH VIOLATION: Pad emitted while depth="
+        const int64_t wall_us = clock_ ? clock_->now_utc_us()
+                                       : std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool steady_state = first_real_frame_emitted_;  // Proxy: post-first-frame = steady-state
+        std::cout << "[ProgramOutput] INV-P9-STEADY-004 VIOLATION: Pad emitted while depth="
                   << video_depth_before_pop << " >= " << kDepthHighThreshold
-                  << " (violations=" << pad_while_depth_high_ << ")" << std::endl;
+                  << ", steady_state=" << (steady_state ? "true" : "false")
+                  << ", wall_us=" << wall_us
+                  << ", violations=" << pad_while_depth_high_
+                  << std::endl;
       }
 
       if (!pad_frame_initialized_) {
@@ -466,6 +489,11 @@ emit_pad_frame:
       using_pad_frame = true;
       pad_frames_emitted_++;
 
+      if (content_deficit_active_ptr_ && content_deficit_active_ptr_->load(std::memory_order_acquire)) {
+        if (pad_frames_emitted_ == 1 || pad_frames_emitted_ % 30 == 0) {
+          std::cout << "[ProgramOutput] DEFICIT_PAD_FRAME ct=" << pad_pts_us << std::endl;
+        }
+      }
       if (pad_frames_emitted_ == 1 || pad_frames_emitted_ % 30 == 0) {
         std::cout << "[ProgramOutput] INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #"
                   << pad_frames_emitted_ << " at PTS=" << pad_pts_us << "us"
@@ -992,6 +1020,10 @@ void ProgramOutput::SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback c
   on_successor_video_emitted_ = std::move(callback);
 }
 
+void ProgramOutput::SetContentDeficitActiveFlag(std::atomic<bool>* flag) {
+  content_deficit_active_ptr_ = flag;
+}
+
 int64_t ProgramOutput::GetLastEmittedPTS() const {
   // Phase 7: Return last emitted PTS for continuity across segment boundaries
   // This is read by SwitchToLive to align the next segment's PTS
@@ -1047,6 +1079,107 @@ buffer::AudioFrame ProgramOutput::GeneratePadAudio(int64_t pts_us, int nb_sample
   audio.data.resize(data_size, 0);
 
   return audio;
+}
+
+// =============================================================================
+// INV-P9-STEADY-005: Buffer Equilibrium Sustained (P9-CORE-008, P9-OPT-001)
+// =============================================================================
+// Monitors buffer depth during steady-state and warns if outside equilibrium
+// range [1, 2N] for > 1 second. Rate-limited to avoid log spam.
+//
+// Called from RenderLoop on every iteration; internally rate-limits to 1s samples.
+// Uses steady_clock for timing (not MasterClock) since this is observability.
+// =============================================================================
+void ProgramOutput::CheckBufferEquilibrium() {
+  // Only monitor during steady-state (after first real frame emitted)
+  if (!first_real_frame_emitted_) {
+    return;
+  }
+
+  // Use steady_clock directly for wall-clock timing (not affected by test clocks)
+  // This is appropriate because equilibrium monitoring is observability, not PTS-based
+  const int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+
+  // Rate-limit sampling to kEquilibriumSampleIntervalUs (1 second)
+  if (equilibrium_last_check_us_ > 0 &&
+      (now_us - equilibrium_last_check_us_) < kEquilibriumSampleIntervalUs) {
+    return;
+  }
+  equilibrium_last_check_us_ = now_us;
+
+  // Sample current buffer depth
+  size_t depth = 0;
+  {
+    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+    depth = input_buffer_->Size();
+  }
+  equilibrium_last_depth_ = depth;
+
+  // Check if depth is within equilibrium range [1, 2N]
+  const bool in_range = (depth >= static_cast<size_t>(kEquilibriumMinDepth) &&
+                         depth <= static_cast<size_t>(kEquilibriumMaxDepth));
+
+  if (!in_range) {
+    // Outside equilibrium range
+    if (!equilibrium_in_violation_) {
+      // Start of new violation episode
+      equilibrium_in_violation_ = true;
+      equilibrium_violation_start_us_ = now_us;
+    } else {
+      // Ongoing violation - check if > 1 second
+      const int64_t violation_duration_us = now_us - equilibrium_violation_start_us_;
+      if (violation_duration_us > 1'000'000) {  // > 1 second
+        // This is a sustained violation - increment counter
+        // Only increment once per crossing of the 1s threshold
+        static int64_t last_increment_us = 0;
+        if (equilibrium_violation_start_us_ != last_increment_us) {
+          equilibrium_violations_total_++;
+          last_increment_us = equilibrium_violation_start_us_;
+
+          // INV-P9-STEADY-005: Report to MetricsExporter if available
+          if (metrics_) {
+            metrics_->IncrementEquilibriumViolations(channel_id_);
+          }
+        }
+
+        // Rate-limit warning log to avoid spam (max 1 per 5 seconds per P9-OPT-001)
+        if (equilibrium_last_log_us_ == 0 ||
+            (now_us - equilibrium_last_log_us_) >= kEquilibriumLogRateLimitUs) {
+          equilibrium_last_log_us_ = now_us;
+
+          const int64_t duration_ms = violation_duration_us / 1000;
+          const char* direction = (depth < static_cast<size_t>(kEquilibriumMinDepth))
+                                      ? "LOW (possible underrun)"
+                                      : "HIGH (possible backpressure)";
+
+          std::cout << "[ProgramOutput] INV-P9-STEADY-005 WARNING: "
+                    << "Buffer depth " << depth << " outside equilibrium range ["
+                    << kEquilibriumMinDepth << ", " << kEquilibriumMaxDepth << "] "
+                    << "for " << duration_ms << "ms - " << direction
+                    << ", violations_total=" << equilibrium_violations_total_
+                    << std::endl;
+        }
+      }
+    }
+  } else {
+    // Back in equilibrium range - reset violation state
+    if (equilibrium_in_violation_) {
+      const int64_t violation_duration_us = now_us - equilibrium_violation_start_us_;
+      if (violation_duration_us > 1'000'000) {
+        std::cout << "[ProgramOutput] INV-P9-STEADY-005: "
+                  << "Buffer equilibrium restored, depth=" << depth
+                  << ", was out of range for " << (violation_duration_us / 1000) << "ms"
+                  << std::endl;
+      }
+    }
+    equilibrium_in_violation_ = false;
+    equilibrium_violation_start_us_ = 0;
+  }
+
+  // Publish equilibrium metrics if MetricsExporter exists
+  // (Future: Add dedicated equilibrium gauge/counter to MetricsExporter)
+  // For now, buffer_depth_frames is already published in PublishMetrics()
 }
 
 // ============================================================================

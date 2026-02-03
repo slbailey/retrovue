@@ -187,6 +187,12 @@ class EncoderPipeline {
   int silence_frames_generated_;       // Counter: retrovue_audio_silence_frames_injected_total
   bool audio_liveness_enabled_;        // INV-P10-PCR-PACED-MUX: False to disable silence injection
 
+  // =========================================================================
+  // INV-P9-STEADY-007: Producer CT Authoritative
+  // =========================================================================
+  bool producer_ct_authoritative_;     // When true, pass through producer PTS without modification
+  bool first_producer_audio_logged_;   // True after first audio PTS logged (for attach proof)
+
   // Generate and encode silence frames to fill gap up to target_pts_90k
   void GenerateSilenceFrames(int64_t target_pts_90k);
 
@@ -226,6 +232,15 @@ class EncoderPipeline {
   // INV-P10-PCR-PACED-MUX: Disable audio liveness injection when PCR-paced mux is active.
   // When disabled, no silence frames are generated - producer audio is authoritative.
   void SetAudioLivenessEnabled(bool enabled);
+
+  // =========================================================================
+  // INV-P9-STEADY-007: Producer CT Authoritative
+  // =========================================================================
+  // When enabled, muxer MUST use producer-provided timestamps directly.
+  // No local CT counters. No PTS rebasing. No offset calculation.
+  // If producer timestamps have discontinuities, log violation but pass through.
+  // =========================================================================
+  void SetProducerCTAuthoritative(bool enabled);
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

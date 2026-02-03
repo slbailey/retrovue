@@ -22,6 +22,7 @@
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/runtime/PlayoutEngine.h"
+#include "retrovue/telemetry/MetricsExporter.h"
 
 // Phase 8: Map C++ ResultCode enum to proto ResultCode enum
 namespace {
@@ -335,6 +336,11 @@ namespace retrovue
 
       std::string sink_name = "channel-" + std::to_string(channel_id) + "-mpeg-ts";
       auto sink = std::make_unique<output::MpegTSOutputSink>(state->fd, config, sink_name);
+
+      // P9-OPT-002: Wire up MetricsExporter for steady-state telemetry
+      if (auto metrics = interface_->GetMetricsExporter()) {
+        sink->SetMetricsExporter(metrics, channel_id);
+      }
 
       auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink), false);
       if (attach_result.success) {

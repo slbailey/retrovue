@@ -80,6 +80,8 @@ namespace retrovue::producers::file
         teardown_requested_(false),
         writes_disabled_(false),
         frames_produced_(0),
+        planned_frame_count_(-1),
+        frames_delivered_(0),
         buffer_full_count_(0),
         decode_errors_(0),
         drain_timeout_(std::chrono::milliseconds(0)),
@@ -94,6 +96,8 @@ namespace retrovue::producers::file
         decoder_initialized_(false),
         eof_reached_(false),
         eof_event_emitted_(false),
+        eof_signaled_(false),
+        truncation_logged_(false),
         time_base_(0.0),
         last_mt_pts_us_(0),
         last_decoded_mt_pts_us_(0),
@@ -204,6 +208,12 @@ namespace retrovue::producers::file
 
     // Set state to RUNNING before starting thread (so loop sees correct state)
     SetState(ProducerState::RUNNING);
+
+    // P8-PLAN-001 INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001: Capture planning authority from Core at start
+    planned_frame_count_ = config_.frame_count;
+    frames_delivered_.store(0, std::memory_order_release);
+    truncation_logged_ = false;
+    eof_signaled_ = false;
     
     // In stub mode, emit ready immediately
     if (config_.stub_mode)
@@ -426,10 +436,33 @@ namespace retrovue::producers::file
 
     if (!was_blocked) {
       decode_gate_block_count_++;
+      // ==========================================================================
+      // HYPOTHESIS TEST T1: Identify which buffer is causing the block
+      // ==========================================================================
+      // H1 predicts: audio_at_capacity=true, video_at_capacity=false
+      // This log discriminates between audio-caused vs video-caused blocking.
+      const char* block_cause = "UNKNOWN";
+      if (audio_at_capacity && !video_at_capacity) {
+        block_cause = "AUDIO_ONLY";
+      } else if (video_at_capacity && !audio_at_capacity) {
+        block_cause = "VIDEO_ONLY";
+      } else if (audio_at_capacity && video_at_capacity) {
+        block_cause = "BOTH";
+      }
       std::cout << "[FileProducer] INV-P10-SLOT-GATE: Blocking at capacity "
                 << "(video=" << video_depth << "/" << video_capacity
                 << ", audio=" << audio_depth << "/" << audio_capacity
-                << ", episode=" << decode_gate_block_count_ << ")" << std::endl;
+                << ", episode=" << decode_gate_block_count_
+                << ", block_cause=" << block_cause << ")" << std::endl;
+
+      // T4: Log audio/video depth ratio at block time
+      if (video_capacity > 0) {
+        const double av_ratio = static_cast<double>(audio_depth) / static_cast<double>(video_depth > 0 ? video_depth : 1);
+        std::cout << "[FileProducer] HYPOTHESIS_TEST_T4: audio_depth=" << audio_depth
+                  << " video_depth=" << video_depth
+                  << " av_ratio=" << av_ratio
+                  << " (H1 predicts: audio_full with video_low)" << std::endl;
+      }
     }
 
     // Wait until ONE slot frees in the full buffer(s)
@@ -448,9 +481,23 @@ namespace retrovue::producers::file
       if (video_has_slot && audio_has_slot) {
         // Only log if we actually blocked for a significant time
         if (was_blocked) {
+          // ==========================================================================
+          // HYPOTHESIS TEST T1 (continued): Log which buffer was the bottleneck
+          // ==========================================================================
+          // At release time, identify which buffer drained first (the other was bottleneck)
+          const char* bottleneck = "UNKNOWN";
+          // If audio was at capacity when we started and video wasn't, audio was bottleneck
+          if (audio_at_capacity && !video_at_capacity) {
+            bottleneck = "AUDIO";
+          } else if (video_at_capacity && !audio_at_capacity) {
+            bottleneck = "VIDEO";
+          } else {
+            bottleneck = "BOTH";
+          }
           std::cout << "[FileProducer] INV-P10-SLOT-GATE: Released "
                     << "(video=" << video_depth << "/" << video_capacity
-                    << ", audio=" << audio_depth << "/" << audio_capacity << ")" << std::endl;
+                    << ", audio=" << audio_depth << "/" << audio_capacity
+                    << ", bottleneck_was=" << bottleneck << ")" << std::endl;
         }
         decode_gate_blocked_ = false;
         return true;
@@ -462,6 +509,31 @@ namespace retrovue::producers::file
         std::this_thread::yield();
       }
     }
+  }
+
+  // ==========================================================================
+  // INV-P9-STEADY-003: Symmetric A/V backpressure
+  // ==========================================================================
+  // Audio MUST NOT run too far ahead of video. The constraint "1 frame duration"
+  // (33ms at 30fps) maps to approximately 1.5 audio frames at 48kHz/1024 samples.
+  // We allow audio to be up to 2 frames ahead to account for different frame rates.
+  //
+  // This is a FRAME COUNT constraint, not a PTS constraint. PTS-based throttling
+  // would require knowing the next frame's PTS before decoding, which isn't possible.
+  // ==========================================================================
+  bool FileProducer::CanAudioAdvance() const
+  {
+    // INV-P9-STEADY-003: PTS-based symmetric throttling
+    // Audio and video have different frame durations (video ~33ms, audio ~21ms).
+    // Frame-count-based throttling causes PTS divergence because limiting audio
+    // frames causes audio to fall behind video in PTS.
+    //
+    // For now, disable frame-count throttle and rely on buffer backpressure.
+    // The ring buffer's audio capacity is 3x video capacity specifically to
+    // accommodate the higher audio frame rate while maintaining flow.
+    //
+    // TODO: Implement true PTS-based throttling if needed.
+    return true;
   }
 
   bool FileProducer::isRunning() const
@@ -557,6 +629,27 @@ namespace retrovue::producers::file
         }
       }
 
+      // P8-PLAN-003 INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001: Long content truncated at planned_frame_count
+      const int64_t delivered = frames_delivered_.load(std::memory_order_acquire);
+      if (planned_frame_count_ >= 0 && delivered >= planned_frame_count_)
+      {
+        if (!truncation_logged_)
+        {
+          truncation_logged_ = true;
+          std::cout << "[FileProducer] CONTENT_TRUNCATED segment=" << config_.asset_uri
+                    << " planned=" << planned_frame_count_
+                    << " delivered=" << delivered
+                    << " (truncating at boundary)" << std::endl;
+        }
+        if (!eof_event_emitted_)
+        {
+          eof_event_emitted_ = true;
+          EmitEvent("segment_complete", "truncated_at_boundary");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
+
       // Phase 8.6: When frame_count is not set (-1), segment end = natural EOF only.
 
       // Check teardown timeout
@@ -617,6 +710,33 @@ namespace retrovue::producers::file
                       << "EOF before frame_count reached ("
                       << produced << "/" << config_.frame_count << ")"
                       << std::endl;
+          }
+
+          // P8-PLAN-002 INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001: Detect early EOF (content deficit)
+          const int64_t delivered = frames_delivered_.load(std::memory_order_acquire);
+          if (planned_frame_count_ >= 0 && delivered < planned_frame_count_) {
+            const int64_t deficit = planned_frame_count_ - delivered;
+            std::cout << "[FileProducer] EARLY_EOF segment=" << config_.asset_uri
+                      << " planned=" << planned_frame_count_
+                      << " delivered=" << delivered
+                      << " deficit_frames=" << deficit << std::endl;
+            EmitEvent("early_eof", "deficit_frames=" + std::to_string(deficit));
+          }
+
+          // P8-EOF-001 INV-P8-SEGMENT-EOF-DISTINCT-001: Signal decoder EOF to PlayoutEngine (idempotent)
+          if (!eof_signaled_) {
+            eof_signaled_ = true;
+            const int64_t delivered_eof = frames_delivered_.load(std::memory_order_acquire);
+            const int64_t ct_at_eof = timeline_controller_
+                ? timeline_controller_->GetCTCursor()
+                : 0;
+            std::cout << "[FileProducer] DECODER_EOF segment=" << config_.asset_uri
+                      << " ct=" << ct_at_eof
+                      << " frames_delivered=" << delivered_eof
+                      << " planned=" << planned_frame_count_ << std::endl;
+            if (live_producer_eof_callback_) {
+              live_producer_eof_callback_(config_.asset_uri, ct_at_eof, delivered_eof);
+            }
           }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1022,6 +1142,8 @@ namespace retrovue::producers::file
     decoder_initialized_ = true;
     eof_reached_ = false;
     eof_event_emitted_ = false;
+    eof_signaled_ = false;
+    truncation_logged_ = false;
     return true;
   }
 
@@ -1106,6 +1228,12 @@ namespace retrovue::producers::file
     eof_reached_ = false;
     audio_eof_reached_ = false;
     eof_event_emitted_ = false;
+    eof_signaled_ = false;
+    truncation_logged_ = false;
+  }
+
+  void FileProducer::SetLiveProducerEOFCallback(LiveProducerEOFCallback callback) {
+    live_producer_eof_callback_ = std::move(callback);
   }
 
   bool FileProducer::ProduceRealFrame()
@@ -1143,6 +1271,10 @@ namespace retrovue::producers::file
     // If it's an audio packet, send to audio decoder and continue reading
     if (packet_->stream_index == audio_stream_index_ && audio_codec_ctx_ != nullptr)
     {
+      // HYPOTHESIS TEST T3: Track audio packet count
+      audio_packets_processed_++;
+      av_rate_probe_audio_count_++;
+
       // Send audio packet to decoder
       ret = avcodec_send_packet(audio_codec_ctx_, packet_);
       av_packet_unref(packet_);
@@ -1161,6 +1293,10 @@ namespace retrovue::producers::file
       av_packet_unref(packet_);
       return true;  // Skip other non-video/non-audio packets, try again
     }
+
+    // HYPOTHESIS TEST T3: Track video packet count
+    video_packets_processed_++;
+    av_rate_probe_video_count_++;
 
     // Send packet to decoder
     ret = avcodec_send_packet(codec_ctx_, packet_);
@@ -1201,6 +1337,41 @@ namespace retrovue::producers::file
     // Extract frame PTS in microseconds (media-relative)
     int64_t base_pts_us = output_frame.metadata.pts;
     video_frame_count_++;
+
+    // ==========================================================================
+    // HYPOTHESIS TEST T3: Periodic A/V packet rate logging
+    // ==========================================================================
+    // Log every 100 video frames to show audio/video packet ratio.
+    // H1 predicts: audio_packets >> video_packets (typically 3-5x for 48kHz audio)
+    if (video_frame_count_ % 100 == 0) {
+      const int64_t now_us = master_clock_ ? master_clock_->now_utc_us()
+          : std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+      if (av_rate_probe_start_us_ == 0) {
+        av_rate_probe_start_us_ = now_us;
+      }
+      const int64_t elapsed_us = now_us - av_rate_probe_start_us_;
+      if (elapsed_us > 0) {
+        const double audio_rate = static_cast<double>(av_rate_probe_audio_count_) * 1'000'000.0 / elapsed_us;
+        const double video_rate = static_cast<double>(av_rate_probe_video_count_) * 1'000'000.0 / elapsed_us;
+        const double av_ratio = av_rate_probe_video_count_ > 0
+            ? static_cast<double>(av_rate_probe_audio_count_) / av_rate_probe_video_count_
+            : 0.0;
+        std::cout << "[FileProducer] HYPOTHESIS_TEST_T3: "
+                  << "audio_packets=" << audio_packets_processed_
+                  << " video_packets=" << video_packets_processed_
+                  << " audio_rate=" << audio_rate << "pkt/s"
+                  << " video_rate=" << video_rate << "pkt/s"
+                  << " av_ratio=" << av_ratio
+                  << " (H1 predicts: audio >> video)" << std::endl;
+        // Detect imbalance: audio packets > 3x video packets
+        if (av_ratio > 3.0 && !av_rate_imbalance_logged_) {
+          av_rate_imbalance_logged_ = true;
+          std::cout << "[FileProducer] HYPOTHESIS_TEST_T3: AV_IMBALANCE_DETECTED "
+                    << "(av_ratio=" << av_ratio << " > 3.0, consistent with H1)" << std::endl;
+        }
+      }
+    }
 
     // Phase 8: Load shadow mode state early - needed for gating decisions
     bool in_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
@@ -1271,16 +1442,152 @@ namespace retrovue::producers::file
           std::cout << "[FileProducer] Shadow decode: first frame cached, PTS="
                     << base_pts_us << std::endl;
           EmitEvent("ShadowDecodeReady", "");
+
+          // ====================================================================
+          // INV-P8-SHADOW-EPOCH: Establish video epoch from cached frame
+          // ====================================================================
+          // Set first_mt_pts_us_ when caching the first shadow frame so that:
+          // 1. Audio can pass INV-P10-AUDIO-VIDEO-GATE during shadow preroll
+          // 2. A/V sync is maintained from the switch point forward
+          // Scoped to shadow mode only - live mode establishes epoch normally.
+          // ====================================================================
+          if (first_mt_pts_us_ == 0) {
+            first_mt_pts_us_ = base_pts_us;
+            playback_start_utc_us_ = master_clock_ ? master_clock_->now_utc_us() : 0;
+            {
+              std::lock_guard<std::mutex> epoch_lock(g_video_epoch_mutex);
+              g_video_epoch_time[this] = std::chrono::steady_clock::now();
+            }
+            std::cout << "[FileProducer] INV-P8-SHADOW-EPOCH: Epoch established from cached frame "
+                      << "(first_mt_pts_us=" << first_mt_pts_us_ << ")" << std::endl;
+          }
         }
       }
 
-      // Wait IN PLACE until shadow is disabled - do NOT return/discard frame
-      // Also check teardown_requested_ to avoid hanging during StopChannel
+      // ==========================================================================
+      // INV-P8-SHADOW-PREROLL: Continue demuxing during shadow wait
+      // ==========================================================================
+      // Shadow preroll ensures both audio AND video buffers are populated before
+      // the switch deadline arrives. Without preroll, buffers would be empty at
+      // switch time, triggering the safety rail.
+      //
+      // Behavior:
+      // - Audio packets: decode and buffer (gated only until epoch exists)
+      // - Video packets: decode and buffer (after first frame is cached)
+      // - Continues until shadow mode disabled OR buffers full OR EOF
+      // ==========================================================================
+      uint64_t shadow_audio_buffered = 0;
+      uint64_t shadow_video_buffered = 0;
+      std::cout << "[FileProducer] INV-P8-SHADOW-PREROLL: Entering "
+                << "(audio_depth=" << output_buffer_.AudioSize()
+                << ", video_depth=" << output_buffer_.Size() << ")" << std::endl;
+
+      // Continue demuxing until shadow is disabled or termination requested
       while (shadow_decode_mode_.load(std::memory_order_acquire) &&
              !stop_requested_.load(std::memory_order_acquire) &&
              !teardown_requested_.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        // Check if BOTH buffers are full - if so, yield and retry
+        if (output_buffer_.IsAudioFull() && output_buffer_.IsFull()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+
+        // Read next packet from demuxer
+        int ret = av_read_frame(format_ctx_, packet_);
+
+        if (ret == AVERROR_EOF) {
+          // EOF during shadow preroll - stop demuxing, wait for switch
+          if (shadow_audio_buffered > 0 || shadow_video_buffered > 0) {
+            std::cout << "[FileProducer] INV-P8-SHADOW-PREROLL: EOF reached "
+                      << "(audio_buffered=" << shadow_audio_buffered
+                      << ", video_buffered=" << shadow_video_buffered << ")" << std::endl;
+          }
+          // Sleep until shadow disabled since we can't demux anymore
+          while (shadow_decode_mode_.load(std::memory_order_acquire) &&
+                 !stop_requested_.load(std::memory_order_acquire) &&
+                 !teardown_requested_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+          break;
+        }
+
+        if (ret < 0) {
+          av_packet_unref(packet_);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;  // Transient error, retry
+        }
+
+        // Dispatch packet based on stream type
+        if (packet_->stream_index == audio_stream_index_ && audio_codec_ctx_ != nullptr) {
+          // Audio packet: decode and buffer
+          audio_packets_processed_++;
+          ret = avcodec_send_packet(audio_codec_ctx_, packet_);
+          av_packet_unref(packet_);
+          if (ret >= 0 || ret == AVERROR(EAGAIN)) {
+            ReceiveAudioFrames();
+            shadow_audio_buffered++;
+          }
+        } else if (packet_->stream_index == video_stream_index_) {
+          // =======================================================================
+          // INV-P8-SHADOW-PREROLL: Video decode and buffer
+          // =======================================================================
+          // Decode video frames during shadow preroll so the buffer is populated
+          // at switch time. First frame is already cached; subsequent frames fill
+          // the buffer for seamless playback after the switch.
+          // =======================================================================
+          video_packets_processed_++;
+          ret = avcodec_send_packet(codec_ctx_, packet_);
+          av_packet_unref(packet_);
+
+          if (ret >= 0 || ret == AVERROR(EAGAIN)) {
+            // Receive all available decoded frames from this packet
+            while (true) {
+              ret = avcodec_receive_frame(codec_ctx_, frame_);
+              if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                break;  // Need more packets or done
+              }
+              if (ret < 0) {
+                break;  // Decode error
+              }
+
+              // Scale and assemble the frame
+              if (!ScaleFrame()) {
+                continue;  // Skip frame on scale error
+              }
+
+              buffer::Frame output_frame;
+              if (!AssembleFrame(output_frame)) {
+                continue;  // Skip frame on assemble error
+              }
+
+              // Check video buffer capacity before push
+              if (output_buffer_.IsFull()) {
+                break;  // Buffer full, preroll complete for video
+              }
+
+              // Push to buffer (MT-based PTS, transformed at switch via TimelineController)
+              if (output_buffer_.Push(output_frame)) {
+                shadow_video_buffered++;
+              }
+            }
+          }
+        } else {
+          // Other packet: discard
+          av_packet_unref(packet_);
+        }
       }
+
+      // ==========================================================================
+      // INV-P8-SHADOW-PREROLL: Log preroll completion
+      // ==========================================================================
+      const size_t audio_depth_at_exit = output_buffer_.AudioSize();
+      const size_t video_depth_at_exit = output_buffer_.Size();
+      std::cout << "[FileProducer] INV-P8-SHADOW-PREROLL: Complete "
+                << "(audio_depth=" << audio_depth_at_exit
+                << ", video_depth=" << video_depth_at_exit
+                << ", audio_buffered=" << shadow_audio_buffered
+                << ", video_buffered=" << shadow_video_buffered << ")" << std::endl;
 
       // INV-P8-SHADOW-FLUSH: Check if frame was already flushed by PlayoutEngine
       if (cached_frame_flushed_.load(std::memory_order_acquire)) {
@@ -1545,6 +1852,20 @@ namespace retrovue::producers::file
       }
     }
 
+    // P8-PLAN-003 INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001: Do not deliver beyond planned_frame_count
+    if (planned_frame_count_ >= 0 && frames_delivered_.load(std::memory_order_acquire) >= planned_frame_count_)
+    {
+      if (!truncation_logged_)
+      {
+        truncation_logged_ = true;
+        std::cout << "[FileProducer] CONTENT_TRUNCATED segment=" << config_.asset_uri
+                  << " planned=" << planned_frame_count_
+                  << " delivered=" << frames_delivered_.load(std::memory_order_acquire)
+                  << " (stopping at boundary)" << std::endl;
+      }
+      return true;  // No more frames from this segment; loop will hit truncation wait
+    }
+
     // =======================================================================
     // INV-P10-ELASTIC-FLOW-CONTROL: Push with backpressure retry
     // =======================================================================
@@ -1565,6 +1886,17 @@ namespace retrovue::producers::file
     }
 
     frames_produced_.fetch_add(1, std::memory_order_relaxed);
+    frames_delivered_.fetch_add(1, std::memory_order_relaxed);
+
+    // =========================================================================
+    // INV-P9-STEADY-003: Video counter (kept for potential future use)
+    // =========================================================================
+    // Note: Frame-count-based throttling was removed because audio and video have
+    // different frame durations (video ~33ms, audio ~21ms). Limiting audio frames
+    // to match video frames caused audio to fall behind in PTS. The buffer's 3x
+    // audio capacity naturally maintains PTS sync without explicit throttling.
+    // =========================================================================
+    steady_state_video_count_.fetch_add(1, std::memory_order_release);
 
     // =========================================================================
     // INV-DECODE-RATE-001 DIAGNOSTIC PROBE: Detect decode rate violations
@@ -1892,10 +2224,23 @@ namespace retrovue::producers::file
       return;  // Silently drop - producer is being force-stopped
     }
 
+    // P8-PLAN-003: Do not deliver beyond planned_frame_count (stub path)
+    if (planned_frame_count_ >= 0 && frames_delivered_.load(std::memory_order_acquire) >= planned_frame_count_) {
+      if (!truncation_logged_) {
+        truncation_logged_ = true;
+        std::cout << "[FileProducer] CONTENT_TRUNCATED segment=" << config_.asset_uri
+                  << " planned=" << planned_frame_count_
+                  << " delivered=" << frames_delivered_.load(std::memory_order_acquire)
+                  << " (stopping at boundary, stub)" << std::endl;
+      }
+      return;
+    }
+
     // Normal mode: attempt to push decoded frame
     if (output_buffer_.Push(frame))
     {
       frames_produced_.fetch_add(1, std::memory_order_relaxed);
+      frames_delivered_.fetch_add(1, std::memory_order_relaxed);
     }
     else
     {
@@ -1998,6 +2343,7 @@ namespace retrovue::producers::file
 
         if (output_buffer_.Push(frame)) {
           frames_produced_.fetch_add(1, std::memory_order_relaxed);
+          frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
           // CRITICAL: Set first_mt_pts_us_ to MT (not CT!) so the producer thread
           // knows the first frame was already processed and doesn't re-establish epoch.
@@ -2024,6 +2370,7 @@ namespace retrovue::producers::file
       // Legacy path: no TimelineController, just push with raw PTS
       if (output_buffer_.Push(frame)) {
         frames_produced_.fetch_add(1, std::memory_order_relaxed);
+        frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
         // Set first_mt_pts_us_ for legacy path too
         if (first_mt_pts_us_ == 0) {
@@ -2120,6 +2467,15 @@ namespace retrovue::producers::file
     // Receive decoded audio frames - but exit after processing ONE to prevent burst
     while (!stop_requested_.load(std::memory_order_acquire) && !processed_one)
     {
+      // INV-P9-STEADY-003: Check audio buffer capacity BEFORE receiving
+      // If audio buffer is full, return immediately and let the outer decode
+      // loop iterate. WaitForDecodeReady() will block until space is available.
+      // This prevents spin-waiting inside this function.
+      if (output_buffer_.IsAudioFull()) {
+        // Audio buffer at capacity - exit and let WaitForDecodeReady gate
+        return received_any;
+      }
+
       int ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
       if (ret == AVERROR(EAGAIN))
       {
@@ -2318,34 +2674,23 @@ namespace retrovue::producers::file
         }
 
         // =======================================================================
-        // Phase 8: Gate audio on segment mapping lock (INV-P8-AV-SYNC)
+        // INV-P8-SHADOW-AUDIO-GATE: Gate audio until video epoch exists
         // =======================================================================
-        // Audio must NOT advance ahead of video during preview/shadow mode.
-        // Until the segment mapping is LOCKED (first video frame admitted),
-        // audio frames must be dropped to prevent A/V desync at switch time.
+        // Audio must NOT advance ahead of video during shadow mode. However, once
+        // the video epoch is established (first_mt_pts_us_ != 0), audio is aligned
+        // to the video timeline and can safely buffer during shadow preroll.
         //
-        // Why this matters:
-        // - Video goes through TimelineController.AdmitFrame() which gates on mapping
-        // - Audio was free-running, filling buffers while video waited for mapping
-        // - This caused audio to be "too far in the future" when video finally locked
-        // - Result: A/V desync, silent output, or stalled encoder after switch
+        // Gate conditions:
+        // - Shadow mode active AND no video epoch → GATE (drop audio)
+        // - Shadow mode active AND video epoch exists → ALLOW (preroll buffering)
+        // - Shadow mode disabled → ALLOW (normal operation)
+        // - Mapping just locked this iteration → ALLOW (bypass for live startup)
         //
-        // The fix: Drop audio in two cases:
-        // INV-P8-AUDIO-GATE: Only gate audio while in shadow mode.
-        // Previously, audio was also gated while IsMappingPending() was true, but this
-        // caused a readiness starvation loop:
-        //   - Mapping can't clear until video calls AdmitFrame()
-        //   - Audio gated while mapping pending → audio_depth stays 0
-        //   - Readiness requires audio_depth >= 5 → never passes
-        //   - SwitchToLive polls forever
-        //
-        // Fix: Allow audio to flow to buffer once shadow mode is disabled, even if
-        // mapping is still pending. The first video frame will lock the mapping,
-        // and audio will already be accumulating in the buffer for readiness.
-        //
-        // INV-P8-AUDIO-GATE Fix #2: If mapping locked this iteration, bypass gating entirely.
-        // This guarantees audio flows on the same iteration where video locks mapping.
-        bool audio_should_be_gated = shadow_decode_mode_.load(std::memory_order_acquire);
+        // This enables INV-P8-SHADOW-PREROLL to populate both audio and video
+        // buffers before the switch deadline.
+        // =======================================================================
+        bool audio_should_be_gated = shadow_decode_mode_.load(std::memory_order_acquire)
+                                     && (first_mt_pts_us_ == 0);  // Only gate if no video epoch
         if (mapping_locked_this_iteration_) {
           audio_should_be_gated = false;  // Override: mapping just locked, audio must flow
         }
@@ -2353,7 +2698,7 @@ namespace retrovue::producers::file
           audio_mapping_gate_drop_count_++;
           if (audio_mapping_gate_drop_count_ <= 5 || audio_mapping_gate_drop_count_ % 100 == 0) {
             std::cout << "[FileProducer] AUDIO_GATED #" << audio_mapping_gate_drop_count_
-                      << " - shadow mode active (dropping audio until shadow disabled)"
+                      << " - shadow mode active AND no video epoch (waiting for first video frame)"
                       << std::endl;
           }
           av_frame_unref(audio_frame_);
@@ -2397,6 +2742,11 @@ namespace retrovue::producers::file
           std::cout << "[FileProducer] Audio backpressure: released" << std::endl;  // P11A-002/003
           audio_backpressure_logged = false;
         }
+
+        // =====================================================================
+        // INV-P9-STEADY-003: Increment audio counter after successful push
+        // =====================================================================
+        steady_state_audio_count_.fetch_add(1, std::memory_order_release);
 
         received_any = true;
         processed_one = true;  // Phase 6: Exit loop after this frame

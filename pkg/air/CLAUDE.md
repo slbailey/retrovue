@@ -198,11 +198,28 @@ When analyzing runtime logs or incidents, ALWAYS use the contracts-first, logs-a
    - Identify what happened BEFORE vs AFTER the expected event
    - Calculate actual vs expected timing deltas
 
-3. TRACE CAUSAL CHAIN
+3. FORM HYPOTHESES (NOT CONCLUSIONS)
    - Start from the violation and work backwards
    - Identify the component that violated the contract
-   - Find the upstream event that caused the component to fail
-   - Continue until you reach the root cause (often: timing, resource exhaustion, or metadata mismatch)
+   - Find the upstream event that MIGHT have caused the component to fail
+   - Form hypotheses about causation — do NOT assert "root cause"
+
+   CRITICAL: Incident analysis may only assert:
+   - **Observed facts** (direct quotes from logs, with timestamps)
+   - **Hypotheses** (explicitly labeled as such)
+   - **Tests** that would falsify each hypothesis
+
+   "Root cause" is ONLY allowed after a hypothesis survives a falsification test.
+
+   Example of WRONG analysis:
+     "The audio queue filled up, which blocked video production. Root cause: shared buffers."
+
+   Example of CORRECT analysis:
+     "OBSERVED: Audio queue at capacity (queue_depth=180/180)
+      OBSERVED: Encoder reports vq=0, aq=0
+      HYPOTHESIS: Audio backpressure blocks the decode thread, preventing video production
+      TEST: Check if FileProducer decode loop is single-threaded for audio+video
+      TEST: Add log to confirm which producer instance is blocking"
 
 4. CATEGORIZE LOG LINES
    | Category | Definition | Action |
@@ -213,8 +230,10 @@ When analyzing runtime logs or incidents, ALWAYS use the contracts-first, logs-a
    | Progress/Debug | DBG-*, counters, heartbeats | EVALUATE for noise |
 
 5. PRODUCE ACTIONABLE OUTPUT
-   - Root cause statement (one sentence)
-   - Evidence chain (which logs prove it)
+   - Observed facts (with log evidence)
+   - Hypotheses (explicitly labeled, ranked by likelihood)
+   - Falsification tests for each hypothesis
+   - ONLY after testing: Root cause statement (one sentence)
    - Recommendations with priority (P0/P1/P2)
    - Log noise reduction opportunities (RATE-LIMIT, DELETE, GUARD)
 

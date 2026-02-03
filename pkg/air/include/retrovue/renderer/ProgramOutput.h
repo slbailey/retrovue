@@ -180,6 +180,10 @@ class ProgramOutput {
   using OnSuccessorVideoEmittedCallback = std::function<void()>;
   void SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback);
 
+  // P8-FILL-002: PlayoutEngine sets this so ProgramOutput emits pad during content deficit (EOF before boundary).
+  // Pointer is NOT owned; must outlive ProgramOutput.
+  void SetContentDeficitActiveFlag(std::atomic<bool>* flag);
+
   // Factory method to create appropriate output based on mode.
   static std::unique_ptr<ProgramOutput> Create(
       const RenderConfig& config,
@@ -285,6 +289,10 @@ class ProgramOutput {
   // the "bootstrap frame" for SPS/PPS emission.
   bool no_content_segment_ = false;
 
+  // P8-FILL-002: Content deficit active flag from PlayoutEngine (EOF before boundary).
+  // When set, emit pad immediately when buffer empty (no freeze window).
+  std::atomic<bool>* content_deficit_active_ptr_ = nullptr;
+
   // =========================================================================
   // INV-PACING-ENFORCEMENT-002: RealTimeHoldPolicy state
   // =========================================================================
@@ -348,8 +356,14 @@ class ProgramOutput {
   uint64_t pads_ct_mismatch_ = 0;        // FRAME_CT_MISMATCH
   uint64_t pads_unknown_ = 0;            // UNKNOWN fallback
 
-  // INV-NO-PAD-WHILE-DEPTH-HIGH: Violation counter
-  // Incremented when pad is emitted while video buffer depth >= 10
+  // =========================================================================
+  // INV-P9-STEADY-004: No Pad While Depth High
+  // =========================================================================
+  // Pad frame emission while buffer depth >= 10 is a CONTRACT VIOLATION.
+  // If frames exist in the buffer but are not being consumed, this indicates
+  // a flow control or CT tracking bug, not content starvation.
+  // Counter tracks violations; log emitted on each occurrence.
+  // =========================================================================
   uint64_t pad_while_depth_high_ = 0;
   static constexpr size_t kDepthHighThreshold = 10;
 
@@ -371,6 +385,32 @@ class ProgramOutput {
   // Reset ONLY on segment boundary (CT ownership change), not on first pad frame.
   double audio_sample_remainder_ = 0.0;
 
+  // =========================================================================
+  // INV-P9-STEADY-005: Buffer Equilibrium Sustained (P9-CORE-008, P9-OPT-001)
+  // =========================================================================
+  // Buffer depth MUST oscillate around target (default: 3 frames).
+  // Depth MUST remain in range [1, 2N] during steady-state.
+  // Monitor periodically and warn if outside range for > 1 second.
+  //
+  // Observability only (Phase 9) - no enforcement.
+  // Rate-limited logging to avoid spam (max 1 log per 5 seconds).
+  // =========================================================================
+  static constexpr int kEquilibriumTargetDepth = 3;
+  static constexpr int kEquilibriumMinDepth = 1;
+  static constexpr int kEquilibriumMaxDepth = 2 * kEquilibriumTargetDepth;  // 6
+  static constexpr int64_t kEquilibriumSampleIntervalUs = 1'000'000;        // 1 second
+  static constexpr int64_t kEquilibriumLogRateLimitUs = 5'000'000;          // 5 seconds
+
+  int64_t equilibrium_last_check_us_ = 0;           // Wall-clock of last sample
+  int64_t equilibrium_violation_start_us_ = 0;      // When violation episode started
+  bool equilibrium_in_violation_ = false;           // Currently outside [1, 2N]
+  int64_t equilibrium_last_log_us_ = 0;             // Wall-clock of last warning log
+  uint64_t equilibrium_violations_total_ = 0;       // Count of 1s+ violations (metric)
+  size_t equilibrium_last_depth_ = 0;               // Depth at last sample
+
+  // Called from RenderLoop to check buffer equilibrium periodically
+  void CheckBufferEquilibrium();
+
  public:
   // Called at channel start to lock pad audio format.
   // Must be called before any frames are emitted.
@@ -384,6 +424,12 @@ class ProgramOutput {
     return first_real_frame_emitted_;
   }
 
+  // INV-P9-STEADY-004: Get violation count for pad emitted while depth >= 10.
+  // Used by tests to verify violation detection.
+  uint64_t GetPadWhileDepthHighViolations() const {
+    return pad_while_depth_high_;
+  }
+
   // INV-P8-ZERO-FRAME-BOOTSTRAP: Set when segment has no real content.
   // When true, pad frames are allowed immediately (bypasses CONTENT-BEFORE-PAD).
   // The first pad frame acts as "bootstrap frame" for encoder initialization.
@@ -394,6 +440,22 @@ class ProgramOutput {
   // Returns true if current segment has no content (frame_count=0).
   bool IsNoContentSegment() const {
     return no_content_segment_;
+  }
+
+  // INV-P9-STEADY-005: Get equilibrium violation count (violations lasting > 1s).
+  // Used by tests to verify equilibrium monitoring.
+  uint64_t GetEquilibriumViolations() const {
+    return equilibrium_violations_total_;
+  }
+
+  // INV-P9-STEADY-005: Check if currently in equilibrium violation state.
+  bool IsInEquilibriumViolation() const {
+    return equilibrium_in_violation_;
+  }
+
+  // INV-P9-STEADY-005: Get last sampled buffer depth for diagnostics.
+  size_t GetLastEquilibriumDepth() const {
+    return equilibrium_last_depth_;
   }
 
   // Called on segment boundary to reset pad audio phase accumulator.

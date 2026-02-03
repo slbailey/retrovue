@@ -209,6 +209,10 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/TimelineController/TimelineControllerContractTests.cpp
   tests/contracts/TimelineController/Phase8IntegrationTests.cpp
   tests/contracts/Phase9OutputBootstrapTests.cpp
+  tests/contracts/Phase9SteadyStateSilenceTests.cpp
+  tests/contracts/Phase9SymmetricBackpressureTests.cpp
+  tests/contracts/Phase9NoPadWhileDepthHighTests.cpp
+  tests/contracts/Phase9BufferEquilibriumTests.cpp
   tests/contracts/Phase10PipelineFlowControlTests.cpp
   tests/contracts/Phase10FrameIndexedExecutionTests.cpp
   tests/contracts/Phase11AudioContinuityTests.cpp

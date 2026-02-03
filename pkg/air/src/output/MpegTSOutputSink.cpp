@@ -14,6 +14,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
+#include "retrovue/telemetry/MetricsExporter.h"
 
 #include <cerrno>
 #include <cstring>
@@ -174,6 +175,18 @@ void MpegTSOutputSink::Stop() {
     g_ts_emission_violation_logged.erase(this);
   }
 
+  // INV-P9-STEADY-001: Reset steady-state flags so next Start() can detect entry again
+  steady_state_entered_.store(false, std::memory_order_release);
+  pcr_paced_active_.store(false, std::memory_order_release);
+
+  // INV-P9-STEADY-008: Reset silence injection disabled flag for next session
+  silence_injection_disabled_.store(false, std::memory_order_release);
+
+  // P9-OPT-002: Report steady-state inactive to metrics
+  if (metrics_exporter_) {
+    metrics_exporter_->SetSteadyStateActive(channel_id_, false);
+  }
+
   SetStatus(SinkStatus::kStopped, "Stopped");
 }
 
@@ -209,6 +222,11 @@ void MpegTSOutputSink::SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallbac
   on_successor_video_emitted_ = std::move(callback);
 }
 
+void MpegTSOutputSink::SetMetricsExporter(std::shared_ptr<telemetry::MetricsExporter> metrics, int32_t channel_id) {
+  metrics_exporter_ = std::move(metrics);
+  channel_id_ = channel_id;
+}
+
 void MpegTSOutputSink::MuxLoop() {
   std::cout << "[MpegTSOutputSink] MuxLoop starting, fd=" << fd_ << std::endl;
 
@@ -241,6 +259,22 @@ void MpegTSOutputSink::MuxLoop() {
   int video_emit_count = 0;
   int audio_emit_count = 0;
   int pacing_wait_count = 0;
+
+  // =========================================================================
+  // INV-P9-STEADY-001 / P9-CORE-002: PCR-paced mux instrumentation
+  // =========================================================================
+  // Track dequeue intervals and CT vs wall clock deltas to prove pacing.
+  // Log periodically (every N frames) to avoid log spam.
+  // =========================================================================
+  std::chrono::steady_clock::time_point last_dequeue_time;
+  bool last_dequeue_time_valid = false;
+  int64_t total_pacing_wait_us = 0;
+  int64_t min_dequeue_interval_us = INT64_MAX;
+  int64_t max_dequeue_interval_us = 0;
+  int64_t sum_dequeue_interval_us = 0;
+  int64_t sum_ct_wall_delta_us = 0;
+  constexpr int kPacingLogInterval = 30;  // Log every 30 frames (~1 second at 30fps)
+  int late_frame_count = 0;  // Frames that arrived after their CT (no wait needed)
 
   std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Time-driven emission enabled" << std::endl;
 
@@ -307,10 +341,66 @@ void MpegTSOutputSink::MuxLoop() {
       std::cout << "[MpegTSOutputSink] PCR-PACE: Timing initialized, ct_epoch_us="
                 << ct_epoch_us << std::endl;
       std::cout << "[MpegTSOutputSink] INV-P9-TS-EMISSION-LIVENESS: PCR-PACE initialized, deadline=500ms" << std::endl;
+
+      // =====================================================================
+      // INV-P9-STEADY-001: Steady-state entry detection
+      // =====================================================================
+      // Entry conditions:
+      //   1. Sink attached (we're in MuxLoop, so Start() succeeded)
+      //   2. Buffer depth >= kSteadyStateMinDepth (we have at least one video frame)
+      //   3. Timing epoch established (timing_initialized = true now)
+      //
+      // This is DETECTION ONLY (P9-CORE-001). Behavior changes come in later tasks.
+      // =====================================================================
+      if (!steady_state_entered_.load(std::memory_order_acquire)) {
+        steady_state_entered_.store(true, std::memory_order_release);
+        pcr_paced_active_.store(true, std::memory_order_release);
+
+        // =====================================================================
+        // INV-P9-STEADY-007: Enable Producer CT Authoritative mode
+        // =====================================================================
+        // In steady-state, muxer must use producer-provided timestamps directly.
+        // No local CT counters. No PTS rebasing. No offset calculation.
+        // =====================================================================
+        if (encoder_) {
+          encoder_->SetProducerCTAuthoritative(true);
+        }
+
+        // =====================================================================
+        // INV-P9-STEADY-008: Disable silence injection on steady-state entry
+        // =====================================================================
+        // Silence injection MUST be disabled when steady-state begins.
+        // Producer audio is the ONLY audio source.
+        // When audio queue is empty, mux MUST stall (video waits with audio).
+        // =====================================================================
+        silence_injection_disabled_.store(true, std::memory_order_release);
+
+        // Log with evidence fields for contract verification and testing
+        std::cout << "[MpegTSOutputSink] INV-P9-STEADY-STATE: entered"
+                  << " sink=" << name_
+                  << " ct_epoch_us=" << ct_epoch_us
+                  << " vq_depth=" << vq_size
+                  << " aq_depth=" << aq_size
+                  << " wall_epoch_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+                         wall_epoch.time_since_epoch()).count()
+                  << std::endl;
+
+        // INV-P9-STEADY-008: Log proof that silence injection is disabled
+        std::cout << "[MpegTSOutputSink] INV-P9-STEADY-008: silence_injection_disabled=true"
+                  << std::endl;
+
+        // P9-OPT-002: Report steady-state active to metrics
+        if (metrics_exporter_) {
+          metrics_exporter_->SetSteadyStateActive(channel_id_, true);
+        }
+      }
     }
 
     // -----------------------------------------------------------------------
     // Step 3: Wait until wall clock matches frame's CT (PCR pacing)
+    // -----------------------------------------------------------------------
+    // INV-P9-STEADY-001 / P9-CORE-002: Output owns pacing authority.
+    // Wait is ONLY performed when pcr_paced_active_ is true.
     // -----------------------------------------------------------------------
     int64_t ct_delta_us = next_video_ct_us - ct_epoch_us;
 
@@ -333,12 +423,33 @@ void MpegTSOutputSink::MuxLoop() {
 
     auto target_wall = wall_epoch + std::chrono::microseconds(ct_delta_us);
 
-    if (now < target_wall && !NoPcrPacing()) {
+    // =========================================================================
+    // INV-P9-STEADY-001 / P9-CORE-002: PCR-paced wait
+    // =========================================================================
+    // Only wait when:
+    //   1. pcr_paced_active_ is true (steady-state entered)
+    //   2. NoPcrPacing() environment variable is not set
+    //   3. Current time is before target time
+    //
+    // If now >= target_wall, the frame's CT is already in the past (late frame).
+    // This indicates the producer is not keeping up with real-time decode.
+    // We emit immediately but track this for diagnostics.
+    // =========================================================================
+    int64_t actual_wait_us = 0;
+    bool is_late_frame = (now >= target_wall);
+    if (is_late_frame && pcr_paced_active_.load(std::memory_order_acquire)) {
+      late_frame_count++;
+    }
+
+    if (pcr_paced_active_.load(std::memory_order_acquire) && !NoPcrPacing() && !is_late_frame) {
       // Not yet time to emit - sleep until target
       auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(target_wall - now).count();
+      actual_wait_us = wait_us;
+      total_pacing_wait_us += wait_us;
+
       // INV-P10-PCR-PACED-MUX: Pacing wait (log first only)
       if (pacing_wait_count == 0) {
-        std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Pacing started, first_wait="
+        std::cout << "[MpegTSOutputSink] INV-P9-STEADY-001: PCR-paced mux active, first_wait="
                   << wait_us << "us" << std::endl;
       }
       pacing_wait_count++;
@@ -356,9 +467,70 @@ void MpegTSOutputSink::MuxLoop() {
           break;
         }
       }
+
+      // P9-OPT-002: Record mux CT wait time for histogram (sample every 30 frames)
+      if (metrics_exporter_ && (pacing_wait_count % 30) == 1) {
+        double wait_ms = static_cast<double>(actual_wait_us) / 1000.0;
+        metrics_exporter_->RecordMuxCTWaitMs(channel_id_, wait_ms);
+      }
     }
 
     if (stop_requested_.load(std::memory_order_acquire)) break;
+
+    // =========================================================================
+    // INV-P9-STEADY-008: Stall when audio queue empty in steady-state
+    // =========================================================================
+    // When silence injection is disabled (steady-state), video MUST NOT advance
+    // without audio. If audio queue is empty, mux STALLS until audio arrives.
+    // This ensures A/V sync and prevents video-only emission.
+    // =========================================================================
+    if (silence_injection_disabled_.load(std::memory_order_acquire)) {
+      // Check if audio is available for this video frame's CT
+      int64_t audio_available_ct_us = -1;
+      {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        if (!audio_queue_.empty()) {
+          audio_available_ct_us = audio_queue_.front().pts_us;
+        }
+      }
+
+      // If no audio available and we need audio (audio_ct <= video_ct), stall
+      if (audio_available_ct_us < 0) {
+        // No audio at all - stall
+        static int stall_log_counter = 0;
+        if (stall_log_counter++ % 100 == 0) {
+          std::cout << "[MpegTSOutputSink] INV-P9-STEADY-008: Mux STALLING - audio queue empty"
+                    << " (video waits with audio)"
+                    << " vq_size=" << vq_size
+                    << " video_ct_us=" << next_video_ct_us
+                    << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;  // Retry - don't emit video without audio
+      }
+    }
+
+    // =========================================================================
+    // P9-CORE-002 Instrumentation: Dequeue interval and CT vs wall clock delta
+    // =========================================================================
+    auto dequeue_time = std::chrono::steady_clock::now();
+    int64_t ct_wall_delta_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        dequeue_time - target_wall).count();
+    sum_ct_wall_delta_us += ct_wall_delta_us;
+
+    if (last_dequeue_time_valid) {
+      int64_t dequeue_interval_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          dequeue_time - last_dequeue_time).count();
+      sum_dequeue_interval_us += dequeue_interval_us;
+      if (dequeue_interval_us < min_dequeue_interval_us) {
+        min_dequeue_interval_us = dequeue_interval_us;
+      }
+      if (dequeue_interval_us > max_dequeue_interval_us) {
+        max_dequeue_interval_us = dequeue_interval_us;
+      }
+    }
+    last_dequeue_time = dequeue_time;
+    last_dequeue_time_valid = true;
 
     // -----------------------------------------------------------------------
     // Step 4: Dequeue and encode exactly ONE video frame
@@ -366,6 +538,44 @@ void MpegTSOutputSink::MuxLoop() {
     buffer::Frame frame;
     if (DequeueVideoFrame(&frame)) {
       video_emit_count++;
+
+      // =====================================================================
+      // P9-CORE-002 Instrumentation: Log pacing metrics every N frames
+      // =====================================================================
+      // Proves pacing is working:
+      // - avg_dequeue_interval_us: Should be ~33333us at 30fps
+      // - min/max: Should be within reasonable bounds (no bursts)
+      // - avg_ct_wall_delta_us: How accurately we hit the target CT
+      // - total_pacing_wait_us: Cumulative time spent waiting (proves we wait)
+      // =====================================================================
+      if (video_emit_count % kPacingLogInterval == 0 && video_emit_count > 0) {
+        int64_t avg_dequeue_interval_us = sum_dequeue_interval_us / (kPacingLogInterval - 1);
+        int64_t avg_ct_wall_delta_us = sum_ct_wall_delta_us / kPacingLogInterval;
+        std::cout << "[MpegTSOutputSink] P9-CORE-002-PACING: "
+                  << "emit_count=" << video_emit_count
+                  << " avg_dequeue_interval_us=" << avg_dequeue_interval_us
+                  << " min_dequeue_interval_us=" << min_dequeue_interval_us
+                  << " max_dequeue_interval_us=" << max_dequeue_interval_us
+                  << " avg_ct_wall_delta_us=" << avg_ct_wall_delta_us
+                  << " total_pacing_wait_us=" << total_pacing_wait_us
+                  << " late_frames=" << late_frame_count
+                  << " pcr_paced_active=" << (pcr_paced_active_.load(std::memory_order_acquire) ? 1 : 0)
+                  << std::endl;
+
+        // Log warning if all frames are late (producer not keeping up)
+        if (late_frame_count == kPacingLogInterval) {
+          std::cout << "[MpegTSOutputSink] P9-CORE-002-WARNING: All " << kPacingLogInterval
+                    << " frames arrived late (CT already past). Producer may not be keeping up with real-time."
+                    << std::endl;
+        }
+
+        // Reset for next interval
+        min_dequeue_interval_us = INT64_MAX;
+        max_dequeue_interval_us = 0;
+        sum_dequeue_interval_us = 0;
+        sum_ct_wall_delta_us = 0;
+        late_frame_count = 0;
+      }
 
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
       encoder_->encodeFrame(frame, pts90k);

@@ -322,6 +322,44 @@ void MetricsExporter::IncrementSwitchDeadlineNotReady(int32_t channel_id) {
   queue_cv_.notify_one();
 }
 
+void MetricsExporter::IncrementEquilibriumViolations(int32_t channel_id) {
+  Event event{};
+  event.type = Event::Type::kIncrementEquilibriumViolations;
+  event.channel_id = channel_id;
+  if (!event_queue_.Push(event)) {
+    queue_overflow_total_.fetch_add(1, std::memory_order_acq_rel);
+    return;
+  }
+  submitted_events_.fetch_add(1, std::memory_order_acq_rel);
+  queue_cv_.notify_one();
+}
+
+void MetricsExporter::SetSteadyStateActive(int32_t channel_id, bool active) {
+  Event event{};
+  event.type = Event::Type::kSetSteadyStateActive;
+  event.channel_id = channel_id;
+  event.steady_state_active = active;
+  if (!event_queue_.Push(event)) {
+    queue_overflow_total_.fetch_add(1, std::memory_order_acq_rel);
+    return;
+  }
+  submitted_events_.fetch_add(1, std::memory_order_acq_rel);
+  queue_cv_.notify_one();
+}
+
+void MetricsExporter::RecordMuxCTWaitMs(int32_t channel_id, double wait_ms) {
+  Event event{};
+  event.type = Event::Type::kRecordMuxCTWaitMs;
+  event.channel_id = channel_id;
+  event.mux_ct_wait_ms = wait_ms;
+  if (!event_queue_.Push(event)) {
+    queue_overflow_total_.fetch_add(1, std::memory_order_acq_rel);
+    return;
+  }
+  submitted_events_.fetch_add(1, std::memory_order_acq_rel);
+  queue_cv_.notify_one();
+}
+
 bool MetricsExporter::GetChannelMetrics(int32_t channel_id,
                                         ChannelMetrics& metrics) const {
   if (kMetricsExporterVerbose) {
@@ -443,6 +481,29 @@ void MetricsExporter::ProcessEvent(const Event& event) {
       break;
     case Event::Type::kIncrementSwitchDeadlineNotReady:
       switch_deadline_not_ready_[event.channel_id]++;
+      break;
+    case Event::Type::kIncrementEquilibriumViolations:
+      equilibrium_violations_[event.channel_id]++;
+      break;
+    case Event::Type::kSetSteadyStateActive: {
+      bool was_active = steady_state_active_[event.channel_id];
+      steady_state_active_[event.channel_id] = event.steady_state_active;
+      if (event.steady_state_active && !was_active) {
+        // Record entry time when transitioning to active
+        steady_state_entry_time_us_[event.channel_id] =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+      }
+      break;
+    }
+    case Event::Type::kRecordMuxCTWaitMs:
+      mux_ct_wait_samples_ms_[event.channel_id].push_back(event.mux_ct_wait_ms);
+      // Keep only last 1000 samples per channel to bound memory
+      if (mux_ct_wait_samples_ms_[event.channel_id].size() > 1000) {
+        mux_ct_wait_samples_ms_[event.channel_id].erase(
+            mux_ct_wait_samples_ms_[event.channel_id].begin());
+      }
       break;
   }
 }
@@ -596,6 +657,62 @@ std::string MetricsExporter::GenerateMetricsText() const {
   oss << "# TYPE retrovue_switch_deadline_not_ready_total counter\n";
   for (const auto& [ch_id, cnt] : switch_deadline_not_ready_) {
     oss << "retrovue_switch_deadline_not_ready_total{channel_id=\"" << ch_id << "\"} " << cnt << "\n";
+  }
+
+  // INV-P9-STEADY-005: Buffer equilibrium violations (depth outside [1,2N] for >1s)
+  oss << "\n# HELP retrovue_buffer_equilibrium_violations_total Buffer depth outside equilibrium range for >1s\n";
+  oss << "# TYPE retrovue_buffer_equilibrium_violations_total counter\n";
+  for (const auto& [ch_id, cnt] : equilibrium_violations_) {
+    oss << "retrovue_buffer_equilibrium_violations_total{channel_id=\"" << ch_id << "\"} " << cnt << "\n";
+  }
+
+  // P9-OPT-002: Steady-state active gauge (INV-P9-STEADY-001)
+  oss << "\n# HELP retrovue_steady_state_active Whether steady-state playout is active (1=active, 0=inactive)\n";
+  oss << "# TYPE retrovue_steady_state_active gauge\n";
+  for (const auto& [ch_id, active] : steady_state_active_) {
+    oss << "retrovue_steady_state_active{channel_id=\"" << ch_id << "\"} " << (active ? 1 : 0) << "\n";
+  }
+
+  // P9-OPT-002: Steady-state duration (INV-P9-STEADY-001)
+  oss << "\n# HELP retrovue_steady_state_duration_seconds Time in steady-state since entry\n";
+  oss << "# TYPE retrovue_steady_state_duration_seconds gauge\n";
+  int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+  for (const auto& [ch_id, active] : steady_state_active_) {
+    if (active) {
+      auto it = steady_state_entry_time_us_.find(ch_id);
+      if (it != steady_state_entry_time_us_.end()) {
+        double duration_sec = static_cast<double>(now_us - it->second) / 1'000'000.0;
+        oss << "retrovue_steady_state_duration_seconds{channel_id=\"" << ch_id << "\"} " << duration_sec << "\n";
+      }
+    }
+  }
+
+  // P9-OPT-002: Mux CT wait histogram (INV-P9-STEADY-001)
+  static const std::vector<double> kMuxWaitBuckets = {0.0, 1.0, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0};
+  oss << "\n# HELP retrovue_mux_ct_wait_ms Time mux loop waits for CT before dequeue (ms)\n";
+  oss << "# TYPE retrovue_mux_ct_wait_ms histogram\n";
+  for (const auto& [ch_id, samples] : mux_ct_wait_samples_ms_) {
+    if (samples.empty()) continue;
+    std::vector<uint64_t> bucket_counts(kMuxWaitBuckets.size() + 1, 0);
+    double sum = 0.0;
+    for (double s : samples) {
+      sum += s;
+      size_t b = 0;
+      for (; b < kMuxWaitBuckets.size() && s > kMuxWaitBuckets[b]; ++b) {}
+      for (size_t i = b; i <= kMuxWaitBuckets.size(); ++i) {
+        bucket_counts[i]++;
+      }
+    }
+    for (size_t i = 0; i < kMuxWaitBuckets.size(); ++i) {
+      oss << "retrovue_mux_ct_wait_ms_bucket{channel_id=\"" << ch_id
+          << "\",le=\"" << kMuxWaitBuckets[i] << "\"} " << bucket_counts[i] << "\n";
+    }
+    oss << "retrovue_mux_ct_wait_ms_bucket{channel_id=\"" << ch_id
+        << "\",le=\"+Inf\"} " << bucket_counts[kMuxWaitBuckets.size()] << "\n";
+    oss << "retrovue_mux_ct_wait_ms_sum{channel_id=\"" << ch_id << "\"} " << sum << "\n";
+    oss << "retrovue_mux_ct_wait_ms_count{channel_id=\"" << ch_id << "\"} " << samples.size() << "\n";
   }
 
   return oss.str();
