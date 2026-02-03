@@ -272,6 +272,24 @@ class TimelineController {
   int64_t GetFramePeriodUs() const { return config_.frame_period_us; }
 
   // ========================================================================
+  // INV-P8-SHADOW-PREROLL-SYNC: Advance CT cursor for pre-buffered frames
+  // ========================================================================
+  // During shadow preroll, frames are pushed to the buffer without going
+  // through AdmitFrame, so ct_cursor doesn't advance. After the switch,
+  // when the mapping is locked and we know how many frames were pre-buffered,
+  // call this to sync ct_cursor to account for those frames.
+  //
+  // This allows the producer to continue adding frames sequentially without
+  // getting REJECTED_EARLY for being "ahead" of where ct_cursor thinks we are.
+  //
+  // Example: Shadow preroll buffered 60 frames. After switch:
+  //   ct_cursor = CT_start - frame_period (expects frame 0)
+  //   AdvanceCursorForPreBufferedFrames(60)
+  //   ct_cursor = CT_start + 59*frame_period (expects frame 60)
+  // ========================================================================
+  void AdvanceCursorForPreBufferedFrames(size_t frame_count);
+
+  // ========================================================================
   // Statistics
   // ========================================================================
 

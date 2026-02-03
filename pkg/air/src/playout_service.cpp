@@ -313,9 +313,11 @@ namespace retrovue
       if (control_surface_only_ || interface_->IsOutputSinkAttached(channel_id))
         return;
 
-      std::optional<std::string> path = interface_->GetLiveAssetPath(channel_id);
-      if (!path || path->empty())
-        return;
+      // INV-P9-IMMEDIATE-SINK-ATTACH: Attach sink as soon as client connects.
+      // Professional broadcast systems attach immediately and emit pad frames
+      // until real content is available. This avoids circular dependencies
+      // where SwitchToLive waits for sink output but sink waits for SwitchToLive.
+      // We only need ProgramFormat (from StartChannel), not live_asset_path.
 
       auto program_format_opt = interface_->GetProgramFormat(channel_id);
       if (!program_format_opt) {

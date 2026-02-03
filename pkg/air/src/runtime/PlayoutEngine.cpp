@@ -779,6 +779,12 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
                   << "(video=" << video_depth << ", audio=" << audio_depth
                   << ", elapsed_ms=" << elapsed_ms << ", asset=" << s->live_asset_path << ")"
                   << std::endl;
+
+        // INV-P8-SHADOW-PREROLL-SYNC: Advance ct_cursor for pre-buffered frames
+        if (s->timeline_controller && video_depth > 0) {
+          s->timeline_controller->AdvanceCursorForPreBufferedFrames(video_depth);
+        }
+
         did_complete = true;
         break;  // Exit loop; lock released
       }
@@ -1284,6 +1290,14 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
               << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
               << ", asset=" << state->live_asset_path << ")" << std::endl;
 
+    // INV-P8-SHADOW-PREROLL-SYNC: Advance ct_cursor to account for pre-buffered frames.
+    // During shadow preroll, frames were pushed to buffer without AdmitFrame, so ct_cursor
+    // didn't advance. Now that the segment is committed, we advance ct_cursor so the producer
+    // can continue adding frames sequentially without getting REJECTED_EARLY.
+    if (state->timeline_controller && preview_depth_before > 0) {
+      state->timeline_controller->AdvanceCursorForPreBufferedFrames(preview_depth_before);
+    }
+
     // INV-P8-SUCCESSOR-OBSERVABILITY: Do not return success until observer confirms
     // at least one real successor video frame routed. Completion ONLY via observer.
     constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
@@ -1467,6 +1481,11 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
   std::cout << "[SwitchToLive] INV-SWITCH-DEADLINE-AUTHORITATIVE-001: COMPLETE "
             << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
             << ", asset=" << state->live_asset_path << ", safety_rail=" << (!ready ? "true" : "false") << ")" << std::endl;
+
+  // INV-P8-SHADOW-PREROLL-SYNC: Advance ct_cursor for pre-buffered frames
+  if (state->timeline_controller && preview_depth_before > 0) {
+    state->timeline_controller->AdvanceCursorForPreBufferedFrames(preview_depth_before);
+  }
 
   PlayoutInstance* state_ptr = state;
   constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
