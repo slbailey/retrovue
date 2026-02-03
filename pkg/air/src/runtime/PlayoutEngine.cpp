@@ -133,6 +133,13 @@ struct PlayoutEngine::PlayoutInstance {
   // accepted by encoder/mux). Pad frames do not count. Gates switch completion.
   std::atomic<bool> successor_video_emitted_{false};
 
+  // P8-FILL-001/003: Content deficit (EOF before boundary) — fill with pad until switch
+  std::atomic<bool> content_deficit_active_{false};
+  int64_t deficit_start_ct_us_ = 0;
+  int64_t deficit_boundary_ct_us_ = 0;
+  std::string deficit_segment_id_;
+  int64_t target_boundary_time_ms_ = 0;  // Set when switch scheduled (target_boundary_time_ms > 0)
+
   // Core components (null when control_surface_only)
   std::unique_ptr<buffer::FrameRingBuffer> ring_buffer;
   std::unique_ptr<buffer::FrameRingBuffer> preview_ring_buffer;  // Separate buffer for preview pre-fill
@@ -263,12 +270,21 @@ EngineResult PlayoutEngine::StartChannel(
     state->live_producer = std::make_unique<producers::file::FileProducer>(
         producer_config, *state->ring_buffer, master_clock_, nullptr,
         state->timeline_controller.get());
-    
+
+    // P8-EOF-001: Wire decoder EOF callback; PlayoutEngine receives signal (boundary unchanged)
+    state->live_producer->SetLiveProducerEOFCallback(
+        [this, channel_id](const std::string& segment_id, int64_t ct_at_eof_us, int64_t frames_delivered) {
+          OnLiveProducerEOF(channel_id, segment_id, ct_at_eof_us, frames_delivered);
+        });
+
     // Create program output
     renderer::RenderConfig render_config;
     render_config.mode = renderer::RenderMode::HEADLESS;
     state->program_output = renderer::ProgramOutput::Create(
         render_config, *state->ring_buffer, master_clock_, metrics_exporter_, channel_id);
+
+    // P8-FILL-002: ProgramOutput reads this to emit pad during content deficit (EOF before boundary)
+    state->program_output->SetContentDeficitActiveFlag(&state->content_deficit_active_);
 
     // INV-P8-SUCCESSOR-OBSERVABILITY: Wire observer before any segment may commit.
     // ProgramOutput notifies when first real successor video frame is routed.
@@ -715,6 +731,9 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
                     << "(readiness passed)" << std::endl;
         }
 
+        // P8-FILL-003: End content deficit fill when watcher completes switch
+        EndContentDeficitFill(s.get());
+
         // Capture PTS for as-run log before redirect (SetInputBuffer resets first_pts).
         const int64_t first_pts_us = s->program_output ? s->program_output->GetFirstEmittedPTS() : 0;
         const int64_t last_pts_us = s->program_output ? s->program_output->GetLastEmittedPTS() : 0;
@@ -910,6 +929,7 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
       return result;
     }
     std::cout << "[PlayoutEngine] INV-SWITCH-DEADLINE-AUTHORITATIVE-001: Switch scheduled for " << target_boundary_time_ms << std::endl;
+    state->target_boundary_time_ms_ = target_boundary_time_ms;  // P8-FILL-001: so OnLiveProducerEOF can compute boundary_ct
     lock.unlock();
     const int64_t target_us = target_boundary_time_ms * 1000;
     if (master_clock_) {
@@ -1220,6 +1240,8 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
     const int64_t first_pts_us = state->program_output ? state->program_output->GetFirstEmittedPTS() : 0;
     const int64_t last_pts_us = state->program_output ? state->program_output->GetLastEmittedPTS() : 0;
 
+    EndContentDeficitFill(state.get());
+
     MaybeRequestStop(state->live_producer.get());
     auto old_producer = std::move(state->live_producer);
 
@@ -1325,6 +1347,9 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
     return EngineResult(false, "No preview producer for channel " + std::to_string(channel_id));
   }
 
+  // P8-FILL-003: End content deficit fill when switch executes
+  EndContentDeficitFill(state);
+
   constexpr size_t kMinPreviewVideoDepth = 2;
   const bool is_shadow_mode = state->preview_producer->IsShadowDecodeMode();
   const bool shadow_ready = state->preview_producer->IsShadowDecodeReady();
@@ -1337,6 +1362,22 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
 
   if (!ready) {
     std::cout << "[PlayoutEngine] INV-SWITCH-DEADLINE-AUTHORITATIVE-001 VIOLATION: Switch executed at deadline but preview not ready. Using safety rails." << std::endl;
+    // ==========================================================================
+    // HYPOTHESIS TEST T2: Log buffer state when safety rail engages
+    // ==========================================================================
+    // H2 predicts: preview_audio_depth high, preview_video_depth low/zero
+    // This confirms audio backpressure blocked video production before switch.
+    const size_t preview_audio_depth = state->preview_ring_buffer ? state->preview_ring_buffer->AudioSize() : 0;
+    const size_t preview_audio_capacity = state->preview_ring_buffer ? state->preview_ring_buffer->AudioCapacity() : 0;
+    const size_t preview_video_capacity = state->preview_ring_buffer ? state->preview_ring_buffer->Capacity() : 0;
+    std::cout << "[PlayoutEngine] HYPOTHESIS_TEST_T2: safety_rail=true "
+              << "preview_video=" << preview_video_depth << "/" << preview_video_capacity
+              << " preview_audio=" << preview_audio_depth << "/" << preview_audio_capacity
+              << " (H2 predicts: audio_high, video_low)" << std::endl;
+    if (preview_audio_depth > preview_video_depth * 3) {
+      std::cout << "[PlayoutEngine] HYPOTHESIS_TEST_T2: AUDIO_IMBALANCE_DETECTED "
+                << "(audio >> video*3, consistent with H1/H2)" << std::endl;
+    }
     if (metrics_exporter_) {
       metrics_exporter_->IncrementSwitchDeadlineNotReady(channel_id);
     }
@@ -1686,6 +1727,58 @@ void PlayoutEngine::DisconnectRendererFromOutputBus(int32_t channel_id) {
     state->program_output->ClearOutputBus();
     std::cout << "[PlayoutEngine] Renderer disconnected from OutputBus for channel " << channel_id << std::endl;
   }
+}
+
+void PlayoutEngine::OnLiveProducerEOF(int32_t channel_id, const std::string& segment_id,
+                                      int64_t ct_at_eof_us, int64_t frames_delivered) {
+  // P8-EOF-002 INV-P8-SEGMENT-EOF-DISTINCT-001: EOF does NOT advance boundary; does NOT trigger switch.
+  std::cout << "[PlayoutEngine] DECODER_EOF received segment=" << segment_id
+            << " channel=" << channel_id
+            << " ct_at_eof=" << ct_at_eof_us
+            << " frames_delivered=" << frames_delivered
+            << " (boundary remains at scheduled time)" << std::endl;
+
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second) return;
+  PlayoutInstance* state = it->second.get();
+  if (!state->timeline_controller) return;
+
+  int64_t boundary_ct_us = 0;
+  if (state->target_boundary_time_ms_ > 0) {
+    const int64_t epoch_us = state->timeline_controller->GetEpoch();
+    boundary_ct_us = state->target_boundary_time_ms_ * 1000 - epoch_us;
+  }
+  if (boundary_ct_us <= 0 || ct_at_eof_us < boundary_ct_us) {
+    StartContentDeficitFill(state, segment_id, ct_at_eof_us, boundary_ct_us > 0 ? boundary_ct_us : 0);
+  }
+}
+
+void PlayoutEngine::StartContentDeficitFill(PlayoutInstance* state, const std::string& segment_id,
+                                            int64_t eof_ct_us, int64_t boundary_ct_us) {
+  if (state->content_deficit_active_.load(std::memory_order_acquire)) return;
+  state->content_deficit_active_.store(true, std::memory_order_release);
+  state->deficit_start_ct_us_ = eof_ct_us;
+  state->deficit_boundary_ct_us_ = boundary_ct_us;
+  state->deficit_segment_id_ = segment_id;
+  const int64_t gap_ms = boundary_ct_us > 0 ? (boundary_ct_us - eof_ct_us) / 1000 : 0;
+  std::cout << "[PlayoutEngine] CONTENT_DEFICIT_FILL_START segment=" << segment_id
+            << " ct=" << eof_ct_us
+            << " boundary_ct=" << boundary_ct_us
+            << " gap_ms=" << gap_ms << std::endl;
+}
+
+void PlayoutEngine::EndContentDeficitFill(PlayoutInstance* state) {
+  if (!state->content_deficit_active_.load(std::memory_order_acquire)) return;
+  const int64_t now_ct = state->timeline_controller ? state->timeline_controller->GetCTCursor() : 0;
+  const int64_t duration_ms = (now_ct - state->deficit_start_ct_us_) / 1000;
+  std::cout << "[PlayoutEngine] CONTENT_DEFICIT_FILL_END segment=" << state->deficit_segment_id_
+            << " duration_ms=" << duration_ms << std::endl;
+  state->content_deficit_active_.store(false, std::memory_order_release);
+  state->deficit_start_ct_us_ = 0;
+  state->deficit_boundary_ct_us_ = 0;
+  state->deficit_segment_id_.clear();
+  state->target_boundary_time_ms_ = 0;
 }
 
 }  // namespace retrovue::runtime

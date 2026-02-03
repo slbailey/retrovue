@@ -78,6 +78,10 @@ namespace retrovue::producers::file
   // Event callback for producer events (for test harness)
   using ProducerEventCallback = std::function<void(const std::string &event_type, const std::string &message)>;
 
+  // P8-EOF-001: Callback when live producer reaches decoder EOF (segment_id, ct_at_eof_us, frames_delivered).
+  // PlayoutEngine uses this for content deficit detection; EOF does NOT advance boundary.
+  using LiveProducerEOFCallback = std::function<void(const std::string& segment_id, int64_t ct_at_eof_us, int64_t frames_delivered)>;
+
   // FileProducer is a self-contained decoder that reads video/audio files,
   // decodes them internally using FFmpeg, and produces decoded YUV420 frames and PCM audio.
   //
@@ -175,6 +179,13 @@ namespace retrovue::producers::file
     // Used to detect zero-frame segments for bootstrap frame handling.
     int64_t GetConfiguredFrameCount() const { return config_.frame_count; }
 
+    // P8-PLAN-001 INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001: Planning authority and delivered count for deficit detection.
+    int64_t GetPlannedFrameCount() const { return planned_frame_count_; }
+    int64_t GetFramesDelivered() const { return frames_delivered_.load(std::memory_order_acquire); }
+
+    // P8-EOF-001: Set callback for decoder EOF (segment_id, ct_at_eof_us, frames_delivered). Idempotent signal.
+    void SetLiveProducerEOFCallback(LiveProducerEOFCallback callback);
+
     // Contract-level observability: as-run stats for AIR_AS_RUN_FRAME_RANGE.
     std::optional<AsRunFrameStats> GetAsRunFrameStats() const override;
 
@@ -219,6 +230,9 @@ namespace retrovue::producers::file
     std::atomic<bool> teardown_requested_;
     std::atomic<bool> writes_disabled_;  // Phase 7: Hard write barrier for RequestStop
     std::atomic<uint64_t> frames_produced_;
+    // P8-PLAN-001 INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001: planning authority from Core; deficit detection
+    int64_t planned_frame_count_ = -1;           // Set from config at start; -1 = until EOF
+    std::atomic<int64_t> frames_delivered_{0};  // Frames delivered to buffer (for early EOF detection)
     std::atomic<uint64_t> buffer_full_count_;
     std::atomic<uint64_t> decode_errors_;
     std::chrono::steady_clock::time_point teardown_deadline_;
@@ -245,6 +259,9 @@ namespace retrovue::producers::file
     int pad_y_;
     bool eof_reached_;
     bool eof_event_emitted_;  // Phase 8.8: emit "eof" only once; producer stays running until explicit stop
+    bool eof_signaled_;       // P8-EOF-001: DECODER_EOF signaled to PlayoutEngine only once per segment
+    bool truncation_logged_;  // P8-PLAN-003: log CONTENT_TRUNCATED only once per segment
+    LiveProducerEOFCallback live_producer_eof_callback_;
     double time_base_;  // Stream time base for PTS/DTS conversion
     // MT-DOMAIN ONLY: These variables must NEVER hold CT values.
     // MT = Media Time (raw decoder PTS, typically 0 to media duration)
@@ -317,6 +334,17 @@ namespace retrovue::producers::file
     bool decode_gate_blocked_;
 
     // ==========================================================================
+    // INV-P9-STEADY-003: Symmetric A/V backpressure tracking
+    // ==========================================================================
+    // Counters track frames emitted to enforce A/V delta <= 1 frame.
+    // Audio MUST NOT run more than 1 frame ahead of video.
+    // When audio_count > video_count + 1, audio push must wait.
+    // ==========================================================================
+    std::atomic<int64_t> steady_state_video_count_{0};
+    std::atomic<int64_t> steady_state_audio_count_{0};
+    bool av_delta_violation_logged_ = false;
+
+    // ==========================================================================
     // INV-DECODE-RATE-001: Diagnostic probe state for decode rate monitoring
     // ==========================================================================
     // Tracks decode rate to detect when producer falls behind real-time.
@@ -329,6 +357,19 @@ namespace retrovue::producers::file
     bool decode_probe_in_seek_ = false;            // True while discarding to seek target
     bool decode_rate_violation_logged_ = false;    // Log violation once per episode
     static constexpr int64_t kDecodeProbeWindowUs = 1'000'000;  // 1-second window
+
+    // ==========================================================================
+    // HYPOTHESIS TEST T3: Audio vs video packet rate tracking
+    // ==========================================================================
+    // Tracks packets processed to detect when audio decodes faster than video.
+    // H1 predicts: audio_packets_processed >> video_packets_processed
+    // ==========================================================================
+    uint64_t audio_packets_processed_ = 0;         // Total audio packets decoded
+    uint64_t video_packets_processed_ = 0;         // Total video packets decoded
+    int64_t av_rate_probe_start_us_ = 0;           // Start of A/V rate measurement window
+    uint64_t av_rate_probe_audio_count_ = 0;       // Audio packets in window
+    uint64_t av_rate_probe_video_count_ = 0;       // Video packets in window
+    bool av_rate_imbalance_logged_ = false;        // Log imbalance once per episode
 
     // ==========================================================================
     // INV-P10-BACKPRESSURE-SYMMETRIC: Unified A/V gating
@@ -347,6 +388,11 @@ namespace retrovue::producers::file
     // Blocks BEFORE av_read_frame() until both buffers have space.
     // INV-P10-BACKPRESSURE-SYMMETRIC: Gate at decode level, not push level.
     bool WaitForDecodeReady();
+
+    // INV-P9-STEADY-003: Check if audio can push (A/V delta <= 1)
+    // Returns true if audio is allowed to push without violating A/V delta.
+    // If false, audio must wait for video to catch up.
+    bool CanAudioAdvance() const;
   };
 
 } // namespace retrovue::producers::file

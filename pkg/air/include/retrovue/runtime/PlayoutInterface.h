@@ -20,6 +20,9 @@ namespace retrovue::output {
 class IOutputSink;
 class OutputBus;
 }
+namespace retrovue::telemetry {
+class MetricsExporter;
+}
 namespace retrovue::runtime {
 
 // Forward declarations
@@ -121,6 +124,9 @@ class PlayoutInterface {
 
   // Disconnects the renderer from the OutputBus.
   void DisconnectRendererFromOutputBus(int32_t channel_id);
+
+  // P9-OPT-002: Get the MetricsExporter for steady-state telemetry.
+  std::shared_ptr<telemetry::MetricsExporter> GetMetricsExporter();
 
   // Update the playout plan for an active channel
   InterfaceResult UpdatePlan(

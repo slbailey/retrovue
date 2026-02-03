@@ -75,7 +75,9 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       silence_injection_active_(false),
       silence_audio_pts_90k_(0),
       silence_frames_generated_(0),
-      audio_liveness_enabled_(true) {  // INV-P10-PCR-PACED-MUX: Default on, disable for PCR-paced
+      audio_liveness_enabled_(true),  // INV-P10-PCR-PACED-MUX: Default on, disable for PCR-paced
+      producer_ct_authoritative_(false),  // INV-P9-STEADY-007: Default off, enable in steady-state
+      first_producer_audio_logged_(false) {  // INV-P9-STEADY-007: For attach proof logging
   time_base_.num = 1;
   time_base_.den = 90000;  // MPEG-TS timebase is 90kHz
 }
@@ -1453,56 +1455,107 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   const int16_t* samples_ptr = combined_samples.data();
   int samples_remaining = total_samples;
   int64_t current_pts90k = pts90k;
-  
-  // Enforce PTS continuity: if we've already muxed packets and this PTS is very low,
-  // it's likely a new producer starting. Adjust it to continue from last muxed PTS.
-  // Convert last_mux_dts_ from stream timebase to 90kHz for comparison
+
+  // =========================================================================
+  // INV-P9-STEADY-007: Producer CT Authoritative
+  // =========================================================================
+  // When producer_ct_authoritative_ is true:
+  //   - Pass through producer PTS without modification
+  //   - Do NOT calculate or apply PTS offset
+  //   - Log discontinuities as violations but do NOT fix them
+  //
+  // When false (bootstrap / pre-steady-state):
+  //   - Legacy behavior: detect producer switches and rebase PTS
+  // =========================================================================
+
   AVRational tb90k{1, 90000};
 
-  // Producer switch detection: We need to detect when a NEW producer starts (PTS resets to low value)
-  // and calculate an offset to rebase its PTS to continue from where we left off.
-  //
-  // Key insight: After a switch, ALL frames from the new producer will have "low" PTS values
-  // relative to the muxed stream. We must NOT re-detect a switch on every frame!
-  //
-  // Solution: Track the PTS offset that converts producer PTS → muxed PTS.
-  // A switch is detected when incoming PTS is MUCH lower than what we'd expect from the
-  // current producer (i.e., lower than previous incoming PTS by a large margin).
+  if (producer_ct_authoritative_) {
+    // INV-P9-STEADY-007: Pass through producer PTS directly
+    // Detect discontinuities for logging only (do NOT fix)
+    if (last_seen_audio_pts90k_ != AV_NOPTS_VALUE) {
+      const int64_t backward_threshold = 450000;  // 5 seconds in 90kHz
+      const int64_t forward_threshold = 450000;   // 5 seconds in 90kHz
+      int64_t delta = pts90k - last_seen_audio_pts90k_;
 
-  bool is_first_frame_of_new_producer = false;
-
-  // Detect switch by comparing to PREVIOUS INCOMING PTS (not muxed PTS)
-  // This detects when the source timeline resets/jumps backward significantly
-  if (last_seen_audio_pts90k_ != AV_NOPTS_VALUE) {
-    // A backward jump of more than 5 seconds indicates a producer switch
-    // (normal playback only moves forward or has small jitter)
-    const int64_t backward_threshold = 450000;  // 5 seconds in 90kHz
-    if (pts90k < last_seen_audio_pts90k_ - backward_threshold) {
-      is_first_frame_of_new_producer = true;
+      if (delta < -backward_threshold) {
+        // Backward jump - log violation but pass through
+        std::cout << "[EncoderPipeline] INV-P9-STEADY-007 VIOLATION: Audio PTS jumped backward by "
+                  << (-delta / 90) << "ms (from " << last_seen_audio_pts90k_
+                  << " to " << pts90k << "), passing through unchanged" << std::endl;
+      } else if (delta > forward_threshold) {
+        // Forward jump - log violation but pass through
+        std::cout << "[EncoderPipeline] INV-P9-STEADY-007 VIOLATION: Audio PTS jumped forward by "
+                  << (delta / 90) << "ms (from " << last_seen_audio_pts90k_
+                  << " to " << pts90k << "), passing through unchanged" << std::endl;
+      }
     }
-  }
 
-  // Always update last_seen_audio_pts90k_ with the ORIGINAL incoming PTS
-  // This tracks the SOURCE timeline, not the muxed timeline
-  last_seen_audio_pts90k_ = pts90k;
+    // Update last seen PTS for discontinuity detection
+    last_seen_audio_pts90k_ = pts90k;
 
-  // Producer switch: rebase PTS and reset output timing
-  if (is_first_frame_of_new_producer) {
-    ResetOutputTiming();
-    if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
-      // Convert last_audio_mux_dts_ from stream timebase to 90kHz
-      int64_t last_muxed_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
-      // Calculate duration of one AAC frame in 90kHz units
-      const int frame_size_90k = audio_codec_ctx_->frame_size;
-      int64_t frame_duration_90k = (static_cast<int64_t>(frame_size_90k) * 90000) / encoder_sample_rate;
-      // Calculate the offset needed to rebase the new producer's PTS
-      int64_t target_pts = last_muxed_pts90k + frame_duration_90k;
-      audio_pts_offset_90k_ = target_pts - pts90k;
+    // Use producer PTS directly - NO offset applied
+    current_pts90k = pts90k;
+
+    // Log first audio PTS to prove no reset on attach
+    if (!first_producer_audio_logged_) {
+      std::cout << "[EncoderPipeline] INV-P9-STEADY-007: First audio PTS=" << pts90k
+                << " (producer-provided, not reset to 0)" << std::endl;
+      first_producer_audio_logged_ = true;
     }
-  }
+  } else {
+    // Legacy behavior: detect producer switches and rebase PTS
+    // This is used during bootstrap / pre-steady-state
 
-  // Apply the PTS offset to get the muxed PTS
-  current_pts90k = pts90k + audio_pts_offset_90k_;
+    // Enforce PTS continuity: if we've already muxed packets and this PTS is very low,
+    // it's likely a new producer starting. Adjust it to continue from last muxed PTS.
+    // Convert last_mux_dts_ from stream timebase to 90kHz for comparison
+
+    // Producer switch detection: We need to detect when a NEW producer starts (PTS resets to low value)
+    // and calculate an offset to rebase its PTS to continue from where we left off.
+    //
+    // Key insight: After a switch, ALL frames from the new producer will have "low" PTS values
+    // relative to the muxed stream. We must NOT re-detect a switch on every frame!
+    //
+    // Solution: Track the PTS offset that converts producer PTS → muxed PTS.
+    // A switch is detected when incoming PTS is MUCH lower than what we'd expect from the
+    // current producer (i.e., lower than previous incoming PTS by a large margin).
+
+    bool is_first_frame_of_new_producer = false;
+
+    // Detect switch by comparing to PREVIOUS INCOMING PTS (not muxed PTS)
+    // This detects when the source timeline resets/jumps backward significantly
+    if (last_seen_audio_pts90k_ != AV_NOPTS_VALUE) {
+      // A backward jump of more than 5 seconds indicates a producer switch
+      // (normal playback only moves forward or has small jitter)
+      const int64_t backward_threshold = 450000;  // 5 seconds in 90kHz
+      if (pts90k < last_seen_audio_pts90k_ - backward_threshold) {
+        is_first_frame_of_new_producer = true;
+      }
+    }
+
+    // Always update last_seen_audio_pts90k_ with the ORIGINAL incoming PTS
+    // This tracks the SOURCE timeline, not the muxed timeline
+    last_seen_audio_pts90k_ = pts90k;
+
+    // Producer switch: rebase PTS and reset output timing
+    if (is_first_frame_of_new_producer) {
+      ResetOutputTiming();
+      if (last_audio_mux_dts_ != AV_NOPTS_VALUE && audio_stream_) {
+        // Convert last_audio_mux_dts_ from stream timebase to 90kHz
+        int64_t last_muxed_pts90k = av_rescale_q(last_audio_mux_dts_, audio_stream_->time_base, tb90k);
+        // Calculate duration of one AAC frame in 90kHz units
+        const int frame_size_90k = audio_codec_ctx_->frame_size;
+        int64_t frame_duration_90k = (static_cast<int64_t>(frame_size_90k) * 90000) / encoder_sample_rate;
+        // Calculate the offset needed to rebase the new producer's PTS
+        int64_t target_pts = last_muxed_pts90k + frame_duration_90k;
+        audio_pts_offset_90k_ = target_pts - pts90k;
+      }
+    }
+
+    // Apply the PTS offset to get the muxed PTS
+    current_pts90k = pts90k + audio_pts_offset_90k_;
+  }
   
   // Convert caller's 90kHz PTS into the codec's time base for audio.
   AVRational tb_audio = audio_codec_ctx_->time_base;
@@ -1881,6 +1934,30 @@ void EncoderPipeline::SetAudioLivenessEnabled(bool enabled) {
   audio_liveness_enabled_ = enabled;
   std::cout << "[EncoderPipeline] INV-P10-PCR-PACED-MUX: Audio liveness "
             << (enabled ? "ENABLED" : "DISABLED (producer audio authoritative)") << std::endl;
+#else
+  (void)enabled;
+#endif
+}
+
+// =========================================================================
+// INV-P9-STEADY-007: Producer CT Authoritative
+// =========================================================================
+// When enabled, muxer uses producer-provided timestamps directly.
+// No local CT counters. No PTS rebasing. No offset calculation.
+// If producer timestamps have discontinuities, log violation but pass through.
+// =========================================================================
+void EncoderPipeline::SetProducerCTAuthoritative(bool enabled) {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  producer_ct_authoritative_ = enabled;
+  if (enabled) {
+    // Reset audio_pts_offset_90k_ to 0 so it has no effect
+    audio_pts_offset_90k_ = 0;
+    std::cout << "[EncoderPipeline] INV-P9-STEADY-007: Producer CT authoritative ENABLED"
+              << " (audio_pts_offset_90k_ reset to 0)" << std::endl;
+  } else {
+    std::cout << "[EncoderPipeline] INV-P9-STEADY-007: Producer CT authoritative DISABLED"
+              << " (PTS rebasing allowed)" << std::endl;
+  }
 #else
   (void)enabled;
 #endif

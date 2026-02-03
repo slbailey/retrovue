@@ -103,7 +103,8 @@ namespace retrovue::buffer
     // capacity: Number of frames the buffer can hold (default: 60)
     explicit FrameRingBuffer(size_t capacity = 60);
 
-    ~FrameRingBuffer();
+    // Virtual destructor for proper polymorphic cleanup (allows test overrides).
+    virtual ~FrameRingBuffer();
 
     // Disable copy and move
     FrameRingBuffer(const FrameRingBuffer &) = delete;
@@ -143,7 +144,8 @@ namespace retrovue::buffer
 
     // Returns the current number of video frames in the buffer.
     // This is an approximate count due to concurrent access.
-    size_t Size() const;
+    // Virtual for test override (e.g., INV-P9-STEADY-004 violation simulation).
+    virtual size_t Size() const;
 
     // Returns the current number of audio frames in the buffer.
     // This is an approximate count due to concurrent access.

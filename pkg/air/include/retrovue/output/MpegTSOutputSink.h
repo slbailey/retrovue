@@ -18,6 +18,10 @@
 #include "retrovue/output/IOutputSink.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 
+namespace retrovue::telemetry {
+class MetricsExporter;
+}  // namespace retrovue::telemetry
+
 namespace retrovue::buffer {
 struct Frame;
 struct AudioFrame;
@@ -71,6 +75,9 @@ class MpegTSOutputSink : public IOutputSink {
   // video frame encoded. Used to gate segment commit and switch completion.
   using OnSuccessorVideoEmittedCallback = std::function<void()>;
   void SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback);
+
+  // P9-OPT-002: Set metrics exporter for steady-state telemetry
+  void SetMetricsExporter(std::shared_ptr<telemetry::MetricsExporter> metrics, int32_t channel_id);
 
  private:
   // Main mux loop (runs in worker thread).
@@ -135,6 +142,51 @@ class MpegTSOutputSink : public IOutputSink {
 
   // INV-SWITCH-SUCCESSOR-EMISSION: Called when a real video frame is encoded
   OnSuccessorVideoEmittedCallback on_successor_video_emitted_;
+
+  // =========================================================================
+  // INV-P9-STEADY-001: Steady-state entry detection
+  // =========================================================================
+  // Steady-state is entered when: sink attached AND buffer depth >= 1 AND
+  // timing epoch established. Once entered, output owns pacing authority.
+  //
+  // These flags are detection scaffolding for Phase 9 contracts. They do NOT
+  // change behavior in this task (P9-CORE-001); behavior changes come later.
+  // =========================================================================
+  std::atomic<bool> steady_state_entered_{false};
+  std::atomic<bool> pcr_paced_active_{false};
+  static constexpr size_t kSteadyStateMinDepth = 1;
+
+ public:
+  // INV-P9-STEADY-001: Test hook - check if steady-state has been entered
+  bool IsSteadyStateEntered() const {
+    return steady_state_entered_.load(std::memory_order_acquire);
+  }
+
+  // INV-P9-STEADY-001: Test hook - check if PCR pacing is active
+  bool IsPcrPacedActive() const {
+    return pcr_paced_active_.load(std::memory_order_acquire);
+  }
+
+  // INV-P9-STEADY-008: Test hook - check if silence injection is disabled
+  bool IsSilenceInjectionDisabled() const {
+    return silence_injection_disabled_.load(std::memory_order_acquire);
+  }
+
+ private:
+  // =========================================================================
+  // INV-P9-STEADY-008: No Silence Injection After Attach
+  // =========================================================================
+  // When steady-state begins, silence injection MUST be disabled.
+  // Producer audio is the ONLY audio source.
+  // When audio queue is empty, mux MUST stall (video waits with audio).
+  // =========================================================================
+  std::atomic<bool> silence_injection_disabled_{false};
+
+  // =========================================================================
+  // P9-OPT-002: Steady-state metrics
+  // =========================================================================
+  std::shared_ptr<telemetry::MetricsExporter> metrics_exporter_;
+  int32_t channel_id_{0};
 };
 
 }  // namespace retrovue::output

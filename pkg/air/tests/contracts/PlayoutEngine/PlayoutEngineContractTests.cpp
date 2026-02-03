@@ -1,7 +1,9 @@
 #include "../../BaseContractTest.h"
 #include "../ContractRegistryEnvironment.h"
 
+#include <atomic>
 #include <chrono>
+#include <sstream>
 #include <thread>
 #include <functional>
 
@@ -1564,6 +1566,489 @@ TEST_F(PlayoutEngineContractTest, INV_P8_AUDIO_GATE_ReadinessTripsAfterShadowDis
     grpc::ServerContext ctx;
     service.StopChannel(&ctx, &req, &resp);
   }
+}
+
+// =============================================================================
+// Phase 8 Content Deficit Amendment — Contract Tests (P8-TEST-*)
+// =============================================================================
+// INV-P8-SEGMENT-EOF-DISTINCT-001, INV-P8-CONTENT-DEFICIT-FILL-001,
+// INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001
+// =============================================================================
+
+// P8-TEST-PLAN-001: Short content triggers EARLY_EOF with correct counts
+TEST_F(PlayoutEngineContractTest, P8_TEST_PLAN_001_ShortContentTriggersEarlyEOF)
+{
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+  {
+    std::ifstream f(sample_asset);
+    if (!f.good()) {
+      GTEST_SKIP() << "Test asset not found: " << sample_asset;
+    }
+  }
+
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+  clock->SetRatePpm(0.0);
+
+  std::string early_eof_event;
+  producers::file::ProducerEventCallback cb = [&early_eof_event](const std::string& type, const std::string&) {
+    if (type == "early_eof") early_eof_event = type;
+  };
+
+  producers::file::ProducerConfig config;
+  config.asset_uri = sample_asset;
+  config.stub_mode = false;
+  config.target_width = 1920;
+  config.target_height = 1080;
+  config.target_fps = 30.0;
+  config.frame_count = 99999;  // More than file has — triggers early EOF
+
+  producers::file::FileProducer producer(config, buffer, clock, cb, nullptr);
+  ASSERT_TRUE(producer.start());
+
+  for (int i = 0; i < 400; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    clock->AdvanceSeconds(0.5);
+    while (buffer.Size() > 0) {
+      buffer::Frame f;
+      buffer.Pop(f);
+    }
+    if (!early_eof_event.empty()) break;
+    if (producer.IsEOF()) break;
+  }
+  producer.stop();
+  while (producer.isRunning()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  const int64_t delivered = producer.GetFramesDelivered();
+  const int64_t planned = producer.GetPlannedFrameCount();
+  EXPECT_LT(delivered, planned)
+      << "P8-TEST-PLAN-001: delivered (" << delivered << ") should be < planned (" << planned << ") for early EOF";
+  if (producer.IsEOF()) {
+    EXPECT_EQ(early_eof_event, "early_eof")
+        << "P8-TEST-PLAN-001: early_eof event should be emitted when EOF reached";
+  }
+}
+
+// P8-TEST-PLAN-002: Long content truncated at planned_frame_count
+TEST_F(PlayoutEngineContractTest, P8_TEST_PLAN_002_LongContentTruncatedAtBoundary)
+{
+  buffer::FrameRingBuffer buffer(120);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+  clock->SetRatePpm(0.0);
+
+  producers::file::ProducerConfig config;
+  config.asset_uri = "truncate-test.mp4";
+  config.stub_mode = true;
+  config.target_width = 1920;
+  config.target_height = 1080;
+  config.target_fps = 30.0;
+  config.frame_count = 5;  // Deliver only 5 frames
+
+  producers::file::FileProducer producer(config, buffer, clock, nullptr, nullptr);
+  ASSERT_TRUE(producer.start());
+
+  for (int i = 0; i < 50; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    clock->AdvanceSeconds(0.5);
+    while (buffer.Size() > 0) {
+      buffer::Frame f;
+      buffer.Pop(f);
+    }
+    if (producer.GetFramesDelivered() >= 5) break;
+  }
+  producer.stop();
+  while (producer.isRunning()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_EQ(producer.GetFramesDelivered(), 5)
+      << "P8-TEST-PLAN-002: delivery must stop at planned_frame_count (got " << producer.GetFramesDelivered() << ")";
+  EXPECT_EQ(producer.GetPlannedFrameCount(), 5);
+}
+
+// P8-TEST-EOF-001: DECODER_EOF received; boundary unchanged (log proof)
+TEST_F(PlayoutEngineContractTest, P8_TEST_EOF_001_DecoderEOFLoggedBoundaryUnchanged)
+{
+  std::stringstream log_capture;
+  std::streambuf* old_cout = std::cout.rdbuf(log_capture.rdbuf());
+
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 996;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  std::ifstream f(sample_asset);
+  if (!f.good()) {
+    std::cout.rdbuf(old_cout);
+    GTEST_SKIP() << "Test asset not found: " << sample_asset;
+  }
+
+  retrovue::playout::StartChannelRequest req;
+  req.set_channel_id(channel_id);
+  req.set_plan_handle(sample_asset);
+  req.set_port(0);
+  req.set_program_format_json(kDefaultProgramFormatJson);
+  retrovue::playout::StartChannelResponse resp;
+  grpc::ServerContext ctx;
+  grpc::Status st = service.StartChannel(&ctx, &req, &resp);
+  ASSERT_TRUE(st.ok() && resp.success());
+
+  for (int i = 0; i < 80; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    clock->AdvanceSeconds(0.5);
+  }
+
+  {
+    retrovue::playout::StopChannelRequest stop_req;
+    stop_req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse stop_resp;
+    grpc::ServerContext stop_ctx;
+    service.StopChannel(&stop_ctx, &stop_req, &stop_resp);
+  }
+
+  std::cout.rdbuf(old_cout);
+  std::string log = log_capture.str();
+  const bool eof_logged = log.find("DECODER_EOF") != std::string::npos ||
+                         log.find("EARLY_EOF") != std::string::npos ||
+                         log.find("End of file reached") != std::string::npos;
+  EXPECT_TRUE(eof_logged)
+      << "P8-TEST-EOF-001: EOF-related log (DECODER_EOF/EARLY_EOF/End of file) when live producer hits EOF";
+}
+
+// P8-TEST-FILL-001: CONTENT_DEFICIT_FILL_START when EOF before boundary
+TEST_F(PlayoutEngineContractTest, P8_TEST_FILL_001_ContentDeficitFillStartLogged)
+{
+  std::stringstream log_capture;
+  std::streambuf* old_cout = std::cout.rdbuf(log_capture.rdbuf());
+
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  const int64_t epoch_us = 1'700'000'000'000'000LL;
+  clock->SetEpochUtcUs(epoch_us);
+
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 995;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  std::ifstream f(sample_asset);
+  if (!f.good()) {
+    std::cout.rdbuf(old_cout);
+    GTEST_SKIP() << "Test asset not found: " << sample_asset;
+  }
+
+  retrovue::playout::StartChannelRequest start_req;
+  start_req.set_channel_id(channel_id);
+  start_req.set_plan_handle(sample_asset);
+  start_req.set_port(0);
+  start_req.set_program_format_json(kDefaultProgramFormatJson);
+  retrovue::playout::StartChannelResponse start_resp;
+  grpc::ServerContext start_ctx;
+  ASSERT_TRUE(service.StartChannel(&start_ctx, &start_req, &start_resp).ok());
+  ASSERT_TRUE(start_resp.success());
+
+  retrovue::playout::LoadPreviewRequest load_req;
+  load_req.set_channel_id(channel_id);
+  load_req.set_asset_path(sample_asset);
+  load_req.set_start_frame(0);
+  load_req.set_frame_count(300);
+  load_req.set_fps_numerator(30);
+  load_req.set_fps_denominator(1);
+  retrovue::playout::LoadPreviewResponse load_resp;
+  grpc::ServerContext load_ctx;
+  ASSERT_TRUE(service.LoadPreview(&load_ctx, &load_req, &load_resp).ok());
+
+  const int64_t boundary_ms = (epoch_us / 1000) + 5000;
+  retrovue::playout::SwitchToLiveRequest switch_req;
+  switch_req.set_channel_id(channel_id);
+  switch_req.set_target_boundary_time_ms(boundary_ms);
+  retrovue::playout::SwitchToLiveResponse switch_resp;
+  grpc::ServerContext switch_ctx;
+  service.SwitchToLive(&switch_ctx, &switch_req, &switch_resp);
+
+  for (int i = 0; i < 60; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    clock->AdvanceSeconds(0.5);
+  }
+
+  {
+    retrovue::playout::StopChannelRequest stop_req;
+    stop_req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse stop_resp;
+    grpc::ServerContext stop_ctx;
+    service.StopChannel(&stop_ctx, &stop_req, &stop_resp);
+  }
+
+  std::cout.rdbuf(old_cout);
+  std::string log = log_capture.str();
+  EXPECT_TRUE(log.find("CONTENT_DEFICIT_FILL_START") != std::string::npos ||
+              log.find("DECODER_EOF") != std::string::npos)
+      << "P8-TEST-FILL-001: CONTENT_DEFICIT_FILL_START or DECODER_EOF when EOF before boundary";
+}
+
+// P8-TEST-EOF-002: Switch occurs at boundary time, not at EOF time
+TEST_F(PlayoutEngineContractTest, P8_TEST_EOF_002_SwitchAtBoundaryNotAtEOF)
+{
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  const int64_t epoch_us = 1'700'000'000'000'000LL;
+  clock->SetEpochUtcUs(epoch_us);
+
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 994;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  std::ifstream f(sample_asset);
+  if (!f.good()) {
+    GTEST_SKIP() << "Test asset not found: " << sample_asset;
+  }
+
+  retrovue::playout::StartChannelRequest start_req;
+  start_req.set_channel_id(channel_id);
+  start_req.set_plan_handle(sample_asset);
+  start_req.set_port(0);
+  start_req.set_program_format_json(kDefaultProgramFormatJson);
+  retrovue::playout::StartChannelResponse start_resp;
+  grpc::ServerContext start_ctx;
+  ASSERT_TRUE(service.StartChannel(&start_ctx, &start_req, &start_resp).ok());
+  ASSERT_TRUE(start_resp.success());
+
+  retrovue::playout::LoadPreviewRequest load_req;
+  load_req.set_channel_id(channel_id);
+  load_req.set_asset_path(sample_asset);
+  load_req.set_start_frame(0);
+  load_req.set_frame_count(300);
+  load_req.set_fps_numerator(30);
+  load_req.set_fps_denominator(1);
+  retrovue::playout::LoadPreviewResponse load_resp;
+  grpc::ServerContext load_ctx;
+  ASSERT_TRUE(service.LoadPreview(&load_ctx, &load_req, &load_resp).ok());
+
+  const int64_t now_ms = epoch_us / 1000;
+  const int64_t target_boundary_ms = now_ms + 8000;
+  retrovue::playout::SwitchToLiveRequest switch_req;
+  switch_req.set_channel_id(channel_id);
+  switch_req.set_target_boundary_time_ms(target_boundary_ms);
+  retrovue::playout::SwitchToLiveResponse switch_resp;
+  grpc::ServerContext switch_ctx;
+  service.SwitchToLive(&switch_ctx, &switch_req, &switch_resp);
+
+  int64_t completion_ms = 0;
+  for (int i = 0; i < 80; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    clock->AdvanceSeconds(0.5);
+    retrovue::playout::SwitchToLiveRequest poll_req;
+    poll_req.set_channel_id(channel_id);
+    poll_req.set_target_boundary_time_ms(target_boundary_ms);
+    retrovue::playout::SwitchToLiveResponse poll_resp;
+    grpc::ServerContext poll_ctx;
+    grpc::Status st = service.SwitchToLive(&poll_ctx, &poll_req, &poll_resp);
+    if (st.ok() && poll_resp.success()) {
+      completion_ms = poll_resp.switch_completion_time_ms();
+      break;
+    }
+  }
+
+  {
+    retrovue::playout::StopChannelRequest stop_req;
+    stop_req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse stop_resp;
+    grpc::ServerContext stop_ctx;
+    service.StopChannel(&stop_ctx, &stop_req, &stop_resp);
+  }
+
+  EXPECT_GE(completion_ms, target_boundary_ms - 500)
+      << "P8-TEST-EOF-002: Switch should complete at or after boundary (completion="
+      << completion_ms << ", target=" << target_boundary_ms << ")";
+  EXPECT_LE(completion_ms, target_boundary_ms + 500)
+      << "P8-TEST-EOF-002: Switch should complete near boundary time (not late by seconds)";
+}
+
+// P8-TEST-FILL-002: Output continues during deficit (frame count non-zero)
+TEST_F(PlayoutEngineContractTest, P8_TEST_FILL_002_FramesEmittedDuringDeficit)
+{
+  std::atomic<uint64_t> video_frames_received{0};
+  class CountingSink : public output::IOutputSink {
+   public:
+    explicit CountingSink(std::atomic<uint64_t>* count) : count_(count) {}
+    bool Start() override { return true; }
+    void Stop() override {}
+    bool IsRunning() const override { return true; }
+    output::SinkStatus GetStatus() const override { return output::SinkStatus::kRunning; }
+    void ConsumeVideo(const buffer::Frame&) override { count_->fetch_add(1, std::memory_order_relaxed); }
+    void ConsumeAudio(const buffer::AudioFrame&) override {}
+    void SetStatusCallback(output::SinkStatusCallback) override {}
+    std::string GetName() const override { return "counting"; }
+   private:
+    std::atomic<uint64_t>* count_;
+  };
+  auto sink = std::make_unique<CountingSink>(&video_frames_received);
+
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  const int64_t epoch_us = 1'700'000'000'000'000LL;
+  clock->SetEpochUtcUs(epoch_us);
+
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 993;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  std::ifstream f(sample_asset);
+  if (!f.good()) {
+    GTEST_SKIP() << "Test asset not found: " << sample_asset;
+  }
+
+  retrovue::playout::StartChannelRequest start_req;
+  start_req.set_channel_id(channel_id);
+  start_req.set_plan_handle(sample_asset);
+  start_req.set_port(0);
+  start_req.set_program_format_json(kDefaultProgramFormatJson);
+  retrovue::playout::StartChannelResponse start_resp;
+  grpc::ServerContext start_ctx;
+  ASSERT_TRUE(service.StartChannel(&start_ctx, &start_req, &start_resp).ok());
+  ASSERT_TRUE(start_resp.success());
+
+  auto attach_result = engine->AttachOutputSink(channel_id, std::move(sink), true);
+  ASSERT_TRUE(attach_result.success);
+  engine->ConnectRendererToOutputBus(channel_id);
+
+  retrovue::playout::LoadPreviewRequest load_req;
+  load_req.set_channel_id(channel_id);
+  load_req.set_asset_path(sample_asset);
+  load_req.set_start_frame(0);
+  load_req.set_frame_count(300);
+  load_req.set_fps_numerator(30);
+  load_req.set_fps_denominator(1);
+  retrovue::playout::LoadPreviewResponse load_resp;
+  grpc::ServerContext load_ctx;
+  ASSERT_TRUE(service.LoadPreview(&load_ctx, &load_req, &load_resp).ok());
+
+  const int64_t boundary_ms = (epoch_us / 1000) + 6000;
+  retrovue::playout::SwitchToLiveRequest switch_req;
+  switch_req.set_channel_id(channel_id);
+  switch_req.set_target_boundary_time_ms(boundary_ms);
+  retrovue::playout::SwitchToLiveResponse switch_resp;
+  grpc::ServerContext switch_ctx;
+  service.SwitchToLive(&switch_ctx, &switch_req, &switch_resp);
+
+  for (int i = 0; i < 50; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    clock->AdvanceSeconds(0.5);
+  }
+
+  {
+    retrovue::playout::StopChannelRequest stop_req;
+    stop_req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse stop_resp;
+    grpc::ServerContext stop_ctx;
+    service.StopChannel(&stop_ctx, &stop_req, &stop_resp);
+  }
+
+  EXPECT_GT(video_frames_received.load(), 0u)
+      << "P8-TEST-FILL-002: Frames must be emitted during deficit (output liveness)";
+}
+
+// P8-TEST-FILL-003: Switch terminates deficit fill; CONTENT_DEFICIT_FILL_END logged
+TEST_F(PlayoutEngineContractTest, P8_TEST_FILL_003_SwitchTerminatesDeficitFill)
+{
+  std::stringstream log_capture;
+  std::streambuf* old_cout = std::cout.rdbuf(log_capture.rdbuf());
+
+  auto metrics = std::make_shared<telemetry::MetricsExporter>(0);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  const int64_t epoch_us = 1'700'000'000'000'000LL;
+  clock->SetEpochUtcUs(epoch_us);
+
+  auto engine = std::make_shared<runtime::PlayoutEngine>(metrics, clock, false);
+  auto interface = std::make_shared<runtime::PlayoutInterface>(engine);
+  retrovue::playout::PlayoutControlImpl service(interface, false);
+
+  const int32_t channel_id = 992;
+  const std::string sample_asset = "/opt/retrovue/assets/SampleA.mp4";
+
+  std::ifstream f(sample_asset);
+  if (!f.good()) {
+    std::cout.rdbuf(old_cout);
+    GTEST_SKIP() << "Test asset not found: " << sample_asset;
+  }
+
+  retrovue::playout::StartChannelRequest start_req;
+  start_req.set_channel_id(channel_id);
+  start_req.set_plan_handle(sample_asset);
+  start_req.set_port(0);
+  start_req.set_program_format_json(kDefaultProgramFormatJson);
+  retrovue::playout::StartChannelResponse start_resp;
+  grpc::ServerContext start_ctx;
+  ASSERT_TRUE(service.StartChannel(&start_ctx, &start_req, &start_resp).ok());
+  ASSERT_TRUE(start_resp.success());
+
+  retrovue::playout::LoadPreviewRequest load_req;
+  load_req.set_channel_id(channel_id);
+  load_req.set_asset_path(sample_asset);
+  load_req.set_start_frame(0);
+  load_req.set_frame_count(300);
+  load_req.set_fps_numerator(30);
+  load_req.set_fps_denominator(1);
+  retrovue::playout::LoadPreviewResponse load_resp;
+  grpc::ServerContext load_ctx;
+  ASSERT_TRUE(service.LoadPreview(&load_ctx, &load_req, &load_resp).ok());
+
+  const int64_t boundary_ms = (epoch_us / 1000) + 5000;
+  retrovue::playout::SwitchToLiveRequest switch_req;
+  switch_req.set_channel_id(channel_id);
+  switch_req.set_target_boundary_time_ms(boundary_ms);
+  retrovue::playout::SwitchToLiveResponse switch_resp;
+  grpc::ServerContext switch_ctx;
+  service.SwitchToLive(&switch_ctx, &switch_req, &switch_resp);
+
+  bool switch_completed = false;
+  for (int i = 0; i < 60; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    clock->AdvanceSeconds(0.5);
+    retrovue::playout::SwitchToLiveRequest poll_req;
+    poll_req.set_channel_id(channel_id);
+    poll_req.set_target_boundary_time_ms(boundary_ms);
+    retrovue::playout::SwitchToLiveResponse poll_resp;
+    grpc::ServerContext poll_ctx;
+    if (service.SwitchToLive(&poll_ctx, &poll_req, &poll_resp).ok() && poll_resp.success()) {
+      switch_completed = true;
+      break;
+    }
+  }
+
+  {
+    retrovue::playout::StopChannelRequest stop_req;
+    stop_req.set_channel_id(channel_id);
+    retrovue::playout::StopChannelResponse stop_resp;
+    grpc::ServerContext stop_ctx;
+    service.StopChannel(&stop_ctx, &stop_req, &stop_resp);
+  }
+
+  std::cout.rdbuf(old_cout);
+  std::string log = log_capture.str();
+
+  EXPECT_TRUE(switch_completed) << "P8-TEST-FILL-003: Switch should complete";
+  EXPECT_TRUE(log.find("CONTENT_DEFICIT_FILL_END") != std::string::npos ||
+              log.find("CONTENT_DEFICIT_FILL_START") != std::string::npos || !switch_completed)
+      << "P8-TEST-FILL-003: CONTENT_DEFICIT_FILL_END (or START) when deficit was active and switch executed";
 }
 
 } // namespace

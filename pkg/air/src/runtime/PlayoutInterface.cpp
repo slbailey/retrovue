@@ -9,6 +9,7 @@
 #include "retrovue/output/OutputBus.h"
 #include "retrovue/runtime/PlayoutEngine.h"
 #include "retrovue/runtime/ProgramFormat.h"
+#include "retrovue/telemetry/MetricsExporter.h"
 
 namespace retrovue::runtime {
 
@@ -131,6 +132,10 @@ void PlayoutInterface::ConnectRendererToOutputBus(int32_t channel_id) {
 
 void PlayoutInterface::DisconnectRendererFromOutputBus(int32_t channel_id) {
   engine_->DisconnectRendererFromOutputBus(channel_id);
+}
+
+std::shared_ptr<telemetry::MetricsExporter> PlayoutInterface::GetMetricsExporter() {
+  return engine_->GetMetricsExporter();
 }
 
 }  // namespace retrovue::runtime

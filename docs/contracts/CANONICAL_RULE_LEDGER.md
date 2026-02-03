@@ -72,6 +72,9 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-SESSION-CREATION-UNGATED-001 | LAW-AUTHORITY-HIERARCHY, Phase 12 §8 | **Defines** — session creation not gated on boundary feasibility; viewer tune-in always creates session if resources available |
 | INV-STARTUP-CONVERGENCE-001 | INV-SESSION-CREATION-UNGATED-001, Phase 12 §8 | **Defines** — infeasible boundaries skipped during startup convergence; session must converge within bounded window |
 | INV-STARTUP-BOUNDARY-FEASIBILITY-001 | INV-SCHED-PLAN-BEFORE-EXEC-001, INV-STARTUP-CONVERGENCE-001 | **Amended** — applies to boundary commitment, not session creation; pre-convergence infeasibility causes skip, post-convergence infeasibility is FATAL |
+| INV-P8-SEGMENT-EOF-DISTINCT-001 | LAW-AUTHORITY-HIERARCHY, LAW-TIMELINE | **Enforces** — schedule-driven timeline; EOF is event, not authority; CT continues after EOF |
+| INV-P8-CONTENT-DEFICIT-FILL-001 | LAW-OUTPUT-LIVENESS, INV-P8-SEGMENT-EOF-DISTINCT-001 | **Operationalizes** — fills gap between EOF and boundary with pad; preserves TS cadence |
+| INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | LAW-AUTHORITY-HIERARCHY, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — frame_count is planning authority; short content triggers fill, long content truncated |
 
 ---
 
@@ -229,6 +232,20 @@ Truths about correctness and time.
 | INV-P8-OUTPUT-001 | Deterministic Output Liveness — explicit flush, bounded delivery |
 | INV-P8-SWITCH-002 | CT and MT describe same instant at segment start; first frame locks both |
 | INV-P8-AUDIO-CT-001 | Audio PTS derived from CT, init from first video frame |
+
+### Phase 8 Content Deficit Invariants (Amendment 2026-02-02)
+
+| Rule ID | Classification | Owner | Enforcement | Test | Log | Supersedes | Notes |
+|---------|---------------|-------|-------------|------|-----|------------|-------|
+| **INV-P8-SEGMENT-EOF-DISTINCT-001** | CONTRACT | PlayoutEngine | P8 | Pending | Yes | — | EOF ≠ boundary |
+| **INV-P8-CONTENT-DEFICIT-FILL-001** | CONTRACT | ProgramOutput | P8 | Pending | Yes | — | Pad fills EOF-to-boundary gap |
+| **INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001** | CONTRACT | FileProducer | P8 | Pending | Yes | — | frame_count is planning authority |
+
+| Rule ID | One-Line Definition |
+|---------|---------------------|
+| INV-P8-SEGMENT-EOF-DISTINCT-001 | Segment EOF (decoder exhaustion) is distinct from segment end (scheduled boundary). EOF is an event within the segment; boundary is the scheduled instant at which the switch occurs. Timeline advancement driven by scheduled segment end time, not by EOF. |
+| INV-P8-CONTENT-DEFICIT-FILL-001 | If live decoder reaches EOF before the scheduled segment end time, the gap (content deficit) MUST be filled using a deterministic fill strategy at real-time cadence until the boundary; pad (black/silence) is the guaranteed fallback. Output liveness and TS cadence preserved; mux never stalls. |
+| INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | frame_count in the playout plan is planning authority from Core. AIR receives this authority and enforces runtime adaptation against it. If actual content is shorter than planned, INV-P8-CONTENT-DEFICIT-FILL-001 applies; if longer, segment end time still governs (schedule authoritative). |
 
 ### Phase 9/10 Semantic Invariants
 
@@ -1135,6 +1152,54 @@ This section documents the phased implementation of invariants added by the 2026
 
 ---
 
+### Phase 8 Content Deficit Amendment
+
+**Goal:** Distinguish decoder EOF from segment boundary; fill content deficit with pad to preserve output liveness.
+
+**Governing Document:** [PHASE8_EXECUTION_PLAN.md](./PHASE8_EXECUTION_PLAN.md)
+**Incident Reference:** 2026-02-02 Black Screen Incident (Decoder EOF → False Viewer Disconnect)
+
+**Invariants:**
+- INV-P8-SEGMENT-EOF-DISTINCT-001 (decoder EOF ≠ segment end)
+- INV-P8-CONTENT-DEFICIT-FILL-001 (pad fills EOF-to-boundary gap)
+- INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 (frame_count is planning authority)
+
+**Implementation Tasks:**
+
+| Task ID | Description | Owner | Blocked By | Status |
+|---------|-------------|-------|------------|--------|
+| P8-PLAN-001 | Store frame_count as planning authority in FileProducer | AIR | — | — |
+| P8-PLAN-002 | Detect early EOF (frames_delivered < planned_frame_count) | AIR | P8-PLAN-001 | — |
+| P8-PLAN-003 | Handle long content (truncate at boundary) | AIR | P8-PLAN-001 | — |
+| P8-EOF-001 | Add EOF signaling from FileProducer to PlayoutEngine | AIR | P8-PLAN-002 | — |
+| P8-EOF-002 | Decouple EOF from boundary evaluation in PlayoutEngine | AIR | P8-EOF-001 | — |
+| P8-EOF-003 | Preserve CT advancement after live EOF | AIR | P8-EOF-002 | — |
+| P8-FILL-001 | Implement content deficit detection in PlayoutEngine | AIR | P8-EOF-002 | — |
+| P8-FILL-002 | Emit pad frames during content deficit | AIR | P8-FILL-001 | — |
+| P8-FILL-003 | End content deficit on boundary switch | AIR | P8-FILL-002 | — |
+| P8-TEST-EOF-001 | Contract test: EOF signaled before boundary, CT continues | Test | P8-EOF-003 | — |
+| P8-TEST-EOF-002 | Contract test: EOF does not trigger switch | Test | P8-EOF-002 | — |
+| P8-TEST-FILL-001 | Contract test: Pad emitted during content deficit | Test | P8-FILL-002 | — |
+| P8-TEST-FILL-002 | Contract test: TS emission continues during deficit | Test | P8-FILL-002 | — |
+| P8-TEST-FILL-003 | Contract test: Switch terminates deficit fill | Test | P8-FILL-003 | — |
+| P8-TEST-PLAN-001 | Contract test: Short content triggers early EOF | Test | P8-PLAN-002 | — |
+| P8-TEST-PLAN-002 | Contract test: Long content truncated at boundary | Test | P8-PLAN-003 | — |
+| P8-INT-001 | Integration: short content → pad → switch | Test | P8-TEST-FILL-003 | — |
+| P8-INT-002 | Integration: HTTP connection survives content deficit | Test | P8-INT-001 | — |
+
+**Exit Criteria:**
+- Decoder EOF logged distinctly from boundary
+- CT continues advancing after EOF
+- Content deficit filled with pad at real-time cadence
+- TS emission continues during deficit (no HTTP timeout)
+- Switch executes at boundary time, not EOF time
+- No false viewer disconnects due to content deficit
+- No black screen incidents from short content
+
+**Risk:** Low — Additive semantics; closes gap in existing pad mechanism
+
+---
+
 ### Phase Dependency Graph
 
 ```
@@ -1229,6 +1294,7 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 
 | Date | Auditor | Scope | Summary |
 |------|---------|-------|---------|
+| 2026-02-02 | Systems Contract Authority | Phase 8 Content Deficit Amendment | Added INV-P8-SEGMENT-EOF-DISTINCT-001 (decoder EOF distinct from segment boundary), INV-P8-CONTENT-DEFICIT-FILL-001 (pad fills EOF-to-boundary gap), INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 (frame_count is planning authority). 9 implementation tasks (P8-PLAN-*, P8-EOF-*, P8-FILL-*), 7 contract tests (P8-TEST-*), 2 integration tests (P8-INT-*). Incident-derived: Black screen incident where decoder EOF caused cascade failure (buffer empty → no TS packets → HTTP timeout → false viewer disconnect → teardown). Root cause: EOF conflated with segment end, no content deficit policy. Creates PHASE8_EXECUTION_PLAN.md and task specs in docs/contracts/tasks/phase8/. |
 | 2026-02-02 | Systems Contract Authority | Phase 12 Startup Convergence Amendment | Added INV-SESSION-CREATION-UNGATED-001 (session creation not gated on boundary feasibility) and INV-STARTUP-CONVERGENCE-001 (infeasible boundaries skipped during startup convergence). Amended INV-STARTUP-BOUNDARY-FEASIBILITY-001 to apply to boundary commitment, not session creation. New terminology: Session Creation, Boundary Commitment, Startup Convergence, Converged Session. Added PHASE12.md §8 (Startup Convergence Semantics). 4 implementation tasks (P12-CORE-010–013), 4 test tasks (P12-TEST-009–012). Incident-derived: Core returned 503 on viewer tune-in due to boundary feasibility check, despite content being immediately playable. Root cause: conflation of session creation with boundary commitment. |
 | 2026-02-02 | Systems Contract Authority | Phase 12 Terminal Semantics Amendment | Added INV-TERMINAL-SCHEDULER-HALT-001 (intent-absorbing: no scheduling intent after FAILED_TERMINAL) and INV-TERMINAL-TIMER-CLEARED-001 (timers cancelled on terminal entry). Introduced canonical terminology: "fully absorbing" = transition-absorbing + intent-absorbing. Clarified allowed operations in FAILED_TERMINAL (health, metrics, diagnostics). Incident-derived: scheduler continued generating intent after terminal failure, causing spurious log errors. |
 | 2026-02-02 | Systems Contract Authority | Phase 12 Creation | Created Phase 12: Live Session Authority & Teardown Semantics. Added 5 invariants: INV-TEARDOWN-STABLE-STATE-001 (teardown deferred in transient states), INV-TEARDOWN-GRACE-TIMEOUT-001 (bounded deferral), INV-TEARDOWN-NO-NEW-WORK-001 (no new work when pending), INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions), INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state). Incident-derived: Core tore down channel during SWITCH_ISSUED causing AIR encoder deadlock and audio queue overflow. 7 implementation tasks (P12-CORE-001–007), 6 test tasks (P12-TEST-001–006). |

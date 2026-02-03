@@ -132,6 +132,16 @@ class MetricsExporter {
   // P11D-003: Counter of switches that executed at deadline with preview not ready (safety rails).
   void IncrementSwitchDeadlineNotReady(int32_t channel_id);
 
+  // INV-P9-STEADY-005 (P9-CORE-008): Counter of equilibrium violations (depth outside [1,2N] for >1s).
+  void IncrementEquilibriumViolations(int32_t channel_id);
+
+  // P9-OPT-002: Steady-state metrics for INV-P9-STEADY-001
+  // Sets whether steady-state is active for a channel (gauge: 0 or 1).
+  void SetSteadyStateActive(int32_t channel_id, bool active);
+
+  // Records mux CT wait time for histogram (P9-OPT-002).
+  void RecordMuxCTWaitMs(int32_t channel_id, double wait_ms);
+
   // Gets the current metrics for a channel.
   // Returns false if channel doesn't exist.
   bool GetChannelMetrics(int32_t channel_id, ChannelMetrics& metrics) const;
@@ -153,6 +163,9 @@ class MetricsExporter {
       kRecordSwitchBoundaryDelta,
       kIncrementBoundaryViolations,
       kIncrementSwitchDeadlineNotReady,  // P11D-003
+      kIncrementEquilibriumViolations,   // INV-P9-STEADY-005
+      kSetSteadyStateActive,             // P9-OPT-002
+      kRecordMuxCTWaitMs,                // P9-OPT-002
     };
 
     Type type;
@@ -164,6 +177,8 @@ class MetricsExporter {
     bool transport_success = true;
     double transport_latency_ms = 0.0;
     int64_t switch_boundary_delta_ms = 0;  // P11B-003
+    bool steady_state_active = false;      // P9-OPT-002
+    double mux_ct_wait_ms = 0.0;           // P9-OPT-002
   };
 
   class EventQueue {
@@ -221,6 +236,13 @@ class MetricsExporter {
   std::map<int32_t, uint64_t> switch_boundary_violations_;
   // P11D-003: Switches at deadline with preview not ready (safety rails)
   std::map<int32_t, uint64_t> switch_deadline_not_ready_;
+  // INV-P9-STEADY-005: Buffer equilibrium violations (depth outside [1,2N] for >1s)
+  std::map<int32_t, uint64_t> equilibrium_violations_;
+
+  // P9-OPT-002: Steady-state metrics (INV-P9-STEADY-001)
+  std::map<int32_t, bool> steady_state_active_;                    // gauge: 0 or 1
+  std::map<int32_t, int64_t> steady_state_entry_time_us_;          // timestamp of entry
+  std::map<int32_t, std::vector<double>> mux_ct_wait_samples_ms_;  // histogram samples
 };
 
 }  // namespace retrovue::telemetry

@@ -168,6 +168,9 @@ class PlayoutEngine {
   // Disconnects the renderer from the OutputBus (reverts to legacy callbacks).
   void DisconnectRendererFromOutputBus(int32_t channel_id);
 
+  // P9-OPT-002: Get the MetricsExporter for steady-state telemetry.
+  std::shared_ptr<telemetry::MetricsExporter> GetMetricsExporter() { return metrics_exporter_; }
+
   EngineResult UpdatePlan(
       int32_t channel_id,
       const std::string& plan_handle);
@@ -191,6 +194,18 @@ class PlayoutEngine {
 
   // Helper: Check if output sink is attached (caller must hold channels_mutex_).
   bool IsOutputSinkAttachedLocked(int32_t channel_id) const;
+
+  // P8-EOF-001 / P8-EOF-002: Called when live FileProducer reaches decoder EOF.
+  // EOF does NOT advance boundary; does NOT trigger switch; boundary remains at scheduled time.
+  void OnLiveProducerEOF(int32_t channel_id, const std::string& segment_id,
+                        int64_t ct_at_eof_us, int64_t frames_delivered);
+
+  // P8-FILL-001: Start content deficit fill (EOF before boundary).
+  void StartContentDeficitFill(PlayoutInstance* state, const std::string& segment_id,
+                              int64_t eof_ct_us, int64_t boundary_ct_us);
+
+  // P8-FILL-003: End content deficit fill on switch.
+  void EndContentDeficitFill(PlayoutInstance* state);
 
   // INV-FINALIZE-LIVE: Centralized wiring of output bus → program output.
   // Call after switch completes (normal or watcher) and after sink attach.
