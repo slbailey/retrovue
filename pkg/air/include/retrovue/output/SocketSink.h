@@ -61,24 +61,6 @@ class SocketSink {
   // by dropping. Callers MUST NOT retry or treat this as a failure.
   bool TryConsumeBytes(const uint8_t* data, size_t len);
 
-  // CONTRACT_VIOLATION_PENDING: This method exists for migration purposes.
-  // It VIOLATES SS-001 (non-blocking) and SS-004 (no retries).
-  //
-  // Blocking write with retry on EAGAIN/EWOULDBLOCK.
-  // Moved from MpegTSOutputSink::WriteToFdCallback for extraction.
-  //
-  // This method:
-  // - Retries on EAGAIN with 100µs sleep (VIOLATES SS-004)
-  // - Retries on EINTR (acceptable)
-  // - Blocks until all bytes written or error (VIOLATES SS-001)
-  //
-  // Returns:
-  //   Number of bytes written on success (always == len if no error)
-  //   -1 on error (EPIPE, connection closed, etc.)
-  //
-  // TODO: Replace callers with TryConsumeBytes to achieve contract compliance.
-  ssize_t BlockingWrite(const uint8_t* data, size_t len);
-
   // Closes the socket sink. Idempotent.
   // After Close(), TryConsumeBytes() returns false immediately.
   void Close();
