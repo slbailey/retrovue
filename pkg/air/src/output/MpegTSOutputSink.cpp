@@ -643,9 +643,17 @@ void MpegTSOutputSink::MuxLoop() {
 void MpegTSOutputSink::EnqueueVideoFrame(const buffer::Frame& frame) {
   std::lock_guard<std::mutex> lock(video_queue_mutex_);
   if (video_queue_.size() >= kMaxVideoQueueSize) {
-    video_queue_.pop();  // Drop oldest frame
-    std::cout << "[DBG-DROP] video_drop=1 reason=QUEUE_FULL vq_size="
-              << video_queue_.size() << std::endl;
+    video_queue_.pop();  // Drop oldest frame - VIOLATION of Phase 10 posture
+    uint64_t total_dropped = video_frames_dropped_.fetch_add(1, std::memory_order_relaxed) + 1;
+    // INV-P10-FRAME-DROP-POLICY: Sink overflow drop is a contract violation.
+    // Correct behavior: backpressure propagates upstream to throttle decode.
+    // This drop is an emergency overload rail, not routine flow control.
+    std::cout << "[MpegTSOutputSink] INV-P10-FRAME-DROP-POLICY VIOLATION: "
+              << "video_drop=1 queue_depth=" << video_queue_.size()
+              << " max=" << kMaxVideoQueueSize
+              << " total_dropped=" << total_dropped
+              << " frame_ct=" << frame.metadata.pts
+              << std::endl;
   }
   video_queue_.push(frame);
 }
@@ -653,9 +661,17 @@ void MpegTSOutputSink::EnqueueVideoFrame(const buffer::Frame& frame) {
 void MpegTSOutputSink::EnqueueAudioFrame(const buffer::AudioFrame& audio_frame) {
   std::lock_guard<std::mutex> lock(audio_queue_mutex_);
   if (audio_queue_.size() >= kMaxAudioQueueSize) {
-    audio_queue_.pop();  // Drop oldest frame
-    std::cout << "[DBG-DROP] audio_drop=1 reason=QUEUE_FULL aq_size="
-              << audio_queue_.size() << std::endl;
+    audio_queue_.pop();  // Drop oldest frame - VIOLATION of Phase 10 posture
+    uint64_t total_dropped = audio_frames_dropped_.fetch_add(1, std::memory_order_relaxed) + 1;
+    // INV-P10-FRAME-DROP-POLICY: Sink overflow drop is a contract violation.
+    // Correct behavior: backpressure propagates upstream to throttle decode.
+    // This drop is an emergency overload rail, not routine flow control.
+    std::cout << "[MpegTSOutputSink] INV-P10-FRAME-DROP-POLICY VIOLATION: "
+              << "audio_drop=1 queue_depth=" << audio_queue_.size()
+              << " max=" << kMaxAudioQueueSize
+              << " total_dropped=" << total_dropped
+              << " frame_ct=" << audio_frame.pts_us
+              << std::endl;
   }
   audio_queue_.push(audio_frame);
 }

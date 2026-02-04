@@ -3,8 +3,11 @@
 **Status:** Canonical
 **Scope:** Steady-state realtime playout, backpressure, producer throttling, buffer equilibrium
 **Authority:** Refines Layer 0 Laws; does not override Phase 9 semantics
+**Doctrine:** [PHASE10_PRESSURE_DOCTRINE.md](../PHASE10_PRESSURE_DOCTRINE.md)
 
 Phase 9 is **frozen**. This contract does not modify bootstrap semantics, switching, or initial PCR establishment.
+
+This file answers: **"What concrete rules must components follow to obey the doctrine?"**
 
 ---
 
@@ -15,7 +18,7 @@ Phase 9 is **frozen**. This contract does not modify bootstrap semantics, switch
 | **INV-P10-BACKPRESSURE-SYMMETRIC** | CONTRACT | FileProducer, FrameRingBuffer | P10 | No | Yes |
 | **INV-P10-PRODUCER-THROTTLE** | CONTRACT | FileProducer | P10 | No | Yes |
 | **INV-P10-BUFFER-EQUILIBRIUM** | CONTRACT | FrameRingBuffer | P10 | No | Yes |
-| **INV-P10-NO-SILENCE-INJECTION** | CONTRACT | MpegTSOutputSink | P10 | No | No |
+| **INV-P10-NO-SILENCE-INJECTION** | CONTRACT | ProgramOutput / Mux | P10 | No | No |
 | **INV-P10-SINK-GATE** | CONTRACT | ProgramOutput | P10 | No | No |
 | **INV-OUTPUT-READY-BEFORE-LIVE** | CONTRACT | ChannelManager (Core) | P10 | No | Yes |
 | **INV-SWITCH-READINESS** | CONTRACT | PlayoutEngine | P10 | No | Yes |
@@ -134,6 +137,17 @@ WRONG: Gate at push level (causes A/V desync)
 - Video: 1 frame at 30fps = 33.3ms
 - Audio: 1024 samples at 48kHz = 21.3ms
 - Target depth of "3 frames" means ~100ms of video OR equivalent audio duration
+
+**Phase 10 Scope: Observability + Boundedness.**
+Phase 10 requires:
+1. Target N and range [1, 2N] defined
+2. Periodic sampling and violation detection
+3. Logging when outside range for >1 second
+4. Metrics counter for sustained violations
+
+Phase 10 does NOT require active depth control (PID controller, setpoint bias, etc.).
+Equilibrium emerges from matched producer/consumer rates under slot-based flow control.
+Active depth control mechanisms are explicitly **out of scope** for Phase 10 (deferred to Phase 11+).
 
 ---
 
