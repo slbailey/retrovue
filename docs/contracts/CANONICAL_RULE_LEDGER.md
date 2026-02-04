@@ -75,8 +75,8 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-P8-SEGMENT-EOF-DISTINCT-001 | LAW-AUTHORITY-HIERARCHY, LAW-TIMELINE | **Enforces** — schedule-driven timeline; EOF is event, not authority; CT continues after EOF |
 | INV-P8-CONTENT-DEFICIT-FILL-001 | LAW-OUTPUT-LIVENESS, INV-P8-SEGMENT-EOF-DISTINCT-001 | **Operationalizes** — fills gap between EOF and boundary with pad; preserves TS cadence |
 | INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | LAW-AUTHORITY-HIERARCHY, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — frame_count is planning authority; short content triggers fill, long content truncated |
-| LAW-TS-DISCOVERABILITY | LAW-OUTPUT-LIVENESS, LAW-VIDEO-DECODABILITY | **Extends** — if output must be live (LAW-OUTPUT-LIVENESS) and decodable (LAW-VIDEO-DECODABILITY), then program structure must be discoverable at any join time; PAT/PMT are control-plane, not media |
-| INV-TS-CONTROL-PLANE-CADENCE | LAW-TS-DISCOVERABILITY | **Operationalizes** — enforces 500ms wall-time bound on PAT/PMT emission; explicitly prohibits waiting on media queues, CT alignment, or encoder state |
+| LAW-TS-DISCOVERABILITY | LAW-OUTPUT-LIVENESS, LAW-VIDEO-DECODABILITY | **Derived consequence** — if output must be live (LAW-OUTPUT-LIVENESS) and decodable (LAW-VIDEO-DECODABILITY), then program structure must be discoverable at any join time. PAT/PMT emission is coupled to media frame writes in FFmpeg; discoverability is satisfied as a downstream consequence of liveness, not independently enforced. |
+| INV-TS-CONTROL-PLANE-CADENCE | LAW-TS-DISCOVERABILITY, LAW-OUTPUT-LIVENESS | **Detects** — monitors for 500ms wall-time gaps in TS emission; logs LAW-OUTPUT-LIVENESS violation when detected. No independent enforcement — PAT/PMT emission is coupled to media frame writes in FFmpeg. |
 
 ---
 
@@ -307,43 +307,35 @@ Truths about correctness and time.
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
-| INV-TS-CONTROL-PLANE-CADENCE | At any wall-time T (steady_clock), PAT and PMT MUST have been **emitted** (bytes observed leaving sink) in (T−500ms, T]. MUST NOT be gated by CT pacing, media availability, buffer depth, producer state, or encoder output. |
+| INV-TS-CONTROL-PLANE-CADENCE | **DETECTOR:** If no TS bytes emitted for ≥500ms wall time while MuxLoop is running, log LAW-OUTPUT-LIVENESS violation. No independent enforcement — PAT/PMT emission is coupled to video frame writes in FFmpeg. |
 
 **INV-TS-CONTROL-PLANE-CADENCE Details:**
 
-- **Definition (Sliding Window):** At any wall-time T, there MUST exist a PAT and PMT **emitted** in the interval (T−500ms, T]. This is a continuous guarantee evaluated against `steady_clock`, not a periodic check or epoch-aligned sample.
+- **Nature:** This is a **DETECTOR**, not an enforcer. There is no independent mechanism to emit PAT/PMT without emitting media frames — FFmpeg's `av_write_frame(nullptr)` does NOT trigger PAT/PMT resend; `resend_headers` and `pat_pmt_at_frames` flags only fire on actual packet writes.
 
-- **"Emitted" means:** Bytes containing PAT (PID 0x0000) or PMT (PID from PAT) observed leaving the sink (after `WriteToFdCallback` → `SocketSink`). NOT "scheduled", "eligible", or "queued internally by muxer".
+- **Definition (Sliding Window):** At any wall-time T, there SHOULD exist TS bytes **emitted** in the interval (T−500ms, T]. If this condition fails, it indicates a LAW-OUTPUT-LIVENESS violation (not a separate discoverability enforcement gap).
 
-- **Enforcement Point:** `MpegTSOutputSink::MuxLoop` — track wall time since last muxer output; if threshold exceeded while waiting for media, cause the muxer to emit control-plane tables.
+- **"Emitted" means:** Any TS bytes observed leaving the sink (after `WriteToFdCallback` → `SocketSink`). Since PAT/PMT piggyback on video frame writes, no TS bytes = no PAT/PMT.
 
-- **Forbidden (explicit prohibitions):** Control-plane emission MUST NOT wait on:
-  - `video_queue_` non-empty
-  - `audio_queue_` non-empty
-  - CT alignment (frame timing)
-  - Encoder packet availability
-  - Producer state (EOF, starvation, shadow mode)
-  - Buffer depth thresholds
+- **Detection Point:** `MpegTSOutputSink::MuxLoop` — track wall time since last muxer output; if threshold exceeded, log violation.
 
-- **Log Requirement:** Yes — log when control-plane emission is triggered due to media starvation:
+- **Log Requirement:** Yes — log when TS emission stalls:
   ```
-  INV-TS-CONTROL-PLANE-CADENCE: muxer heartbeat
-    media_starvation_ms=N
-    last_pat_seen_ms_ago=M
-    last_pmt_seen_ms_ago=P
+  [MpegTSOutputSink] LAW-OUTPUT-LIVENESS VIOLATION: no TS emitted for Nms (control-plane cannot be discoverable)
+  [MpegTSOutputSink] INV-TS-CONTROL-PLANE-CADENCE: idle_ms=N vq=V aq=A pcr_paced_active=B silence_injection_disabled=C
   ```
-  The `last_pat_seen_ms_ago` and `last_pmt_seen_ms_ago` fields enable postmortem verification via forensic grep without decoding media.
+  This logs the root cause (liveness violation) and includes queue state for diagnosis.
 
-- **Derives From:** LAW-TS-DISCOVERABILITY (subordinate invariant)
+- **Derives From:** LAW-TS-DISCOVERABILITY (which itself derives from LAW-OUTPUT-LIVENESS)
 
-- **Implementation Note:** Emission must go through the muxer (EncoderPipeline), not around it. Raw socket writes bypass FFmpeg's `resend_headers` state and will not trigger PAT/PMT resend.
+- **Why Not Enforcement:** FFmpeg's mpegts muxer does not provide an API to emit PAT/PMT independently of media. The `av_write_frame(NULL)` call only flushes buffered PES payloads; `MPEGTS_FLAG_REEMIT_PAT_PMT` is a one-shot flag cleared after first use; `MPEGTS_FLAG_PAT_PMT_AT_FRAMES` only triggers on actual video frame writes. The only way to guarantee PAT/PMT cadence is to guarantee media (or pad) frame cadence — i.e., enforce LAW-OUTPUT-LIVENESS.
 
 - **Phase 10 Compliance:** Does NOT violate Phase 10:
   - No new thread (MuxLoop already runs)
-  - No new queue (heartbeat uses existing muxer path)
-  - No new timing authority (MuxLoop already tracks wall time for CT pacing)
-  - No blocking (heartbeat emission is non-blocking)
-  - No backpressure propagation (control-plane is bounded, small)
+  - No new queue (detection only, no emission path)
+  - No new timing authority (wall time tracking already exists for CT pacing)
+  - No blocking (detection is read-only)
+  - No backpressure (logging does not affect data path)
 
 ### Frame Execution Invariants
 
