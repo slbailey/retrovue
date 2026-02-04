@@ -52,6 +52,8 @@ This ensures that when segment commit occurs, the buffer contains at least one v
 
 **Readiness for output routing requires commit detected AND >=1 video frame, not deep buffering.**
 
+**Ownership clarification:** BOOTSTRAP-READY is an internal AIR routing-readiness rule. It is not a Protocol readiness state and is not visible to Core as a gating signal for whether AIR "exists." Core queries AIR readiness via Protocol (INV-OUTPUT-READY-BEFORE-LIVE); this invariant governs AIR's internal routing decision.
+
 Readiness Policy:
 | Condition | Old Policy | Phase 9 Policy |
 |-----------|------------|----------------|
@@ -118,12 +120,14 @@ INV-P9-AUDIO-LIVENESS: injecting_silence ended (real_audio_ready=true)
 **At output startup (after TS header write and before steady-state):**
 
 - Audio MUST be the PCR master
-- Audio PTS MUST start at 0 (or <= 1 frame duration)
+- Audio PTS MUST start at 0 (or <= 1 frame duration) — *this is transport PTS, not CT; see Transport PTS Base Rule below*
 - Video PTS MUST be derived relative to audio
 - Mux MUST NOT initialize audio timing from video
 - If no real audio is available, injected silence is authoritative
 
 **Violations cause VLC to stall indefinitely.**
+
+**CT↔PTS Note:** "Audio PTS starts at 0" refers to *transport PTS*, not internal CT. CT remains authoritative per INV-P10-PRODUCER-CT-AUTHORITATIVE. See "Transport PTS Base Rule" section below for reconciliation.
 
 **Forbidden Pattern:**
 ```
@@ -138,6 +142,25 @@ X REMOVE this behavior:
 **First decodable TS packet MUST be emitted within 500ms of PCR-PACE timing initialization.**
 
 Derives from: INV-P9-BOOT-LIVENESS (adds specific deadline to "bounded time")
+
+---
+
+## Transport PTS Base Rule (CT↔PTS Reconciliation)
+
+**Internal CT (Channel Time) is the authoritative schedule time.** MPEG-TS PTS/DTS may be rebased to a local-zero timeline for decoder friendliness, as long as:
+
+1. **Monotonicity holds** — PTS never regresses within a segment
+2. **CT↔PTS mapping is stable** — constant offset for the session (or segment, if reset on boundaries)
+3. **Producer CT remains authoritative** — INV-P10-PRODUCER-CT-AUTHORITATIVE means mux uses producer-provided CT for sequencing decisions; transport PTS is a derived output
+
+**Why this matters:**
+- Phase 9 states "Audio PTS MUST start at 0"
+- Phase 10 states "Muxer must use producer-provided CT"
+- These are compatible: CT governs internal timing; transport PTS is rebased for decoder compatibility
+
+**Forbidden pattern:** Using transport PTS for internal timing decisions. CT is authoritative; PTS is output encoding.
+
+**Hardening rule:** Transport PTS is a derived encoding timestamp and MUST NOT be used as internal schedule time; all internal decisions use CT. No invariant may claim "PTS == CT" — with rebasing, PTS is CT plus a constant offset (or segment-offset).
 
 ---
 

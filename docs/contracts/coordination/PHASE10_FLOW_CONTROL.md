@@ -30,8 +30,8 @@ Phase 9 is **frozen**. This contract does not modify bootstrap semantics, switch
 | INV-P10-BACKPRESSURE-SYMMETRIC | When buffer full, both audio and video throttled symmetrically. **Audio samples MUST NOT be dropped due to queue backpressure; overflow MUST cause producer throttling.** |
 | INV-P10-PRODUCER-THROTTLE | Producer decode rate governed by consumer capacity, not decoder speed |
 | INV-P10-BUFFER-EQUILIBRIUM | Buffer depth oscillates around target, not unbounded or zero |
-| INV-P10-NO-SILENCE-INJECTION | Audio liveness disabled when PCR-paced mux active |
-| INV-P10-SINK-GATE | ProgramOutput must not consume frames before sink attached. **Clarification:** This gate exists solely to prevent buffer drain before routing is possible. It does not condition broadcast correctness or emission semantics on sink presence. Frames flow unconditionally once routing is established; absence of sink results in legal discard, not emission suppression. |
+| INV-P10-NO-SILENCE-INJECTION | Audio liveness (silence injection) disabled when PCR-paced mux active in steady-state, **except during Phase 9 bootstrap before producer audio is authoritative** |
+| INV-P10-SINK-GATE | ProgramOutput must not destructively dequeue the active buffer unless a routing target exists OR an explicit discard policy is active. **This gates destructive drain, not emission.** OutputBus may legally discard when no sink attached. Broadcast correctness is independent of sink presence. |
 | INV-OUTPUT-READY-BEFORE-LIVE | **(Core only)** Core must not declare channel LIVE until output pipeline is observable. AIR exposes readiness signals; Core decides LIVE state. LIVE is a Core lifecycle state, not an AIR broadcast state. |
 | INV-SWITCH-READINESS | **DIAGNOSTIC GOAL:** Switch SHOULD have video >=2, sink attached, format locked. *(Superseded by INV-SWITCH-DEADLINE-AUTHORITATIVE-001 for completion semantics)* |
 | INV-SWITCH-SUCCESSOR-EMISSION | **DIAGNOSTIC GOAL:** Real successor video frame SHOULD be emitted at switch. *(Superseded by INV-SWITCH-DEADLINE-AUTHORITATIVE-001 for completion semantics)* |
@@ -139,19 +139,20 @@ WRONG: Gate at push level (causes A/V desync)
 
 ### INV-P10-SINK-GATE
 
-**ProgramOutput must not consume frames before an output sink is attached.**
+**ProgramOutput must not destructively dequeue the active buffer unless a routing target exists OR an explicit discard policy is active.**
 
-**Ownership Clarification:** This gate exists solely to prevent buffer drain before routing is possible. It does NOT condition broadcast correctness or emission semantics on sink presence.
+**Key distinction:** This gates *destructive drain*, not *emission* or *runtime existence*. AIR can still "emit" to OutputBus, and OutputBus can legally discard when no sink is attached. Broadcast correctness is independent of sink presence.
 
 This prevents buffer starvation during the window between `StartChannel` and `AttachStream`:
 - Without this gate, frames are popped but not routed anywhere
 - Buffer drains without pacing, causing underrun before playback even begins
-- Gate pauses frame consumption until OutputBus is connected
+- Gate pauses destructive dequeue until routing target exists
 
 **What this invariant is NOT:**
 - NOT an observer-gated output mechanism
 - NOT a visibility gate
 - NOT a broadcast correctness condition
+- NOT a Protocol readiness state visible to Core
 
 Once routing is established, frames flow unconditionally. Absence of sink results in legal discard at OutputBus, not emission suppression at ProgramOutput.
 
@@ -159,20 +160,23 @@ Once routing is established, frames flow unconditionally. Absence of sink result
 
 ### INV-OUTPUT-READY-BEFORE-LIVE
 
-**Owner:** Core (ChannelManager)
+**Owner:** Core (ChannelManager) — *this invariant is included here for completeness but is defined in Core lifecycle contracts*
 
 **Core MUST NOT declare a channel LIVE until the output pipeline is observable.**
 
-**Ownership Clarification:** LIVE is a Core lifecycle state, not an AIR broadcast state. AIR exposes readiness signals (buffer depth, sink attachment status); Core decides when to transition to LIVE. AIR never decides "LIVE" — it only reports conditions.
+**Ownership Clarification:** LIVE is a Core lifecycle state, not an AIR broadcast state. AIR exposes readiness signals (buffer depth, sink attachment status) as diagnostics; Core decides when to transition to LIVE. AIR never decides "LIVE" — it only reports conditions.
 
-- **LIVE** means "Core has declared the output pipeline observable"
-- **NOT_READY** means "Core has not yet declared LIVE"
-
-**Binding Rules (Core):**
-- Core queries AIR readiness via Protocol
-- Core transitions boundary state to LIVE when conditions are met
+**AIR's role (what this file governs):**
+- AIR exposes readiness signals (diagnostic telemetry)
 - AIR does not autonomously enter or declare LIVE state
-- If buffer is ready but sink is not attached, remain in NOT_READY state
+- AIR runtime continues regardless of Core's LIVE declaration
+
+**Core's role (defined in Core lifecycle contracts):**
+- Core maintains internal lifecycle states (PRE_LIVE, LIVE, etc.)
+- Core transitions boundary state to LIVE when conditions are met
+- Protocol readiness responses must not create retry semantics (per INV-CONTROL-NO-POLL-001)
+
+**See:** [/pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md](../../../pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md) for full lifecycle state machine.
 
 ---
 
@@ -208,11 +212,14 @@ All producers (FileProducer, PrevueProducer, WeatherProducer, EmergencyProducer,
    - Sample clock advances time: `ct += sample_duration`
    - Monotonicity guard only if time goes backwards
 
+   **Anchoring rule:** Audio CT is derived from the video-locked origin CT for the segment; subsequent audio frames advance by sample duration. This yields a stable CT stream suitable for muxing without sink-side repairs. Audio does NOT have an independent clock — it is anchored to video's segment origin.
+
    What is FORBIDDEN:
    - No `<=` comparison (equality is fine)
    - No `+1us` nudging
    - No per-frame "adjustments" or "repairs"
    - No "Audio PTS adjusted" logic
+   - No independent audio clock that can drift from video origin
 
 6. **INV-P10-PRODUCER-CT-AUTHORITATIVE: Muxer must use producer-provided CT.**
 
@@ -230,11 +237,14 @@ All producers (FileProducer, PrevueProducer, WeatherProducer, EmergencyProducer,
    4. Dequeue and encode all audio with CT <= video CT
    5. Repeat
 
+   **Critical clarification:** PCR pacing MUST NOT block upstream frame production/selection. Any sink-side "waiting" is internal scheduling of writes, not a stall that can prevent ProgramOutput from producing pad/real frames on time. LAW-OUTPUT-LIVENESS and continuous emission always win.
+
    What is FORBIDDEN:
    - Draining loops ("while queue not empty -> emit")
    - Burst writes (emit as fast as possible)
    - Adaptive speed-up / slow-down
    - Dropping frames to catch up
+   - Sink-side waits that backpressure upstream
 
 ---
 
@@ -257,9 +267,11 @@ All producers (FileProducer, PrevueProducer, WeatherProducer, EmergencyProducer,
 ### A/V Desync
 
 **Symptom:** Lip sync issues, audio leads/lags video
-**Cause:** Asymmetric backpressure or frame drops
+**Cause:** Asymmetric backpressure or timing drift
 **Detection:** `|audio_pts - video_pts| > threshold` (e.g., 100ms)
-**Recovery:** Coordinated drop to resync, or wait for natural catchup
+**Recovery:** Pad insertion until clocks realign; never drop emitted samples. Natural convergence preferred; symmetric throttling prevents recurrence.
+
+**Constitutional constraint:** Per INV-PACING-ENFORCEMENT-002, no drops are permitted. Freeze-then-pad is the recovery mechanism, not coordinated dropping.
 
 ### Timing Drift
 
@@ -279,5 +291,6 @@ All producers (FileProducer, PrevueProducer, WeatherProducer, EmergencyProducer,
 
 - [BROADCAST_LAWS.md](../laws/BROADCAST_LAWS.md) - Layer 0 Laws
 - [PHASE9_BOOTSTRAP.md](./PHASE9_BOOTSTRAP.md) - Phase 9 Bootstrap
-- [PHASE12_SESSION_TEARDOWN.md](./PHASE12_SESSION_TEARDOWN.md) - Phase 12 Teardown
+- [BOUNDARY_LIFECYCLE.md](../../../pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md) - Core boundary lifecycle (Protocol)
+- [PHASE12_SESSION_TEARDOWN.md](../../../pkg/core/docs/contracts/lifecycle/PHASE12_SESSION_TEARDOWN.md) - Core session teardown (NOT AIR)
 - [CANONICAL_RULE_LEDGER.md](../CANONICAL_RULE_LEDGER.md) - Single source of truth

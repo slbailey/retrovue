@@ -31,7 +31,7 @@
 | **LAW-SWITCHING** | LAW | AIR | P8 | Yes | Yes |
 | **LAW-VIDEO-DECODABILITY** | LAW | AIR | RUNTIME | Yes | Yes |
 | **LAW-FRAME-EXECUTION** | CONTRACT | AIR | P10 | No | No |
-| **LAW-RUNTIME-AUDIO-AUTHORITY** | LAW | PlayoutEngine | RUNTIME | No | Yes |
+| **LAW-RUNTIME-AUDIO-AUTHORITY** | LAW | AIR (PlayoutEngine) | RUNTIME | No | Yes |
 
 ---
 
@@ -96,8 +96,8 @@ Source: PlayoutInvariants-BroadcastGradeGuarantees.md §4
 - **No gaps:** The output stream has no missing frames or packets at the switch boundary.
 - **No PTS regression:** PTS/DTS never decrease across the switch.
 - **No silence during switches:** The switch is seamless at the frame boundary.
-- Switching is Core-commanded (SwitchToLive).
-- AIR does not switch autonomously except dead-man fallback.
+- Switching is Core-commanded (SwitchToLive). AIR executes switches; AIR does not decide whether to switch.
+- AIR does not switch autonomously except dead-man fallback (safety rail, not editorial decision).
 
 Source: PlayoutInvariants-BroadcastGradeGuarantees.md §5
 
