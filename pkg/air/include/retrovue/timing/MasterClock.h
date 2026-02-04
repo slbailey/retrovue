@@ -39,14 +39,23 @@ class MasterClock {
   // Role determines who is allowed to set epoch - only LIVE can succeed.
   enum class EpochSetterRole { LIVE, PREVIEW };
 
+  // =========================================================================
+  // EPOCH OWNERSHIP (CANONICAL):
+  // - Only PlayoutEngine may call ResetEpochForNewSession() and TrySetEpochOnce().
+  // - Producers and TimelineController must never reset or set epoch.
+  // - Epoch is immutable during steady-state playout (Phase 10).
+  // =========================================================================
+
   // Attempts to set the epoch. Returns true if epoch was set, false if:
   //   - role == PREVIEW (always rejected per P7-ARCH-001)
   //   - epoch already locked (even LIVE is rejected after first set)
   // Uses atomic compare-exchange to prevent races between concurrent setters.
+  // OWNERSHIP: Only PlayoutEngine may call this.
   virtual bool TrySetEpochOnce(int64_t epoch_utc_us, EpochSetterRole role = EpochSetterRole::LIVE) = 0;
 
   // Resets the epoch lock for a new channel session.
   // Called only on channel stop/start boundaries, never during active playback.
+  // OWNERSHIP: Only PlayoutEngine may call this.
   virtual void ResetEpochForNewSession() = 0;
 
   // Returns true if epoch has been locked (set at least once this session).

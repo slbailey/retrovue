@@ -1791,40 +1791,13 @@ namespace retrovue::producers::file
       }
       else
       {
-        // Legacy path: Per Phase 7 contract (INV-P7-004): Epoch stability.
-        // Only the first (live) producer sets the epoch.
-        // Preview/shadow producers must NOT reset the epoch - they inherit the channel's epoch.
-        // Belt-and-suspenders: even if shadow_mode check fails, TrySetEpochOnce() will refuse.
-        bool shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
-        if (master_clock_ && !shadow_mode)
+        // LEGACY PATH (no TimelineController) - epoch owned by PlayoutEngine.
+        // Producers must never set epoch. PlayoutEngine establishes epoch at StartChannel.
+        if (master_clock_)
         {
           playback_start_utc_us_ = master_clock_->now_utc_us();
-          // CRITICAL FIX for mid-segment join (Phase 6):
-          // The epoch must account for the media PTS offset after seek.
-          // Without this, scheduled_to_utc_us(frame_pts) returns a time far in the future
-          // (playback_start + frame_pts), when it should return a time near playback_start.
-          //
-          // Correct formula: epoch = playback_start - first_frame_pts
-          // Then: scheduled_to_utc_us(frame_pts) = epoch + frame_pts
-          //                                      = playback_start - first_frame_pts + frame_pts
-          //                                      = playback_start + (frame_pts - first_frame_pts)
-          // So the first frame is due at playback_start, and subsequent frames are due
-          // at playback_start + (their offset from first frame).
-          int64_t epoch_utc_us = playback_start_utc_us_ - first_mt_pts_us_;
-
-          // Phase 7: Use TrySetEpochOnce with LIVE role - if epoch already set, this is a no-op
-          if (master_clock_->TrySetEpochOnce(epoch_utc_us, timing::MasterClock::EpochSetterRole::LIVE)) {
-            std::cout << "[FileProducer] Clock epoch synchronized: playback_start="
-                      << playback_start_utc_us_ << "us, first_frame_pts=" << first_mt_pts_us_
-                      << "us, epoch=" << epoch_utc_us << "us" << std::endl;
-          } else {
-            // Epoch was already set by another producer - read existing epoch
-            int64_t existing_epoch = master_clock_->get_epoch_utc_us();
-            std::cout << "[FileProducer] Epoch already established (existing=" << existing_epoch
-                      << "), not resetting (INV-P7-004)" << std::endl;
-          }
-        } else if (shadow_mode) {
-          std::cout << "[FileProducer] Shadow mode: inheriting existing epoch (no reset)" << std::endl;
+          std::cout << "[FileProducer] Legacy path: epoch owned by PlayoutEngine (existing="
+                    << master_clock_->get_epoch_utc_us() << "us)" << std::endl;
         }
       }
     }
