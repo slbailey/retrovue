@@ -265,10 +265,9 @@ HTTP fan-out happens above this sink.
 | Method | Status | Notes |
 |--------|--------|-------|
 | `TryConsumeBytes()` | ✅ Compliant | Non-blocking, uses MSG_DONTWAIT, drops on EAGAIN |
-| `BlockingWrite()` | ⚠️ Deprecated | Marked CONTRACT_VIOLATION_PENDING; exists for migration only |
 | `Close()` | ✅ Compliant | Idempotent |
 
-**WriteToFdCallback uses `TryConsumeBytes()` exclusively.** The deprecated `BlockingWrite()` is not called in production paths and should be deleted once all legacy callers are migrated.
+**Phase 10 Compliance:** All legacy blocking methods have been removed. `WriteToFdCallback` uses `TryConsumeBytes()` exclusively. No escape hatches remain.
 
 ---
 
