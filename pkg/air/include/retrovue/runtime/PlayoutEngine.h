@@ -141,14 +141,14 @@ class PlayoutEngine {
   // Phase 9.0: OutputBus/OutputSink architecture
   // Attaches an output sink to the channel's OutputBus.
   // The sink will receive frames routed through the bus.
-  // If replace_existing is true and a sink is already attached, replaces it.
+  // OB-001: If a sink is already attached, returns error (protocol violation).
+  // Core must call DetachOutputSink first if replacement is needed.
   EngineResult AttachOutputSink(int32_t channel_id,
-                                std::unique_ptr<output::IOutputSink> sink,
-                                bool replace_existing = false);
+                                std::unique_ptr<output::IOutputSink> sink);
 
   // Detaches the output sink from the channel's OutputBus.
-  // If force is true, detaches immediately without waiting for graceful shutdown.
-  EngineResult DetachOutputSink(int32_t channel_id, bool force = false);
+  // OB-003: Always succeeds. Core-owned decision.
+  EngineResult DetachOutputSink(int32_t channel_id);
 
   // Returns true if an output sink is attached to the channel's OutputBus.
   bool IsOutputSinkAttached(int32_t channel_id);

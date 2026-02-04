@@ -25,9 +25,10 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
          |      +-- PHASE9_BOOTSTRAP.md         <- Output bootstrap
          |      +-- PHASE10_FLOW_CONTROL.md     <- Steady-state flow
          |
-         +-- components/                        <- Layer 2.5-2.6: Component role specs
+         +-- components/                        <- Layer 2.5-2.7: Component role specs
          |      +-- PROGRAMOUTPUT_CONTRACT.md   <- Pure selector (2.5)
          |      +-- OUTPUTBUS_CONTRACT.md       <- Non-blocking router (2.6)
+         |      +-- SOCKETSINK_CONTRACT.md      <- Non-blocking transport (2.7)
          |
          +-- diagnostics/
          |      +-- DIAGNOSTIC_INVARIANTS.md    <- Layer 3: Logging, drops (AIR)
@@ -221,6 +222,21 @@ Component contracts define the role, authority boundaries, and invariants for sp
 | OB-003 | Stable sink between attach/detach (errors don't detach) |
 | OB-004 | No fan-out, ever (HTTP handles multiplexing) |
 | OB-005 | No timing or correctness authority |
+
+### SocketSink Contract
+
+**Location:** [components/SOCKETSINK_CONTRACT.md](./components/SOCKETSINK_CONTRACT.md)
+
+**Role:** Non-blocking byte consumer. Transport layer, outside broadcast semantics.
+
+| Invariant | Description |
+|-----------|-------------|
+| SS-001 | Non-blocking ingress (HARD LAW — violation = LAW-OUTPUT-LIVENESS breach) |
+| SS-002 | Local backpressure absorption (never propagate upstream) |
+| SS-003 | Bounded memory (no unbounded queues) |
+| SS-004 | Best-effort delivery (no retries, no repair) |
+| SS-005 | Failure is local (errors don't detach, don't affect AIR) |
+| SS-006 | No timing authority (no sleep, no pacing, no batching) |
 
 ---
 

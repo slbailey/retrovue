@@ -1120,7 +1120,7 @@ TEST_F(Phase10FlowControlTest, TEST_INV_P8_ZERO_FRAME_BOOTSTRAP_EndToEndOutputFl
 
   // Stop output before assertions
   program_output->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 
   // =========================================================================
   // ASSERTION: At least 5 pad frames emitted within 500ms

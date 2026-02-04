@@ -103,14 +103,13 @@ InterfaceResult PlayoutInterface::UpdatePlan(
 // Phase 9.0: OutputBus/OutputSink methods
 InterfaceResult PlayoutInterface::AttachOutputSink(
     int32_t channel_id,
-    std::unique_ptr<output::IOutputSink> sink,
-    bool replace_existing) {
-  auto result = engine_->AttachOutputSink(channel_id, std::move(sink), replace_existing);
+    std::unique_ptr<output::IOutputSink> sink) {
+  auto result = engine_->AttachOutputSink(channel_id, std::move(sink));
   return InterfaceResult(result.success, result.message);
 }
 
-InterfaceResult PlayoutInterface::DetachOutputSink(int32_t channel_id, bool force) {
-  auto result = engine_->DetachOutputSink(channel_id, force);
+InterfaceResult PlayoutInterface::DetachOutputSink(int32_t channel_id) {
+  auto result = engine_->DetachOutputSink(channel_id);
   return InterfaceResult(result.success, result.message);
 }
 
