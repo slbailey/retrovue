@@ -7,6 +7,8 @@
 This document is a **constitutional amendment** that freezes Phase 10 behavior.
 Future changes MUST NOT violate these constraints without explicit doctrine revision.
 
+**Scope boundary:** This guard applies to **steady-state playout only**. Phase 9 bootstrap semantics and Phase 12 teardown semantics are explicitly out of scope.
+
 ---
 
 ## Frozen Behaviors
@@ -160,4 +162,4 @@ If a violation is necessary, it requires:
 
 | Date | Change | Author |
 |------|--------|--------|
-| 2026-02-04 | Initial freeze | Phase 10 Compliance Audit |
+| 2026-02-04 | Initial freeze after elimination of: (1) `SocketSink::BlockingWrite()` sleep-retry loop, (2) hysteresis gating in FileProducer, (3) legacy `TsOutputSink` and `MpegTSPlayoutSink` dead code | Phase 10 Compliance Audit |
