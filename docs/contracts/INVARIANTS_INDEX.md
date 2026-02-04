@@ -58,6 +58,8 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
 | LAW-AUDIO-FORMAT | House format enforcement |
 | LAW-SWITCHING | No gaps, no PTS regression |
 | LAW-VIDEO-DECODABILITY | Every segment starts with IDR |
+| LAW-TS-DISCOVERABILITY | TS self-describing to late-joiners; control-plane not media-gated |
+| INV-TS-CONTROL-PLANE-CADENCE | PAT/PMT in (T−500ms,T] sliding window; MUST NOT wait on media/CT/buffers |
 | LAW-FRAME-EXECUTION | Frame index governs execution precision |
 | LAW-OBS-001 through LAW-OBS-005 | Observability requirements |
 | LAW-RUNTIME-AUDIO-AUTHORITY | Producer audio authority enforcement |
@@ -278,12 +280,12 @@ Superseded rules from RULE_HARVEST and audit amendments.
 
 | Layer | Total Rules | With Tests | Coverage |
 |-------|-------------|------------|----------|
-| Layer 0 (Laws) | 14 | 6 | 43% |
-| Layer 1 (Semantic) | 32 | 25 | 78% |
+| Layer 0 (Laws) | 15 | 6 | 40% |
+| Layer 1 (Semantic) | 33 | 25 | 76% |
 | Layer 2 (Coordination) | 44 | 26 | 59% |
 | Layer 3 (Diagnostic) | 5 | 0 | 0% |
 | Cross-Domain | 3 | 1 | 33% |
-| **Total** | **98** | **58** | **59%** |
+| **Total** | **100** | **58** | **58%** |
 
 ---
 

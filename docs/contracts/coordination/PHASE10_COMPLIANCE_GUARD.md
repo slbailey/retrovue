@@ -55,6 +55,28 @@ The following behaviors are **locked** and MUST NOT be changed:
 | Periodic sampling | `CheckBufferEquilibrium()` every 1s |
 | No active depth control | Emergent from matched rates |
 
+### 6. Control-Plane Is Not Media (LAW-TS-DISCOVERABILITY)
+
+| Frozen Behavior | Implementation |
+|-----------------|----------------|
+| PAT/PMT not subject to CT pacing | Control-plane cadence enforced in MuxLoop |
+| Emission bounded by wall time (≤500ms) | `INV-TS-CONTROL-PLANE-CADENCE` |
+| Media starvation does not block discovery | Muxer heartbeat when threshold exceeded |
+
+**Forbidden (INV-TS-CONTROL-PLANE-CADENCE):** Control-plane emission MUST NOT wait on:
+- `video_queue_` non-empty
+- `audio_queue_` non-empty
+- CT alignment (frame timing)
+- Encoder packet availability
+- Producer state (EOF, starvation, shadow mode)
+
+**Phase 10 Compliance:** This does NOT violate Phase 10 pressure doctrine:
+- No new thread — MuxLoop already runs
+- No new queue — heartbeat uses existing muxer path
+- No new timing authority — MuxLoop already tracks wall time for CT pacing
+- No blocking — heartbeat emission is non-blocking
+- No backpressure — control-plane is bounded, small
+
 ---
 
 ## Forbidden Patterns
@@ -126,6 +148,21 @@ grep -r "segment_commit_generation_" pkg/air/src | grep -v TimelineController  #
 # EPOCH OWNERSHIP: Only PlayoutEngine may call reset/set epoch (exclude implementations in timing/)
 grep -r "ResetEpochForNewSession\|TrySetEpochOnce" pkg/air/src/producers pkg/air/src/output pkg/air/src/renderer  # MUST return 0 results
 grep -r "->ResetEpochForNewSession\|->TrySetEpochOnce" pkg/air/src/timing/TimelineController  # MUST return 0 results
+
+# LAW-TS-DISCOVERABILITY: PAT/PMT must be emitted periodically for late-joiner support
+# The resend_headers flag MUST be set in EncoderPipeline
+grep -r "resend_headers" pkg/air/src/playout_sinks/mpegts/EncoderPipeline.cpp | wc -l  # MUST return >= 1
+# avformat_write_header alone is insufficient (emits PAT/PMT only once)
+# Verify the mpegts_flags are actually configured
+grep -rE 'mpegts_flags.*resend_headers' pkg/air/src/playout_sinks/mpegts/  # MUST return >= 1
+
+# INV-TS-CONTROL-PLANE-CADENCE: Control-plane MUST NOT be media-gated
+# MuxLoop MUST cause muxer to emit control-plane even during media starvation
+# Structural proof: MuxLoop must track time since last muxer output AND trigger heartbeat when threshold exceeded
+grep -rE 'CONTROL.PLANE.CADENCE|control_plane_cadence|last_muxer_output|muxer_heartbeat' pkg/air/src/output/MpegTSOutputSink.cpp | wc -l  # MUST return >= 1 after implementation
+# FORBIDDEN: MuxLoop waiting indefinitely for media without control-plane emission
+# The media wait loop (sleep 1ms, retry) MUST be bounded by control-plane cadence check
+grep -A10 'No video available.*wait briefly' pkg/air/src/output/MpegTSOutputSink.cpp | grep -E 'CONTROL.PLANE|cadence|heartbeat|500'  # MUST match after implementation
 ```
 
 ### Contract Tests
