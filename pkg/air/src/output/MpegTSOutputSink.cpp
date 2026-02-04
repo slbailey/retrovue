@@ -7,8 +7,10 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <fcntl.h>
 #include <iostream>
 #include <thread>
+#include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -166,7 +168,35 @@ void MpegTSOutputSink::Stop() {
     metrics_exporter_->SetSteadyStateActive(channel_id_, false);
   }
 
+  // Close forensic dump if enabled
+  DisableForensicDump();
+
   SetStatus(SinkStatus::kStopped, "Stopped");
+}
+
+// =============================================================================
+// Forensic TS Tap
+// =============================================================================
+
+void MpegTSOutputSink::EnableForensicDump(const std::string& path) {
+  int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+  if (fd >= 0) {
+    forensic_fd_ = fd;
+    forensic_enabled_.store(true, std::memory_order_release);
+    std::cout << "[MpegTSOutputSink] Forensic dump enabled: " << path << std::endl;
+  } else {
+    std::cerr << "[MpegTSOutputSink] Failed to open forensic dump: " << path
+              << " (errno=" << errno << ")" << std::endl;
+  }
+}
+
+void MpegTSOutputSink::DisableForensicDump() {
+  forensic_enabled_.store(false, std::memory_order_release);
+  if (forensic_fd_ >= 0) {
+    ::close(forensic_fd_);
+    forensic_fd_ = -1;
+    std::cout << "[MpegTSOutputSink] Forensic dump disabled" << std::endl;
+  }
 }
 
 bool MpegTSOutputSink::IsRunning() const {
@@ -274,6 +304,46 @@ void MpegTSOutputSink::MuxLoop() {
     {
       std::lock_guard<std::mutex> lock(audio_queue_mutex_);
       aq_size = audio_queue_.size();
+    }
+
+    // =========================================================================
+    // INV-TS-CONTROL-PLANE-CADENCE: Detect 500ms TS emission gap (DETECTOR)
+    // =========================================================================
+    // This is a DETECTOR, not an ENFORCER. PAT/PMT flows when video frames flow
+    // (via pat_pmt_at_frames). If no TS bytes have been emitted for >= 500ms,
+    // this indicates a LAW-OUTPUT-LIVENESS violation upstream (no pad frames
+    // flowing). TS discoverability is violated as a downstream consequence.
+    //
+    // FFmpeg's mpegts muxer does NOT emit PAT/PMT on av_write_frame(nullptr).
+    // The resend_headers flag only triggers on actual packet writes.
+    // Therefore, enforcement must come from ensuring continuous frame flow.
+    // =========================================================================
+    {
+      auto now_cp = std::chrono::steady_clock::now();
+      auto last_emit = dbg_last_write_time_;  // Set in WriteToFdCallback
+      int64_t idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now_cp - last_emit).count();
+
+      // Only check after some TS has been written (dbg_bytes_written_ > 0)
+      // to avoid false positive during initial startup
+      constexpr int64_t kControlPlaneCadenceMs = 500;
+      bool has_emitted_ts = dbg_bytes_written_.load(std::memory_order_relaxed) > 0;
+      if (has_emitted_ts && idle_ms >= kControlPlaneCadenceMs) {
+        // Log violation - this is a LAW-OUTPUT-LIVENESS breach
+        // Only log once per violation window to avoid spam
+        static thread_local int64_t last_violation_log_ms = 0;
+        if (idle_ms > last_violation_log_ms + 1000) {  // Log at most once per second
+          std::cout << "[MpegTSOutputSink] LAW-OUTPUT-LIVENESS VIOLATION: no TS emitted for "
+                    << idle_ms << "ms (control-plane cannot be discoverable)" << std::endl;
+          std::cout << "[MpegTSOutputSink] INV-TS-CONTROL-PLANE-CADENCE: idle_ms=" << idle_ms
+                    << " vq=" << vq_size
+                    << " aq=" << aq_size
+                    << " pcr_paced_active=" << (pcr_paced_active_.load(std::memory_order_acquire) ? 1 : 0)
+                    << " silence_injection_disabled=" << (silence_injection_disabled_.load(std::memory_order_acquire) ? 1 : 0)
+                    << std::endl;
+          last_violation_log_ms = idle_ms;
+        }
+      }
     }
 
     // INV-P9-TS-EMISSION-LIVENESS (P1-MS-006): Log violation once if 500ms elapsed without first TS
@@ -697,6 +767,12 @@ bool MpegTSOutputSink::DequeueAudioFrame(buffer::AudioFrame* out) {
 int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size) {
   auto* sink = static_cast<MpegTSOutputSink*>(opaque);
   if (!sink || !sink->socket_sink_) return -1;
+
+  // Forensic tap: mirror bytes before socket (non-blocking, passive)
+  if (sink->forensic_enabled_.load(std::memory_order_acquire)) {
+    ssize_t w = ::write(sink->forensic_fd_, buf, static_cast<size_t>(buf_size));
+    (void)w;  // Forensic only — ignore errors, never block
+  }
 
   // Emit bytes via non-blocking SocketSink (SS-001, SS-002)
   bool accepted = sink->socket_sink_->TryConsumeBytes(

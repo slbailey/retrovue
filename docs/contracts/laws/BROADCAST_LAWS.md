@@ -148,6 +148,24 @@ A late-joining viewer tuning into an active channel MUST be able to decode the s
 
 ---
 
+#### Derivation from LAW-OUTPUT-LIVENESS
+
+**This law is a DOWNSTREAM CONSEQUENCE of LAW-OUTPUT-LIVENESS, not an independent enforcement target.**
+
+If LAW-OUTPUT-LIVENESS is satisfied (continuous TS bytes emitted via pad when no content):
+- FFmpeg's `resend_headers+pat_pmt_at_frames` flags cause PAT/PMT to be emitted with each video frame
+- Since pads are emitted continuously, PAT/PMT are emitted continuously
+- TS discoverability is satisfied automatically
+
+If LAW-OUTPUT-LIVENESS is violated (no TS bytes for ≥500ms):
+- No mechanism exists to emit PAT/PMT independently of media frames (FFmpeg limitation)
+- TS discoverability is necessarily violated as a downstream consequence
+- The root cause is the liveness violation, not a separate discoverability failure
+
+**Therefore:** Discoverability is not independently enforceable. It is a property that emerges from output liveness compliance.
+
+---
+
 #### Classification: Control-Plane vs Media
 
 | Category | Examples | Pacing Authority | May Be Gated By CT |
@@ -155,7 +173,7 @@ A late-joining viewer tuning into an active channel MUST be able to decode the s
 | **Control-Plane** | PAT, PMT, SDT, NIT | Wall clock (bounded cadence) | **NO** |
 | **Media** | Video PES, Audio PES | CT (frame timing) | Yes |
 
-**PAT/PMT are control-plane, not media.** They describe stream structure, not stream content. They MUST NOT be subject to media-layer pacing or availability gates.
+**PAT/PMT are control-plane, not media.** They describe stream structure, not stream content. However, in FFmpeg's mpegts muxer, control-plane emission is coupled to media frame writes — there is no independent control-plane heartbeat API.
 
 ---
 
@@ -171,20 +189,11 @@ A late-joining viewer tuning into an active channel MUST be able to decode the s
 
 #### Formal Guarantees
 
-1. **Periodic Table Emission:** PAT and PMT MUST be emitted periodically throughout the stream, not just at stream start.
+1. **Periodic Table Emission:** PAT and PMT MUST be emitted periodically throughout the stream, not just at stream start. This is achieved via FFmpeg's `resend_headers+pat_pmt_at_frames` muxer flags.
 
 2. **Bounded Discovery Time (Sliding Window):** At any wall-time T, there MUST exist a PAT and PMT **emitted** (per definition above) in the interval (T−500ms, T]. This is a continuous guarantee, not a periodic check.
 
-3. **Control-Plane Independence:** Control-plane emission MUST NOT be gated by:
-   - CT pacing (MuxLoop frame timing)
-   - Media availability (buffer depth, queue state)
-   - Producer state (EOF, starvation, shadow mode)
-   - Encoder state (keyframe arrival, audio readiness)
-   - Backpressure (transport or sink state)
-
-4. **Timing-Independent Emission:** MuxLoop MUST cause the MPEG-TS muxer to emit PAT/PMT at least once per 500ms wall time, independent of media availability.
-
-5. **Single Responsibility:** MpegTSOutputSink owns runtime enforcement of control-plane cadence. EncoderPipeline owns muxer configuration and provides the emission mechanism.
+3. **Liveness Dependency:** PAT/PMT emission is coupled to video frame writes. If TS bytes are not flowing (LAW-OUTPUT-LIVENESS violation), PAT/PMT cannot flow either. This is a muxer architectural constraint, not a RetroVue design choice.
 
 ---
 
@@ -196,7 +205,7 @@ RetroVue is not a file generator or one-shot encoder. It is a **continuously obs
 - Content must be decodable (LAW-VIDEO-DECODABILITY)
 - **Structure must be discoverable (this law)**
 
-PAT/PMT is *structure*, not *data*. A stream that is "live" and "decodable" but not "discoverable" is useless to late-joiners. This law closes that gap.
+PAT/PMT is *structure*, not *data*. A stream that is "live" and "decodable" but not "discoverable" is useless to late-joiners. Since FFmpeg couples control-plane to media, the ONLY way to guarantee discoverability is to guarantee output liveness.
 
 ---
 
@@ -206,8 +215,8 @@ PAT/PMT is *structure*, not *data*. A stream that is "live" and "decodable" but 
 |---------|--------------|
 | PAT/PMT only at `avformat_write_header()` | Late-joiners never see structure |
 | PAT/PMT only with keyframes | GOP-length stalls (2+ seconds) |
-| PAT/PMT gated by CT pacing | Media starvation blocks discovery |
-| PAT/PMT gated by buffer depth | Bootstrap delay blocks discovery |
+| Independent PAT/PMT enforcement via `av_write_frame(nullptr)` | FFmpeg does not emit PAT/PMT on null flush — this is a non-op |
+| Raw socket writes bypassing muxer | FFmpeg's resend_headers state not triggered |
 
 #### Correct Pattern
 
@@ -216,20 +225,19 @@ PAT/PMT is *structure*, not *data*. A stream that is "live" and "decodable" but 
    av_dict_set(&muxer_opts_, "mpegts_flags", "resend_headers+pat_pmt_at_frames", 0);
    ```
 
-2. Enforce cadence in MuxLoop: if wall time since last muxer output exceeds threshold, cause the muxer to emit control-plane tables independently of media availability. Implementation options:
-   - EncoderPipeline heartbeat method (preferred)
-   - Muxer-routed null frame injection
-   - NOT: raw socket writes that bypass the muxer
+2. Ensure LAW-OUTPUT-LIVENESS compliance: continuous pad emission when no content ensures continuous PAT/PMT emission as a downstream consequence.
+
+3. Detect violations: if TS emission stalls for ≥500ms, log a LAW-OUTPUT-LIVENESS violation. The discoverability failure is a symptom, not the root cause.
 
 ---
 
 #### Subordinate Invariant
 
-See: **INV-TS-CONTROL-PLANE-CADENCE** — enforces the 500ms bound at runtime.
+See: **INV-TS-CONTROL-PLANE-CADENCE** — detects 500ms emission gaps and logs LAW-OUTPUT-LIVENESS violations. This is a **detector**, not an enforcer — there is no independent enforcement path for control-plane cadence.
 
 ---
 
-Source: Late-joiner incident 2026-02-04; Phase 10 compliance audit 2026-02-04
+Source: Late-joiner incident 2026-02-04; Phase 10 compliance audit 2026-02-04; FFmpeg API analysis 2026-02-04
 
 ---
 
