@@ -72,7 +72,7 @@ Amendment 2026-02-02: These invariants address the distinction between decoder E
 |---------|---------------|-------|-------------|------|-----|-------|
 | **INV-P8-SEGMENT-EOF-DISTINCT-001** | CONTRACT | PlayoutEngine | P8 | Pending | Yes | EOF ≠ boundary |
 | **INV-P8-CONTENT-DEFICIT-FILL-001** | CONTRACT | ProgramOutput | P8 | Pending | Yes | Pad fills EOF-to-boundary gap |
-| **INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001** | CONTRACT | FileProducer | P8 | Pending | Yes | frame_count is planning authority |
+| **INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001** | CONTRACT | Core | SCHEDULE-TIME | Pending | Yes | frame_count is planning authority |
 
 ### Definitions
 
@@ -80,7 +80,7 @@ Amendment 2026-02-02: These invariants address the distinction between decoder E
 |---------|---------------------|
 | INV-P8-SEGMENT-EOF-DISTINCT-001 | Segment EOF (decoder exhaustion) is distinct from segment end (scheduled boundary). EOF is an event within the segment; boundary is the scheduled instant at which the switch occurs. Timeline advancement driven by scheduled segment end time, not by EOF. |
 | INV-P8-CONTENT-DEFICIT-FILL-001 | If live decoder reaches EOF before the scheduled segment end time, the gap (content deficit) MUST be filled using a deterministic fill strategy at real-time cadence until the boundary; pad (black/silence) is the guaranteed fallback. Output liveness and TS cadence preserved; mux never stalls. |
-| INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | frame_count in the playout plan is planning authority from Core. AIR receives this authority and enforces runtime adaptation against it. If actual content is shorter than planned, INV-P8-CONTENT-DEFICIT-FILL-001 applies; if longer, segment end time still governs (schedule authoritative). |
+| INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | frame_count in the playout plan is planning authority from Core. AIR receives this authority and enforces runtime adaptation against it. AIR must not reject or reinterpret frame_count authority. If actual content is shorter than planned, INV-P8-CONTENT-DEFICIT-FILL-001 applies; if longer, segment end time still governs (schedule authoritative). |
 
 ---
 
@@ -137,7 +137,7 @@ Amendment 2026-02-02: These invariants address the distinction between decoder E
 | Rule ID | One-Line Definition |
 |---------|---------------------|
 | INV-AIR-IDR-BEFORE-OUTPUT | AIR must not emit video packets until IDR produced; gate resets on switch |
-| INV-AIR-CONTENT-BEFORE-PAD | Pad frames only after first real decoded content frame routed to output |
+| INV-AIR-CONTENT-BEFORE-PAD | Within a segment, pad frames only after first real decoded content frame has been admitted. Does not apply at channel startup before any content exists; LAW-OUTPUT-LIVENESS governs that case. |
 | INV-AUDIO-HOUSE-FORMAT-001 | All audio reaching EncoderPipeline must be house format; reject non-house input |
 
 ---

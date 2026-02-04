@@ -25,6 +25,10 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
          |      +-- PHASE9_BOOTSTRAP.md         <- Output bootstrap
          |      +-- PHASE10_FLOW_CONTROL.md     <- Steady-state flow
          |
+         +-- components/                        <- Layer 2.5-2.6: Component role specs
+         |      +-- PROGRAMOUTPUT_CONTRACT.md   <- Pure selector (2.5)
+         |      +-- OUTPUTBUS_CONTRACT.md       <- Non-blocking router (2.6)
+         |
          +-- diagnostics/
          |      +-- DIAGNOSTIC_INVARIANTS.md    <- Layer 3: Logging, drops (AIR)
          |
@@ -35,6 +39,7 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
          |
          +-- lifecycle/
                 +-- PHASE12_SESSION_TEARDOWN.md <- Core lifecycle (NOT AIR)
+                +-- BOUNDARY_LIFECYCLE.md       <- Core boundary + Protocol (NOT AIR)
 ```
 
 ---
@@ -109,15 +114,10 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
 | INV-P8-AV-SYNC | Audio-video sync at switch |
 | INV-P8-AUDIO-PRIME-001 | Audio prime sequencing |
 | INV-P8-IO-UDS-001 | UDS output constraints |
-| INV-P8-SWITCH-TIMING | Boundary timing tolerance |
-| INV-BOUNDARY-* | Broadcast-grade timing |
+| INV-P8-SWITCH-TIMING | AIR execution timing tolerance |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | Audio continuity |
-| INV-SCHED-PLAN-BEFORE-EXEC-001 | Planning-time feasibility |
-| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | Startup boundary requirements |
-| INV-SWITCH-ISSUANCE-* | Switch issuance rules |
-| INV-LEADTIME-MEASUREMENT-001 | Lead-time calculation |
-| INV-CONTROL-NO-POLL-001 | No poll semantics |
-| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Deadline-authoritative switching |
+
+*Note: Boundary lifecycle and Protocol invariants moved to [BOUNDARY_LIFECYCLE.md](../../pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md)*
 
 ### Phase 9 Bootstrap
 
@@ -165,6 +165,62 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
 | INV-TERMINAL-* | Terminal state semantics (Core) |
 | INV-SESSION-CREATION-UNGATED-001 | Ungated session creation (Core) |
 | INV-STARTUP-CONVERGENCE-001 | Startup convergence (Core) |
+
+### Boundary Lifecycle (Core + Protocol — NOT AIR)
+
+**Location:** [/pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md](../../pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md)
+
+**Ownership:** These are Core lifecycle and Protocol interface invariants. AIR does not define, plan, or manage boundary lifecycle states. AIR receives boundary declarations via Protocol and executes them.
+
+| Rule Family | Description |
+|-------------|-------------|
+| INV-BOUNDARY-TOLERANCE-001 | Timing tolerance (Protocol) |
+| INV-BOUNDARY-DECLARED-001 | Boundary declaration (Protocol) |
+| INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | Deadline authority (Protocol) |
+| INV-LEADTIME-MEASUREMENT-001 | Lead-time basis (Protocol) |
+| INV-CONTROL-NO-POLL-001 | No-poll semantics (Protocol) |
+| INV-SCHED-PLAN-BEFORE-EXEC-001 | Planning-time feasibility (Core) |
+| INV-STARTUP-BOUNDARY-FEASIBILITY-001 | Startup boundary (Core) |
+| INV-SWITCH-ISSUANCE-* | Issuance rules (Core) |
+| INV-BOUNDARY-LIFECYCLE-001 | Lifecycle state machine (Core) |
+| INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | Plan conformance (Core) |
+
+---
+
+## Layer 2.5 - Component Contracts
+
+Component contracts define the role, authority boundaries, and invariants for specific AIR components.
+
+### ProgramOutput Contract
+
+**Location:** [components/PROGRAMOUTPUT_CONTRACT.md](./components/PROGRAMOUTPUT_CONTRACT.md)
+
+**Role:** Pure, non-blocking frame selector and dispatcher. Refines LAW-OUTPUT-LIVENESS.
+
+| Invariant | Description |
+|-----------|-------------|
+| PO-001 | Non-blocking emission (alias of LAW-OUTPUT-LIVENESS) |
+| PO-002 | Selection, not scheduling |
+| PO-003 | Pad is first-class output |
+| PO-004 | No sink awareness |
+| PO-005 | No readiness gating |
+| PO-006 | Destructive dequeue rules (anchors INV-P10-SINK-GATE) |
+| PO-007 | Pad classification required |
+| PO-008 | No timing repairs |
+
+### OutputBus Contract
+
+**Location:** [components/OUTPUTBUS_CONTRACT.md](./components/OUTPUTBUS_CONTRACT.md)
+
+**Role:** Single-sink byte router. Mechanical delivery only. No fan-out.
+
+| Invariant | Description |
+|-----------|-------------|
+| OB-001 | Single sink only (second attach = protocol error) |
+| OB-002 | Legal discard when unattached (AIR can exist with zero viewers) |
+| OB-003 | Stable sink between attach/detach (errors don't detach) |
+| OB-004 | No fan-out, ever (HTTP handles multiplexing) |
+| OB-005 | No timing or correctness authority |
 
 ---
 
