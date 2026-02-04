@@ -175,8 +175,10 @@ public:
 ```
 
 **Return value semantics:**
-- `true` = bytes accepted
-- `false` = bytes dropped (locally)
+- `true` = bytes accepted (may or may not reach client)
+- `false` = bytes dropped (locally, due to backpressure)
+
+**Note:** `false` is not an error. It is a normal outcome indicating the sink absorbed backpressure by dropping. Callers MUST NOT retry, log warnings, or treat this as a failure condition.
 
 No exceptions. No retries.
 
@@ -258,7 +260,19 @@ HTTP fan-out happens above this sink.
 
 ---
 
-## 10. Derivation Notes
+## 10. Implementation Status
+
+| Method | Status | Notes |
+|--------|--------|-------|
+| `TryConsumeBytes()` | ✅ Compliant | Non-blocking, uses MSG_DONTWAIT, drops on EAGAIN |
+| `BlockingWrite()` | ⚠️ Deprecated | Marked CONTRACT_VIOLATION_PENDING; exists for migration only |
+| `Close()` | ✅ Compliant | Idempotent |
+
+**WriteToFdCallback uses `TryConsumeBytes()` exclusively.** The deprecated `BlockingWrite()` is not called in production paths and should be deleted once all legacy callers are migrated.
+
+---
+
+## 11. Derivation Notes
 
 | This Contract | Derives From | Relationship |
 |---------------|--------------|--------------|

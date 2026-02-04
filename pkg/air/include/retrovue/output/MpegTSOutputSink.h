@@ -137,6 +137,16 @@ class MpegTSOutputSink : public IOutputSink {
   std::chrono::steady_clock::time_point dbg_output_heartbeat_time_;
   std::chrono::steady_clock::time_point dbg_enqueue_heartbeat_time_;
 
+  // =========================================================================
+  // INV-P10-FRAME-DROP-POLICY: Overflow drop tracking
+  // =========================================================================
+  // These drops are CONTRACT VIOLATIONS - sink overflow should not be routine.
+  // Correct behavior: backpressure propagates upstream to throttle decode.
+  // These counters exist to make violations visible, not to normalize them.
+  // =========================================================================
+  std::atomic<uint64_t> video_frames_dropped_{0};
+  std::atomic<uint64_t> audio_frames_dropped_{0};
+
   // INV-SWITCH-SUCCESSOR-EMISSION: Called when a real video frame is encoded
   OnSuccessorVideoEmittedCallback on_successor_video_emitted_;
 
