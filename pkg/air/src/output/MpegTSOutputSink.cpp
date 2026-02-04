@@ -16,17 +16,6 @@
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/telemetry/MetricsExporter.h"
 
-#include <cerrno>
-#include <cstring>
-
-#if defined(__linux__) || defined(__APPLE__)
-#include <unistd.h>
-#endif
-
-#if defined(__linux__)
-#include <sys/socket.h>  // For send() with MSG_NOSIGNAL
-#endif
-
 static bool NoPcrPacing() {
   static bool checked = false;
   static bool value = false;
@@ -65,9 +54,7 @@ MpegTSOutputSink::MpegTSOutputSink(
       config_(config),
       name_(name),
       status_(SinkStatus::kIdle),
-      stop_requested_(false),
-      prebuffer_target_bytes_(0),
-      prebuffering_(false) {
+      stop_requested_(false) {
 }
 
 MpegTSOutputSink::~MpegTSOutputSink() {
@@ -85,34 +72,19 @@ bool MpegTSOutputSink::Start() {
     return false;
   }
 
+  // Create SocketSink for non-blocking byte transport
+  socket_sink_ = std::make_unique<SocketSink>(fd_, name_ + "-socket");
+
   // Create and open encoder pipeline
   encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config_);
   if (!encoder_->open(config_, this, &MpegTSOutputSink::WriteToFdCallback)) {
     SetStatus(SinkStatus::kError, "Failed to open encoder pipeline");
     encoder_.reset();
+    socket_sink_.reset();
     return false;
   }
 
-  // ==========================================================================
-  // INV-P8-IO-UDS-001: UDS must never block output on prebuffer thresholds
-  // ==========================================================================
-  // UDS is low-latency and local; prebuffer thresholds can prevent first bytes
-  // from ever reaching the client if encoder/header gating stalls.
-  //
-  // Practical enforcement:
-  // - Default prebuffer OFF for UDS
-  // - If ever re-enabled, MUST flush on timeout (250ms) and/or client connect
-  // - Never use thresholds > 9.4KB (50 TS packets) for any transport
-  //
-  // Phase 8 issues that make large prebuffers dangerous:
-  // - Short clips and frequent producer switches reset prebuffer
-  // - Header deferral (INV-P8-AUDIO-PRIME-001) delays first bytes
-  // - CT resets on segment boundaries invalidate buffered data
-  // ==========================================================================
-  prebuffer_target_bytes_ = 0;
-  prebuffering_.store(false, std::memory_order_release);
   encoder_->SetOutputTimingEnabled(true);  // Enable timing immediately
-  std::cout << "[MpegTSOutputSink] Prebuffering DISABLED (INV-P8-IO-UDS-001)" << std::endl;
 
   // =========================================================================
   // INV-P9-IMMEDIATE-OUTPUT: Keep audio liveness ENABLED at startup
@@ -157,6 +129,12 @@ void MpegTSOutputSink::Stop() {
   if (encoder_) {
     encoder_->close();
     encoder_.reset();
+  }
+
+  // Close SocketSink
+  if (socket_sink_) {
+    socket_sink_->Close();
+    socket_sink_.reset();
   }
 
   // Clear queues
@@ -700,94 +678,21 @@ bool MpegTSOutputSink::DequeueAudioFrame(buffer::AudioFrame* out) {
   return true;
 }
 
-// Helper to write to fd without SIGPIPE (uses send with MSG_NOSIGNAL on Linux)
-static ssize_t SafeWrite(int fd, const void* data, size_t len) {
-#if defined(__linux__)
-  // Use send() with MSG_NOSIGNAL to avoid SIGPIPE on closed socket
-  return send(fd, data, len, MSG_NOSIGNAL);
-#else
-  return write(fd, data, len);
-#endif
-}
-
 int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size) {
-#if defined(__linux__) || defined(__APPLE__)
   auto* sink = static_cast<MpegTSOutputSink*>(opaque);
-  if (!sink || sink->fd_ < 0) return -1;
+  if (!sink || !sink->socket_sink_) return -1;
 
-  // Prebuffer phase: accumulate data until we have enough for smooth playback.
-  // This absorbs encoder warmup bitrate spikes (fade-ins, etc.)
-  if (sink->prebuffering_.load(std::memory_order_acquire)) {
-    std::lock_guard<std::mutex> lock(sink->prebuffer_mutex_);
+  // Emit bytes via non-blocking SocketSink (SS-001, SS-002)
+  bool accepted = sink->socket_sink_->TryConsumeBytes(
+      reinterpret_cast<const uint8_t*>(buf),
+      static_cast<size_t>(buf_size));
 
-    // Add data to prebuffer
-    sink->prebuffer_.insert(sink->prebuffer_.end(), buf, buf + buf_size);
-
-    // Check if we've reached the target
-    if (sink->prebuffer_.size() >= sink->prebuffer_target_bytes_) {
-      // Write entire prebuffer to fd (handle EAGAIN/EINTR)
-      const uint8_t* p = sink->prebuffer_.data();
-      size_t remaining = sink->prebuffer_.size();
-      while (remaining > 0) {
-        ssize_t n = SafeWrite(sink->fd_, p, remaining);
-        if (n < 0) {
-          if (errno == EINTR) continue;  // Interrupted, retry
-          if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // Backpressure - brief sleep and retry
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-            continue;
-          }
-          sink->prebuffer_.clear();
-          return -1;
-        }
-        if (n == 0) {
-          sink->prebuffer_.clear();
-          return -1;
-        }
-        remaining -= static_cast<size_t>(n);
-        p += n;
-      }
-
-      sink->prebuffer_.clear();
-      sink->prebuffer_.shrink_to_fit();  // Free memory
-      sink->prebuffering_.store(false, std::memory_order_release);
-
-      // P8-IO-001: Re-enable output timing now that prebuffer is flushed
-      if (sink->encoder_) {
-        sink->encoder_->SetOutputTimingEnabled(true);
-      }
-      std::cout << "[MpegTSOutputSink] Prebuffer flushed, output timing re-enabled" << std::endl;
-    }
-
-    return buf_size;  // Data accepted (buffered)
+  // Track telemetry
+  if (accepted) {
+    sink->dbg_bytes_written_.fetch_add(
+        static_cast<uint64_t>(buf_size), std::memory_order_relaxed);
   }
-
-  // Direct streaming mode: write all bytes (handle partial writes + EAGAIN/EINTR)
-  const uint8_t* p = buf;
-  size_t remaining = static_cast<size_t>(buf_size);
-  while (remaining > 0) {
-    ssize_t n = SafeWrite(sink->fd_, p, remaining);
-    if (n < 0) {
-      if (errno == EINTR) continue;  // Interrupted, retry
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        // Backpressure - brief sleep and retry
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-        continue;
-      }
-      // Real error (EPIPE, etc.)
-      return -1;
-    }
-    if (n == 0) {
-      // Connection closed
-      return -1;
-    }
-    remaining -= static_cast<size_t>(n);
-    p += n;
-
-    // DEBUG: Track successful writes
-    sink->dbg_bytes_written_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
-    sink->dbg_last_write_time_ = std::chrono::steady_clock::now();
-  }
+  sink->dbg_last_write_time_ = std::chrono::steady_clock::now();
 
   // INV-P9-BOOT-LIVENESS: Log when first decodable TS packet is emitted after sink attach
   if (sink->dbg_packets_written_.load(std::memory_order_relaxed) == 0) {
@@ -829,13 +734,8 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
   // Track packet count for violation detection
   sink->dbg_packets_written_.fetch_add(1, std::memory_order_relaxed);
 
+  // Always return buf_size - SocketSink absorbed any backpressure (SS-002)
   return buf_size;
-#else
-  (void)opaque;
-  (void)buf;
-  (void)buf_size;
-  return -1;
-#endif
 }
 
 void MpegTSOutputSink::SetStatus(SinkStatus status, const std::string& message) {

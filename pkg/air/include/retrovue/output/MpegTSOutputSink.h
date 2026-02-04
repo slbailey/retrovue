@@ -16,6 +16,7 @@
 #include <functional>
 
 #include "retrovue/output/IOutputSink.h"
+#include "retrovue/output/SocketSink.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 
 namespace retrovue::telemetry {
@@ -109,6 +110,9 @@ class MpegTSOutputSink : public IOutputSink {
   // Encoder pipeline (owns FFmpeg encoder/muxer)
   std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder_;
 
+  // Socket transport (non-blocking byte consumer)
+  std::unique_ptr<SocketSink> socket_sink_;
+
   // Frame queues (renderer thread enqueues, MuxLoop dequeues)
   mutable std::mutex video_queue_mutex_;
   std::queue<buffer::Frame> video_queue_;
@@ -121,13 +125,6 @@ class MpegTSOutputSink : public IOutputSink {
   // Worker thread
   std::atomic<bool> stop_requested_;
   std::thread mux_thread_;
-
-  // Prebuffer: accumulates encoded data before streaming starts.
-  // This absorbs encoder warmup bitrate spikes (fade-ins, scene changes).
-  std::vector<uint8_t> prebuffer_;
-  size_t prebuffer_target_bytes_;
-  std::atomic<bool> prebuffering_;
-  mutable std::mutex prebuffer_mutex_;
 
   // =========================================================================
   // DEBUG INSTRUMENTATION - remove after diagnosis
