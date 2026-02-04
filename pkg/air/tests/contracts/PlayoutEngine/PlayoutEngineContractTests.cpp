@@ -169,7 +169,7 @@ TEST_F(PlayoutEngineContractTest, BC_001_FrameTimingAlignsWithMasterClock)
 
   clock->AdvanceSeconds(0.05);
   renderer->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 
   const auto &stats = renderer->GetStats();
   EXPECT_GE(stats.frames_rendered, 1u);
@@ -1926,7 +1926,7 @@ TEST_F(PlayoutEngineContractTest, P8_TEST_FILL_002_FramesEmittedDuringDeficit)
   ASSERT_TRUE(service.StartChannel(&start_ctx, &start_req, &start_resp).ok());
   ASSERT_TRUE(start_resp.success());
 
-  auto attach_result = engine->AttachOutputSink(channel_id, std::move(sink), true);
+  auto attach_result = engine->AttachOutputSink(channel_id, std::move(sink));
   ASSERT_TRUE(attach_result.success);
   engine->ConnectRendererToOutputBus(channel_id);
 

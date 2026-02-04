@@ -236,8 +236,8 @@ EngineResult PlayoutEngine::StartChannel(
     // Create control state machine
     state->control = std::make_unique<PlayoutControl>();
 
-    // Phase 9.0: Create OutputBus with state machine validation
-    state->output_bus = std::make_unique<output::OutputBus>(state->control.get());
+    // Phase 9.0: Create OutputBus (contract-compliant, no control plane dependency)
+    state->output_bus = std::make_unique<output::OutputBus>();
 
     // Phase 8: Create TimelineController for unified time authority
     timing::TimelineConfig timeline_config = timing::TimelineConfig::FromFps(
@@ -407,9 +407,10 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
       state->control->Stop(MakeCommandId("stop", channel_id), now, now);
     }
 
-    // Phase 9.0: Detach any attached output sink (forced detach)
+    // Phase 9.0: Detach any attached output sink
+    // OB-003: DetachSink always succeeds, Core-owned decision
     if (state->output_bus) {
-      state->output_bus->DetachSink(true);
+      state->output_bus->DetachSink();
     }
 
     // Stop switch watcher thread if running (signal only, don't join to avoid deadlock)
@@ -1607,8 +1608,7 @@ EngineResult PlayoutEngine::UpdatePlan(
 
 EngineResult PlayoutEngine::AttachOutputSink(
     int32_t channel_id,
-    std::unique_ptr<output::IOutputSink> sink,
-    bool replace_existing) {
+    std::unique_ptr<output::IOutputSink> sink) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
   auto it = channels_.find(channel_id);
@@ -1630,17 +1630,20 @@ EngineResult PlayoutEngine::AttachOutputSink(
   //
   // INV-P9-NO-BUS-REPLACEMENT: Always attach to existing bus (state->output_bus).
   // Bus is created once at StartChannel and never replaced.
+  //
+  // OB-001: If sink already attached, AttachSink returns error (protocol violation).
+  // Core must call DetachSink first if replacement is needed.
   std::cout << "[AttachOutputSink] channel=" << channel_id
             << " bus=" << static_cast<void*>(state->output_bus.get())
             << " attaching to existing bus" << std::endl;
-  auto result = state->output_bus->AttachSink(std::move(sink), replace_existing);
+  auto result = state->output_bus->AttachSink(std::move(sink));
   std::cout << "[AttachOutputSink] channel=" << channel_id
             << " result=" << (result.success ? "OK" : "FAIL")
-            << " sink_attached=" << state->output_bus->IsAttached() << std::endl;
+            << " sink_attached=" << state->output_bus->HasSink() << std::endl;
   return EngineResult(result.success, result.message);
 }
 
-EngineResult PlayoutEngine::DetachOutputSink(int32_t channel_id, bool force) {
+EngineResult PlayoutEngine::DetachOutputSink(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
   auto it = channels_.find(channel_id);
@@ -1659,7 +1662,8 @@ EngineResult PlayoutEngine::DetachOutputSink(int32_t channel_id, bool force) {
 
   // INV-P8-SUCCESSOR-OBSERVABILITY: Observer stays attached (owned by ProgramOutput).
   // Only cleared on StopChannel/EndSession.
-  auto result = state->output_bus->DetachSink(force);
+  // OB-003: DetachSink always succeeds, Core-owned decision.
+  auto result = state->output_bus->DetachSink();
   return EngineResult(result.success, result.message);
 }
 
@@ -1676,7 +1680,7 @@ bool PlayoutEngine::IsOutputSinkAttachedLocked(int32_t channel_id) const {
   if (it == channels_.end() || !it->second || !it->second->output_bus) {
     return false;
   }
-  return it->second->output_bus->IsAttached();
+  return it->second->output_bus->HasSink();
 }
 
 output::OutputBus* PlayoutEngine::GetOutputBus(int32_t channel_id) {
@@ -1721,7 +1725,7 @@ void PlayoutEngine::FinalizeLiveOutput(int32_t channel_id) {
 
   if (state->program_output) {
     state->program_output->SetOutputBus(state->output_bus.get());
-    bool attached = state->output_bus->IsAttached();
+    bool attached = state->output_bus->HasSink();
     std::cout << "[FinalizeLiveOutput] channel=" << channel_id
               << " bus=" << static_cast<void*>(state->output_bus.get())
               << " sink_attached=" << attached

@@ -189,7 +189,7 @@ TEST_F(OutputSwitchingContractTest, OS_001_OutputReadsFromExactlyOneBuffer) {
   EXPECT_GT(preview_frames.load(), 0) << "Should consume frames from preview buffer after redirect";
 
   output->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 }
 
 // =============================================================================
@@ -263,7 +263,7 @@ TEST_F(OutputSwitchingContractTest, OS_002_HotSwitchIsImmediate) {
       << "First preview frame should appear within 50ms of switch (immediate)";
 
   output->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 }
 
 // =============================================================================
@@ -327,7 +327,7 @@ TEST_F(OutputSwitchingContractTest, OS_003_PreviewMustHaveFramesBeforeSwitch) {
       << "Should consume pre-loaded frames from preview immediately";
 
   output->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 }
 
 // =============================================================================
@@ -392,7 +392,7 @@ TEST_F(OutputSwitchingContractTest, OS_004_SwitchDoesNotDrainOldBuffer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
   output->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 }
 
 // =============================================================================
@@ -463,7 +463,7 @@ TEST_F(OutputSwitchingContractTest, OS_005_SwitchOccursOnDecodedFrames) {
   std::this_thread::sleep_for(std::chrono::milliseconds(80));
 
   output->Stop();
-  bus.DetachSink(/*force=*/true);
+  bus.DetachSink();
 
   // Verify we got decoded frames from both buffers
   std::lock_guard<std::mutex> lock(sequence_mutex);

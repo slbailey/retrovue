@@ -89,14 +89,13 @@ ControllerResult PlayoutController::UpdatePlan(
 // Phase 9.0: OutputBus/OutputSink methods
 ControllerResult PlayoutController::AttachOutputSink(
     int32_t channel_id,
-    std::unique_ptr<output::IOutputSink> sink,
-    bool replace_existing) {
-  auto result = engine_->AttachOutputSink(channel_id, std::move(sink), replace_existing);
+    std::unique_ptr<output::IOutputSink> sink) {
+  auto result = engine_->AttachOutputSink(channel_id, std::move(sink));
   return ControllerResult(result.success, result.message);
 }
 
-ControllerResult PlayoutController::DetachOutputSink(int32_t channel_id, bool force) {
-  auto result = engine_->DetachOutputSink(channel_id, force);
+ControllerResult PlayoutController::DetachOutputSink(int32_t channel_id) {
+  auto result = engine_->DetachOutputSink(channel_id);
   return ControllerResult(result.success, result.message);
 }
 

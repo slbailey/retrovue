@@ -162,10 +162,10 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_001_PreAttachDiscardIsSile
   SCOPED_TRACE("INV-P9-SINK-LIVENESS-001: Pre-attach frame discard must be silent");
 
   // Create OutputBus with no control plane (standalone test)
-  output::OutputBus bus(nullptr);
+  output::OutputBus bus;
 
   // Verify no sink attached
-  ASSERT_FALSE(bus.IsAttached()) << "Bus should start with no sink";
+  ASSERT_FALSE(bus.HasSink()) << "Bus should start with no sink";
 
   // Route multiple video frames - should not throw or error
   for (int i = 0; i < 100; ++i) {
@@ -182,7 +182,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_001_PreAttachDiscardIsSile
   }
 
   // Still no sink attached (frames were discarded)
-  EXPECT_FALSE(bus.IsAttached());
+  EXPECT_FALSE(bus.HasSink());
 
   std::cout << "[INV-P9-SINK-LIVENESS-001] Pre-attach discard: "
             << "100 video + 50 audio frames discarded silently" << std::endl;
@@ -197,7 +197,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_001_PreAttachDiscardIsSile
 TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_002_PostAttachDelivery) {
   SCOPED_TRACE("INV-P9-SINK-LIVENESS-002: Post-attach frames must reach sink");
 
-  output::OutputBus bus(nullptr);
+  output::OutputBus bus;
 
   // Create and attach sink
   auto sink = std::make_unique<TestOutputSink>();
@@ -205,7 +205,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_002_PostAttachDelivery) {
 
   auto result = bus.AttachSink(std::move(sink));
   ASSERT_TRUE(result.success) << "AttachSink failed: " << result.message;
-  ASSERT_TRUE(bus.IsAttached()) << "Sink should be attached after AttachSink";
+  ASSERT_TRUE(bus.HasSink()) << "Sink should be attached after AttachSink";
 
   // Route video frames - all MUST reach sink
   constexpr int kVideoFrameCount = 50;
@@ -248,7 +248,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_002_PostAttachDelivery) {
 TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_002_MixedPrePostAttach) {
   SCOPED_TRACE("INV-P9-SINK-LIVENESS-002: Pre-attach discard + post-attach delivery");
 
-  output::OutputBus bus(nullptr);
+  output::OutputBus bus;
 
   // Route frames before attach - should be discarded
   constexpr int kPreAttachFrames = 20;
@@ -291,7 +291,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_002_MixedPrePostAttach) {
 TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_SinkStabilityExplicitDetach) {
   SCOPED_TRACE("INV-P9-SINK-LIVENESS-003: Sink remains attached until explicit detach");
 
-  output::OutputBus bus(nullptr);
+  output::OutputBus bus;
 
   // Attach sink
   auto sink = std::make_unique<TestOutputSink>();
@@ -299,7 +299,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_SinkStabilityExplicitD
 
   auto result = bus.AttachSink(std::move(sink));
   ASSERT_TRUE(result.success);
-  ASSERT_TRUE(bus.IsAttached());
+  ASSERT_TRUE(bus.HasSink());
 
   // Route some frames
   for (int i = 0; i < 10; ++i) {
@@ -308,7 +308,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_SinkStabilityExplicitD
   }
 
   // Sink should still be attached
-  EXPECT_TRUE(bus.IsAttached()) << "Sink should remain attached during frame routing";
+  EXPECT_TRUE(bus.HasSink()) << "Sink should remain attached during frame routing";
   EXPECT_EQ(sink_ptr->GetVideoFramesReceived(), 10u);
 
   // Route more frames
@@ -318,13 +318,13 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_SinkStabilityExplicitD
   }
 
   // Still attached
-  EXPECT_TRUE(bus.IsAttached()) << "Sink should remain attached";
+  EXPECT_TRUE(bus.HasSink()) << "Sink should remain attached";
   EXPECT_EQ(sink_ptr->GetVideoFramesReceived(), 20u);
 
   // Now explicit detach
   auto detach_result = bus.DetachSink();
   EXPECT_TRUE(detach_result.success) << "DetachSink failed: " << detach_result.message;
-  EXPECT_FALSE(bus.IsAttached()) << "Sink should be detached after DetachSink";
+  EXPECT_FALSE(bus.HasSink()) << "Sink should be detached after DetachSink";
 
   // Frames after detach should be discarded (back to pre-attach state)
   for (int i = 20; i < 30; ++i) {
@@ -348,12 +348,12 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_SinkStabilityExplicitD
 TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_IdempotentDetach) {
   SCOPED_TRACE("INV-P9-SINK-LIVENESS-003: DetachSink is idempotent");
 
-  output::OutputBus bus(nullptr);
+  output::OutputBus bus;
 
   // Detach without attach - should be idempotent no-op
   auto result = bus.DetachSink();
   EXPECT_TRUE(result.success) << "DetachSink on empty bus should succeed (idempotent)";
-  EXPECT_FALSE(bus.IsAttached());
+  EXPECT_FALSE(bus.HasSink());
 
   // Multiple detach calls should all succeed
   for (int i = 0; i < 5; ++i) {
@@ -373,7 +373,7 @@ TEST_F(SinkLivenessContractTest, INV_P9_SINK_LIVENESS_003_IdempotentDetach) {
 TEST_F(SinkLivenessContractTest, PhaseTransitions_AttachDetachAttach) {
   SCOPED_TRACE("Phase transitions: attach -> detach -> attach");
 
-  output::OutputBus bus(nullptr);
+  output::OutputBus bus;
 
   // Phase 1: Pre-attach (discard)
   for (int i = 0; i < 5; ++i) {

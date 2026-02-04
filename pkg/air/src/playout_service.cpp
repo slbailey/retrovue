@@ -344,7 +344,7 @@ namespace retrovue
         sink->SetMetricsExporter(metrics, channel_id);
       }
 
-      auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink), false);
+      auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink));
       if (attach_result.success) {
         std::cout << "[TryAttachSinkForChannel] MpegTSOutputSink attached for channel "
                   << channel_id << std::endl;
@@ -372,7 +372,7 @@ namespace retrovue
       {
         // Disconnect program output from OutputBus first
         interface_->DisconnectRendererFromOutputBus(channel_id);
-        interface_->DetachOutputSink(channel_id, force);
+        interface_->DetachOutputSink(channel_id);
         std::cout << "[DetachStream] OutputSink detached for channel " << channel_id << std::endl;
       }
 
