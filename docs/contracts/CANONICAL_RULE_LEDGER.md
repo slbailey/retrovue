@@ -75,6 +75,8 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-P8-SEGMENT-EOF-DISTINCT-001 | LAW-AUTHORITY-HIERARCHY, LAW-TIMELINE | **Enforces** — schedule-driven timeline; EOF is event, not authority; CT continues after EOF |
 | INV-P8-CONTENT-DEFICIT-FILL-001 | LAW-OUTPUT-LIVENESS, INV-P8-SEGMENT-EOF-DISTINCT-001 | **Operationalizes** — fills gap between EOF and boundary with pad; preserves TS cadence |
 | INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | LAW-AUTHORITY-HIERARCHY, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — frame_count is planning authority; short content triggers fill, long content truncated |
+| LAW-TS-DISCOVERABILITY | LAW-OUTPUT-LIVENESS, LAW-VIDEO-DECODABILITY | **Extends** — if output must be live (LAW-OUTPUT-LIVENESS) and decodable (LAW-VIDEO-DECODABILITY), then program structure must be discoverable at any join time; PAT/PMT are control-plane, not media |
+| INV-TS-CONTROL-PLANE-CADENCE | LAW-TS-DISCOVERABILITY | **Operationalizes** — enforces 500ms wall-time bound on PAT/PMT emission; explicitly prohibits waiting on media queues, CT alignment, or encoder state |
 
 ---
 
@@ -149,6 +151,7 @@ Laws are non-negotiable. All contracts must conform to these laws.
 | **LAW-AUDIO-FORMAT** | LAW | AIR | INIT | No | No | — |
 | **LAW-SWITCHING** | LAW | AIR | P8 | Yes | Yes | — |
 | **LAW-VIDEO-DECODABILITY** | LAW | AIR | RUNTIME | Yes | Yes | — |
+| **LAW-TS-DISCOVERABILITY** | LAW | MpegTSOutputSink | RUNTIME | No | Yes | — |
 | **LAW-FRAME-EXECUTION** | CONTRACT | AIR | P10 | No | No | — |
 | **LAW-OBS-001** | LAW | AIR | RUNTIME | No | Yes | — |
 | **LAW-OBS-002** | LAW | AIR | RUNTIME | No | Yes | — |
@@ -167,6 +170,7 @@ Laws are non-negotiable. All contracts must conform to these laws.
 | LAW-AUDIO-FORMAT | Channel defines house format; all audio normalized before OutputBus; EncoderPipeline never negotiates | PlayoutInvariants §4 |
 | LAW-SWITCHING | No gaps, no PTS regression, no silence during switches. **Transitions MUST complete within one video frame duration of scheduled absolute boundary time.** | PlayoutInvariants §5 |
 | LAW-VIDEO-DECODABILITY | Every segment starts with IDR; real content gates pad; AIR owns keyframes | PlayoutInvariants §6 |
+| LAW-TS-DISCOVERABILITY | Transport stream MUST be self-describing to any late-joining observer; PAT/PMT are control-plane (not media) and MUST NOT be gated by CT pacing, buffer depth, or media availability; MpegTSOutputSink owns runtime enforcement | Late-joiner incident 2026-02-04 |
 | LAW-FRAME-EXECUTION | Frame index governs execution precision (HOW cuts happen), not transition timing (WHEN cuts happen). CT derives from frame index within a segment. **Does not override LAW-CLOCK for switch timing.** | PlayoutInvariants §7 *(Reclassified to CONTRACT; subordinate to LAW-AUTHORITY-HIERARCHY)* |
 | LAW-OBS-001 | Intent evidence — every significant action has intent log | ObservabilityParityLaw |
 | LAW-OBS-002 | Correlation evidence — related events share correlation ID | ObservabilityParityLaw |
@@ -294,6 +298,52 @@ Truths about correctness and time.
 | INV-AIR-IDR-BEFORE-OUTPUT | AIR must not emit video packets until IDR produced; gate resets on switch |
 | INV-AIR-CONTENT-BEFORE-PAD | Pad frames only after first real decoded content frame routed to output |
 | INV-AUDIO-HOUSE-FORMAT-001 | All audio reaching EncoderPipeline must be house format; reject non-house input |
+
+### Transport Stream Discoverability Invariants
+
+| Rule ID | Classification | Owner | Enforcement | Test | Log | Supersedes |
+|---------|---------------|-------|-------------|------|-----|------------|
+| **INV-TS-CONTROL-PLANE-CADENCE** | CONTRACT | MpegTSOutputSink | RUNTIME | No | Yes | — |
+
+| Rule ID | One-Line Definition |
+|---------|---------------------|
+| INV-TS-CONTROL-PLANE-CADENCE | At any wall-time T (steady_clock), PAT and PMT MUST have been **emitted** (bytes observed leaving sink) in (T−500ms, T]. MUST NOT be gated by CT pacing, media availability, buffer depth, producer state, or encoder output. |
+
+**INV-TS-CONTROL-PLANE-CADENCE Details:**
+
+- **Definition (Sliding Window):** At any wall-time T, there MUST exist a PAT and PMT **emitted** in the interval (T−500ms, T]. This is a continuous guarantee evaluated against `steady_clock`, not a periodic check or epoch-aligned sample.
+
+- **"Emitted" means:** Bytes containing PAT (PID 0x0000) or PMT (PID from PAT) observed leaving the sink (after `WriteToFdCallback` → `SocketSink`). NOT "scheduled", "eligible", or "queued internally by muxer".
+
+- **Enforcement Point:** `MpegTSOutputSink::MuxLoop` — track wall time since last muxer output; if threshold exceeded while waiting for media, cause the muxer to emit control-plane tables.
+
+- **Forbidden (explicit prohibitions):** Control-plane emission MUST NOT wait on:
+  - `video_queue_` non-empty
+  - `audio_queue_` non-empty
+  - CT alignment (frame timing)
+  - Encoder packet availability
+  - Producer state (EOF, starvation, shadow mode)
+  - Buffer depth thresholds
+
+- **Log Requirement:** Yes — log when control-plane emission is triggered due to media starvation:
+  ```
+  INV-TS-CONTROL-PLANE-CADENCE: muxer heartbeat
+    media_starvation_ms=N
+    last_pat_seen_ms_ago=M
+    last_pmt_seen_ms_ago=P
+  ```
+  The `last_pat_seen_ms_ago` and `last_pmt_seen_ms_ago` fields enable postmortem verification via forensic grep without decoding media.
+
+- **Derives From:** LAW-TS-DISCOVERABILITY (subordinate invariant)
+
+- **Implementation Note:** Emission must go through the muxer (EncoderPipeline), not around it. Raw socket writes bypass FFmpeg's `resend_headers` state and will not trigger PAT/PMT resend.
+
+- **Phase 10 Compliance:** Does NOT violate Phase 10:
+  - No new thread (MuxLoop already runs)
+  - No new queue (heartbeat uses existing muxer path)
+  - No new timing authority (MuxLoop already tracks wall time for CT pacing)
+  - No blocking (heartbeat emission is non-blocking)
+  - No backpressure propagation (control-plane is bounded, small)
 
 ### Frame Execution Invariants
 
