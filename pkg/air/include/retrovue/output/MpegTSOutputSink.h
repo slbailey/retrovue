@@ -72,7 +72,7 @@ class MpegTSOutputSink : public IOutputSink {
   void SetStatusCallback(SinkStatusCallback callback) override;
   std::string GetName() const override;
 
-  // INV-SWITCH-SUCCESSOR-EMISSION: Callback invoked once per real (non-pad)
+  // ORCH-SWITCH-SUCCESSOR-OBSERVED: Callback invoked once per real (non-pad)
   // video frame encoded. Used to gate segment commit and switch completion.
   using OnSuccessorVideoEmittedCallback = std::function<void()>;
   void SetOnSuccessorVideoEmitted(OnSuccessorVideoEmittedCallback callback);
@@ -147,7 +147,7 @@ class MpegTSOutputSink : public IOutputSink {
   std::atomic<uint64_t> video_frames_dropped_{0};
   std::atomic<uint64_t> audio_frames_dropped_{0};
 
-  // INV-SWITCH-SUCCESSOR-EMISSION: Called when a real video frame is encoded
+  // ORCH-SWITCH-SUCCESSOR-OBSERVED: Called when a real video frame is encoded
   OnSuccessorVideoEmittedCallback on_successor_video_emitted_;
 
   // =========================================================================

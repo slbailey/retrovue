@@ -368,14 +368,14 @@ Audio may legitimately lag video due to epoch alignment:
 
 # PASSED (video ready, audio may be 0):
 
-### 4.9 Switch Completion Requires Successor Video Emission (INV-SWITCH-SUCCESSOR-EMISSION)
+### 4.9 Switch Completion Requires Successor Video Emission (ORCH-SWITCH-SUCCESSOR-OBSERVED)
 
-**INV-SWITCH-SUCCESSOR-EMISSION**: A segment switch is not complete unless at least one real successor video frame has been emitted by the encoder.
+**ORCH-SWITCH-SUCCESSOR-OBSERVED**: A segment switch is not complete unless at least one real successor video frame has been emitted by the encoder.
 
 "Emitted" means: passed through ProgramOutput, routed through OutputBus, accepted by the encoder/mux. Pad frames do not count.
 
 **Enforcement:**
-- **TimelineController**: When an emission observer is attached (MpegTSOutputSink with callback), `segment_commit_generation_` advances only when `NotifySuccessorVideoEmitted()` is called (from sink after encoding a real frame). When no observer is attached (tests, late attach), commit_gen advances when the mapping locks.
+- **TimelineController**: When an emission observer is attached (MpegTSOutputSink with callback), `segment_commit_generation_` advances only when `RecordSuccessorEmissionDiagnostic()` is called (from sink after encoding a real frame). When no observer is attached (tests, late attach), commit_gen advances when the mapping locks.
 - **SwitchWatcher**: Does the swap first, then waits for `successor_video_emitted_` before setting `switch_auto_completed`. Hard assert: must not set `switch_auto_completed` without that signal.
 - **Direct path**: Does not return success until `successor_video_emitted_` is true (or no sink attached).
 - **MpegTSOutputSink**: Calls `OnSuccessorVideoEmitted` when a real (non-pad) video frame is encoded; pad frames (`asset_uri == "pad://black"`) do not trigger the callback.
@@ -387,8 +387,8 @@ Audio may legitimately lag video due to epoch alignment:
 
 **Log signatures:**
 ```
-[TimelineController] INV-SWITCH-SUCCESSOR-EMISSION: Segment N commit_gen=M (successor video emitted)
-[SwitchToLive] INV-SWITCH-SUCCESSOR-EMISSION VIOLATION: timeout waiting for successor video emission
+[TimelineController] ORCH-SWITCH-SUCCESSOR-OBSERVED: Segment N commit_gen=M (successor video emitted)
+[SwitchToLive] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission
 ```
 
 **4.8 continued — Switch Readiness log signatures:**

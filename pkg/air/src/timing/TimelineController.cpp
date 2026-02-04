@@ -33,16 +33,15 @@ bool TimelineController::StartSession() {
     return false;
   }
 
-  // Establish epoch from current wall-clock time
-  epoch_us_ = clock_->now_utc_us();
+  // Snapshot epoch from MasterClock (already set by PlayoutEngine)
+  epoch_us_ = clock_->get_epoch_utc_us();
   ct_cursor_us_ = 0;
   segment_mapping_ = std::nullopt;
   session_active_ = true;
   was_in_catch_up_ = false;
 
-  // Reset epoch in MasterClock for the new session
-  clock_->ResetEpochForNewSession();
-  clock_->TrySetEpochOnce(epoch_us_, MasterClock::EpochSetterRole::LIVE);
+  // NOTE: Epoch is owned by PlayoutEngine. TimelineController only reads it.
+  // PlayoutEngine::StartChannel() resets and sets epoch before calling StartSession().
 
   std::cout << "[TimelineController] Session started, epoch=" << epoch_us_
             << "us, CT=0" << std::endl;
@@ -184,12 +183,22 @@ void TimelineController::SetEmissionObserverAttached(bool attached) {
   emission_observer_attached_ = attached;
 }
 
-void TimelineController::NotifySuccessorVideoEmitted() {
+// ORCHESTRATION GUARANTEE:
+// This method MUST remain:
+// - O(1)
+// - Non-blocking
+// - Free of waits, sleeps, or I/O
+//
+// It MAY be invoked from the render thread.
+// Any future change that blocks here is a Phase 10 doctrine violation.
+//
+// TODO(Phase11): Enforce thread affinity with runtime thread registry.
+void TimelineController::RecordSuccessorEmissionDiagnostic() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!commit_pending_successor_emission_) return;
   commit_pending_successor_emission_ = false;
   segment_commit_generation_++;
-  std::cout << "[TimelineController] INV-SWITCH-SUCCESSOR-EMISSION: Segment "
+  std::cout << "[TimelineController] ORCH-SWITCH-SUCCESSOR-OBSERVED: Segment "
             << current_segment_id_ << " commit_gen=" << segment_commit_generation_
             << " (successor video emitted)" << std::endl;
 }

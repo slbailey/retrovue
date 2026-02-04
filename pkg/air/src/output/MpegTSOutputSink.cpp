@@ -557,7 +557,7 @@ void MpegTSOutputSink::MuxLoop() {
       const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
       encoder_->encodeFrame(frame, pts90k);
 
-      // INV-SWITCH-SUCCESSOR-EMISSION: Notify when a real (non-pad) video
+      // ORCH-SWITCH-SUCCESSOR-OBSERVED: Notify when a real (non-pad) video
       // frame has been emitted by the encoder. Pad frames do not count.
       const bool is_real_frame = (frame.metadata.asset_uri != "pad://black");
       if (is_real_frame && on_successor_video_emitted_) {

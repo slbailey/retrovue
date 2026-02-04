@@ -109,7 +109,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_001_FirstFrameAvailableAtCommit) {
   bool flushed = producer.FlushCachedFrameToBuffer();
 
   // INV-P8-SUCCESSOR-OBSERVABILITY: Simulate observer (no ProgramOutput in test)
-  timeline_->NotifySuccessorVideoEmitted();
+  timeline_->RecordSuccessorEmissionDiagnostic();
 
   // CRITICAL ASSERTION: Buffer must have ≥1 frame IMMEDIATELY after flush returns
   EXPECT_TRUE(flushed) << "FlushCachedFrameToBuffer should return true";
@@ -162,7 +162,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_002_ReadinessSatisfiedAfterCommit) {
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
   producer.FlushCachedFrameToBuffer();
-  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
+  timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer (no ProgramOutput in test)
 
   // INV-P9-BOOTSTRAP-READY check
   uint64_t current_gen = timeline_->GetSegmentCommitGeneration();
@@ -223,7 +223,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_003_NoDeadlockOnSwitch) {
 
   // Step 3: Flush cached frame (INV-P9-FLUSH)
   producer.FlushCachedFrameToBuffer();
-  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
+  timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer (no ProgramOutput in test)
 
   // Step 4: Check readiness (simulating watcher)
   uint64_t post_commit_gen = timeline_->GetSegmentCommitGeneration();
@@ -282,7 +282,7 @@ TEST_F(Phase9OutputBootstrapTest, G9_004_OutputTransitionOccurs) {
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
   producer.FlushCachedFrameToBuffer();
-  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
+  timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer (no ProgramOutput in test)
 
   // Verify frame can be consumed from buffer
   ASSERT_GE(ring_buffer.Size(), 1u);
@@ -336,7 +336,7 @@ TEST_F(Phase9OutputBootstrapTest, INV_P9_FLUSH_Synchronous) {
   // Measure flush time - should be <10ms (just a buffer push)
   auto flush_start = std::chrono::steady_clock::now();
   bool flushed = producer.FlushCachedFrameToBuffer();
-  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
+  timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer (no ProgramOutput in test)
   auto flush_end = std::chrono::steady_clock::now();
 
   auto flush_duration = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -390,7 +390,7 @@ TEST_F(Phase9OutputBootstrapTest, AudioZeroFrameAcceptable) {
   timeline_->BeginSegmentFromPreview();
   producer.SetShadowDecodeMode(false);
   producer.FlushCachedFrameToBuffer();
-  timeline_->NotifySuccessorVideoEmitted();  // Simulate observer (no ProgramOutput in test)
+  timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer (no ProgramOutput in test)
 
   // Check bootstrap readiness with potentially zero audio
   uint64_t post_commit_gen = timeline_->GetSegmentCommitGeneration();
@@ -444,7 +444,7 @@ TEST_F(Phase9OutputBootstrapTest, MultiSwitchStability) {
     timeline_->BeginSegmentFromPreview();
     producer1.SetShadowDecodeMode(false);
     producer1.FlushCachedFrameToBuffer();
-    timeline_->NotifySuccessorVideoEmitted();  // Simulate observer
+    timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer
 
     uint64_t gen_after_1 = timeline_->GetSegmentCommitGeneration();
     EXPECT_GT(gen_after_1, gen_before_1) << "First switch should advance generation";
@@ -476,7 +476,7 @@ TEST_F(Phase9OutputBootstrapTest, MultiSwitchStability) {
     timeline_->BeginSegmentFromPreview();
     producer2.SetShadowDecodeMode(false);
     producer2.FlushCachedFrameToBuffer();
-    timeline_->NotifySuccessorVideoEmitted();  // Simulate observer
+    timeline_->RecordSuccessorEmissionDiagnostic();  // Simulate observer
 
     uint64_t gen_after_2 = timeline_->GetSegmentCommitGeneration();
     EXPECT_GT(gen_after_2, gen_before_2) << "Second switch should advance generation";

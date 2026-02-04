@@ -95,7 +95,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_001_SuccessorNeverRetiredByBookkeeping) 
   tc->BeginSegmentFromPreview();
   int64_t ct_out = 0;
   tc->AdmitFrame(0, ct_out);
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   // ==========================================================================
   // Simulate switch: capture baseline before new segment
@@ -115,7 +115,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_001_SuccessorNeverRetiredByBookkeeping) 
   // ==========================================================================
   // Successor-activation bookkeeping
   // ==========================================================================
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   uint64_t gen_after_activation = tc->GetSegmentCommitGeneration();
 
@@ -164,7 +164,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_002_RetiringProducerIsPreSwapLive) {
   tc->BeginSegmentFromPreview();
   int64_t ct = 0;
   tc->AdmitFrame(0, ct);
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   // ==========================================================================
   // Track retirement target identity
@@ -181,7 +181,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_002_RetiringProducerIsPreSwapLive) {
   bool swap_done = true;
 
   // Post-swap: "live_producer" means successor, but retirement target is fixed
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   EXPECT_TRUE(retirement_target_is_pre_swap_producer)
       << "Retirement actions must apply only to the pre-swap producer";
@@ -218,7 +218,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_003_SuccessorContinuesAcrossActivation) 
   tc->BeginSegmentFromPreview();
   int64_t ct = 0;
   tc->AdmitFrame(0, ct);
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   // Successor segment
   tc->BeginSegmentFromPreview();
@@ -228,7 +228,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_003_SuccessorContinuesAcrossActivation) 
   bool swap_done = true;
 
   // Successor activation event (this is same-segment bookkeeping)
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   // ==========================================================================
   // INVARIANT: Successor continues producing after activation
@@ -279,7 +279,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_004_NoContinuityFailureSignature) {
   tc->BeginSegmentFromPreview();
   int64_t ct = 0;
   tc->AdmitFrame(0, ct);
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   // 2. Capture baseline
   uint64_t last_seen = tc->GetSegmentCommitGeneration();
@@ -292,7 +292,7 @@ TEST_F(SwitchWatcherStopTargetTest, SWT_004_NoContinuityFailureSignature) {
   bool swap_done = true;
 
   // 5. Successor activation (may increment commit-gen)
-  tc->NotifySuccessorVideoEmitted();
+  tc->RecordSuccessorEmissionDiagnostic();
 
   // 6. Edge detection fires in buggy code
   uint64_t current_gen = tc->GetSegmentCommitGeneration();

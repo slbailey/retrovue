@@ -128,7 +128,7 @@ struct PlayoutEngine::PlayoutInstance {
   // This works across multiple switches (1st, 2nd, Nth).
   uint64_t last_seen_commit_gen = 0;
 
-  // INV-SWITCH-SUCCESSOR-EMISSION: True only after at least one real successor
+  // ORCH-SWITCH-SUCCESSOR-OBSERVED: True only after at least one real successor
   // video frame has been emitted by the encoder (routed through OutputBus and
   // accepted by encoder/mux). Pad frames do not count. Gates switch completion.
   std::atomic<bool> successor_video_emitted_{false};
@@ -245,17 +245,22 @@ EngineResult PlayoutEngine::StartChannel(
     state->timeline_controller = std::make_unique<timing::TimelineController>(
         master_clock_, timeline_config);
 
-    // Start timeline session
+    // EPOCH OWNERSHIP (CANONICAL):
+    // PlayoutEngine is the sole owner of epoch lifecycle.
+    // Reset and set epoch BEFORE starting session - deterministic from the start.
+    // Epoch is immutable during steady-state playout (Phase 10).
+    if (master_clock_) {
+      master_clock_->ResetEpochForNewSession();
+      const int64_t epoch = master_clock_->now_utc_us();
+      master_clock_->TrySetEpochOnce(epoch, timing::MasterClock::EpochSetterRole::LIVE);
+      std::cout << "[PlayoutEngine] Epoch established: " << epoch << "us" << std::endl;
+    }
+
+    // Start timeline session (reads epoch from MasterClock)
     if (!state->timeline_controller->StartSession()) {
       return EngineResult(false, "Failed to start timeline session for channel " + std::to_string(channel_id));
     }
     std::cout << "[PlayoutEngine] Phase 8 TimelineController started for channel " << channel_id << std::endl;
-
-    // Phase 7 (INV-P7-001): Epoch is established by first live producer.
-    // The first live producer will set epoch = playback_start - first_frame_pts
-    // via TrySetEpochOnce(). Subsequent producers (preview) will be blocked.
-    // Note: ResetEpochForNewSession() is called in StopChannel(), not here,
-    // so epoch persists across the channel session.
 
     // Create producer config from ProgramFormat (canonical signal format)
     producers::file::ProducerConfig producer_config;
@@ -293,7 +298,7 @@ EngineResult PlayoutEngine::StartChannel(
     timing::TimelineController* tc = state->timeline_controller.get();
     state->program_output->SetOnSuccessorVideoEmitted([state_ptr, tc]() {
       state_ptr->successor_video_emitted_.store(true, std::memory_order_release);
-      if (tc) tc->NotifySuccessorVideoEmitted();
+      if (tc) tc->RecordSuccessorEmissionDiagnostic();
     });
     state->timeline_controller->SetEmissionObserverAttached(true);
 
@@ -1201,7 +1206,7 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
           std::cout << "[PlayoutEngine] INV-P8-ZERO-FRAME-BOOTSTRAP: Zero-frame segment detected, "
                     << "CONTENT-BEFORE-PAD gate bypassed" << std::endl;
         }
-        // INV-SWITCH-SUCCESSOR-EMISSION: Zero-content segment has no real frames;
+        // ORCH-SWITCH-SUCCESSOR-OBSERVED: Zero-content segment has no real frames;
         // allow switch completion without encoder emission (pad-only segment).
         state->successor_video_emitted_.store(true, std::memory_order_release);
       } else {
@@ -1299,8 +1304,10 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
       state->timeline_controller->AdvanceCursorForPreBufferedFrames(preview_depth_before);
     }
 
-    // INV-P8-SUCCESSOR-OBSERVABILITY: Do not return success until observer confirms
-    // at least one real successor video frame routed. Completion ONLY via observer.
+    // ORCHESTRATION BOUNDARY:
+    // This wait gates SwitchToLive RPC completion only.
+    // It MUST NOT affect CT, epoch, frame pacing, or emission timing.
+    // This is NOT a timing or pressure mechanism.
     constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
     const auto wait_start = std::chrono::steady_clock::now();
     PlayoutInstance* state_ptr = state.get();
@@ -1314,8 +1321,8 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
       }
       state_ptr = it->second.get();
       if (std::chrono::steady_clock::now() - wait_start > kSuccessorEmitWaitTimeout) {
-        std::cerr << "[SwitchToLive] INV-SWITCH-SUCCESSOR-EMISSION VIOLATION: timeout waiting for successor video emission" << std::endl;
-        return EngineResult(false, "INV-SWITCH-SUCCESSOR-EMISSION: timeout waiting for successor video emission");
+        std::cerr << "[SwitchToLive] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission" << std::endl;
+        return EngineResult(false, "ORCH-SWITCH-SUCCESSOR-OBSERVED: timeout waiting for successor video emission");
       }
     }
 
@@ -1488,6 +1495,10 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
     state->timeline_controller->AdvanceCursorForPreBufferedFrames(preview_depth_before);
   }
 
+  // ORCHESTRATION BOUNDARY:
+  // This wait gates SwitchToLive RPC completion only.
+  // It MUST NOT affect CT, epoch, frame pacing, or emission timing.
+  // This is NOT a timing or pressure mechanism.
   PlayoutInstance* state_ptr = state;
   constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
   const auto wait_start = std::chrono::steady_clock::now();
@@ -1501,8 +1512,8 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
     }
     state_ptr = it->second.get();
     if (std::chrono::steady_clock::now() - wait_start > kSuccessorEmitWaitTimeout) {
-      std::cerr << "[SwitchToLive] INV-SWITCH-SUCCESSOR-EMISSION VIOLATION: timeout waiting for successor video emission" << std::endl;
-      return EngineResult(false, "INV-SWITCH-SUCCESSOR-EMISSION: timeout waiting for successor video emission");
+      std::cerr << "[SwitchToLive] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission" << std::endl;
+      return EngineResult(false, "ORCH-SWITCH-SUCCESSOR-OBSERVED: timeout waiting for successor video emission");
     }
   }
 

@@ -193,13 +193,24 @@ class TimelineController {
   // This works for 1st, 2nd, Nth switches.
   uint64_t GetSegmentCommitGeneration() const;
 
-  // INV-SWITCH-SUCCESSOR-EMISSION: Segment commit is not observable until at
+  // ORCH-SWITCH-SUCCESSOR-OBSERVED: Segment commit is not observable until at
   // least one real successor video frame has been emitted by the encoder.
   // When mapping locks we set commit_pending_successor_emission_; commit_gen
   // advances only when this is called (from sink after encoding a real frame).
-  void NotifySuccessorVideoEmitted();
+  //
+  // =========================================================================
+  // Phase 10 Compliance: DIAGNOSTIC-ONLY
+  // =========================================================================
+  // This method is DIAGNOSTIC-ONLY.
+  // It MUST NOT:
+  //   - gate segment switching
+  //   - influence CT, epoch, or admission
+  //   - be consulted for readiness, pacing, or selection
+  // Sink callbacks MUST NOT become timing or control authority.
+  // =========================================================================
+  void RecordSuccessorEmissionDiagnostic();
 
-  // When true, commit_gen advances only after NotifySuccessorVideoEmitted().
+  // When true, commit_gen advances only after RecordSuccessorEmissionDiagnostic().
   // When false (e.g. tests with no sink), commit_gen advances when mapping locks.
   void SetEmissionObserverAttached(bool attached);
 
@@ -339,9 +350,13 @@ class TimelineController {
   // INV-P8-SEGMENT-COMMIT-EDGE: Generation counter for commit edge detection
   // Increments exactly once per commit. Allows detecting commit edges across
   // multiple switches (1st, 2nd, Nth).
+  //
+  // PHASE 10 GUARD: This is DIAGNOSTIC / ORCHESTRATION SEQUENCE ONLY.
+  // It MUST NOT gate switching, admission, pacing, CT, or epoch.
+  // Used solely to trigger predecessor retirement after successor emission.
   uint64_t segment_commit_generation_ = 0;
 
-  // INV-SWITCH-SUCCESSOR-EMISSION: Commit gen does not advance until sink has
+  // ORCH-SWITCH-SUCCESSOR-OBSERVED: Commit gen does not advance until sink has
   // emitted at least one real (non-pad) video frame after mapping lock.
   bool commit_pending_successor_emission_ = false;
   bool emission_observer_attached_ = false;

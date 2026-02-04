@@ -53,7 +53,7 @@
 
 **Log pattern (violation):**
 ```
-[TimelineController] INV-SWITCH-SUCCESSOR-EMISSION: Segment N commit_gen=X (successor video emitted)
+[TimelineController] ORCH-SWITCH-SUCCESSOR-OBSERVED: Segment N commit_gen=X (successor video emitted)
 [FileProducer] Request stop (writes disabled)   ← within <100ms of above
 ```
 Followed by successor emitting only a handful of frames instead of running continuously.
@@ -126,7 +126,7 @@ The switch watcher's retirement-detection logic used a dynamically-resolved refe
 
 ### Confirmation: Where Commit-Gen Increments
 
-The successor-activation signal (`NotifySuccessorVideoEmitted` in `TimelineController.cpp`) increments `segment_commit_generation_`. This increment represents same-segment bookkeeping ("segment fully active"), not a new segment event. The switch watcher's edge detector treated this as a retirement trigger.
+The successor-activation signal (`RecordSuccessorEmissionDiagnostic` in `TimelineController.cpp`) increments `segment_commit_generation_`. This increment represents same-segment bookkeeping ("segment fully active"), not a new segment event. The switch watcher's edge detector treated this as a retirement trigger.
 
 ---
 

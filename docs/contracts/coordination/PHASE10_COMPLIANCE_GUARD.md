@@ -119,6 +119,13 @@ grep -r "sleep_for.*WriteToFdCallback" pkg/air/  # MUST return 0 results
 
 # No hysteresis markers
 grep -r "low.water\|high.water" pkg/air/src/producers/  # MUST return 0 results
+
+# No logic may branch on successor emission generation (diagnostic-only)
+grep -r "segment_commit_generation_" pkg/air/src | grep -v TimelineController  # MUST return 0 results
+
+# EPOCH OWNERSHIP: Only PlayoutEngine may call reset/set epoch (exclude implementations in timing/)
+grep -r "ResetEpochForNewSession\|TrySetEpochOnce" pkg/air/src/producers pkg/air/src/output pkg/air/src/renderer  # MUST return 0 results
+grep -r "->ResetEpochForNewSession\|->TrySetEpochOnce" pkg/air/src/timing/TimelineController  # MUST return 0 results
 ```
 
 ### Contract Tests
