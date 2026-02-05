@@ -126,12 +126,14 @@ set(BLOCKPLAN_SOURCES
   src/blockplan/BlockPlanTypes.cpp
   src/blockplan/BlockPlanValidator.cpp
   src/blockplan/BlockPlanQueue.cpp
+  src/blockplan/BlockPlanExecutor.cpp
 )
 
 add_library(retrovue_blockplan ${BLOCKPLAN_SOURCES})
 target_include_directories(retrovue_blockplan
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
 )
 target_compile_features(retrovue_blockplan PUBLIC cxx_std_20)
 
@@ -314,6 +316,8 @@ add_test(
 # Tests for docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
 add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/BlockPlanContractTests.cpp
+  tests/contracts/BlockPlan/ExecutorContractTests.cpp
+  tests/contracts/BlockPlan/ExecutorDiagnosticHarness.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
@@ -326,6 +330,7 @@ target_link_libraries(blockplan_contract_tests
 target_include_directories(blockplan_contract_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
 )
 
 add_test(
