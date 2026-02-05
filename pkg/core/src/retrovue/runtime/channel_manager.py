@@ -104,6 +104,11 @@ from dataclasses import dataclass
 from datetime import datetime
 import logging
 import os
+import threading
+
+# BlockPlan imports (lazy to avoid circular imports)
+if TYPE_CHECKING:
+    from .playout_session import PlayoutSession, BlockPlan
 
 if TYPE_CHECKING:
     from retrovue.runtime.metrics import ChannelMetricsSample, MetricsPublisher
@@ -337,6 +342,14 @@ class ChannelManager:
         # P11D-011: Deadline-scheduled switch issuance (not cadence-detected)
         self._switch_issue_timer: threading.Timer | None = None
         self._switch_issue_timer_lock: threading.Lock = threading.Lock()
+
+        # INV-VIEWER-LIFECYCLE: Thread-safe viewer count transitions
+        # Protects viewer_sessions dict and viewer_count for concurrent join/leave
+        self._viewer_lock: threading.Lock = threading.Lock()
+
+        # BlockPlan mode: when True, use BlockPlanProducer instead of Phase8AirProducer
+        # Set via set_blockplan_mode() or configuration
+        self._blockplan_mode: bool = False
         self._pending_fatal: BaseException | None = None  # Set by timer callback if late/fatal; tick() re-raises
         # Phase 8: State machine for clock-driven switching (replaces boolean flags)
         self._switch_state: SwitchState = SwitchState.IDLE
@@ -667,45 +680,69 @@ class ChannelManager:
         return [segment]
 
     def viewer_join(self, session_id: str, session_info: dict[str, Any]) -> None:
-        """Called when a viewer starts watching this channel."""
-        now = self.clock.now_utc()
+        """
+        Called when a viewer starts watching this channel.
 
-        if session_id in self.viewer_sessions:
-            self.viewer_sessions[session_id]["last_activity"] = now
-        else:
-            self.viewer_sessions[session_id] = {
-                "session_id": session_id,
-                "channel_id": self.channel_id,
-                "started_at": now,
-                "last_activity": now,
-                "client_info": session_info,
-            }
+        INV-VIEWER-LIFECYCLE-001: Thread-safe viewer count transitions.
+        Concurrent viewer joins are serialized via _viewer_lock.
+        First viewer (0→1) triggers on_first_viewer() exactly once.
+        """
+        with self._viewer_lock:
+            now = self.clock.now_utc()
 
-        old_count = self.runtime_state.viewer_count
-        self.runtime_state.viewer_count = len(self.viewer_sessions)
+            if session_id in self.viewer_sessions:
+                self.viewer_sessions[session_id]["last_activity"] = now
+            else:
+                self.viewer_sessions[session_id] = {
+                    "session_id": session_id,
+                    "channel_id": self.channel_id,
+                    "started_at": now,
+                    "last_activity": now,
+                    "client_info": session_info,
+                }
 
-        # When first viewer joins after STOPPED, re-enter RUNNING so producer can start.
-        if old_count == 0 and self.runtime_state.viewer_count == 1:
-            self._channel_state = "RUNNING"
-        # Fanout rule: first viewer starts Producer.
-        if old_count == 0 and self.runtime_state.viewer_count == 1:
-            self.on_first_viewer()
+            old_count = self.runtime_state.viewer_count
+            self.runtime_state.viewer_count = len(self.viewer_sessions)
 
-        # If we have an active producer, surface its endpoint for new viewers.
-        if self.active_producer:
-            self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
+            # When first viewer joins after STOPPED, re-enter RUNNING so producer can start.
+            if old_count == 0 and self.runtime_state.viewer_count == 1:
+                self._channel_state = "RUNNING"
+            # Fanout rule: first viewer starts Producer.
+            # INV-VIEWER-LIFECYCLE-001: AIR starts exactly once on 0→1 transition
+            if old_count == 0 and self.runtime_state.viewer_count == 1:
+                self._logger.info(
+                    "INV-VIEWER-LIFECYCLE-001: First viewer joined channel %s, starting AIR",
+                    self.channel_id
+                )
+                self.on_first_viewer()
+
+            # If we have an active producer, surface its endpoint for new viewers.
+            if self.active_producer:
+                self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
     def viewer_leave(self, session_id: str) -> None:
-        """Called when a viewer stops watching."""
-        if session_id in self.viewer_sessions:
-            del self.viewer_sessions[session_id]
+        """
+        Called when a viewer stops watching.
 
-        old_count = self.runtime_state.viewer_count
-        self.runtime_state.viewer_count = len(self.viewer_sessions)
+        INV-VIEWER-LIFECYCLE-002: Thread-safe viewer count transitions.
+        Concurrent viewer leaves are serialized via _viewer_lock.
+        Last viewer (1→0) triggers on_last_viewer() exactly once.
+        """
+        with self._viewer_lock:
+            if session_id in self.viewer_sessions:
+                del self.viewer_sessions[session_id]
 
-        # Fanout rule: last viewer stops Producer.
-        if old_count == 1 and self.runtime_state.viewer_count == 0:
-            self.on_last_viewer()
+            old_count = self.runtime_state.viewer_count
+            self.runtime_state.viewer_count = len(self.viewer_sessions)
+
+            # Fanout rule: last viewer stops Producer.
+            # INV-VIEWER-LIFECYCLE-002: AIR stops exactly once on 1→0 transition
+            if old_count == 1 and self.runtime_state.viewer_count == 0:
+                self._logger.info(
+                    "INV-VIEWER-LIFECYCLE-002: Last viewer left channel %s, stopping AIR",
+                    self.channel_id
+                )
+                self.on_last_viewer()
 
     # Phase 0 Contract Methods
     def tune_in(self, session_id: str, session_info: dict[str, Any] | None = None) -> None:
@@ -1792,10 +1829,57 @@ class ChannelManager:
         """
         Factory hook: build the correct Producer implementation for the given mode.
 
-        This method is intentionally a stub here. It will be overridden by the RetroVue Core runtime.
+        When _blockplan_mode is True, returns BlockPlanProducer for autonomous
+        BlockPlan execution. Otherwise, returns Phase8AirProducer for legacy
+        LoadPreview/SwitchToLive execution.
+
+        INV-VIEWER-LIFECYCLE: Producer selection is deterministic based on mode flag.
         """
-        _ = mode  # avoid unused var lint
-        return None
+        if self._blockplan_mode:
+            self._logger.info(
+                "Channel %s: Building BlockPlanProducer (mode=%s)",
+                self.channel_id, mode
+            )
+            return BlockPlanProducer(
+                channel_id=self.channel_id,
+                configuration={"block_duration_ms": 30_000},
+                channel_config=self._get_channel_config(),
+                schedule_service=self.schedule_service,
+                clock=self.clock,
+            )
+        else:
+            # Legacy Phase8 mode - return None (or Phase8AirProducer if available)
+            # This method is typically overridden by the runtime
+            _ = mode  # avoid unused var lint
+            return None
+
+    def _get_channel_config(self) -> ChannelConfig:
+        """Get or create ChannelConfig for this channel."""
+        # Try to get from ProgramDirector if available
+        if hasattr(self.program_director, 'get_channel_config'):
+            config = self.program_director.get_channel_config(self.channel_id)
+            if config:
+                return config
+        # Fall back to mock config
+        return MOCK_CHANNEL_CONFIG
+
+    def set_blockplan_mode(self, enabled: bool) -> None:
+        """
+        Enable or disable BlockPlan mode.
+
+        When enabled, ChannelManager uses BlockPlanProducer which provides:
+        - Autonomous block execution (no mid-block Core↔AIR communication)
+        - 2-block lookahead feeding
+        - Viewer-lifecycle-driven start/stop
+
+        Args:
+            enabled: True to use BlockPlanProducer, False for legacy Phase8AirProducer
+        """
+        self._blockplan_mode = enabled
+        self._logger.info(
+            "Channel %s: BlockPlan mode %s",
+            self.channel_id, "enabled" if enabled else "disabled"
+        )
 
 
 # ----------------------------------------------------------------------
@@ -2472,5 +2556,322 @@ class Phase8AirProducer(Producer):
         except Exception as e:
             self._logger.warning("Channel %s: SwitchToLive failed: %s", self.channel_id, e)
             return False
+
+
+# =============================================================================
+# BlockPlanProducer: Viewer-lifecycle-driven BlockPlan execution
+# =============================================================================
+
+
+class BlockPlanProducer(Producer):
+    """
+    Producer that uses BlockPlan-based execution via PlayoutSession.
+
+    This producer implements the on-demand playout model:
+    - AIR starts on first viewer (0 → 1 transition)
+    - AIR stops on last viewer (1 → 0 transition)
+    - No viewer can start/stop AIR directly
+    - BlockPlan execution is autonomous (no mid-block Core↔AIR traffic)
+
+    ChannelManager owns the viewer lifecycle; BlockPlanProducer owns the
+    AIR subprocess and BlockPlan feeding.
+
+    Thread Safety:
+    - All public methods are thread-safe via _lock
+    - Viewer churn (rapid join/leave) cannot double-start or double-stop
+    - Concurrent viewer_join/leave are serialized
+    """
+
+    # Block duration in milliseconds (configurable via configuration)
+    DEFAULT_BLOCK_DURATION_MS = 30_000  # 30 seconds
+
+    def __init__(
+        self,
+        channel_id: str,
+        configuration: dict[str, Any],
+        channel_config: ChannelConfig | None = None,
+        schedule_service: ScheduleService | None = None,
+        clock: MasterClock | None = None,
+    ):
+        super().__init__(channel_id, ProducerMode.NORMAL, configuration)
+        self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
+        self.schedule_service = schedule_service
+        self.clock = clock
+
+        # PlayoutSession instance (created on start, destroyed on stop)
+        self._session: "PlayoutSession | None" = None
+
+        # Thread-safety lock for all state mutations
+        self._lock = threading.RLock()
+
+        # State tracking
+        self._started = False
+        self._start_count = 0  # Debug: track start attempts
+        self._stop_count = 0   # Debug: track stop attempts
+
+        # Block generation state
+        self._block_index = 0
+        self._next_block_start_ms = 0
+        self._block_duration_ms = configuration.get(
+            "block_duration_ms", self.DEFAULT_BLOCK_DURATION_MS
+        )
+
+        # UDS socket for TS output
+        self._socket_path: Path | None = None
+        self._stream_endpoint = f"/channel/{channel_id}.ts"
+
+        # Program format for encoding (extracted from ChannelConfig.program_format)
+        pf = self.channel_config.program_format
+        self._program_format = {
+            "video": {
+                "width": pf.video_width,
+                "height": pf.video_height,
+                "frame_rate": {
+                    "num": pf.frame_rate_num,
+                    "den": pf.frame_rate_den,
+                },
+            },
+            "audio": {
+                "sample_rate": pf.audio_sample_rate,
+                "channels": pf.audio_channels,
+            },
+        }
+
+    def start(self, playout_plan: list[dict[str, Any]], start_at_station_time: datetime) -> bool:
+        """
+        Start BlockPlan execution.
+
+        Called by ChannelManager.on_first_viewer() when viewer count goes 0→1.
+        Creates PlayoutSession, seeds initial 2 blocks, and begins execution.
+
+        INV-VIEWER-LIFECYCLE-001: AIR starts exactly once per first-viewer event.
+        """
+        with self._lock:
+            if self._started:
+                self._logger.warning(
+                    "INV-VIEWER-LIFECYCLE-001: Channel %s already started (start_count=%d)",
+                    self.channel_id, self._start_count
+                )
+                return True  # Idempotent - already running
+
+            self._start_count += 1
+            self._logger.info(
+                "INV-VIEWER-LIFECYCLE-001: Channel %s starting BlockPlan execution "
+                "(start_count=%d, station_time=%s)",
+                self.channel_id, self._start_count, start_at_station_time
+            )
+
+            try:
+                # Import here to avoid circular imports
+                from .playout_session import PlayoutSession, BlockPlan
+
+                # Setup socket path
+                self._socket_path = Path(f"/tmp/retrovue/air/{self.channel_id}.sock")
+                self._socket_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Create PlayoutSession
+                self._session = PlayoutSession(
+                    channel_id=self.channel_id,
+                    channel_id_int=self.channel_config.channel_id_int,
+                    ts_socket_path=self._socket_path,
+                    program_format=self._program_format,
+                    on_block_complete=self._on_block_complete,
+                    on_session_end=self._on_session_end,
+                )
+
+                # Start AIR subprocess
+                join_utc_ms = int(start_at_station_time.timestamp() * 1000)
+                if not self._session.start(join_utc_ms=join_utc_ms):
+                    raise RuntimeError("PlayoutSession.start() failed")
+
+                # Generate and seed initial 2 blocks
+                block_a = self._generate_block(playout_plan, 0)
+                block_b = self._generate_block(playout_plan, 1)
+
+                if not self._session.seed(block_a, block_b):
+                    raise RuntimeError("PlayoutSession.seed() failed")
+
+                # Feed a third block to maintain 2-block lookahead
+                block_c = self._generate_block(playout_plan, 2)
+                self._session.feed(block_c)
+
+                self._started = True
+                self.status = ProducerStatus.RUNNING
+                self.started_at = start_at_station_time
+                self.output_url = self._stream_endpoint
+
+                self._logger.info(
+                    "Channel %s: BlockPlan execution started, seeded 2 blocks",
+                    self.channel_id
+                )
+                return True
+
+            except Exception as e:
+                self._logger.error(
+                    "Channel %s: BlockPlan start failed: %s",
+                    self.channel_id, e
+                )
+                self._cleanup()
+                self.status = ProducerStatus.ERROR
+                return False
+
+    def stop(self) -> bool:
+        """
+        Stop BlockPlan execution.
+
+        Called by ChannelManager.on_last_viewer() when viewer count goes 1→0.
+        Stops PlayoutSession, terminates AIR, cleans up resources.
+
+        INV-VIEWER-LIFECYCLE-002: AIR stops exactly once per last-viewer event.
+        """
+        with self._lock:
+            if not self._started:
+                self._logger.debug(
+                    "Channel %s: stop() called but not started (stop_count=%d)",
+                    self.channel_id, self._stop_count
+                )
+                return True  # Idempotent - already stopped
+
+            self._stop_count += 1
+            self._logger.info(
+                "INV-VIEWER-LIFECYCLE-002: Channel %s stopping BlockPlan execution "
+                "(stop_count=%d)",
+                self.channel_id, self._stop_count
+            )
+
+            self._cleanup()
+
+            self._started = False
+            self.status = ProducerStatus.STOPPED
+            self.output_url = None
+            self._teardown_cleanup()
+
+            return True
+
+    def _cleanup(self):
+        """Clean up PlayoutSession and resources."""
+        if self._session:
+            try:
+                self._session.stop(reason="last_viewer_left")
+            except Exception as e:
+                self._logger.warning(
+                    "Channel %s: Session stop error: %s",
+                    self.channel_id, e
+                )
+            self._session = None
+
+        # Reset block generation state for next start
+        self._block_index = 0
+        self._next_block_start_ms = 0
+
+    def _generate_block(
+        self,
+        playout_plan: list[dict[str, Any]],
+        block_offset: int,
+    ) -> "BlockPlan":
+        """
+        Generate a BlockPlan from the playout plan.
+
+        For now, generates fixed-duration blocks from the first segment.
+        Future: proper segment slicing based on schedule.
+        """
+        from .playout_session import BlockPlan
+
+        block_index = self._block_index + block_offset
+        start_ms = self._next_block_start_ms + (block_offset * self._block_duration_ms)
+        end_ms = start_ms + self._block_duration_ms
+
+        # Get asset from playout plan
+        if playout_plan:
+            segment = playout_plan[0]
+            asset_path = segment.get("asset_path", "assets/SampleA.mp4")
+        else:
+            asset_path = "assets/SampleA.mp4"
+
+        block = BlockPlan(
+            block_id=f"BLOCK-{self.channel_id}-{block_index}",
+            channel_id=self.channel_config.channel_id_int,
+            start_utc_ms=start_ms,
+            end_utc_ms=end_ms,
+            segments=[{
+                "segment_index": 0,
+                "asset_uri": asset_path,
+                "asset_start_offset_ms": 0,
+                "segment_duration_ms": self._block_duration_ms,
+            }],
+        )
+
+        # Advance state for next generation
+        if block_offset == 0:
+            self._block_index += 1
+            self._next_block_start_ms = end_ms
+
+        return block
+
+    def _on_block_complete(self, block_id: str):
+        """Callback when a block completes - feed next block."""
+        with self._lock:
+            if not self._started or not self._session:
+                return
+
+            self._logger.debug(
+                "Channel %s: Block %s completed, feeding next",
+                self.channel_id, block_id
+            )
+
+            # Generate and feed next block
+            # Note: Using empty playout_plan - real implementation would
+            # fetch fresh schedule data
+            next_block = self._generate_block([], 0)
+            self._session.feed(next_block)
+
+    def _on_session_end(self, reason: str):
+        """Callback when session ends unexpectedly."""
+        self._logger.info(
+            "Channel %s: Session ended: %s",
+            self.channel_id, reason
+        )
+
+    def play_content(self, content: ContentSegment) -> bool:
+        """Not used in BlockPlan mode (blocks are fed instead)."""
+        return True
+
+    def get_stream_endpoint(self) -> str | None:
+        """Return stream endpoint URL."""
+        return self.output_url
+
+    def health(self) -> str:
+        """Report Producer health."""
+        with self._lock:
+            if not self._started:
+                return "stopped"
+            if self._session and self._session.is_running:
+                return "running"
+            if self.status == ProducerStatus.ERROR:
+                return "degraded"
+            return "stopped"
+
+    def get_producer_id(self) -> str:
+        """Get unique identifier for this producer."""
+        return f"blockplan_{self.channel_id}"
+
+    def on_paced_tick(self, t_now: float, dt: float) -> None:
+        """
+        Advance producer state using pacing ticks.
+
+        In BlockPlan mode, most work happens asynchronously in AIR.
+        This tick only handles teardown advancement.
+        """
+        # Handle graceful teardown if in progress
+        if self._advance_teardown(dt):
+            return
+
+        # BlockPlan execution is autonomous - no per-tick work needed
+        # Block feeding happens via on_block_complete callback
+
+    def get_socket_path(self) -> Path | None:
+        """Return the UDS socket path for TS output."""
+        with self._lock:
+            return self._socket_path
 
 
