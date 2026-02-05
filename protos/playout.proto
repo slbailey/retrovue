@@ -78,6 +78,12 @@ service PlayoutControl {
   // StopBlockPlanSession terminates execution immediately.
   // Use when last viewer leaves or on error.
   rpc StopBlockPlanSession(StopBlockPlanSessionRequest) returns (StopBlockPlanSessionResponse);
+
+  // SubscribeBlockEvents returns a stream of block lifecycle events.
+  // Core subscribes after StartBlockPlanSession to receive BlockCompleted events.
+  // This enables boundary-driven just-in-time feeding without polling.
+  // Stream ends when session ends or is stopped.
+  rpc SubscribeBlockEvents(SubscribeBlockEventsRequest) returns (stream BlockEvent);
 }
 
 // StartChannelRequest provides the context required to initialize a playout channel.
@@ -307,5 +313,44 @@ enum BlockPlanResultCode {
   BLOCKPLAN_RESULT_NO_SESSION = 5;          // No active BlockPlan session
   BLOCKPLAN_RESULT_ALREADY_ACTIVE = 6;      // Session already running
   BLOCKPLAN_RESULT_STREAM_NOT_ATTACHED = 7; // Must AttachStream first
+}
+
+// ==========================================================================
+// Block Event Streaming (boundary-driven feeding)
+// ==========================================================================
+
+// SubscribeBlockEventsRequest identifies the channel to subscribe to.
+message SubscribeBlockEventsRequest {
+  int32 channel_id = 1;
+}
+
+// BlockEvent represents a lifecycle event from the BlockPlan executor.
+// AIR reports facts; Core decides whether to act.
+message BlockEvent {
+  int32 channel_id = 1;
+
+  oneof event {
+    BlockCompleted block_completed = 10;
+    SessionEnded session_ended = 11;
+  }
+}
+
+// BlockCompleted is emitted once per block, after the block fence is reached.
+// Core uses this to know when to feed the next block.
+// Does NOT include segment data. Does NOT request action.
+message BlockCompleted {
+  string block_id = 1;              // ID of the completed block
+  int64 block_start_utc_ms = 2;     // Block start time (for correlation)
+  int64 block_end_utc_ms = 3;       // Block end time (fence)
+  int64 final_ct_ms = 4;            // Actual CT at completion (may exceed fence slightly)
+  int32 blocks_executed_total = 5;  // Running count of blocks executed this session
+}
+
+// SessionEnded is emitted when the BlockPlan session terminates.
+// Reason indicates why: lookahead_exhausted, stopped, error.
+message SessionEnded {
+  string reason = 1;                // "lookahead_exhausted", "stopped", "error"
+  int64 final_ct_ms = 2;            // Final CT at termination
+  int32 blocks_executed_total = 3;  // Total blocks completed
 }
 

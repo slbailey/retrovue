@@ -197,6 +197,8 @@ class PlayoutSession:
         self._lock = threading.Lock()
         self._grpc_channel: Optional[grpc.Channel] = None
         self._stub: Optional[playout_pb2_grpc.PlayoutControlStub] = None
+        self._event_thread: Optional[threading.Thread] = None
+        self._event_stop = threading.Event()
 
         logger.info(f"[PlayoutSession:{channel_id}] Initialized, ts_socket={ts_socket_path}")
 
@@ -320,6 +322,69 @@ class PlayoutSession:
             logger.error(f"[PlayoutSession:{self.channel_id}] AttachStream RPC error: {e}")
             return False
 
+    def _subscribe_to_events(self) -> None:
+        """Start background thread to receive block events from AIR."""
+        def event_loop():
+            try:
+                request = playout_pb2.SubscribeBlockEventsRequest(
+                    channel_id=self.channel_id_int,
+                )
+                # Use a streaming call that will block until events arrive or connection ends
+                for event in self._stub.SubscribeBlockEvents(request):
+                    if self._event_stop.is_set():
+                        break
+
+                    if event.HasField("block_completed"):
+                        completed = event.block_completed
+                        logger.info(
+                            f"[PlayoutSession:{self.channel_id}] BlockCompleted: "
+                            f"block_id={completed.block_id}, "
+                            f"final_ct_ms={completed.final_ct_ms}, "
+                            f"blocks_total={completed.blocks_executed_total}"
+                        )
+                        with self._lock:
+                            self._state.blocks_executed = completed.blocks_executed_total
+                        if self.on_block_complete:
+                            try:
+                                self.on_block_complete(completed.block_id)
+                            except Exception as e:
+                                logger.error(
+                                    f"[PlayoutSession:{self.channel_id}] "
+                                    f"on_block_complete callback error: {e}"
+                                )
+
+                    elif event.HasField("session_ended"):
+                        ended = event.session_ended
+                        logger.info(
+                            f"[PlayoutSession:{self.channel_id}] SessionEnded: "
+                            f"reason={ended.reason}, "
+                            f"final_ct_ms={ended.final_ct_ms}, "
+                            f"blocks_total={ended.blocks_executed_total}"
+                        )
+                        with self._lock:
+                            self._state.blocks_executed = ended.blocks_executed_total
+                            self._state.is_running = False
+                        if self.on_session_end:
+                            try:
+                                self.on_session_end(ended.reason)
+                            except Exception as e:
+                                logger.error(
+                                    f"[PlayoutSession:{self.channel_id}] "
+                                    f"on_session_end callback error: {e}"
+                                )
+                        break  # Session ended, exit the event loop
+
+            except grpc.RpcError as e:
+                if not self._event_stop.is_set():
+                    logger.warning(
+                        f"[PlayoutSession:{self.channel_id}] Event stream error: {e.code()}"
+                    )
+
+        self._event_stop.clear()
+        self._event_thread = threading.Thread(target=event_loop, daemon=True)
+        self._event_thread.start()
+        logger.debug(f"[PlayoutSession:{self.channel_id}] Event subscription started")
+
     def seed(self, block_a: BlockPlan, block_b: BlockPlan) -> bool:
         """
         Seed the executor with 2 initial blocks.
@@ -369,6 +434,8 @@ class PlayoutSession:
                         f"[PlayoutSession:{self.channel_id}] Seeded: "
                         f"{block_a.block_id}, {block_b.block_id}"
                     )
+                    # Start event subscription for boundary-driven feeding
+                    self._subscribe_to_events()
                     return True
                 else:
                     logger.error(
@@ -472,6 +539,12 @@ class PlayoutSession:
     def _cleanup(self):
         """Clean up resources."""
         self._state.is_running = False
+
+        # Signal event thread to stop
+        self._event_stop.set()
+        if self._event_thread and self._event_thread.is_alive():
+            self._event_thread.join(timeout=2.0)
+        self._event_thread = None
 
         if self._grpc_channel:
             try:
