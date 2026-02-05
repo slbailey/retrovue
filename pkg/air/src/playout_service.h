@@ -8,16 +8,19 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include <grpcpp/grpcpp.h>
 
 #include "playout.grpc.pb.h"
 #include "playout.pb.h"
+#include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/runtime/PlayoutInterface.h"
 
 namespace retrovue {
@@ -73,6 +76,22 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
                             const DetachStreamRequest* request,
                             DetachStreamResponse* response) override;
 
+  // ==========================================================================
+  // BlockPlan Mode RPCs
+  // ==========================================================================
+
+  grpc::Status StartBlockPlanSession(grpc::ServerContext* context,
+                                      const StartBlockPlanSessionRequest* request,
+                                      StartBlockPlanSessionResponse* response) override;
+
+  grpc::Status FeedBlockPlan(grpc::ServerContext* context,
+                              const FeedBlockPlanRequest* request,
+                              FeedBlockPlanResponse* response) override;
+
+  grpc::Status StopBlockPlanSession(grpc::ServerContext* context,
+                                     const StopBlockPlanSessionRequest* request,
+                                     StopBlockPlanSessionResponse* response) override;
+
  private:
   // Controller that manages all channel lifecycle operations
   std::shared_ptr<runtime::PlayoutInterface> interface_;
@@ -104,6 +123,53 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
   // Call after SwitchToLive success or AttachStream (late attach path).
   // Requires stream_mutex_ held.
   void TryAttachSinkForChannel(int32_t channel_id);
+
+  // ==========================================================================
+  // BlockPlan Session State
+  // ==========================================================================
+  struct BlockPlanBlock {
+    std::string block_id;
+    int32_t channel_id = 0;
+    int64_t start_utc_ms = 0;
+    int64_t end_utc_ms = 0;
+    struct Segment {
+      int32_t segment_index = 0;
+      std::string asset_uri;
+      int64_t asset_start_offset_ms = 0;
+      int64_t segment_duration_ms = 0;
+    };
+    std::vector<Segment> segments;
+  };
+
+  struct BlockPlanSessionState {
+    bool active = false;
+    int32_t channel_id = 0;
+    int64_t final_ct_ms = 0;
+    int32_t blocks_executed = 0;
+    int32_t blocks_fed = 0;
+    int fd = -1;  // UDS file descriptor for output
+    int width = 640;
+    int height = 480;
+    double fps = 30.0;
+    std::thread execution_thread;
+    std::atomic<bool> stop_requested{false};
+
+    // Block queue (2-block window)
+    std::mutex queue_mutex;
+    std::vector<BlockPlanBlock> block_queue;  // Index 0 = executing, 1 = pending
+    std::condition_variable queue_cv;         // Notify when block added
+  };
+
+  // BlockPlan execution thread (real execution using RealTimeBlockExecutor)
+  void BlockPlanExecutionThread(BlockPlanSessionState* state);
+
+  // Convert proto BlockPlan to internal type
+  static BlockPlanBlock ProtoToBlock(const BlockPlan& proto);
+
+  // Convert internal block to blockplan::BlockPlan type for executor
+  static blockplan::BlockPlan ConvertToBlockPlanType(const BlockPlanBlock& block);
+  std::mutex blockplan_mutex_;
+  std::unique_ptr<BlockPlanSessionState> blockplan_session_;
 };
 
 }  // namespace playout

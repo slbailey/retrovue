@@ -49,6 +49,35 @@ service PlayoutControl {
   // Phase 8: byte transport attachment (Python owns stream sink, Air writes bytes)
   rpc AttachStream(AttachStreamRequest) returns (AttachStreamResponse);
   rpc DetachStream(DetachStreamRequest) returns (DetachStreamResponse);
+
+  // ==========================================================================
+  // BlockPlan Mode: 2-block window feeder execution
+  // ==========================================================================
+  // BlockPlan mode replaces segment-by-segment LoadPreview/SwitchToLive with
+  // a deterministic CT-driven executor that maintains a 2-block lookahead queue.
+  //
+  // Flow:
+  //   1. StartBlockPlanSession: Initialize and seed queue with 2 blocks
+  //   2. FeedBlockPlan: Feed next block when slot becomes available
+  //   3. StopBlockPlanSession: Terminate execution
+  //
+  // The executor handles CT advancement, fence termination, and lookahead
+  // exhaustion automatically. Core only needs to feed blocks just-in-time.
+  // ==========================================================================
+
+  // StartBlockPlanSession initializes BlockPlan mode and seeds the 2-block queue.
+  // Must provide exactly 2 contiguous blocks (block_a.end == block_b.start).
+  // Stream attachment must already be done via AttachStream.
+  rpc StartBlockPlanSession(StartBlockPlanSessionRequest) returns (StartBlockPlanSessionResponse);
+
+  // FeedBlockPlan adds the next block to the queue.
+  // Call when notified that a slot is available (after block completion).
+  // Block must be contiguous with the pending block's end time.
+  rpc FeedBlockPlan(FeedBlockPlanRequest) returns (FeedBlockPlanResponse);
+
+  // StopBlockPlanSession terminates execution immediately.
+  // Use when last viewer leaves or on error.
+  rpc StopBlockPlanSession(StopBlockPlanSessionRequest) returns (StopBlockPlanSessionResponse);
 }
 
 // StartChannelRequest provides the context required to initialize a playout channel.
@@ -201,5 +230,82 @@ message DetachStreamRequest {
 message DetachStreamResponse {
   bool success = 1;
   string message = 2;
+}
+
+// ==========================================================================
+// BlockPlan Mode Messages
+// ==========================================================================
+
+// BlockPlan represents a single block of scheduled content.
+// Maps to the BlockPlan struct in pkg/air/include/retrovue/blockplan/BlockPlanTypes.hpp
+message BlockPlan {
+  string block_id = 1;           // Unique identifier (e.g., "BLOCK-2025-01-15-14:30")
+  int32 channel_id = 2;          // Channel this block belongs to
+  int64 start_utc_ms = 3;        // Block start time (UTC milliseconds since epoch)
+  int64 end_utc_ms = 4;          // Block end time (UTC milliseconds since epoch)
+  repeated BlockSegment segments = 5;  // Segments within this block
+}
+
+// BlockSegment represents a contiguous portion of an asset within a block.
+message BlockSegment {
+  int32 segment_index = 1;           // Index within block (0-based, must be contiguous)
+  string asset_uri = 2;              // Asset file path
+  int64 asset_start_offset_ms = 3;   // Offset within asset where segment starts
+  int64 segment_duration_ms = 4;     // Duration of this segment
+}
+
+// StartBlockPlanSessionRequest initializes BlockPlan mode with 2 seed blocks.
+message StartBlockPlanSessionRequest {
+  int32 channel_id = 1;
+  BlockPlan block_a = 2;         // First block (executing)
+  BlockPlan block_b = 3;         // Second block (pending)
+  int64 join_utc_ms = 4;         // Join time for mid-block join (0 = block_a.start)
+
+  // Program format for encoding (same as StartChannelRequest)
+  string program_format_json = 10;
+}
+
+message StartBlockPlanSessionResponse {
+  bool success = 1;
+  string message = 2;
+  BlockPlanResultCode result_code = 3;
+}
+
+// FeedBlockPlanRequest adds the next block to the queue.
+message FeedBlockPlanRequest {
+  int32 channel_id = 1;
+  BlockPlan block = 2;           // Next block to feed
+}
+
+message FeedBlockPlanResponse {
+  bool success = 1;
+  string message = 2;
+  BlockPlanResultCode result_code = 3;
+  bool queue_full = 4;           // True if queue was already full (block not accepted)
+}
+
+// StopBlockPlanSessionRequest terminates BlockPlan execution.
+message StopBlockPlanSessionRequest {
+  int32 channel_id = 1;
+  string reason = 2;             // Reason for stopping (for logging)
+}
+
+message StopBlockPlanSessionResponse {
+  bool success = 1;
+  string message = 2;
+  int64 final_ct_ms = 3;         // Final CT at termination
+  int32 blocks_executed = 4;     // Total blocks completed
+}
+
+// Result codes for BlockPlan operations
+enum BlockPlanResultCode {
+  BLOCKPLAN_RESULT_UNSPECIFIED = 0;
+  BLOCKPLAN_RESULT_OK = 1;
+  BLOCKPLAN_RESULT_INVALID_BLOCK = 2;       // Block failed validation
+  BLOCKPLAN_RESULT_NOT_CONTIGUOUS = 3;      // Block start != previous end
+  BLOCKPLAN_RESULT_QUEUE_FULL = 4;          // Queue already has 2 blocks
+  BLOCKPLAN_RESULT_NO_SESSION = 5;          // No active BlockPlan session
+  BLOCKPLAN_RESULT_ALREADY_ACTIVE = 6;      // Session already running
+  BLOCKPLAN_RESULT_STREAM_NOT_ATTACHED = 7; // Must AttachStream first
 }
 
