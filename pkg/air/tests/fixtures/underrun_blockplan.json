@@ -1,0 +1,15 @@
+{
+  "block_id": "UNDERRUN-001",
+  "channel_id": 1,
+  "start_utc_ms": 0,
+  "end_utc_ms": 30000,
+  "segments": [
+    {
+      "segment_index": 0,
+      "asset_uri": "short_asset.mp4",
+      "asset_start_offset_ms": 0,
+      "segment_duration_ms": 30000,
+      "asset_actual_duration_ms": 20000
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "block_id": "BLOCK-B",
+  "channel_id": 1,
+  "start_utc_ms": 10000,
+  "end_utc_ms": 20000,
+  "segments": [
+    {
+      "segment_index": 0,
+      "asset_uri": "commercial_break.mp4",
+      "asset_start_offset_ms": 0,
+      "segment_duration_ms": 10000
+    }
+  ]
+}

@@ -79,6 +79,21 @@ class PlayoutControlStub(object):
                 request_serializer=playout__pb2.DetachStreamRequest.SerializeToString,
                 response_deserializer=playout__pb2.DetachStreamResponse.FromString,
                 _registered_method=True)
+        self.StartBlockPlanSession = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/StartBlockPlanSession',
+                request_serializer=playout__pb2.StartBlockPlanSessionRequest.SerializeToString,
+                response_deserializer=playout__pb2.StartBlockPlanSessionResponse.FromString,
+                _registered_method=True)
+        self.FeedBlockPlan = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/FeedBlockPlan',
+                request_serializer=playout__pb2.FeedBlockPlanRequest.SerializeToString,
+                response_deserializer=playout__pb2.FeedBlockPlanResponse.FromString,
+                _registered_method=True)
+        self.StopBlockPlanSession = channel.unary_unary(
+                '/retrovue.playout.PlayoutControl/StopBlockPlanSession',
+                request_serializer=playout__pb2.StopBlockPlanSessionRequest.SerializeToString,
+                response_deserializer=playout__pb2.StopBlockPlanSessionResponse.FromString,
+                _registered_method=True)
 
 
 class PlayoutControlServicer(object):
@@ -149,6 +164,47 @@ class PlayoutControlServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def StartBlockPlanSession(self, request, context):
+        """==========================================================================
+        BlockPlan Mode: 2-block window feeder execution
+        ==========================================================================
+        BlockPlan mode replaces segment-by-segment LoadPreview/SwitchToLive with
+        a deterministic CT-driven executor that maintains a 2-block lookahead queue.
+
+        Flow:
+        1. StartBlockPlanSession: Initialize and seed queue with 2 blocks
+        2. FeedBlockPlan: Feed next block when slot becomes available
+        3. StopBlockPlanSession: Terminate execution
+
+        The executor handles CT advancement, fence termination, and lookahead
+        exhaustion automatically. Core only needs to feed blocks just-in-time.
+        ==========================================================================
+
+        StartBlockPlanSession initializes BlockPlan mode and seeds the 2-block queue.
+        Must provide exactly 2 contiguous blocks (block_a.end == block_b.start).
+        Stream attachment must already be done via AttachStream.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FeedBlockPlan(self, request, context):
+        """FeedBlockPlan adds the next block to the queue.
+        Call when notified that a slot is available (after block completion).
+        Block must be contiguous with the pending block's end time.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StopBlockPlanSession(self, request, context):
+        """StopBlockPlanSession terminates execution immediately.
+        Use when last viewer leaves or on error.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PlayoutControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -191,6 +247,21 @@ def add_PlayoutControlServicer_to_server(servicer, server):
                     servicer.DetachStream,
                     request_deserializer=playout__pb2.DetachStreamRequest.FromString,
                     response_serializer=playout__pb2.DetachStreamResponse.SerializeToString,
+            ),
+            'StartBlockPlanSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartBlockPlanSession,
+                    request_deserializer=playout__pb2.StartBlockPlanSessionRequest.FromString,
+                    response_serializer=playout__pb2.StartBlockPlanSessionResponse.SerializeToString,
+            ),
+            'FeedBlockPlan': grpc.unary_unary_rpc_method_handler(
+                    servicer.FeedBlockPlan,
+                    request_deserializer=playout__pb2.FeedBlockPlanRequest.FromString,
+                    response_serializer=playout__pb2.FeedBlockPlanResponse.SerializeToString,
+            ),
+            'StopBlockPlanSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.StopBlockPlanSession,
+                    request_deserializer=playout__pb2.StopBlockPlanSessionRequest.FromString,
+                    response_serializer=playout__pb2.StopBlockPlanSessionResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -414,6 +485,87 @@ class PlayoutControl(object):
             '/retrovue.playout.PlayoutControl/DetachStream',
             playout__pb2.DetachStreamRequest.SerializeToString,
             playout__pb2.DetachStreamResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartBlockPlanSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/StartBlockPlanSession',
+            playout__pb2.StartBlockPlanSessionRequest.SerializeToString,
+            playout__pb2.StartBlockPlanSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FeedBlockPlan(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/FeedBlockPlan',
+            playout__pb2.FeedBlockPlanRequest.SerializeToString,
+            playout__pb2.FeedBlockPlanResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StopBlockPlanSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/StopBlockPlanSession',
+            playout__pb2.StopBlockPlanSessionRequest.SerializeToString,
+            playout__pb2.StopBlockPlanSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,

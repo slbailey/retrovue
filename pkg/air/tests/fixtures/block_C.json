@@ -1,0 +1,14 @@
+{
+  "block_id": "BLOCK-C",
+  "channel_id": 1,
+  "start_utc_ms": 20000,
+  "end_utc_ms": 30000,
+  "segments": [
+    {
+      "segment_index": 0,
+      "asset_uri": "show_part2.mp4",
+      "asset_start_offset_ms": 0,
+      "segment_duration_ms": 10000
+    }
+  ]
+}

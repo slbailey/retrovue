@@ -1,0 +1,28 @@
+{
+  "block_id": "UNDERRUN-MULTI",
+  "channel_id": 2,
+  "start_utc_ms": 0,
+  "end_utc_ms": 60000,
+  "segments": [
+    {
+      "segment_index": 0,
+      "asset_uri": "full_content.mp4",
+      "asset_start_offset_ms": 0,
+      "segment_duration_ms": 20000
+    },
+    {
+      "segment_index": 1,
+      "asset_uri": "short_commercial.mp4",
+      "asset_start_offset_ms": 0,
+      "segment_duration_ms": 15000,
+      "asset_actual_duration_ms": 8000
+    },
+    {
+      "segment_index": 2,
+      "asset_uri": "another_short.mp4",
+      "asset_start_offset_ms": 0,
+      "segment_duration_ms": 25000,
+      "asset_actual_duration_ms": 15000
+    }
+  ]
+}
