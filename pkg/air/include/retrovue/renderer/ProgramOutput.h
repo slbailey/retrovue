@@ -272,13 +272,29 @@ class ProgramOutput {
   //   2. VLC can decode the stream from the start
   //   3. Pad frames (which may lack keyframe treatment) don't corrupt decoder state
   //
-  // Evidence: Log shows "INV-P10.5-OUTPUT-SAFETY-RAIL: Emitting pad frame #1"
-  // BEFORE any real content frames, causing VLC to display nothing.
+  // =========================================================================
+  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Output-first, content-second
+  // =========================================================================
+  // After AttachStream, emit decodable TS within 500ms using fallback if needed.
+  // Wait briefly for real content, then emit pad (black + silence) anyway.
+  //
+  // Philosophy: Output is unconditional; content is best-effort.
+  // Professional playout systems emit the moment output is armed.
+  //
+  // This replaces the retired INV-AIR-CONTENT-BEFORE-PAD which had the
+  // philosophy backwards (gating output on content availability).
   //
   // EXCEPTION: When no_content_segment_=true (zero-frame segment), pad frames
-  // are allowed immediately. The first pad frame acts as the "bootstrap frame"
-  // for encoder initialization. See INV-P8-ZERO-FRAME-BOOTSTRAP.
+  // are allowed immediately without waiting.
+  // =========================================================================
   bool first_real_frame_emitted_ = false;
+
+  // Maximum time to wait for first real frame before emitting fallback.
+  // 500ms is long enough for decoder to produce IDR/SPS/PPS, short enough
+  // that viewers see black quickly if content is unavailable.
+  static constexpr int64_t kFirstContentWaitWindowUs = 500'000;  // 500ms
+  int64_t first_content_wait_start_us_ = 0;  // 0 = not yet started waiting
+  bool first_content_wait_expired_ = false;  // true once window exceeded
 
   // =========================================================================
   // INV-P8-ZERO-FRAME-BOOTSTRAP: Allow pad frames when no content expected
@@ -418,8 +434,8 @@ class ProgramOutput {
     audio_format_locked_ = true;
   }
 
-  // INV-AIR-CONTENT-BEFORE-PAD: Check if first real frame has been emitted.
-  // Used by diagnostics and tests to verify pad gating.
+  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Check if real content has arrived.
+  // Used by diagnostics and tests to verify fallback-to-content transition.
   bool HasEmittedRealFrame() const {
     return first_real_frame_emitted_;
   }

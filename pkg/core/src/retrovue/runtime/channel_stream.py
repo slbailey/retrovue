@@ -20,10 +20,19 @@ import socket
 import threading
 import time
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Any, Callable, Protocol
 
 _logger = logging.getLogger(__name__)
+
+# =============================================================================
+# AUDIT: INV-UDS-DRAIN timing instrumentation
+# =============================================================================
+_AUDIT_T0: int | None = None  # Thread started (monotonic_ns)
+_AUDIT_T1: int | None = None  # Before first recv (monotonic_ns)
+_AUDIT_T2: int | None = None  # After first recv returns data (monotonic_ns)
+_AUDIT_FIRST_RECV_DONE = False
+_AUDIT_LOCK = threading.Lock()
 
 
 class TsSource(Protocol):
@@ -60,6 +69,18 @@ class UdsTsSource:
             self.sock.connect(str(self.socket_path))
             self.sock.settimeout(None)  # Blocking mode for reads
             self._connected = True
+
+            # AUDIT: Log actual kernel buffer sizes
+            try:
+                rcvbuf = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                sndbuf = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+                _logger.info("[AUDIT-BUF] UdsTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
+                            rcvbuf, sndbuf)
+                if rcvbuf < 131072:  # < 128KB
+                    _logger.warning("[AUDIT-BUF] SO_RCVBUF < 128KB - risk of overrun during startup!")
+            except Exception as e:
+                _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
+
             _logger.info("Connected to UDS socket: %s", self.socket_path)
             return True
         except (OSError, socket.error) as e:
@@ -97,8 +118,12 @@ class UdsTsSource:
         self._connected = False
         if self.sock:
             try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Already closed or not connected
+            try:
                 self.sock.close()
-            except Exception:
+            except OSError:
                 pass
             self.sock = None
         _logger.info("Closed UDS socket: %s", self.socket_path)
@@ -115,6 +140,17 @@ class SocketTsSource:
     def __init__(self, sock: socket.socket):
         self.sock = sock
         self._connected = True
+
+        # AUDIT: Log actual kernel buffer sizes
+        try:
+            rcvbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+            sndbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+            _logger.info("[AUDIT-BUF] SocketTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
+                        rcvbuf, sndbuf)
+            if rcvbuf < 131072:  # < 128KB
+                _logger.warning("[AUDIT-BUF] SO_RCVBUF < 128KB - risk of overrun during startup!")
+        except Exception as e:
+            _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
 
     def read(self, size: int) -> bytes:
         if not self.sock or not self._connected:
@@ -133,8 +169,12 @@ class SocketTsSource:
         self._connected = False
         if self.sock:
             try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Already closed or not connected
+            try:
                 self.sock.close()
-            except Exception:
+            except OSError:
                 pass
             self.sock = None
 
@@ -284,8 +324,15 @@ class ChannelStream:
 
     def _reader_loop(self) -> None:
         """Background thread loop that reads TS data and fans out to subscribers."""
+        global _AUDIT_T0, _AUDIT_T1, _AUDIT_T2, _AUDIT_FIRST_RECV_DONE
+
         self._logger.info("ChannelStream reader loop started for channel %s", self.channel_id)
         chunk_size = 188 * 10  # Read 10 TS packets at a time (188 bytes each)
+
+        # AUDIT: Track inter-recv gaps for steady-state analysis
+        _last_recv_return_ns: int | None = None
+        _max_inter_recv_gap_ns: int = 0
+        _local_first_recv_done = False
 
         while not self._stop_event.is_set():
             # Connect if needed (initial connection only - no reconnect after streaming starts)
@@ -307,9 +354,23 @@ class ChannelStream:
                 )
                 break
 
+            # AUDIT: T1 - Record timestamp immediately before first recv
+            if not _local_first_recv_done:
+                with _AUDIT_LOCK:
+                    if not _AUDIT_FIRST_RECV_DONE:
+                        _AUDIT_T1 = time.monotonic_ns()
+                        t0_val = _AUDIT_T0 or 0
+                        self._logger.info(
+                            "[AUDIT-T1] First recv() ENTERING at %d ns (T0→T1 = %.2f ms) for channel %s",
+                            _AUDIT_T1, (_AUDIT_T1 - t0_val) / 1e6, self.channel_id
+                        )
+
             # Read TS chunk
             try:
+                _recv_enter_ns = time.monotonic_ns()
                 chunk = self.ts_source.read(chunk_size)
+                _recv_exit_ns = time.monotonic_ns()
+
                 if not chunk:
                     # EOF or disconnect: playout engine closed the write side.
                     # Phase 8.7: no reconnect loops - stop reader.
@@ -318,6 +379,38 @@ class ChannelStream:
                         self.channel_id,
                     )
                     break
+
+                # AUDIT: T2 - Record timestamp when first recv returns data
+                if not _local_first_recv_done:
+                    with _AUDIT_LOCK:
+                        if not _AUDIT_FIRST_RECV_DONE:
+                            _AUDIT_T2 = _recv_exit_ns
+                            _AUDIT_FIRST_RECV_DONE = True
+                            t0_val = _AUDIT_T0 or 0
+                            t1_val = _AUDIT_T1 or 0
+                            self._logger.info(
+                                "[AUDIT-T2] First recv() RETURNED DATA at %d ns "
+                                "(T1→T2 = %.2f ms, T0→T2 = %.2f ms, %d bytes) for channel %s",
+                                _AUDIT_T2,
+                                (_AUDIT_T2 - t1_val) / 1e6,
+                                (_AUDIT_T2 - t0_val) / 1e6,
+                                len(chunk),
+                                self.channel_id
+                            )
+                    _local_first_recv_done = True
+
+                # AUDIT: Track inter-recv gaps (steady-state cadence proof)
+                if _last_recv_return_ns is not None:
+                    gap_ns = _recv_exit_ns - _last_recv_return_ns
+                    if gap_ns > _max_inter_recv_gap_ns:
+                        _max_inter_recv_gap_ns = gap_ns
+                    if gap_ns > 40_000_000:  # > 40ms threshold
+                        self._logger.warning(
+                            "[AUDIT-GAP] Inter-recv gap %.2f ms EXCEEDS 40ms threshold for channel %s",
+                            gap_ns / 1e6, self.channel_id
+                        )
+                _last_recv_return_ns = _recv_exit_ns
+
                 # Debug: log first 16 bytes once per connection (verify TS sync 0x47, not HELLO)
                 if not self._first_chunk_logged and len(chunk) >= 16:
                     self._logger.info(
@@ -338,15 +431,26 @@ class ChannelStream:
 
             # Fan-out to all subscribers
             with self.subscribers_lock:
-                for client_id, queue in self.subscribers.items():
+                for client_id, client_queue in self.subscribers.items():
                     try:
                         # Non-blocking put; if queue is full, drop this chunk for
                         # that client (backpressure: slow client misses data but
                         # stays subscribed — contract says no per-client buffering
                         # required and slow clients must not stall others).
-                        queue.put_nowait(chunk)
+                        client_queue.put_nowait(chunk)
+                    except Full:
+                        pass  # Expected: slow client, drop chunk
                     except Exception:
-                        pass  # Queue full or other error — drop chunk, keep subscriber
+                        self._logger.warning(
+                            "Unexpected fanout error for client %s", client_id, exc_info=True
+                        )
+
+        # AUDIT: Log max inter-recv gap observed during this session
+        if _max_inter_recv_gap_ns > 0:
+            self._logger.info(
+                "[AUDIT-EXIT] Max inter-recv gap was %.2f ms for channel %s",
+                _max_inter_recv_gap_ns / 1e6, self.channel_id
+            )
 
         # Cleanup
         if self.ts_source:
@@ -361,11 +465,23 @@ class ChannelStream:
 
     def start(self) -> None:
         """Start the UDS reader thread."""
+        global _AUDIT_T0, _AUDIT_T1, _AUDIT_T2, _AUDIT_FIRST_RECV_DONE
+
         if self.reader_thread is not None and self.reader_thread.is_alive():
             return  # Already running
 
         self._stop_event.clear()
         self._stopped = False
+
+        # AUDIT: Reset state for new session and record T0
+        with _AUDIT_LOCK:
+            _AUDIT_T0 = time.monotonic_ns()
+            _AUDIT_T1 = None
+            _AUDIT_T2 = None
+            _AUDIT_FIRST_RECV_DONE = False
+        self._logger.info("[AUDIT-T0] Reader thread spawning at %d ns for channel %s",
+                         _AUDIT_T0, self.channel_id)
+
         self.reader_thread = threading.Thread(
             target=self._reader_loop, name=f"ChannelStream-{self.channel_id}", daemon=True
         )

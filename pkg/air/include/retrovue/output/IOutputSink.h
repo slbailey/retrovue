@@ -23,6 +23,7 @@ enum class SinkStatus {
   kRunning,       // Sink is actively consuming frames
   kBackpressure,  // Sink is experiencing backpressure (queue full)
   kError,         // Sink encountered an error
+  kDetached,      // Sink detached due to slow consumer (transport closed, mux loop terminating)
   kStopping,      // Sink is shutting down
   kStopped        // Sink has stopped
 };

@@ -305,6 +305,12 @@ def air_switch_to_live(
     result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
     violation_reason = getattr(r, 'violation_reason', '') or ''
     if r.success:
+        # AUDIT: TP - Producer switch completed
+        _AUDIT_TP = time.monotonic_ns()
+        logging.getLogger(__name__).info(
+            "[AUDIT-TP] SwitchToLive completed at %d ns for channel_id=%d",
+            _AUDIT_TP, channel_id_int
+        )
         return (True, result_code, violation_reason)
     # P11D-005: Treat PROTOCOL_VIOLATION and NOT_READY as fatal (no retry)
     if result_code == RESULT_CODE_PROTOCOL_VIOLATION:
@@ -356,9 +362,18 @@ def _launch_air_binary(
 
     # Redirect Air stdout/stderr to channel-specific log (truncated each run)
     air_log = _open_air_log(channel_id)
+
+    # Build AIR command line
+    air_cmd = [str(air_bin), "--port", str(grpc_port)]
+
+    # Forensic TS dump: if RETROVUE_FORENSIC_DUMP_DIR is set, enable forensic dump
+    forensic_dir = os.environ.get("RETROVUE_FORENSIC_DUMP_DIR", "")
+    if forensic_dir:
+        air_cmd.extend(["--forensic-dump-dir", forensic_dir])
+
     try:
         proc = subprocess.Popen(
-            [str(air_bin), "--port", str(grpc_port)],
+            air_cmd,
             cwd=str(air_bin.parent),
             stdout=air_log,
             stderr=air_log,
@@ -520,6 +535,13 @@ def _launch_air_binary(
             if result_code == RESULT_CODE_NOT_READY:
                 raise SwitchProtocolError("Unexpected NOT_READY in deadline-authoritative mode")
             raise RuntimeError(f"SwitchToLive failed: {r.message}")
+
+        # AUDIT: TP - Producer starts writing NOW (SwitchToLive completed)
+        _AUDIT_TP = time.monotonic_ns()
+        logging.getLogger(__name__).info(
+            "[AUDIT-TP] SwitchToLive completed at %d ns - PRODUCER NOW WRITING for channel %s",
+            _AUDIT_TP, channel_id
+        )
 
     try:
         conn = reader_socket_queue.get(timeout=_UDS_ACCEPT_S)

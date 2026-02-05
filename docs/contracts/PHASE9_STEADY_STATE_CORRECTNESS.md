@@ -142,12 +142,15 @@ Muxer MUST use producer-provided CT. No local CT counters. No CT resets. Produce
 **Owner:** MpegTSOutputSink
 **Enforcement:** Post-Attach / Steady-State
 
-Silence injection MUST be disabled when steady-state begins. Producer audio is the ONLY audio source. When audio queue is empty, the mux loop MUST stall (video waits with audio). PCR advances only from real audio.
+Silence injection MUST be disabled when steady-state begins. Producer audio is the ONLY audio source.
+
+**Relationship to LAW-OUTPUT-LIVENESS:** When audio queue is empty, transport MUST continue (video proceeds alone). TS emission can never be gated on audio availability. PCR advances with video packets; late joiners remain discoverable. A/V sync is a content-plane concern, not a transport-plane concern.
 
 **MUST:** Disable silence injection on steady-state entry.
-**MUST:** Stall mux when audio unavailable (video waits).
+**MUST:** Continue video emission when audio unavailable (LAW-OUTPUT-LIVENESS).
 **MUST NOT:** Inject silence during steady-state.
 **MUST NOT:** Fabricate audio packets.
+**MUST NOT:** Stall TS emission waiting for audio.
 
 ---
 
