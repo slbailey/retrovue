@@ -80,6 +80,17 @@ class MpegTSOutputSink : public IOutputSink {
   // P9-OPT-002: Set metrics exporter for steady-state telemetry
   void SetMetricsExporter(std::shared_ptr<telemetry::MetricsExporter> metrics, int32_t channel_id);
 
+  // =========================================================================
+  // Forensic TS Tap (runtime toggle)
+  // =========================================================================
+  // Enable: mirrors all TS bytes to file (non-blocking, passive)
+  // Disable: closes file, stops mirroring
+  // Safe to call at any time after construction.
+  // =========================================================================
+  void EnableForensicDump(const std::string& path);
+  void DisableForensicDump();
+  bool IsForensicDumpEnabled() const { return forensic_enabled_.load(std::memory_order_acquire); }
+
  private:
   // Main mux loop (runs in worker thread).
   // Drains frame queues and encodes to MPEG-TS.
@@ -129,11 +140,14 @@ class MpegTSOutputSink : public IOutputSink {
   // =========================================================================
   // DEBUG INSTRUMENTATION - remove after diagnosis
   // =========================================================================
-  std::atomic<uint64_t> dbg_bytes_written_{0};
+  std::atomic<uint64_t> dbg_bytes_enqueued_{0};     // Bytes enqueued to SocketSink buffer
+  std::atomic<uint64_t> dbg_bytes_dropped_{0};      // Bytes dropped (sink closed/detached)
   std::atomic<uint64_t> dbg_packets_written_{0};
   std::atomic<uint64_t> dbg_video_frames_enqueued_{0};
   std::atomic<uint64_t> dbg_audio_frames_enqueued_{0};
-  std::chrono::steady_clock::time_point dbg_last_write_time_;
+  // LAW-OUTPUT-LIVENESS: Liveness detector MUST query SocketSink::GetLastAcceptedTime()
+  // dbg_last_attempt_time_ is when FFmpeg callback was invoked (diagnostic only)
+  std::chrono::steady_clock::time_point dbg_last_attempt_time_;  // Callback invoked
   std::chrono::steady_clock::time_point dbg_output_heartbeat_time_;
   std::chrono::steady_clock::time_point dbg_enqueue_heartbeat_time_;
 
@@ -147,8 +161,58 @@ class MpegTSOutputSink : public IOutputSink {
   std::atomic<uint64_t> video_frames_dropped_{0};
   std::atomic<uint64_t> audio_frames_dropped_{0};
 
+  // =========================================================================
+  // INV-FALLBACK-001: Upstream starvation detection
+  // =========================================================================
+  // Fallback mode ONLY triggers after confirmed upstream starvation.
+  // last_real_frame_dequeue_time_: Updated ONLY when real frame is dequeued.
+  // kFallbackGraceWindowUs: Must elapse with empty queue before fallback.
+  // =========================================================================
+  std::chrono::steady_clock::time_point last_real_frame_dequeue_time_;
+  static constexpr int64_t kFallbackGraceWindowUs = 100'000;  // 100ms = ~3 frames at 30fps
+
+  // =========================================================================
+  // INV-LIVENESS-SEPARATION: Separate upstream and downstream clocks
+  // =========================================================================
+  // Upstream frame clock: tracks when real frames are dequeued from producer
+  // Downstream delivery clock: tracks when bytes reach kernel socket buffer
+  //
+  // CRITICAL: These are INDEPENDENT failure modes:
+  // - Upstream starvation (no frames) MAY trigger fallback
+  // - Downstream stall (consumer not draining) MUST NOT trigger fallback
+  // =========================================================================
+  static constexpr int64_t kDownstreamStallThresholdMs = 500;  // Log stall after 500ms
+  static constexpr int64_t kUpstreamStarvationThresholdMs = 100;  // Same as grace window
+
+  // =========================================================================
+  // INV-LATE-FRAME-THRESHOLD: Ignore sub-millisecond "lateness"
+  // =========================================================================
+  // A frame arriving 100us "late" is effectively on-time due to scheduling jitter.
+  // Only count as late if > threshold, to avoid misleading warnings.
+  // =========================================================================
+  static constexpr int64_t kLateFrameThresholdUs = 2'000;  // 2ms threshold
+
+  // =========================================================================
+  // INV-BOOT-FAST-EMIT: Bypass pacing during boot window
+  // =========================================================================
+  // For fast channel join, emit TS packets as fast as possible for the first
+  // N milliseconds after sink attach. This ensures PAT/PMT and initial frames
+  // reach the consumer immediately. Pacing only kicks in after boot window.
+  // =========================================================================
+  static constexpr int64_t kBootFastEmitWindowMs = 250;  // 250ms boot window
+  std::atomic<bool> boot_fast_emit_active_{true};  // Starts active, cleared after window
+
   // ORCH-SWITCH-SUCCESSOR-OBSERVED: Called when a real video frame is encoded
   OnSuccessorVideoEmittedCallback on_successor_video_emitted_;
+
+  // =========================================================================
+  // Forensic TS Tap (runtime-enabled, passive, non-blocking)
+  // =========================================================================
+  // Mirrors bytes after mux, before socket. Never blocks. Can be enabled
+  // at runtime after sink exists. Does not alter flow control.
+  // =========================================================================
+  std::atomic<bool> forensic_enabled_{false};
+  int forensic_fd_ = -1;
 
   // =========================================================================
   // INV-P9-STEADY-001: Steady-state entry detection
@@ -185,7 +249,8 @@ class MpegTSOutputSink : public IOutputSink {
   // =========================================================================
   // When steady-state begins, silence injection MUST be disabled.
   // Producer audio is the ONLY audio source.
-  // When audio queue is empty, mux MUST stall (video waits with audio).
+  // When audio queue is empty, transport continues (LAW-OUTPUT-LIVENESS).
+  // Video proceeds alone; A/V sync is a content-plane concern.
   // =========================================================================
   std::atomic<bool> silence_injection_disabled_{false};
 
@@ -194,6 +259,34 @@ class MpegTSOutputSink : public IOutputSink {
   // =========================================================================
   std::shared_ptr<telemetry::MetricsExporter> metrics_exporter_;
   int32_t channel_id_{0};
+
+  // =========================================================================
+  // INV-TS-CONTINUITY: Null packet emission for transport continuity
+  // =========================================================================
+  // Broadcast-grade TS streams emit null packets (PID 0x1FFF) during gaps.
+  // This guarantees:
+  //   - No EOF detection by consumers (continuous byte flow)
+  //   - No VLC re-probe (TS sync maintained)
+  //   - No false slow-consumer detach (buffer never appears stagnant)
+  // =========================================================================
+  static constexpr size_t kTsPacketSize = 188;
+  static constexpr size_t kNullPacketClusterSize = 7;  // Match AVIO buffer
+  uint8_t null_packet_cluster_[kTsPacketSize * kNullPacketClusterSize];
+  bool null_packets_initialized_ = false;
+  std::atomic<uint64_t> null_packets_emitted_{0};
+
+  // Track last time TS bytes were actually written (for null packet injection)
+  std::atomic<int64_t> last_ts_write_time_us_{0};
+  static constexpr int64_t kNullPacketIntervalUs = 50'000;  // 50ms max gap
+
+  // Initialize null packet buffer (called once at start)
+  void InitNullPackets();
+  // Emit null packets to maintain transport continuity
+  void EmitNullPackets();
+  // Update last TS write timestamp (called from AVIO callback)
+  void MarkTsWritten();
+  // Check if null packets needed based on time since last TS
+  void EmitNullPacketsIfNeeded();
 };
 
 }  // namespace retrovue::output

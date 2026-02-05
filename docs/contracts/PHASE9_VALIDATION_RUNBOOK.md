@@ -191,7 +191,7 @@ grep "INV-P9-STEADY-007" pkg/air/logs/cheers-24-7-air.log
 #### INV-P9-STEADY-008: No Silence Injection After Attach
 
 ```bash
-grep "INV-P9-STEADY-008" pkg/air/logs/cheers-24-7-air.log
+grep "INV-P9-STEADY-008\|LAW-OUTPUT-LIVENESS" pkg/air/logs/cheers-24-7-air.log
 ```
 
 **Expected (PASS):**
@@ -199,12 +199,12 @@ grep "INV-P9-STEADY-008" pkg/air/logs/cheers-24-7-air.log
 [MpegTSOutputSink] INV-P9-STEADY-008: silence_injection_disabled=true
 ```
 
-**Stalling (acceptable if transient):**
+**Audio underrun (transport continues per LAW-OUTPUT-LIVENESS):**
 ```
-[MpegTSOutputSink] INV-P9-STEADY-008: Mux STALLING - audio queue empty
+[MpegTSOutputSink] LAW-OUTPUT-LIVENESS: Audio queue empty, video proceeding (transport continuous)
 ```
 
-**Failure:** Silence frames injected after this log line appears.
+**Failure:** Silence frames injected after silence_injection_disabled=true, OR transport stalls waiting for audio.
 
 #### Steady-State Entry Confirmation
 
@@ -467,7 +467,7 @@ grep "segment_switch\|switch_to_live" pkg/air/logs/cheers-24-7-air.log | head -5
 | INV-P9-STEADY-007 | `VIOLATION: Audio PTS jumped` | Local CT counter or discontinuity |
 | INV-P9-STEADY-007 | `Producer CT authoritative ENABLED` | Correct behavior proof |
 | INV-P9-STEADY-008 | `silence_injection_disabled=true` | Correct behavior proof |
-| INV-P9-STEADY-008 | `Mux STALLING - audio queue empty` | Acceptable stall (not failure) |
+| LAW-OUTPUT-LIVENESS | `Audio queue empty, video proceeding` | Transport continues (correct) |
 
 ---
 

@@ -33,6 +33,7 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 | **Clock** | MasterClock is the only source of "now"; CT never resets once established. | Law |
 | **Timeline** | TimelineController owns CT mapping; producers are time-blind after lock. | Law |
 | **Output Liveness** | ProgramOutput never blocks; if no content → deterministic pad (black + silence). | Law |
+| **INV-TICK-GUARANTEED-OUTPUT** | Every output tick emits exactly one frame; fallback chain: real → freeze → black. No conditional can prevent emission. Contract: [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) | Law |
 | **Audio Format** | Channel defines house format; all audio normalized before OutputBus; EncoderPipeline never negotiates. Contract test: **INV-AUDIO-HOUSE-FORMAT-001**. | Law |
 | **Switching** | No gaps, no PTS regression, no silence during switches. | Law |
 | **Observability Parity** | Intent, correlation, result, timing, and boundary evidence (LAW-OBS-001 through LAW-OBS-005). | Law |
@@ -68,6 +69,7 @@ Output sink attachment policy. See [SinkLivenessPolicy.md](semantics/SinkLivenes
 | **INV-P9-SINK-LIVENESS-001** | Pre-attach discard: frames routed to bus without sink are silently discarded (legal) | `OutputBus` | Semantic |
 | **INV-P9-SINK-LIVENESS-002** | Post-attach delivery: after AttachSink succeeds, all frames MUST reach sink until DetachSink | `OutputBus` | Semantic |
 | **INV-P9-SINK-LIVENESS-003** | Sink stability: sink pointer SHALL NOT become null between attach and explicit detach | `OutputBus` | Semantic |
+| **INV-SINK-NO-IMPLICIT-EOF** | After AttachStream, sink MUST emit TS until explicit stop/detach/fatal error. Producer EOF, empty queues, segment boundaries MUST NOT terminate emission. Contract: [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) | `MpegTSOutputSink` | Semantic |
 
 ### Derived Semantic Invariants
 
@@ -95,7 +97,8 @@ Output sink attachment policy. See [SinkLivenessPolicy.md](semantics/SinkLivenes
 | INV-P10-PCR-PACED-MUX | Mux loop must be time-driven, not availability-driven | Semantic |
 | INV-AUDIO-HOUSE-FORMAT-001 | All audio reaching EncoderPipeline (including pad) must be house format; pipeline rejects or fails loudly on non-house input; pad uses same path, CT, cadence, format as program. Test: INV_AUDIO_HOUSE_FORMAT_001_HouseFormatOnly (stub) | Semantic |
 | INV-AIR-IDR-BEFORE-OUTPUT | AIR must not emit any video packets for a segment until an IDR frame has been produced by the encoder for that segment. Gate resets on segment switch (ResetOutputTiming). | Semantic |
-| INV-AIR-CONTENT-BEFORE-PAD | Pad frames may ONLY be emitted AFTER at least one real decoded content frame has been successfully routed to output. First real frame establishes decoder state (IDR/SPS/PPS). | Semantic |
+| **INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT** | After AttachStream, emit decodable TS within 500ms using fallback if needed. Output-first, content-second. Contract: [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) | Semantic |
+| ~~INV-AIR-CONTENT-BEFORE-PAD~~ | **RETIRED** — Replaced by INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT. Old philosophy (gate output on content) was backwards. | — |
 
 **Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
 
@@ -172,6 +175,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Primitive invariants** (pacing, decode rate, content) | [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) |
 | **RealTimeHold** (freeze-then-pad, no-drop policy) | [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) |
 | **Component contracts** | [README.md](semantics/README.md) |
+| **Broadcast-grade output** (unconditional emission) | [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) · [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) · [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |

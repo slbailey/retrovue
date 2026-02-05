@@ -241,6 +241,7 @@ class EncoderPipeline {
   // If producer timestamps have discontinuities, log violation but pass through.
   // =========================================================================
   void SetProducerCTAuthoritative(bool enabled);
+
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

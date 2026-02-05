@@ -253,9 +253,13 @@ void ProgramOutput::RenderLoop() {
     }
 
     // =========================================================================
-    // INV-PACING-ENFORCEMENT-002 CLAUSE 1: Wall-clock pacing
-    // "emit at most one frame per frame period"
-    // "Wall-clock (or MasterClock) is the sole pacing authority"
+    // INV-PACING-ENFORCEMENT-002 CLAUSE 1: Wall-clock pacing (OBSERVATIONAL)
+    // =========================================================================
+    // Pacing is now OBSERVATIONAL, not a gate. We emit first, pace after.
+    // This ensures INV-TICK-GUARANTEED-OUTPUT: nothing can prevent emission.
+    //
+    // Structure: Emit → Track early/late → Sleep remainder of period
+    // Old structure (RETIRED): Wait → Emit
     // =========================================================================
     int64_t now_wall_us = 0;
     if (clock_) {
@@ -265,7 +269,7 @@ void ProgramOutput::RenderLoop() {
           std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    // Calculate next emission deadline
+    // Calculate timing for observational metrics
     int64_t next_deadline_us = 0;
     if (pacing_last_emission_us_ == 0) {
       // First iteration - emit immediately, establish baseline
@@ -275,27 +279,10 @@ void ProgramOutput::RenderLoop() {
       next_deadline_us = pacing_last_emission_us_ + pacing_frame_period_us_;
     }
 
-    // =========================================================================
-    // INV-PACING-ENFORCEMENT-002 CLAUSE 1: Wait until deadline
-    // "SHALL NOT emit frames faster than real time"
-    // =========================================================================
-    if (now_wall_us < next_deadline_us) {
-      const int64_t wait_us = next_deadline_us - now_wall_us;
-      if (wait_us > 1000) {  // Only sleep if > 1ms
-        WaitForMicros(clock_, wait_us - 500, &stop_requested_);  // Wake slightly early
-      }
-      // Spin-wait for precise timing
-      while (!stop_requested_.load(std::memory_order_acquire)) {
-        if (clock_) {
-          now_wall_us = clock_->now_utc_us();
-        } else {
-          now_wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::steady_clock::now().time_since_epoch()).count();
-        }
-        if (now_wall_us >= next_deadline_us) break;
-        std::this_thread::yield();
-      }
-    }
+    // OBSERVATIONAL: Track early/late (does NOT gate emission)
+    const int64_t timing_delta_us = now_wall_us - next_deadline_us;
+    // timing_delta_us < 0 means we're early (ahead of schedule)
+    // timing_delta_us > 0 means we're late (behind schedule)
 
     if (stop_requested_.load(std::memory_order_acquire)) break;
 
@@ -338,17 +325,59 @@ void ProgramOutput::RenderLoop() {
       }
 
       // =========================================================================
-      // INV-AIR-CONTENT-BEFORE-PAD: Gate pad/freeze until first real frame
+      // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Output-first, content-second
+      // =========================================================================
+      // After AttachStream, emit decodable TS within 500ms using fallback if needed.
+      // Wait briefly for first real frame, then emit pad anyway.
+      // Professional playout: output ALWAYS flows. VLC sees "instant black"
+      // rather than spinning indefinitely.
+      //
+      // This replaces the retired INV-AIR-CONTENT-BEFORE-PAD which had the
+      // philosophy backwards (gating output on content availability).
       // =========================================================================
       if (!first_real_frame_emitted_ && !no_content_segment_) {
         static uint64_t content_wait_count = 0;
-        if (++content_wait_count == 1 || content_wait_count % 100 == 0) {
-          std::cout << "[ProgramOutput] INV-AIR-CONTENT-BEFORE-PAD: Waiting for first real content frame "
-                    << "(wait_count=" << content_wait_count << ")" << std::endl;
+        content_wait_count++;
+
+        // Start the wait timer on first iteration
+        if (first_content_wait_start_us_ == 0) {
+          first_content_wait_start_us_ = now_wall_us;
+          std::cout << "[ProgramOutput] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: "
+                    << "Waiting for real content (window=" << (kFirstContentWaitWindowUs / 1000) << "ms)"
+                    << std::endl;
         }
-        // Still respect pacing - update emission time even when waiting
-        pacing_last_emission_us_ = now_wall_us;
-        continue;
+
+        // Check if wait window has expired
+        const int64_t wait_elapsed_us = now_wall_us - first_content_wait_start_us_;
+        if (wait_elapsed_us < kFirstContentWaitWindowUs) {
+          // Still within wait window - continue waiting
+          if (content_wait_count % 100 == 0) {
+            std::cout << "[ProgramOutput] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: "
+                      << "Still waiting for real content (elapsed=" << (wait_elapsed_us / 1000) << "ms)"
+                      << std::endl;
+          }
+          // Still respect pacing - update emission time even when waiting
+          pacing_last_emission_us_ = now_wall_us;
+          continue;
+        }
+
+        // Wait window expired - log transition and emit fallback
+        if (!first_content_wait_expired_) {
+          first_content_wait_expired_ = true;
+          std::cout << "[ProgramOutput] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: "
+                    << "Emitting fallback (no real content after " << (wait_elapsed_us / 1000) << "ms). "
+                    << "Output-first, content-second." << std::endl;
+        }
+
+        // Log periodically while emitting fallback
+        if (content_wait_count % 300 == 0) {
+          std::cout << "[ProgramOutput] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: "
+                    << "Emitting fallback, still waiting for real content (elapsed="
+                    << (wait_elapsed_us / 1000) << "ms)" << std::endl;
+        }
+
+        // Fall through to emit pad frame
+        goto emit_pad_frame;
       }
 
       // =========================================================================
@@ -704,13 +733,19 @@ frame_ready:
     // =========================================================================
     // INV-AIR-CONTENT-BEFORE-PAD: Mark first real frame as emitted
     // =========================================================================
-    // Once first real content frame is routed to output, pad frames are allowed.
-    // This ensures VLC receives decodable content (with IDR/SPS/PPS) first.
+    // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Real content arrived
+    // =========================================================================
+    // Mark transition from fallback to real content. If we were emitting
+    // fallback frames, this is the seamless handoff point.
     if (!first_real_frame_emitted_) {
       first_real_frame_emitted_ = true;
-      std::cout << "[ProgramOutput] INV-AIR-CONTENT-BEFORE-PAD: First real content frame emitted, "
-                << "pad frames now allowed. PTS=" << frame.metadata.pts << "us"
-                << " size=" << frame.width << "x" << frame.height << std::endl;
+      const char* transition = first_content_wait_expired_
+          ? "transitioning from fallback"
+          : "arrived within wait window";
+      std::cout << "[ProgramOutput] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: "
+                << "Real content arrived (" << transition << "). "
+                << "PTS=" << frame.metadata.pts << "us "
+                << "size=" << frame.width << "x" << frame.height << std::endl;
     }
 
     // =========================================================================
@@ -883,6 +918,36 @@ frame_ready:
     } else {
       pacing_last_emission_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    // =========================================================================
+    // INV-PACING-ENFORCEMENT-002: Post-emission pacing (AFTER emission)
+    // =========================================================================
+    // Sleep remainder of frame period to prevent flooding transport.
+    // This is AFTER emission, so it cannot prevent emission (demoted from gate).
+    //
+    // Key insight: Pacing happens AFTER we've already emitted.
+    // Old approach (gate): Wait → Emit (timing could block emission)
+    // New approach (observational): Emit → Wait (timing only throttles rate)
+    // =========================================================================
+    {
+      int64_t post_emit_now_us = 0;
+      if (clock_) {
+        post_emit_now_us = clock_->now_utc_us();
+      } else {
+        post_emit_now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+      }
+
+      // Calculate next target emission time
+      const int64_t next_target_us = pacing_last_emission_us_ + pacing_frame_period_us_;
+      const int64_t sleep_us = next_target_us - post_emit_now_us;
+
+      if (sleep_us > 1000 && !stop_requested_.load(std::memory_order_acquire)) {
+        // Sleep most of the remaining time, wake slightly early for precision
+        WaitForMicros(clock_, sleep_us - 500, &stop_requested_);
+      }
+      // Note: No spin-wait needed since we're throttling, not synchronizing
     }
   }
 

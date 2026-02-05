@@ -29,8 +29,10 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
  public:
   // Constructs the service with a controller that manages channel lifecycle.
   // control_surface_only: when true, AttachStream writes HELLO (Phase 8.0 tests); when false, stream stays silent until SwitchToLive writes real MPEG-TS (Phase 8.6).
+  // forensic_dump_dir: if non-empty, auto-enable TS forensic dump to <dir>/channel_<id>.ts
   PlayoutControlImpl(std::shared_ptr<runtime::PlayoutInterface> interface,
-                     bool control_surface_only = false);
+                     bool control_surface_only = false,
+                     const std::string& forensic_dump_dir = "");
   ~PlayoutControlImpl() override;
 
   // Disable copy and move
@@ -78,6 +80,9 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
   // Phase 9.0: OutputBus/OutputSink architecture
   // control_surface_only_: when true, uses legacy HelloLoop; when false, uses MpegTSOutputSink
   bool control_surface_only_ = false;
+
+  // Forensic dump: if non-empty, auto-enable TS dump to <dir>/channel_<id>.ts
+  std::string forensic_dump_dir_;
 
   // Phase 9.0: gRPC layer owns only transport state (FD), not output runtime state.
   // Output runtime (encoder, queues, mux thread) is owned by MpegTSOutputSink in OutputBus.

@@ -25,6 +25,7 @@ struct ServerConfig {
   std::string server_address = "0.0.0.0:50051";
   bool enable_reflection = true;
   bool control_surface_only = false;  // Phase 8.0: no decode/render, AttachStream only
+  std::string forensic_dump_dir;      // If set, auto-enable TS forensic dump for all sinks
 };
 
 ServerConfig ParseArgs(int argc, char** argv) {
@@ -41,6 +42,8 @@ ServerConfig ParseArgs(int argc, char** argv) {
       }
     } else if (arg == "--control-surface-only") {
       config.control_surface_only = true;
+    } else if (arg == "--forensic-dump-dir" && i + 1 < argc) {
+      config.forensic_dump_dir = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
       std::cout << "RetroVue Playout Engine\n\n"
                 << "Usage: retrovue_playout [OPTIONS]\n\n"
@@ -48,6 +51,7 @@ ServerConfig ParseArgs(int argc, char** argv) {
                 << "  -p, --port PORT        Listen port (default: 50051)\n"
                 << "  -a, --address ADDRESS  Full listen address (default: 0.0.0.0:50051)\n"
                 << "  --control-surface-only Phase 8.0: no decode/render (StartChannel + AttachStream only)\n"
+                << "  --forensic-dump-dir DIR  Mirror all TS output to DIR/channel_<id>.ts\n"
                 << "  -h, --help             Show this help message\n"
                 << std::endl;
       std::exit(0);
@@ -77,7 +81,8 @@ void RunServer(const ServerConfig& config) {
   auto interface = std::make_shared<retrovue::runtime::PlayoutInterface>(engine);
   
   // Create the gRPC service (thin adapter between gRPC and interface)
-  retrovue::playout::PlayoutControlImpl service(interface, config.control_surface_only);
+  retrovue::playout::PlayoutControlImpl service(interface, config.control_surface_only,
+                                                 config.forensic_dump_dir);
 
   // Enable health checking and reflection
   grpc::EnableDefaultHealthCheckService(true);
@@ -99,6 +104,9 @@ void RunServer(const ServerConfig& config) {
   std::cout << "gRPC Health Check: Enabled" << std::endl;
   std::cout << "gRPC Reflection: " << (config.enable_reflection ? "Enabled" : "Disabled") << std::endl;
   std::cout << "Metrics Endpoint: http://localhost:9308/metrics" << std::endl;
+  if (!config.forensic_dump_dir.empty()) {
+    std::cout << "Forensic Dump: " << config.forensic_dump_dir << "/channel_<id>.ts" << std::endl;
+  }
   std::cout << "==============================================================" << std::endl;
   std::cout << "\nComponents:" << std::endl;
   std::cout << "  ✓ FFmpegDecoder (real video decoding)" << std::endl;

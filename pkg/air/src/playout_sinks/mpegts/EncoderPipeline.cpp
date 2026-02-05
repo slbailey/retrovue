@@ -17,12 +17,15 @@
 #include <thread>
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
+extern "C" {
 #include <libavutil/dict.h>
 #include <libavutil/time.h>
 #include <libavutil/mathematics.h>  // For av_rescale_q
 #include <libavutil/log.h>  // For av_log_set_level
 #include <libavutil/channel_layout.h>  // For av_channel_layout_from_mask, av_channel_layout_copy
 #include <libavutil/samplefmt.h>
+#include <libavutil/opt.h>  // For av_opt_set (INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT)
+}
 #endif
 
 namespace retrovue::playout_sinks::mpegts {
@@ -131,19 +134,52 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     return false;
   }
 
+  // =========================================================================
+  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Force immediate TS packet emission
+  // =========================================================================
+  // Professional broadcast muxers emit packets immediately, never buffering.
+  // FFmpeg's default behavior (content-driven, buffered) is incompatible with
+  // live transport. These settings make FFmpeg behave like a broadcast mux.
+  // =========================================================================
+
+  // Format context level: disable all interleave delays (UNCONDITIONAL)
+  format_ctx_->max_delay = 0;                    // No muxer delay
+  format_ctx_->max_interleave_delta = 0;         // No waiting for A/V interleave
+  format_ctx_->flags |= AVFMT_FLAG_FLUSH_PACKETS;// Force flush after each packet
+  format_ctx_->flush_packets = 1;                // Redundant but explicit
+
   AVDictionary* muxer_opts = nullptr;
-  av_dict_set(&muxer_opts, "max_delay", "0", 0);  // No muxer delay for immediate output
+  av_dict_set(&muxer_opts, "max_delay", "0", 0);
   av_dict_set(&muxer_opts, "muxrate", "0", 0);
   muxer_opts_ = muxer_opts;
+
+  // MPEG-TS specific: immediate packet emission (BEFORE avformat_write_header)
+  int opt_ret = av_opt_set(format_ctx_->priv_data, "muxdelay", "0", 0);
+  if (opt_ret < 0) {
+    std::cerr << "[EncoderPipeline] Warning: Failed to set muxdelay=0 (FFmpeg version may not support it)" << std::endl;
+  }
+  opt_ret = av_opt_set(format_ctx_->priv_data, "pcr_period", "20", 0);
+  if (opt_ret < 0) {
+    std::cerr << "[EncoderPipeline] Warning: Failed to set pcr_period=20 (FFmpeg version may not support it)" << std::endl;
+  }
+
+  // Log confirmation of zero-buffering settings
+  std::cout << "[EncoderPipeline] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Zero-mux-buffering enabled "
+            << "(max_delay=0, max_interleave_delta=0, flush_packets=1)" << std::endl;
 
   if (!config.persistent_mux) {
     av_dict_set(&muxer_opts_, "mpegts_flags", "resend_headers+pat_pmt_at_frames", 0);
   }
 
   if (avio_write_callback_) {
-    // Allocate smaller buffer for AVIO (16KB buffer) to reduce blocking risk
-    // Smaller buffer means less data can accumulate before backpressure is felt
-    const size_t buffer_size = 16 * 1024;  // 16KB instead of 64KB
+    // =========================================================================
+    // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Minimal AVIO buffer for immediate emission
+    // =========================================================================
+    // Use smallest practical buffer: 7 TS packets (188 * 7 = 1316 bytes).
+    // This forces callbacks on every small cluster of packets rather than
+    // waiting for a large buffer to fill. Professional muxers emit immediately.
+    // =========================================================================
+    const size_t buffer_size = 188 * 7;  // 1316 bytes - one TS packet cluster
     uint8_t* buffer = (uint8_t*)av_malloc(buffer_size);
     if (!buffer) {
       std::cerr << "[EncoderPipeline] Failed to allocate AVIO buffer" << std::endl;
@@ -164,18 +200,14 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     
     // Explicitly mark as non-blocking (required on some FFmpeg builds)
     custom_avio_ctx_->seekable = 0;
-    
+
     // Set AVIO context on format context
     format_ctx_->pb = custom_avio_ctx_;
     format_ctx_->flags |= AVFMT_FLAG_CUSTOM_IO;
-    // Phase 8.9: Force immediate packet writes to avoid buffering delays
-    // when audio stream exists but no audio packets are being sent
-    format_ctx_->flags |= AVFMT_FLAG_FLUSH_PACKETS;
-    // P8-IO-001: Forward Progress Guarantee - disable interleave buffering
-    // Forces FFmpeg to write packets immediately instead of buffering for A/V interleaving
-    format_ctx_->max_interleave_delta = 0;
-    // P8-IO-001: Instruct TS muxer to behave like a live sink
-    format_ctx_->flush_packets = 1;
+
+    // Log AVIO buffer size for diagnostics
+    std::cout << "[EncoderPipeline] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: AVIO buffer_size="
+              << buffer_size << " bytes (7 TS packets)" << std::endl;
   }
 
   // Create video stream (codec already validated at start of open())
@@ -669,7 +701,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
           av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
           EnforceMonotonicDts();
           GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-          av_interleaved_write_frame(format_ctx_, packet_);
+          av_write_frame(format_ctx_, packet_);
+          avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Force immediate emission
         }
         send_ret = avcodec_send_frame(codec_ctx_, frame_);
       }
@@ -697,16 +730,14 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
       EnforceMonotonicDts();
       GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-      int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
+      int write_ret = av_write_frame(format_ctx_, packet_);
+      // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Flush after EVERY write, not just at end
+      avio_flush(format_ctx_->pb);
       if (write_ret < 0) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE];
         av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
         std::cerr << "[EncoderPipeline] write_frame failed: " << errbuf << std::endl;
       }
-    }
-    // INV-P8-OUTPUT-001: Explicit flush - output must not depend on muxer buffering
-    if (n > 0 && format_ctx_->pb) {
-      avio_flush(format_ctx_->pb);
     }
     return true;
   }
@@ -785,11 +816,13 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     // Set encoder options for streaming
     AVDictionary* opts = nullptr;
     av_dict_set(&opts, "preset", "ultrafast", 0);
+    // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: zerolatency disables lookahead and B-frames
+    av_dict_set(&opts, "tune", "zerolatency", 0);
     // Force single-threaded encoding to eliminate frame reordering
     av_dict_set(&opts, "threads", "1", 0);
-    // VBV-constrained VBR with settings to handle startup/fade-in
+    // VBV-constrained VBR with immediate output (no lookahead buffering)
     av_dict_set(&opts, "x264-params",
-        "rc-lookahead=10:sync-lookahead=0:bframes=0:nal-hrd=vbr:vbv-init=0.5:qpmin=18",
+        "bframes=0:nal-hrd=vbr:vbv-init=0.9",
         0);
 
     // Open codec with options
@@ -1012,8 +1045,9 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
         EnforceMonotonicDts();
         GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-        // av_interleaved_write_frame takes ownership and unrefs the packet.
-        int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
+        // av_write_frame takes ownership and unrefs the packet.
+        int write_ret = av_write_frame(format_ctx_, packet_);
+        avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
         if (write_ret == AVERROR(EAGAIN)) {
           break;
         }
@@ -1023,7 +1057,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
           std::cerr << "[EncoderPipeline] Error writing drained packet: " << write_errbuf << std::endl;
         }
       }
-      
+
       // Try sending frame again after draining
       send_ret = avcodec_send_frame(codec_ctx_, frame_);
       if (send_ret == AVERROR(EAGAIN)) {
@@ -1088,8 +1122,10 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
 
     // Write packet to muxer.
-    // av_interleaved_write_frame takes ownership and unrefs the packet.
-    int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
+    // av_write_frame takes ownership and unrefs the packet.
+    int write_ret = av_write_frame(format_ctx_, packet_);
+    // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Flush after EVERY write
+    avio_flush(format_ctx_->pb);
 
     if (write_ret == AVERROR(EAGAIN)) {
       break;
@@ -1102,13 +1138,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     }
   }
 
-  // P8-IO-001: Forward Progress Guarantee - flush periodically to ensure
-  // AVIO buffer doesn't hold data waiting for more bytes (every 10 frames)
-  // Flush unconditionally - encoder lookahead may delay packet production
   ++video_frame_count_;
-  if (format_ctx_->pb && (video_frame_count_ % 10 == 0)) {
-    avio_flush(format_ctx_->pb);
-  }
 
   return true;
 }
@@ -1149,8 +1179,9 @@ void EncoderPipeline::close() {
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
         EnforceMonotonicDts();
         GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-        // av_interleaved_write_frame takes ownership and unrefs the packet.
-        int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
+        // av_write_frame takes ownership and unrefs the packet.
+        int write_ret = av_write_frame(format_ctx_, packet_);
+        avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
         if (write_ret < 0 && write_ret != AVERROR(EAGAIN)) {
           char errbuf[AV_ERROR_MAX_STRING_SIZE];
           av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
@@ -1624,7 +1655,8 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
           // Convert audio PTS to 90kHz for consistent output timing
           int64_t audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
           GateOutputTiming(audio_pts_90k);
-          av_interleaved_write_frame(format_ctx_, packet_);
+          av_write_frame(format_ctx_, packet_);
+          avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
         }
         ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
       }
@@ -1666,14 +1698,15 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       int64_t audio_pts_90k_gate = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
       GateOutputTiming(audio_pts_90k_gate);
 
-      int mux_ret = av_interleaved_write_frame(format_ctx_, packet_);
+      int mux_ret = av_write_frame(format_ctx_, packet_);
+      avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
       if (mux_ret < 0) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE];
         av_strerror(mux_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
         std::cerr << "[EncoderPipeline] Error muxing audio packet: " << errbuf << std::endl;
       }
     }
-    
+
     // Advance pointer and PTS for next chunk
     samples_ptr += samples_this_frame * encoder_channels;
     samples_remaining -= samples_this_frame;
@@ -1796,9 +1829,10 @@ bool EncoderPipeline::flushAudio() {
         // Convert audio PTS to 90kHz for consistent output timing
         int64_t flush_audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
         GateOutputTiming(flush_audio_pts_90k);
-        av_interleaved_write_frame(format_ctx_, packet_);
+        av_write_frame(format_ctx_, packet_);
+        avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
       }
-      
+
       // Advance PTS and pointer
       int64_t frame_duration_90k = (static_cast<int64_t>(samples_this_frame) * 90000) / encoder_sample_rate;
       current_pts90k += frame_duration_90k;
@@ -1832,7 +1866,8 @@ bool EncoderPipeline::flushAudio() {
     // Convert audio PTS to 90kHz for consistent output timing
     int64_t drain_audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
     GateOutputTiming(drain_audio_pts_90k);
-    av_interleaved_write_frame(format_ctx_, packet_);
+    av_write_frame(format_ctx_, packet_);
+    avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
   }
 
   return true;

@@ -228,14 +228,42 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
            "AbsoluteMapping segments should not reach AdmitFrame while pending");
 
     // Lock both CT and MT from this first frame
-    int64_t ct_start_us = clock_->now_utc_us() - epoch_us_;
+    int64_t now_utc_us = clock_->now_utc_us();
+    int64_t ct_start_us = now_utc_us - epoch_us_;
+
+    // =====================================================================
+    // CT-DOMAIN-SANITY: Log clock values at CT calculation
+    // =====================================================================
+    auto now_steady = std::chrono::steady_clock::now();
+    int64_t steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        now_steady.time_since_epoch()).count();
+    std::cout << "[CT-DOMAIN-SANITY] TimelineController CT calc: "
+              << "now_utc_us=" << now_utc_us
+              << " epoch_us=" << epoch_us_
+              << " ct_start_us=" << ct_start_us
+              << " steady_ns=" << steady_ns
+              << " (CT = now_utc - epoch, both SYSTEM_CLOCK)" << std::endl;
+
+    // HARD ASSERT: CT should be small, epoch should be large (Unix timestamp)
+    // CT should be < 24 hours, epoch should be > year 2020
+    constexpr int64_t kMaxReasonableCT = 86'400'000'000LL;  // 24h in us
+    constexpr int64_t kMinReasonableEpoch = 1577836800'000'000LL;  // 2020-01-01 in us
+    if (std::abs(ct_start_us) > kMaxReasonableCT) {
+      std::cerr << "[CT-DOMAIN-SANITY] FATAL: ct_start_us=" << ct_start_us
+                << " exceeds 24h - CHECK now_utc_us=" << now_utc_us
+                << " epoch_us=" << epoch_us_ << std::endl;
+    }
+    if (epoch_us_ < kMinReasonableEpoch) {
+      std::cerr << "[CT-DOMAIN-SANITY] WARNING: epoch_us=" << epoch_us_
+                << " is before 2020 - suspicious!" << std::endl;
+    }
 
     // INV-P8-SEGMENT-COMMIT: Record the segment ID before clearing pending
     SegmentId committed_segment_id = pending_segment_->id;
 
     std::cout << "[TimelineController] INV-P8-SWITCH-002: Mapping LOCKED from preview frame "
               << "(segment_id=" << committed_segment_id << "): "
-              << "wall=" << clock_->now_utc_us() << "us, epoch=" << epoch_us_
+              << "wall=" << now_utc_us << "us, epoch=" << epoch_us_
               << "us, CT_start=" << ct_start_us << "us, MT_start=" << media_time_us << "us"
               << std::endl;
 

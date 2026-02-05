@@ -65,12 +65,18 @@ namespace retrovue
 
     PlayoutControlImpl::PlayoutControlImpl(
         std::shared_ptr<runtime::PlayoutInterface> interface,
-        bool control_surface_only)
+        bool control_surface_only,
+        const std::string& forensic_dump_dir)
         : interface_(std::move(interface)),
-          control_surface_only_(control_surface_only)
+          control_surface_only_(control_surface_only),
+          forensic_dump_dir_(forensic_dump_dir)
     {
       std::cout << "[PlayoutControlImpl] Service initialized (API version: " << kApiVersion
-                << ", control_surface_only=" << control_surface_only_ << ")" << std::endl;
+                << ", control_surface_only=" << control_surface_only_;
+      if (!forensic_dump_dir_.empty()) {
+        std::cout << ", forensic_dump_dir=" << forensic_dump_dir_;
+      }
+      std::cout << ")" << std::endl;
     }
 
     PlayoutControlImpl::~PlayoutControlImpl()
@@ -342,6 +348,12 @@ namespace retrovue
       // P9-OPT-002: Wire up MetricsExporter for steady-state telemetry
       if (auto metrics = interface_->GetMetricsExporter()) {
         sink->SetMetricsExporter(metrics, channel_id);
+      }
+
+      // Forensic dump: auto-enable if --forensic-dump-dir was specified
+      if (!forensic_dump_dir_.empty()) {
+        std::string dump_path = forensic_dump_dir_ + "/channel_" + std::to_string(channel_id) + ".ts";
+        sink->EnableForensicDump(dump_path);
       }
 
       auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink));
