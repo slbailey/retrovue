@@ -119,6 +119,22 @@ target_include_directories(playout_proto
     "${PROTO_GEN_DIR}"
 )
 
+# ---- BlockPlan Executor (Section 7 Contracts) ----
+# Minimal executor for BlockPlan execution model
+# Contract Reference: docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
+set(BLOCKPLAN_SOURCES
+  src/blockplan/BlockPlanTypes.cpp
+  src/blockplan/BlockPlanValidator.cpp
+  src/blockplan/BlockPlanQueue.cpp
+)
+
+add_library(retrovue_blockplan ${BLOCKPLAN_SOURCES})
+target_include_directories(retrovue_blockplan
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_features(retrovue_blockplan PUBLIC cxx_std_20)
+
 # ---- Air engine (control-surface-only capable; paths match repo layout) ----
 # Core service + runtime
 set(AIR_CORE_SOURCES
@@ -292,4 +308,27 @@ target_include_directories(deterministic_harness_tests
 add_test(
   NAME DeterministicHarnessContracts
   COMMAND deterministic_harness_tests
+)
+
+# ---- BlockPlan Contract Tests (Section 7) ----
+# Tests for docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
+add_executable(blockplan_contract_tests
+  tests/contracts/BlockPlan/BlockPlanContractTests.cpp
+)
+
+target_link_libraries(blockplan_contract_tests
+  PRIVATE
+    retrovue_blockplan
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(blockplan_contract_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_test(
+  NAME BlockPlanContracts
+  COMMAND blockplan_contract_tests
 )
