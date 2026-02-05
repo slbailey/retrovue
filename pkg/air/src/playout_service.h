@@ -92,6 +92,12 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
                                      const StopBlockPlanSessionRequest* request,
                                      StopBlockPlanSessionResponse* response) override;
 
+  // Server-streaming RPC for block lifecycle events.
+  // Core subscribes to receive BlockCompleted events for boundary-driven feeding.
+  grpc::Status SubscribeBlockEvents(grpc::ServerContext* context,
+                                     const SubscribeBlockEventsRequest* request,
+                                     grpc::ServerWriter<BlockEvent>* writer) override;
+
  private:
   // Controller that manages all channel lifecycle operations
   std::shared_ptr<runtime::PlayoutInterface> interface_;
@@ -158,6 +164,11 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
     std::mutex queue_mutex;
     std::vector<BlockPlanBlock> block_queue;  // Index 0 = executing, 1 = pending
     std::condition_variable queue_cv;         // Notify when block added
+
+    // Event subscribers (for SubscribeBlockEvents streaming)
+    std::mutex event_mutex;
+    std::vector<grpc::ServerWriter<BlockEvent>*> event_subscribers;
+    std::string termination_reason;  // Set when session ends
   };
 
   // BlockPlan execution thread (real execution using RealTimeBlockExecutor)
@@ -168,6 +179,14 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
 
   // Convert internal block to blockplan::BlockPlan type for executor
   static blockplan::BlockPlan ConvertToBlockPlanType(const BlockPlanBlock& block);
+
+  // Emit BlockCompleted event to all subscribers
+  void EmitBlockCompleted(BlockPlanSessionState* state, const BlockPlanBlock& block,
+                          int64_t final_ct_ms);
+
+  // Emit SessionEnded event to all subscribers
+  void EmitSessionEnded(BlockPlanSessionState* state, const std::string& reason);
+
   std::mutex blockplan_mutex_;
   std::unique_ptr<BlockPlanSessionState> blockplan_session_;
 };

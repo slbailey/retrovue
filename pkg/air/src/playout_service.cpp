@@ -167,6 +167,9 @@ namespace retrovue
       std::cout << "[BlockPlanExecution] Starting execution thread for channel "
                 << state->channel_id << std::endl;
 
+      // Track termination reason for SessionEnded event
+      std::string termination_reason = "unknown";
+
       // Configure the real-time sink
       blockplan::realtime::SinkConfig sink_config;
       sink_config.fd = state->fd;
@@ -235,6 +238,7 @@ namespace retrovue
         if (!validation.valid) {
           std::cerr << "[BlockPlanExecution] Block validation failed: " << validation.detail << std::endl;
           state->final_ct_ms = 0;
+          termination_reason = "error";
           break;
         }
 
@@ -244,6 +248,7 @@ namespace retrovue
 
         if (!join_result.valid) {
           std::cerr << "[BlockPlanExecution] Join computation failed" << std::endl;
+          termination_reason = "error";
           break;
         }
 
@@ -259,15 +264,20 @@ namespace retrovue
                   << ", result=" << static_cast<int>(result.code)
                   << std::endl;
 
+        // Emit BlockCompleted event to subscribers (fires after fence)
+        EmitBlockCompleted(state, current_block, result.final_ct_ms);
+
         // Check for errors
         if (result.code != blockplan::realtime::RealTimeBlockExecutor::Result::Code::kSuccess &&
             result.code != blockplan::realtime::RealTimeBlockExecutor::Result::Code::kTerminated) {
           std::cerr << "[BlockPlanExecution] Execution error: " << result.error_detail << std::endl;
+          termination_reason = "error";
           break;
         }
 
         if (result.code == blockplan::realtime::RealTimeBlockExecutor::Result::Code::kTerminated) {
           std::cout << "[BlockPlanExecution] Terminated by request" << std::endl;
+          termination_reason = "stopped";
           break;
         }
 
@@ -276,13 +286,23 @@ namespace retrovue
           std::lock_guard<std::mutex> lock(state->queue_mutex);
           if (state->block_queue.empty()) {
             std::cout << "[BlockPlanExecution] LOOKAHEAD_EXHAUSTED at fence" << std::endl;
+            termination_reason = "lookahead_exhausted";
             break;
           }
         }
       }
 
+      // If we exited due to stop_requested (from main loop condition), set reason
+      if (state->stop_requested.load(std::memory_order_acquire) && termination_reason == "unknown") {
+        termination_reason = "stopped";
+      }
+
       std::cout << "[BlockPlanExecution] Thread exiting: blocks_executed=" << state->blocks_executed
-                << ", final_ct=" << state->final_ct_ms << "ms" << std::endl;
+                << ", final_ct=" << state->final_ct_ms << "ms"
+                << ", reason=" << termination_reason << std::endl;
+
+      // Emit SessionEnded event to all subscribers
+      EmitSessionEnded(state, termination_reason);
     }
 
     grpc::Status PlayoutControlImpl::StartChannel(grpc::ServerContext *context,
@@ -916,6 +936,126 @@ namespace retrovue
       response->set_final_ct_ms(final_ct);
       response->set_blocks_executed(blocks_executed);
       return grpc::Status::OK;
+    }
+
+    // ==========================================================================
+    // SubscribeBlockEvents: Server-streaming RPC for boundary-driven feeding
+    // ==========================================================================
+
+    grpc::Status PlayoutControlImpl::SubscribeBlockEvents(
+        grpc::ServerContext* context,
+        const SubscribeBlockEventsRequest* request,
+        grpc::ServerWriter<BlockEvent>* writer)
+    {
+      const int32_t channel_id = request->channel_id();
+
+      std::cout << "[SubscribeBlockEvents] Subscriber connected for channel "
+                << channel_id << std::endl;
+
+      // Add subscriber to session
+      {
+        std::lock_guard<std::mutex> lock(blockplan_mutex_);
+        if (!blockplan_session_ || !blockplan_session_->active ||
+            blockplan_session_->channel_id != channel_id) {
+          std::cout << "[SubscribeBlockEvents] No active session for channel "
+                    << channel_id << std::endl;
+          return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                              "No active BlockPlan session for channel");
+        }
+
+        std::lock_guard<std::mutex> event_lock(blockplan_session_->event_mutex);
+        blockplan_session_->event_subscribers.push_back(writer);
+      }
+
+      // Wait for session to end or client to disconnect
+      // The stream stays open until the session ends or client cancels
+      while (!context->IsCancelled()) {
+        {
+          std::lock_guard<std::mutex> lock(blockplan_mutex_);
+          if (!blockplan_session_ || !blockplan_session_->active) {
+            // Session ended, stream will close
+            break;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+
+      // Remove subscriber
+      {
+        std::lock_guard<std::mutex> lock(blockplan_mutex_);
+        if (blockplan_session_) {
+          std::lock_guard<std::mutex> event_lock(blockplan_session_->event_mutex);
+          auto& subs = blockplan_session_->event_subscribers;
+          subs.erase(std::remove(subs.begin(), subs.end(), writer), subs.end());
+        }
+      }
+
+      std::cout << "[SubscribeBlockEvents] Subscriber disconnected for channel "
+                << channel_id << std::endl;
+      return grpc::Status::OK;
+    }
+
+    void PlayoutControlImpl::EmitBlockCompleted(
+        BlockPlanSessionState* state,
+        const BlockPlanBlock& block,
+        int64_t final_ct_ms)
+    {
+      std::lock_guard<std::mutex> lock(state->event_mutex);
+
+      BlockEvent event;
+      event.set_channel_id(state->channel_id);
+
+      auto* completed = event.mutable_block_completed();
+      completed->set_block_id(block.block_id);
+      completed->set_block_start_utc_ms(block.start_utc_ms);
+      completed->set_block_end_utc_ms(block.end_utc_ms);
+      completed->set_final_ct_ms(final_ct_ms);
+      completed->set_blocks_executed_total(state->blocks_executed);
+
+      std::cout << "[EmitBlockCompleted] block_id=" << block.block_id
+                << ", blocks_executed=" << state->blocks_executed
+                << ", subscribers=" << state->event_subscribers.size()
+                << std::endl;
+
+      // Send to all subscribers (remove failed ones)
+      std::vector<grpc::ServerWriter<BlockEvent>*> failed;
+      for (auto* writer : state->event_subscribers) {
+        if (!writer->Write(event)) {
+          failed.push_back(writer);
+        }
+      }
+      for (auto* w : failed) {
+        state->event_subscribers.erase(
+            std::remove(state->event_subscribers.begin(),
+                        state->event_subscribers.end(), w),
+            state->event_subscribers.end());
+      }
+    }
+
+    void PlayoutControlImpl::EmitSessionEnded(
+        BlockPlanSessionState* state,
+        const std::string& reason)
+    {
+      std::lock_guard<std::mutex> lock(state->event_mutex);
+
+      BlockEvent event;
+      event.set_channel_id(state->channel_id);
+
+      auto* ended = event.mutable_session_ended();
+      ended->set_reason(reason);
+      ended->set_final_ct_ms(state->final_ct_ms);
+      ended->set_blocks_executed_total(state->blocks_executed);
+
+      std::cout << "[EmitSessionEnded] reason=" << reason
+                << ", blocks_executed=" << state->blocks_executed
+                << ", subscribers=" << state->event_subscribers.size()
+                << std::endl;
+
+      // Send to all subscribers
+      for (auto* writer : state->event_subscribers) {
+        writer->Write(event);
+      }
+      state->event_subscribers.clear();
     }
 
   } // namespace playout

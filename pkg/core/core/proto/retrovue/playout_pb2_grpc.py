@@ -94,6 +94,11 @@ class PlayoutControlStub(object):
                 request_serializer=playout__pb2.StopBlockPlanSessionRequest.SerializeToString,
                 response_deserializer=playout__pb2.StopBlockPlanSessionResponse.FromString,
                 _registered_method=True)
+        self.SubscribeBlockEvents = channel.unary_stream(
+                '/retrovue.playout.PlayoutControl/SubscribeBlockEvents',
+                request_serializer=playout__pb2.SubscribeBlockEventsRequest.SerializeToString,
+                response_deserializer=playout__pb2.BlockEvent.FromString,
+                _registered_method=True)
 
 
 class PlayoutControlServicer(object):
@@ -205,6 +210,16 @@ class PlayoutControlServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SubscribeBlockEvents(self, request, context):
+        """SubscribeBlockEvents returns a stream of block lifecycle events.
+        Core subscribes after StartBlockPlanSession to receive BlockCompleted events.
+        This enables boundary-driven just-in-time feeding without polling.
+        Stream ends when session ends or is stopped.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PlayoutControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -262,6 +277,11 @@ def add_PlayoutControlServicer_to_server(servicer, server):
                     servicer.StopBlockPlanSession,
                     request_deserializer=playout__pb2.StopBlockPlanSessionRequest.FromString,
                     response_serializer=playout__pb2.StopBlockPlanSessionResponse.SerializeToString,
+            ),
+            'SubscribeBlockEvents': grpc.unary_stream_rpc_method_handler(
+                    servicer.SubscribeBlockEvents,
+                    request_deserializer=playout__pb2.SubscribeBlockEventsRequest.FromString,
+                    response_serializer=playout__pb2.BlockEvent.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -566,6 +586,33 @@ class PlayoutControl(object):
             '/retrovue.playout.PlayoutControl/StopBlockPlanSession',
             playout__pb2.StopBlockPlanSessionRequest.SerializeToString,
             playout__pb2.StopBlockPlanSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SubscribeBlockEvents(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/retrovue.playout.PlayoutControl/SubscribeBlockEvents',
+            playout__pb2.SubscribeBlockEventsRequest.SerializeToString,
+            playout__pb2.BlockEvent.FromString,
             options,
             channel_credentials,
             insecure,
