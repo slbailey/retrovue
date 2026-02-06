@@ -53,7 +53,8 @@ logger = logging.getLogger("verify_first_on_air")
 # =============================================================================
 
 REPO_ROOT = Path("/opt/retrovue")
-TEST_ASSET = REPO_ROOT / "assets" / "SampleA.mp4"
+TEST_ASSET_A = REPO_ROOT / "assets" / "SampleA.mp4"
+TEST_ASSET_B = REPO_ROOT / "assets" / "SampleB.mp4"
 SERVER_HOST = "0.0.0.0"  # Bind to all interfaces
 CLIENT_HOST = "127.0.0.1"  # Client connects to localhost
 SERVER_PORT = 9999
@@ -115,14 +116,23 @@ def run_server():
 
     original_get_or_create = director._get_or_create_manager
 
-    # Simple schedule service that returns SampleA.mp4
+    # Schedule service returning two assets for mid-asset seek verification:
+    #   Block 0 (even): SampleA.mp4 from the start (offset=0)
+    #   Block 1 (odd):  SampleB.mp4 starting 12 seconds in (offset=12000)
     class SimpleScheduleService:
         def get_playout_plan_now(self, channel_id: str, at_station_time):
-            return [{
-                "asset_path": str(REPO_ROOT / "assets" / "SampleA.mp4"),
-                "start_pts": 0,
-                "segment_type": "content",
-            }]
+            return [
+                {
+                    "asset_path": str(REPO_ROOT / "assets" / "SampleA.mp4"),
+                    "asset_start_offset_ms": 0,
+                    "segment_type": "content",
+                },
+                {
+                    "asset_path": str(REPO_ROOT / "assets" / "SampleB.mp4"),
+                    "asset_start_offset_ms": 12000,
+                    "segment_type": "content",
+                },
+            ]
         def load_schedule(self, channel_id: str):
             return True, None
 
@@ -161,8 +171,14 @@ def run_server():
     logger.info(f"Server listening on http://{SERVER_HOST}:{SERVER_PORT}")
     logger.info(f"Stream URL: http://<your-ip>:{SERVER_PORT}/channel/{CHANNEL_ID}.ts")
     logger.info("")
-    logger.info("To verify with ffplay:")
-    logger.info(f"  ffplay -fflags nobuffer http://<your-ip>:{SERVER_PORT}/channel/{CHANNEL_ID}.ts")
+    logger.info("Block plan (5s blocks, round-robin):")
+    logger.info(f"  Even blocks: {TEST_ASSET_A} offset=0ms")
+    logger.info(f"  Odd  blocks: {TEST_ASSET_B} offset=12000ms")
+    logger.info("")
+    logger.info("To verify mid-asset seek with ffplay:")
+    logger.info(f"  ffplay -fflags nobuffer -flags low_delay http://<your-ip>:{SERVER_PORT}/channel/{CHANNEL_ID}.ts")
+    logger.info("")
+    logger.info("Expected: 5s of SampleA (start) → 5s of SampleB (12s in) → repeat")
     logger.info("")
     logger.info("To verify with this script:")
     logger.info("  python -m retrovue.runtime.verify_first_on_air --client")

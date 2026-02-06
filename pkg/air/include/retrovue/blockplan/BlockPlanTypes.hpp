@@ -212,6 +212,33 @@ struct AcceptanceResult {
   }
 };
 
+// =============================================================================
+// Playout Execution Mode
+// INV-SERIAL-BLOCK-EXECUTION: Baseline mode declaration
+// =============================================================================
+
+enum class PlayoutExecutionMode {
+  // Blocks execute sequentially. Block N must complete before Block N+1 begins.
+  // Encoder is opened once per session and closed at session end.
+  // No frames are emitted outside of block execution.
+  // This is the only implemented mode.
+  kSerialBlock,
+
+  // Future: Continuous output with pre-decoded frame buffer.
+  // Not implemented. Placeholder for design document reference:
+  //   docs/architecture/proposals/ContinuousOutputDesign.md
+  kContinuousOutput,
+};
+
+// Convert execution mode to string for logging/telemetry
+inline const char* PlayoutExecutionModeToString(PlayoutExecutionMode mode) {
+  switch (mode) {
+    case PlayoutExecutionMode::kSerialBlock:     return "serial_block";
+    case PlayoutExecutionMode::kContinuousOutput: return "continuous_output";
+    default:                                      return "unknown";
+  }
+}
+
 }  // namespace retrovue::blockplan
 
 #endif  // RETROVUE_BLOCKPLAN_TYPES_HPP_

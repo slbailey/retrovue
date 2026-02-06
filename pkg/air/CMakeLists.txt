@@ -167,6 +167,8 @@ set(AIR_CORE_SOURCES
   src/output/SocketSink.cpp
   # BlockPlan real-time execution
   src/blockplan/RealTimeExecution.cpp
+  # BlockPlan execution engine (serial block mode)
+  src/blockplan/SerialBlockExecutionEngine.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
@@ -328,11 +330,15 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ExecutorDiagnosticHarness.cpp
   tests/contracts/BlockPlan/FeederContractTests.cpp
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
+  tests/contracts/BlockPlan/SerialBlockBaselineContractTests.cpp
+  tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
+  tests/contracts/BlockPlan/SerialBlockMetricsTests.cpp
+  tests/contracts/BlockPlan/MidAssetSeekContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
   PRIVATE
-    retrovue_blockplan
+    retrovue_air_core
     GTest::gtest
     GTest::gtest_main
 )

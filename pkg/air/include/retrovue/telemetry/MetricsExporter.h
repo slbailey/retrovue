@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -146,6 +147,14 @@ class MetricsExporter {
   // Returns false if channel doesn't exist.
   bool GetChannelMetrics(int32_t channel_id, ChannelMetrics& metrics) const;
 
+  // Register a supplementary metrics provider that appends Prometheus-format
+  // text to /metrics output. Provider must be thread-safe and return valid
+  // Prometheus text exposition format. Use for engine-level metrics that live
+  // outside the event queue pipeline.
+  using CustomMetricsProvider = std::function<std::string()>;
+  void RegisterCustomMetricsProvider(const std::string& name, CustomMetricsProvider provider);
+  void UnregisterCustomMetricsProvider(const std::string& name);
+
   // Test helpers.
   Snapshot SnapshotForTest() const;
   bool WaitUntilDrainedForTest(std::chrono::milliseconds timeout);
@@ -243,6 +252,9 @@ class MetricsExporter {
   std::map<int32_t, bool> steady_state_active_;                    // gauge: 0 or 1
   std::map<int32_t, int64_t> steady_state_entry_time_us_;          // timestamp of entry
   std::map<int32_t, std::vector<double>> mux_ct_wait_samples_ms_;  // histogram samples
+
+  // Custom metrics providers (appended to /metrics output)
+  std::map<std::string, CustomMetricsProvider> custom_providers_;
 };
 
 }  // namespace retrovue::telemetry
