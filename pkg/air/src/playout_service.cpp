@@ -248,6 +248,16 @@ namespace retrovue
                 << state->width << "x" << state->height << " @ " << state->fps << "fps"
                 << std::endl;
 
+      // ========================================================================
+      // ARCHITECTURAL TELEMETRY: One-time per-session declaration (AIR side)
+      // ========================================================================
+      std::cout << "[INV-PLAYOUT-AUTHORITY] channel_id=" << state->channel_id
+                << " | playout_path=blockplan"
+                << " | encoder_scope=session"
+                << " | execution_model=serial_block"
+                << " | format=" << state->width << "x" << state->height << "@" << state->fps
+                << std::endl;
+
       // Configure the real-time sink with shared encoder
       blockplan::realtime::SinkConfig sink_config;
       sink_config.fd = state->fd;
