@@ -47,6 +47,17 @@ struct SerialBlockMetrics {
   int64_t sum_asset_probe_ms = 0;        // Sum for mean
   int32_t assets_probed = 0;             // Total assets probed across all blocks
 
+  // ---- Block Preloading (P2) ----
+  int32_t preload_attempted_total = 0;       // Times preload was started
+  int32_t preload_ready_at_boundary_total = 0; // Times preload was ready when needed
+  int32_t preload_fallback_total = 0;        // Times fell back to sync probe
+  int64_t max_preload_probe_us = 0;          // Worst preload probe time
+  int64_t sum_preload_probe_us = 0;          // Sum for mean
+  int64_t max_preload_decoder_open_us = 0;   // Worst preload decoder open
+  int64_t sum_preload_decoder_open_us = 0;   // Sum for mean
+  int64_t max_preload_seek_us = 0;           // Worst preload seek
+  int64_t sum_preload_seek_us = 0;           // Sum for mean
+
   // ---- Encoder Lifetime ----
   int32_t encoder_open_count = 0;        // Must be exactly 1 per session
   int32_t encoder_close_count = 0;       // Must be exactly 1 per session
@@ -125,6 +136,50 @@ struct SerialBlockMetrics {
     oss << "# TYPE air_serial_block_assets_probed_total counter\n";
     oss << "air_serial_block_assets_probed_total{channel=\"" << ch << "\"} "
         << assets_probed << "\n";
+
+    // Block preloading (P2)
+    oss << "\n# HELP air_serial_block_preload_attempted_total Times preload was started\n";
+    oss << "# TYPE air_serial_block_preload_attempted_total counter\n";
+    oss << "air_serial_block_preload_attempted_total{channel=\"" << ch << "\"} "
+        << preload_attempted_total << "\n";
+
+    oss << "\n# HELP air_serial_block_preload_ready_total Times preload was ready at boundary\n";
+    oss << "# TYPE air_serial_block_preload_ready_total counter\n";
+    oss << "air_serial_block_preload_ready_total{channel=\"" << ch << "\"} "
+        << preload_ready_at_boundary_total << "\n";
+
+    oss << "\n# HELP air_serial_block_preload_fallback_total Times fell back to sync probe\n";
+    oss << "# TYPE air_serial_block_preload_fallback_total counter\n";
+    oss << "air_serial_block_preload_fallback_total{channel=\"" << ch << "\"} "
+        << preload_fallback_total << "\n";
+
+    if (preload_attempted_total > 0) {
+      double mean_probe_us = static_cast<double>(sum_preload_probe_us) / preload_attempted_total;
+      oss << "\n# HELP air_serial_block_preload_probe_us Preload asset probe time (microseconds)\n";
+      oss << "# TYPE air_serial_block_preload_probe_us gauge\n";
+      oss << "air_serial_block_preload_probe_max_us{channel=\"" << ch << "\"} "
+          << max_preload_probe_us << "\n";
+      oss << "air_serial_block_preload_probe_mean_us{channel=\"" << ch << "\"} "
+          << static_cast<int64_t>(mean_probe_us) << "\n";
+    }
+
+    if (preload_ready_at_boundary_total > 0) {
+      double mean_decoder_us = static_cast<double>(sum_preload_decoder_open_us) / preload_ready_at_boundary_total;
+      double mean_seek_us = static_cast<double>(sum_preload_seek_us) / preload_ready_at_boundary_total;
+      oss << "\n# HELP air_serial_block_preload_decoder_open_us Preload decoder open time (microseconds)\n";
+      oss << "# TYPE air_serial_block_preload_decoder_open_us gauge\n";
+      oss << "air_serial_block_preload_decoder_open_max_us{channel=\"" << ch << "\"} "
+          << max_preload_decoder_open_us << "\n";
+      oss << "air_serial_block_preload_decoder_open_mean_us{channel=\"" << ch << "\"} "
+          << static_cast<int64_t>(mean_decoder_us) << "\n";
+
+      oss << "\n# HELP air_serial_block_preload_seek_us Preload seek time (microseconds)\n";
+      oss << "# TYPE air_serial_block_preload_seek_us gauge\n";
+      oss << "air_serial_block_preload_seek_max_us{channel=\"" << ch << "\"} "
+          << max_preload_seek_us << "\n";
+      oss << "air_serial_block_preload_seek_mean_us{channel=\"" << ch << "\"} "
+          << static_cast<int64_t>(mean_seek_us) << "\n";
+    }
 
     // Encoder lifetime
     oss << "\n# HELP air_serial_block_encoder_open_count Encoder open count (must be 1)\n";

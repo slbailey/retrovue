@@ -169,6 +169,13 @@ set(AIR_CORE_SOURCES
   src/blockplan/RealTimeExecution.cpp
   # BlockPlan execution engine (serial block mode)
   src/blockplan/SerialBlockExecutionEngine.cpp
+  # BlockPlan preloader (P2: background resource preloading)
+  src/blockplan/BlockPreloader.cpp
+  # ContinuousOutput execution engine (P3.0 + P3.1a + P3.1b: pad + A/B BlockSource swap)
+  src/blockplan/OutputClock.cpp
+  src/blockplan/BlockSource.cpp
+  src/blockplan/SourcePreloader.cpp
+  src/blockplan/ContinuousOutputExecutionEngine.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
@@ -334,6 +341,9 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
   tests/contracts/BlockPlan/SerialBlockMetricsTests.cpp
   tests/contracts/BlockPlan/MidAssetSeekContractTests.cpp
+  tests/contracts/BlockPlan/BlockPreloadContractTests.cpp
+  tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
+  tests/contracts/BlockPlan/SeamProofContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
@@ -375,4 +385,15 @@ target_include_directories(retrovue_air_standalone
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
     ${CMAKE_CURRENT_SOURCE_DIR}/src/standalone
+)
+
+# ---- P3.2: Seam Verify Standalone Harness ----
+# Standalone binary for real-media boundary verification.
+# Separate from retrovue_air_standalone (which uses the old executor infrastructure).
+add_executable(retrovue_air_seam_verify
+  src/standalone/SeamVerifyMain.cpp
+)
+target_link_libraries(retrovue_air_seam_verify PRIVATE retrovue_air_core)
+target_include_directories(retrovue_air_seam_verify PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

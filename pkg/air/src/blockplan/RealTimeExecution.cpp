@@ -10,6 +10,7 @@
 #include <iostream>
 #include <thread>
 
+#include "retrovue/blockplan/BlockPreloader.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/decode/FFmpegDecoder.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
@@ -476,6 +477,18 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
   return true;
 }
 
+void RealTimeEncoderSink::InstallPreloadedDecoder(
+    std::unique_ptr<decode::FFmpegDecoder> decoder,
+    const std::string& asset_uri,
+    int64_t seek_target_ms) {
+  if (!decoder) return;
+  decoder_ = std::move(decoder);
+  current_asset_uri_ = asset_uri;
+  next_frame_offset_ms_ = seek_target_ms;
+  std::cout << "[RealTimeEncoderSink] Installed preloaded decoder: uri=" << asset_uri
+            << " seek_target_ms=" << seek_target_ms << std::endl;
+}
+
 void RealTimeEncoderSink::Close() {
   // ==========================================================================
   // SESSION-LONG ENCODER: Do NOT close/destroy shared encoder
@@ -564,7 +577,8 @@ const Segment* RealTimeBlockExecutor::GetSegmentByIndex(
 
 RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     const ValidatedBlockPlan& validated,
-    const JoinParameters& join_params) {
+    const JoinParameters& join_params,
+    BlockPreloadContext* preload) {
 
   const BlockPlan& plan = validated.plan;
   const auto& boundaries = validated.boundaries;
@@ -577,16 +591,33 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
   Diag("[Executor] Starting block: " + plan.block_id +
        " (duration=" + std::to_string(block_duration_ms) + "ms)");
 
-  // Probe all assets in the block
-  for (const auto& seg : plan.segments) {
-    if (!assets_.HasAsset(seg.asset_uri)) {
-      if (!assets_.ProbeAsset(seg.asset_uri)) {
-        return Result{
-            Result::Code::kAssetError,
-            0,
-            0,  // No PTS offset on error before sink initialized
-            "Failed to probe asset: " + seg.asset_uri
-        };
+  // Probe all assets in the block (skip if preloaded)
+  if (preload && preload->assets_ready) {
+    assets_ = std::move(preload->assets);
+    // Verify all segments are covered; fall back to sync probe for any missing
+    for (const auto& seg : plan.segments) {
+      if (!assets_.HasAsset(seg.asset_uri)) {
+        if (!assets_.ProbeAsset(seg.asset_uri)) {
+          return Result{
+              Result::Code::kAssetError,
+              0,
+              0,
+              "Failed to probe asset: " + seg.asset_uri
+          };
+        }
+      }
+    }
+  } else {
+    for (const auto& seg : plan.segments) {
+      if (!assets_.HasAsset(seg.asset_uri)) {
+        if (!assets_.ProbeAsset(seg.asset_uri)) {
+          return Result{
+              Result::Code::kAssetError,
+              0,
+              0,  // No PTS offset on error before sink initialized
+              "Failed to probe asset: " + seg.asset_uri
+          };
+        }
       }
     }
   }
@@ -600,6 +631,19 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
         config_.sink.initial_pts_offset_90k,  // Preserve incoming offset on error
         "Failed to open encoder sink"
     };
+  }
+
+  // Install preloaded decoder if available and matching first segment
+  if (preload && preload->decoder_ready) {
+    const Segment* first_seg = GetSegmentByIndex(plan, join_params.start_segment_index);
+    if (first_seg &&
+        preload->decoder_asset_uri == first_seg->asset_uri &&
+        preload->decoder_seek_target_ms == join_params.effective_asset_offset_ms) {
+      sink_->InstallPreloadedDecoder(
+          std::move(preload->decoder),
+          preload->decoder_asset_uri,
+          preload->decoder_seek_target_ms);
+    }
   }
 
   // Set clock epoch to block start

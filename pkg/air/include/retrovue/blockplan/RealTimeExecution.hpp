@@ -32,6 +32,10 @@ class EncoderPipeline;
 struct MpegTSPlayoutSinkConfig;
 }  // namespace retrovue::playout_sinks::mpegts
 
+namespace retrovue::blockplan {
+struct BlockPreloadContext;
+}  // namespace retrovue::blockplan
+
 namespace retrovue::blockplan::realtime {
 
 // =============================================================================
@@ -135,6 +139,15 @@ class RealTimeEncoderSink {
 
   // Emit a frame (decodes if needed, encodes, writes to FD)
   bool EmitFrame(const FrameMetadata& frame);
+
+  // Install a preloaded decoder for the first segment.
+  // Must be called AFTER Open() and BEFORE the first EmitFrame().
+  // Transfers ownership of the decoder to this sink.
+  // If the asset_uri or offset don't match the first frame, the sink
+  // will detect the mismatch and re-seek (graceful fallback).
+  void InstallPreloadedDecoder(std::unique_ptr<decode::FFmpegDecoder> decoder,
+                               const std::string& asset_uri,
+                               int64_t seek_target_ms);
 
   // Finalize block (does NOT close shared encoder - only resets per-block state)
   void Close();
@@ -262,8 +275,11 @@ class RealTimeBlockExecutor {
 
   // Execute a validated block plan in real-time
   // Blocks until: fence reached, failure occurs, or termination requested
+  // Optional preload context provides pre-probed assets and/or pre-opened decoder.
+  // If preload is nullptr or incomplete, falls back to synchronous behavior.
   Result Execute(const ValidatedBlockPlan& plan,
-                 const JoinParameters& join_params);
+                 const JoinParameters& join_params,
+                 BlockPreloadContext* preload = nullptr);
 
   // Request graceful termination
   void RequestTermination();

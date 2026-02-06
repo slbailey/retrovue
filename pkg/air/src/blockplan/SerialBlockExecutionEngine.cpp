@@ -15,6 +15,7 @@
 #include <string>
 #include <utility>
 
+#include "retrovue/blockplan/BlockPreloader.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
 #include "retrovue/blockplan/RealTimeExecution.hpp"
@@ -206,6 +207,13 @@ void SerialBlockExecutionEngine::Run() {
   // INV-PTS-MONOTONIC: Track accumulated PTS offset across blocks
   int64_t session_pts_offset_90k = 0;
 
+  // ========================================================================
+  // P2 – BLOCK PRELOADER: Reduce block-boundary stalls by preloading
+  // the next block's assets and decoder while the current block executes.
+  // Best-effort: if preload isn't ready, falls back to sync behavior.
+  // ========================================================================
+  BlockPreloader preloader;
+
   // Main execution loop - process blocks from queue
   while (!ctx_->stop_requested.load(std::memory_order_acquire))
   {
@@ -258,43 +266,103 @@ void SerialBlockExecutionEngine::Run() {
     BlockPlan plan = FedBlockToBlockPlan(current_block);
 
     // ========================================================================
-    // INSTRUMENTATION: Asset probe timing (per asset)
+    // P2: Try to consume preloaded resources for this block
     // ========================================================================
-    auto probe_total_start = std::chrono::steady_clock::now();
-    realtime::RealAssetSource assets;
-    for (const auto& seg : plan.segments) {
-      auto probe_start = std::chrono::steady_clock::now();
-      if (!assets.ProbeAsset(seg.asset_uri)) {
-        std::cerr << "[BlockPlanExecution] Failed to probe asset: " << seg.asset_uri << std::endl;
-        // Continue with next block or terminate
-        continue;
+    auto preload = preloader.TakeIfReady();
+    bool used_preload = false;
+
+    if (preload && preload->block_id == current_block.block_id && preload->assets_ready) {
+      // Preload hit — use preloaded asset durations for validation
+      std::cout << "[METRIC] preload_hit block_id=" << current_block.block_id
+                << " probe_us=" << preload->probe_us
+                << " decoder_ready=" << preload->decoder_ready
+                << std::endl;
+      used_preload = true;
+
+      // Accumulate preload metrics
+      {
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        metrics_.preload_ready_at_boundary_total++;
+        metrics_.sum_preload_probe_us += preload->probe_us;
+        if (preload->probe_us > metrics_.max_preload_probe_us) {
+          metrics_.max_preload_probe_us = preload->probe_us;
+        }
+        if (preload->decoder_ready) {
+          metrics_.sum_preload_decoder_open_us += preload->decoder_open_us;
+          if (preload->decoder_open_us > metrics_.max_preload_decoder_open_us) {
+            metrics_.max_preload_decoder_open_us = preload->decoder_open_us;
+          }
+          metrics_.sum_preload_seek_us += preload->seek_us;
+          if (preload->seek_us > metrics_.max_preload_seek_us) {
+            metrics_.max_preload_seek_us = preload->seek_us;
+          }
+        }
       }
-      auto probe_end = std::chrono::steady_clock::now();
-      auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          probe_end - probe_start).count();
-      std::cout << "[METRIC] asset_probe_ms=" << probe_ms
-                << " uri=" << seg.asset_uri
-                << " block_id=" << current_block.block_id << std::endl;
+    } else {
+      // Preload miss — discard stale or absent preload
+      if (preload) {
+        std::cout << "[METRIC] preload_stale expected=" << current_block.block_id
+                  << " got=" << preload->block_id << std::endl;
+      }
+      preload.reset();
+
+      {
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        // Only count as fallback if we attempted a preload (not first block)
+        if (have_prev_block_time) {
+          metrics_.preload_fallback_total++;
+        }
+      }
     }
-    auto probe_total_end = std::chrono::steady_clock::now();
-    auto probe_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        probe_total_end - probe_total_start).count();
-    std::cout << "[METRIC] asset_probe_total_ms=" << probe_total_ms
-              << " block_id=" << current_block.block_id << std::endl;
+
+    // ========================================================================
+    // INSTRUMENTATION: Asset probe timing (skip if preloaded)
+    // ========================================================================
+    realtime::RealAssetSource engine_assets;
+    realtime::RealAssetSource* assets_for_validation = nullptr;
+
+    if (used_preload) {
+      // Use preloaded assets for validation
+      assets_for_validation = &preload->assets;
+    } else {
+      // Synchronous probe (existing behavior)
+      auto probe_total_start = std::chrono::steady_clock::now();
+      for (const auto& seg : plan.segments) {
+        auto probe_start = std::chrono::steady_clock::now();
+        if (!engine_assets.ProbeAsset(seg.asset_uri)) {
+          std::cerr << "[BlockPlanExecution] Failed to probe asset: " << seg.asset_uri << std::endl;
+          continue;
+        }
+        auto probe_end = std::chrono::steady_clock::now();
+        auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            probe_end - probe_start).count();
+        std::cout << "[METRIC] asset_probe_ms=" << probe_ms
+                  << " uri=" << seg.asset_uri
+                  << " block_id=" << current_block.block_id << std::endl;
+      }
+      auto probe_total_end = std::chrono::steady_clock::now();
+      auto probe_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          probe_total_end - probe_total_start).count();
+      std::cout << "[METRIC] asset_probe_total_ms=" << probe_total_ms
+                << " block_id=" << current_block.block_id << std::endl;
+
+      assets_for_validation = &engine_assets;
+    }
 
     // Accumulate asset probe metrics
     {
       std::lock_guard<std::mutex> lock(metrics_mutex_);
       metrics_.assets_probed += static_cast<int32_t>(plan.segments.size());
-      metrics_.sum_asset_probe_ms += probe_total_ms;
-      if (probe_total_ms > metrics_.max_asset_probe_ms) {
-        metrics_.max_asset_probe_ms = probe_total_ms;
+      if (!used_preload) {
+        // Only count sync probe time (preload time is tracked separately)
+        auto probe_total_ms = 0;  // Already logged above
+        metrics_.sum_asset_probe_ms += probe_total_ms;
       }
     }
 
     // Create asset duration function for validator
-    auto duration_fn = [&assets](const std::string& uri) -> int64_t {
-      return assets.GetDuration(uri);
+    auto duration_fn = [assets_for_validation](const std::string& uri) -> int64_t {
+      return assets_for_validation->GetDuration(uri);
     };
 
     // Validate block plan
@@ -322,6 +390,24 @@ void SerialBlockExecutionEngine::Run() {
     exec_config.sink.initial_pts_offset_90k = session_pts_offset_90k;
 
     // ========================================================================
+    // P2: Start preloading next block BEFORE executing current block
+    // The preloader runs on a background thread during the ~5s execution.
+    // ========================================================================
+    {
+      std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+      if (!ctx_->block_queue.empty()) {
+        const auto& next_block = ctx_->block_queue.front();
+        preloader.StartPreload(next_block, ctx_->width, ctx_->height);
+        {
+          std::lock_guard<std::mutex> mlock(metrics_mutex_);
+          metrics_.preload_attempted_total++;
+        }
+        std::cout << "[BlockPreloader] Started preload for: " << next_block.block_id
+                  << std::endl;
+      }
+    }
+
+    // ========================================================================
     // INSTRUMENTATION: Execute timing and boundary gap
     // ========================================================================
     auto execute_start = std::chrono::steady_clock::now();
@@ -332,7 +418,8 @@ void SerialBlockExecutionEngine::Run() {
           execute_start - prev_block_last_frame_time).count();
       std::cout << "[METRIC] boundary_gap_ms=" << boundary_gap_ms
                 << " prev_block=" << prev_block_id
-                << " next_block=" << current_block.block_id << std::endl;
+                << " next_block=" << current_block.block_id
+                << " preloaded=" << (used_preload ? "true" : "false") << std::endl;
 
       // Accumulate boundary gap metrics
       {
@@ -353,9 +440,10 @@ void SerialBlockExecutionEngine::Run() {
                 << " channel_id=" << ctx_->channel_id << std::endl;
     }
 
-    // Create and run executor
+    // Create and run executor (pass preload context if available)
     realtime::RealTimeBlockExecutor executor(exec_config);
-    auto result = executor.Execute(validated, join_result.params);
+    auto result = executor.Execute(validated, join_result.params,
+                                   used_preload ? preload.get() : nullptr);
 
     auto execute_end = std::chrono::steady_clock::now();
     auto execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -431,6 +519,9 @@ void SerialBlockExecutionEngine::Run() {
       }
     }
   }
+
+  // P2: Cancel any in-progress preload before closing encoder
+  preloader.Cancel();
 
   // If we exited due to stop_requested (from main loop condition), set reason
   if (ctx_->stop_requested.load(std::memory_order_acquire) && termination_reason == "unknown") {

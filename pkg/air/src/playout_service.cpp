@@ -18,6 +18,7 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
 #include "retrovue/blockplan/RealTimeExecution.hpp"
+#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
 #include "retrovue/blockplan/SerialBlockExecutionEngine.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/output/IOutputSink.h"
@@ -694,8 +695,30 @@ namespace retrovue
         }
 
         blockplan_session_->engine->Start();
+      } else if (kExecutionMode == blockplan::PlayoutExecutionMode::kContinuousOutput) {
+        // P3.0: ContinuousOutput — pad-only skeleton
+        blockplan::ContinuousOutputExecutionEngine::Callbacks callbacks;
+        callbacks.on_block_completed = [this](const blockplan::FedBlock& block, int64_t final_ct_ms) {
+          EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
+        };
+        callbacks.on_session_ended = [this](const std::string& reason) {
+          EmitSessionEnded(blockplan_session_.get(), reason);
+        };
+
+        blockplan_session_->engine = std::make_unique<blockplan::ContinuousOutputExecutionEngine>(
+            blockplan_session_.get(), std::move(callbacks));
+
+        // Wire engine metrics to Prometheus export
+        if (auto metrics_exporter = interface_->GetMetricsExporter()) {
+          auto* engine_ptr = static_cast<blockplan::ContinuousOutputExecutionEngine*>(
+              blockplan_session_->engine.get());
+          metrics_exporter->RegisterCustomMetricsProvider(
+              "continuous_output_engine",
+              [engine_ptr]() { return engine_ptr->GenerateMetricsText(); });
+        }
+
+        blockplan_session_->engine->Start();
       } else {
-        // kContinuousOutput: NOT IMPLEMENTED
         std::cerr << "[StartBlockPlanSession] FATAL: execution_model="
                   << blockplan::PlayoutExecutionModeToString(kExecutionMode)
                   << " is not implemented" << std::endl;
@@ -799,6 +822,7 @@ namespace retrovue
       // Unregister engine metrics provider before stopping
       if (auto metrics_exporter = interface_->GetMetricsExporter()) {
         metrics_exporter->UnregisterCustomMetricsProvider("serial_block_engine");
+        metrics_exporter->UnregisterCustomMetricsProvider("continuous_output_engine");
       }
 
       // Stop execution engine (joins thread internally)

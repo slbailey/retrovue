@@ -17,6 +17,7 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
 #include "retrovue/blockplan/SerialBlockExecutionEngine.hpp"
 
@@ -93,20 +94,28 @@ TEST_F(ExecutionEngineGuardrailTest, SerialBlockSelectsSerialEngine) {
 }
 
 // -----------------------------------------------------------------------------
-// TEST-ENGINE-002: kContinuousOutput is declared but NOT implemented
-// Any attempt to create an engine for this mode must be rejected at the
-// selection point (in playout_service.cpp). The enum value exists only as
-// a placeholder.
+// TEST-ENGINE-002: kContinuousOutput selects ContinuousOutputExecutionEngine
+// The engine must implement IPlayoutExecutionEngine.
 // -----------------------------------------------------------------------------
-TEST_F(ExecutionEngineGuardrailTest, ContinuousOutputNotImplemented) {
+TEST_F(ExecutionEngineGuardrailTest, ContinuousOutputSelectsContinuousEngine) {
   constexpr auto mode = PlayoutExecutionMode::kContinuousOutput;
   EXPECT_EQ(std::string(PlayoutExecutionModeToString(mode)), "continuous_output");
 
-  // There is no ContinuousOutputEngine class — this test documents
-  // that kContinuousOutput has no engine implementation.
-  // The selection logic in playout_service.cpp rejects this mode at startup.
-  EXPECT_NE(static_cast<int>(mode), static_cast<int>(PlayoutExecutionMode::kSerialBlock))
-      << "kContinuousOutput must be a distinct mode from kSerialBlock";
+  // kContinuousOutput must be distinct from kSerialBlock
+  EXPECT_NE(static_cast<int>(mode), static_cast<int>(PlayoutExecutionMode::kSerialBlock));
+
+  // Creating a ContinuousOutputExecutionEngine must succeed
+  ContinuousOutputExecutionEngine::Callbacks callbacks;
+  callbacks.on_block_completed = [](const FedBlock&, int64_t) {};
+  callbacks.on_session_ended = [](const std::string&) {};
+
+  auto engine = std::make_unique<ContinuousOutputExecutionEngine>(
+      ctx_.get(), std::move(callbacks));
+  EXPECT_NE(engine, nullptr);
+
+  // Verify it satisfies the IPlayoutExecutionEngine interface
+  IPlayoutExecutionEngine* iface = engine.get();
+  EXPECT_NE(iface, nullptr);
 }
 
 // =============================================================================
