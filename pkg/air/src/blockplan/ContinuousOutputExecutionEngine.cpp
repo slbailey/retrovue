@@ -406,12 +406,20 @@ void ContinuousOutputExecutionEngine::Run() {
     if (active_source_->GetState() == BlockSource::State::kReady &&
         source_ticks_ >= active_source_->FramesPerBlock()) {
 
-      // P3.3: Finalize and emit playback summary before completion callback
+      // P3.3: Finalize and emit playback summary + proof before completion callback
       if (!block_acc.block_id.empty()) {
         auto summary = block_acc.Finalize();
         std::cout << FormatPlaybackSummary(summary) << std::endl;
         if (callbacks_.on_block_summary) {
           callbacks_.on_block_summary(summary);
+        }
+
+        // P3.3b: Build and emit playback proof (wanted vs showed)
+        auto proof = BuildPlaybackProof(
+            active_source_->GetBlock(), summary, clock.FrameDurationMs());
+        std::cout << FormatPlaybackProof(proof) << std::endl;
+        if (callbacks_.on_playback_proof) {
+          callbacks_.on_playback_proof(proof);
         }
       }
 

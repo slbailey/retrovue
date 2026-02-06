@@ -670,7 +670,7 @@ namespace retrovue
       // ENGINE SELECTION: Select execution engine based on execution mode
       // INV-SERIAL-BLOCK-EXECUTION: Only kSerialBlock is implemented
       // ========================================================================
-      constexpr auto kExecutionMode = blockplan::PlayoutExecutionMode::kSerialBlock;
+      constexpr auto kExecutionMode = blockplan::PlayoutExecutionMode::kContinuousOutput;
 
       if (kExecutionMode == blockplan::PlayoutExecutionMode::kSerialBlock) {
         // Create callbacks that delegate to gRPC event emission

@@ -96,6 +96,10 @@ class PlaybackTraceContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(seam_mutex_);
       seam_transitions_.push_back(t);
     };
+    callbacks.on_playback_proof = [this](const BlockPlaybackProof& p) {
+      std::lock_guard<std::mutex> lock(proof_mutex_);
+      proofs_.push_back(p);
+    };
     return std::make_unique<ContinuousOutputExecutionEngine>(
         ctx_.get(), std::move(callbacks));
   }
@@ -123,6 +127,9 @@ class PlaybackTraceContractTest : public ::testing::Test {
 
   std::mutex seam_mutex_;
   std::vector<SeamTransitionLog> seam_transitions_;
+
+  std::mutex proof_mutex_;
+  std::vector<BlockPlaybackProof> proofs_;
 };
 
 // =============================================================================
@@ -498,6 +505,247 @@ TEST_F(PlaybackTraceContractTest, BlockAccumulatorUnitTest) {
   summary = acc.Finalize();
   EXPECT_EQ(summary.asset_uris.size(), 2u)
       << "Duplicate URI must not be added again";
+}
+
+// =============================================================================
+// P3.3b PROOF TESTS
+// =============================================================================
+
+// =============================================================================
+// PROOF-001: ProofEmittedPerBlock
+// Queue 2 blocks. After both complete, verify 2 proofs with correct block IDs.
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, ProofEmittedPerBlock) {
+  FedBlock block1 = MakeSyntheticBlock("proof-a", 1000);
+  FedBlock block2 = MakeSyntheticBlock("proof-b", 1000);
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block1);
+    ctx_->block_queue.push_back(block2);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  ASSERT_TRUE(WaitForBlocksCompleted(2, 8000))
+      << "Both blocks must complete within timeout";
+
+  engine_->Stop();
+
+  std::lock_guard<std::mutex> lock(proof_mutex_);
+  ASSERT_EQ(proofs_.size(), 2u)
+      << "One proof must be emitted per completed block";
+  EXPECT_EQ(proofs_[0].wanted.block_id, "proof-a");
+  EXPECT_EQ(proofs_[0].showed.block_id, "proof-a");
+  EXPECT_EQ(proofs_[1].wanted.block_id, "proof-b");
+  EXPECT_EQ(proofs_[1].showed.block_id, "proof-b");
+}
+
+// =============================================================================
+// PROOF-002: AllPadVerdictForSyntheticBlock
+// Queue 1 synthetic (unresolvable) block. Verdict must be ALL_PAD.
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, AllPadVerdictForSyntheticBlock) {
+  FedBlock block = MakeSyntheticBlock("proof-allpad", 1000,
+                                       "/nonexistent/proof.mp4");
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000))
+      << "Block must complete within timeout";
+
+  engine_->Stop();
+
+  std::lock_guard<std::mutex> lock(proof_mutex_);
+  ASSERT_EQ(proofs_.size(), 1u);
+  EXPECT_EQ(proofs_[0].verdict, PlaybackProofVerdict::kAllPad)
+      << "Unresolvable asset must produce ALL_PAD verdict";
+  EXPECT_EQ(proofs_[0].showed.pad_frames, proofs_[0].showed.frames_emitted)
+      << "All frames must be pad";
+}
+
+// =============================================================================
+// PROOF-003: IntentMatchesFedBlock
+// Verify BuildIntent extracts correct fields from FedBlock.
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, IntentMatchesFedBlock) {
+  FedBlock block = MakeSyntheticBlock("proof-intent", 3000, "/assets/test.mp4");
+  block.segments[0].asset_start_offset_ms = 5000;
+
+  // At 30fps, frame_duration_ms = 33, expected_frames = ceil(3000/33) = 91
+  auto intent = BuildIntent(block, 33);
+
+  EXPECT_EQ(intent.block_id, "proof-intent");
+  EXPECT_EQ(intent.expected_duration_ms, 3000);
+  EXPECT_EQ(intent.expected_frames, 91)
+      << "ceil(3000/33) = 91";
+  ASSERT_EQ(intent.expected_asset_uris.size(), 1u);
+  EXPECT_EQ(intent.expected_asset_uris[0], "/assets/test.mp4");
+  EXPECT_EQ(intent.expected_start_offset_ms, 5000);
+}
+
+// =============================================================================
+// PROOF-004: DetermineVerdictLogic
+// Unit test on DetermineVerdict() covering all four verdict paths.
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, DetermineVerdictLogic) {
+  BlockPlaybackIntent wanted;
+  wanted.block_id = "verdict-test";
+  wanted.expected_asset_uris = {"/a.mp4"};
+  wanted.expected_frames = 30;
+
+  // FAITHFUL: correct asset, zero pad
+  {
+    BlockPlaybackSummary showed;
+    showed.asset_uris = {"/a.mp4"};
+    showed.frames_emitted = 30;
+    showed.pad_frames = 0;
+    EXPECT_EQ(DetermineVerdict(wanted, showed), PlaybackProofVerdict::kFaithful)
+        << "Correct asset + zero pad = FAITHFUL";
+  }
+
+  // PARTIAL_PAD: correct asset, some pad
+  {
+    BlockPlaybackSummary showed;
+    showed.asset_uris = {"/a.mp4"};
+    showed.frames_emitted = 30;
+    showed.pad_frames = 5;
+    EXPECT_EQ(DetermineVerdict(wanted, showed), PlaybackProofVerdict::kPartialPad)
+        << "Correct asset + some pad = PARTIAL_PAD";
+  }
+
+  // ALL_PAD: no real frames
+  {
+    BlockPlaybackSummary showed;
+    showed.frames_emitted = 30;
+    showed.pad_frames = 30;
+    EXPECT_EQ(DetermineVerdict(wanted, showed), PlaybackProofVerdict::kAllPad)
+        << "All pad frames = ALL_PAD";
+  }
+
+  // ASSET_MISMATCH: wrong asset observed
+  {
+    BlockPlaybackSummary showed;
+    showed.asset_uris = {"/b.mp4"};
+    showed.frames_emitted = 30;
+    showed.pad_frames = 0;
+    EXPECT_EQ(DetermineVerdict(wanted, showed), PlaybackProofVerdict::kAssetMismatch)
+        << "Wrong asset = ASSET_MISMATCH";
+  }
+}
+
+// =============================================================================
+// PROOF-005: FormatPlaybackProofOutput
+// Unit test on FormatPlaybackProof(). Verify output contains WANTED/SHOWED/VERDICT.
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, FormatPlaybackProofOutput) {
+  BlockPlaybackProof proof;
+  proof.wanted.block_id = "fmt-proof";
+  proof.wanted.expected_asset_uris = {"/assets/movie.mp4"};
+  proof.wanted.expected_start_offset_ms = 0;
+  proof.wanted.expected_duration_ms = 5000;
+  proof.wanted.expected_frames = 152;
+
+  proof.showed.block_id = "fmt-proof";
+  proof.showed.asset_uris = {"/assets/movie.mp4"};
+  proof.showed.first_block_ct_ms = 0;
+  proof.showed.last_block_ct_ms = 4950;
+  proof.showed.frames_emitted = 152;
+  proof.showed.pad_frames = 0;
+
+  proof.verdict = PlaybackProofVerdict::kFaithful;
+
+  std::string output = FormatPlaybackProof(proof);
+
+  EXPECT_NE(output.find("[CONTINUOUS-PLAYBACK-PROOF]"), std::string::npos)
+      << "Must contain log prefix";
+  EXPECT_NE(output.find("block_id=fmt-proof"), std::string::npos)
+      << "Must contain block_id";
+  EXPECT_NE(output.find("WANTED:"), std::string::npos)
+      << "Must contain WANTED section";
+  EXPECT_NE(output.find("SHOWED:"), std::string::npos)
+      << "Must contain SHOWED section";
+  EXPECT_NE(output.find("VERDICT: FAITHFUL"), std::string::npos)
+      << "Must contain FAITHFUL verdict";
+  EXPECT_NE(output.find("asset=/assets/movie.mp4"), std::string::npos)
+      << "Must contain asset URI";
+  EXPECT_NE(output.find("duration=5000ms"), std::string::npos)
+      << "Must contain duration";
+  EXPECT_NE(output.find("frames=152"), std::string::npos)
+      << "Must contain frame count";
+}
+
+// =============================================================================
+// PROOF-006: ProofWantedFramesMatchesFence
+// Queue 1 block. Verify proof.wanted.expected_frames equals summary.frames_emitted.
+// (For synthetic blocks, both should equal ceil(duration/frame_dur).)
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, ProofWantedFramesMatchesFence) {
+  // 1000ms at 30fps: ceil(1000/33) = 31
+  FedBlock block = MakeSyntheticBlock("proof-frames", 1000);
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000))
+      << "Block must complete within timeout";
+
+  engine_->Stop();
+
+  std::lock_guard<std::mutex> lock(proof_mutex_);
+  ASSERT_EQ(proofs_.size(), 1u);
+  EXPECT_EQ(proofs_[0].wanted.expected_frames, 31)
+      << "Expected frames must be ceil(1000/33) = 31";
+  EXPECT_EQ(proofs_[0].showed.frames_emitted, 31)
+      << "Showed frames must match fence count";
+  EXPECT_EQ(proofs_[0].wanted.expected_frames,
+            proofs_[0].showed.frames_emitted)
+      << "Wanted frames must equal showed frames at fence";
+}
+
+// =============================================================================
+// PROOF-007: RealMediaFaithfulVerdict
+// GTEST_SKIP if assets missing. Queue real block. Verify FAITHFUL verdict.
+// =============================================================================
+TEST_F(PlaybackTraceContractTest, RealMediaFaithfulVerdict) {
+  const std::string path_a = "/opt/retrovue/assets/SampleA.mp4";
+
+  if (!FileExists(path_a)) {
+    GTEST_SKIP() << "Real media asset not found: " << path_a;
+  }
+
+  FedBlock block = MakeSyntheticBlock("proof-real", 3000, path_a);
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 10000))
+      << "Real media block must complete";
+
+  engine_->Stop();
+
+  std::lock_guard<std::mutex> lock(proof_mutex_);
+  ASSERT_EQ(proofs_.size(), 1u);
+  EXPECT_EQ(proofs_[0].verdict, PlaybackProofVerdict::kFaithful)
+      << "Real media with correct asset must produce FAITHFUL verdict";
+  EXPECT_EQ(proofs_[0].showed.pad_frames, 0)
+      << "Real media block should have zero pad frames";
+  ASSERT_FALSE(proofs_[0].showed.asset_uris.empty());
+  EXPECT_EQ(proofs_[0].showed.asset_uris[0], path_a)
+      << "Showed asset must match wanted asset";
 }
 
 }  // namespace
