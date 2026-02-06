@@ -148,6 +148,9 @@ class SessionState:
     last_error: Optional[str] = None
     grpc_addr: Optional[str] = None
     air_process: Optional[subprocess.Popen] = None
+    # INV-FEED-NO-FEED-AFTER-END: Track session termination
+    session_ended: bool = False
+    session_end_reason: Optional[str] = None
 
 
 class PlayoutSession:
@@ -364,6 +367,9 @@ class PlayoutSession:
                         with self._lock:
                             self._state.blocks_executed = ended.blocks_executed_total
                             self._state.is_running = False
+                            # INV-FEED-NO-FEED-AFTER-END: Mark session as ended
+                            self._state.session_ended = True
+                            self._state.session_end_reason = ended.reason
                         if self.on_session_end:
                             try:
                                 self.on_session_end(ended.reason)
@@ -455,6 +461,8 @@ class PlayoutSession:
         Call this when a block completes to maintain the 2-block window.
         Block must be contiguous with the current pending block.
 
+        INV-FEED-NO-FEED-AFTER-END: Returns False if session has ended.
+
         Args:
             block: Next block to feed
 
@@ -462,6 +470,14 @@ class PlayoutSession:
             True if feeding succeeded
         """
         with self._lock:
+            # INV-FEED-NO-FEED-AFTER-END: Defense-in-depth guard
+            if self._state.session_ended:
+                logger.warning(
+                    f"[PlayoutSession:{self.channel_id}] INV-FEED-NO-FEED-AFTER-END: "
+                    f"Cannot feed after session ended (reason={self._state.session_end_reason})"
+                )
+                return False
+
             if not self._state.is_running:
                 logger.error(f"[PlayoutSession:{self.channel_id}] Cannot feed - not running")
                 return False

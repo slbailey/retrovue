@@ -2609,6 +2609,13 @@ class BlockPlanProducer(Producer):
         self._start_count = 0  # Debug: track start attempts
         self._stop_count = 0   # Debug: track stop attempts
 
+        # INV-FEED-NO-FEED-AFTER-END: Track session termination
+        self._session_ended = False
+        self._session_end_reason: str | None = None
+
+        # INV-FEED-EXACTLY-ONCE: Track fed blocks to prevent duplicates
+        self._fed_block_ids: set[str] = set()
+
         # Block generation state
         self._block_index = 0
         self._next_block_start_ms = 0
@@ -2749,7 +2756,11 @@ class BlockPlanProducer(Producer):
             return True
 
     def _cleanup(self):
-        """Clean up PlayoutSession and resources."""
+        """
+        Clean up PlayoutSession and resources.
+
+        INV-CM-RESTART-SAFETY: Resets all state for clean restart.
+        """
         if self._session:
             try:
                 self._session.stop(reason="last_viewer_left")
@@ -2763,6 +2774,11 @@ class BlockPlanProducer(Producer):
         # Reset block generation state for next start
         self._block_index = 0
         self._next_block_start_ms = 0
+
+        # INV-CM-RESTART-SAFETY: Reset session state flags
+        self._session_ended = False
+        self._session_end_reason = None
+        self._fed_block_ids.clear()
 
     def _generate_block(
         self,
@@ -2809,10 +2825,34 @@ class BlockPlanProducer(Producer):
         return block
 
     def _on_block_complete(self, block_id: str):
-        """Callback when a block completes - feed next block."""
+        """
+        Callback when a block completes - feed next block.
+
+        INV-FEED-EXACTLY-ONCE: Only feeds once per BlockCompleted event.
+        INV-FEED-NO-FEED-AFTER-END: Does not feed after SessionEnded.
+        INV-FEED-NO-MID-BLOCK: Only called by event callback (never by timer/poll).
+        """
         with self._lock:
+            # INV-FEED-NO-FEED-AFTER-END: Guard against feeding after session end
+            if self._session_ended:
+                self._logger.debug(
+                    "INV-FEED-NO-FEED-AFTER-END: Channel %s: Ignoring block_complete "
+                    "after session ended (reason=%s)",
+                    self.channel_id, self._session_end_reason
+                )
+                return
+
             if not self._started or not self._session:
                 return
+
+            # INV-FEED-EXACTLY-ONCE: Prevent duplicate feeds for same block
+            if block_id in self._fed_block_ids:
+                self._logger.warning(
+                    "INV-FEED-EXACTLY-ONCE: Channel %s: Duplicate completion for %s, ignoring",
+                    self.channel_id, block_id
+                )
+                return
+            self._fed_block_ids.add(block_id)
 
             self._logger.debug(
                 "Channel %s: Block %s completed, feeding next",
@@ -2826,11 +2866,32 @@ class BlockPlanProducer(Producer):
             self._session.feed(next_block)
 
     def _on_session_end(self, reason: str):
-        """Callback when session ends unexpectedly."""
+        """
+        Callback when session ends.
+
+        INV-FEED-NO-FEED-AFTER-END: Sets flag to prevent further feeding.
+        INV-FEED-SESSION-END-REASON: Logs the termination reason.
+        """
+        with self._lock:
+            self._session_ended = True
+            self._session_end_reason = reason
+
         self._logger.info(
-            "Channel %s: Session ended: %s",
+            "INV-FEED-SESSION-END-REASON: Channel %s: Session ended: %s",
             self.channel_id, reason
         )
+
+        # Handle specific termination reasons
+        if reason == "error":
+            self._logger.error(
+                "Channel %s: Session ended with error, halting feeding",
+                self.channel_id
+            )
+        elif reason == "lookahead_exhausted":
+            self._logger.info(
+                "Channel %s: Lookahead exhausted - no more blocks in schedule",
+                self.channel_id
+            )
 
     def play_content(self, content: ContentSegment) -> bool:
         """Not used in BlockPlan mode (blocks are fed instead)."""
