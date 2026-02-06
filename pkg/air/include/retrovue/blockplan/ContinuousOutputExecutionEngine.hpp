@@ -37,6 +37,7 @@ class BlockSource;
 class SourcePreloader;
 struct FrameFingerprint;
 struct BlockPlaybackSummary;
+struct BlockPlaybackProof;
 struct SeamTransitionLog;
 
 class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
@@ -59,6 +60,10 @@ class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
     // P3.3: Seam transition log (optional — test/diagnostics).
     // Fired at source swap or new block load after fence.
     std::function<void(const SeamTransitionLog&)> on_seam_transition;
+
+    // P3.3b: Playback proof — wanted vs showed comparison.
+    // Fired at fence, after on_block_summary.
+    std::function<void(const BlockPlaybackProof&)> on_playback_proof;
   };
 
   ContinuousOutputExecutionEngine(BlockPlanSessionContext* ctx,

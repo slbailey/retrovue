@@ -660,3 +660,65 @@ Seam transition (emitted at source swap or new block load):
 | TRACE-009 | FormatSeamTransitionOutput — format string matches contract |
 | TRACE-010 | RealMediaSummaryWithAssetIdentity — GTEST_SKIP if assets missing |
 | TRACE-011 | BlockAccumulatorUnitTest — direct unit test on aggregation logic |
+
+---
+
+## P3.3b — Playback Proof: Wanted vs Showed
+
+P3.3b extends the execution trace with a **proof layer** that pairs editorial
+intent (from `FedBlock`) with actual execution (from `BlockPlaybackSummary`) and
+renders a WANTED/SHOWED/VERDICT comparison per block.
+
+### Design
+
+At each block fence, the engine:
+1. Extracts **intent** from the active `FedBlock` (asset URIs, duration, expected frames)
+2. Pairs it with the **actual** `BlockPlaybackSummary` from the accumulator
+3. Determines a **verdict** by comparing the two
+4. Emits a `BlockPlaybackProof` via the `on_playback_proof` callback
+
+### BlockPlaybackIntent
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `block_id` | string | Block identity |
+| `expected_asset_uris` | vector | Asset URIs from FedBlock segments |
+| `expected_duration_ms` | int64 | end_utc_ms - start_utc_ms |
+| `expected_frames` | int64 | ceil(duration / frame_duration) |
+| `expected_start_offset_ms` | int64 | First segment's asset_start_offset_ms |
+
+### PlaybackProofVerdict
+
+| Verdict | Meaning |
+|---------|---------|
+| `FAITHFUL` | Correct asset(s), zero pad frames |
+| `PARTIAL_PAD` | Correct asset(s), some pad frames |
+| `ALL_PAD` | No real frames emitted (decoder never produced output) |
+| `ASSET_MISMATCH` | Observed asset URI not in expected set |
+
+### Log Format
+
+```
+[CONTINUOUS-PLAYBACK-PROOF] block_id=...
+  WANTED: asset=/foo.mp4 offset=0ms duration=5000ms frames=152
+  SHOWED: asset=/foo.mp4 range=0-4950ms frames=152 pad=0
+  VERDICT: FAITHFUL
+```
+
+### Engine Callback (P3.3b)
+
+| Callback | Description |
+|----------|-------------|
+| `on_playback_proof` | Optional. Fired at fence, after `on_block_summary`. |
+
+### Contract Tests (PlaybackTraceContractTests.cpp — P3.3b)
+
+| Test ID | Description |
+|---------|-------------|
+| PROOF-001 | ProofEmittedPerBlock — one proof per completed block |
+| PROOF-002 | AllPadVerdictForSyntheticBlock — unresolvable asset yields ALL_PAD |
+| PROOF-003 | IntentMatchesFedBlock — BuildIntent extracts correct fields |
+| PROOF-004 | DetermineVerdictLogic — all four verdict paths covered |
+| PROOF-005 | FormatPlaybackProofOutput — format contains WANTED/SHOWED/VERDICT |
+| PROOF-006 | ProofWantedFramesMatchesFence — wanted frames == showed frames |
+| PROOF-007 | RealMediaFaithfulVerdict — GTEST_SKIP if assets missing |
