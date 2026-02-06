@@ -176,6 +176,8 @@ namespace retrovue
       sink_config.width = state->width;
       sink_config.height = state->height;
       sink_config.fps = state->fps;
+      // INV-PTS-MONOTONIC: Initialize PTS offset for session continuity across blocks
+      sink_config.initial_pts_offset_90k = 0;
 
       // Create executor config with diagnostics
       blockplan::realtime::RealTimeBlockExecutor::Config exec_config;
@@ -183,6 +185,9 @@ namespace retrovue
       exec_config.diagnostic = [](const std::string& msg) {
         std::cout << msg << std::endl;
       };
+
+      // INV-PTS-MONOTONIC: Track accumulated PTS offset across blocks
+      int64_t session_pts_offset_90k = 0;
 
       // Main execution loop - process blocks from queue
       while (!state->stop_requested.load(std::memory_order_acquire))
@@ -252,9 +257,15 @@ namespace retrovue
           break;
         }
 
+        // INV-PTS-MONOTONIC: Update sink config with session PTS offset before execution
+        exec_config.sink.initial_pts_offset_90k = session_pts_offset_90k;
+
         // Create and run executor
         blockplan::realtime::RealTimeBlockExecutor executor(exec_config);
         auto result = executor.Execute(validated, join_result.params);
+
+        // INV-PTS-MONOTONIC: Capture PTS offset from completed block for next block
+        session_pts_offset_90k = result.final_pts_offset_90k;
 
         state->final_ct_ms = result.final_ct_ms;
         state->blocks_executed++;

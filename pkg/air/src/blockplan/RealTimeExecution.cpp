@@ -128,8 +128,9 @@ const RealAssetSource::AssetInfo* RealAssetSource::GetAsset(const std::string& u
 // =============================================================================
 
 RealTimeEncoderSink::RealTimeEncoderSink(const SinkConfig& config)
-    : config_(config) {
+    : config_(config), pts_offset_90k_(config.initial_pts_offset_90k) {
   // Allocate frame buffers for YUV420P
+  // INV-PTS-MONOTONIC: pts_offset_90k_ starts at initial value for session continuity
   const size_t y_size = static_cast<size_t>(config_.width * config_.height);
   const size_t uv_size = y_size / 4;
   y_buffer_.resize(y_size);
@@ -201,9 +202,14 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
   frame_count_++;
 
   // Handle block transitions (CT reset)
+  // INV-PTS-MONOTONIC: PTS must be monotonically increasing across the entire session
+  // INV-PTS-CONTINUOUS: PTS must advance by frame duration (no gaps)
+  // INV-CT-UNCHANGED: CT resets to 0 at each block boundary (this is correct)
+  // When CT drops, we're at a block boundary - accumulate the previous block's
+  // duration into the offset so PTS continues increasing.
   if (last_ct_ms_ >= 0 && frame.ct_ms < last_ct_ms_) {
-    // CT dropped - block transition, adjust PTS offset
-    pts_offset_90k_ = (last_ct_ms_ + kFrameDurationMs) * 90;
+    // CT dropped - block transition, ACCUMULATE offset (not assign!)
+    pts_offset_90k_ += (last_ct_ms_ + kFrameDurationMs) * 90;
   }
   last_ct_ms_ = frame.ct_ms;
 
@@ -420,6 +426,7 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
         return Result{
             Result::Code::kAssetError,
             0,
+            0,  // No PTS offset on error before sink initialized
             "Failed to probe asset: " + seg.asset_uri
         };
       }
@@ -432,6 +439,7 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     return Result{
         Result::Code::kEncoderError,
         0,
+        config_.sink.initial_pts_offset_90k,  // Preserve incoming offset on error
         "Failed to open encoder sink"
     };
   }
@@ -449,8 +457,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
       if (termination_requested_.load(std::memory_order_acquire)) {
+        int64_t final_pts_offset = sink_->FinalPtsOffset90k();
         sink_->Close();
-        return Result{Result::Code::kTerminated, 0, "Terminated during wait"};
+        return Result{Result::Code::kTerminated, 0, final_pts_offset, "Terminated during wait"};
       }
     }
   }
@@ -470,8 +479,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
   int32_t current_segment_index = join_params.start_segment_index;
   const Segment* current_segment = GetSegmentByIndex(plan, current_segment_index);
   if (!current_segment) {
+    int64_t final_pts_offset = sink_->FinalPtsOffset90k();
     sink_->Close();
-    return Result{Result::Code::kAssetError, ct_ms, "Invalid start segment"};
+    return Result{Result::Code::kAssetError, ct_ms, final_pts_offset, "Invalid start segment"};
   }
 
   // Get current segment boundary
@@ -486,10 +496,12 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
   // Asset state
   auto* current_asset = assets_.GetAsset(current_segment->asset_uri);
   if (!current_asset) {
+    int64_t final_pts_offset = sink_->FinalPtsOffset90k();
     sink_->Close();
     return Result{
         Result::Code::kAssetError,
         ct_ms,
+        final_pts_offset,
         "Asset not found: " + current_segment->asset_uri
     };
   }
@@ -508,8 +520,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
   while (true) {
     // Check termination
     if (termination_requested_.load(std::memory_order_acquire)) {
+      int64_t final_pts_offset = sink_->FinalPtsOffset90k();
       sink_->Close();
-      return Result{Result::Code::kTerminated, ct_ms, "Terminated"};
+      return Result{Result::Code::kTerminated, ct_ms, final_pts_offset, "Terminated"};
     }
 
     // =======================================================================
@@ -518,8 +531,10 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     // =======================================================================
     if (ct_ms >= block_duration_ms) {
       Diag("[Executor] Fence reached at CT=" + std::to_string(ct_ms));
+      // INV-PTS-MONOTONIC: Capture PTS offset before close for next block
+      int64_t final_pts_offset = sink_->FinalPtsOffset90k();
       sink_->Close();
-      return Result{Result::Code::kSuccess, ct_ms, ""};
+      return Result{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
     }
 
     // =======================================================================
@@ -531,8 +546,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
       const Segment* next_segment = GetSegmentByIndex(plan, next_segment_index);
 
       if (!next_segment) {
+        int64_t final_pts_offset = sink_->FinalPtsOffset90k();
         sink_->Close();
-        return Result{Result::Code::kSuccess, ct_ms, ""};
+        return Result{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
       }
 
       Diag("[Executor] Segment transition: " + std::to_string(current_segment_index) +
@@ -550,10 +566,12 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
 
       current_asset = assets_.GetAsset(current_segment->asset_uri);
       if (!current_asset) {
+        int64_t final_pts_offset = sink_->FinalPtsOffset90k();
         sink_->Close();
         return Result{
             Result::Code::kAssetError,
             ct_ms,
+            final_pts_offset,
             "Asset not found: " + current_segment->asset_uri
         };
       }
@@ -600,8 +618,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     // EMIT FRAME
     // =======================================================================
     if (!sink_->EmitFrame(frame)) {
+      int64_t final_pts_offset = sink_->FinalPtsOffset90k();
       sink_->Close();
-      return Result{Result::Code::kEncoderError, ct_ms, "Encoder error"};
+      return Result{Result::Code::kEncoderError, ct_ms, final_pts_offset, "Encoder error"};
     }
 
     // =======================================================================
@@ -630,8 +649,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     }
   }
 
+  int64_t final_pts_offset = sink_->FinalPtsOffset90k();
   sink_->Close();
-  return Result{Result::Code::kSuccess, ct_ms, ""};
+  return Result{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
 }
 
 }  // namespace retrovue::blockplan::realtime

@@ -327,6 +327,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ExecutorContractTests.cpp
   tests/contracts/BlockPlan/ExecutorDiagnosticHarness.cpp
   tests/contracts/BlockPlan/FeederContractTests.cpp
+  tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
