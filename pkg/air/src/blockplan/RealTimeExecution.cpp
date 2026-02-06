@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/decode/FFmpegDecoder.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 
@@ -152,6 +153,8 @@ bool RealTimeEncoderSink::Open() {
   enc_config.target_height = config_.height;
   enc_config.target_fps = config_.fps;
   enc_config.enable_audio = true;
+  enc_config.gop_size = 90;      // I-frame every 3 seconds (reduces encoding spikes)
+  enc_config.bitrate = 2000000;  // 2 Mbps (faster encoding)
 
   encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
 
@@ -207,22 +210,97 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
   // Compute PTS in 90kHz units
   int64_t pts_90k = frame.ct_ms * 90 + pts_offset_90k_;
 
-  // Generate frame data (black for both pad and real frames for now)
-  // TODO: For real frames, decode from asset using FileProducer
-  GenerateBlackFrame(y_buffer_.data(), u_buffer_.data(), v_buffer_.data());
-
-  // Create Frame struct for encoder
-  // YUV420P format: Y plane + U plane + V plane
   const size_t y_size = static_cast<size_t>(config_.width * config_.height);
   const size_t uv_size = y_size / 4;
 
   buffer::Frame video_frame;
   video_frame.width = config_.width;
   video_frame.height = config_.height;
-  video_frame.data.resize(y_size + uv_size * 2);
-  std::memcpy(video_frame.data.data(), y_buffer_.data(), y_size);
-  std::memcpy(video_frame.data.data() + y_size, u_buffer_.data(), uv_size);
-  std::memcpy(video_frame.data.data() + y_size + uv_size, v_buffer_.data(), uv_size);
+
+  bool decoded_ok = false;
+
+  // For pad frames or if asset_uri is empty, generate black
+  if (frame.is_pad || frame.asset_uri.empty()) {
+    GenerateBlackFrame(y_buffer_.data(), u_buffer_.data(), v_buffer_.data());
+  } else {
+    // Try to decode real frame from asset
+    // Check if we need to open/seek the decoder
+    bool need_seek = false;
+
+    if (!decoder_ || current_asset_uri_ != frame.asset_uri) {
+      // Different asset - need to open new decoder
+      decoder_.reset();
+      current_asset_uri_ = frame.asset_uri;
+
+      decode::DecoderConfig dec_config;
+      dec_config.input_uri = frame.asset_uri;
+      dec_config.target_width = config_.width;
+      dec_config.target_height = config_.height;
+
+      decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
+      if (!decoder_->Open()) {
+        std::cerr << "[RealTimeEncoderSink] Failed to open decoder for: " << frame.asset_uri << std::endl;
+        decoder_.reset();
+        current_asset_uri_.clear();
+      } else {
+        need_seek = true;
+        next_frame_offset_ms_ = 0;
+      }
+    }
+
+    // Check if we need to seek (new asset or discontinuous offset)
+    if (decoder_ && !need_seek) {
+      // If the requested offset is significantly different from where we expect to be,
+      // we need to seek
+      int64_t expected_offset = next_frame_offset_ms_;
+      int64_t delta = frame.asset_offset_ms - expected_offset;
+      if (delta < -kFrameDurationMs || delta > kFrameDurationMs * 2) {
+        need_seek = true;
+      }
+    }
+
+    if (decoder_ && need_seek) {
+      if (!decoder_->SeekToMs(frame.asset_offset_ms)) {
+        std::cerr << "[RealTimeEncoderSink] Seek failed to " << frame.asset_offset_ms << "ms" << std::endl;
+      }
+      next_frame_offset_ms_ = frame.asset_offset_ms;
+    }
+
+    // Decode the frame
+    if (decoder_) {
+      buffer::Frame decoded_frame;
+      if (decoder_->DecodeFrameToBuffer(decoded_frame)) {
+        // Copy decoded frame data to our video_frame
+        video_frame = std::move(decoded_frame);
+        decoded_ok = true;
+        next_frame_offset_ms_ += kFrameDurationMs;
+      } else if (decoder_->IsEOF()) {
+        // Reached end of file - loop back to start
+        decoder_->SeekToMs(0);
+        next_frame_offset_ms_ = 0;
+        if (decoder_->DecodeFrameToBuffer(decoded_frame)) {
+          video_frame = std::move(decoded_frame);
+          decoded_ok = true;
+          next_frame_offset_ms_ += kFrameDurationMs;
+        }
+      }
+    }
+
+    // Fall back to black if decode failed
+    if (!decoded_ok) {
+      GenerateBlackFrame(y_buffer_.data(), u_buffer_.data(), v_buffer_.data());
+    }
+  }
+
+  // If we didn't get a decoded frame, build from buffers
+  if (!decoded_ok) {
+    video_frame.data.resize(y_size + uv_size * 2);
+    std::memcpy(video_frame.data.data(), y_buffer_.data(), y_size);
+    std::memcpy(video_frame.data.data() + y_size, u_buffer_.data(), uv_size);
+    std::memcpy(video_frame.data.data() + y_size + uv_size, v_buffer_.data(), uv_size);
+    video_frame.width = config_.width;
+    video_frame.height = config_.height;
+  }
 
   video_frame.metadata.pts = pts_90k;
   video_frame.metadata.dts = pts_90k;
@@ -230,10 +308,40 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
   video_frame.metadata.asset_uri = frame.asset_uri;
   video_frame.metadata.has_ct = true;
 
-  // Encode the frame
+  // Encode the video frame
   if (!encoder_->encodeFrame(video_frame, pts_90k)) {
     std::cerr << "[RealTimeEncoderSink] encodeFrame failed at CT=" << frame.ct_ms << std::endl;
     // Continue even on failure - don't break the stream
+  }
+
+  // Phase 8.9: Encode pending audio frames from the decoder
+  // Limit to 2 audio frames per video frame to stay within real-time budget.
+  // (Video ~33ms, AAC audio ~21ms, so steady-state is ~1.5 audio/video)
+  if (decoder_ && decoded_ok) {
+    buffer::AudioFrame audio_frame;
+    int audio_frames_this_call = 0;
+    constexpr int kMaxAudioFramesPerVideoFrame = 2;
+
+    while (audio_frames_this_call < kMaxAudioFramesPerVideoFrame &&
+           decoder_->GetPendingAudioFrame(audio_frame)) {
+      // Convert audio PTS from microseconds to 90kHz
+      // audio_frame.pts_us is relative to asset start
+      // We need to align it with video PTS by adding the same offset
+      int64_t audio_pts_90k = pts_offset_90k_ + (audio_frame.pts_us * 90 / 1000);
+
+      // Disable silence injection since we have real audio
+      if (!audio_started_) {
+        encoder_->SetAudioLivenessEnabled(false);
+        audio_started_ = true;
+        std::cout << "[RealTimeEncoderSink] Real audio started at CT=" << frame.ct_ms << std::endl;
+      }
+
+      if (!encoder_->encodeAudioFrame(audio_frame, audio_pts_90k, false)) {
+        std::cerr << "[RealTimeEncoderSink] encodeAudioFrame failed" << std::endl;
+        // Continue even on failure
+      }
+      audio_frames_this_call++;
+    }
   }
 
   return true;
@@ -454,6 +562,21 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     }
 
     // =======================================================================
+    // REAL-TIME PACING: Wait until frame deadline before starting work
+    // This ensures writes happen at consistent intervals
+    // =======================================================================
+    if (!deadline_initialized_) {
+      next_frame_deadline_ = std::chrono::steady_clock::now();
+      deadline_initialized_ = true;
+    } else {
+      // Wait until deadline
+      auto now = std::chrono::steady_clock::now();
+      if (now < next_frame_deadline_) {
+        std::this_thread::sleep_until(next_frame_deadline_);
+      }
+    }
+
+    // =======================================================================
     // COMPUTE FRAME TO EMIT
     // =======================================================================
     FrameMetadata frame;
@@ -491,8 +614,14 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
       asset_offset_ms += kFrameDurationMs;
     }
 
-    // Real-time pacing
-    clock_.AdvanceMs(kFrameDurationMs);
+    // Advance deadline for next frame
+    next_frame_deadline_ += std::chrono::milliseconds(kFrameDurationMs);
+
+    // If we're more than one frame behind, reset deadline to prevent catching up
+    auto now = std::chrono::steady_clock::now();
+    if (now > next_frame_deadline_ + std::chrono::milliseconds(kFrameDurationMs)) {
+      next_frame_deadline_ = now + std::chrono::milliseconds(kFrameDurationMs);
+    }
 
     // Progress logging every second
     if (ct_ms % 1000 < kFrameDurationMs) {

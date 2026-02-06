@@ -411,14 +411,27 @@ class ChannelStream:
                         )
                 _last_recv_return_ns = _recv_exit_ns
 
-                # Debug: log first 16 bytes once per connection (verify TS sync 0x47, not HELLO)
+                # FIRST-ON-AIR: Verify first byte is 0x47 (MPEG-TS sync byte)
                 if not self._first_chunk_logged and len(chunk) >= 16:
-                    self._logger.info(
-                        "First TS chunk for channel %s (%d bytes, starts 0x47): %s",
-                        self.channel_id,
-                        len(chunk),
-                        chunk[:16].hex(),
-                    )
+                    first_byte = chunk[0]
+                    is_valid_ts = first_byte == 0x47
+                    if is_valid_ts:
+                        self._logger.info(
+                            "FIRST-ON-AIR: Channel %s: First TS chunk verified "
+                            "(0x47 sync byte present, %d bytes): %s",
+                            self.channel_id,
+                            len(chunk),
+                            chunk[:16].hex(),
+                        )
+                    else:
+                        self._logger.error(
+                            "FIRST-ON-AIR: Channel %s: Invalid TS stream! "
+                            "Expected 0x47 sync byte, got 0x%02x (%d bytes): %s",
+                            self.channel_id,
+                            first_byte,
+                            len(chunk),
+                            chunk[:16].hex(),
+                        )
                     self._first_chunk_logged = True
             except IOError as e:
                 # Phase 8.7: no reconnect loops - read error means stop

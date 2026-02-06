@@ -140,7 +140,10 @@ class EncoderPipeline {
 
   // True only after avcodec_open2 succeeds; avoid flush in close() when codec never opened.
   bool codec_opened_;
-  
+
+  // True if using NVENC hardware encoder, false for libx264 software
+  bool using_nvenc_;
+
   // Muxer options for PCR cadence configuration (FE-019)
   AVDictionary* muxer_opts_;
   

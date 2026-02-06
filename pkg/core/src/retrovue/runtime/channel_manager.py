@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import math
 import json
+import queue
+import socket
 import sys
 import threading
 import time
@@ -2627,6 +2629,11 @@ class BlockPlanProducer(Producer):
         self._socket_path: Path | None = None
         self._stream_endpoint = f"/channel/{channel_id}.ts"
 
+        # Phase 0: UDS listener for AIR connection (Core is server, AIR is client)
+        self._uds_server_socket: socket.socket | None = None
+        self._reader_socket_queue: queue.Queue[socket.socket] = queue.Queue()
+        self._accept_thread: threading.Thread | None = None
+
         # Program format for encoding (extracted from ChannelConfig.program_format)
         pf = self.channel_config.program_format
         self._program_format = {
@@ -2676,6 +2683,36 @@ class BlockPlanProducer(Producer):
                 self._socket_path = Path(f"/tmp/retrovue/air/{self.channel_id}.sock")
                 self._socket_path.parent.mkdir(parents=True, exist_ok=True)
 
+                # Phase 0: Set up UDS listener BEFORE starting AIR
+                # Core is the server, AIR is the client (connects via AttachStream)
+                if self._socket_path.exists():
+                    self._socket_path.unlink()
+                self._uds_server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self._uds_server_socket.bind(str(self._socket_path))
+                self._uds_server_socket.listen(1)
+
+                # Start accept thread (daemon so it doesn't block shutdown)
+                def accept_air_connection():
+                    try:
+                        conn, _ = self._uds_server_socket.accept()
+                        self._reader_socket_queue.put(conn)
+                        self._logger.info(
+                            "FIRST-ON-AIR: Channel %s: AIR connected to UDS socket",
+                            self.channel_id
+                        )
+                    except Exception as e:
+                        if not self._started:
+                            return  # Expected during cleanup
+                        self._logger.error(
+                            "Channel %s: UDS accept error: %s",
+                            self.channel_id, e
+                        )
+
+                self._accept_thread = threading.Thread(
+                    target=accept_air_connection, daemon=True
+                )
+                self._accept_thread.start()
+
                 # Create PlayoutSession
                 self._session = PlayoutSession(
                     channel_id=self.channel_id,
@@ -2692,14 +2729,14 @@ class BlockPlanProducer(Producer):
                     raise RuntimeError("PlayoutSession.start() failed")
 
                 # Generate and seed initial 2 blocks
-                block_a = self._generate_block(playout_plan, 0)
-                block_b = self._generate_block(playout_plan, 1)
+                block_a = self._generate_next_block(playout_plan)
+                block_b = self._generate_next_block(playout_plan)
 
                 if not self._session.seed(block_a, block_b):
                     raise RuntimeError("PlayoutSession.seed() failed")
 
                 # Feed a third block to maintain 2-block lookahead
-                block_c = self._generate_block(playout_plan, 2)
+                block_c = self._generate_next_block(playout_plan)
                 self._session.feed(block_c)
 
                 self._started = True
@@ -2771,6 +2808,22 @@ class BlockPlanProducer(Producer):
                 )
             self._session = None
 
+        # Close UDS server socket
+        if self._uds_server_socket:
+            try:
+                self._uds_server_socket.close()
+            except Exception:
+                pass
+            self._uds_server_socket = None
+
+        # Clear reader socket queue (drain any remaining sockets)
+        while not self._reader_socket_queue.empty():
+            try:
+                sock = self._reader_socket_queue.get_nowait()
+                sock.close()
+            except Exception:
+                pass
+
         # Reset block generation state for next start
         self._block_index = 0
         self._next_block_start_ms = 0
@@ -2780,21 +2833,20 @@ class BlockPlanProducer(Producer):
         self._session_end_reason = None
         self._fed_block_ids.clear()
 
-    def _generate_block(
+    def _generate_next_block(
         self,
         playout_plan: list[dict[str, Any]],
-        block_offset: int,
     ) -> "BlockPlan":
         """
-        Generate a BlockPlan from the playout plan.
+        Generate the next BlockPlan and advance state.
 
         For now, generates fixed-duration blocks from the first segment.
         Future: proper segment slicing based on schedule.
         """
         from .playout_session import BlockPlan
 
-        block_index = self._block_index + block_offset
-        start_ms = self._next_block_start_ms + (block_offset * self._block_duration_ms)
+        block_index = self._block_index
+        start_ms = self._next_block_start_ms
         end_ms = start_ms + self._block_duration_ms
 
         # Get asset from playout plan
@@ -2818,9 +2870,8 @@ class BlockPlanProducer(Producer):
         )
 
         # Advance state for next generation
-        if block_offset == 0:
-            self._block_index += 1
-            self._next_block_start_ms = end_ms
+        self._block_index += 1
+        self._next_block_start_ms = end_ms
 
         return block
 
@@ -2862,7 +2913,7 @@ class BlockPlanProducer(Producer):
             # Generate and feed next block
             # Note: Using empty playout_plan - real implementation would
             # fetch fresh schedule data
-            next_block = self._generate_block([], 0)
+            next_block = self._generate_next_block([])
             self._session.feed(next_block)
 
     def _on_session_end(self, reason: str):
@@ -2934,5 +2985,15 @@ class BlockPlanProducer(Producer):
         """Return the UDS socket path for TS output."""
         with self._lock:
             return self._socket_path
+
+    @property
+    def socket_path(self) -> Path | None:
+        """UDS socket path (for _get_or_create_fanout_buffer compatibility)."""
+        return self._socket_path
+
+    @property
+    def reader_socket_queue(self) -> queue.Queue[socket.socket]:
+        """Queue containing accepted AIR socket (for _get_or_create_fanout_buffer)."""
+        return self._reader_socket_queue
 
 

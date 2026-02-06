@@ -205,6 +205,53 @@ void FFmpegDecoder::Close() {
   first_keyframe_seen_ = false;
 }
 
+bool FFmpegDecoder::SeekToMs(int64_t position_ms) {
+  if (!format_ctx_ || video_stream_index_ < 0) {
+    return false;
+  }
+
+  // Convert milliseconds to stream time base
+  AVStream* stream = format_ctx_->streams[video_stream_index_];
+  int64_t timestamp = av_rescale_q(position_ms * 1000,
+                                    {1, AV_TIME_BASE},
+                                    stream->time_base);
+
+  // Seek to keyframe before the target position
+  int ret = av_seek_frame(format_ctx_, video_stream_index_, timestamp,
+                          AVSEEK_FLAG_BACKWARD);
+  if (ret < 0) {
+    std::cerr << "[FFmpegDecoder] Seek failed to " << position_ms << "ms" << std::endl;
+    return false;
+  }
+
+  // Flush decoder buffers
+  if (codec_ctx_) {
+    avcodec_flush_buffers(codec_ctx_);
+  }
+  if (audio_codec_ctx_) {
+    avcodec_flush_buffers(audio_codec_ctx_);
+  }
+
+  // Reset EOF flags
+  eof_reached_ = false;
+  audio_eof_reached_ = false;
+  first_keyframe_seen_ = false;
+
+  // Clear pending audio frames
+  while (!pending_audio_frames_.empty()) {
+    pending_audio_frames_.pop();
+  }
+
+  return true;
+}
+
+bool FFmpegDecoder::DecodeFrameToBuffer(buffer::Frame& output_frame) {
+  if (!IsOpen() || eof_reached_) {
+    return false;
+  }
+  return ReadAndDecodeFrame(output_frame);
+}
+
 int FFmpegDecoder::GetVideoWidth() const {
   if (!codec_ctx_) return 0;
   return codec_ctx_->width;
@@ -733,12 +780,21 @@ bool FFmpegDecoder::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& out
   return true;
 }
 
+bool FFmpegDecoder::GetPendingAudioFrame(buffer::AudioFrame& output_frame) {
+  if (pending_audio_frames_.empty()) {
+    return false;
+  }
+  output_frame = std::move(pending_audio_frames_.front());
+  pending_audio_frames_.pop();
+  return true;
+}
+
 void FFmpegDecoder::UpdateStats(double decode_time_ms) {
   stats_.frames_decoded++;
 
   // Update average decode time (exponential moving average)
   const double alpha = 0.1;
-  stats_.average_decode_time_ms = 
+  stats_.average_decode_time_ms =
       alpha * decode_time_ms + (1.0 - alpha) * stats_.average_decode_time_ms;
 
   // Calculate current FPS

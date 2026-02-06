@@ -101,6 +101,22 @@ class FFmpegDecoder {
   // Closes the decoder and releases resources.
   void Close();
 
+  // Seek to position in milliseconds.
+  // Seeks to nearest keyframe before the target position.
+  bool SeekToMs(int64_t position_ms);
+
+  // Decode next frame directly to Frame struct (no ring buffer).
+  // Used by BlockPlan executor for frame-by-frame decoding.
+  bool DecodeFrameToBuffer(buffer::Frame& output_frame);
+
+  // Check if there are pending audio frames from video decoding.
+  // Audio frames are automatically decoded when video packets are read.
+  bool HasPendingAudioFrame() const { return !pending_audio_frames_.empty(); }
+
+  // Get next pending audio frame (already resampled to house format).
+  // Returns false if no pending audio frames.
+  bool GetPendingAudioFrame(buffer::AudioFrame& output_frame);
+
   // Returns true if decoder is open and ready.
   bool IsOpen() const { return format_ctx_ != nullptr; }
 
