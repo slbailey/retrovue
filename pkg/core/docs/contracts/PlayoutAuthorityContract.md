@@ -103,6 +103,94 @@ path has sufficient operational history.
 
 ---
 
+## CONTINUOUS_OUTPUT Execution Mode (P3.0 + P3.1a + P3.1b)
+
+The `kContinuousOutput` mode emits a continuous frame stream at fixed cadence.
+Unlike SERIAL_BLOCK, frames are emitted even when no block content is available
+(pad frames fill the gap).
+
+### Differences from SERIAL_BLOCK
+
+| Aspect | SERIAL_BLOCK | CONTINUOUS_OUTPUT |
+|--------|--------------|-------------------|
+| Output between blocks | No frames | Pad frames |
+| Frame timing | Per-block deadline | Session-global OutputClock |
+| PTS source | CT-based (reset per block) | Session-frame-index (N * 3000) |
+| Encoder lifecycle | Session-long | Session-long |
+| Frame count per block | floor(duration / frame_dur) | ceil(duration / frame_dur) |
+| Deterministic fence | CT >= block_duration | ticks >= frames_per_block |
+
+### Tick Ownership & BlockSource
+
+- **Engine owns time**: `source_ticks_` counter incremented per tick in the main loop
+- **BlockSource reacts**: EMPTY → READY (AssignBlock), decodes on demand, READY → EMPTY (Reset)
+- **Fence is engine-side**: `source_ticks_ >= FramesPerBlock()` → block complete
+- Decode failure → pad frame, tick still counts toward fence
+
+### AssignBlock Constraint
+
+`AssignBlock()` is synchronous and may stall (probe + open + seek).
+`TryLoadActiveBlock()` (which calls `AssignBlock()`) is only invoked when the
+source is EMPTY — outside the clock-wait/frame-emission path.  It must never
+be moved into the clock wait section, the frame emission path, or any code
+that assumes it completes before the next tick.
+
+### Preserved Guarantees
+
+- INV-ONE-ENCODER-PER-SESSION: Encoder opened once, closed once
+- Monotonic PTS: PTS(N) = N * frame_duration_90k
+- Session-wide audio PTS: samples_emitted * 90000 / 48000
+
+### P3.1b: A/B Source Swap with Background Preloading
+
+P3.1b extends the ContinuousOutput engine with a `SourcePreloader` and `next_source_`
+to enable gapless block transitions.
+
+#### Design
+
+- **SourcePreloader**: Background thread that creates a `BlockSource` and calls
+  `AssignBlock()` off the tick thread. Produces a fully READY source that the
+  engine can adopt via pointer swap.
+- **next_source_**: A pre-loaded `BlockSource` held by the engine. At the block
+  fence, if `next_source_` is READY, the engine swaps it into `active_source_`
+  without stalling the tick loop.
+- **Fence swap algorithm**: At `source_ticks_ >= FramesPerBlock()`:
+  1. Fire `on_block_completed` callback
+  2. Check `next_source_` — if READY, swap to active (source_swap_count++)
+  3. If not, check `preloader_->TakeSource()` — if READY, swap
+  4. If neither available, reset active to EMPTY, enter pad mode (`past_fence = true`)
+  5. Kick off preload for following block
+
+#### Safety Rules
+
+1. `AssignBlock()` is NEVER called from the tick window — only from `SourcePreloader::Worker()`
+   (background thread) or `TryLoadActiveBlock()` (outside tick window, fallback path)
+2. `SourcePreloader` is cancel-safe: `Cancel()` joins the worker thread and discards result
+3. `Stop()` cancels the preloader before joining the engine thread (no deadlock)
+4. `next_source_` is only accessed from the engine thread (no cross-thread contention)
+
+#### Metrics (P3.1b)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `air_continuous_source_swap_count` | counter | Source swaps at block fence |
+| `air_continuous_next_preload_started_total` | counter | Preloads kicked off |
+| `air_continuous_next_preload_ready_total` | counter | Preloads ready at consumption |
+| `air_continuous_next_preload_failed_total` | counter | Preloads failed or not ready |
+| `air_continuous_fence_pad_frames_total` | counter | Pad frames after fence (next not ready) |
+
+#### Contract Tests (P3.1b)
+
+| Test ID | Description |
+|---------|-------------|
+| CONT-SWAP-001 | Source swap count increments for back-to-back blocks |
+| CONT-SWAP-002 | No deadlock when Stop() called during preload |
+| CONT-SWAP-003 | Delayed preload does not stall engine (delay hook test) |
+| CONT-SWAP-004 | AssignBlock runs on background thread (not tick thread) |
+| CONT-SWAP-005 | PTS monotonic across source swaps (regression check) |
+
+---
+
 ## Why SERIAL_BLOCK Exists
 
 The `SERIAL_BLOCK` execution mode (`PlayoutExecutionMode::kSerialBlock`)
@@ -349,3 +437,153 @@ The `SerialBlockMetricsTests` suite verifies:
 - Encoder open/close counts are both 1 (INV-ONE-ENCODER-PER-SESSION)
 - `session_active` gauge reflects running/stopped state
 - `FrameCadenceMetrics` default-constructs to zero in `Result`
+
+---
+
+## P2 – Serial Block Preloading
+
+### Purpose
+
+Reduce block-boundary stalls by preloading the next block's heavy resources
+(asset probe + decoder open + seek) while the current block is executing.
+
+This is **stall reduction**, not stall elimination. The execution model
+remains SERIAL_BLOCK. This phase is a stepping stone toward
+ContinuousOutput.
+
+### What Stalls Are Reduced
+
+| Stall Source | Typical Cost | Preloaded? |
+|---|---|---|
+| Asset probe (avformat_open_input + find_stream_info) | 8–16ms | Yes |
+| Redundant executor-level re-probe | 5–8ms | Yes |
+| Decoder open (FFmpegDecoder::Open) | 5–6ms | Yes |
+| SeekPreciseToMs (preroll to offset) | 0–42ms | Yes |
+| Block validation + join computation | <1ms | No (CPU-only, trivial) |
+| Encoder lifecycle | 0ms | N/A (session-long, unchanged) |
+
+### What Is NOT Changed
+
+- **CT resets per block** — unchanged
+- **Frame count** — deterministic from block_duration, unaffected by preload
+- **PTS continuity** — CT-based, unaffected
+- **Encoder lifecycle** — session-long, one open/close per session
+- **Execution model** — Block N completes entirely before Block N+1 begins
+- **Pad frame behavior** — no pad frames introduced by preloading
+
+### Design
+
+**BlockPreloadContext**: Lightweight struct holding pre-probed assets and
+optionally a pre-opened, pre-seeked decoder. No timing logic, no encoder
+references.
+
+**BlockPreloader**: Background thread that probes assets and optionally
+opens a decoder for the next block. Runs during the current block's
+~5-second execution, so it has ample time. Cancel-safe via atomic flag
+checked between heavy operations.
+
+**Integration**: The engine peeks at the next block in the queue before
+calling `Execute()`. If a preload result is available and matches the
+current block_id, it is consumed. Otherwise, the engine falls back to
+the synchronous probe/open behavior.
+
+**Decoder handoff**: The preloaded decoder is installed in the sink via
+`InstallPreloadedDecoder()`. If the asset URI or seek offset don't match
+the first frame, the sink's existing logic detects the mismatch and
+re-seeks (graceful fallback).
+
+### Safety Rules
+
+1. Preload must respect `Stop()` immediately (cancel_requested_ atomic)
+2. Decoder ownership transfers via `std::unique_ptr` — no leaks, no double-close
+3. No shared mutable decoder across blocks
+4. Encoder is unchanged and remains session-long
+5. Stale preloads (wrong block_id) are discarded, not used
+
+### Instrumentation
+
+| Metric | Type | Description |
+|---|---|---|
+| `preload_attempted_total` | counter | Times preload was started |
+| `preload_ready_at_boundary_total` | counter | Times preload was ready when needed |
+| `preload_fallback_total` | counter | Times fell back to sync probe |
+| `preload_probe_max_us` | gauge | Worst preload asset probe time |
+| `preload_probe_mean_us` | gauge | Mean preload asset probe time |
+| `preload_decoder_open_max_us` | gauge | Worst preload decoder open time |
+| `preload_seek_max_us` | gauge | Worst preload seek time |
+
+Per-block log line: `[METRIC] preload_hit block_id=... probe_us=... decoder_ready=...`
+
+### Contract Tests (BlockPreloadContractTests.cpp)
+
+| Test ID | Description |
+|---|---|
+| PRELOAD-001 | Cancel without Start is safe |
+| PRELOAD-002 | TakeIfReady returns nullptr when no preload started |
+| PRELOAD-003 | Cancel interrupts in-progress preload |
+| PRELOAD-004 | Destructor cleans up without hanging |
+| PRELOAD-005 | StartPreload cancels previous preload |
+| PRELOAD-006 | Stale preload context is discarded |
+| PRELOAD-007 | Default BlockPreloadContext state is safe |
+| PRELOAD-008 | Engine Stop cancels preloader (no hang) |
+| PRELOAD-009 | Preload metrics initialized to zero |
+| PRELOAD-010 | Frame count deterministic (baseline) |
+| PRELOAD-011 | Frame count identical with mid-asset offset |
+| PRELOAD-012 | Frame count identical for different assets |
+| PRELOAD-013 | Prometheus text includes preload metrics |
+
+---
+
+## P3.2 — Seam Proof: Real-Media Boundary Verification
+
+P3.2 adds verification infrastructure to **prove** seamless block transitions
+by fingerprinting frames at the encode boundary and asserting zero-pad gaps.
+
+### Design
+
+**FrameFingerprint**: Per-frame record emitted via optional `on_frame_emitted`
+callback in `ContinuousOutputExecutionEngine::Callbacks`. Contains:
+- `session_frame_index`: Global frame counter
+- `is_pad`: Whether this was a pad frame
+- `active_block_id`: Block ID active at emission time
+- `asset_uri` / `asset_offset_ms`: Source metadata (from BlockSource::FrameData)
+- `y_crc32`: CRC32 of the first 4096 bytes of the Y plane
+
+**BoundaryReport**: Captures the last 5 frames of block A and first 5 frames
+of block B around a fence transition. Reports `pad_frames_in_window` — the
+count of pad frames in the 10-frame window around the boundary.
+
+**CRC32YPlane**: Uses zlib `crc32()` on the first `kFingerprintYBytes` (4096)
+bytes of Y plane data. Returns 0 for null/empty data (pad frames).
+
+### BlockSource FrameData Extension
+
+`BlockSource::FrameData` carries `asset_uri` and `block_ct_ms` fields populated
+in `TryGetFrame()`. The `block_ct_ms` value is captured before the internal
+position advance, representing the content time at the start of the frame.
+
+### Engine Integration
+
+- `on_frame_emitted` callback fires after every frame (real or pad), zero cost
+  when not wired
+- `SetPreloaderDelayHook()` forwards to `SourcePreloader::SetDelayHook()` for
+  test injection of preload delays
+- Fingerprint emission occurs at the encode boundary, after the frame is
+  encoded but before fence check
+
+### Standalone Verify Harness
+
+`retrovue_air_seam_verify` is a standalone executable that accepts two blocks
+via CLI args, runs them through `ContinuousOutputExecutionEngine`, collects
+fingerprints, builds a `BoundaryReport`, and asserts seamless transitions.
+
+### Contract Tests (SeamProofContractTests.cpp)
+
+| Test ID | Description |
+|---------|-------------|
+| SEAM-PROOF-001 | PreloadSuccessZeroFencePad — instant preload yields zero fence pad |
+| SEAM-PROOF-002 | PreloadDelayerCausesFencePad — 2s delay hook causes fence pad > 0 |
+| SEAM-PROOF-003 | FingerprintCallbackFiresEveryFrame — callback count matches metric |
+| SEAM-PROOF-004 | FrameDataCarriesMetadata — FrameData has asset_uri/block_ct_ms |
+| SEAM-PROOF-005 | RealMediaBoundarySeamless — GTEST_SKIP if assets missing |
+| SEAM-PROOF-006 | BoundaryReportGeneration — unit test on BuildBoundaryReport |

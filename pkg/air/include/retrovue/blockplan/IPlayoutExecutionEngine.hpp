@@ -15,10 +15,8 @@ namespace retrovue::blockplan {
 // Does NOT expose timing, clocks, or content logic.
 //
 // Current implementations:
-//   - SerialBlockExecutionEngine (kSerialBlock) — the only implemented engine
-//
-// Future implementations:
-//   - ContinuousOutputEngine (kContinuousOutput) — placeholder, not implemented
+//   - SerialBlockExecutionEngine (kSerialBlock)
+//   - ContinuousOutputExecutionEngine (kContinuousOutput) — P3.0 pad-only
 // =============================================================================
 
 class IPlayoutExecutionEngine {

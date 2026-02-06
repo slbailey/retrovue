@@ -177,29 +177,29 @@ class FFmpegDecoder {
   DecoderStats stats_;
 
   // FFmpeg contexts (opaque pointers)
-  AVFormatContext* format_ctx_;
-  AVCodecContext* codec_ctx_;
-  AVCodecContext* audio_codec_ctx_;
-  AVFrame* frame_;
-  AVFrame* scaled_frame_;
-  AVFrame* audio_frame_;
-  AVPacket* packet_;
-  SwsContext* sws_ctx_;
-  ::SwrContext* swr_ctx_;  // Audio resampler (FFmpeg type, global scope)
+  AVFormatContext* format_ctx_ = nullptr;
+  AVCodecContext* codec_ctx_ = nullptr;
+  AVCodecContext* audio_codec_ctx_ = nullptr;
+  AVFrame* frame_ = nullptr;
+  AVFrame* scaled_frame_ = nullptr;
+  AVFrame* audio_frame_ = nullptr;
+  AVPacket* packet_ = nullptr;
+  SwsContext* sws_ctx_ = nullptr;
+  ::SwrContext* swr_ctx_ = nullptr;  // Audio resampler (FFmpeg type, global scope)
 
-  int video_stream_index_;
-  int audio_stream_index_;
-  bool eof_reached_;
-  bool audio_eof_reached_;
+  int video_stream_index_ = -1;
+  int audio_stream_index_ = -1;
+  bool eof_reached_ = false;
+  bool audio_eof_reached_ = false;
 
   // Skip pre-keyframe frames to avoid scaling artifacts
   bool first_keyframe_seen_;
   
   // Timing
-  int64_t start_time_;
-  double time_base_;
-  int64_t audio_start_time_;
-  double audio_time_base_;
+  int64_t start_time_ = 0;
+  double time_base_ = 0.0;
+  int64_t audio_start_time_ = 0;
+  double audio_time_base_ = 0.0;
 
   // Pending frame from SeekPreciseToMs() preroll
   bool has_pending_frame_ = false;
