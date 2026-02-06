@@ -572,12 +572,15 @@ class PlayoutSession:
 
         if self._state.air_process:
             try:
+                logger.info(f"[PlayoutSession:{self.channel_id}] Terminating AIR subprocess (pid={self._state.air_process.pid})")
                 self._state.air_process.terminate()
                 self._state.air_process.wait(timeout=5.0)
+                logger.info(f"[PlayoutSession:{self.channel_id}] FIRST-ON-AIR: AIR terminated cleanly")
             except subprocess.TimeoutExpired:
+                logger.warning(f"[PlayoutSession:{self.channel_id}] AIR did not exit gracefully, killing")
                 self._state.air_process.kill()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[PlayoutSession:{self.channel_id}] AIR termination error: {e}")
             self._state.air_process = None
 
     @property

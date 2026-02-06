@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/decode/FFmpegDecoder.h"
 
 // Forward declarations
 namespace retrovue::playout_sinks::mpegts {
@@ -152,6 +153,16 @@ class RealTimeEncoderSink {
   std::vector<uint8_t> y_buffer_;
   std::vector<uint8_t> u_buffer_;
   std::vector<uint8_t> v_buffer_;
+
+  // Video decoder for real frame data
+  std::unique_ptr<decode::FFmpegDecoder> decoder_;
+  std::string current_asset_uri_;
+  int64_t current_asset_offset_ms_ = -1;
+  int64_t next_frame_offset_ms_ = 0;
+  static constexpr int64_t kFrameDurationMs = 33;  // ~30fps
+
+  // Audio state: track when real audio starts to disable silence injection
+  bool audio_started_ = false;
 };
 
 // =============================================================================
@@ -208,6 +219,10 @@ class RealTimeBlockExecutor {
 
   // Emit diagnostic message
   void Diag(const std::string& msg);
+
+  // Pacing: use absolute deadline to maintain consistent frame rate
+  std::chrono::steady_clock::time_point next_frame_deadline_;
+  bool deadline_initialized_ = false;
 };
 
 }  // namespace retrovue::blockplan::realtime

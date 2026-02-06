@@ -56,6 +56,7 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       sws_ctx_valid_(false),
       header_written_(false),
       codec_opened_(false),
+      using_nvenc_(false),
       muxer_opts_(nullptr),
       last_video_mux_dts_(AV_NOPTS_VALUE),
       last_video_mux_pts_(AV_NOPTS_VALUE),
@@ -105,11 +106,18 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     return true;
   }
 
-  // All-or-nothing: require libx264 so open() fails before allocating when encoder unavailable.
-  const AVCodec* codec = avcodec_find_encoder_by_name("libx264");
-  if (!codec) {
-    std::cerr << "[EncoderPipeline] libx264 not found (required for Phase 8.4)" << std::endl;
-    return false;
+  // Try NVENC first for hardware acceleration, fall back to libx264
+  const AVCodec* codec = avcodec_find_encoder_by_name("h264_nvenc");
+  using_nvenc_ = (codec != nullptr);
+  if (using_nvenc_) {
+    std::cout << "[EncoderPipeline] Using NVENC hardware encoder (h264_nvenc)" << std::endl;
+  } else {
+    codec = avcodec_find_encoder_by_name("libx264");
+    if (!codec) {
+      std::cerr << "[EncoderPipeline] No H.264 encoder found (tried h264_nvenc, libx264)" << std::endl;
+      return false;
+    }
+    std::cout << "[EncoderPipeline] Using software encoder (libx264)" << std::endl;
   }
 
   av_log_set_level(AV_LOG_ERROR);
@@ -419,17 +427,27 @@ skip_audio:
     codec_ctx_->rc_buffer_size = config.bitrate / 4;   // 0.25 second buffer
 
     AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "preset", "ultrafast", 0);
-    // zerolatency tune: disables lookahead, B-frames, and other latency-adding features
-    av_dict_set(&opts, "tune", "zerolatency", 0);
-    // Force single-threaded encoding to eliminate frame reordering
-    av_dict_set(&opts, "threads", "1", 0);
-    // VBV-constrained VBR with settings to handle startup:
-    // - vbv-init=0.9: Start with buffer nearly full for immediate output
-    // - bframes=0: Already set by zerolatency tune
-    av_dict_set(&opts, "x264-params",
-        "bframes=0:nal-hrd=vbr:vbv-init=0.9",
-        0);
+    if (using_nvenc_) {
+      // NVENC settings for low latency
+      av_dict_set(&opts, "preset", "p1", 0);       // Fastest NVENC preset (p1-p7, p1 fastest)
+      av_dict_set(&opts, "tune", "ll", 0);         // Low latency tuning
+      av_dict_set(&opts, "rc", "cbr", 0);          // Constant bitrate for streaming
+      av_dict_set(&opts, "zerolatency", "1", 0);   // Enable zero latency mode
+      av_dict_set(&opts, "delay", "0", 0);         // No frame delay
+    } else {
+      // libx264 settings for low latency
+      av_dict_set(&opts, "preset", "ultrafast", 0);
+      // zerolatency tune: disables lookahead, B-frames, and other latency-adding features
+      av_dict_set(&opts, "tune", "zerolatency", 0);
+      // Force single-threaded encoding to eliminate frame reordering
+      av_dict_set(&opts, "threads", "1", 0);
+      // VBV-constrained VBR with settings to handle startup:
+      // - vbv-init=0.9: Start with buffer nearly full for immediate output
+      // - bframes=0: Already set by zerolatency tune
+      av_dict_set(&opts, "x264-params",
+          "bframes=0:nal-hrd=vbr:vbv-init=0.9",
+          0);
+    }
     ret = avcodec_open2(codec_ctx_, codec, &opts);
     av_dict_free(&opts);
     if (ret < 0) {
@@ -746,9 +764,12 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
   if (!codec_ctx_->width || !codec_ctx_->height || 
       codec_ctx_->width != frame.width || codec_ctx_->height != frame.height) {
     
-    const AVCodec* codec = avcodec_find_encoder_by_name("libx264");
+    // Use same encoder type as initial open (NVENC or libx264)
+    const AVCodec* codec = using_nvenc_
+        ? avcodec_find_encoder_by_name("h264_nvenc")
+        : avcodec_find_encoder_by_name("libx264");
     if (!codec) {
-      std::cerr << "[EncoderPipeline] libx264 not found" << std::endl;
+      std::cerr << "[EncoderPipeline] Encoder not found (nvenc=" << using_nvenc_ << ")" << std::endl;
       return false;
     }
 
@@ -815,15 +836,22 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
 
     // Set encoder options for streaming
     AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "preset", "ultrafast", 0);
-    // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: zerolatency disables lookahead and B-frames
-    av_dict_set(&opts, "tune", "zerolatency", 0);
-    // Force single-threaded encoding to eliminate frame reordering
-    av_dict_set(&opts, "threads", "1", 0);
-    // VBV-constrained VBR with immediate output (no lookahead buffering)
-    av_dict_set(&opts, "x264-params",
-        "bframes=0:nal-hrd=vbr:vbv-init=0.9",
-        0);
+    if (using_nvenc_) {
+      // NVENC settings for low latency
+      av_dict_set(&opts, "preset", "p1", 0);
+      av_dict_set(&opts, "tune", "ll", 0);
+      av_dict_set(&opts, "rc", "cbr", 0);
+      av_dict_set(&opts, "zerolatency", "1", 0);
+      av_dict_set(&opts, "delay", "0", 0);
+    } else {
+      // libx264 settings for low latency
+      av_dict_set(&opts, "preset", "ultrafast", 0);
+      av_dict_set(&opts, "tune", "zerolatency", 0);
+      av_dict_set(&opts, "threads", "1", 0);
+      av_dict_set(&opts, "x264-params",
+          "bframes=0:nal-hrd=vbr:vbv-init=0.9",
+          0);
+    }
 
     // Open codec with options
     ret = avcodec_open2(codec_ctx_, codec, &opts);
