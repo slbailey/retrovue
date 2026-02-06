@@ -34,6 +34,19 @@ _AUDIT_T2: int | None = None  # After first recv returns data (monotonic_ns)
 _AUDIT_FIRST_RECV_DONE = False
 _AUDIT_LOCK = threading.Lock()
 
+# =============================================================================
+# RECV-GAP TELEMETRY CONSTANTS (Contract: do not change without updating tests)
+# =============================================================================
+# These constants define the recv-gap warning policy. They are NOT correctness
+# signals - recv gaps depend on socket buffering, OS scheduling, and encoder
+# cadence. This telemetry exists only to detect systemic issues, not to enforce
+# frame-level timing guarantees.
+#
+# Policy: Emit at most ONE warning per session, only if we observe >= 10 gaps
+# exceeding the threshold. This prevents log spam while still surfacing patterns.
+RECV_GAP_WARN_THRESHOLD_MS: int = 40  # Fixed threshold - do not "move the bar"
+RECV_GAP_WARN_COUNT: int = 10  # Minimum gaps before warning (prevents noise)
+
 
 class TsSource(Protocol):
     """Protocol for TS data source (UDS or fake for tests)."""
@@ -329,9 +342,11 @@ class ChannelStream:
         self._logger.info("ChannelStream reader loop started for channel %s", self.channel_id)
         chunk_size = 188 * 10  # Read 10 TS packets at a time (188 bytes each)
 
-        # AUDIT: Track inter-recv gaps for steady-state analysis
+        # AUDIT: Track inter-recv gaps for steady-state analysis (telemetry only)
+        # These metrics are NOT correctness signals - see RECV_GAP_WARN_* constants.
         _last_recv_return_ns: int | None = None
         _max_inter_recv_gap_ns: int = 0
+        _count_gaps_over_threshold: int = 0
         _local_first_recv_done = False
 
         while not self._stop_event.is_set():
@@ -399,16 +414,15 @@ class ChannelStream:
                             )
                     _local_first_recv_done = True
 
-                # AUDIT: Track inter-recv gaps (steady-state cadence proof)
+                # AUDIT: Track inter-recv gaps (telemetry only, not correctness)
+                # See RECV_GAP_WARN_* constants for policy documentation.
                 if _last_recv_return_ns is not None:
                     gap_ns = _recv_exit_ns - _last_recv_return_ns
                     if gap_ns > _max_inter_recv_gap_ns:
                         _max_inter_recv_gap_ns = gap_ns
-                    if gap_ns > 40_000_000:  # > 40ms threshold
-                        self._logger.warning(
-                            "[AUDIT-GAP] Inter-recv gap %.2f ms EXCEEDS 40ms threshold for channel %s",
-                            gap_ns / 1e6, self.channel_id
-                        )
+                    threshold_ns = RECV_GAP_WARN_THRESHOLD_MS * 1_000_000
+                    if gap_ns > threshold_ns:
+                        _count_gaps_over_threshold += 1
                 _last_recv_return_ns = _recv_exit_ns
 
                 # FIRST-ON-AIR: Verify first byte is 0x47 (MPEG-TS sync byte)
@@ -458,11 +472,22 @@ class ChannelStream:
                             "Unexpected fanout error for client %s", client_id, exc_info=True
                         )
 
-        # AUDIT: Log max inter-recv gap observed during this session
+        # AUDIT: Log recv-gap telemetry at session exit
+        # This is informational only - recv gaps are NOT correctness signals.
+        max_gap_ms = _max_inter_recv_gap_ns / 1e6
         if _max_inter_recv_gap_ns > 0:
             self._logger.info(
-                "[AUDIT-EXIT] Max inter-recv gap was %.2f ms for channel %s",
-                _max_inter_recv_gap_ns / 1e6, self.channel_id
+                "[AUDIT-EXIT] Max inter-recv gap was %.2f ms (gaps>%dms: %d) for channel %s",
+                max_gap_ms, RECV_GAP_WARN_THRESHOLD_MS, _count_gaps_over_threshold,
+                self.channel_id
+            )
+        # Emit ONE warning per session if pattern suggests systemic issue
+        if _count_gaps_over_threshold >= RECV_GAP_WARN_COUNT:
+            self._logger.warning(
+                "[AUDIT-GAP-SUMMARY] Channel %s had %d recv gaps exceeding %dms "
+                "(max=%.2fms). This is telemetry, not a correctness violation.",
+                self.channel_id, _count_gaps_over_threshold,
+                RECV_GAP_WARN_THRESHOLD_MS, max_gap_ms
             )
 
         # Cleanup

@@ -22,6 +22,7 @@
 #include "retrovue/output/IOutputSink.h"
 #include "retrovue/output/MpegTSOutputSink.h"
 #include "retrovue/output/OutputBus.h"
+#include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/runtime/PlayoutEngine.h"
@@ -170,7 +171,58 @@ namespace retrovue
       // Track termination reason for SessionEnded event
       std::string termination_reason = "unknown";
 
-      // Configure the real-time sink
+      // ========================================================================
+      // SESSION-LONG ENCODER: Create encoder ONCE for entire session
+      // ========================================================================
+      // This fixes DTS out-of-order warnings by:
+      // - Maintaining continuity counters across blocks
+      // - Preserving encoder/muxer state (DTS tracking)
+      // - Not re-writing PAT/PMT per block
+      // - Avoiding encoder priming delays at block boundaries
+      // ========================================================================
+      playout_sinks::mpegts::MpegTSPlayoutSinkConfig enc_config;
+      enc_config.target_width = state->width;
+      enc_config.target_height = state->height;
+      enc_config.target_fps = state->fps;
+      enc_config.enable_audio = true;
+      enc_config.gop_size = 90;      // I-frame every 3 seconds
+      enc_config.bitrate = 2000000;  // 2 Mbps
+
+      auto session_encoder = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
+
+      // Session write context for callback (must outlive encoder)
+      struct SessionWriteContext {
+        int fd;
+        int64_t bytes_written;
+      };
+      SessionWriteContext write_ctx{state->fd, 0};
+
+      // Write callback (stateless - uses opaque pointer)
+      auto write_callback = [](void* opaque, uint8_t* buf, int buf_size) -> int {
+        auto* ctx = static_cast<SessionWriteContext*>(opaque);
+#if defined(__linux__) || defined(__APPLE__)
+        ssize_t written = write(ctx->fd, buf, static_cast<size_t>(buf_size));
+        if (written > 0) {
+          ctx->bytes_written += written;
+        }
+        return static_cast<int>(written);
+#else
+        (void)buf;
+        return buf_size;
+#endif
+      };
+
+      // Open the session encoder
+      if (!session_encoder->open(enc_config, &write_ctx, write_callback)) {
+        std::cerr << "[BlockPlanExecution] Failed to open session encoder" << std::endl;
+        return;
+      }
+
+      std::cout << "[BlockPlanExecution] Session encoder opened: "
+                << state->width << "x" << state->height << " @ " << state->fps << "fps"
+                << std::endl;
+
+      // Configure the real-time sink with shared encoder
       blockplan::realtime::SinkConfig sink_config;
       sink_config.fd = state->fd;
       sink_config.width = state->width;
@@ -178,6 +230,8 @@ namespace retrovue
       sink_config.fps = state->fps;
       // INV-PTS-MONOTONIC: Initialize PTS offset for session continuity across blocks
       sink_config.initial_pts_offset_90k = 0;
+      // SESSION-LONG ENCODER: Share the encoder across all blocks
+      sink_config.shared_encoder = session_encoder.get();
 
       // Create executor config with diagnostics
       blockplan::realtime::RealTimeBlockExecutor::Config exec_config;
@@ -306,6 +360,15 @@ namespace retrovue
       // If we exited due to stop_requested (from main loop condition), set reason
       if (state->stop_requested.load(std::memory_order_acquire) && termination_reason == "unknown") {
         termination_reason = "stopped";
+      }
+
+      // ========================================================================
+      // SESSION-LONG ENCODER: Close the encoder at session end
+      // ========================================================================
+      if (session_encoder) {
+        session_encoder->close();
+        std::cout << "[BlockPlanExecution] Session encoder closed: "
+                  << write_ctx.bytes_written << " bytes written" << std::endl;
       }
 
       std::cout << "[BlockPlanExecution] Thread exiting: blocks_executed=" << state->blocks_executed
