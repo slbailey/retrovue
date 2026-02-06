@@ -439,5 +439,195 @@ TEST_F(PTSContinuityTest, ManyBlocksMaintainContinuity) {
   EXPECT_NEAR(actual_final_pts, expected_final_pts, kNumBlocks * kFrameDurationMs * 90 * 2);
 }
 
+// =============================================================================
+// G. AUDIO/VIDEO SYNC TESTS (INV-AUDIO-VIDEO-SYNC)
+// =============================================================================
+// These tests verify that audio PTS is computed from samples emitted (CT-based),
+// not from decoder timestamps (asset-relative). This is critical for:
+// - Audio/video sync across block boundaries
+// - Same asset continuing across blocks (audio must not jump ahead)
+// =============================================================================
+
+// Audio constants (house format)
+static constexpr int kAudioSampleRate = 48000;
+static constexpr int kAudioFrameSamples = 1024;  // AAC frame size
+static constexpr int64_t kAudioFrameDuration90k = (kAudioFrameSamples * 90000) / kAudioSampleRate;
+
+// Simulates audio PTS recording with CT-based computation
+class AudioPTSRecordingSink {
+ public:
+  struct RecordedAudioFrame {
+    int64_t samples_emitted;    // Total samples emitted so far
+    int64_t audio_pts_90k;      // Computed audio PTS
+    int64_t video_pts_90k;      // Corresponding video PTS for comparison
+    std::string block_id;
+  };
+
+  // Set the session offset (accumulated from previous blocks)
+  void SetPtsOffset(int64_t pts_offset_90k) {
+    pts_offset_90k_ = pts_offset_90k;
+    audio_samples_emitted_ = 0;  // Reset per block
+  }
+
+  // Emit audio frames (CT-based PTS calculation - CORRECT)
+  void EmitAudioFrameCorrect(int num_samples, int64_t video_ct_ms, const std::string& block_id) {
+    // Correct: Audio PTS = session_offset + (samples_emitted * 90000 / sample_rate)
+    int64_t audio_pts_90k = pts_offset_90k_ + (audio_samples_emitted_ * 90000 / kAudioSampleRate);
+    int64_t video_pts_90k = pts_offset_90k_ + video_ct_ms * 90;
+
+    frames_.push_back({audio_samples_emitted_, audio_pts_90k, video_pts_90k, block_id});
+    audio_samples_emitted_ += num_samples;
+  }
+
+  // Emit audio frames (asset-relative PTS calculation - BUGGY)
+  void EmitAudioFrameBuggy(int64_t asset_pts_us, int64_t video_ct_ms, const std::string& block_id) {
+    // Bug: Audio PTS = session_offset + (asset_pts * 90 / 1000)
+    // asset_pts_us is asset-relative, not block-relative!
+    int64_t audio_pts_90k = pts_offset_90k_ + (asset_pts_us * 90 / 1000);
+    int64_t video_pts_90k = pts_offset_90k_ + video_ct_ms * 90;
+
+    frames_.push_back({0, audio_pts_90k, video_pts_90k, block_id});
+  }
+
+  const std::vector<RecordedAudioFrame>& Frames() const { return frames_; }
+  void Clear() {
+    frames_.clear();
+    pts_offset_90k_ = 0;
+    audio_samples_emitted_ = 0;
+  }
+
+  // INV-AUDIO-VIDEO-SYNC: Audio and video PTS should stay within tolerance
+  bool AudioVideoSyncWithinTolerance(int64_t max_drift_90k = 9000) const {  // 100ms
+    for (const auto& frame : frames_) {
+      int64_t drift = std::abs(frame.audio_pts_90k - frame.video_pts_90k);
+      if (drift > max_drift_90k) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Check that audio never leads video by more than threshold
+  bool AudioNeverLeadsVideoBy(int64_t max_lead_90k = 45000) const {  // 500ms
+    for (const auto& frame : frames_) {
+      int64_t lead = frame.audio_pts_90k - frame.video_pts_90k;
+      if (lead > max_lead_90k) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  std::vector<RecordedAudioFrame> frames_;
+  int64_t pts_offset_90k_ = 0;
+  int64_t audio_samples_emitted_ = 0;
+};
+
+// -----------------------------------------------------------------------------
+// TEST-AUDIO-001: Correct audio PTS is CT-based and stays synced with video
+// -----------------------------------------------------------------------------
+TEST_F(PTSContinuityTest, AudioPtsIsCtBasedAndSynced) {
+  AudioPTSRecordingSink audio_sink;
+  audio_sink.SetPtsOffset(0);
+
+  // Simulate 5 seconds of audio/video
+  int64_t video_ct_ms = 0;
+  for (int i = 0; i < 234; ++i) {  // ~234 audio frames in 5 seconds
+    audio_sink.EmitAudioFrameCorrect(kAudioFrameSamples, video_ct_ms, "BLOCK-1");
+    // Advance video CT proportionally
+    video_ct_ms = (i * kAudioFrameSamples * 1000) / kAudioSampleRate;
+  }
+
+  EXPECT_TRUE(audio_sink.AudioVideoSyncWithinTolerance(9000))
+      << "Audio and video should be synced within 100ms";
+}
+
+// -----------------------------------------------------------------------------
+// TEST-AUDIO-002: Buggy asset-relative audio PTS causes drift on block 2
+// This demonstrates the bug when same asset continues across blocks
+// -----------------------------------------------------------------------------
+TEST_F(PTSContinuityTest, BuggyAssetRelativeAudioCausesDrift) {
+  AudioPTSRecordingSink audio_sink;
+
+  // Block 1: Asset A from 0-5000ms
+  audio_sink.SetPtsOffset(0);
+  int64_t asset_pts_us = 0;
+  for (int i = 0; i < 234; ++i) {
+    audio_sink.EmitAudioFrameBuggy(asset_pts_us, i * 21, "BLOCK-1");  // ~21ms per audio frame
+    asset_pts_us += 21333;  // AAC frame duration in microseconds
+  }
+
+  // Block 2: Same asset A continuing from 5000-10000ms
+  // But CT resets to 0 and pts_offset advances by ~450000
+  int64_t block2_offset = 451440;  // PTS offset after block 1
+  audio_sink.SetPtsOffset(block2_offset);
+
+  // Bug: asset_pts_us continues from 5000000, not reset
+  // This causes audio PTS = 451440 + 450000 = 901440 (5s ahead of video!)
+  for (int i = 0; i < 234; ++i) {
+    int64_t video_ct_ms = i * 21;  // CT resets to 0 for block 2
+    audio_sink.EmitAudioFrameBuggy(asset_pts_us, video_ct_ms, "BLOCK-2");
+    asset_pts_us += 21333;
+  }
+
+  // With the buggy implementation, audio should lead video significantly
+  EXPECT_FALSE(audio_sink.AudioNeverLeadsVideoBy(45000))
+      << "Buggy implementation should cause audio to lead video by ~5 seconds";
+}
+
+// -----------------------------------------------------------------------------
+// TEST-AUDIO-003: Correct CT-based audio PTS maintains sync across blocks
+// This is the key test that verifies the fix
+// -----------------------------------------------------------------------------
+TEST_F(PTSContinuityTest, CorrectCtBasedAudioMaintainsSyncAcrossBlocks) {
+  AudioPTSRecordingSink audio_sink;
+
+  // Block 1
+  audio_sink.SetPtsOffset(0);
+  int64_t video_ct_ms = 0;
+  for (int i = 0; i < 234; ++i) {
+    audio_sink.EmitAudioFrameCorrect(kAudioFrameSamples, video_ct_ms, "BLOCK-1");
+    video_ct_ms = (i * kAudioFrameSamples * 1000) / kAudioSampleRate;
+  }
+
+  // Block 2 - CT resets, offset advances
+  int64_t block2_offset = 451440;  // 5 seconds in 90kHz
+  audio_sink.SetPtsOffset(block2_offset);
+  video_ct_ms = 0;  // CT resets
+  for (int i = 0; i < 234; ++i) {
+    audio_sink.EmitAudioFrameCorrect(kAudioFrameSamples, video_ct_ms, "BLOCK-2");
+    video_ct_ms = (i * kAudioFrameSamples * 1000) / kAudioSampleRate;
+  }
+
+  EXPECT_TRUE(audio_sink.AudioVideoSyncWithinTolerance(9000))
+      << "CT-based audio PTS should maintain sync across block boundary";
+  EXPECT_TRUE(audio_sink.AudioNeverLeadsVideoBy(9000))
+      << "Audio should never lead video significantly with CT-based PTS";
+}
+
+// -----------------------------------------------------------------------------
+// TEST-AUDIO-004: Frame determinism - same input produces same frame count
+// INV-FRAME-DETERMINISM: Given same BlockPlan input, frame count is identical
+// -----------------------------------------------------------------------------
+TEST_F(PTSContinuityTest, FrameCountIsDeterministic) {
+  constexpr int64_t kBlockDuration = 5000;
+  constexpr int kTrials = 5;
+
+  std::vector<size_t> frame_counts;
+
+  for (int trial = 0; trial < kTrials; ++trial) {
+    sink_->Clear();
+    SimulateBlock(sink_.get(), "BLOCK-1", kBlockDuration);
+    frame_counts.push_back(sink_->FrameCount());
+  }
+
+  // All trials should produce identical frame counts
+  for (size_t i = 1; i < frame_counts.size(); ++i) {
+    EXPECT_EQ(frame_counts[i], frame_counts[0])
+        << "Frame count must be deterministic across runs";
+  }
+}
+
 }  // namespace
 }  // namespace retrovue::blockplan::testing

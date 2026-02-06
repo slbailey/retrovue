@@ -105,6 +105,14 @@ struct SinkConfig {
   int audio_channels = 2;
   // INV-PTS-MONOTONIC: Initial PTS offset for session continuity across blocks
   int64_t initial_pts_offset_90k = 0;
+  // ==========================================================================
+  // SESSION-LONG ENCODER: Shared encoder pipeline for entire session
+  // ==========================================================================
+  // When non-null, use this shared pipeline instead of creating a new one.
+  // This ensures continuity counters, muxer state, and encoder state persist
+  // across block boundaries, fixing DTS out-of-order warnings.
+  // The caller (playout_service) owns this pipeline for the session lifetime.
+  playout_sinks::mpegts::EncoderPipeline* shared_encoder = nullptr;
 };
 
 // Frame metadata (matches testing::EmittedFrame structure)
@@ -122,13 +130,13 @@ class RealTimeEncoderSink {
   explicit RealTimeEncoderSink(const SinkConfig& config);
   ~RealTimeEncoderSink();
 
-  // Initialize encoder pipeline
+  // Initialize encoder pipeline (or use shared pipeline if configured)
   bool Open();
 
   // Emit a frame (decodes if needed, encodes, writes to FD)
   bool EmitFrame(const FrameMetadata& frame);
 
-  // Finalize and close
+  // Finalize block (does NOT close shared encoder - only resets per-block state)
   void Close();
 
   // Statistics
@@ -145,6 +153,10 @@ class RealTimeEncoderSink {
     return pts_offset_90k_ + (last_ct_ms_ + kFrameDurationMs) * 90;
   }
 
+  // Get last emitted video/audio PTS for tripwire assertions
+  int64_t LastVideoPts90k() const { return last_video_pts_90k_; }
+  int64_t LastAudioPts90k() const { return last_audio_pts_90k_; }
+
  private:
   // Generate black video frame
   void GenerateBlackFrame(uint8_t* y_plane, uint8_t* u_plane, uint8_t* v_plane);
@@ -154,12 +166,23 @@ class RealTimeEncoderSink {
                    int64_t pts_90k);
 
   SinkConfig config_;
-  std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder_;
+  // Owned encoder (created per-block if no shared encoder)
+  std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> owned_encoder_;
+  // Points to shared or owned encoder
+  playout_sinks::mpegts::EncoderPipeline* encoder_ = nullptr;
+  // True if we're using a shared encoder (don't close it)
+  bool using_shared_encoder_ = false;
 
   size_t frame_count_ = 0;
   int64_t bytes_written_ = 0;
   int64_t last_ct_ms_ = -1;
   int64_t pts_offset_90k_ = 0;
+
+  // ==========================================================================
+  // TRIPWIRE: Track last emitted PTS for monotonicity assertions
+  // ==========================================================================
+  int64_t last_video_pts_90k_ = -1;
+  int64_t last_audio_pts_90k_ = -1;
 
   // Frame buffers
   std::vector<uint8_t> y_buffer_;
@@ -175,6 +198,15 @@ class RealTimeEncoderSink {
 
   // Audio state: track when real audio starts to disable silence injection
   bool audio_started_ = false;
+
+  // ==========================================================================
+  // INV-PTS-MONOTONIC / INV-AUDIO-VIDEO-SYNC: Audio PTS must be CT-based
+  // ==========================================================================
+  // Audio PTS is computed from samples emitted (not decoder timestamps).
+  // This ensures audio and video share the same monotonic timeline.
+  // audio_pts_90k = pts_offset_90k_ + (audio_samples_emitted_ * 90000 / sample_rate)
+  int64_t audio_samples_emitted_ = 0;
+  static constexpr int kAudioSampleRate = 48000;  // House format sample rate
 };
 
 // =============================================================================

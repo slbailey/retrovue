@@ -136,6 +136,10 @@ RealTimeEncoderSink::RealTimeEncoderSink(const SinkConfig& config)
   y_buffer_.resize(y_size);
   u_buffer_.resize(uv_size);
   v_buffer_.resize(uv_size);
+
+  std::cout << "[RealTimeEncoderSink] Constructed with pts_offset_90k_=" << pts_offset_90k_
+            << (config.shared_encoder ? " (using shared encoder)" : " (will create own encoder)")
+            << std::endl;
 }
 
 RealTimeEncoderSink::~RealTimeEncoderSink() {
@@ -148,7 +152,23 @@ bool RealTimeEncoderSink::Open() {
     return false;
   }
 
-  // Create encoder config
+  // ==========================================================================
+  // SESSION-LONG ENCODER: Use shared encoder if provided
+  // ==========================================================================
+  // When using a shared encoder:
+  // - The muxer/encoder state persists across blocks
+  // - Continuity counters are maintained
+  // - No PAT/PMT reset
+  // - DTS/PTS tracking continues seamlessly
+  // ==========================================================================
+  if (config_.shared_encoder) {
+    encoder_ = config_.shared_encoder;
+    using_shared_encoder_ = true;
+    std::cout << "[RealTimeEncoderSink] Using shared session encoder (no re-init)" << std::endl;
+    return true;
+  }
+
+  // Create encoder config (only if not using shared encoder)
   playout_sinks::mpegts::MpegTSPlayoutSinkConfig enc_config;
   enc_config.target_width = config_.width;
   enc_config.target_height = config_.height;
@@ -157,7 +177,9 @@ bool RealTimeEncoderSink::Open() {
   enc_config.gop_size = 90;      // I-frame every 3 seconds (reduces encoding spikes)
   enc_config.bitrate = 2000000;  // 2 Mbps (faster encoding)
 
-  encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
+  owned_encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
+  encoder_ = owned_encoder_.get();
+  using_shared_encoder_ = false;
 
   // Write callback that writes to FD
   auto write_callback = [](void* opaque, uint8_t* buf, int buf_size) -> int {
@@ -215,6 +237,26 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
 
   // Compute PTS in 90kHz units
   int64_t pts_90k = frame.ct_ms * 90 + pts_offset_90k_;
+
+  // ==========================================================================
+  // TRIPWIRE: Verify video PTS is monotonically increasing
+  // ==========================================================================
+  // This assertion catches bugs in PTS calculation before they reach the muxer.
+  // If this fires, the bug is in our PTS offset tracking, not the encoder.
+  // ==========================================================================
+  if (last_video_pts_90k_ >= 0 && pts_90k <= last_video_pts_90k_) {
+    std::cerr << "[TRIPWIRE] VIDEO PTS NOT MONOTONIC! "
+              << "last=" << last_video_pts_90k_ << " (" << (last_video_pts_90k_ / 90.0) << "ms), "
+              << "new=" << pts_90k << " (" << (pts_90k / 90.0) << "ms), "
+              << "ct_ms=" << frame.ct_ms << ", offset=" << pts_offset_90k_
+              << ", block_transition=" << (last_ct_ms_ >= 0 && frame.ct_ms < last_ct_ms_)
+              << std::endl;
+    // In debug builds, abort to catch this immediately
+#ifndef NDEBUG
+    std::abort();
+#endif
+  }
+  last_video_pts_90k_ = pts_90k;
 
   const size_t y_size = static_cast<size_t>(config_.width * config_.height);
   const size_t uv_size = y_size / 4;
@@ -330,10 +372,35 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
 
     while (audio_frames_this_call < kMaxAudioFramesPerVideoFrame &&
            decoder_->GetPendingAudioFrame(audio_frame)) {
-      // Convert audio PTS from microseconds to 90kHz
-      // audio_frame.pts_us is relative to asset start
-      // We need to align it with video PTS by adding the same offset
-      int64_t audio_pts_90k = pts_offset_90k_ + (audio_frame.pts_us * 90 / 1000);
+      // =======================================================================
+      // INV-PTS-MONOTONIC / INV-AUDIO-VIDEO-SYNC: CT-based audio PTS
+      // =======================================================================
+      // Audio PTS is computed from samples emitted within this block, NOT from
+      // decoder timestamps (which are asset-relative and cause discontinuities
+      // when the same asset continues across block boundaries).
+      //
+      // Formula: audio_pts_90k = session_offset + (samples_emitted * 90000 / sample_rate)
+      //
+      // This ensures audio and video share the same monotonic timeline.
+      // Recv cadence is not used as a correctness signal.
+      // =======================================================================
+      int64_t audio_pts_90k = pts_offset_90k_ +
+          (audio_samples_emitted_ * 90000 / kAudioSampleRate);
+
+      // =======================================================================
+      // TRIPWIRE: Verify audio PTS is monotonically increasing
+      // =======================================================================
+      if (last_audio_pts_90k_ >= 0 && audio_pts_90k <= last_audio_pts_90k_) {
+        std::cerr << "[TRIPWIRE] AUDIO PTS NOT MONOTONIC! "
+                  << "last=" << last_audio_pts_90k_ << ", new=" << audio_pts_90k
+                  << ", samples_emitted=" << audio_samples_emitted_
+                  << ", offset=" << pts_offset_90k_
+                  << std::endl;
+#ifndef NDEBUG
+        std::abort();
+#endif
+      }
+      last_audio_pts_90k_ = audio_pts_90k;
 
       // Disable silence injection since we have real audio
       if (!audio_started_) {
@@ -346,6 +413,9 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
         std::cerr << "[RealTimeEncoderSink] encodeAudioFrame failed" << std::endl;
         // Continue even on failure
       }
+
+      // Track samples emitted for next audio frame's PTS
+      audio_samples_emitted_ += audio_frame.nb_samples;
       audio_frames_this_call++;
     }
   }
@@ -354,12 +424,31 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
 }
 
 void RealTimeEncoderSink::Close() {
-  if (encoder_) {
-    encoder_->close();
-    encoder_.reset();
+  // ==========================================================================
+  // SESSION-LONG ENCODER: Do NOT close/destroy shared encoder
+  // ==========================================================================
+  // When using a shared encoder, we only reset per-block state.
+  // The encoder/muxer continues running for the next block.
+  // This maintains continuity counters and DTS/PTS tracking.
+  // ==========================================================================
+  if (using_shared_encoder_) {
+    // Shared encoder stays open - just log block completion
+    std::cout << "[RealTimeEncoderSink] Block completed (shared encoder): "
+              << frame_count_ << " frames, " << bytes_written_ << " bytes, "
+              << "last_ct_ms=" << last_ct_ms_ << ", final_pts_offset=" << FinalPtsOffset90k()
+              << std::endl;
+    // Clear the pointer but don't delete (not owned)
+    encoder_ = nullptr;
+  } else {
+    // Owned encoder - close and destroy
+    if (owned_encoder_) {
+      owned_encoder_->close();
+      owned_encoder_.reset();
+    }
+    encoder_ = nullptr;
+    std::cout << "[RealTimeEncoderSink] Closed: " << frame_count_ << " frames, "
+              << bytes_written_ << " bytes" << std::endl;
   }
-  std::cout << "[RealTimeEncoderSink] Closed: " << frame_count_ << " frames, "
-            << bytes_written_ << " bytes" << std::endl;
 }
 
 // =============================================================================

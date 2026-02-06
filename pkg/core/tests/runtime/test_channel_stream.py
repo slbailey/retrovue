@@ -16,6 +16,8 @@ from retrovue.runtime.channel_stream import (
     ChannelStream,
     FakeTsSource,
     generate_ts_stream,
+    RECV_GAP_WARN_THRESHOLD_MS,
+    RECV_GAP_WARN_COUNT,
 )
 
 
@@ -108,3 +110,56 @@ def test_generate_ts_stream_eof():
     q.put(b"")
     out = list(generate_ts_stream(q))
     assert out == [b"abc"]
+
+
+# =============================================================================
+# CONTRACT TESTS: Recv-gap telemetry policy (prevents "moving the bar")
+# =============================================================================
+# These tests ensure the recv-gap warning thresholds are NOT silently changed.
+# If you need to change these values, you MUST update both the constants AND
+# these tests, forcing explicit acknowledgment of the policy change.
+
+
+class TestRecvGapTelemetryContract:
+    """Contract tests for recv-gap warning policy constants."""
+
+    def test_threshold_is_40ms(self):
+        """
+        CONTRACT: RECV_GAP_WARN_THRESHOLD_MS must be exactly 40ms.
+
+        This is a fixed threshold - do not "move the bar" to silence warnings.
+        If you need to change this, you must update this test AND document why.
+        """
+        from retrovue.runtime.channel_stream import RECV_GAP_WARN_THRESHOLD_MS
+        assert RECV_GAP_WARN_THRESHOLD_MS == 40, (
+            f"RECV_GAP_WARN_THRESHOLD_MS was changed to {RECV_GAP_WARN_THRESHOLD_MS}ms! "
+            "Do not move the bar - fix the underlying issue instead."
+        )
+
+    def test_warn_count_is_10(self):
+        """
+        CONTRACT: RECV_GAP_WARN_COUNT must be exactly 10.
+
+        We only warn after 10 gaps to prevent noise from transient spikes.
+        If you need to change this, you must update this test AND document why.
+        """
+        from retrovue.runtime.channel_stream import RECV_GAP_WARN_COUNT
+        assert RECV_GAP_WARN_COUNT == 10, (
+            f"RECV_GAP_WARN_COUNT was changed to {RECV_GAP_WARN_COUNT}! "
+            "Do not raise this just to silence warnings."
+        )
+
+    def test_constants_are_integers(self):
+        """Constants must be integers for nanosecond math and count comparisons."""
+        from retrovue.runtime.channel_stream import (
+            RECV_GAP_WARN_THRESHOLD_MS,
+            RECV_GAP_WARN_COUNT,
+        )
+        assert isinstance(RECV_GAP_WARN_THRESHOLD_MS, int)
+        assert isinstance(RECV_GAP_WARN_COUNT, int)
+
+    def test_threshold_converts_to_nanoseconds_correctly(self):
+        """Verify the ns conversion used in the reader loop is correct."""
+        from retrovue.runtime.channel_stream import RECV_GAP_WARN_THRESHOLD_MS
+        threshold_ns = RECV_GAP_WARN_THRESHOLD_MS * 1_000_000
+        assert threshold_ns == 40_000_000, "40ms should be 40,000,000 ns"
