@@ -552,6 +552,14 @@ skip_audio:
     }
     header_written_ = true;
     std::cout << "[EncoderPipeline] Header written - TS output is now decodable" << std::endl;
+
+    // ========================================================================
+    // INSTRUMENTATION: Log header write time (PAT/PMT now in output)
+    // ========================================================================
+    auto now = std::chrono::steady_clock::now();
+    auto since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    std::cout << "[METRIC] header_written_epoch_ms=" << since_epoch << std::endl;
   }
 
   initialized_ = true;
@@ -1060,6 +1068,14 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         if (!first_keyframe_emitted_) {
           if (packet_->flags & AV_PKT_FLAG_KEY) {
             first_keyframe_emitted_ = true;
+            // ================================================================
+            // INSTRUMENTATION: First keyframe (IDR) emitted
+            // ================================================================
+            auto now = std::chrono::steady_clock::now();
+            auto since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()).count();
+            std::cout << "[METRIC] first_keyframe_emitted_epoch_ms=" << since_epoch
+                      << " video_frame_count=" << video_frame_count_ << std::endl;
           } else {
             // Block non-keyframe packets until first IDR is emitted
             std::cerr << "[AIR] INV-AIR-IDR-BEFORE-OUTPUT: BLOCKING output (waiting_for_idr=true)" << std::endl;
@@ -1135,6 +1151,14 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     if (!first_keyframe_emitted_) {
       if (packet_->flags & AV_PKT_FLAG_KEY) {
         first_keyframe_emitted_ = true;
+        // ================================================================
+        // INSTRUMENTATION: First keyframe (IDR) emitted
+        // ================================================================
+        auto now = std::chrono::steady_clock::now();
+        auto since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count();
+        std::cout << "[METRIC] first_keyframe_emitted_epoch_ms=" << since_epoch
+                  << " video_frame_count=" << video_frame_count_ << std::endl;
       } else {
         // Block non-keyframe packets until first IDR is emitted
         std::cerr << "[AIR] INV-AIR-IDR-BEFORE-OUTPUT: BLOCKING output (waiting_for_idr=true)" << std::endl;

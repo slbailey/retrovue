@@ -73,16 +73,31 @@ bool RealAssetSource::ProbeAsset(const std::string& uri) {
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   AVFormatContext* fmt_ctx = nullptr;
 
+  // ========================================================================
+  // INSTRUMENTATION: Detailed probe timing (open_input vs find_stream_info)
+  // ========================================================================
+  auto open_start = std::chrono::steady_clock::now();
   if (avformat_open_input(&fmt_ctx, uri.c_str(), nullptr, nullptr) < 0) {
     std::cerr << "[RealAssetSource] Failed to open: " << uri << std::endl;
     return false;
   }
+  auto open_end = std::chrono::steady_clock::now();
+  auto open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      open_end - open_start).count();
+  std::cout << "[METRIC] asset_open_input_ms=" << open_ms
+            << " uri=" << uri << std::endl;
 
+  auto stream_info_start = std::chrono::steady_clock::now();
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
     avformat_close_input(&fmt_ctx);
     std::cerr << "[RealAssetSource] Failed to find stream info: " << uri << std::endl;
     return false;
   }
+  auto stream_info_end = std::chrono::steady_clock::now();
+  auto stream_info_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      stream_info_end - stream_info_start).count();
+  std::cout << "[METRIC] asset_stream_info_ms=" << stream_info_ms
+            << " uri=" << uri << std::endl;
 
   // Get duration in milliseconds
   int64_t duration_ms = 0;
@@ -223,6 +238,15 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
 
   frame_count_++;
 
+  // ========================================================================
+  // INSTRUMENTATION: First frame timing (per block)
+  // ========================================================================
+  if (frame_count_ == 1) {
+    std::cout << "[METRIC] first_frame_emitted ct_ms=" << frame.ct_ms
+              << " segment_index=" << frame.segment_index
+              << " is_pad=" << (frame.is_pad ? "true" : "false") << std::endl;
+  }
+
   // Handle block transitions (CT reset)
   // INV-PTS-MONOTONIC: PTS must be monotonically increasing across the entire session
   // INV-PTS-CONTINUOUS: PTS must advance by frame duration (no gaps)
@@ -285,12 +309,21 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
       dec_config.target_width = config_.width;
       dec_config.target_height = config_.height;
 
+      // ========================================================================
+      // INSTRUMENTATION: Decoder open timing
+      // ========================================================================
+      auto decoder_open_start = std::chrono::steady_clock::now();
       decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
       if (!decoder_->Open()) {
         std::cerr << "[RealTimeEncoderSink] Failed to open decoder for: " << frame.asset_uri << std::endl;
         decoder_.reset();
         current_asset_uri_.clear();
       } else {
+        auto decoder_open_end = std::chrono::steady_clock::now();
+        auto decoder_open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            decoder_open_end - decoder_open_start).count();
+        std::cout << "[METRIC] decoder_open_ms=" << decoder_open_ms
+                  << " uri=" << frame.asset_uri << std::endl;
         need_seek = true;
         next_frame_offset_ms_ = 0;
       }

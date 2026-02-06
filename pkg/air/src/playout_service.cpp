@@ -168,6 +168,14 @@ namespace retrovue
       std::cout << "[BlockPlanExecution] Starting execution thread for channel "
                 << state->channel_id << std::endl;
 
+      // ========================================================================
+      // INSTRUMENTATION: Session-level timing
+      // ========================================================================
+      auto session_start_time = std::chrono::steady_clock::now();
+      std::string prev_block_id;  // Track for boundary gap measurement
+      std::chrono::steady_clock::time_point prev_block_last_frame_time;
+      bool have_prev_block_time = false;
+
       // Track termination reason for SessionEnded event
       std::string termination_reason = "unknown";
 
@@ -194,8 +202,10 @@ namespace retrovue
       struct SessionWriteContext {
         int fd;
         int64_t bytes_written;
+        bool first_write_logged;
+        std::chrono::steady_clock::time_point session_start;
       };
-      SessionWriteContext write_ctx{state->fd, 0};
+      SessionWriteContext write_ctx{state->fd, 0, false, session_start_time};
 
       // Write callback (stateless - uses opaque pointer)
       auto write_callback = [](void* opaque, uint8_t* buf, int buf_size) -> int {
@@ -204,6 +214,16 @@ namespace retrovue
         ssize_t written = write(ctx->fd, buf, static_cast<size_t>(buf_size));
         if (written > 0) {
           ctx->bytes_written += written;
+          // ================================================================
+          // INSTRUMENTATION: First TS write timing (tune-in latency)
+          // ================================================================
+          if (!ctx->first_write_logged) {
+            ctx->first_write_logged = true;
+            auto now = std::chrono::steady_clock::now();
+            auto tunein_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - ctx->session_start).count();
+            std::cout << "[METRIC] tunein_first_ts_ms=" << tunein_ms << std::endl;
+          }
         }
         return static_cast<int>(written);
 #else
@@ -213,10 +233,16 @@ namespace retrovue
       };
 
       // Open the session encoder
+      auto encoder_open_start = std::chrono::steady_clock::now();
       if (!session_encoder->open(enc_config, &write_ctx, write_callback)) {
         std::cerr << "[BlockPlanExecution] Failed to open session encoder" << std::endl;
         return;
       }
+      auto encoder_open_end = std::chrono::steady_clock::now();
+      auto encoder_open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          encoder_open_end - encoder_open_start).count();
+      std::cout << "[METRIC] encoder_open_ms=" << encoder_open_ms
+                << " channel_id=" << state->channel_id << std::endl;
 
       std::cout << "[BlockPlanExecution] Session encoder opened: "
                 << state->width << "x" << state->height << " @ " << state->fps << "fps"
@@ -246,6 +272,11 @@ namespace retrovue
       // Main execution loop - process blocks from queue
       while (!state->stop_requested.load(std::memory_order_acquire))
       {
+        // ========================================================================
+        // INSTRUMENTATION: Block fetch timing (includes queue wait)
+        // ========================================================================
+        auto block_fetch_start = std::chrono::steady_clock::now();
+
         // Get next block from queue
         PlayoutControlImpl::BlockPlanBlock current_block;
         {
@@ -258,8 +289,16 @@ namespace retrovue
               break;
             }
 
-            // Wait for block to be added (with timeout to check stop flag)
+            // INSTRUMENTATION: Log queue wait
+            auto wait_start = std::chrono::steady_clock::now();
             state->queue_cv.wait_for(lock, std::chrono::milliseconds(100));
+            auto wait_end = std::chrono::steady_clock::now();
+            auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                wait_end - wait_start).count();
+            if (wait_ms > 10) {  // Only log significant waits
+              std::cout << "[METRIC] queue_wait_ms=" << wait_ms
+                        << " channel_id=" << state->channel_id << std::endl;
+            }
             continue;
           }
 
@@ -268,6 +307,12 @@ namespace retrovue
           state->block_queue.erase(state->block_queue.begin());
         }
 
+        auto block_fetch_end = std::chrono::steady_clock::now();
+        auto block_fetch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            block_fetch_end - block_fetch_start).count();
+        std::cout << "[METRIC] block_fetch_ms=" << block_fetch_ms
+                  << " block_id=" << current_block.block_id << std::endl;
+
         std::cout << "[BlockPlanExecution] Executing block: " << current_block.block_id
                   << " (" << current_block.start_utc_ms << "-" << current_block.end_utc_ms << ")"
                   << std::endl;
@@ -275,15 +320,30 @@ namespace retrovue
         // Convert to blockplan types
         blockplan::BlockPlan plan = ConvertToBlockPlanType(current_block);
 
-        // Validate the block
+        // ========================================================================
+        // INSTRUMENTATION: Asset probe timing (per asset)
+        // ========================================================================
+        auto probe_total_start = std::chrono::steady_clock::now();
         blockplan::realtime::RealAssetSource assets;
         for (const auto& seg : plan.segments) {
+          auto probe_start = std::chrono::steady_clock::now();
           if (!assets.ProbeAsset(seg.asset_uri)) {
             std::cerr << "[BlockPlanExecution] Failed to probe asset: " << seg.asset_uri << std::endl;
             // Continue with next block or terminate
             continue;
           }
+          auto probe_end = std::chrono::steady_clock::now();
+          auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              probe_end - probe_start).count();
+          std::cout << "[METRIC] asset_probe_ms=" << probe_ms
+                    << " uri=" << seg.asset_uri
+                    << " block_id=" << current_block.block_id << std::endl;
         }
+        auto probe_total_end = std::chrono::steady_clock::now();
+        auto probe_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            probe_total_end - probe_total_start).count();
+        std::cout << "[METRIC] asset_probe_total_ms=" << probe_total_ms
+                  << " block_id=" << current_block.block_id << std::endl;
 
         // Create asset duration function for validator
         auto duration_fn = [&assets](const std::string& uri) -> int64_t {
@@ -314,9 +374,43 @@ namespace retrovue
         // INV-PTS-MONOTONIC: Update sink config with session PTS offset before execution
         exec_config.sink.initial_pts_offset_90k = session_pts_offset_90k;
 
+        // ========================================================================
+        // INSTRUMENTATION: Execute timing and boundary gap
+        // ========================================================================
+        auto execute_start = std::chrono::steady_clock::now();
+
+        // Log boundary gap from previous block (if any)
+        if (have_prev_block_time) {
+          auto boundary_gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              execute_start - prev_block_last_frame_time).count();
+          std::cout << "[METRIC] boundary_gap_ms=" << boundary_gap_ms
+                    << " prev_block=" << prev_block_id
+                    << " next_block=" << current_block.block_id << std::endl;
+        }
+
+        // Log time from session start to first block execute
+        if (state->blocks_executed == 0) {
+          auto tunein_to_execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              execute_start - session_start_time).count();
+          std::cout << "[METRIC] tunein_to_first_execute_ms=" << tunein_to_execute_ms
+                    << " channel_id=" << state->channel_id << std::endl;
+        }
+
         // Create and run executor
         blockplan::realtime::RealTimeBlockExecutor executor(exec_config);
         auto result = executor.Execute(validated, join_result.params);
+
+        auto execute_end = std::chrono::steady_clock::now();
+        auto execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            execute_end - execute_start).count();
+        std::cout << "[METRIC] block_execute_ms=" << execute_ms
+                  << " block_id=" << current_block.block_id
+                  << " frames=" << result.final_ct_ms / 33 << std::endl;
+
+        // Store for next boundary gap calculation
+        prev_block_id = current_block.block_id;
+        prev_block_last_frame_time = execute_end;
+        have_prev_block_time = true;
 
         // INV-PTS-MONOTONIC: Capture PTS offset from completed block for next block
         session_pts_offset_90k = result.final_pts_offset_90k;
