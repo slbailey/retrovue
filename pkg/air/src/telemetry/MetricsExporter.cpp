@@ -715,7 +715,25 @@ std::string MetricsExporter::GenerateMetricsText() const {
     oss << "retrovue_mux_ct_wait_ms_count{channel_id=\"" << ch_id << "\"} " << samples.size() << "\n";
   }
 
+  // Append output from custom metrics providers
+  for (const auto& [name, provider] : custom_providers_) {
+    if (provider) {
+      oss << "\n" << provider();
+    }
+  }
+
   return oss.str();
+}
+
+void MetricsExporter::RegisterCustomMetricsProvider(
+    const std::string& name, CustomMetricsProvider provider) {
+  std::lock_guard<std::mutex> lock(metrics_mutex_);
+  custom_providers_[name] = std::move(provider);
+}
+
+void MetricsExporter::UnregisterCustomMetricsProvider(const std::string& name) {
+  std::lock_guard<std::mutex> lock(metrics_mutex_);
+  custom_providers_.erase(name);
 }
 
 }  // namespace retrovue::telemetry

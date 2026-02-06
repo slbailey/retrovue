@@ -341,9 +341,17 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
     }
 
     if (decoder_ && need_seek) {
-      if (!decoder_->SeekToMs(frame.asset_offset_ms)) {
+      auto seek_start = std::chrono::steady_clock::now();
+      int preroll_count = decoder_->SeekPreciseToMs(frame.asset_offset_ms);
+      auto seek_end = std::chrono::steady_clock::now();
+      auto seek_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          seek_end - seek_start).count();
+      if (preroll_count < 0) {
         std::cerr << "[RealTimeEncoderSink] Seek failed to " << frame.asset_offset_ms << "ms" << std::endl;
       }
+      std::cout << "[METRIC] seek_precise_us=" << seek_us
+                << " preroll_frames=" << preroll_count
+                << " target_ms=" << frame.asset_offset_ms << std::endl;
       next_frame_offset_ms_ = frame.asset_offset_ms;
     }
 
@@ -351,6 +359,18 @@ bool RealTimeEncoderSink::EmitFrame(const FrameMetadata& frame) {
     if (decoder_) {
       buffer::Frame decoded_frame;
       if (decoder_->DecodeFrameToBuffer(decoded_frame)) {
+        // Capture decoder PTS before it gets overwritten with CT-based PTS
+        int64_t decoded_pts_ms = decoded_frame.metadata.pts / 1000;
+        real_frames_decoded_++;
+        if (desired_start_ms_ < 0) {
+          // First real decoded frame in this block
+          desired_start_ms_ = frame.asset_offset_ms;
+          actual_start_ms_ = decoded_pts_ms;
+        }
+        // Always update end (last one wins)
+        desired_end_ms_ = frame.asset_offset_ms;
+        actual_end_ms_ = decoded_pts_ms;
+
         // Copy decoded frame data to our video_frame
         video_frame = std::move(decoded_frame);
         decoded_ok = true;
@@ -464,6 +484,22 @@ void RealTimeEncoderSink::Close() {
   // The encoder/muxer continues running for the next block.
   // This maintains continuity counters and DTS/PTS tracking.
   // ==========================================================================
+  // ==========================================================================
+  // SEEK ACCURACY: Log desired vs actual frame positions
+  // ==========================================================================
+  if (real_frames_decoded_ > 0) {
+    std::cout << "[METRIC] block_seek_accuracy"
+              << " desired_start_ms=" << desired_start_ms_
+              << " actual_start_ms=" << actual_start_ms_
+              << " start_delta_ms=" << (actual_start_ms_ - desired_start_ms_)
+              << " desired_end_ms=" << desired_end_ms_
+              << " actual_end_ms=" << actual_end_ms_
+              << " end_delta_ms=" << (actual_end_ms_ - desired_end_ms_)
+              << " real_frames=" << real_frames_decoded_
+              << " total_frames=" << frame_count_
+              << std::endl;
+  }
+
   if (using_shared_encoder_) {
     // Shared encoder stays open - just log block completion
     std::cout << "[RealTimeEncoderSink] Block completed (shared encoder): "
@@ -635,6 +671,13 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
        ", segment=" + std::to_string(current_segment_index));
 
   // ==========================================================================
+  // METRICS: Frame cadence tracking (passive — no behavioral effect)
+  // ==========================================================================
+  FrameCadenceMetrics cadence;
+  std::chrono::steady_clock::time_point prev_emit_time;
+  bool have_prev_emit = false;
+
+  // ==========================================================================
   // PHASE 3: Main execution loop
   // CONTRACT-BLOCK-002: Block execution lifecycle
   // IDENTICAL TO BlockPlanExecutor logic
@@ -644,7 +687,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     if (termination_requested_.load(std::memory_order_acquire)) {
       int64_t final_pts_offset = sink_->FinalPtsOffset90k();
       sink_->Close();
-      return Result{Result::Code::kTerminated, ct_ms, final_pts_offset, "Terminated"};
+      Result r{Result::Code::kTerminated, ct_ms, final_pts_offset, "Terminated"};
+      r.frame_cadence = cadence;
+      return r;
     }
 
     // =======================================================================
@@ -656,7 +701,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
       // INV-PTS-MONOTONIC: Capture PTS offset before close for next block
       int64_t final_pts_offset = sink_->FinalPtsOffset90k();
       sink_->Close();
-      return Result{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
+      Result r{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
+      r.frame_cadence = cadence;
+      return r;
     }
 
     // =======================================================================
@@ -670,7 +717,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
       if (!next_segment) {
         int64_t final_pts_offset = sink_->FinalPtsOffset90k();
         sink_->Close();
-        return Result{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
+        Result r{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
+        r.frame_cadence = cadence;
+        return r;
       }
 
       Diag("[Executor] Segment transition: " + std::to_string(current_segment_index) +
@@ -690,12 +739,10 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
       if (!current_asset) {
         int64_t final_pts_offset = sink_->FinalPtsOffset90k();
         sink_->Close();
-        return Result{
-            Result::Code::kAssetError,
-            ct_ms,
-            final_pts_offset,
-            "Asset not found: " + current_segment->asset_uri
-        };
+        Result r{Result::Code::kAssetError, ct_ms, final_pts_offset,
+                 "Asset not found: " + current_segment->asset_uri};
+        r.frame_cadence = cadence;
+        return r;
       }
 
       asset_offset_ms = current_segment->asset_start_offset_ms;
@@ -737,13 +784,32 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
     }
 
     // =======================================================================
-    // EMIT FRAME
+    // EMIT FRAME (with passive cadence measurement)
     // =======================================================================
+    auto emit_start = std::chrono::steady_clock::now();
     if (!sink_->EmitFrame(frame)) {
       int64_t final_pts_offset = sink_->FinalPtsOffset90k();
       sink_->Close();
-      return Result{Result::Code::kEncoderError, ct_ms, final_pts_offset, "Encoder error"};
+      Result r{Result::Code::kEncoderError, ct_ms, final_pts_offset, "Encoder error"};
+      r.frame_cadence = cadence;
+      return r;
     }
+    cadence.frames_emitted++;
+
+    // Measure inter-frame gap (time between consecutive EmitFrame starts)
+    if (have_prev_emit) {
+      auto gap_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          emit_start - prev_emit_time).count();
+      cadence.sum_inter_frame_gap_us += gap_us;
+      if (gap_us > cadence.max_inter_frame_gap_us) {
+        cadence.max_inter_frame_gap_us = gap_us;
+      }
+      if (gap_us > 40000) {  // 40ms threshold
+        cadence.frame_gaps_over_40ms++;
+      }
+    }
+    prev_emit_time = emit_start;
+    have_prev_emit = true;
 
     // =======================================================================
     // ADVANCE CT
@@ -773,7 +839,9 @@ RealTimeBlockExecutor::Result RealTimeBlockExecutor::Execute(
 
   int64_t final_pts_offset = sink_->FinalPtsOffset90k();
   sink_->Close();
-  return Result{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
+  Result r{Result::Code::kSuccess, ct_ms, final_pts_offset, ""};
+  r.frame_cadence = cadence;
+  return r;
 }
 
 }  // namespace retrovue::blockplan::realtime

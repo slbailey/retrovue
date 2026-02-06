@@ -245,7 +245,54 @@ bool FFmpegDecoder::SeekToMs(int64_t position_ms) {
   return true;
 }
 
+int FFmpegDecoder::SeekPreciseToMs(int64_t target_ms) {
+  if (!SeekToMs(target_ms)) {
+    return -1;
+  }
+
+  // No preroll needed for start of file
+  if (target_ms <= 0) {
+    return 0;
+  }
+
+  int preroll_count = 0;
+
+  while (true) {
+    buffer::Frame frame;
+    if (!ReadAndDecodeFrame(frame)) {
+      // EOF during preroll — no on-target frame found
+      // Clear any audio frames accumulated during preroll
+      while (!pending_audio_frames_.empty()) {
+        pending_audio_frames_.pop();
+      }
+      return preroll_count;
+    }
+
+    // Convert frame PTS from microseconds to milliseconds
+    int64_t pts_ms = frame.metadata.pts / 1000;
+
+    if (pts_ms >= target_ms) {
+      // This is the first on-target frame — store it as pending
+      has_pending_frame_ = true;
+      pending_frame_ = std::move(frame);
+      // Flush audio frames from preroll period
+      while (!pending_audio_frames_.empty()) {
+        pending_audio_frames_.pop();
+      }
+      return preroll_count;
+    }
+
+    // Discard this preroll frame
+    preroll_count++;
+  }
+}
+
 bool FFmpegDecoder::DecodeFrameToBuffer(buffer::Frame& output_frame) {
+  if (has_pending_frame_) {
+    has_pending_frame_ = false;
+    output_frame = std::move(pending_frame_);
+    return true;
+  }
   if (!IsOpen() || eof_reached_) {
     return false;
   }

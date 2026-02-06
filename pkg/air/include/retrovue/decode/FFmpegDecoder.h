@@ -105,6 +105,13 @@ class FFmpegDecoder {
   // Seeks to nearest keyframe before the target position.
   bool SeekToMs(int64_t position_ms);
 
+  // Seek precisely to target position with preroll.
+  // 1. Seeks to keyframe BEFORE target (via SeekToMs)
+  // 2. Decodes and discards frames until PTS >= target_ms
+  // 3. Leaves the first on-target frame pending for next DecodeFrameToBuffer()
+  // Returns number of preroll frames discarded, or -1 on seek error.
+  int SeekPreciseToMs(int64_t target_ms);
+
   // Decode next frame directly to Frame struct (no ring buffer).
   // Used by BlockPlan executor for frame-by-frame decoding.
   bool DecodeFrameToBuffer(buffer::Frame& output_frame);
@@ -193,6 +200,10 @@ class FFmpegDecoder {
   double time_base_;
   int64_t audio_start_time_;
   double audio_time_base_;
+
+  // Pending frame from SeekPreciseToMs() preroll
+  bool has_pending_frame_ = false;
+  buffer::Frame pending_frame_;
 
   // Phase 8.9: Queue for audio frames decoded during video packet processing
   std::queue<buffer::AudioFrame> pending_audio_frames_;

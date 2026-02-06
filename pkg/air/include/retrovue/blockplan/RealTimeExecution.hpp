@@ -200,6 +200,17 @@ class RealTimeEncoderSink {
   bool audio_started_ = false;
 
   // ==========================================================================
+  // SEEK ACCURACY: Track desired vs actual frame positions per block
+  // ==========================================================================
+  // Desired = executor-computed asset_offset_ms from FrameMetadata
+  // Actual  = decoder PTS (microseconds from asset start, / 1000 for ms)
+  int64_t desired_start_ms_ = -1;   // First real frame's requested offset
+  int64_t actual_start_ms_ = -1;    // First real frame's decoded PTS (ms)
+  int64_t desired_end_ms_ = -1;     // Last real frame's requested offset
+  int64_t actual_end_ms_ = -1;      // Last real frame's decoded PTS (ms)
+  size_t real_frames_decoded_ = 0;  // Count of successfully decoded frames
+
+  // ==========================================================================
   // INV-PTS-MONOTONIC / INV-AUDIO-VIDEO-SYNC: Audio PTS must be CT-based
   // ==========================================================================
   // Audio PTS is computed from samples emitted (not decoder timestamps).
@@ -221,6 +232,14 @@ class RealTimeBlockExecutor {
     std::function<void(const std::string&)> diagnostic;  // Optional logging
   };
 
+  // Per-block frame cadence metrics captured during Execute()
+  struct FrameCadenceMetrics {
+    int64_t frames_emitted = 0;
+    int64_t max_inter_frame_gap_us = 0;   // Max time between consecutive EmitFrame calls
+    int64_t sum_inter_frame_gap_us = 0;   // Sum for computing mean
+    int32_t frame_gaps_over_40ms = 0;     // Count of gaps exceeding 40ms (~1.2x frame period)
+  };
+
   struct Result {
     enum class Code {
       kSuccess,
@@ -234,6 +253,8 @@ class RealTimeBlockExecutor {
     // INV-PTS-MONOTONIC: Final PTS offset to pass to next block for continuity
     int64_t final_pts_offset_90k = 0;
     std::string error_detail;
+    // Per-block frame cadence metrics (passive observation)
+    FrameCadenceMetrics frame_cadence;
   };
 
   explicit RealTimeBlockExecutor(const Config& config);

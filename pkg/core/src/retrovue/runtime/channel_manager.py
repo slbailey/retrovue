@@ -2658,6 +2658,9 @@ class BlockPlanProducer(Producer):
             "block_duration_ms", self.DEFAULT_BLOCK_DURATION_MS
         )
 
+        # Retained playout plan for block cycling (set at start, reused on feed)
+        self._playout_plan: list[dict[str, Any]] = []
+
         # UDS socket for TS output
         self._socket_path: Path | None = None
         self._stream_endpoint = f"/channel/{channel_id}.ts"
@@ -2711,6 +2714,9 @@ class BlockPlanProducer(Producer):
             try:
                 # Import here to avoid circular imports
                 from .playout_session import PlayoutSession, BlockPlan
+
+                # Retain playout plan for block cycling
+                self._playout_plan = playout_plan or []
 
                 # Setup socket path
                 self._socket_path = Path(f"/tmp/retrovue/air/{self.channel_id}.sock")
@@ -2892,8 +2898,8 @@ class BlockPlanProducer(Producer):
         """
         Generate the next BlockPlan and advance state.
 
-        For now, generates fixed-duration blocks from the first segment.
-        Future: proper segment slicing based on schedule.
+        Cycles through playout_plan entries round-robin, respecting per-entry
+        asset_start_offset_ms for mid-asset seek support.
         """
         from .playout_session import BlockPlan
 
@@ -2901,24 +2907,33 @@ class BlockPlanProducer(Producer):
         start_ms = self._next_block_start_ms
         end_ms = start_ms + self._block_duration_ms
 
-        # Get asset from playout plan
+        # Cycle through playout plan entries round-robin
         if playout_plan:
-            segment = playout_plan[0]
-            asset_path = segment.get("asset_path", "assets/SampleA.mp4")
+            entry = playout_plan[block_index % len(playout_plan)]
+            asset_path = entry.get("asset_path", "assets/SampleA.mp4")
+            asset_offset_ms = entry.get("asset_start_offset_ms", 0)
         else:
             asset_path = "assets/SampleA.mp4"
+            asset_offset_ms = 0
+
+        block_id = f"BLOCK-{self.channel_id}-{block_index}"
 
         block = BlockPlan(
-            block_id=f"BLOCK-{self.channel_id}-{block_index}",
+            block_id=block_id,
             channel_id=self.channel_config.channel_id_int,
             start_utc_ms=start_ms,
             end_utc_ms=end_ms,
             segments=[{
                 "segment_index": 0,
                 "asset_uri": asset_path,
-                "asset_start_offset_ms": 0,
+                "asset_start_offset_ms": asset_offset_ms,
                 "segment_duration_ms": self._block_duration_ms,
             }],
+        )
+
+        self._logger.info(
+            "BlockPlan generated: block_id=%s asset_uri=%s asset_start_offset_ms=%d",
+            block_id, asset_path, asset_offset_ms,
         )
 
         # Advance state for next generation
@@ -2962,10 +2977,8 @@ class BlockPlanProducer(Producer):
                 self.channel_id, block_id
             )
 
-            # Generate and feed next block
-            # Note: Using empty playout_plan - real implementation would
-            # fetch fresh schedule data
-            next_block = self._generate_next_block([])
+            # Generate and feed next block using retained playout plan
+            next_block = self._generate_next_block(self._playout_plan)
             self._session.feed(next_block)
 
     def _on_session_end(self, reason: str):

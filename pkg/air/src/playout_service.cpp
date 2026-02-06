@@ -18,6 +18,7 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
 #include "retrovue/blockplan/RealTimeExecution.hpp"
+#include "retrovue/blockplan/SerialBlockExecutionEngine.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/output/IOutputSink.h"
 #include "retrovue/output/MpegTSOutputSink.h"
@@ -123,7 +124,7 @@ namespace retrovue
 #endif
     }
 
-    // Convert proto BlockPlan to internal type
+    // Convert proto BlockPlan to internal FedBlock type
     PlayoutControlImpl::BlockPlanBlock PlayoutControlImpl::ProtoToBlock(const BlockPlan& proto)
     {
       BlockPlanBlock block;
@@ -143,345 +144,11 @@ namespace retrovue
       return block;
     }
 
-    // Convert internal block to blockplan::BlockPlan type for executor
-    blockplan::BlockPlan PlayoutControlImpl::ConvertToBlockPlanType(const BlockPlanBlock& block) {
-      blockplan::BlockPlan plan;
-      plan.block_id = block.block_id;
-      plan.channel_id = block.channel_id;
-      plan.start_utc_ms = block.start_utc_ms;
-      plan.end_utc_ms = block.end_utc_ms;
-
-      for (const auto& seg : block.segments) {
-        blockplan::Segment s;
-        s.segment_index = seg.segment_index;
-        s.asset_uri = seg.asset_uri;
-        s.asset_start_offset_ms = seg.asset_start_offset_ms;
-        s.segment_duration_ms = seg.segment_duration_ms;
-        plan.segments.push_back(s);
-      }
-      return plan;
-    }
-
-    // BlockPlan execution thread - uses RealTimeBlockExecutor for real MPEG-TS output
-    void PlayoutControlImpl::BlockPlanExecutionThread(BlockPlanSessionState* state)
-    {
-      std::cout << "[BlockPlanExecution] Starting execution thread for channel "
-                << state->channel_id << std::endl;
-
-      // ========================================================================
-      // INSTRUMENTATION: Session-level timing
-      // ========================================================================
-      auto session_start_time = std::chrono::steady_clock::now();
-      std::string prev_block_id;  // Track for boundary gap measurement
-      std::chrono::steady_clock::time_point prev_block_last_frame_time;
-      bool have_prev_block_time = false;
-
-      // Track termination reason for SessionEnded event
-      std::string termination_reason = "unknown";
-
-      // ========================================================================
-      // SESSION-LONG ENCODER: Create encoder ONCE for entire session
-      // ========================================================================
-      // This fixes DTS out-of-order warnings by:
-      // - Maintaining continuity counters across blocks
-      // - Preserving encoder/muxer state (DTS tracking)
-      // - Not re-writing PAT/PMT per block
-      // - Avoiding encoder priming delays at block boundaries
-      // ========================================================================
-      playout_sinks::mpegts::MpegTSPlayoutSinkConfig enc_config;
-      enc_config.target_width = state->width;
-      enc_config.target_height = state->height;
-      enc_config.target_fps = state->fps;
-      enc_config.enable_audio = true;
-      enc_config.gop_size = 90;      // I-frame every 3 seconds
-      enc_config.bitrate = 2000000;  // 2 Mbps
-
-      auto session_encoder = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
-
-      // Session write context for callback (must outlive encoder)
-      struct SessionWriteContext {
-        int fd;
-        int64_t bytes_written;
-        bool first_write_logged;
-        std::chrono::steady_clock::time_point session_start;
-      };
-      SessionWriteContext write_ctx{state->fd, 0, false, session_start_time};
-
-      // Write callback (stateless - uses opaque pointer)
-      auto write_callback = [](void* opaque, uint8_t* buf, int buf_size) -> int {
-        auto* ctx = static_cast<SessionWriteContext*>(opaque);
-#if defined(__linux__) || defined(__APPLE__)
-        ssize_t written = write(ctx->fd, buf, static_cast<size_t>(buf_size));
-        if (written > 0) {
-          ctx->bytes_written += written;
-          // ================================================================
-          // INSTRUMENTATION: First TS write timing (tune-in latency)
-          // ================================================================
-          if (!ctx->first_write_logged) {
-            ctx->first_write_logged = true;
-            auto now = std::chrono::steady_clock::now();
-            auto tunein_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - ctx->session_start).count();
-            std::cout << "[METRIC] tunein_first_ts_ms=" << tunein_ms << std::endl;
-          }
-        }
-        return static_cast<int>(written);
-#else
-        (void)buf;
-        return buf_size;
-#endif
-      };
-
-      // Open the session encoder
-      auto encoder_open_start = std::chrono::steady_clock::now();
-      if (!session_encoder->open(enc_config, &write_ctx, write_callback)) {
-        std::cerr << "[BlockPlanExecution] Failed to open session encoder" << std::endl;
-        return;
-      }
-      auto encoder_open_end = std::chrono::steady_clock::now();
-      auto encoder_open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          encoder_open_end - encoder_open_start).count();
-      std::cout << "[METRIC] encoder_open_ms=" << encoder_open_ms
-                << " channel_id=" << state->channel_id << std::endl;
-
-      std::cout << "[BlockPlanExecution] Session encoder opened: "
-                << state->width << "x" << state->height << " @ " << state->fps << "fps"
-                << std::endl;
-
-      // ========================================================================
-      // ARCHITECTURAL TELEMETRY: One-time per-session declaration (AIR side)
-      // ========================================================================
-      std::cout << "[INV-PLAYOUT-AUTHORITY] channel_id=" << state->channel_id
-                << " | playout_path=blockplan"
-                << " | encoder_scope=session"
-                << " | execution_model=serial_block"
-                << " | format=" << state->width << "x" << state->height << "@" << state->fps
-                << std::endl;
-
-      // Configure the real-time sink with shared encoder
-      blockplan::realtime::SinkConfig sink_config;
-      sink_config.fd = state->fd;
-      sink_config.width = state->width;
-      sink_config.height = state->height;
-      sink_config.fps = state->fps;
-      // INV-PTS-MONOTONIC: Initialize PTS offset for session continuity across blocks
-      sink_config.initial_pts_offset_90k = 0;
-      // SESSION-LONG ENCODER: Share the encoder across all blocks
-      sink_config.shared_encoder = session_encoder.get();
-
-      // Create executor config with diagnostics
-      blockplan::realtime::RealTimeBlockExecutor::Config exec_config;
-      exec_config.sink = sink_config;
-      exec_config.diagnostic = [](const std::string& msg) {
-        std::cout << msg << std::endl;
-      };
-
-      // INV-PTS-MONOTONIC: Track accumulated PTS offset across blocks
-      int64_t session_pts_offset_90k = 0;
-
-      // Main execution loop - process blocks from queue
-      while (!state->stop_requested.load(std::memory_order_acquire))
-      {
-        // ========================================================================
-        // INSTRUMENTATION: Block fetch timing (includes queue wait)
-        // ========================================================================
-        auto block_fetch_start = std::chrono::steady_clock::now();
-
-        // Get next block from queue
-        PlayoutControlImpl::BlockPlanBlock current_block;
-        {
-          std::unique_lock<std::mutex> lock(state->queue_mutex);
-
-          // Wait for a block to be available
-          if (state->block_queue.empty()) {
-            // Check if we should wait or exit
-            if (state->stop_requested.load(std::memory_order_acquire)) {
-              break;
-            }
-
-            // INSTRUMENTATION: Log queue wait
-            auto wait_start = std::chrono::steady_clock::now();
-            state->queue_cv.wait_for(lock, std::chrono::milliseconds(100));
-            auto wait_end = std::chrono::steady_clock::now();
-            auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                wait_end - wait_start).count();
-            if (wait_ms > 10) {  // Only log significant waits
-              std::cout << "[METRIC] queue_wait_ms=" << wait_ms
-                        << " channel_id=" << state->channel_id << std::endl;
-            }
-            continue;
-          }
-
-          // Get and remove the first block
-          current_block = state->block_queue.front();
-          state->block_queue.erase(state->block_queue.begin());
-        }
-
-        auto block_fetch_end = std::chrono::steady_clock::now();
-        auto block_fetch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            block_fetch_end - block_fetch_start).count();
-        std::cout << "[METRIC] block_fetch_ms=" << block_fetch_ms
-                  << " block_id=" << current_block.block_id << std::endl;
-
-        std::cout << "[BlockPlanExecution] Executing block: " << current_block.block_id
-                  << " (" << current_block.start_utc_ms << "-" << current_block.end_utc_ms << ")"
-                  << std::endl;
-
-        // Convert to blockplan types
-        blockplan::BlockPlan plan = ConvertToBlockPlanType(current_block);
-
-        // ========================================================================
-        // INSTRUMENTATION: Asset probe timing (per asset)
-        // ========================================================================
-        auto probe_total_start = std::chrono::steady_clock::now();
-        blockplan::realtime::RealAssetSource assets;
-        for (const auto& seg : plan.segments) {
-          auto probe_start = std::chrono::steady_clock::now();
-          if (!assets.ProbeAsset(seg.asset_uri)) {
-            std::cerr << "[BlockPlanExecution] Failed to probe asset: " << seg.asset_uri << std::endl;
-            // Continue with next block or terminate
-            continue;
-          }
-          auto probe_end = std::chrono::steady_clock::now();
-          auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              probe_end - probe_start).count();
-          std::cout << "[METRIC] asset_probe_ms=" << probe_ms
-                    << " uri=" << seg.asset_uri
-                    << " block_id=" << current_block.block_id << std::endl;
-        }
-        auto probe_total_end = std::chrono::steady_clock::now();
-        auto probe_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            probe_total_end - probe_total_start).count();
-        std::cout << "[METRIC] asset_probe_total_ms=" << probe_total_ms
-                  << " block_id=" << current_block.block_id << std::endl;
-
-        // Create asset duration function for validator
-        auto duration_fn = [&assets](const std::string& uri) -> int64_t {
-          return assets.GetDuration(uri);
-        };
-
-        // Validate block plan
-        blockplan::BlockPlanValidator validator(duration_fn);
-        auto validation = validator.Validate(plan, plan.start_utc_ms);
-
-        if (!validation.valid) {
-          std::cerr << "[BlockPlanExecution] Block validation failed: " << validation.detail << std::endl;
-          state->final_ct_ms = 0;
-          termination_reason = "error";
-          break;
-        }
-
-        // Compute join parameters (start at block beginning)
-        blockplan::ValidatedBlockPlan validated{plan, validation.boundaries, plan.start_utc_ms};
-        auto join_result = blockplan::JoinComputer::ComputeJoinParameters(validated, plan.start_utc_ms);
-
-        if (!join_result.valid) {
-          std::cerr << "[BlockPlanExecution] Join computation failed" << std::endl;
-          termination_reason = "error";
-          break;
-        }
-
-        // INV-PTS-MONOTONIC: Update sink config with session PTS offset before execution
-        exec_config.sink.initial_pts_offset_90k = session_pts_offset_90k;
-
-        // ========================================================================
-        // INSTRUMENTATION: Execute timing and boundary gap
-        // ========================================================================
-        auto execute_start = std::chrono::steady_clock::now();
-
-        // Log boundary gap from previous block (if any)
-        if (have_prev_block_time) {
-          auto boundary_gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              execute_start - prev_block_last_frame_time).count();
-          std::cout << "[METRIC] boundary_gap_ms=" << boundary_gap_ms
-                    << " prev_block=" << prev_block_id
-                    << " next_block=" << current_block.block_id << std::endl;
-        }
-
-        // Log time from session start to first block execute
-        if (state->blocks_executed == 0) {
-          auto tunein_to_execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              execute_start - session_start_time).count();
-          std::cout << "[METRIC] tunein_to_first_execute_ms=" << tunein_to_execute_ms
-                    << " channel_id=" << state->channel_id << std::endl;
-        }
-
-        // Create and run executor
-        blockplan::realtime::RealTimeBlockExecutor executor(exec_config);
-        auto result = executor.Execute(validated, join_result.params);
-
-        auto execute_end = std::chrono::steady_clock::now();
-        auto execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            execute_end - execute_start).count();
-        std::cout << "[METRIC] block_execute_ms=" << execute_ms
-                  << " block_id=" << current_block.block_id
-                  << " frames=" << result.final_ct_ms / 33 << std::endl;
-
-        // Store for next boundary gap calculation
-        prev_block_id = current_block.block_id;
-        prev_block_last_frame_time = execute_end;
-        have_prev_block_time = true;
-
-        // INV-PTS-MONOTONIC: Capture PTS offset from completed block for next block
-        session_pts_offset_90k = result.final_pts_offset_90k;
-
-        state->final_ct_ms = result.final_ct_ms;
-        state->blocks_executed++;
-
-        std::cout << "[BlockPlanExecution] Block " << current_block.block_id
-                  << " completed: ct=" << result.final_ct_ms << "ms"
-                  << ", result=" << static_cast<int>(result.code)
-                  << std::endl;
-
-        // Emit BlockCompleted event to subscribers (fires after fence)
-        EmitBlockCompleted(state, current_block, result.final_ct_ms);
-
-        // Check for errors
-        if (result.code != blockplan::realtime::RealTimeBlockExecutor::Result::Code::kSuccess &&
-            result.code != blockplan::realtime::RealTimeBlockExecutor::Result::Code::kTerminated) {
-          std::cerr << "[BlockPlanExecution] Execution error: " << result.error_detail << std::endl;
-          termination_reason = "error";
-          break;
-        }
-
-        if (result.code == blockplan::realtime::RealTimeBlockExecutor::Result::Code::kTerminated) {
-          std::cout << "[BlockPlanExecution] Terminated by request" << std::endl;
-          termination_reason = "stopped";
-          break;
-        }
-
-        // Check if there's another block (lookahead)
-        {
-          std::lock_guard<std::mutex> lock(state->queue_mutex);
-          if (state->block_queue.empty()) {
-            std::cout << "[BlockPlanExecution] LOOKAHEAD_EXHAUSTED at fence" << std::endl;
-            termination_reason = "lookahead_exhausted";
-            break;
-          }
-        }
-      }
-
-      // If we exited due to stop_requested (from main loop condition), set reason
-      if (state->stop_requested.load(std::memory_order_acquire) && termination_reason == "unknown") {
-        termination_reason = "stopped";
-      }
-
-      // ========================================================================
-      // SESSION-LONG ENCODER: Close the encoder at session end
-      // ========================================================================
-      if (session_encoder) {
-        session_encoder->close();
-        std::cout << "[BlockPlanExecution] Session encoder closed: "
-                  << write_ctx.bytes_written << " bytes written" << std::endl;
-      }
-
-      std::cout << "[BlockPlanExecution] Thread exiting: blocks_executed=" << state->blocks_executed
-                << ", final_ct=" << state->final_ct_ms << "ms"
-                << ", reason=" << termination_reason << std::endl;
-
-      // Emit SessionEnded event to all subscribers
-      EmitSessionEnded(state, termination_reason);
-    }
+    // ========================================================================
+    // BlockPlanExecutionThread logic has been extracted to:
+    //   SerialBlockExecutionEngine (blockplan/SerialBlockExecutionEngine.cpp)
+    // This is a mechanical extraction — no logic changes.
+    // ========================================================================
 
     grpc::Status PlayoutControlImpl::StartChannel(grpc::ServerContext *context,
                                                   const StartChannelRequest *request,
@@ -998,10 +665,47 @@ namespace retrovue
                 << "@" << blockplan_session_->fps << "fps"
                 << std::endl;
 
-      // Start real execution thread using RealTimeBlockExecutor
-      blockplan_session_->stop_requested.store(false, std::memory_order_release);
-      blockplan_session_->execution_thread = std::thread(
-          &PlayoutControlImpl::BlockPlanExecutionThread, this, blockplan_session_.get());
+      // ========================================================================
+      // ENGINE SELECTION: Select execution engine based on execution mode
+      // INV-SERIAL-BLOCK-EXECUTION: Only kSerialBlock is implemented
+      // ========================================================================
+      constexpr auto kExecutionMode = blockplan::PlayoutExecutionMode::kSerialBlock;
+
+      if (kExecutionMode == blockplan::PlayoutExecutionMode::kSerialBlock) {
+        // Create callbacks that delegate to gRPC event emission
+        blockplan::SerialBlockExecutionEngine::Callbacks callbacks;
+        callbacks.on_block_completed = [this](const blockplan::FedBlock& block, int64_t final_ct_ms) {
+          EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
+        };
+        callbacks.on_session_ended = [this](const std::string& reason) {
+          EmitSessionEnded(blockplan_session_.get(), reason);
+        };
+
+        blockplan_session_->engine = std::make_unique<blockplan::SerialBlockExecutionEngine>(
+            blockplan_session_.get(), std::move(callbacks));
+
+        // Wire engine metrics to Prometheus export
+        if (auto metrics_exporter = interface_->GetMetricsExporter()) {
+          auto* engine_ptr = static_cast<blockplan::SerialBlockExecutionEngine*>(
+              blockplan_session_->engine.get());
+          metrics_exporter->RegisterCustomMetricsProvider(
+              "serial_block_engine",
+              [engine_ptr]() { return engine_ptr->GenerateMetricsText(); });
+        }
+
+        blockplan_session_->engine->Start();
+      } else {
+        // kContinuousOutput: NOT IMPLEMENTED
+        std::cerr << "[StartBlockPlanSession] FATAL: execution_model="
+                  << blockplan::PlayoutExecutionModeToString(kExecutionMode)
+                  << " is not implemented" << std::endl;
+        blockplan_session_.reset();
+        response->set_success(false);
+        response->set_message("Execution mode not implemented: "
+                              + std::string(blockplan::PlayoutExecutionModeToString(kExecutionMode)));
+        response->set_result_code(BLOCKPLAN_RESULT_NO_SESSION);
+        return grpc::Status::OK;
+      }
 
       response->set_success(true);
       response->set_message("BlockPlan session started");
@@ -1092,10 +796,15 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
-      // Stop execution thread if running
-      blockplan_session_->stop_requested.store(true, std::memory_order_release);
-      if (blockplan_session_->execution_thread.joinable()) {
-        blockplan_session_->execution_thread.join();
+      // Unregister engine metrics provider before stopping
+      if (auto metrics_exporter = interface_->GetMetricsExporter()) {
+        metrics_exporter->UnregisterCustomMetricsProvider("serial_block_engine");
+      }
+
+      // Stop execution engine (joins thread internally)
+      if (blockplan_session_->engine) {
+        blockplan_session_->engine->Stop();
+        blockplan_session_->engine.reset();
       }
 
       int64_t final_ct = blockplan_session_->final_ct_ms;
