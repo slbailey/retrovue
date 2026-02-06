@@ -103,6 +103,8 @@ struct SinkConfig {
   double fps = 30.0;     // Frame rate
   int audio_rate = 48000;
   int audio_channels = 2;
+  // INV-PTS-MONOTONIC: Initial PTS offset for session continuity across blocks
+  int64_t initial_pts_offset_90k = 0;
 };
 
 // Frame metadata (matches testing::EmittedFrame structure)
@@ -132,6 +134,16 @@ class RealTimeEncoderSink {
   // Statistics
   size_t FrameCount() const { return frame_count_; }
   int64_t BytesWritten() const { return bytes_written_; }
+  // INV-PTS-MONOTONIC: Get final PTS offset for next block's session continuity.
+  // Returns the offset needed for the NEXT block to maintain monotonic PTS.
+  // This includes the current block's duration contribution.
+  int64_t FinalPtsOffset90k() const {
+    if (last_ct_ms_ < 0) {
+      return pts_offset_90k_;  // No frames emitted
+    }
+    // Next block starts where this block ended: base + (last_ct + frame_duration) * 90
+    return pts_offset_90k_ + (last_ct_ms_ + kFrameDurationMs) * 90;
+  }
 
  private:
   // Generate black video frame
@@ -187,6 +199,8 @@ class RealTimeBlockExecutor {
     };
     Code code = Code::kSuccess;
     int64_t final_ct_ms = 0;
+    // INV-PTS-MONOTONIC: Final PTS offset to pass to next block for continuity
+    int64_t final_pts_offset_90k = 0;
     std::string error_detail;
   };
 
