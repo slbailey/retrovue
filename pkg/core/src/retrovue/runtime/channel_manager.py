@@ -108,6 +108,19 @@ import logging
 import os
 import threading
 
+# =============================================================================
+# PLAYOUT AUTHORITY DECLARATION
+# =============================================================================
+# The BlockPlan path is the sole authoritative playout path for live channels.
+# Legacy paths (Phase8AirProducer, LoadPreview/SwitchToLive) are retained for
+# reference only and MUST NOT be invoked for live playout.
+#
+# Enforcement: PLAYOUT_AUTHORITY is checked at producer construction time.
+# Any attempt to construct a legacy producer while this is "blockplan" will
+# raise an error with a descriptive message.
+# =============================================================================
+PLAYOUT_AUTHORITY: str = "blockplan"
+
 # BlockPlan imports (lazy to avoid circular imports)
 if TYPE_CHECKING:
     from .playout_session import PlayoutSession, BlockPlan
@@ -1831,12 +1844,25 @@ class ChannelManager:
         """
         Factory hook: build the correct Producer implementation for the given mode.
 
-        When _blockplan_mode is True, returns BlockPlanProducer for autonomous
-        BlockPlan execution. Otherwise, returns Phase8AirProducer for legacy
-        LoadPreview/SwitchToLive execution.
-
-        INV-VIEWER-LIFECYCLE: Producer selection is deterministic based on mode flag.
+        INV-PLAYOUT-AUTHORITY: When PLAYOUT_AUTHORITY == "blockplan", only
+        BlockPlanProducer may be constructed.  Legacy paths are blocked.
         """
+        # =====================================================================
+        # INV-PLAYOUT-AUTHORITY: Enforce authoritative playout path
+        # =====================================================================
+        if PLAYOUT_AUTHORITY == "blockplan" and not self._blockplan_mode:
+            self._logger.error(
+                "INV-PLAYOUT-AUTHORITY: Channel %s: PLAYOUT_AUTHORITY is 'blockplan' "
+                "but _blockplan_mode is False.  Legacy playout path is disabled.  "
+                "Call set_blockplan_mode(True) before starting the channel.",
+                self.channel_id,
+            )
+            raise RuntimeError(
+                f"Channel {self.channel_id}: Legacy playout path invoked while "
+                f"PLAYOUT_AUTHORITY='{PLAYOUT_AUTHORITY}'.  "
+                f"Only BlockPlanProducer is permitted for live channels."
+            )
+
         if self._blockplan_mode:
             self._logger.info(
                 "Channel %s: Building BlockPlanProducer (mode=%s)",
@@ -1850,8 +1876,7 @@ class ChannelManager:
                 clock=self.clock,
             )
         else:
-            # Legacy Phase8 mode - return None (or Phase8AirProducer if available)
-            # This method is typically overridden by the runtime
+            # Legacy Phase8 mode — unreachable when PLAYOUT_AUTHORITY == "blockplan"
             _ = mode  # avoid unused var lint
             return None
 
@@ -2352,14 +2377,11 @@ class Phase8ProgramDirector:
 
 
 class Phase8AirProducer(Producer):
-    """Producer that spawns an Air process to play video for the schedule.
+    """LEGACY Producer — retained for reference only.
 
-    ChannelManager spawns Air (playout engine) processes to actually play content.
-    ChannelManager does NOT spawn ProgramDirector or the main retrovue process;
-    ProgramDirector spawns ChannelManager when one doesn't exist for the channel.
-
-    Supports clock-driven segment switching via load_preview() and switch_to_live()
-    called by ChannelManager tick (schedule advances because time advanced, not EOF).
+    This producer uses the LoadPreview/SwitchToLive clock-driven switching path.
+    It is superseded by BlockPlanProducer and MUST NOT be invoked for live channels
+    when PLAYOUT_AUTHORITY == "blockplan".
     """
 
     def __init__(
@@ -2378,6 +2400,17 @@ class Phase8AirProducer(Producer):
 
     def start(self, playout_plan: list[dict[str, Any]], start_at_station_time: datetime) -> bool:
         """Start output by spawning an Air process. Builds PlayoutRequest, launches Air via stdin."""
+        # =====================================================================
+        # INV-PLAYOUT-AUTHORITY GUARDRAIL: Block legacy path when authority is blockplan
+        # =====================================================================
+        if PLAYOUT_AUTHORITY == "blockplan":
+            raise RuntimeError(
+                f"INV-PLAYOUT-AUTHORITY: Phase8AirProducer.start() called for "
+                f"channel '{self.channel_id}' while PLAYOUT_AUTHORITY='{PLAYOUT_AUTHORITY}'. "
+                f"The legacy LoadPreview/SwitchToLive path is disabled. "
+                f"Use BlockPlanProducer instead."
+            )
+
         if not playout_plan:
             return False
 
@@ -2747,6 +2780,25 @@ class BlockPlanProducer(Producer):
                 self._logger.info(
                     "Channel %s: BlockPlan execution started, seeded 2 blocks",
                     self.channel_id
+                )
+
+                # =============================================================
+                # ARCHITECTURAL TELEMETRY: One-time per-session declaration
+                # =============================================================
+                # Emitted exactly once per session so logs unambiguously show
+                # which playout path, encoder scope, and execution model is
+                # active.  Not emitted per-block or per-frame.
+                # =============================================================
+                self._logger.info(
+                    "INV-PLAYOUT-AUTHORITY: Channel %s session started | "
+                    "playout_path=blockplan | "
+                    "encoder_scope=session | "
+                    "execution_model=serial_block | "
+                    "block_duration_ms=%d | "
+                    "authority=%s",
+                    self.channel_id,
+                    self._block_duration_ms,
+                    PLAYOUT_AUTHORITY,
                 )
                 return True
 
