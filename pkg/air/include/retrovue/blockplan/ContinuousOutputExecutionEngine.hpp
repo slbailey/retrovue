@@ -36,6 +36,8 @@ namespace retrovue::blockplan {
 class BlockSource;
 class SourcePreloader;
 struct FrameFingerprint;
+struct BlockPlaybackSummary;
+struct SeamTransitionLog;
 
 class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
  public:
@@ -49,6 +51,14 @@ class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
     // P3.2: Per-frame fingerprint (optional — test/verify only).
     // Zero cost when not wired.
     std::function<void(const FrameFingerprint&)> on_frame_emitted;
+
+    // P3.3: Per-block playback summary (optional — test/diagnostics).
+    // Fired when a block completes its fence, before on_block_completed.
+    std::function<void(const BlockPlaybackSummary&)> on_block_summary;
+
+    // P3.3: Seam transition log (optional — test/diagnostics).
+    // Fired at source swap or new block load after fence.
+    std::function<void(const SeamTransitionLog&)> on_seam_transition;
   };
 
   ContinuousOutputExecutionEngine(BlockPlanSessionContext* ctx,

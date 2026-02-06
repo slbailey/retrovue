@@ -18,6 +18,7 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BlockSource.hpp"
 #include "retrovue/blockplan/OutputClock.hpp"
+#include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/SourcePreloader.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
@@ -311,6 +312,16 @@ void ContinuousOutputExecutionEngine::Run() {
   // Track whether we're past the active block's fence and waiting for next
   bool past_fence = false;
 
+  // P3.3: Per-block playback accumulator
+  BlockAccumulator block_acc;
+  if (active_source_->GetState() == BlockSource::State::kReady) {
+    block_acc.Reset(active_source_->GetBlock().block_id);
+  }
+  // P3.3: Seam transition tracking
+  std::string prev_completed_block_id;
+  int64_t fence_session_frame = -1;
+  int64_t fence_pad_counter = 0;  // pad frames since last fence
+
   while (!ctx_->stop_requested.load(std::memory_order_acquire)) {
     // Wait until absolute deadline for this frame
     auto wake_time = clock.WaitForFrame(session_frame_index);
@@ -371,12 +382,43 @@ void ContinuousOutputExecutionEngine::Run() {
       callbacks_.on_frame_emitted(fp);
     }
 
+    // P3.3: Accumulate frame into current block summary
+    if (active_source_->GetState() == BlockSource::State::kReady &&
+        !block_acc.block_id.empty()) {
+      std::string uri;
+      int64_t ct_ms = 0;
+      if (!is_pad && frame_data) {
+        uri = frame_data->asset_uri;
+        ct_ms = frame_data->block_ct_ms;
+      }
+      block_acc.AccumulateFrame(session_frame_index, is_pad, uri, ct_ms);
+    }
+
+    // P3.3: Count pad frames after fence for seam tracking
+    if (past_fence && is_pad) {
+      fence_pad_counter++;
+    }
+
     // ==================================================================
     // FENCE CHECK (engine-owned, not BlockSource)
     // P3.1b: At fence, try to swap to preloaded next_source_.
     // ==================================================================
     if (active_source_->GetState() == BlockSource::State::kReady &&
         source_ticks_ >= active_source_->FramesPerBlock()) {
+
+      // P3.3: Finalize and emit playback summary before completion callback
+      if (!block_acc.block_id.empty()) {
+        auto summary = block_acc.Finalize();
+        std::cout << FormatPlaybackSummary(summary) << std::endl;
+        if (callbacks_.on_block_summary) {
+          callbacks_.on_block_summary(summary);
+        }
+      }
+
+      // P3.3: Record completed block for seam tracking
+      prev_completed_block_id = active_source_->GetBlock().block_id;
+      fence_session_frame = session_frame_index;
+      fence_pad_counter = 0;
 
       // Fire completion callback for the active block
       if (callbacks_.on_block_completed) {
@@ -418,6 +460,23 @@ void ContinuousOutputExecutionEngine::Run() {
         }
         past_fence = false;
 
+        // P3.3: Emit seam transition log (seamless swap)
+        if (!prev_completed_block_id.empty()) {
+          SeamTransitionLog seam;
+          seam.from_block_id = prev_completed_block_id;
+          seam.to_block_id = active_source_->GetBlock().block_id;
+          seam.fence_frame = fence_session_frame;
+          seam.pad_frames_at_fence = 0;
+          seam.seamless = true;
+          std::cout << FormatSeamTransition(seam) << std::endl;
+          if (callbacks_.on_seam_transition) {
+            callbacks_.on_seam_transition(seam);
+          }
+        }
+
+        // P3.3: Reset accumulator for new block
+        block_acc.Reset(active_source_->GetBlock().block_id);
+
         // Immediately kick off preload for the following block
         TryKickoffNextPreload();
       } else {
@@ -433,6 +492,25 @@ void ContinuousOutputExecutionEngine::Run() {
       TryLoadActiveBlock();  // Outside timed tick window
 
       if (active_source_->GetState() == BlockSource::State::kReady) {
+        // P3.3: Emit seam transition log (padded transition)
+        if (!prev_completed_block_id.empty()) {
+          SeamTransitionLog seam;
+          seam.from_block_id = prev_completed_block_id;
+          seam.to_block_id = active_source_->GetBlock().block_id;
+          seam.fence_frame = fence_session_frame;
+          seam.pad_frames_at_fence = fence_pad_counter;
+          seam.seamless = (fence_pad_counter == 0);
+          std::cout << FormatSeamTransition(seam) << std::endl;
+          if (callbacks_.on_seam_transition) {
+            callbacks_.on_seam_transition(seam);
+          }
+          prev_completed_block_id.clear();
+        }
+
+        // P3.3: Reset accumulator for new block
+        block_acc.Reset(active_source_->GetBlock().block_id);
+        fence_pad_counter = 0;
+
         past_fence = false;
         // Kick off preload for the next one
         TryKickoffNextPreload();

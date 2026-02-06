@@ -587,3 +587,76 @@ fingerprints, builds a `BoundaryReport`, and asserts seamless transitions.
 | SEAM-PROOF-004 | FrameDataCarriesMetadata — FrameData has asset_uri/block_ct_ms |
 | SEAM-PROOF-005 | RealMediaBoundarySeamless — GTEST_SKIP if assets missing |
 | SEAM-PROOF-006 | BoundaryReportGeneration — unit test on BuildBoundaryReport |
+
+---
+
+## P3.3 — Execution Trace & Proof Logs
+
+P3.3 adds deterministic, low-volume, per-block playback summary logs that prove
+what content was actually played. These logs reflect actual execution, not
+scheduled intent.
+
+### Design
+
+This phase is **observability only** — no behavioral changes. Summary and seam
+data is aggregated from frame-level metadata already available in the tick loop.
+
+### BlockPlaybackSummary
+
+Aggregated per-block execution record finalized when the block reaches its fence.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `block_id` | string | Block identity |
+| `asset_uris` | vector | Unique asset URIs observed, in order |
+| `first_block_ct_ms` | int64 | CT of first real frame (-1 if all pad) |
+| `last_block_ct_ms` | int64 | CT of last real frame (-1 if all pad) |
+| `frames_emitted` | int64 | Total frames (real + pad) |
+| `pad_frames` | int64 | Pad frame count |
+| `first_session_frame_index` | int64 | Global session frame at block start |
+| `last_session_frame_index` | int64 | Global session frame at block end |
+
+### Log Format
+
+Per-block summary (emitted at fence):
+```
+[CONTINUOUS-PLAYBACK-SUMMARY] block_id=... asset=... asset_range=0-4950ms frames=152 pad_frames=0 session_frames=0-151
+```
+
+Seam transition (emitted at source swap or new block load):
+```
+[CONTINUOUS-SEAM] from=BLOCK-A to=BLOCK-B fence_frame=151 pad_frames_at_fence=0 status=SEAMLESS
+```
+
+### SeamTransitionLog
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `from_block_id` | string | Completed block |
+| `to_block_id` | string | New active block |
+| `fence_frame` | int64 | Session frame at fence |
+| `pad_frames_at_fence` | int64 | Pad frames between blocks |
+| `seamless` | bool | True if pad_frames_at_fence == 0 |
+
+### Engine Callbacks (P3.3)
+
+| Callback | Description |
+|----------|-------------|
+| `on_block_summary` | Optional. Fired before `on_block_completed` at fence. |
+| `on_seam_transition` | Optional. Fired at source swap or new block load after fence. |
+
+### Contract Tests (PlaybackTraceContractTests.cpp)
+
+| Test ID | Description |
+|---------|-------------|
+| TRACE-001 | SummaryProducedPerBlock — one summary per completed block |
+| TRACE-002 | SummaryFrameCountMatchesMetrics — frames_emitted == FramesPerBlock |
+| TRACE-003 | SummaryPadCountAccurate — all-pad block has pad_frames == frames_emitted |
+| TRACE-004 | SummarySessionFrameRange — contiguous, non-overlapping session frames |
+| TRACE-005 | SeamTransitionLogProduced — seam log emitted for back-to-back blocks |
+| TRACE-006 | SeamlessTransitionStatus — instant preload produces SEAMLESS status |
+| TRACE-007 | PaddedTransitionStatus — delayed preload produces PADDED status |
+| TRACE-008 | FormatPlaybackSummaryOutput — format string matches contract |
+| TRACE-009 | FormatSeamTransitionOutput — format string matches contract |
+| TRACE-010 | RealMediaSummaryWithAssetIdentity — GTEST_SKIP if assets missing |
+| TRACE-011 | BlockAccumulatorUnitTest — direct unit test on aggregation logic |

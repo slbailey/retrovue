@@ -344,6 +344,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/BlockPreloadContractTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
   tests/contracts/BlockPlan/SeamProofContractTests.cpp
+  tests/contracts/BlockPlan/PlaybackTraceContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
