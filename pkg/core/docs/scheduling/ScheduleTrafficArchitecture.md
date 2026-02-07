@@ -277,6 +277,23 @@ spans it; Traffic adjusts subsequent events at resolution time.
 
 *Contract: C-BRK-01*
 
+### INV-SM-009: Segment Integrity
+
+Once playback of a PlayoutSegment begins, execution MUST proceed continuously until
+the segment's declared `frame_count` is exhausted. Transitions may occur only between
+segments, never within a segment.
+
+This invariant applies to both program and filler segments.
+
+This aligns ScheduleManager's output contract with:
+
+- **INV-BRK-01** (authorized breakpoints) — upstream, Traffic ensures breaks are
+  separate segments at authorized positions.
+- **INV-PL-07** ([Segment Integrity in Playlist](../architecture/PlaylistArchitecture.md)) —
+  the Playlist-level mirror stating segments are indivisible at execution time.
+- **CT-domain switching logic** — the execution engine honours segment boundaries
+  by switching only at segment transitions.
+
 ---
 
 ## Non-Goals
