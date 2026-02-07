@@ -1,6 +1,6 @@
 // Repository: Retrovue-playout
-// Component: Continuous Output Metrics
-// Purpose: Passive observability metrics for ContinuousOutputExecutionEngine
+// Component: Pipeline Metrics
+// Purpose: Passive observability metrics for PipelineManager
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 //
@@ -8,8 +8,8 @@
 // These metrics are passive observations only — they do NOT affect
 // execution, timing, or control flow.
 
-#ifndef RETROVUE_BLOCKPLAN_CONTINUOUS_OUTPUT_METRICS_HPP_
-#define RETROVUE_BLOCKPLAN_CONTINUOUS_OUTPUT_METRICS_HPP_
+#ifndef RETROVUE_BLOCKPLAN_PIPELINE_METRICS_HPP_
+#define RETROVUE_BLOCKPLAN_PIPELINE_METRICS_HPP_
 
 #include <cstdint>
 #include <sstream>
@@ -17,7 +17,7 @@
 
 namespace retrovue::blockplan {
 
-struct ContinuousOutputMetrics {
+struct PipelineMetrics {
   // ---- Session Lifetime ----
   int64_t session_start_epoch_ms = 0;
   int64_t session_duration_ms = 0;
@@ -145,4 +145,4 @@ struct ContinuousOutputMetrics {
 
 }  // namespace retrovue::blockplan
 
-#endif  // RETROVUE_BLOCKPLAN_CONTINUOUS_OUTPUT_METRICS_HPP_
+#endif  // RETROVUE_BLOCKPLAN_PIPELINE_METRICS_HPP_

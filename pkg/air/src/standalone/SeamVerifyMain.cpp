@@ -1,7 +1,7 @@
 // Repository: Retrovue-playout
 // Component: Seam Verify Standalone Harness
 // Purpose: P3.2 standalone binary for real-media boundary verification.
-//          Queues two blocks through ContinuousOutputExecutionEngine and
+//          Queues two blocks through PipelineManager and
 //          verifies seamless block transitions via FrameFingerprint and
 //          BoundaryReport.
 // Contract Reference: PlayoutAuthorityContract.md (P3.2)
@@ -29,7 +29,7 @@
 #endif
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
-#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 
 using namespace retrovue::blockplan;
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
   std::vector<FrameFingerprint> fingerprints;
   std::mutex fp_mu;
 
-  ContinuousOutputExecutionEngine::Callbacks callbacks;
+  PipelineManager::Callbacks callbacks;
   callbacks.on_block_completed = [&](const FedBlock& block, int64_t frame_idx) {
     std::lock_guard<std::mutex> lock(mu);
     completed_blocks.push_back(block.block_id);
@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
   }
 
   // Create and start engine
-  auto engine = std::make_unique<ContinuousOutputExecutionEngine>(
+  auto engine = std::make_unique<PipelineManager>(
       &ctx, std::move(callbacks));
   engine->Start();
 

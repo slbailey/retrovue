@@ -119,15 +119,11 @@ target_include_directories(playout_proto
     "${PROTO_GEN_DIR}"
 )
 
-# ---- BlockPlan Executor (Section 7 Contracts) ----
-# Minimal executor for BlockPlan execution model
+# ---- BlockPlan shared infrastructure ----
 # Contract Reference: docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
 set(BLOCKPLAN_SOURCES
   src/blockplan/BlockPlanTypes.cpp
   src/blockplan/BlockPlanValidator.cpp
-  src/blockplan/BlockPlanQueue.cpp
-  src/blockplan/BlockPlanExecutor.cpp
-  src/blockplan/FeederHarness.cpp
 )
 
 add_library(retrovue_blockplan ${BLOCKPLAN_SOURCES})
@@ -165,17 +161,13 @@ set(AIR_CORE_SOURCES
   src/output/OutputBus.cpp
   src/output/MpegTSOutputSink.cpp
   src/output/SocketSink.cpp
-  # BlockPlan real-time execution
-  src/blockplan/RealTimeExecution.cpp
-  # BlockPlan execution engine (serial block mode)
-  src/blockplan/SerialBlockExecutionEngine.cpp
-  # BlockPlan preloader (P2: background resource preloading)
-  src/blockplan/BlockPreloader.cpp
-  # ContinuousOutput execution engine (P3.0 + P3.1a + P3.1b: pad + A/B BlockSource swap)
+  # BlockPlan asset probing (used by TickProducer)
+  src/blockplan/RealAssetSource.cpp
+  # PipelineManager playout engine (P3.0 + P3.1a + P3.1b: pad + A/B producer swap)
   src/blockplan/OutputClock.cpp
-  src/blockplan/BlockSource.cpp
-  src/blockplan/SourcePreloader.cpp
-  src/blockplan/ContinuousOutputExecutionEngine.cpp
+  src/blockplan/TickProducer.cpp
+  src/blockplan/ProducerPreloader.cpp
+  src/blockplan/PipelineManager.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
@@ -283,8 +275,7 @@ target_include_directories(contracts_playoutengine_tests
 enable_testing()
 
 # DISABLED: Known deadlock / infinite loop in test infrastructure
-# Does not conform to current executor/feeder model
-# Must be rewritten against BlockPlanExecutor + FeederHarness
+# Uses legacy PlayoutEngine/PlayoutControl — not the current PipelineManager path
 # add_test(
 #   NAME PlayoutEngineContracts
 #   COMMAND contracts_playoutengine_tests
@@ -333,15 +324,8 @@ add_test(
 # Tests for docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
 add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/BlockPlanContractTests.cpp
-  tests/contracts/BlockPlan/ExecutorContractTests.cpp
-  tests/contracts/BlockPlan/ExecutorDiagnosticHarness.cpp
-  tests/contracts/BlockPlan/FeederContractTests.cpp
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
-  tests/contracts/BlockPlan/SerialBlockBaselineContractTests.cpp
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
-  tests/contracts/BlockPlan/SerialBlockMetricsTests.cpp
-  tests/contracts/BlockPlan/MidAssetSeekContractTests.cpp
-  tests/contracts/BlockPlan/BlockPreloadContractTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
   tests/contracts/BlockPlan/SeamProofContractTests.cpp
   tests/contracts/BlockPlan/PlaybackTraceContractTests.cpp
@@ -365,32 +349,8 @@ add_test(
   COMMAND blockplan_contract_tests
 )
 
-# ---- Standalone BlockPlan Executor Harness ----
-# Test binary that acts as fake Core for diagnostics.
-# Links against AIR libraries but is NOT the production executable.
-# Supports --output-ts for real MPEG-TS file output verification.
-add_executable(retrovue_air_standalone
-  src/standalone/StandaloneMain.cpp
-  src/standalone/MpegTsSink.cpp
-)
-
-target_link_libraries(retrovue_air_standalone
-  PRIVATE
-    retrovue_blockplan
-    retrovue_air_core  # For EncoderPipeline (MPEG-TS encoding)
-    GTest::gtest  # For test infrastructure types
-)
-
-target_include_directories(retrovue_air_standalone
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/standalone
-)
-
 # ---- P3.2: Seam Verify Standalone Harness ----
-# Standalone binary for real-media boundary verification.
-# Separate from retrovue_air_standalone (which uses the old executor infrastructure).
+# Standalone binary for real-media boundary verification using PipelineManager.
 add_executable(retrovue_air_seam_verify
   src/standalone/SeamVerifyMain.cpp
 )

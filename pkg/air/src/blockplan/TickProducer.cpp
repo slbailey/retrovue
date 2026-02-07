@@ -1,10 +1,10 @@
 // Repository: Retrovue-playout
-// Component: BlockSource
-// Purpose: Decode lifecycle for a single block in ContinuousOutput mode (P3.1a)
+// Component: TickProducer
+// Purpose: Decode lifecycle for a single block in PipelineManager mode (P3.1a)
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 
-#include "retrovue/blockplan/BlockSource.hpp"
+#include "retrovue/blockplan/TickProducer.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -16,12 +16,12 @@ namespace retrovue::blockplan {
 
 static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 
-BlockSource::BlockSource(int width, int height, double fps)
+TickProducer::TickProducer(int width, int height, double fps)
     : width_(width),
       height_(height),
       frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)) {}
 
-BlockSource::~BlockSource() {
+TickProducer::~TickProducer() {
   Reset();
 }
 
@@ -30,7 +30,7 @@ BlockSource::~BlockSource() {
 // Always transitions to READY (even on failure — fence still runs)
 // =============================================================================
 
-void BlockSource::AssignBlock(const FedBlock& block) {
+void TickProducer::AssignBlock(const FedBlock& block) {
   // Reset any previous state
   Reset();
 
@@ -50,7 +50,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
   for (const auto& seg : plan.segments) {
     if (!assets_.HasAsset(seg.asset_uri)) {
       if (!assets_.ProbeAsset(seg.asset_uri)) {
-        std::cerr << "[BlockSource] Failed to probe asset: " << seg.asset_uri
+        std::cerr << "[TickProducer] Failed to probe asset: " << seg.asset_uri
                   << std::endl;
         all_probed = false;
         break;
@@ -61,7 +61,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
   if (!all_probed) {
     decoder_ok_ = false;
     state_ = State::kReady;
-    std::cout << "[BlockSource] Block assigned (no decoder — probe failed): "
+    std::cout << "[TickProducer] Block assigned (no decoder — probe failed): "
               << block.block_id << " frames_per_block=" << frames_per_block_
               << std::endl;
     return;
@@ -77,7 +77,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
   if (!result.valid) {
     decoder_ok_ = false;
     state_ = State::kReady;
-    std::cerr << "[BlockSource] Validation failed: " << result.detail
+    std::cerr << "[TickProducer] Validation failed: " << result.detail
               << std::endl;
     return;
   }
@@ -101,7 +101,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
 
   decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
   if (!decoder_->Open()) {
-    std::cerr << "[BlockSource] Failed to open decoder: "
+    std::cerr << "[TickProducer] Failed to open decoder: "
               << first_seg.asset_uri << std::endl;
     decoder_.reset();
     decoder_ok_ = false;
@@ -113,7 +113,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
   if (first_seg.asset_start_offset_ms > 0) {
     int preroll = decoder_->SeekPreciseToMs(first_seg.asset_start_offset_ms);
     if (preroll < 0) {
-      std::cerr << "[BlockSource] Seek failed to "
+      std::cerr << "[TickProducer] Seek failed to "
                 << first_seg.asset_start_offset_ms << "ms" << std::endl;
       decoder_.reset();
       decoder_ok_ = false;
@@ -129,7 +129,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
   decoder_ok_ = true;
   state_ = State::kReady;
 
-  std::cout << "[BlockSource] Block assigned: " << block.block_id
+  std::cout << "[TickProducer] Block assigned: " << block.block_id
             << " frames_per_block=" << frames_per_block_
             << " segments=" << plan.segments.size()
             << " decoder_ok=true" << std::endl;
@@ -139,7 +139,7 @@ void BlockSource::AssignBlock(const FedBlock& block) {
 // TryGetFrame — decode one frame, advance internal position
 // =============================================================================
 
-std::optional<BlockSource::FrameData> BlockSource::TryGetFrame() {
+std::optional<FrameData> TickProducer::TryGetFrame() {
   if (state_ != State::kReady) {
     return std::nullopt;
   }
@@ -173,7 +173,7 @@ std::optional<BlockSource::FrameData> BlockSource::TryGetFrame() {
 
       decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
       if (!decoder_->Open()) {
-        std::cerr << "[BlockSource] Failed to open decoder for segment "
+        std::cerr << "[TickProducer] Failed to open decoder for segment "
                   << next_index << ": " << next_seg.asset_uri << std::endl;
         decoder_.reset();
         decoder_ok_ = false;
@@ -247,7 +247,7 @@ std::optional<BlockSource::FrameData> BlockSource::TryGetFrame() {
 // Reset — back to EMPTY
 // =============================================================================
 
-void BlockSource::Reset() {
+void TickProducer::Reset() {
   decoder_.reset();
   decoder_ok_ = false;
   current_asset_uri_.clear();
@@ -259,20 +259,52 @@ void BlockSource::Reset() {
   state_ = State::kEmpty;
 }
 
-BlockSource::State BlockSource::GetState() const {
+TickProducer::State TickProducer::GetState() const {
   return state_;
 }
 
-const FedBlock& BlockSource::GetBlock() const {
+const FedBlock& TickProducer::GetBlock() const {
   return block_;
 }
 
-int64_t BlockSource::FramesPerBlock() const {
+int64_t TickProducer::FramesPerBlock() const {
   return frames_per_block_;
 }
 
-bool BlockSource::HasDecoder() const {
+bool TickProducer::HasDecoder() const {
   return decoder_ok_;
+}
+
+// =============================================================================
+// IProducer implementation
+// =============================================================================
+
+bool TickProducer::start() {
+  running_ = true;
+  stop_requested_ = false;
+  return true;
+}
+
+void TickProducer::stop() {
+  Reset();
+  running_ = false;
+}
+
+bool TickProducer::isRunning() const {
+  return running_;
+}
+
+void TickProducer::RequestStop() {
+  stop_requested_ = true;
+}
+
+bool TickProducer::IsStopped() const {
+  return !running_;
+}
+
+std::optional<producers::AsRunFrameStats>
+TickProducer::GetAsRunFrameStats() const {
+  return std::nullopt;
 }
 
 }  // namespace retrovue::blockplan

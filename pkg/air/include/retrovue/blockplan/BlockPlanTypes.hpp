@@ -214,19 +214,16 @@ struct AcceptanceResult {
 
 // =============================================================================
 // Playout Execution Mode
-// INV-SERIAL-BLOCK-EXECUTION: Baseline mode declaration
 // =============================================================================
 
 enum class PlayoutExecutionMode {
-  // Blocks execute sequentially. Block N must complete before Block N+1 begins.
-  // Encoder is opened once per session and closed at session end.
-  // No frames are emitted outside of block execution.
-  // This is the only implemented mode.
+  // Legacy serial-block mode (removed).  Enum value retained for wire
+  // compatibility in telemetry and for compile-time mode assertions.
   kSerialBlock,
 
-  // Future: Continuous output with pre-decoded frame buffer.
-  // Not implemented. Placeholder for design document reference:
-  //   docs/architecture/proposals/ContinuousOutputDesign.md
+  // Authoritative mode: continuous output via PipelineManager.
+  // Session-long encoder, OutputClock at fixed cadence, pad frames when
+  // no block content is available, A/B producer swap at fence.
   kContinuousOutput,
 };
 

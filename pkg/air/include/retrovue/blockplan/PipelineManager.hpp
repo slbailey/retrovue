@@ -1,5 +1,5 @@
 // Repository: Retrovue-playout
-// Component: Continuous Output Execution Engine
+// Component: Pipeline Manager
 // Purpose: IPlayoutExecutionEngine that emits a continuous frame stream,
 //          falling back to pad frames when no block content is available.
 // Contract Reference: PlayoutAuthorityContract.md
@@ -7,14 +7,15 @@
 //
 // P3.0: Pad-only skeleton — session-long encoder, OutputClock at fixed
 // cadence, pad frames when no block content is available.
-// P3.1a: Active BlockSource — real decoded frames from blocks with pad
+// P3.1a: Active Producer — real decoded frames from blocks with pad
 // fallback.  Single active source only (no A/B switching).
-// P3.1b: A/B source swap with background preloading — next_source_ is
+// P3.1b: A/B source swap with background preloading — preview_ is
 // preloaded off-thread so the fence swap is instant.
 
-#ifndef RETROVUE_BLOCKPLAN_CONTINUOUS_OUTPUT_EXECUTION_ENGINE_HPP_
-#define RETROVUE_BLOCKPLAN_CONTINUOUS_OUTPUT_EXECUTION_ENGINE_HPP_
+#ifndef RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_
+#define RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_
 
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -23,8 +24,10 @@
 #include <thread>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
-#include "retrovue/blockplan/ContinuousOutputMetrics.hpp"
+#include "retrovue/blockplan/ITickProducer.hpp"
+#include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
+#include "retrovue/producers/IProducer.h"
 
 // Forward declarations
 namespace retrovue::playout_sinks::mpegts {
@@ -33,14 +36,14 @@ class EncoderPipeline;
 
 namespace retrovue::blockplan {
 
-class BlockSource;
-class SourcePreloader;
+class ProducerPreloader;
+struct FrameData;
 struct FrameFingerprint;
 struct BlockPlaybackSummary;
 struct BlockPlaybackProof;
 struct SeamTransitionLog;
 
-class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
+class PipelineManager : public IPlayoutExecutionEngine {
  public:
   struct Callbacks {
     // Called when a block completes its allocated frame count.
@@ -66,21 +69,21 @@ class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
     std::function<void(const BlockPlaybackProof&)> on_playback_proof;
   };
 
-  ContinuousOutputExecutionEngine(BlockPlanSessionContext* ctx,
-                                  Callbacks callbacks);
-  ~ContinuousOutputExecutionEngine() override;
+  PipelineManager(BlockPlanSessionContext* ctx,
+                  Callbacks callbacks);
+  ~PipelineManager() override;
 
   // IPlayoutExecutionEngine
   void Start() override;
   void Stop() override;
 
   // Thread-safe snapshot of accumulated session metrics.
-  ContinuousOutputMetrics SnapshotMetrics() const;
+  PipelineMetrics SnapshotMetrics() const;
 
   // Generate Prometheus text exposition.  Thread-safe.
   std::string GenerateMetricsText() const;
 
-  // P3.2: Test-only — forward delay hook to internal SourcePreloader.
+  // P3.2: Test-only — forward delay hook to internal ProducerPreloader.
   void SetPreloaderDelayHook(std::function<void()> hook);
 
  private:
@@ -90,17 +93,32 @@ class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
   void EmitPadFrame(playout_sinks::mpegts::EncoderPipeline* encoder,
                     int64_t video_pts_90k, int64_t audio_pts_90k);
 
-  // Dequeue next block from ctx_->block_queue and assign to active_source_.
-  // Called ONLY when active_source_ is EMPTY — outside the timed tick window.
-  void TryLoadActiveBlock();
+  // Dequeue next block from ctx_->block_queue and assign to live_.
+  // Called ONLY when live_ is EMPTY — outside the timed tick window.
+  void TryLoadLiveProducer();
 
-  // P3.1b: If next_source_ is EMPTY and queue has a block, kick off preload.
+  // P3.1b: If preview_ is EMPTY and queue has a block, kick off preload.
   // Called outside the tick window only.
-  void TryKickoffNextPreload();
+  void TryKickoffPreviewPreload();
 
-  // P3.1b: Pop the preloaded next_source_ if ready.  Returns non-null if
-  // a fully READY BlockSource was obtained.  Non-blocking.
-  std::unique_ptr<BlockSource> TryTakePreloadedNext();
+  // P3.1b: Pop the preloaded preview_ if ready.  Returns non-null if
+  // a fully READY IProducer was obtained.  Non-blocking.
+  std::unique_ptr<producers::IProducer> TryTakePreviewProducer();
+
+  // --- ITickProducer access helpers ---
+  // All tick-method calls on IProducer pointers go through these.
+  // Hard assert: the IProducer must be a TickProducer (implements ITickProducer).
+  static ITickProducer* AsTickProducer(producers::IProducer* p) {
+    auto* tp = dynamic_cast<ITickProducer*>(p);
+    assert(tp && "IProducer must implement ITickProducer");
+    return tp;
+  }
+
+  static const ITickProducer* AsTickProducer(const producers::IProducer* p) {
+    auto* tp = dynamic_cast<const ITickProducer*>(p);
+    assert(tp && "IProducer must implement ITickProducer");
+    return tp;
+  }
 
   BlockPlanSessionContext* ctx_;
   Callbacks callbacks_;
@@ -108,20 +126,20 @@ class ContinuousOutputExecutionEngine : public IPlayoutExecutionEngine {
   bool started_ = false;
 
   mutable std::mutex metrics_mutex_;
-  ContinuousOutputMetrics metrics_;
+  PipelineMetrics metrics_;
 
   // Guard against on_session_ended firing more than once.
   bool session_ended_fired_ = false;
 
-  // P3.1a: Active block source for real-frame decoding.
-  std::unique_ptr<BlockSource> active_source_;
-  int64_t source_ticks_ = 0;  // Engine-owned tick counter for active block
+  // P3.1a: Live producer for real-frame decoding (Input Bus A).
+  std::unique_ptr<producers::IProducer> live_;
+  int64_t live_ticks_ = 0;  // Engine-owned tick counter for live bus
 
-  // P3.1b: Next block source (preloaded in background).
-  std::unique_ptr<BlockSource> next_source_;
-  std::unique_ptr<SourcePreloader> preloader_;
+  // P3.1b: Preview producer (preloaded in background, Input Bus B).
+  std::unique_ptr<producers::IProducer> preview_;
+  std::unique_ptr<ProducerPreloader> preloader_;
 };
 
 }  // namespace retrovue::blockplan
 
-#endif  // RETROVUE_BLOCKPLAN_CONTINUOUS_OUTPUT_EXECUTION_ENGINE_HPP_
+#endif  // RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_

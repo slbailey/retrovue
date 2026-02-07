@@ -17,9 +17,7 @@
 
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
-#include "retrovue/blockplan/RealTimeExecution.hpp"
-#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
-#include "retrovue/blockplan/SerialBlockExecutionEngine.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/output/IOutputSink.h"
 #include "retrovue/output/MpegTSOutputSink.h"
@@ -146,9 +144,7 @@ namespace retrovue
     }
 
     // ========================================================================
-    // BlockPlanExecutionThread logic has been extracted to:
-    //   SerialBlockExecutionEngine (blockplan/SerialBlockExecutionEngine.cpp)
-    // This is a mechanical extraction — no logic changes.
+    // Engine selection: PipelineManager (ContinuousOutput mode)
     // ========================================================================
 
     grpc::Status PlayoutControlImpl::StartChannel(grpc::ServerContext *context,
@@ -667,14 +663,10 @@ namespace retrovue
                 << std::endl;
 
       // ========================================================================
-      // ENGINE SELECTION: Select execution engine based on execution mode
-      // INV-SERIAL-BLOCK-EXECUTION: Only kSerialBlock is implemented
+      // ENGINE: ContinuousOutput via PipelineManager
       // ========================================================================
-      constexpr auto kExecutionMode = blockplan::PlayoutExecutionMode::kContinuousOutput;
-
-      if (kExecutionMode == blockplan::PlayoutExecutionMode::kSerialBlock) {
-        // Create callbacks that delegate to gRPC event emission
-        blockplan::SerialBlockExecutionEngine::Callbacks callbacks;
+      {
+        blockplan::PipelineManager::Callbacks callbacks;
         callbacks.on_block_completed = [this](const blockplan::FedBlock& block, int64_t final_ct_ms) {
           EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
         };
@@ -682,35 +674,12 @@ namespace retrovue
           EmitSessionEnded(blockplan_session_.get(), reason);
         };
 
-        blockplan_session_->engine = std::make_unique<blockplan::SerialBlockExecutionEngine>(
+        blockplan_session_->engine = std::make_unique<blockplan::PipelineManager>(
             blockplan_session_.get(), std::move(callbacks));
 
         // Wire engine metrics to Prometheus export
         if (auto metrics_exporter = interface_->GetMetricsExporter()) {
-          auto* engine_ptr = static_cast<blockplan::SerialBlockExecutionEngine*>(
-              blockplan_session_->engine.get());
-          metrics_exporter->RegisterCustomMetricsProvider(
-              "serial_block_engine",
-              [engine_ptr]() { return engine_ptr->GenerateMetricsText(); });
-        }
-
-        blockplan_session_->engine->Start();
-      } else if (kExecutionMode == blockplan::PlayoutExecutionMode::kContinuousOutput) {
-        // P3.0: ContinuousOutput — pad-only skeleton
-        blockplan::ContinuousOutputExecutionEngine::Callbacks callbacks;
-        callbacks.on_block_completed = [this](const blockplan::FedBlock& block, int64_t final_ct_ms) {
-          EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
-        };
-        callbacks.on_session_ended = [this](const std::string& reason) {
-          EmitSessionEnded(blockplan_session_.get(), reason);
-        };
-
-        blockplan_session_->engine = std::make_unique<blockplan::ContinuousOutputExecutionEngine>(
-            blockplan_session_.get(), std::move(callbacks));
-
-        // Wire engine metrics to Prometheus export
-        if (auto metrics_exporter = interface_->GetMetricsExporter()) {
-          auto* engine_ptr = static_cast<blockplan::ContinuousOutputExecutionEngine*>(
+          auto* engine_ptr = static_cast<blockplan::PipelineManager*>(
               blockplan_session_->engine.get());
           metrics_exporter->RegisterCustomMetricsProvider(
               "continuous_output_engine",
@@ -718,16 +687,6 @@ namespace retrovue
         }
 
         blockplan_session_->engine->Start();
-      } else {
-        std::cerr << "[StartBlockPlanSession] FATAL: execution_model="
-                  << blockplan::PlayoutExecutionModeToString(kExecutionMode)
-                  << " is not implemented" << std::endl;
-        blockplan_session_.reset();
-        response->set_success(false);
-        response->set_message("Execution mode not implemented: "
-                              + std::string(blockplan::PlayoutExecutionModeToString(kExecutionMode)));
-        response->set_result_code(BLOCKPLAN_RESULT_NO_SESSION);
-        return grpc::Status::OK;
       }
 
       response->set_success(true);
@@ -821,7 +780,6 @@ namespace retrovue
 
       // Unregister engine metrics provider before stopping
       if (auto metrics_exporter = interface_->GetMetricsExporter()) {
-        metrics_exporter->UnregisterCustomMetricsProvider("serial_block_engine");
         metrics_exporter->UnregisterCustomMetricsProvider("continuous_output_engine");
       }
 

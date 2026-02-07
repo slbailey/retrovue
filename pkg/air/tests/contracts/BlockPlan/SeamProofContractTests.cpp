@@ -20,11 +20,11 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
-#include "retrovue/blockplan/BlockSource.hpp"
-#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
-#include "retrovue/blockplan/ContinuousOutputMetrics.hpp"
+#include "retrovue/blockplan/TickProducer.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
+#include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
-#include "retrovue/blockplan/SourcePreloader.hpp"
+#include "retrovue/blockplan/ProducerPreloader.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -79,8 +79,8 @@ class SeamProofContractTest : public ::testing::Test {
     }
   }
 
-  std::unique_ptr<ContinuousOutputExecutionEngine> MakeEngine() {
-    ContinuousOutputExecutionEngine::Callbacks callbacks;
+  std::unique_ptr<PipelineManager> MakeEngine() {
+    PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
@@ -96,7 +96,7 @@ class SeamProofContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(fp_mutex_);
       fingerprints_.push_back(fp);
     };
-    return std::make_unique<ContinuousOutputExecutionEngine>(
+    return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks));
   }
 
@@ -117,7 +117,7 @@ class SeamProofContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
-  std::unique_ptr<ContinuousOutputExecutionEngine> engine_;
+  std::unique_ptr<PipelineManager> engine_;
 
   std::mutex cb_mutex_;
   std::condition_variable blocks_completed_cv_;
@@ -224,17 +224,17 @@ TEST_F(SeamProofContractTest, FingerprintCallbackFiresEveryFrame) {
 
 // =============================================================================
 // SEAM-PROOF-004: FrameDataCarriesMetadata
-// BlockSource unit test. AssignBlock with synthetic. TryGetFrame returns
+// Producer unit test. AssignBlock with synthetic. TryGetFrame returns
 // nullopt (no decoder). Compile-time proof that FrameData has new fields.
 // Verify FramesPerBlock matches ceil formula.
 // =============================================================================
 TEST_F(SeamProofContractTest, FrameDataCarriesMetadata) {
-  BlockSource source(640, 480, 30.0);
+  TickProducer source(640, 480, 30.0);
 
   // AssignBlock with synthetic (probe fails, no decoder)
   FedBlock block = MakeSyntheticBlock("sp004", 5000);
   source.AssignBlock(block);
-  EXPECT_EQ(source.GetState(), BlockSource::State::kReady);
+  EXPECT_EQ(source.GetState(), TickProducer::State::kReady);
   EXPECT_FALSE(source.HasDecoder());
 
   // FramesPerBlock = ceil(5000 / 33) = 152
@@ -249,7 +249,7 @@ TEST_F(SeamProofContractTest, FrameDataCarriesMetadata) {
       << "TryGetFrame must return nullopt when decoder is not ok";
 
   // Compile-time proof: FrameData has asset_uri and block_ct_ms fields
-  BlockSource::FrameData fd;
+  FrameData fd;
   fd.asset_uri = "test";
   fd.block_ct_ms = 42;
   EXPECT_EQ(fd.asset_uri, "test");

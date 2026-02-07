@@ -1,7 +1,7 @@
 // Repository: Retrovue-playout
 // Component: Playout Execution Engine Interface
-// Purpose: Minimal interface for execution engine selection by mode
-// Contract Reference: INV-SERIAL-BLOCK-EXECUTION, PlayoutAuthorityContract.md
+// Purpose: Minimal interface for execution engine lifecycle
+// Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 
 #ifndef RETROVUE_BLOCKPLAN_IPLAYOUT_EXECUTION_ENGINE_HPP_
@@ -14,9 +14,7 @@ namespace retrovue::blockplan {
 // Minimal interface for playout execution engines.
 // Does NOT expose timing, clocks, or content logic.
 //
-// Current implementations:
-//   - SerialBlockExecutionEngine (kSerialBlock)
-//   - ContinuousOutputExecutionEngine (kContinuousOutput) — P3.0 pad-only
+// Sole implementation: PipelineManager (kContinuousOutput)
 // =============================================================================
 
 class IPlayoutExecutionEngine {

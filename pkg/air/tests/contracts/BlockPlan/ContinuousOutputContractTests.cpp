@@ -1,6 +1,6 @@
 // Repository: Retrovue-playout
 // Component: Continuous Output Contract Tests
-// Purpose: Verify P3.0 + P3.1a + P3.1b ContinuousOutputExecutionEngine contracts
+// Purpose: Verify P3.0 + P3.1a + P3.1b PipelineManager contracts
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 
@@ -16,11 +16,11 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
-#include "retrovue/blockplan/BlockSource.hpp"
-#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
-#include "retrovue/blockplan/ContinuousOutputMetrics.hpp"
+#include "retrovue/blockplan/TickProducer.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
+#include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/OutputClock.hpp"
-#include "retrovue/blockplan/SourcePreloader.hpp"
+#include "retrovue/blockplan/ProducerPreloader.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -47,8 +47,8 @@ class ContinuousOutputContractTest : public ::testing::Test {
     }
   }
 
-  std::unique_ptr<ContinuousOutputExecutionEngine> MakeEngine() {
-    ContinuousOutputExecutionEngine::Callbacks callbacks;
+  std::unique_ptr<PipelineManager> MakeEngine() {
+    PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
@@ -59,7 +59,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
       session_ended_reason_ = reason;
       session_ended_cv_.notify_all();
     };
-    return std::make_unique<ContinuousOutputExecutionEngine>(
+    return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks));
   }
 
@@ -72,7 +72,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
-  std::unique_ptr<ContinuousOutputExecutionEngine> engine_;
+  std::unique_ptr<PipelineManager> engine_;
 
   std::mutex cb_mutex_;
   std::condition_variable session_ended_cv_;
@@ -226,20 +226,20 @@ FedBlock MakeSyntheticBlock(const std::string& block_id,
 }
 
 // =============================================================================
-// CONT-ACT-001: BlockSource State Machine
-// Unit test on BlockSource directly. EMPTY initially. AssignBlock → READY.
+// CONT-ACT-001: Producer State Machine
+// Unit test on Producer directly. EMPTY initially. AssignBlock → READY.
 // TryGetFrame repeatedly (returns nullopt for synthetic block). Reset → EMPTY.
 // =============================================================================
-TEST_F(ContinuousOutputContractTest, BlockSourceStateMachine) {
-  BlockSource source(640, 480, 30.0);
+TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
+  TickProducer source(640, 480, 30.0);
 
   // Initial state: EMPTY
-  EXPECT_EQ(source.GetState(), BlockSource::State::kEmpty);
+  EXPECT_EQ(source.GetState(), TickProducer::State::kEmpty);
 
   // AssignBlock → READY (even with unresolvable URI, since probe fails)
   FedBlock block = MakeSyntheticBlock("sm-001", 5000);
   source.AssignBlock(block);
-  EXPECT_EQ(source.GetState(), BlockSource::State::kReady);
+  EXPECT_EQ(source.GetState(), TickProducer::State::kReady);
   EXPECT_FALSE(source.HasDecoder())
       << "Decoder must not open for nonexistent asset";
   EXPECT_GT(source.FramesPerBlock(), 0)
@@ -253,12 +253,12 @@ TEST_F(ContinuousOutputContractTest, BlockSourceStateMachine) {
   // Call a few more times — state stays READY
   for (int i = 0; i < 5; i++) {
     EXPECT_FALSE(source.TryGetFrame().has_value());
-    EXPECT_EQ(source.GetState(), BlockSource::State::kReady);
+    EXPECT_EQ(source.GetState(), TickProducer::State::kReady);
   }
 
   // Reset → EMPTY
   source.Reset();
-  EXPECT_EQ(source.GetState(), BlockSource::State::kEmpty);
+  EXPECT_EQ(source.GetState(), TickProducer::State::kEmpty);
 }
 
 // =============================================================================
@@ -266,7 +266,7 @@ TEST_F(ContinuousOutputContractTest, BlockSourceStateMachine) {
 // FramesPerBlock = ceil(duration_ms / frame_duration_ms) for various durations.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, FrameCountDeterministic) {
-  BlockSource source(640, 480, 30.0);
+  TickProducer source(640, 480, 30.0);
 
   // 5000ms block at 30fps (33ms/frame): ceil(5000/33) = ceil(151.51) = 152
   {
@@ -495,12 +495,12 @@ TEST_F(ContinuousOutputContractTest, StopDuringPreloadNoDeadlock) {
 
 // =============================================================================
 // CONT-SWAP-003: Delayed preload does not stall engine
-// Test SourcePreloader directly with delay hook. Verify preloader completes
+// Test ProducerPreloader directly with delay hook. Verify preloader completes
 // after delay, and that the engine's tick loop is never blocked by preload.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, PreloaderDelayDoesNotStallEngine) {
-  // Test SourcePreloader directly with delay hook
-  SourcePreloader preloader;
+  // Test ProducerPreloader directly with delay hook
+  ProducerPreloader preloader;
 
   std::atomic<bool> hook_called{false};
   preloader.SetDelayHook([&hook_called]() {
@@ -525,16 +525,17 @@ TEST_F(ContinuousOutputContractTest, PreloaderDelayDoesNotStallEngine) {
 
   auto source = preloader.TakeSource();
   ASSERT_NE(source, nullptr);
-  EXPECT_EQ(source->GetState(), BlockSource::State::kReady);
+  EXPECT_EQ(dynamic_cast<TickProducer*>(source.get())->GetState(),
+            TickProducer::State::kReady);
 }
 
 // =============================================================================
 // CONT-SWAP-004: AssignBlock runs on background thread (not tick thread)
-// SourcePreloader.Worker() runs on its own thread. Verify the thread ID
+// ProducerPreloader.Worker() runs on its own thread. Verify the thread ID
 // differs from the caller's thread, proving AssignBlock is off the tick path.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, AssignBlockRunsOffThread) {
-  SourcePreloader preloader;
+  ProducerPreloader preloader;
 
   std::atomic<std::thread::id> preload_thread_id{};
   std::thread::id caller_thread_id = std::this_thread::get_id();

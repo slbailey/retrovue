@@ -1,10 +1,10 @@
 // Repository: Retrovue-playout
-// Component: Continuous Output Execution Engine
-// Purpose: Continuous output loop with A/B BlockSource swap (P3.0 + P3.1a + P3.1b)
+// Component: Pipeline Manager
+// Purpose: Continuous output loop with A/B Producer swap (P3.0 + P3.1a + P3.1b)
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 
-#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
 
 #include <chrono>
 #include <cstring>
@@ -16,11 +16,11 @@
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
-#include "retrovue/blockplan/BlockSource.hpp"
+#include "retrovue/blockplan/TickProducer.hpp"
 #include "retrovue/blockplan/OutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
-#include "retrovue/blockplan/SourcePreloader.hpp"
+#include "retrovue/blockplan/ProducerPreloader.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
@@ -31,29 +31,29 @@
 
 namespace retrovue::blockplan {
 
-ContinuousOutputExecutionEngine::ContinuousOutputExecutionEngine(
+PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
     Callbacks callbacks)
     : ctx_(ctx),
       callbacks_(std::move(callbacks)),
-      active_source_(std::make_unique<BlockSource>(ctx->width, ctx->height,
+      live_(std::make_unique<TickProducer>(ctx->width, ctx->height,
                                                     ctx->fps)),
-      preloader_(std::make_unique<SourcePreloader>()) {
+      preloader_(std::make_unique<ProducerPreloader>()) {
   metrics_.channel_id = ctx->channel_id;
 }
 
-ContinuousOutputExecutionEngine::~ContinuousOutputExecutionEngine() {
+PipelineManager::~PipelineManager() {
   Stop();
 }
 
-void ContinuousOutputExecutionEngine::Start() {
+void PipelineManager::Start() {
   if (started_) return;
   started_ = true;
   ctx_->stop_requested.store(false, std::memory_order_release);
-  thread_ = std::thread(&ContinuousOutputExecutionEngine::Run, this);
+  thread_ = std::thread(&PipelineManager::Run, this);
 }
 
-void ContinuousOutputExecutionEngine::Stop() {
+void PipelineManager::Stop() {
   if (!started_) return;
   ctx_->stop_requested.store(true, std::memory_order_release);
   ctx_->queue_cv.notify_all();
@@ -64,12 +64,12 @@ void ContinuousOutputExecutionEngine::Stop() {
   started_ = false;
 }
 
-ContinuousOutputMetrics ContinuousOutputExecutionEngine::SnapshotMetrics() const {
+PipelineMetrics PipelineManager::SnapshotMetrics() const {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   return metrics_;
 }
 
-std::string ContinuousOutputExecutionEngine::GenerateMetricsText() const {
+std::string PipelineManager::GenerateMetricsText() const {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   return metrics_.GeneratePrometheusText();
 }
@@ -78,7 +78,7 @@ std::string ContinuousOutputExecutionEngine::GenerateMetricsText() const {
 // EmitPadFrame — black video + silent audio at the given PTS
 // =============================================================================
 
-void ContinuousOutputExecutionEngine::EmitPadFrame(
+void PipelineManager::EmitPadFrame(
     playout_sinks::mpegts::EncoderPipeline* encoder,
     int64_t video_pts_90k,
     int64_t audio_pts_90k) {
@@ -115,24 +115,24 @@ void ContinuousOutputExecutionEngine::EmitPadFrame(
 }
 
 // =============================================================================
-// TryLoadActiveBlock — load active_source_ from preloaded next or queue.
-// Called ONLY when active_source_ is EMPTY — outside the timed tick window.
+// TryLoadLiveProducer — load live_ from preloaded preview or queue.
+// Called ONLY when live_ is EMPTY — outside the timed tick window.
 // =============================================================================
 
-void ContinuousOutputExecutionEngine::TryLoadActiveBlock() {
-  // P3.1b: first try to adopt a preloaded next_source_
-  if (next_source_ &&
-      next_source_->GetState() == BlockSource::State::kReady) {
-    active_source_ = std::move(next_source_);
-    source_ticks_ = 0;
+void PipelineManager::TryLoadLiveProducer() {
+  // P3.1b: first try to adopt a preloaded preview_
+  if (preview_ &&
+      AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+    live_ = std::move(preview_);
+    live_ticks_ = 0;
     return;
   }
 
   // Check if preloader has finished
-  auto preloaded = TryTakePreloadedNext();
-  if (preloaded && preloaded->GetState() == BlockSource::State::kReady) {
-    active_source_ = std::move(preloaded);
-    source_ticks_ = 0;
+  auto preloaded = TryTakePreviewProducer();
+  if (preloaded && AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
+    live_ = std::move(preloaded);
+    live_ticks_ = 0;
     return;
   }
 
@@ -147,19 +147,19 @@ void ContinuousOutputExecutionEngine::TryLoadActiveBlock() {
   // This is acceptable: it occurs only at block boundaries when no
   // content is playing.  The tick loop resumes on the next
   // WaitForFrame() absolute deadline.
-  active_source_->AssignBlock(block);
-  source_ticks_ = 0;
+  AsTickProducer(live_.get())->AssignBlock(block);
+  live_ticks_ = 0;
 }
 
 // =============================================================================
-// TryKickoffNextPreload — start preloading the next block if conditions met.
+// TryKickoffPreviewPreload — start preloading the next block if conditions met.
 // Called outside the tick window only.
 // =============================================================================
 
-void ContinuousOutputExecutionEngine::TryKickoffNextPreload() {
-  // Only preload when: active is READY, next is empty, no preload running
-  if (active_source_->GetState() != BlockSource::State::kReady) return;
-  if (next_source_) return;  // Already have a preloaded next
+void PipelineManager::TryKickoffPreviewPreload() {
+  // Only preload when: live is READY, preview is empty, no preload running
+  if (AsTickProducer(live_.get())->GetState() != ITickProducer::State::kReady) return;
+  if (preview_) return;  // Already have a preloaded preview
   if (preloader_->IsReady()) return;  // Preload finished, not yet consumed
 
   FedBlock block;
@@ -178,10 +178,10 @@ void ContinuousOutputExecutionEngine::TryKickoffNextPreload() {
 }
 
 // =============================================================================
-// TryTakePreloadedNext — non-blocking check for preloader result.
+// TryTakePreviewProducer — non-blocking check for preloader result.
 // =============================================================================
 
-std::unique_ptr<BlockSource> ContinuousOutputExecutionEngine::TryTakePreloadedNext() {
+std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer() {
   auto src = preloader_->TakeSource();
   if (src) {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -191,11 +191,11 @@ std::unique_ptr<BlockSource> ContinuousOutputExecutionEngine::TryTakePreloadedNe
 }
 
 // =============================================================================
-// Run() — P3.0 + P3.1a + P3.1b main loop (pad + A/B BlockSource swap)
+// Run() — P3.0 + P3.1a + P3.1b main loop (pad + A/B Producer swap)
 // =============================================================================
 
-void ContinuousOutputExecutionEngine::Run() {
-  std::cout << "[ContinuousOutput] Starting execution thread for channel "
+void PipelineManager::Run() {
+  std::cout << "[PipelineManager] Starting execution thread for channel "
             << ctx_->channel_id << std::endl;
 
   // ========================================================================
@@ -213,7 +213,7 @@ void ContinuousOutputExecutionEngine::Run() {
   std::string termination_reason = "unknown";
 
   // ========================================================================
-  // 2. SESSION-LONG ENCODER (same pattern as SerialBlockExecutionEngine)
+  // 2. SESSION-LONG ENCODER
   // ========================================================================
   playout_sinks::mpegts::MpegTSPlayoutSinkConfig enc_config;
   enc_config.target_width = ctx_->width;
@@ -249,7 +249,7 @@ void ContinuousOutputExecutionEngine::Run() {
 
   auto encoder_open_start = std::chrono::steady_clock::now();
   if (!session_encoder->open(enc_config, &write_ctx, write_callback)) {
-    std::cerr << "[ContinuousOutput] Failed to open session encoder"
+    std::cerr << "[PipelineManager] Failed to open session encoder"
               << std::endl;
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
@@ -267,7 +267,7 @@ void ContinuousOutputExecutionEngine::Run() {
     metrics_.encoder_open_ms = encoder_open_ms;
   }
 
-  std::cout << "[ContinuousOutput] Session encoder opened: "
+  std::cout << "[PipelineManager] Session encoder opened: "
             << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps
             << "fps, open_ms=" << encoder_open_ms << std::endl;
 
@@ -298,24 +298,41 @@ void ContinuousOutputExecutionEngine::Run() {
   // ========================================================================
   // 5. TRY LOADING FIRST BLOCK (before main loop)
   // ========================================================================
-  TryLoadActiveBlock();
+  TryLoadLiveProducer();
 
   // P3.1b: Kick off preload for next block immediately
-  TryKickoffNextPreload();
+  TryKickoffPreviewPreload();
 
   // ========================================================================
   // 6. MAIN LOOP
   // ========================================================================
+  // Convenience: get ITickProducer* for live_ (refreshed after swaps)
+  auto live_tp = [this]() { return AsTickProducer(live_.get()); };
+
+  // Audit helper: emit BLOCK_START log for the current live block.
+  auto emit_block_start = [&live_tp](const char* source) {
+    const auto& blk = live_tp()->GetBlock();
+    std::cout << "[PipelineManager] BLOCK_START"
+              << " block=" << blk.block_id
+              << " asset=" << (live_tp()->HasDecoder() && !blk.segments.empty()
+                  ? blk.segments[0].asset_uri : "pad")
+              << " offset_ms=" << (!blk.segments.empty()
+                  ? blk.segments[0].asset_start_offset_ms : 0)
+              << " frames=" << live_tp()->FramesPerBlock()
+              << " source=" << source << std::endl;
+  };
+
   int64_t session_frame_index = 0;
   std::chrono::steady_clock::time_point prev_frame_time{};
   bool have_prev_frame_time = false;
-  // Track whether we're past the active block's fence and waiting for next
+  // Track whether we're past the live block's fence and waiting for next
   bool past_fence = false;
 
   // P3.3: Per-block playback accumulator
   BlockAccumulator block_acc;
-  if (active_source_->GetState() == BlockSource::State::kReady) {
-    block_acc.Reset(active_source_->GetBlock().block_id);
+  if (live_tp()->GetState() == ITickProducer::State::kReady) {
+    block_acc.Reset(live_tp()->GetBlock().block_id);
+    emit_block_start("queue");
   }
   // P3.3: Seam transition tracking
   std::string prev_completed_block_id;
@@ -334,12 +351,12 @@ void ContinuousOutputExecutionEngine::Run() {
         (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
 
     bool is_pad = true;
-    std::optional<BlockSource::FrameData> frame_data;
+    std::optional<FrameData> frame_data;
 
-    // TRY REAL FRAME from active source (engine owns the tick)
-    if (active_source_->GetState() == BlockSource::State::kReady) {
-      source_ticks_++;  // Engine owns time
-      frame_data = active_source_->TryGetFrame();  // BlockSource reacts
+    // TRY REAL FRAME from live producer (engine owns the tick)
+    if (live_tp()->GetState() == ITickProducer::State::kReady) {
+      live_ticks_++;  // Engine owns time
+      frame_data = live_tp()->TryGetFrame();  // Producer reacts
       if (frame_data) {
         session_encoder->encodeFrame(frame_data->video, video_pts_90k);
         for (auto& af : frame_data->audio) {
@@ -366,8 +383,8 @@ void ContinuousOutputExecutionEngine::Run() {
       FrameFingerprint fp;
       fp.session_frame_index = session_frame_index;
       fp.is_pad = is_pad;
-      if (active_source_->GetState() == BlockSource::State::kReady) {
-        fp.active_block_id = active_source_->GetBlock().block_id;
+      if (live_tp()->GetState() == ITickProducer::State::kReady) {
+        fp.active_block_id = live_tp()->GetBlock().block_id;
       }
       if (!is_pad && frame_data) {
         fp.asset_uri = frame_data->asset_uri;
@@ -383,7 +400,7 @@ void ContinuousOutputExecutionEngine::Run() {
     }
 
     // P3.3: Accumulate frame into current block summary
-    if (active_source_->GetState() == BlockSource::State::kReady &&
+    if (live_tp()->GetState() == ITickProducer::State::kReady &&
         !block_acc.block_id.empty()) {
       std::string uri;
       int64_t ct_ms = 0;
@@ -400,11 +417,11 @@ void ContinuousOutputExecutionEngine::Run() {
     }
 
     // ==================================================================
-    // FENCE CHECK (engine-owned, not BlockSource)
-    // P3.1b: At fence, try to swap to preloaded next_source_.
+    // FENCE CHECK (engine-owned, not Producer)
+    // P3.1b: At fence, try to swap to preloaded preview_.
     // ==================================================================
-    if (active_source_->GetState() == BlockSource::State::kReady &&
-        source_ticks_ >= active_source_->FramesPerBlock()) {
+    if (live_tp()->GetState() == ITickProducer::State::kReady &&
+        live_ticks_ >= live_tp()->FramesPerBlock()) {
 
       // P3.3: Finalize and emit playback summary + proof before completion callback
       if (!block_acc.block_id.empty()) {
@@ -416,21 +433,42 @@ void ContinuousOutputExecutionEngine::Run() {
 
         // P3.3b: Build and emit playback proof (wanted vs showed)
         auto proof = BuildPlaybackProof(
-            active_source_->GetBlock(), summary, clock.FrameDurationMs());
+            live_tp()->GetBlock(), summary, clock.FrameDurationMs());
         std::cout << FormatPlaybackProof(proof) << std::endl;
         if (callbacks_.on_playback_proof) {
           callbacks_.on_playback_proof(proof);
         }
+
+        // Audit: BLOCK_COMPLETE
+        {
+          const auto& blk = live_tp()->GetBlock();
+          int64_t base_offset = !blk.segments.empty()
+              ? blk.segments[0].asset_start_offset_ms : 0;
+          std::cout << "[PipelineManager] BLOCK_COMPLETE"
+                    << " block=" << summary.block_id
+                    << " frames=" << live_tp()->FramesPerBlock()
+                    << " emitted=" << summary.frames_emitted
+                    << " pad=" << summary.pad_frames
+                    << " asset=" << (!summary.asset_uris.empty()
+                        ? summary.asset_uris[0] : "pad");
+          if (summary.first_block_ct_ms >= 0) {
+            std::cout << " range_ms="
+                      << (base_offset + summary.first_block_ct_ms)
+                      << "->"
+                      << (base_offset + summary.last_block_ct_ms);
+          }
+          std::cout << std::endl;
+        }
       }
 
       // P3.3: Record completed block for seam tracking
-      prev_completed_block_id = active_source_->GetBlock().block_id;
+      prev_completed_block_id = live_tp()->GetBlock().block_id;
       fence_session_frame = session_frame_index;
       fence_pad_counter = 0;
 
-      // Fire completion callback for the active block
+      // Fire completion callback for the live block
       if (callbacks_.on_block_completed) {
-        callbacks_.on_block_completed(active_source_->GetBlock(),
+        callbacks_.on_block_completed(live_tp()->GetBlock(),
                                       session_frame_index);
       }
       {
@@ -439,24 +477,24 @@ void ContinuousOutputExecutionEngine::Run() {
       }
       ctx_->blocks_executed++;
 
-      // P3.1b: Try to swap — check preloaded next_source_ first
+      // P3.1b: Try to swap — check preloaded preview_ first
       bool swapped = false;
 
-      // 1) Already have a next_source_ ready?
-      if (next_source_ &&
-          next_source_->GetState() == BlockSource::State::kReady) {
-        active_source_ = std::move(next_source_);
-        source_ticks_ = 0;
+      // 1) Already have a preview_ ready?
+      if (preview_ &&
+          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+        live_ = std::move(preview_);
+        live_ticks_ = 0;
         swapped = true;
       }
 
       // 2) Preloader has one ready?
       if (!swapped) {
-        auto preloaded = TryTakePreloadedNext();
+        auto preloaded = TryTakePreviewProducer();
         if (preloaded &&
-            preloaded->GetState() == BlockSource::State::kReady) {
-          active_source_ = std::move(preloaded);
-          source_ticks_ = 0;
+            AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
+          live_ = std::move(preloaded);
+          live_ticks_ = 0;
           swapped = true;
         }
       }
@@ -472,7 +510,7 @@ void ContinuousOutputExecutionEngine::Run() {
         if (!prev_completed_block_id.empty()) {
           SeamTransitionLog seam;
           seam.from_block_id = prev_completed_block_id;
-          seam.to_block_id = active_source_->GetBlock().block_id;
+          seam.to_block_id = live_tp()->GetBlock().block_id;
           seam.fence_frame = fence_session_frame;
           seam.pad_frames_at_fence = 0;
           seam.seamless = true;
@@ -483,28 +521,30 @@ void ContinuousOutputExecutionEngine::Run() {
         }
 
         // P3.3: Reset accumulator for new block
-        block_acc.Reset(active_source_->GetBlock().block_id);
+        block_acc.Reset(live_tp()->GetBlock().block_id);
+        emit_block_start("preview");
 
         // Immediately kick off preload for the following block
-        TryKickoffNextPreload();
+        TryKickoffPreviewPreload();
       } else {
-        // No next available — reset active and enter pad mode
-        active_source_->Reset();
-        source_ticks_ = 0;
+        // No next available — reset live and enter pad mode
+        live_tp()->Reset();
+        live_ticks_ = 0;
         past_fence = true;
       }
     }
 
     // LOAD NEXT from queue if source is empty (fallback path)
-    if (active_source_->GetState() == BlockSource::State::kEmpty) {
-      TryLoadActiveBlock();  // Outside timed tick window
+    if (live_tp()->GetState() == ITickProducer::State::kEmpty) {
+      bool had_preview = (preview_ != nullptr);
+      TryLoadLiveProducer();  // Outside timed tick window
 
-      if (active_source_->GetState() == BlockSource::State::kReady) {
+      if (live_tp()->GetState() == ITickProducer::State::kReady) {
         // P3.3: Emit seam transition log (padded transition)
         if (!prev_completed_block_id.empty()) {
           SeamTransitionLog seam;
           seam.from_block_id = prev_completed_block_id;
-          seam.to_block_id = active_source_->GetBlock().block_id;
+          seam.to_block_id = live_tp()->GetBlock().block_id;
           seam.fence_frame = fence_session_frame;
           seam.pad_frames_at_fence = fence_pad_counter;
           seam.seamless = (fence_pad_counter == 0);
@@ -516,22 +556,23 @@ void ContinuousOutputExecutionEngine::Run() {
         }
 
         // P3.3: Reset accumulator for new block
-        block_acc.Reset(active_source_->GetBlock().block_id);
+        block_acc.Reset(live_tp()->GetBlock().block_id);
+        emit_block_start((had_preview && !preview_) ? "preview" : "queue");
         fence_pad_counter = 0;
 
         past_fence = false;
         // Kick off preload for the next one
-        TryKickoffNextPreload();
+        TryKickoffPreviewPreload();
       }
     }
 
     // P3.1b: Opportunistically check preloader result and stash it
-    if (!next_source_ && preloader_->IsReady()) {
-      next_source_ = TryTakePreloadedNext();
+    if (!preview_ && preloader_->IsReady()) {
+      preview_ = TryTakePreviewProducer();
     }
 
     // P3.1b: Try to start preloading if conditions met
-    TryKickoffNextPreload();
+    TryKickoffPreviewPreload();
 
     // ---- Inter-frame gap measurement ----
     if (have_prev_frame_time) {
@@ -569,13 +610,13 @@ void ContinuousOutputExecutionEngine::Run() {
 
   // Cancel preloader and reset sources before closing encoder
   preloader_->Cancel();
-  next_source_.reset();
-  active_source_->Reset();
-  source_ticks_ = 0;
+  preview_.reset();
+  live_tp()->Reset();
+  live_ticks_ = 0;
 
   if (session_encoder) {
     session_encoder->close();
-    std::cout << "[ContinuousOutput] Session encoder closed: "
+    std::cout << "[PipelineManager] Session encoder closed: "
               << write_ctx.bytes_written << " bytes written" << std::endl;
   }
 
@@ -589,7 +630,7 @@ void ContinuousOutputExecutionEngine::Run() {
     metrics_.continuous_mode_active = false;
   }
 
-  std::cout << "[ContinuousOutput] Thread exiting: frames_emitted="
+  std::cout << "[PipelineManager] Thread exiting: frames_emitted="
             << session_frame_index
             << ", reason=" << termination_reason << std::endl;
 
@@ -599,7 +640,7 @@ void ContinuousOutputExecutionEngine::Run() {
   }
 }
 
-void ContinuousOutputExecutionEngine::SetPreloaderDelayHook(
+void PipelineManager::SetPreloaderDelayHook(
     std::function<void()> hook) {
   preloader_->SetDelayHook(std::move(hook));
 }
