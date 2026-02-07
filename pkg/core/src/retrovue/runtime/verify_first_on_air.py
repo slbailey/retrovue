@@ -95,6 +95,7 @@ def run_server():
         name="Test Channel",
         program_format=program_format,
         schedule_source="mock",
+        blockplan_only=True,  # INV-CANONICAL-BOOT: reject legacy paths
     )
 
     config_provider = InlineChannelConfigProvider([channel_config])

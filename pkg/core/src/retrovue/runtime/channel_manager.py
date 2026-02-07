@@ -171,6 +171,64 @@ class ProgramDirector(Protocol):
 
 
 # ----------------------------------------------------------------------
+# Join-In-Progress (JIP) — pure computation
+# Contract: docs/contracts/runtime/INV-JOIN-IN-PROGRESS-BLOCKPLAN.md
+# ----------------------------------------------------------------------
+
+
+def compute_jip_position(
+    playout_plan: list[dict[str, Any]],
+    block_duration_ms: int,
+    cycle_origin_utc_ms: int,
+    now_utc_ms: int,
+) -> tuple[int, int]:
+    """
+    Compute Join-In-Progress position within a cyclic playout plan.
+
+    INV-JIP-BP-002: returned offset is in [0, entry_duration).
+    INV-JIP-BP-003: deterministic for identical inputs.
+
+    Args:
+        playout_plan: Ordered cycle entries (each with optional duration_ms,
+                      asset_path, asset_start_offset_ms).
+        block_duration_ms: Default block duration when entry lacks duration_ms.
+        cycle_origin_utc_ms: Wall-clock epoch (ms) anchoring cycle position 0.
+        now_utc_ms: Current wall-clock time (ms since Unix epoch).
+
+    Returns:
+        (active_entry_index, block_offset_ms) where active_entry_index is the
+        0-based plan entry, and block_offset_ms is in [0, entry_duration).
+    """
+    if not playout_plan:
+        return (0, 0)
+
+    # Resolve per-entry durations and compute cycle length
+    durations = [
+        entry.get("duration_ms", block_duration_ms) for entry in playout_plan
+    ]
+    cycle_length_ms = sum(durations)
+
+    if cycle_length_ms <= 0:
+        return (0, 0)
+
+    # Elapsed time since origin, wrapped to one cycle.
+    # Python's % always returns non-negative when divisor is positive,
+    # so negative elapsed (now < origin) wraps correctly.
+    elapsed_ms = (now_utc_ms - cycle_origin_utc_ms) % cycle_length_ms
+
+    # Walk entries to find the active one
+    accumulated = 0
+    for i, dur in enumerate(durations):
+        if accumulated + dur > elapsed_ms:
+            return (i, elapsed_ms - accumulated)
+        accumulated += dur
+
+    # Should never reach here (modulo guarantees), but satisfy the type checker
+    last = len(durations) - 1
+    return (last, elapsed_ms - sum(durations[:last]))
+
+
+# ----------------------------------------------------------------------
 # Exceptions
 # ----------------------------------------------------------------------
 
@@ -462,6 +520,9 @@ class ChannelManager:
         When a Playlist is active, tick() uses Playlist-driven execution
         instead of the legacy ScheduleService path.
         """
+        # INV-CANONICAL-BOOT-001: Reject playlist loading on blockplan_only channels
+        self._check_blockplan_only_guard("load_playlist()")
+
         # Validate frame_count on every segment (frame-authoritative execution).
         for i, seg in enumerate(playlist.segments):
             if seg.frame_count < 0:
@@ -1014,10 +1075,38 @@ class ChannelManager:
             self._ensure_producer_running_playlist(station_time)
             return
 
+        # C2 Tripwire: BlockPlan bootstrap must never use _playlist
+        if self._playlist is not None:
+            raise RuntimeError(
+                "INV-JIP-BP C2: BlockPlan bootstrap entered with _playlist set. "
+                "JIP operates on playout_plan (list[dict]) only."
+            )
+
         playout_plan = self._get_playout_plan()
 
-        # Ask the Producer to start.
-        started_ok = self.active_producer.start(playout_plan, station_time)
+        # INV-JIP-BP-001: Compute JIP once, at the 0→1 viewer transition.
+        now_utc_ms = int(station_time.timestamp() * 1000)
+        cycle_origin_utc_ms = self.channel_config.schedule_config.get(
+            "cycle_origin_utc_ms", 0,
+        ) if self.channel_config else 0
+        block_duration_ms = self.active_producer._block_duration_ms
+
+        jip_entry_index, jip_offset_ms = compute_jip_position(
+            playout_plan, block_duration_ms, cycle_origin_utc_ms, now_utc_ms,
+        )
+        self._logger.info(
+            "INV-JIP-BP-BOOT: channel_id=%s station_now=%d base_epoch=%d "
+            "active_index=%d offset_ms=%d",
+            self.channel_id, now_utc_ms, cycle_origin_utc_ms,
+            jip_entry_index, jip_offset_ms,
+        )
+
+        # Ask the Producer to start with JIP parameters.
+        started_ok = self.active_producer.start(
+            playout_plan, station_time,
+            jip_entry_index=jip_entry_index,
+            jip_offset_ms=jip_offset_ms,
+        )
         if not started_ok:
             self.runtime_state.producer_status = "error"
             self.active_producer = None
@@ -1122,6 +1211,8 @@ class ChannelManager:
         offset, builds a producer-compatible playout plan, and starts the
         producer.  Sets up CT-domain tracking for frame-based exhaustion.
         """
+        # INV-CANONICAL-BOOT-003: Block playlist bootstrap on blockplan_only channels
+        self._check_blockplan_only_guard("_ensure_producer_running_playlist()")
         now_utc = station_time if station_time.tzinfo else station_time.replace(tzinfo=timezone.utc)
         result = self._resolve_playlist_segment(now_utc)
         if result is None:
@@ -1825,6 +1916,9 @@ class ChannelManager:
         Uses CT-domain exhaustion as the authoritative timing source for
         preload and switch decisions (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION).
         """
+        # INV-CANONICAL-BOOT-004: Block playlist tick on blockplan_only channels
+        self._check_blockplan_only_guard("_tick_playlist()")
+
         producer = self.active_producer
         if producer is None:
             return
@@ -2379,6 +2473,10 @@ class ChannelManager:
         # INV-PLAYOUT-AUTHORITY: Playlist-driven → Phase8AirProducer
         # =====================================================================
         if self._playlist is not None:
+            # INV-CANONICAL-BOOT-002: Block Phase8AirProducer on blockplan_only channels
+            self._check_blockplan_only_guard(
+                "Phase8AirProducer selection (playlist active)"
+            )
             self._logger.info(
                 "INV-PLAYOUT-AUTHORITY: Channel %s session started | "
                 "playout_path=phase8 | reason=playlist_active | mode=%s",
@@ -2450,6 +2548,32 @@ class ChannelManager:
             "Channel %s: BlockPlan mode %s",
             self.channel_id, "enabled" if enabled else "disabled"
         )
+
+    # ------------------------------------------------------------------
+    # INV-CANONICAL-BOOT: Single bootstrap path enforcement
+    # ------------------------------------------------------------------
+
+    @property
+    def _is_blockplan_only(self) -> bool:
+        """True when this channel is configured to reject all legacy paths."""
+        return (
+            self.channel_config is not None
+            and getattr(self.channel_config, "blockplan_only", False)
+        )
+
+    def _check_blockplan_only_guard(self, forbidden_action: str) -> None:
+        """Raise RuntimeError if blockplan_only is set and a legacy path is invoked.
+
+        INV-CANONICAL-BOOT: When a channel's ChannelConfig has
+        blockplan_only=True, only BlockPlanProducer + PlayoutSession is
+        permitted.  Any other playout path must fail immediately.
+        """
+        if self._is_blockplan_only:
+            raise RuntimeError(
+                f"INV-CANONICAL-BOOT: Channel {self.channel_id}: "
+                f"{forbidden_action} is forbidden (blockplan_only=True). "
+                f"Only BlockPlanProducer + PlayoutSession is permitted."
+            )
 
 
 # ----------------------------------------------------------------------
@@ -3242,7 +3366,14 @@ class BlockPlanProducer(Producer):
             },
         }
 
-    def start(self, playout_plan: list[dict[str, Any]], start_at_station_time: datetime) -> bool:
+    def start(
+        self,
+        playout_plan: list[dict[str, Any]],
+        start_at_station_time: datetime,
+        *,
+        jip_entry_index: int = 0,
+        jip_offset_ms: int = 0,
+    ) -> bool:
         """
         Start BlockPlan execution.
 
@@ -3250,6 +3381,9 @@ class BlockPlanProducer(Producer):
         Creates PlayoutSession, seeds initial 2 blocks, and begins execution.
 
         INV-VIEWER-LIFECYCLE-001: AIR starts exactly once per first-viewer event.
+        INV-JIP-BP-001: JIP is computed once per session, at the 0→1 transition.
+        INV-JIP-BP-005/006: jip_offset_ms applied only to block_a.
+        INV-JIP-BP-007: Cursor set to jip_entry_index before seeding.
         """
         with self._lock:
             if self._started:
@@ -3322,8 +3456,14 @@ class BlockPlanProducer(Producer):
                 if not self._session.start(join_utc_ms=join_utc_ms):
                     raise RuntimeError("PlayoutSession.start() failed")
 
+                # INV-JIP-BP-007: Set cursor to JIP entry before seeding
+                self._block_index = jip_entry_index
+
                 # Generate and seed initial 2 blocks
-                block_a = self._generate_next_block(playout_plan)
+                # INV-JIP-BP-005/006: Only block_a carries JIP offset
+                block_a = self._generate_next_block(
+                    playout_plan, jip_offset_ms=jip_offset_ms,
+                )
                 self._advance_cursor(block_a)
                 block_b = self._generate_next_block(playout_plan)
                 self._advance_cursor(block_b)
@@ -3453,6 +3593,8 @@ class BlockPlanProducer(Producer):
     def _generate_next_block(
         self,
         playout_plan: list[dict[str, Any]],
+        *,
+        jip_offset_ms: int = 0,
     ) -> "BlockPlan":
         """
         Generate the next BlockPlan from current cursor position.
@@ -3462,6 +3604,10 @@ class BlockPlanProducer(Producer):
 
         Cycles through playout_plan entries round-robin, respecting per-entry
         asset_start_offset_ms for mid-asset seek support.
+
+        INV-JIP-BP-005/006: When jip_offset_ms > 0 (first block only),
+        asset_start_offset_ms is increased and segment_duration_ms is
+        decreased by jip_offset_ms.
         """
         from .playout_session import BlockPlan
 
@@ -3481,6 +3627,13 @@ class BlockPlanProducer(Producer):
         # Per-entry duration_ms overrides the configured block_duration_ms
         # when present — allows playlist segments to define their own length.
         block_dur_ms = entry.get("duration_ms", self._block_duration_ms)
+
+        # INV-JIP-BP-005: First seeded block carries JIP offset
+        # INV-JIP-BP-006: First block duration reduced by offset
+        if jip_offset_ms > 0:
+            asset_offset_ms += jip_offset_ms
+            block_dur_ms -= jip_offset_ms
+
         end_ms = start_ms + block_dur_ms
 
         block_id = f"BLOCK-{self.channel_id}-{block_index}"

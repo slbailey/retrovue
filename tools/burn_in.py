@@ -4,19 +4,31 @@ Standalone burn-in harness using the Canonical AIR Bootstrap Path.
 
 Uses the EXACT SAME bootstrap pattern as verify_first_on_air --server:
   BlockPlanProducer + PlayoutSession
-  gRPC: GetVersion → AttachStream → StartBlockPlanSession → SubscribeBlockEvents → FeedBlockPlan
+  gRPC: GetVersion -> AttachStream -> StartBlockPlanSession -> SubscribeBlockEvents -> FeedBlockPlan
 
 The Playlist from PlaylistScheduleManager is consumed ONLY by a schedule-service
 adapter that returns playout-plan dicts.  manager._playlist is NEVER set.
+
+Join-In-Progress (JIP):
+  The playlist window_start_at anchors cycle position 0.  When a viewer joins,
+  JIP computes the correct active entry and offset within the cyclic plan so
+  playback begins at the position matching wall-clock time, not always S01E01.
+
+  Verification:
+    1) Run burn_in twice at different times of day; it should start at different
+       offsets within the playlist, not always S01E01.
+    2) Confirm logs show BlockPlanProducer, PlayoutSession, StartBlockPlanSession.
+    3) Confirm absence of StartChannel / LoadPreview / SwitchToLive and absence
+       of Phase producers.
 
 Usage:
     source pkg/core/.venv/bin/activate
     python tools/burn_in.py
 
 Environment variables:
-    RETROVUE_BURN_IN_HOURS  — playlist window duration (default: 24)
-    RETROVUE_BURN_IN_PORT   — HTTP server port (default: 8000)
-    RETROVUE_BURN_IN_TEST_ASSETS — set to "1" to use SampleA/B instead of playlist
+    RETROVUE_BURN_IN_HOURS  -- playlist window duration (default: 24)
+    RETROVUE_BURN_IN_PORT   -- HTTP server port (default: 8000)
+    RETROVUE_BURN_IN_TEST_ASSETS -- set to "1" to use SampleA/B instead of playlist
 """
 
 import logging
@@ -47,7 +59,8 @@ class _TestAssetScheduleService:
     """Same assets as verify_first_on_air: SampleA.mp4 and SampleB.mp4.
 
     Used with RETROVUE_BURN_IN_TEST_ASSETS=1 to isolate bootstrap/pipeline
-    behavior from content-specific issues.
+    behavior from content-specific issues.  JIP wraps modulo
+    2 * block_duration_ms -- the position is not semantically meaningful.
     """
 
     def get_playout_plan_now(self, channel_id: str, at_station_time) -> list[dict]:
@@ -74,6 +87,9 @@ class _PlaylistScheduleAdapter:
     The full playlist.segments list is returned from get_playout_plan_now().
     BlockPlanProducer retains this list at start time and cycles through it
     round-robin via _generate_next_block().  No slicing, no shortcuts.
+
+    Each entry carries duration_ms so compute_jip_position() can walk the
+    plan without needing the default block_duration_ms fallback.
     """
 
     def __init__(self, playlist):
@@ -116,18 +132,32 @@ def main() -> None:
     # 1. Build schedule service (consumed ONLY by BlockPlanProducer, never
     #    loaded into ChannelManager)
     # =========================================================================
+    #
+    # JIP needs a stable epoch so "where we are in the day" is meaningful.
+    # For the playlist path the epoch is playlist.window_start_at (midnight
+    # UTC today).  For the test-asset path the epoch defaults to 0.
+    # =========================================================================
+    cycle_origin_utc_ms = 0  # default for test-asset path
+
     if use_test_assets:
-        # Use SampleA/SampleB — same assets as verify_first_on_air.
+        # Use SampleA/SampleB -- same assets as verify_first_on_air.
         # Isolates bootstrap/pipeline behavior from content-specific issues.
         logger.info("BURN_IN: Using test assets (SampleA.mp4, SampleB.mp4)")
         schedule_service = _TestAssetScheduleService()
     else:
-        now = datetime.now(timezone.utc)
-        end = now + timedelta(hours=burn_in_hours)
-        logger.info("Generating playlist: %s -> %s (%dh)", now, end, burn_in_hours)
+        # Anchor the playlist to midnight UTC today so that JIP position
+        # reflects "time of day".  Running burn_in at 3 PM starts ~15 h into
+        # the cycle; running at 9 AM starts ~9 h in.
+        day_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        day_end = day_start + timedelta(hours=burn_in_hours)
+        logger.info(
+            "Generating playlist: %s -> %s (%dh)", day_start, day_end, burn_in_hours,
+        )
 
         psm = PlaylistScheduleManager()
-        playlists = psm.get_playlists(CHANNEL_ID, now, end)
+        playlists = psm.get_playlists(CHANNEL_ID, day_start, day_end)
         playlist = playlists[0]
         logger.info(
             "Playlist: %d segments, %s -> %s",
@@ -136,12 +166,13 @@ def main() -> None:
             playlist.window_end_at,
         )
 
+        cycle_origin_utc_ms = int(playlist.window_start_at.timestamp() * 1000)
         schedule_service = _PlaylistScheduleAdapter(playlist)
 
     # =========================================================================
     # 2. Create ProgramDirector in embedded mode
     # =========================================================================
-    # Use 640x480@30fps — same as verify_first_on_air.
+    # Use 640x480@30fps -- same as verify_first_on_air.
     # DEFAULT_PROGRAM_FORMAT is 1920x1080 which software x264 cannot encode
     # in real-time, causing periodic stutter from encoder backpressure.
     program_format = ProgramFormat(
@@ -158,6 +189,8 @@ def main() -> None:
         name="RetroVue Classic (burn-in)",
         program_format=program_format,
         schedule_source="mock",
+        schedule_config={"cycle_origin_utc_ms": cycle_origin_utc_ms},
+        blockplan_only=True,  # INV-CANONICAL-BOOT: reject legacy paths
     )
     provider = InlineChannelConfigProvider([channel_config])
 
@@ -173,7 +206,7 @@ def main() -> None:
     director._schedule_service = schedule_service
 
     # =========================================================================
-    # 3. Canonical bootstrap hook — EXACT same pattern as verify_first_on_air
+    # 3. Canonical bootstrap hook -- EXACT same pattern as verify_first_on_air
     #    lines 115-166
     # =========================================================================
     from retrovue.runtime.channel_manager import BlockPlanProducer
@@ -245,8 +278,9 @@ def main() -> None:
 
             logger.info(
                 "BURN_IN: Canonical bootstrap enabled for channel %s "
-                "(BlockPlanProducer, _playlist=None, tripwires armed)",
-                channel_id,
+                "(BlockPlanProducer, _playlist=None, tripwires armed, "
+                "cycle_origin_utc_ms=%d)",
+                channel_id, cycle_origin_utc_ms,
             )
         return manager
 
