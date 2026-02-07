@@ -121,27 +121,33 @@ This document describes the **default scheduling policies** used by SchedulingSe
 
 ---
 
-### 4. No Mid-Longform Cuts
+### 4. Cuts Only at Authorized Breakpoints
 
-**Policy:** Longform content (movies, specials, extended episodes) is never cut mid-play, even if it extends beyond the intended block or zone.
+**Policy:** Playout may transition from program content to interstitial or ad content only at authorized breakpoints within the program. Mid-segment cuts at arbitrary positions are invalid. Programs with no breakpoints play to completion without interruption.
 
 **Behavior:**
-- If a Program resolves to content that is longer than its allocated block(s), the content continues playing
-- The scheduler consumes additional grid blocks to accommodate the full content
-- This applies to movies, specials, and any content where `slot_units` or series pick results in overlength
-- Content is only cut if explicitly allowed by the Program's configuration (not the default)
+- Programs may declare breakpoints (cue points, act breaks, SCTE markers, or explicit chapter markers) that define valid transition positions
+- Traffic may insert interstitial events only at declared breakpoints during Schedule Day resolution
+- Programs with no breakpoints play to completion — they are never cut mid-segment
+- If a program (with or without breakpoints) extends beyond its allocated block(s), the scheduler consumes additional grid blocks to accommodate the full content
+- This applies to all program types: movies, specials, series episodes, and any content where `slot_units` or series pick results in overlength
 
 **User-Facing Outcomes:**
-- **Content Integrity:** Viewers see complete content without abrupt cuts
-- **EPG Truth:** EPG reflects actual content duration, even if it extends beyond the planned block
-- **Predictable Behavior:** Operators know that longform content will always play to completion
+- **Content Integrity:** Viewers see complete content without arbitrary cuts. Breaks occur only at natural transition points (act breaks, chapter markers)
+- **EPG Truth:** EPG reflects actual content duration, including any interstitials inserted at breakpoints
+- **Predictable Behavior:** Operators know that programs will only be interrupted at declared breakpoints, and programs without breakpoints will always play to completion
 
-**Example:**
+**Example (no breakpoints):**
 - Zone contains Movie Program with `slot_units=4` (2 hours on 30-min grid)
-- Movie resolves to 2.5 hours at playlist generation
-- Result: Movie plays for 2.5 hours, consuming 5 grid blocks instead of 4
+- Movie resolves to 2.5 hours at playlist generation, has no declared breakpoints
+- Result: Movie plays for 2.5 hours uninterrupted, consuming 5 grid blocks instead of 4
 
-**See Also:** [Program.md](Program.md) - Resolution section, [ScheduleDay.md](ScheduleDay.md) - Block Consumption and Avails section
+**Example (with breakpoints):**
+- Zone contains a 90-minute episode with a breakpoint declared at 45:00
+- Traffic inserts a 2-minute interstitial event at the 45:00 breakpoint
+- Result: 45 minutes of program, 2-minute break, 45 minutes of program — no cuts at any other position
+
+**See Also:** [Program.md](Program.md) - Resolution section, [ScheduleDay.md](ScheduleDay.md) - Block Consumption and Avails section, [ScheduleTrafficArchitecture.md](../scheduling/ScheduleTrafficArchitecture.md) - INV-BRK-01
 
 ---
 
@@ -179,7 +185,7 @@ These policies work together to ensure deterministic, predictable schedule gener
 1. **Grid Alignment** provides the foundation for all timing decisions
 2. **Soft-Start-After-Current** handles zone transitions gracefully
 3. **Fixed Zone End** ensures zones respect their declared boundaries
-4. **No Mid-Longform Cuts** preserves content integrity
+4. **Cuts Only at Authorized Breakpoints** preserves content integrity
 5. **Carry-In Across Day Seam** ensures seamless day transitions
 
 **Critical Rule:** These policies are applied in order during ScheduleDay resolution. The scheduler evaluates Zones, places SchedulableAssets, and applies these policies to generate the final immutable ScheduleDay. Programs expand their asset chains and VirtualAssets expand to physical Assets during playlist generation, not during ScheduleDay resolution.

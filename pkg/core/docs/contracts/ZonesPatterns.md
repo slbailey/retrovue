@@ -129,28 +129,33 @@ This contract applies to:
 
 ---
 
-### C-LF-01: Longform Never Cut; Consumes Multiple Blocks if Needed
+### C-BRK-01: Cuts Only at Authorized Breakpoints
 
-**Contract:** Longform content (movies, specials, extended episodes) MUST never be cut mid-play, even if it extends beyond the intended block or zone. The scheduler MUST consume additional grid blocks to accommodate the full content.
+**Contract:** Playout may transition from program content to interstitial or ad content ONLY at authorized breakpoints within the program. Mid-segment cuts at arbitrary positions are invalid. Programs that contain no breakpoints MUST play to completion without interruption. If a program extends beyond its allocated grid blocks, the scheduler MUST consume additional blocks to accommodate the full content.
 
 **Behavior:**
-- If a Program resolves to content that is longer than its allocated block(s), the content continues playing
-- The scheduler consumes additional grid blocks to accommodate the full content
-- This applies to movies, specials, and any content where `slot_units` or series pick results in overlength
-- Content is only cut if explicitly allowed by the Program's configuration (not the default)
+- Programs may declare breakpoints (cue points, act breaks, SCTE markers, or explicit chapter markers) that define valid transition positions
+- Traffic may insert interstitial events only at declared breakpoints during Schedule Day resolution
+- Programs with no breakpoints play to completion — they are never cut mid-segment
+- If a program (with or without breakpoints) extends beyond its allocated block(s), the scheduler consumes additional grid blocks
+- This applies to all program types: movies, specials, series episodes, and any content where `slot_units` or series pick results in overlength
 
 **Test Assertions:**
-- Given a Program `["Movie Block"]` with `slot_units=4` (2 hours on 30-min grid) that resolves to a 2.5-hour movie:
+- Given a Program with no breakpoints and `slot_units=4` (2 hours on 30-min grid) that resolves to a 2.5-hour movie:
   - Movie plays for 2.5 hours (5 grid blocks instead of 4)
   - Movie is never cut mid-play
-- Given a Program `["Special"]` that resolves to a 3-hour special on a 30-minute grid:
-  - Special consumes 6 grid blocks
-  - Special plays to completion without interruption
+- Given a Program with a breakpoint at 45:00 in a 90-minute episode on a 30-min grid:
+  - Traffic MAY insert an interstitial event at the 45:00 breakpoint
+  - Traffic MUST NOT insert an interstitial at any other position within the program
+- Given a Program with no breakpoints that resolves to a 3-hour special:
+  - Special consumes 6 grid blocks on a 30-minute grid
+  - Special plays to completion without interruption — no mid-segment cut
 
 **Related Documentation:**
-- [Program.md](../domain/Program.md) - Resolution section, slot_units
-- [SchedulingPolicies.md](../domain/SchedulingPolicies.md) - No Mid-Longform Cuts policy
+- [Program.md](../domain/Program.md) - Resolution section, slot_units, breakpoints
+- [SchedulingPolicies.md](../domain/SchedulingPolicies.md) - Breakpoint and content integrity policies
 - [ScheduleDay.md](../domain/ScheduleDay.md) - Block Consumption and Avails section
+- [ScheduleTrafficArchitecture.md](../scheduling/ScheduleTrafficArchitecture.md) - INV-BRK-01
 
 **Entities:** Program, ScheduleDay
 
@@ -217,7 +222,7 @@ These contracts work together to ensure deterministic, predictable schedule gene
 2. **C-ZONE-03** ensures SchedulableAssets fill Zones correctly
 3. **C-ZONE-01** handles zone transitions gracefully
 4. **C-ZONE-02** ensures zones respect their declared boundaries
-5. **C-LF-01** preserves content integrity
+5. **C-BRK-01** preserves content integrity (cuts only at authorized breakpoints)
 6. **C-BD-01** ensures seamless day transitions
 7. **C-EPG-01** guarantees EPG accuracy
 

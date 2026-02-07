@@ -109,7 +109,7 @@ ScheduleDay generation resolves Zones and their SchedulableAssets into concrete 
 - **Overlength**: If content runtime exceeds the allocated grid block(s), it consumes additional blocks if:
   - The Program has a `slot_units` override that allows the expansion, or
   - The series pick (for series Programs) naturally requires multiple blocks
-- **No mid-longform cuts**: Longform content (with `slot_units` override) is **never cut mid-play**. It always consumes the full number of blocks specified by `slot_units` or required by its duration.
+- **Cuts only at authorized breakpoints**: Programs may only be interrupted at declared breakpoints (cue points, act breaks, SCTE markers, chapter markers). Programs with no breakpoints are **never cut mid-play** — they consume the full number of blocks specified by `slot_units` or required by their duration. See [INV-BRK-01](../scheduling/ScheduleTrafficArchitecture.md).
 
 ### Soft-Start and Carry-In
 

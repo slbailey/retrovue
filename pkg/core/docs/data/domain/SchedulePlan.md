@@ -482,7 +482,7 @@ Within the Planning Mode REPL, the following commands are available:
 - **Preview Compilation**: The `preview day` command compiles to a ScheduleDay draft using the same resolution rules as production:
   - Zones and their SchedulableAssets are placed in ScheduleDay
   - Programs expand their asset chains at playlist generation based on play_mode
-  - Grid alignment, soft-start-after-current, fixed zone end, no mid-longform cuts, and carry-in policies are all applied
+  - Grid alignment, soft-start-after-current, fixed zone end, cuts only at authorized breakpoints, and carry-in policies are all applied
   - The preview is not persisted but shows exactly how the plan will resolve
 
 ### Function-call Parity
