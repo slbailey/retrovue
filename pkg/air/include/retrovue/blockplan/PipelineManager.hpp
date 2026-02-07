@@ -27,6 +27,7 @@
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
+#include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
 
 // Forward declarations
@@ -138,6 +139,19 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // P3.1b: Preview producer (preloaded in background, Input Bus B).
   std::unique_ptr<producers::IProducer> preview_;
   std::unique_ptr<ProducerPreloader> preloader_;
+
+  // --- Cadence-based frame repeat (input_fps < output_fps support) ---
+  // When input source FPS is lower than output FPS, we decode fewer
+  // frames and repeat the last decoded video frame on intervening ticks.
+  // Audio is emitted only on decode ticks to prevent PTS racing.
+  void InitCadence(ITickProducer* tp);
+  void ResetCadence();
+
+  bool cadence_active_ = false;
+  double cadence_ratio_ = 0.0;    // input_fps / output_fps (e.g. 0.7992)
+  double decode_budget_ = 0.0;    // Accumulator: += ratio per tick, decode when >= 1.0
+  buffer::Frame last_decoded_video_;
+  bool have_last_decoded_video_ = false;
 };
 
 }  // namespace retrovue::blockplan

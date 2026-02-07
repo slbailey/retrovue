@@ -3457,7 +3457,6 @@ class BlockPlanProducer(Producer):
 
         block_index = self._block_index
         start_ms = self._next_block_start_ms
-        end_ms = start_ms + self._block_duration_ms
 
         # Cycle through playout plan entries round-robin
         if playout_plan:
@@ -3465,8 +3464,14 @@ class BlockPlanProducer(Producer):
             asset_path = entry.get("asset_path", "assets/SampleA.mp4")
             asset_offset_ms = entry.get("asset_start_offset_ms", 0)
         else:
+            entry = {}
             asset_path = "assets/SampleA.mp4"
             asset_offset_ms = 0
+
+        # Per-entry duration_ms overrides the configured block_duration_ms
+        # when present — allows playlist segments to define their own length.
+        block_dur_ms = entry.get("duration_ms", self._block_duration_ms)
+        end_ms = start_ms + block_dur_ms
 
         block_id = f"BLOCK-{self.channel_id}-{block_index}"
 
@@ -3479,7 +3484,7 @@ class BlockPlanProducer(Producer):
                 "segment_index": 0,
                 "asset_uri": asset_path,
                 "asset_start_offset_ms": asset_offset_ms,
-                "segment_duration_ms": self._block_duration_ms,
+                "segment_duration_ms": block_dur_ms,
             }],
         )
 

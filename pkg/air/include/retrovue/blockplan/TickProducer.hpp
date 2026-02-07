@@ -84,6 +84,7 @@ class TickProducer : public producers::IProducer,
   const FedBlock& GetBlock() const override;
   int64_t FramesPerBlock() const override;
   bool HasDecoder() const override;
+  double GetInputFPS() const override;
 
   // --- IProducer ---
   bool start() override;
@@ -120,7 +121,9 @@ class TickProducer : public producers::IProducer,
 
   int width_;
   int height_;
-  int64_t frame_duration_ms_;
+  int64_t frame_duration_ms_;            // Output frame duration (for fence/frames_per_block)
+  double input_fps_ = 0.0;              // Detected input FPS (0 = unknown)
+  int64_t input_frame_duration_ms_ = 0;  // Content advance per decode (matches input cadence)
 };
 
 }  // namespace retrovue::blockplan
