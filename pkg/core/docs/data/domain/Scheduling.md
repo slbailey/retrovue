@@ -147,7 +147,7 @@ The Scheduler (ScheduleService) processes the Broadcast Scheduling Domain models
    - Applies layering: combines multiple plans using priority resolution (higher priority plans override lower priority plans). Zones from higher-priority plans override overlapping Zones from lower-priority plans.
    - Retrieves Zones and their SchedulableAssets from active plans
    - Places SchedulableAssets in Zones, snapping to the Channel's Grid boundaries (`grid_block_minutes`, `block_start_offsets_minutes`, `programming_day_start`)
-   - Applies scheduling policies: grid alignment, soft-start-after-current, snap-next-boundary, fixed zone end, no mid-longform cuts, carry-in across broadcast day seams
+   - Applies scheduling policies: grid alignment, soft-start-after-current, snap-next-boundary, fixed zone end, cuts only at authorized breakpoints, carry-in across broadcast day seams
    - Builds ScheduleDay records (resolved, immutable daily schedules) 3–4 days in advance with SchedulableAssets placed in Zones with wall-clock times
    - Uses the channel's Grid boundaries to anchor Zone time windows and produce real-world wall-clock times
    - Validates Zones and SchedulableAssets and ensures no gaps or conflicts
@@ -185,7 +185,7 @@ See [SchedulingPolicies.md](SchedulingPolicies.md) for detailed descriptions of 
 - **Soft-start-after-current**: When a Zone opens while content is already playing, the current content continues to completion, and the new Zone's SchedulableAssets start at the next valid Grid boundary
 - **Snap-next-boundary**: Content placement snaps to the next valid Grid boundary when transitioning between Zones
 - **Fixed zone end**: Zones have fixed end times; SchedulableAssets in Zones play within the zone's time window, respecting the zone boundary
-- **No mid-longform cuts**: Longform content (with `slot_units` override) is never cut mid-program; it consumes the required number of grid blocks
+- **Cuts only at authorized breakpoints**: Programs may only be interrupted at declared breakpoints (cue points, act breaks, SCTE markers, chapter markers). Programs with no breakpoints play to completion; longform content consumes additional grid blocks as needed
 - **Carry-in across broadcast day seams**: Content can carry in across broadcast day boundaries (e.g., a program starting at 23:30 can continue into the next programming day)
 - **Duration is zone-controlled**: Duration is determined by the Zone or Schedule context, not by Programs or SchedulableAssets themselves
 - **ScheduleDay contains SchedulableAssets**: ScheduleDay contains SchedulableAssets placed in Zones. Expansion to physical assets occurs at playlist generation.
