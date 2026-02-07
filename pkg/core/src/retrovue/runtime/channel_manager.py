@@ -101,8 +101,8 @@ from .config import (
     MOCK_CHANNEL_CONFIG,
 )
 from ..usecases import channel_manager_launch
-from typing import Protocol, TYPE_CHECKING
-from dataclasses import dataclass
+from typing import Protocol, Sequence, TYPE_CHECKING
+from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 import os
@@ -252,6 +252,52 @@ class ChannelRuntimeState:
         }
 
 
+# ----------------------------------------------------------------------
+# Playlist contract types (PlaylistArchitecture.md)
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlaylistSegment:
+    """A single executable entry in a Playlist.
+
+    Fields match PlaylistArchitecture.md § Segment Fields.
+    All timestamps are timezone-aware datetimes.
+
+    Frame-authoritative execution:
+        ``frame_count`` is the total number of frames in this segment when
+        played from offset 0.  It is the authoritative execution quantity —
+        all CT-domain exhaustion math, preload timing, and switch-before-
+        exhaustion decisions derive from it.  ``duration_seconds`` is
+        retained for metadata, logging, and positional time-lookup only.
+    """
+
+    segment_id: str
+    start_at: datetime
+    duration_seconds: int
+    type: str
+    asset_id: str
+    asset_path: str
+    frame_count: int
+
+
+@dataclass(frozen=True)
+class Playlist:
+    """Time-bounded, ordered list of executable segments for a channel.
+
+    Fields match PlaylistArchitecture.md § Playlist Fields.
+    All timestamps are timezone-aware datetimes.
+    """
+
+    channel_id: str
+    channel_timezone: str
+    window_start_at: datetime
+    window_end_at: datetime
+    generated_at: datetime
+    source: str
+    segments: Sequence[PlaylistSegment] = field(default_factory=tuple)
+
+
 class ChannelManager:
     """
     Per-channel runtime controller that manages individual channel operations.
@@ -399,6 +445,123 @@ class ChannelManager:
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
 
+        # -- Playlist-driven execution state (PlaylistArchitecture.md) --
+        self._playlist: Playlist | None = None
+        self._pl_active_index: int | None = None  # Index into playlist.segments
+
+    # ------------------------------------------------------------------
+    # Playlist loading (PlaylistArchitecture.md)
+    # ------------------------------------------------------------------
+
+    def load_playlist(self, playlist: Playlist) -> None:
+        """Accept a new Playlist for execution.
+
+        Replaces any previously loaded Playlist.  Per INV-PL-06 the
+        handed-off Playlist is immutable — ChannelManager will not modify it.
+
+        When a Playlist is active, tick() uses Playlist-driven execution
+        instead of the legacy ScheduleService path.
+        """
+        # Validate frame_count on every segment (frame-authoritative execution).
+        for i, seg in enumerate(playlist.segments):
+            if seg.frame_count < 0:
+                self._logger.error(
+                    "PLAYLIST_REJECTED: channel=%s segment[%d]=%s has frame_count=%d (must be >= 0)",
+                    self.channel_id,
+                    i,
+                    seg.segment_id,
+                    seg.frame_count,
+                )
+                raise ValueError(
+                    f"PlaylistSegment {seg.segment_id} has frame_count={seg.frame_count}; must be >= 0"
+                )
+
+        self._playlist = playlist
+        # Reset index — first tick will resolve the active segment.
+        self._pl_active_index = None
+        self._logger.info(
+            "PLAYLIST_LOADED: channel=%s window=[%s, %s) segments=%d source=%s",
+            self.channel_id,
+            playlist.window_start_at.isoformat(),
+            playlist.window_end_at.isoformat(),
+            len(playlist.segments),
+            playlist.source,
+        )
+
+    # ------------------------------------------------------------------
+    # Playlist helpers (PlaylistArchitecture.md § Consumption Model)
+    # ------------------------------------------------------------------
+
+    def _resolve_playlist_segment(self, now: datetime) -> tuple[int, PlaylistSegment] | None:
+        """Positional lookup: find the segment covering *now* in the active Playlist.
+
+        Returns ``(index, segment)`` or ``None`` if *now* is outside the window.
+        """
+        playlist = self._playlist
+        if playlist is None:
+            return None
+        for i, seg in enumerate(playlist.segments):
+            seg_end = seg.start_at + timedelta(seconds=seg.duration_seconds)
+            if seg.start_at <= now < seg_end:
+                return (i, seg)
+        return None
+
+    def _playlist_fps(self) -> tuple[int, int, float]:
+        """Return (fps_num, fps_den, fps) from channel config or defaults."""
+        config = self.channel_config
+        if config and hasattr(config, "program_format"):
+            fps_num = getattr(config.program_format, "frame_rate_num", 30)
+            fps_den = getattr(config.program_format, "frame_rate_den", 1)
+        else:
+            fps_num, fps_den = 30, 1
+        fps = fps_num / fps_den if fps_den > 0 else 30.0
+        return fps_num, fps_den, fps
+
+    def _playlist_segment_to_plan(
+        self, seg: PlaylistSegment, offset_seconds: float
+    ) -> list[dict[str, Any]]:
+        """Build a producer-compatible playout plan from a PlaylistSegment.
+
+        Frame-authoritative: ``seg.frame_count`` is the total frame budget for
+        the full segment (offset 0). When joining mid-segment the remaining
+        frame budget is computed by subtracting the frames consumed by the
+        offset.
+
+        Rounding rule: seconds → frames uses ROUND_HALF_UP
+        (``math.floor(x + 0.5)``).
+        """
+        fps_num, fps_den, fps = self._playlist_fps()
+        start_pts_ms = int(offset_seconds * 1000)
+
+        # Frames already consumed at join offset (ROUND_HALF_UP)
+        frames_consumed = int(math.floor(offset_seconds * fps + 0.5))
+        remaining_frames = max(0, seg.frame_count - frames_consumed)
+
+        # Effective execution window (metadata only)
+        effective_start_utc = seg.start_at + timedelta(seconds=offset_seconds)
+        effective_duration_seconds = remaining_frames / fps
+        seg_end = effective_start_utc + timedelta(seconds=effective_duration_seconds)
+
+        return [
+            {
+                "asset_path": seg.asset_path,
+                "start_pts": start_pts_ms,
+                "segment_id": seg.segment_id,
+                "segment_type": seg.type,
+                # Execution-truth fields
+                "frame_count": remaining_frames,
+                "duration_seconds": effective_duration_seconds,
+                # Metadata / diagnostics
+                "start_time_utc": effective_start_utc.isoformat(),
+                "end_time_utc": seg_end.isoformat(),
+                "metadata": {
+                    "original_segment_seconds": seg.duration_seconds,
+                    "frames_consumed": frames_consumed,
+                },
+            }
+        ]
+
+
     def stop_channel(self) -> None:
         """
         Enter STOPPED state and stop the producer. No wait for EOF or segment completion.
@@ -435,6 +598,8 @@ class ChannelManager:
         self._segment_frame_count = None
         self._successor_loaded = False
         self._successor_asset_path = None
+        # Playlist-driven state reset
+        self._pl_active_index = None
         self._stop_producer_if_idle()
 
     def _request_teardown(self, reason: str) -> bool:
@@ -841,8 +1006,14 @@ class ChannelManager:
 
         self.active_producer = producer
 
-        # Get authoritative station time and playout plan.
+        # Get authoritative station time.
         station_time = self.clock.now_utc()
+
+        # -- Playlist-driven initial playback (join-in-progress) -----------
+        if self._playlist is not None:
+            self._ensure_producer_running_playlist(station_time)
+            return
+
         playout_plan = self._get_playout_plan()
 
         # Ask the Producer to start.
@@ -943,6 +1114,75 @@ class ChannelManager:
         # P12-CORE-011 INV-STARTUP-CONVERGENCE-001: Session created; convergence until first boundary
         self._converged = False
         self._convergence_deadline = self.clock.now_utc() + MAX_STARTUP_CONVERGENCE_WINDOW
+
+    def _ensure_producer_running_playlist(self, station_time: datetime) -> None:
+        """Playlist-driven initial playback (join-in-progress).
+
+        Resolves the active segment from the Playlist, computes the wall-clock
+        offset, builds a producer-compatible playout plan, and starts the
+        producer.  Sets up CT-domain tracking for frame-based exhaustion.
+        """
+        now_utc = station_time if station_time.tzinfo else station_time.replace(tzinfo=timezone.utc)
+        result = self._resolve_playlist_segment(now_utc)
+        if result is None:
+            self.runtime_state.producer_status = "error"
+            self.active_producer = None
+            raise NoScheduleDataError(
+                f"No Playlist segment covers {now_utc.isoformat()} for channel {self.channel_id}"
+            )
+        idx, seg = result
+        offset_seconds = (now_utc - seg.start_at).total_seconds()
+        playout_plan = self._playlist_segment_to_plan(seg, offset_seconds)
+
+        started_ok = self.active_producer.start(playout_plan, station_time)
+        if not started_ok:
+            self.runtime_state.producer_status = "error"
+            self.active_producer = None
+            raise ProducerStartupError(
+                f"Channel {self.channel_id}: Producer failed to start from Playlist segment {seg.segment_id}"
+            )
+
+        # Record runtime state
+        self.runtime_state.producer_status = "running"
+        self.runtime_state.producer_started_at = station_time
+        self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
+
+        # Playlist segment tracking
+        self._pl_active_index = idx
+        seg_end = seg.start_at + timedelta(seconds=seg.duration_seconds)
+        self._segment_end_time_utc = seg_end
+
+        # CT-domain init — frame-authoritative.
+        # CT starts at 0; AIR handles the seek offset.  The execution budget
+        # is the remaining frames after subtracting the join offset
+        # (ROUND_HALF_UP: math.floor(x + 0.5) for non-negative values).
+        fps_num, fps_den, fps = self._playlist_fps()
+        self._segment_ct_start_us = 0
+        self._segment_frame_duration_us = int(1_000_000 * fps_den / fps_num) if fps_num > 0 else 33333
+        frames_consumed = int(math.floor(offset_seconds * fps + 0.5))
+        remaining_frames = max(0, seg.frame_count - frames_consumed)
+        self._segment_frame_count = remaining_frames if remaining_frames > 0 else None
+
+        # Reset boundary / switch state
+        self._switch_state = SwitchState.IDLE
+        self._successor_loaded = False
+        self._successor_asset_path = None
+        if self._segment_end_time_utc is not None:
+            self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+            self._transition_boundary_state(BoundaryState.PLANNED)
+
+        self._converged = False
+        self._convergence_deadline = self.clock.now_utc() + MAX_STARTUP_CONVERGENCE_WINDOW
+
+        self._logger.info(
+            "PLAYLIST_INITIAL_PLAYBACK: channel=%s segment=%s asset=%s offset=%.3fs idx=%d/%d",
+            self.channel_id,
+            seg.segment_id,
+            seg.asset_path,
+            offset_seconds,
+            idx,
+            len(self._playlist.segments) if self._playlist else 0,
+        )
 
     def _segment_duration_seconds(self, segment: dict[str, Any]) -> float:
         """Duration of segment from schedule (seconds). Uses duration_seconds or metadata.segment_seconds."""
@@ -1357,6 +1597,12 @@ class ChannelManager:
             return
         if self._channel_state == "STOPPED" or self.active_producer is None:
             return
+
+        # -- Playlist-driven execution (replaces legacy path when active) --
+        if self._playlist is not None:
+            self._tick_playlist()
+            return
+
         producer = self.active_producer
         if not getattr(producer, "load_preview", None) or not getattr(producer, "switch_to_live", None):
             return
@@ -1567,6 +1813,286 @@ class ChannelManager:
                         self._successor_loaded,
                     )
                     self._segment_readiness_violation_logged = True
+
+    # ------------------------------------------------------------------
+    # Playlist-driven tick (PlaylistArchitecture.md § Consumption Model)
+    # ------------------------------------------------------------------
+
+    def _tick_playlist(self) -> None:
+        """Playlist-driven segment tracking, preload, switch, and advancement.
+
+        Called from tick() when ``_playlist`` is not None.
+        Uses CT-domain exhaustion as the authoritative timing source for
+        preload and switch decisions (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION).
+        """
+        producer = self.active_producer
+        if producer is None:
+            return
+
+        playlist = self._playlist
+        if playlist is None:
+            return  # Defensive; caller already checked.
+
+        # -- First tick after load: resolve active segment -----------------
+        if self._pl_active_index is None:
+            now = self.clock.now_utc()
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            result = self._resolve_playlist_segment(now)
+            if result is None:
+                self._logger.warning(
+                    "PLAYLIST_TICK_NO_SEGMENT: channel=%s now=%s outside window",
+                    self.channel_id,
+                    now.isoformat(),
+                )
+                return
+            idx, seg = result
+            self._pl_active_index = idx
+            seg_end = seg.start_at + timedelta(seconds=seg.duration_seconds)
+            self._segment_end_time_utc = seg_end
+
+            # Init CT tracking — frame-authoritative.
+            # Remaining frames account for join-in-progress offset
+            # (ROUND_HALF_UP: math.floor(x + 0.5) for non-negative values).
+            fps_num, fps_den, fps = self._playlist_fps()
+            self._segment_ct_start_us = 0
+            self._segment_frame_duration_us = (
+                int(1_000_000 * fps_den / fps_num) if fps_num > 0 else 33333
+            )
+            offset_seconds = (now - seg.start_at).total_seconds()
+            frames_consumed = int(math.floor(offset_seconds * fps + 0.5))
+            remaining_frames = max(0, seg.frame_count - frames_consumed)
+            self._segment_frame_count = remaining_frames if remaining_frames > 0 else None
+
+            self._switch_state = SwitchState.IDLE
+            self._successor_loaded = False
+            self._successor_asset_path = None
+            if self._segment_end_time_utc is not None:
+                self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+                self._transition_boundary_state(BoundaryState.PLANNED)
+            self._logger.info(
+                "PLAYLIST_SEGMENT_START: channel=%s segment=%s idx=%d/%d",
+                self.channel_id,
+                seg.segment_id,
+                idx,
+                len(playlist.segments),
+            )
+            return
+
+        # -- CT-domain exhaustion tracking ---------------------------------
+        if (
+            self._segment_ct_start_us is None
+            or self._segment_frame_count is None
+        ):
+            # Cannot do CT-based switching — fall back to UTC.
+            return
+
+        ct_exhaust_us = (
+            self._segment_ct_start_us
+            + self._segment_frame_count * self._segment_frame_duration_us
+        )
+        # Approximate current CT from wall clock elapsed since producer start.
+        # (Exact CT requires AIR GetCTCursor RPC; this is the existing pattern.)
+        now = self.clock.now_utc()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        if self.runtime_state.producer_started_at is not None:
+            started = self.runtime_state.producer_started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            current_ct_us = int((now - started).total_seconds() * 1_000_000)
+        else:
+            current_ct_us = 0
+
+        active_idx = self._pl_active_index
+        segments = playlist.segments
+        has_successor = active_idx + 1 < len(segments)
+
+        # -- Emergency fast-path (INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY) ---
+        if (
+            self._switch_state == SwitchState.PREVIEW_LOADED
+            and current_ct_us >= ct_exhaust_us
+            and has_successor
+        ):
+            # Past exhaustion with preview loaded — switch immediately.
+            self._logger.info(
+                "PLAYLIST_EMERGENCY_SWITCH: channel=%s ct=%d exhaust=%d",
+                self.channel_id,
+                current_ct_us,
+                ct_exhaust_us,
+            )
+            ok = producer.switch_to_live(
+                target_boundary_time_utc=self._segment_end_time_utc
+            )
+            if ok:
+                self._handle_playlist_switch_complete(now)
+            return
+
+        # -- Phase 3: Poll switch completion while SWITCH_ARMED ------------
+        if self._switch_state == SwitchState.SWITCH_ARMED:
+            ok = producer.switch_to_live(
+                target_boundary_time_utc=self._segment_end_time_utc
+            )
+            if ok:
+                self._handle_playlist_switch_complete(now)
+            else:
+                # Not complete yet — log violation if past exhaustion (one-shot).
+                if (
+                    current_ct_us > ct_exhaust_us
+                    and not self._segment_readiness_violation_logged
+                ):
+                    self._logger.warning(
+                        "INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION VIOLATION (playlist): "
+                        "channel=%s ct=%d exhaust=%d successor_loaded=%s",
+                        self.channel_id,
+                        current_ct_us,
+                        ct_exhaust_us,
+                        self._successor_loaded,
+                    )
+                    self._segment_readiness_violation_logged = True
+            return
+
+        # -- Phase 1: Preload successor -----------------------------------
+        preload_threshold_us = ct_exhaust_us - self._preload_lead_us
+        if (
+            self._switch_state == SwitchState.IDLE
+            and current_ct_us >= preload_threshold_us
+            and has_successor
+        ):
+            successor = segments[active_idx + 1]
+            fps_num, fps_den, fps = self._playlist_fps()
+            start_frame = 0  # Successor always starts at frame 0.
+            # Frame-authoritative: use segment's declared frame_count.
+            frame_count = successor.frame_count
+
+            ok = producer.load_preview(
+                successor.asset_path,
+                start_frame=start_frame,
+                frame_count=frame_count,
+                fps_numerator=fps_num,
+                fps_denominator=fps_den,
+            )
+            if ok:
+                self._transition_boundary_state(BoundaryState.PRELOAD_ISSUED)
+                self._switch_state = SwitchState.PREVIEW_LOADED
+                self._successor_loaded = True
+                self._successor_asset_path = successor.asset_path
+
+                # Schedule deadline switch issuance.
+                if self._segment_end_time_utc is not None:
+                    self._schedule_switch_issuance(self._segment_end_time_utc)
+                self._transition_boundary_state(BoundaryState.SWITCH_SCHEDULED)
+
+                self._logger.info(
+                    "PLAYLIST_PRELOAD: channel=%s successor=%s ct=%d exhaust=%d",
+                    self.channel_id,
+                    successor.segment_id,
+                    current_ct_us,
+                    ct_exhaust_us,
+                )
+            return
+
+        # -- Phase 2: Switch issuance is deadline-scheduled (reuses legacy timer path).
+
+    def _handle_playlist_switch_complete(self, now: datetime) -> None:
+        """Handle switch completion under Playlist-driven execution.
+
+        Promotes the successor segment to active, advances the Playlist index,
+        updates CT tracking, and records an as-run log entry.
+        """
+        self._transition_boundary_state(BoundaryState.LIVE)
+        self._segment_readiness_violation_logged = False
+
+        playlist = self._playlist
+        if playlist is None or self._pl_active_index is None:
+            return
+
+        old_idx = self._pl_active_index
+        new_idx = old_idx + 1
+        segments = playlist.segments
+
+        # Log switch timing
+        if self._segment_end_time_utc is not None:
+            seg_ts = self._segment_end_time_utc.timestamp()
+            actual_ts = now.timestamp()
+            delta_ms = (actual_ts - seg_ts) * 1000
+            if actual_ts > seg_ts:
+                self._logger.warning(
+                    "INV-P8-SWITCH-TIMING VIOLATION (playlist): channel=%s "
+                    "switch %.1fms AFTER boundary",
+                    self.channel_id,
+                    delta_ms,
+                )
+            else:
+                self._logger.info(
+                    "PLAYLIST_SWITCH_COMPLETE: channel=%s %.1fms before boundary",
+                    self.channel_id,
+                    -delta_ms,
+                )
+
+        # As-run log entry for completed segment.
+        if old_idx < len(segments):
+            completed_seg = segments[old_idx]
+            self._logger.info(
+                "PLAYLIST_ASRUN: channel=%s segment=%s asset=%s start=%s duration=%ds",
+                self.channel_id,
+                completed_seg.segment_id,
+                completed_seg.asset_id,
+                completed_seg.start_at.isoformat(),
+                completed_seg.duration_seconds,
+            )
+
+        if new_idx >= len(segments):
+            # End of Playlist — no more segments.
+            self._pl_active_index = None
+            self._segment_end_time_utc = None
+            self._segment_ct_start_us = None
+            self._segment_frame_count = None
+            self._switch_state = SwitchState.IDLE
+            self._transition_boundary_state(BoundaryState.NONE)
+            self._logger.info(
+                "PLAYLIST_EXHAUSTED: channel=%s (end of window)",
+                self.channel_id,
+            )
+            return
+
+        # Advance to successor segment.
+        new_seg = segments[new_idx]
+        self._pl_active_index = new_idx
+        seg_end = new_seg.start_at + timedelta(seconds=new_seg.duration_seconds)
+        self._segment_end_time_utc = seg_end
+
+        # CT-domain: new segment's ct_start = previous segment's ct_exhaust.
+        if self._segment_ct_start_us is not None and self._segment_frame_count is not None:
+            self._segment_ct_start_us += (
+                self._segment_frame_count * self._segment_frame_duration_us
+            )
+        else:
+            self._segment_ct_start_us = None
+
+        fps_num, fps_den, fps = self._playlist_fps()
+        self._segment_frame_duration_us = (
+            int(1_000_000 * fps_den / fps_num) if fps_num > 0 else 33333
+        )
+        # Frame-authoritative: successor starts at frame 0, full budget.
+        self._segment_frame_count = new_seg.frame_count if new_seg.frame_count > 0 else None
+
+        self._switch_state = SwitchState.IDLE
+        self._successor_loaded = False
+        self._successor_asset_path = None
+        self._last_switch_at_segment_end_utc = self._segment_end_time_utc
+
+        if self._segment_end_time_utc is not None:
+            self._plan_boundary_ms = int(self._segment_end_time_utc.timestamp() * 1000)
+        self._transition_boundary_state(BoundaryState.PLANNED)
+
+        self._logger.info(
+            "PLAYLIST_SEGMENT_START: channel=%s segment=%s idx=%d/%d",
+            self.channel_id,
+            new_seg.segment_id,
+            new_idx,
+            len(segments),
+        )
 
     def _handle_switch_complete(
         self, producer: Producer, segment_end: datetime, now: datetime
@@ -1844,11 +2370,28 @@ class ChannelManager:
         """
         Factory hook: build the correct Producer implementation for the given mode.
 
-        INV-PLAYOUT-AUTHORITY: When PLAYOUT_AUTHORITY == "blockplan", only
-        BlockPlanProducer may be constructed.  Legacy paths are blocked.
+        INV-PLAYOUT-AUTHORITY: Producer selection is a control-plane decision:
+        - Playlist active → Phase8AirProducer (start_pts join-in-progress,
+          frame_count honor, _tick_playlist segment switching).
+        - No playlist + PLAYOUT_AUTHORITY == "blockplan" → BlockPlanProducer.
         """
         # =====================================================================
-        # INV-PLAYOUT-AUTHORITY: Enforce authoritative playout path
+        # INV-PLAYOUT-AUTHORITY: Playlist-driven → Phase8AirProducer
+        # =====================================================================
+        if self._playlist is not None:
+            self._logger.info(
+                "INV-PLAYOUT-AUTHORITY: Channel %s session started | "
+                "playout_path=phase8 | reason=playlist_active | mode=%s",
+                self.channel_id, mode,
+            )
+            return Phase8AirProducer(
+                self.channel_id, {},
+                channel_config=self.channel_config or MOCK_CHANNEL_CONFIG,
+                playlist_authorized=True,
+            )
+
+        # =====================================================================
+        # INV-PLAYOUT-AUTHORITY: No playlist — enforce blockplan authority
         # =====================================================================
         if PLAYOUT_AUTHORITY == "blockplan" and not self._blockplan_mode:
             self._logger.error(
@@ -2377,11 +2920,15 @@ class Phase8ProgramDirector:
 
 
 class Phase8AirProducer(Producer):
-    """LEGACY Producer — retained for reference only.
+    """Producer for clock-driven playout (LoadPreview/SwitchToLive).
 
-    This producer uses the LoadPreview/SwitchToLive clock-driven switching path.
-    It is superseded by BlockPlanProducer and MUST NOT be invoked for live channels
-    when PLAYOUT_AUTHORITY == "blockplan".
+    Used by the Playlist execution path where ChannelManager drives segment
+    transitions via ``_tick_playlist()``.  Respects ``start_pts`` for
+    join-in-progress and ``frame_count`` for segment exhaustion.
+
+    When ``playlist_authorized=True``, the PLAYOUT_AUTHORITY guard is
+    bypassed because ``_build_producer_for_mode()`` has already made the
+    control-plane decision.
     """
 
     def __init__(
@@ -2389,6 +2936,8 @@ class Phase8AirProducer(Producer):
         channel_id: str,
         configuration: dict[str, Any],
         channel_config: ChannelConfig | None = None,
+        *,
+        playlist_authorized: bool = False,
     ):
         super().__init__(channel_id, ProducerMode.NORMAL, configuration)
         self.air_process: channel_manager_launch.ProcessHandle | None = None
@@ -2397,13 +2946,16 @@ class Phase8AirProducer(Producer):
         self._stream_endpoint = f"/channel/{channel_id}.ts"
         self._grpc_addr: str | None = None  # Set after start(); used for LoadPreview/SwitchToLive
         self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
+        self._playlist_authorized = playlist_authorized
 
     def start(self, playout_plan: list[dict[str, Any]], start_at_station_time: datetime) -> bool:
         """Start output by spawning an Air process. Builds PlayoutRequest, launches Air via stdin."""
         # =====================================================================
-        # INV-PLAYOUT-AUTHORITY GUARDRAIL: Block legacy path when authority is blockplan
+        # INV-PLAYOUT-AUTHORITY GUARDRAIL: Block legacy path when authority is
+        # blockplan, UNLESS this producer was constructed for playlist-driven
+        # playout (playlist_authorized=True).
         # =====================================================================
-        if PLAYOUT_AUTHORITY == "blockplan":
+        if PLAYOUT_AUTHORITY == "blockplan" and not self._playlist_authorized:
             raise RuntimeError(
                 f"INV-PLAYOUT-AUTHORITY: Phase8AirProducer.start() called for "
                 f"channel '{self.channel_id}' while PLAYOUT_AUTHORITY='{PLAYOUT_AUTHORITY}'. "
