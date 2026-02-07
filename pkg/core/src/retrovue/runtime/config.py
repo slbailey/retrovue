@@ -122,6 +122,7 @@ class ChannelConfig:
     program_format: ProgramFormat
     schedule_source: str      # "mock", "file", "grid"
     schedule_config: dict[str, Any] = field(default_factory=dict)
+    blockplan_only: bool = False  # When True, only BlockPlanProducer is permitted
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChannelConfig:
@@ -134,6 +135,7 @@ class ChannelConfig:
             program_format=ProgramFormat.from_dict(program_format_data) if program_format_data else DEFAULT_PROGRAM_FORMAT,
             schedule_source=data.get("schedule_source", "mock"),
             schedule_config=data.get("schedule_config", {}),
+            blockplan_only=data.get("blockplan_only", False),
         )
 
 
