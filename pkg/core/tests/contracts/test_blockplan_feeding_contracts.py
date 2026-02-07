@@ -1190,5 +1190,325 @@ class TestArchitecturalInvariants:
         )
 
 
+# =============================================================================
+# Part 4: Queue Discipline Contract Tests (INV-FEED-QUEUE-*)
+# =============================================================================
+
+class TestQueueFullRetry:
+    """
+    INV-FEED-QUEUE-001 through 005: QUEUE_FULL retry discipline.
+
+    Verifies:
+    - Rejected blocks are stored in pending slot
+    - Pending blocks are retried on BLOCK_COMPLETE (before generating new)
+    - Cursor only advances on successful feed
+    - No block index is skipped
+    - Retry is event-driven (no polling/timers)
+    """
+
+    def test_queue_full_stores_pending_and_retries_on_complete(self):
+        """
+        INV-FEED-QUEUE-001/002/003: When feed() returns False (QUEUE_FULL),
+        the block is stored as pending. On next BLOCK_COMPLETE, the pending
+        block is retried before any new block is generated.
+        """
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="qf-test",
+            configuration={"block_duration_ms": 3000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/Episode1.mp4", "duration_ms": 3000},
+            {"asset_path": "assets/Filler.mp4", "duration_ms": 3000},
+            {"asset_path": "assets/Episode2.mp4", "duration_ms": 3000},
+        ]
+
+        # Track all feed calls with their block_ids and return values
+        feed_log: list[tuple[str, bool]] = []
+        queue_full_until_event = [True]  # Simulate queue full initially
+
+        class QueueFullSession:
+            """Mock session that rejects first feed (simulating QUEUE_FULL at startup)."""
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+                self._seeded = False
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                self._seeded = True
+                return True
+
+            def feed(self, block):
+                if queue_full_until_event[0]:
+                    feed_log.append((block.block_id, False))
+                    return False
+                feed_log.append((block.block_id, True))
+                return True
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return self._seeded
+
+        # Manually wire the mock session into the producer
+        mock_session = QueueFullSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        # Simulate start() sequence: generate and seed first 2 blocks
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+
+        mock_session.seed(block_a, block_b)
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Feed 3rd block — should be rejected (QUEUE_FULL)
+        block_c = producer._generate_next_block(playout_plan)
+        result = producer._try_feed_block(block_c)
+
+        # Verify: feed was rejected, block is pending
+        assert result is False, "Feed should fail (QUEUE_FULL)"
+        assert producer._pending_block is not None, (
+            "INV-FEED-QUEUE-002: Rejected block must be stored in _pending_block"
+        )
+        assert producer._pending_block.block_id == "BLOCK-qf-test-2", (
+            f"Pending block should be BLOCK-qf-test-2, got {producer._pending_block.block_id}"
+        )
+        # Cursor should NOT have advanced past block 2
+        assert producer._block_index == 2, (
+            f"INV-FEED-QUEUE-001: Cursor should still be at 2, got {producer._block_index}"
+        )
+
+        assert feed_log == [("BLOCK-qf-test-2", False)], (
+            f"Expected single rejected feed, got {feed_log}"
+        )
+
+        # Now simulate: queue slot freed (BLOCK_COMPLETE for block A)
+        queue_full_until_event[0] = False  # Queue now has room
+        feed_log.clear()
+
+        producer._started = True  # Simulate started state
+        producer._on_block_complete("BLOCK-qf-test-0")
+
+        # Verify: pending block was retried (same block_id)
+        assert len(feed_log) == 1, f"Expected 1 feed on retry, got {len(feed_log)}"
+        assert feed_log[0] == ("BLOCK-qf-test-2", True), (
+            f"INV-FEED-QUEUE-003: Retry must use same block_id. Got {feed_log[0]}"
+        )
+
+        # Verify: pending slot is now clear
+        assert producer._pending_block is None, (
+            "Pending block should be cleared after successful retry"
+        )
+
+        # Verify: cursor has now advanced past the retried block
+        assert producer._block_index == 3, (
+            f"INV-FEED-QUEUE-001: Cursor should be 3 after successful feed, got {producer._block_index}"
+        )
+
+    def test_sequence_integrity_no_gaps(self):
+        """
+        INV-FEED-QUEUE-004: Block sequence is gap-free despite QUEUE_FULL.
+
+        Runs a full 5-block feeding sequence where block 2 is initially
+        rejected. Verifies every block index appears exactly once.
+        """
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="seq-test",
+            configuration={"block_duration_ms": 3000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [
+            {"asset_path": f"assets/Content{i}.mp4", "duration_ms": 3000}
+            for i in range(5)
+        ]
+
+        # Track successfully fed block IDs
+        successfully_fed: list[str] = []
+        reject_next = [False]
+
+        class ControlledSession:
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                successfully_fed.append(block_a.block_id)
+                successfully_fed.append(block_b.block_id)
+                return True
+
+            def feed(self, block):
+                if reject_next[0]:
+                    reject_next[0] = False  # Only reject once
+                    return False
+                successfully_fed.append(block.block_id)
+                return True
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return True
+
+        mock_session = ControlledSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        producer._started = True
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Seed blocks 0, 1
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        # Feed block 2 — will be REJECTED
+        reject_next[0] = True
+        block_c = producer._generate_next_block(playout_plan)
+        producer._try_feed_block(block_c)
+
+        # Verify block 2 is pending
+        assert producer._pending_block is not None
+        assert producer._pending_block.block_id == "BLOCK-seq-test-2"
+
+        # BLOCK_COMPLETE for block 0 → retries block 2 (succeeds)
+        producer._on_block_complete("BLOCK-seq-test-0")
+
+        # BLOCK_COMPLETE for block 1 → generates and feeds block 3
+        producer._on_block_complete("BLOCK-seq-test-1")
+
+        # BLOCK_COMPLETE for block 2 → generates and feeds block 4
+        producer._on_block_complete("BLOCK-seq-test-2")
+
+        # Verify sequence integrity: all blocks 0-4 fed, no gaps
+        expected = [f"BLOCK-seq-test-{i}" for i in range(5)]
+        assert successfully_fed == expected, (
+            f"INV-FEED-QUEUE-004: Expected gap-free sequence {expected}, "
+            f"got {successfully_fed}"
+        )
+
+    def test_no_polling_retry(self):
+        """
+        INV-FEED-QUEUE-005: Retry only happens on BLOCK_COMPLETE event,
+        never via timer or polling.
+        """
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="poll-test",
+            configuration={"block_duration_ms": 3000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 3000}]
+        feed_attempts: list[str] = []
+
+        class NeverAcceptSession:
+            """Session that always rejects feeds (permanent QUEUE_FULL)."""
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                return True
+
+            def feed(self, block):
+                feed_attempts.append(block.block_id)
+                return False  # Always QUEUE_FULL
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return True
+
+        mock_session = NeverAcceptSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        producer._started = True
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Seed blocks 0, 1
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        # Try to feed block 2 — rejected
+        block_c = producer._generate_next_block(playout_plan)
+        producer._try_feed_block(block_c)
+
+        # Wait without any BLOCK_COMPLETE events — should NOT retry
+        initial_attempts = len(feed_attempts)
+        time.sleep(0.3)
+        after_wait_attempts = len(feed_attempts)
+
+        assert after_wait_attempts == initial_attempts, (
+            f"INV-FEED-QUEUE-005: No retry without BLOCK_COMPLETE event. "
+            f"Expected {initial_attempts} attempts, got {after_wait_attempts}"
+        )
+
+    def test_cleanup_clears_pending(self):
+        """
+        INV-FEED-QUEUE-002: _cleanup() resets _pending_block to None.
+        """
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="cleanup-test",
+            configuration={"block_duration_ms": 3000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        # Simulate a pending block
+        from retrovue.runtime.playout_session import BlockPlan
+        producer._pending_block = BlockPlan(
+            block_id="BLOCK-cleanup-test-2",
+            channel_id=1,
+            start_utc_ms=6000,
+            end_utc_ms=9000,
+            segments=[],
+        )
+
+        assert producer._pending_block is not None
+
+        producer._cleanup()
+
+        assert producer._pending_block is None, (
+            "INV-FEED-QUEUE-002: _cleanup() must clear _pending_block"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

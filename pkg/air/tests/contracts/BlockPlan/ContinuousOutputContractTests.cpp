@@ -263,26 +263,28 @@ TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
 
 // =============================================================================
 // CONT-ACT-002: FrameCountDeterministic
-// FramesPerBlock = ceil(duration_ms / frame_duration_ms) for various durations.
+// FramesPerBlock = ceil(duration_ms * fps / 1000) for various durations.
+// Uses exact floating-point fps, not truncated integer frame duration.
+// Contract: INV-AIR-MEDIA-TIME-001
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, FrameCountDeterministic) {
   TickProducer source(640, 480, 30.0);
 
-  // 5000ms block at 30fps (33ms/frame): ceil(5000/33) = ceil(151.51) = 152
+  // 5000ms block at 30fps: ceil(5000 * 30 / 1000) = ceil(150.0) = 150
   {
     FedBlock block = MakeSyntheticBlock("fc-5000", 5000);
     source.AssignBlock(block);
-    EXPECT_EQ(source.FramesPerBlock(), 152)
-        << "5000ms block must produce ceil(5000/33) = 152 frames";
+    EXPECT_EQ(source.FramesPerBlock(), 150)
+        << "5000ms block must produce ceil(5000*30/1000) = 150 frames";
     source.Reset();
   }
 
-  // 3700ms block at 30fps: ceil(3700/33) = ceil(112.12) = 113
+  // 3700ms block at 30fps: ceil(3700 * 30 / 1000) = ceil(111.0) = 111
   {
     FedBlock block = MakeSyntheticBlock("fc-3700", 3700);
     source.AssignBlock(block);
-    EXPECT_EQ(source.FramesPerBlock(), 113)
-        << "3700ms block must produce ceil(3700/33) = 113 frames";
+    EXPECT_EQ(source.FramesPerBlock(), 111)
+        << "3700ms block must produce ceil(3700*30/1000) = 111 frames";
     source.Reset();
   }
 

@@ -100,6 +100,18 @@ Output sink attachment policy. See [SinkLivenessPolicy.md](semantics/SinkLivenes
 | **INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT** | After AttachStream, emit decodable TS within 500ms using fallback if needed. Output-first, content-second. Contract: [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) | Semantic |
 | ~~INV-AIR-CONTENT-BEFORE-PAD~~ | **RETIRED** — Replaced by INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT. Old philosophy (gate output on content) was backwards. | — |
 
+### Media Time Authority Invariants
+
+Decoded media time governs block execution and segment transitions. See [INV-AIR-MEDIA-TIME.md](semantics/INV-AIR-MEDIA-TIME.md) for full behavioral contract.
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-AIR-MEDIA-TIME-001** | Block execution governed by decoded media time, not rounded FPS math | `TickProducer` | Semantic |
+| **INV-AIR-MEDIA-TIME-002** | No cumulative drift — PTS-anchored tracking bounds error to one frame period | `TickProducer` | Semantic |
+| **INV-AIR-MEDIA-TIME-003** | Fence alignment — decoded media time converges to block end within one frame | `TickProducer` | Semantic |
+| **INV-AIR-MEDIA-TIME-004** | Cadence independence — output FPS does not affect media time tracking | `TickProducer` | Semantic |
+| **INV-AIR-MEDIA-TIME-005** | Pad is never primary — padding only when decoded media time exceeds block end | `TickProducer` | Semantic |
+
 **Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
 
 ---

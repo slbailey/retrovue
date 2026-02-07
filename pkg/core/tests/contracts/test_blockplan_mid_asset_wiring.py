@@ -76,8 +76,9 @@ class TestMidAssetBlockPlanWiring:
     def test_block_1_uses_sample_b_mid_offset(self):
         """BLOCK-mock-1 must use SampleB with offset=12000."""
         producer = make_producer()
-        # Generate block 0 first (advances state)
-        producer._generate_next_block(TWO_ASSET_PLAN)
+        # Generate block 0 first, advance cursor
+        b0 = producer._generate_next_block(TWO_ASSET_PLAN)
+        producer._advance_cursor(b0)
         # Now generate block 1
         block = producer._generate_next_block(TWO_ASSET_PLAN)
 
@@ -90,8 +91,10 @@ class TestMidAssetBlockPlanWiring:
     def test_round_robin_cycles_back(self):
         """Block 2 should cycle back to SampleA (index 2 % 2 == 0)."""
         producer = make_producer()
-        producer._generate_next_block(TWO_ASSET_PLAN)  # block 0
-        producer._generate_next_block(TWO_ASSET_PLAN)  # block 1
+        b = producer._generate_next_block(TWO_ASSET_PLAN)  # block 0
+        producer._advance_cursor(b)
+        b = producer._generate_next_block(TWO_ASSET_PLAN)  # block 1
+        producer._advance_cursor(b)
         block = producer._generate_next_block(TWO_ASSET_PLAN)  # block 2
 
         assert block.block_id == "BLOCK-mock-2"
@@ -102,7 +105,11 @@ class TestMidAssetBlockPlanWiring:
     def test_block_timing_contiguous(self):
         """Blocks must form a contiguous timeline (no gaps)."""
         producer = make_producer(block_duration_ms=5000)
-        blocks = [producer._generate_next_block(TWO_ASSET_PLAN) for _ in range(4)]
+        blocks = []
+        for _ in range(4):
+            b = producer._generate_next_block(TWO_ASSET_PLAN)
+            blocks.append(b)
+            producer._advance_cursor(b)
 
         for i in range(1, len(blocks)):
             assert blocks[i].start_utc_ms == blocks[i - 1].end_utc_ms, (
@@ -113,7 +120,11 @@ class TestMidAssetBlockPlanWiring:
     def test_block_duration_matches_config(self):
         """Every block must have the configured duration."""
         producer = make_producer(block_duration_ms=5000)
-        blocks = [producer._generate_next_block(TWO_ASSET_PLAN) for _ in range(4)]
+        blocks = []
+        for _ in range(4):
+            b = producer._generate_next_block(TWO_ASSET_PLAN)
+            blocks.append(b)
+            producer._advance_cursor(b)
 
         for b in blocks:
             assert b.duration_ms == 5000
@@ -121,7 +132,11 @@ class TestMidAssetBlockPlanWiring:
     def test_segment_duration_matches_block(self):
         """Each segment's duration must equal block duration."""
         producer = make_producer(block_duration_ms=5000)
-        blocks = [producer._generate_next_block(TWO_ASSET_PLAN) for _ in range(4)]
+        blocks = []
+        for _ in range(4):
+            b = producer._generate_next_block(TWO_ASSET_PLAN)
+            blocks.append(b)
+            producer._advance_cursor(b)
 
         for b in blocks:
             assert b.segments[0]["segment_duration_ms"] == 5000
@@ -154,6 +169,7 @@ class TestMidAssetBlockPlanWiring:
         # Simulate what _on_block_complete does: use retained plan
         block = producer._generate_next_block(producer._playout_plan)
         assert block.segments[0]["asset_uri"] == SAMPLE_A
+        producer._advance_cursor(block)
 
         block = producer._generate_next_block(producer._playout_plan)
         assert block.segments[0]["asset_uri"] == SAMPLE_B

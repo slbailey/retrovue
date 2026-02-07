@@ -19,6 +19,7 @@ static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 TickProducer::TickProducer(int width, int height, double fps)
     : width_(width),
       height_(height),
+      output_fps_(fps),
       frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)),
       input_frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)) {}
 
@@ -37,11 +38,12 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   block_ = block;
 
-  // Compute frames_per_block = ceil(duration_ms / frame_duration_ms)
+  // Compute frames_per_block using exact fps to avoid truncation error.
+  // OLD: ceil(duration_ms / frame_duration_ms_) — truncated integer division
+  // NEW: ceil(duration_ms * output_fps_ / 1000.0) — exact floating-point
   int64_t duration_ms = block.end_utc_ms - block.start_utc_ms;
   frames_per_block_ = static_cast<int64_t>(
-      std::ceil(static_cast<double>(duration_ms) /
-                static_cast<double>(frame_duration_ms_)));
+      std::ceil(static_cast<double>(duration_ms) * output_fps_ / 1000.0));
 
   // Convert FedBlock → BlockPlan for validation
   BlockPlan plan = FedBlockToBlockPlan(block);
@@ -247,10 +249,27 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     audio_count++;
   }
 
-  // Capture CT before advancing
-  int64_t ct_before = block_ct_ms_;
-  block_ct_ms_ += input_frame_duration_ms_;
-  next_frame_offset_ms_ += input_frame_duration_ms_;
+  // Anchor block_ct_ms_ and next_frame_offset_ms_ to decoded PTS.
+  // This prevents rounding error from accumulating across frames.
+  // PTS is in microseconds from stream start; convert to milliseconds.
+  int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
+
+  // Derive block CT from actual decoded position within current segment
+  int64_t seg_asset_start = 0;
+  int64_t seg_start_ct = 0;
+  if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
+    seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
+  }
+  if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size())) {
+    seg_asset_start = validated_.plan.segments[current_segment_index_].asset_start_offset_ms;
+  }
+
+  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_asset_start);
+
+  // Advance: +1 frame estimate for NEXT-frame boundary/underrun checks.
+  // Single-frame rounding (max 0.3ms), never accumulated.
+  block_ct_ms_ = ct_before + input_frame_duration_ms_;
+  next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
 
   return FrameData{
       std::move(video_frame),
