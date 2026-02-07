@@ -19,7 +19,8 @@ static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 TickProducer::TickProducer(int width, int height, double fps)
     : width_(width),
       height_(height),
-      frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)) {}
+      frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)),
+      input_frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)) {}
 
 TickProducer::~TickProducer() {
   Reset();
@@ -127,12 +128,28 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   current_segment_index_ = 0;
   block_ct_ms_ = 0;
   decoder_ok_ = true;
+
+  // Detect input FPS from decoder for cadence support.
+  // If input FPS differs from output FPS, PipelineManager will use
+  // cadence-based frame repeat to avoid consuming content too fast.
+  input_fps_ = decoder_->GetVideoFPS();
+  if (input_fps_ > 0.0) {
+    input_frame_duration_ms_ = static_cast<int64_t>(
+        std::round(1000.0 / input_fps_));
+  } else {
+    input_frame_duration_ms_ = frame_duration_ms_;
+  }
+
   state_ = State::kReady;
 
   std::cout << "[TickProducer] Block assigned: " << block.block_id
             << " frames_per_block=" << frames_per_block_
             << " segments=" << plan.segments.size()
-            << " decoder_ok=true" << std::endl;
+            << " decoder_ok=true"
+            << " input_fps=" << input_fps_
+            << " input_frame_dur_ms=" << input_frame_duration_ms_
+            << " output_frame_dur_ms=" << frame_duration_ms_
+            << std::endl;
 }
 
 // =============================================================================
@@ -145,7 +162,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   }
 
   if (!decoder_ok_) {
-    block_ct_ms_ += frame_duration_ms_;
+    block_ct_ms_ += input_frame_duration_ms_;
     return std::nullopt;
   }
 
@@ -158,7 +175,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       int32_t next_index = current_segment_index_ + 1;
       if (next_index >= static_cast<int32_t>(validated_.plan.segments.size())) {
         // Past last segment — pad
-        block_ct_ms_ += frame_duration_ms_;
+        block_ct_ms_ += input_frame_duration_ms_;
         return std::nullopt;
       }
 
@@ -177,7 +194,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
                   << next_index << ": " << next_seg.asset_uri << std::endl;
         decoder_.reset();
         decoder_ok_ = false;
-        block_ct_ms_ += frame_duration_ms_;
+        block_ct_ms_ += input_frame_duration_ms_;
         return std::nullopt;
       }
 
@@ -187,7 +204,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
         if (preroll < 0) {
           decoder_.reset();
           decoder_ok_ = false;
-          block_ct_ms_ += frame_duration_ms_;
+          block_ct_ms_ += input_frame_duration_ms_;
           return std::nullopt;
         }
       }
@@ -200,7 +217,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   // Check if asset offset exceeds asset duration (underrun → pad)
   const auto* asset_info = assets_.GetAsset(current_asset_uri_);
   if (asset_info && next_frame_offset_ms_ >= asset_info->duration_ms) {
-    block_ct_ms_ += frame_duration_ms_;
+    block_ct_ms_ += input_frame_duration_ms_;
     return std::nullopt;
   }
 
@@ -211,11 +228,11 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       // Loop: seek to 0 and retry
       decoder_->SeekToMs(0);
       if (!decoder_->DecodeFrameToBuffer(video_frame)) {
-        block_ct_ms_ += frame_duration_ms_;
+        block_ct_ms_ += input_frame_duration_ms_;
         return std::nullopt;
       }
     } else {
-      block_ct_ms_ += frame_duration_ms_;
+      block_ct_ms_ += input_frame_duration_ms_;
       return std::nullopt;
     }
   }
@@ -232,8 +249,8 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
 
   // Capture CT before advancing
   int64_t ct_before = block_ct_ms_;
-  block_ct_ms_ += frame_duration_ms_;
-  next_frame_offset_ms_ += frame_duration_ms_;
+  block_ct_ms_ += input_frame_duration_ms_;
+  next_frame_offset_ms_ += input_frame_duration_ms_;
 
   return FrameData{
       std::move(video_frame),
@@ -256,6 +273,8 @@ void TickProducer::Reset() {
   block_ct_ms_ = 0;
   frames_per_block_ = 0;
   boundaries_.clear();
+  input_fps_ = 0.0;
+  input_frame_duration_ms_ = frame_duration_ms_;
   state_ = State::kEmpty;
 }
 
@@ -273,6 +292,10 @@ int64_t TickProducer::FramesPerBlock() const {
 
 bool TickProducer::HasDecoder() const {
   return decoder_ok_;
+}
+
+double TickProducer::GetInputFPS() const {
+  return input_fps_;
 }
 
 // =============================================================================

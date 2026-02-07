@@ -1962,6 +1962,8 @@ void EncoderPipeline::GateOutputTiming(int64_t packet_pts_90k) {
   // (packet_pts − anchor_output_pts) ≤ (elapsed_wall_time_since_anchor)
   // If packet is early, wait. If late, emit immediately.
 
+  auto gate_start = std::chrono::steady_clock::now();
+
   // Use short sleeps (≤2ms) to avoid oversleeping per ChatGPT recommendation
   while (true) {
     auto wall_elapsed = std::chrono::steady_clock::now() - output_timing_anchor_wall_;
@@ -1975,6 +1977,21 @@ void EncoderPipeline::GateOutputTiming(int64_t packet_pts_90k) {
     // Cap sleep to ~2ms to avoid oversleeping and accumulating jitter
     auto sleep_us = std::min<int64_t>(remaining_us, 2000);
     std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+  }
+
+  // Metric: gate_stall_us — log only when stall exceeds 1.5 frame periods.
+  // Normal pacing sleeps ~28ms per frame at 30fps (frame_period minus encode time).
+  // Pathological stalls (audio PTS racing, main-loop blocking) exceed one full
+  // frame period (33ms at 30fps).  Threshold: 50ms catches problems without
+  // logging healthy real-time pacing.
+  auto gate_end = std::chrono::steady_clock::now();
+  auto gate_stall_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      gate_end - gate_start).count();
+  if (gate_stall_us > 50000) {
+    std::cout << "[EncoderPipeline] GATE_STALL: stall_us=" << gate_stall_us
+              << " pts_90k=" << packet_pts_90k
+              << " media_elapsed_us=" << media_elapsed_us
+              << std::endl;
   }
 #else
   (void)packet_pts_90k;

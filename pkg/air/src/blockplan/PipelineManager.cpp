@@ -333,6 +333,7 @@ void PipelineManager::Run() {
   if (live_tp()->GetState() == ITickProducer::State::kReady) {
     block_acc.Reset(live_tp()->GetBlock().block_id);
     emit_block_start("queue");
+    InitCadence(live_tp());
   }
   // P3.3: Seam transition tracking
   std::string prev_completed_block_id;
@@ -352,30 +353,84 @@ void PipelineManager::Run() {
 
     bool is_pad = true;
     std::optional<FrameData> frame_data;
+    bool did_decode = false;
+    int audio_frames_this_tick = 0;
+
+    // ================================================================
+    // Cadence gate: decide whether to decode or repeat this tick.
+    // ratio = input_fps / output_fps (e.g. 0.7992 for 23.976→30).
+    // decode_budget accumulates ratio each tick; decode when >= 1.0.
+    // This produces a deterministic 4:1 dup pattern for 23.976→30.
+    // ================================================================
+    bool should_decode = true;
+    if (cadence_active_) {
+      decode_budget_ += cadence_ratio_;
+      if (decode_budget_ >= 1.0) {
+        decode_budget_ -= 1.0;
+        should_decode = true;
+      } else {
+        should_decode = false;
+      }
+    }
 
     // TRY REAL FRAME from live producer (engine owns the tick)
     if (live_tp()->GetState() == ITickProducer::State::kReady) {
-      live_ticks_++;  // Engine owns time
-      frame_data = live_tp()->TryGetFrame();  // Producer reacts
-      if (frame_data) {
-        session_encoder->encodeFrame(frame_data->video, video_pts_90k);
-        for (auto& af : frame_data->audio) {
-          session_encoder->encodeAudioFrame(af, audio_pts_90k, false);
-          audio_samples_emitted += af.nb_samples;
-          audio_pts_90k =
-              (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
+      live_ticks_++;  // Engine owns time (output ticks for fence)
+
+      if (should_decode) {
+        frame_data = live_tp()->TryGetFrame();  // Producer reacts
+        if (frame_data) {
+          // Save for potential repeat on next tick
+          last_decoded_video_ = frame_data->video;
+          have_last_decoded_video_ = true;
+
+          session_encoder->encodeFrame(frame_data->video, video_pts_90k);
+          for (auto& af : frame_data->audio) {
+            session_encoder->encodeAudioFrame(af, audio_pts_90k, false);
+            audio_samples_emitted += af.nb_samples;
+            audio_pts_90k =
+                (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
+            audio_frames_this_tick++;
+          }
+          is_pad = false;
+          did_decode = true;
+        } else if (have_last_decoded_video_) {
+          // Content exhausted but block not finished — hold last frame
+          // instead of emitting pad (black). This prevents flicker at
+          // end-of-asset when rounding causes content to run out a few
+          // hundred ticks before the fence fires.
+          session_encoder->encodeFrame(last_decoded_video_, video_pts_90k);
+          is_pad = false;
         }
+      } else if (have_last_decoded_video_) {
+        // Repeat tick: re-encode last video frame with new output PTS.
+        // NO audio emitted — prevents audio PTS from racing ahead.
+        session_encoder->encodeFrame(last_decoded_video_, video_pts_90k);
         is_pad = false;
+        // did_decode stays false
       }
     }
 
     if (is_pad) {
       EmitPadFrame(session_encoder.get(), video_pts_90k, audio_pts_90k);
       audio_samples_emitted += kAudioSamplesPerFrame;
+      audio_frames_this_tick = 1;
       if (past_fence) {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.fence_pad_frames_total++;
       }
+    }
+
+    // Per-tick cadence diagnostic (metric 2: decoded, decode_budget, audio_frames)
+    // Rate-limited: log every 300 frames (~10 seconds at 30fps) when cadence active
+    if (cadence_active_ && session_frame_index % 300 == 0) {
+      std::cout << "[PipelineManager] CADENCE_TICK: frame=" << session_frame_index
+                << " decoded=" << (did_decode ? 1 : 0)
+                << " decode_budget=" << decode_budget_
+                << " audio_frames=" << audio_frames_this_tick
+                << " video_pts_90k=" << video_pts_90k
+                << " audio_pts_90k=" << audio_pts_90k
+                << std::endl;
     }
 
     // P3.2: Emit frame fingerprint for seam verification
@@ -523,6 +578,7 @@ void PipelineManager::Run() {
         // P3.3: Reset accumulator for new block
         block_acc.Reset(live_tp()->GetBlock().block_id);
         emit_block_start("preview");
+        InitCadence(live_tp());
 
         // Immediately kick off preload for the following block
         TryKickoffPreviewPreload();
@@ -531,6 +587,7 @@ void PipelineManager::Run() {
         live_tp()->Reset();
         live_ticks_ = 0;
         past_fence = true;
+        ResetCadence();
       }
     }
 
@@ -558,6 +615,7 @@ void PipelineManager::Run() {
         // P3.3: Reset accumulator for new block
         block_acc.Reset(live_tp()->GetBlock().block_id);
         emit_block_start((had_preview && !preview_) ? "preview" : "queue");
+        InitCadence(live_tp());
         fence_pad_counter = 0;
 
         past_fence = false;
@@ -638,6 +696,43 @@ void PipelineManager::Run() {
     session_ended_fired_ = true;
     callbacks_.on_session_ended(termination_reason);
   }
+}
+
+// =============================================================================
+// InitCadence — detect input/output FPS mismatch and activate frame repeat
+// =============================================================================
+
+void PipelineManager::InitCadence(ITickProducer* tp) {
+  double input_fps = tp->GetInputFPS();
+  double output_fps = ctx_->fps;
+
+  // Log once per asset open (metric 1: input_fps, output_fps)
+  std::cout << "[PipelineManager] FPS_CADENCE: input_fps=" << input_fps
+            << " output_fps=" << output_fps;
+
+  // Activate cadence only when input is meaningfully slower than output.
+  // Tolerance: 2% — avoids activation for 29.97 vs 30.
+  if (input_fps > 0.0 && input_fps < output_fps * 0.98) {
+    cadence_active_ = true;
+    cadence_ratio_ = input_fps / output_fps;
+    decode_budget_ = 1.0;  // Guarantees first tick decodes
+    have_last_decoded_video_ = false;
+    std::cout << " cadence=ACTIVE ratio=" << cadence_ratio_ << std::endl;
+  } else {
+    cadence_active_ = false;
+    cadence_ratio_ = 0.0;
+    decode_budget_ = 0.0;
+    have_last_decoded_video_ = false;
+    std::cout << " cadence=OFF" << std::endl;
+  }
+}
+
+void PipelineManager::ResetCadence() {
+  cadence_active_ = false;
+  cadence_ratio_ = 0.0;
+  decode_budget_ = 0.0;
+  have_last_decoded_video_ = false;
+  last_decoded_video_ = buffer::Frame{};
 }
 
 void PipelineManager::SetPreloaderDelayHook(
