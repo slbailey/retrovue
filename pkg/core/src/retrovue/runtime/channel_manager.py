@@ -3210,6 +3210,9 @@ class BlockPlanProducer(Producer):
             "block_duration_ms", self.DEFAULT_BLOCK_DURATION_MS
         )
 
+        # INV-FEED-QUEUE-002: Pending block slot for QUEUE_FULL retry
+        self._pending_block: "BlockPlan | None" = None
+
         # Retained playout plan for block cycling (set at start, reused on feed)
         self._playout_plan: list[dict[str, Any]] = []
 
@@ -3321,14 +3324,17 @@ class BlockPlanProducer(Producer):
 
                 # Generate and seed initial 2 blocks
                 block_a = self._generate_next_block(playout_plan)
+                self._advance_cursor(block_a)
                 block_b = self._generate_next_block(playout_plan)
+                self._advance_cursor(block_b)
 
                 if not self._session.seed(block_a, block_b):
                     raise RuntimeError("PlayoutSession.seed() failed")
 
                 # Feed a third block to maintain 2-block lookahead
+                # INV-FEED-QUEUE-001: _try_feed_block handles QUEUE_FULL
                 block_c = self._generate_next_block(playout_plan)
-                self._session.feed(block_c)
+                self._try_feed_block(block_c)
 
                 self._started = True
                 self.status = ProducerStatus.RUNNING
@@ -3442,13 +3448,17 @@ class BlockPlanProducer(Producer):
         self._session_ended = False
         self._session_end_reason = None
         self._fed_block_ids.clear()
+        self._pending_block = None  # INV-FEED-QUEUE-002: Clear pending slot
 
     def _generate_next_block(
         self,
         playout_plan: list[dict[str, Any]],
     ) -> "BlockPlan":
         """
-        Generate the next BlockPlan and advance state.
+        Generate the next BlockPlan from current cursor position.
+
+        Does NOT advance the cursor — call _advance_cursor() after
+        successful feed (INV-FEED-QUEUE-001).
 
         Cycles through playout_plan entries round-robin, respecting per-entry
         asset_start_offset_ms for mid-asset seek support.
@@ -3493,11 +3503,40 @@ class BlockPlanProducer(Producer):
             block_id, asset_path, asset_offset_ms,
         )
 
-        # Advance state for next generation
-        self._block_index += 1
-        self._next_block_start_ms = end_ms
-
         return block
+
+    def _advance_cursor(self, block: "BlockPlan"):
+        """
+        Advance block generation cursor after a successful feed.
+
+        INV-FEED-QUEUE-001: Cursor advances ONLY after feed() returns True.
+        """
+        self._block_index += 1
+        self._next_block_start_ms = block.end_utc_ms
+
+    def _try_feed_block(self, block: "BlockPlan") -> bool:
+        """
+        Attempt to feed a block to AIR. On QUEUE_FULL, store in _pending_block.
+
+        INV-FEED-QUEUE-001: Cursor advances only on success.
+        INV-FEED-QUEUE-002: Rejected block stored in _pending_block.
+
+        Returns:
+            True if feed succeeded (cursor advanced, pending cleared).
+            False if QUEUE_FULL (block stored in _pending_block).
+        """
+        if self._session and self._session.feed(block):
+            self._advance_cursor(block)
+            self._pending_block = None
+            return True
+        else:
+            # INV-FEED-QUEUE-002: Store for retry on next BLOCK_COMPLETE
+            self._pending_block = block
+            self._logger.warning(
+                "INV-FEED-QUEUE-002: Block %s stored as pending (QUEUE_FULL)",
+                block.block_id,
+            )
+            return False
 
     def _on_block_complete(self, block_id: str):
         """
@@ -3534,9 +3573,17 @@ class BlockPlanProducer(Producer):
                 self.channel_id, block_id
             )
 
-            # Generate and feed next block using retained playout plan
-            next_block = self._generate_next_block(self._playout_plan)
-            self._session.feed(next_block)
+            # INV-FEED-QUEUE-003: Retry pending block before generating new
+            if self._pending_block is not None:
+                self._logger.info(
+                    "INV-FEED-QUEUE-003: Retrying pending block %s",
+                    self._pending_block.block_id,
+                )
+                self._try_feed_block(self._pending_block)
+            else:
+                # Generate and feed next block using retained playout plan
+                next_block = self._generate_next_block(self._playout_plan)
+                self._try_feed_block(next_block)
 
     def _on_session_end(self, reason: str):
         """

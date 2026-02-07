@@ -455,10 +455,12 @@ void PipelineManager::Run() {
     }
 
     // P3.3: Accumulate frame into current block summary
+    // ct_ms = -1 sentinel when no frame_data (cadence repeat or hold-last-frame).
+    // Accumulator only updates CT tracking when ct_ms >= 0.
     if (live_tp()->GetState() == ITickProducer::State::kReady &&
         !block_acc.block_id.empty()) {
       std::string uri;
-      int64_t ct_ms = 0;
+      int64_t ct_ms = -1;
       if (!is_pad && frame_data) {
         uri = frame_data->asset_uri;
         ct_ms = frame_data->block_ct_ms;

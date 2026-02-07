@@ -349,6 +349,36 @@ add_test(
   COMMAND blockplan_contract_tests
 )
 
+# ---- Media Time Contract Tests (INV-AIR-MEDIA-TIME-001..005) ----
+# Deterministic tests verifying PTS-anchored media time tracking.
+# No video files needed — uses simulated decoder PTS values.
+add_executable(mediatime_contract_tests
+  tests/contracts/BlockPlan/MediaTimeContractTests.cpp
+)
+
+target_link_libraries(mediatime_contract_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_link_options(mediatime_contract_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
+)
+
+target_include_directories(mediatime_contract_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
+)
+
+add_test(
+  NAME MediaTimeContracts
+  COMMAND mediatime_contract_tests
+)
+
 # ---- P3.2: Seam Verify Standalone Harness ----
 # Standalone binary for real-media boundary verification using PipelineManager.
 add_executable(retrovue_air_seam_verify

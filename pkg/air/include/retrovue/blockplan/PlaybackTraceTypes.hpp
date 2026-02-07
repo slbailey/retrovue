@@ -90,8 +90,14 @@ struct BlockAccumulator {
       if (!uri.empty() && asset_uri_set.insert(uri).second) {
         asset_uri_order.push_back(uri);
       }
-      if (first_ct_ms < 0) first_ct_ms = ct_ms;
-      last_ct_ms = ct_ms;
+      // Only update CT tracking when ct_ms is valid (>= 0).
+      // Cadence repeat ticks and hold-last-frame ticks pass ct_ms = -1
+      // because no frame_data is available; these must not clobber the
+      // last known decoded position.
+      if (ct_ms >= 0) {
+        if (first_ct_ms < 0) first_ct_ms = ct_ms;
+        last_ct_ms = ct_ms;
+      }
     }
   }
 

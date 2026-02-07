@@ -121,6 +121,7 @@ class TickProducer : public producers::IProducer,
 
   int width_;
   int height_;
+  double output_fps_;                     // Output fps (exact, for frames_per_block)
   int64_t frame_duration_ms_;            // Output frame duration (for fence/frames_per_block)
   double input_fps_ = 0.0;              // Detected input FPS (0 = unknown)
   int64_t input_frame_duration_ms_ = 0;  // Content advance per decode (matches input cadence)
