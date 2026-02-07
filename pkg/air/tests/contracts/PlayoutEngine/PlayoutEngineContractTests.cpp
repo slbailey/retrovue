@@ -2,19 +2,11 @@
 // DISABLED: Known deadlock / infinite loop in test infrastructure
 // =============================================================================
 //
-// These tests do not conform to the current executor/feeder model.
-// They must be rewritten against BlockPlanExecutor + FeederHarness.
-//
-// The tests use legacy PlayoutEngine/PlayoutControl infrastructure that has
+// These tests use legacy PlayoutEngine/PlayoutControl infrastructure that has
 // timing issues causing infinite waits in the test harness.
 //
-// TODO: Rewrite using BlockPlan contract test patterns:
-//   - FakeClock for deterministic time control
-//   - RecordingSink for frame verification
-//   - BlockPlanExecutor for single-block execution
-//   - FeederHarness + MultiBlockRunner for multi-block scenarios
-//
-// See: pkg/air/tests/contracts/BlockPlan/ for reference implementations
+// The authoritative playout path is now PipelineManager + TickProducer.
+// See: pkg/air/tests/contracts/BlockPlan/ for current contract tests.
 // =============================================================================
 
 #if 0  // DISABLED - see comment above

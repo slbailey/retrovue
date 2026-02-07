@@ -18,8 +18,8 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
-#include "retrovue/blockplan/ContinuousOutputExecutionEngine.hpp"
-#include "retrovue/blockplan/ContinuousOutputMetrics.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
+#include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 
@@ -76,8 +76,8 @@ class PlaybackTraceContractTest : public ::testing::Test {
     }
   }
 
-  std::unique_ptr<ContinuousOutputExecutionEngine> MakeEngine() {
-    ContinuousOutputExecutionEngine::Callbacks callbacks;
+  std::unique_ptr<PipelineManager> MakeEngine() {
+    PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
@@ -100,7 +100,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(proof_mutex_);
       proofs_.push_back(p);
     };
-    return std::make_unique<ContinuousOutputExecutionEngine>(
+    return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks));
   }
 
@@ -114,7 +114,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
-  std::unique_ptr<ContinuousOutputExecutionEngine> engine_;
+  std::unique_ptr<PipelineManager> engine_;
 
   std::mutex cb_mutex_;
   std::condition_variable blocks_completed_cv_;

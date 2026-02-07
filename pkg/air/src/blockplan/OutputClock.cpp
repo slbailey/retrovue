@@ -1,6 +1,6 @@
 // Repository: Retrovue-playout
 // Component: Output Clock
-// Purpose: Frame-indexed session clock for ContinuousOutput execution mode
+// Purpose: Frame-indexed session clock for PipelineManager
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 

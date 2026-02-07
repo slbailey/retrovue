@@ -1,29 +1,30 @@
 // Repository: Retrovue-playout
-// Component: Source Preloader Implementation
-// Purpose: Background BlockSource preparation for ContinuousOutput A/B swap
+// Component: Producer Preloader Implementation
+// Purpose: Background TickProducer preparation for PipelineManager A/B swap
 // Contract Reference: PlayoutAuthorityContract.md (P3.1b)
 // Copyright (c) 2025 RetroVue
 
-#include "retrovue/blockplan/SourcePreloader.hpp"
+#include "retrovue/blockplan/ProducerPreloader.hpp"
 
 #include <iostream>
 
-#include "retrovue/blockplan/BlockSource.hpp"
+#include "retrovue/blockplan/ITickProducer.hpp"
+#include "retrovue/blockplan/TickProducer.hpp"
 
 namespace retrovue::blockplan {
 
-SourcePreloader::~SourcePreloader() {
+ProducerPreloader::~ProducerPreloader() {
   Cancel();
 }
 
-void SourcePreloader::JoinThread() {
+void ProducerPreloader::JoinThread() {
   if (thread_.joinable()) {
     thread_.join();
   }
   in_progress_ = false;
 }
 
-void SourcePreloader::StartPreload(const FedBlock& block,
+void ProducerPreloader::StartPreload(const FedBlock& block,
                                    int width, int height, double fps) {
   Cancel();
 
@@ -34,16 +35,16 @@ void SourcePreloader::StartPreload(const FedBlock& block,
   }
   in_progress_ = true;
 
-  thread_ = std::thread(&SourcePreloader::Worker, this,
+  thread_ = std::thread(&ProducerPreloader::Worker, this,
                          block, width, height, fps);
 }
 
-bool SourcePreloader::IsReady() const {
+bool ProducerPreloader::IsReady() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return result_ != nullptr;
 }
 
-std::unique_ptr<BlockSource> SourcePreloader::TakeSource() {
+std::unique_ptr<producers::IProducer> ProducerPreloader::TakeSource() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!result_) return nullptr;
 
@@ -56,7 +57,7 @@ std::unique_ptr<BlockSource> SourcePreloader::TakeSource() {
   return src;
 }
 
-void SourcePreloader::Cancel() {
+void ProducerPreloader::Cancel() {
   cancel_requested_.store(true, std::memory_order_release);
   JoinThread();
 
@@ -64,16 +65,16 @@ void SourcePreloader::Cancel() {
   result_.reset();
 }
 
-void SourcePreloader::SetDelayHook(DelayHookFn hook) {
+void ProducerPreloader::SetDelayHook(DelayHookFn hook) {
   delay_hook_ = std::move(hook);
 }
 
 // =============================================================================
 // Worker — runs on background thread
-// Creates a BlockSource and calls AssignBlock (the heavy work).
+// Creates a TickProducer and calls AssignBlock (the heavy work).
 // =============================================================================
 
-void SourcePreloader::Worker(FedBlock block, int width, int height, double fps) {
+void ProducerPreloader::Worker(FedBlock block, int width, int height, double fps) {
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
   // Test hook: artificial delay before AssignBlock
@@ -83,13 +84,13 @@ void SourcePreloader::Worker(FedBlock block, int width, int height, double fps) 
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  auto source = std::make_unique<BlockSource>(width, height, fps);
+  auto source = std::make_unique<TickProducer>(width, height, fps);
   source->AssignBlock(block);
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  std::cout << "[SourcePreloader] Preload complete: block=" << block.block_id
-            << " state=" << (source->GetState() == BlockSource::State::kReady
+  std::cout << "[ProducerPreloader] Preload complete: block=" << block.block_id
+            << " state=" << (source->GetState() == ITickProducer::State::kReady
                                  ? "READY" : "EMPTY")
             << " decoder_ok=" << source->HasDecoder()
             << std::endl;

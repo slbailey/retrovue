@@ -17,7 +17,7 @@ static constexpr int64_t kFrameDurationMs = 33;
 
 // =============================================================================
 // PTS Recording Sink
-// Simulates the PTS offset logic from RealTimeEncoderSink to verify correctness
+// Simulates the PTS offset logic used by PipelineManager to verify correctness
 // =============================================================================
 
 class PTSRecordingSink {
@@ -32,7 +32,7 @@ class PTSRecordingSink {
   PTSRecordingSink() = default;
 
   // Emit a frame with CT and block context
-  // This replicates the PTS calculation from RealTimeEncoderSink
+  // This replicates the PTS offset calculation used at block boundaries
   void EmitFrame(int64_t ct_ms, const std::string& block_id) {
     // Handle block transitions (CT reset)
     if (last_ct_ms_ >= 0 && ct_ms < last_ct_ms_) {
