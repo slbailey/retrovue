@@ -44,6 +44,34 @@ struct PipelineMetrics {
   int64_t sum_inter_frame_gap_us = 0;
   int64_t frame_gap_count = 0;
 
+  // ---- Audio Lookahead Buffer (INV-AUDIO-LOOKAHEAD-001) ----
+  int32_t audio_buffer_depth_ms = 0;
+  int64_t audio_buffer_underflows = 0;
+  int64_t audio_buffer_samples_pushed = 0;
+  int64_t audio_buffer_samples_popped = 0;
+
+  // ---- Video Lookahead Buffer (INV-VIDEO-LOOKAHEAD-001) ----
+  int32_t video_buffer_depth_frames = 0;
+  int64_t video_buffer_underflows = 0;
+  int64_t video_buffer_frames_pushed = 0;
+  int64_t video_buffer_frames_popped = 0;
+
+  // ---- Decode Latency ----
+  int64_t decode_latency_p95_us = 0;
+  int64_t decode_latency_mean_us = 0;
+
+  // ---- Video Refill Rate ----
+  double video_refill_rate_fps = 0.0;
+
+  // ---- Buffer Low-Water Marks ----
+  int32_t video_low_water_frames = 0;
+  int32_t audio_low_water_ms = 0;
+  int64_t video_low_water_events = 0;
+  int64_t audio_low_water_events = 0;
+
+  // ---- Session Detach (underflow-triggered stops) ----
+  int32_t detach_count = 0;
+
   // ---- Encoder Lifetime ----
   int32_t encoder_open_count = 0;
   int32_t encoder_close_count = 0;
@@ -131,6 +159,82 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_mean_inter_frame_gap_us gauge\n";
     oss << "air_continuous_mean_inter_frame_gap_us{channel=\"" << ch << "\"} "
         << static_cast<int64_t>(mean_gap) << "\n";
+
+    // Audio lookahead buffer
+    oss << "\n# HELP air_continuous_audio_buffer_depth_ms Audio lookahead buffer depth (ms)\n";
+    oss << "# TYPE air_continuous_audio_buffer_depth_ms gauge\n";
+    oss << "air_continuous_audio_buffer_depth_ms{channel=\"" << ch << "\"} "
+        << audio_buffer_depth_ms << "\n";
+
+    oss << "\n# HELP air_continuous_audio_buffer_underflows Audio buffer underflow events\n";
+    oss << "# TYPE air_continuous_audio_buffer_underflows counter\n";
+    oss << "air_continuous_audio_buffer_underflows{channel=\"" << ch << "\"} "
+        << audio_buffer_underflows << "\n";
+
+    oss << "\n# HELP air_continuous_audio_buffer_samples_pushed Total samples pushed to audio buffer\n";
+    oss << "# TYPE air_continuous_audio_buffer_samples_pushed counter\n";
+    oss << "air_continuous_audio_buffer_samples_pushed{channel=\"" << ch << "\"} "
+        << audio_buffer_samples_pushed << "\n";
+
+    oss << "\n# HELP air_continuous_audio_buffer_samples_popped Total samples popped from audio buffer\n";
+    oss << "# TYPE air_continuous_audio_buffer_samples_popped counter\n";
+    oss << "air_continuous_audio_buffer_samples_popped{channel=\"" << ch << "\"} "
+        << audio_buffer_samples_popped << "\n";
+
+    // Video lookahead buffer
+    oss << "\n# HELP air_continuous_video_buffer_depth_frames Video lookahead buffer depth (frames)\n";
+    oss << "# TYPE air_continuous_video_buffer_depth_frames gauge\n";
+    oss << "air_continuous_video_buffer_depth_frames{channel=\"" << ch << "\"} "
+        << video_buffer_depth_frames << "\n";
+
+    oss << "\n# HELP air_continuous_video_buffer_underflows Video buffer underflow events\n";
+    oss << "# TYPE air_continuous_video_buffer_underflows counter\n";
+    oss << "air_continuous_video_buffer_underflows{channel=\"" << ch << "\"} "
+        << video_buffer_underflows << "\n";
+
+    oss << "\n# HELP air_continuous_video_buffer_frames_pushed Total frames pushed to video buffer\n";
+    oss << "# TYPE air_continuous_video_buffer_frames_pushed counter\n";
+    oss << "air_continuous_video_buffer_frames_pushed{channel=\"" << ch << "\"} "
+        << video_buffer_frames_pushed << "\n";
+
+    oss << "\n# HELP air_continuous_video_buffer_frames_popped Total frames popped from video buffer\n";
+    oss << "# TYPE air_continuous_video_buffer_frames_popped counter\n";
+    oss << "air_continuous_video_buffer_frames_popped{channel=\"" << ch << "\"} "
+        << video_buffer_frames_popped << "\n";
+
+    // Decode latency
+    oss << "\n# HELP air_continuous_decode_latency_p95_us P95 decode latency (microseconds)\n";
+    oss << "# TYPE air_continuous_decode_latency_p95_us gauge\n";
+    oss << "air_continuous_decode_latency_p95_us{channel=\"" << ch << "\"} "
+        << decode_latency_p95_us << "\n";
+
+    oss << "\n# HELP air_continuous_decode_latency_mean_us Mean decode latency (microseconds)\n";
+    oss << "# TYPE air_continuous_decode_latency_mean_us gauge\n";
+    oss << "air_continuous_decode_latency_mean_us{channel=\"" << ch << "\"} "
+        << decode_latency_mean_us << "\n";
+
+    // Video refill rate
+    oss << "\n# HELP air_continuous_video_refill_rate_fps Video fill thread refill rate (fps)\n";
+    oss << "# TYPE air_continuous_video_refill_rate_fps gauge\n";
+    oss << "air_continuous_video_refill_rate_fps{channel=\"" << ch << "\"} "
+        << video_refill_rate_fps << "\n";
+
+    // Low-water events
+    oss << "\n# HELP air_continuous_video_low_water_events Video buffer low-water events\n";
+    oss << "# TYPE air_continuous_video_low_water_events counter\n";
+    oss << "air_continuous_video_low_water_events{channel=\"" << ch << "\"} "
+        << video_low_water_events << "\n";
+
+    oss << "\n# HELP air_continuous_audio_low_water_events Audio buffer low-water events\n";
+    oss << "# TYPE air_continuous_audio_low_water_events counter\n";
+    oss << "air_continuous_audio_low_water_events{channel=\"" << ch << "\"} "
+        << audio_low_water_events << "\n";
+
+    // Session detach
+    oss << "\n# HELP air_continuous_detach_count Underflow-triggered session stops\n";
+    oss << "# TYPE air_continuous_detach_count counter\n";
+    oss << "air_continuous_detach_count{channel=\"" << ch << "\"} "
+        << detach_count << "\n";
 
     // Encoder lifetime
     oss << "\n# HELP air_continuous_encoder_open_count Encoder open count (must be 1)\n";

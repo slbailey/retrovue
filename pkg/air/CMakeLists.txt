@@ -168,6 +168,10 @@ set(AIR_CORE_SOURCES
   src/blockplan/TickProducer.cpp
   src/blockplan/ProducerPreloader.cpp
   src/blockplan/PipelineManager.cpp
+  # AudioLookaheadBuffer: broadcast-grade audio buffering (INV-AUDIO-LOOKAHEAD-001)
+  src/blockplan/AudioLookaheadBuffer.cpp
+  # VideoLookaheadBuffer: non-blocking video buffering (INV-VIDEO-LOOKAHEAD-001)
+  src/blockplan/VideoLookaheadBuffer.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
@@ -329,6 +333,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
   tests/contracts/BlockPlan/SeamProofContractTests.cpp
   tests/contracts/BlockPlan/PlaybackTraceContractTests.cpp
+  tests/contracts/BlockPlan/AudioLookaheadBufferTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
@@ -347,6 +352,99 @@ target_include_directories(blockplan_contract_tests
 add_test(
   NAME BlockPlanContracts
   COMMAND blockplan_contract_tests
+)
+
+# ---- AudioLookaheadBuffer Contract Tests (INV-AUDIO-LOOKAHEAD-001) ----
+add_executable(audio_lookahead_tests
+  tests/contracts/BlockPlan/AudioLookaheadBufferTests.cpp
+)
+
+target_link_libraries(audio_lookahead_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(audio_lookahead_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
+)
+
+add_test(
+  NAME AudioLookaheadContracts
+  COMMAND audio_lookahead_tests
+)
+
+# ---- VideoLookaheadBuffer Contract Tests (INV-VIDEO-LOOKAHEAD-001) ----
+add_executable(video_lookahead_tests
+  tests/contracts/BlockPlan/VideoLookaheadBufferTests.cpp
+)
+
+target_link_libraries(video_lookahead_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(video_lookahead_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
+)
+
+add_test(
+  NAME VideoLookaheadContracts
+  COMMAND video_lookahead_tests
+)
+
+# ---- Lookahead Buffer Contract Tests (INV-VIDEO-LOOKAHEAD-001 + INV-AUDIO-LOOKAHEAD-001) ----
+# Enforces: tick-thread-never-decodes, underflow-is-hard-fault, fence-tick precision.
+add_executable(lookahead_contract_tests
+  tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp
+)
+
+target_link_libraries(lookahead_contract_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(lookahead_contract_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
+)
+
+add_test(
+  NAME LookaheadBufferContracts
+  COMMAND lookahead_contract_tests
+)
+
+# ---- BufferConfig Contract Tests (configurable depths, low-water, decode latency) ----
+add_executable(buffer_config_tests
+  tests/contracts/BlockPlan/BufferConfigTests.cpp
+)
+
+target_link_libraries(buffer_config_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(buffer_config_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
+)
+
+add_test(
+  NAME BufferConfigContracts
+  COMMAND buffer_config_tests
 )
 
 # ---- Media Time Contract Tests (INV-AIR-MEDIA-TIME-001..005) ----
