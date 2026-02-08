@@ -24,8 +24,15 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
+#include "retrovue/output/SocketSink.h"
+
+extern "C" {
+#include <libavutil/error.h>
+}
 
 #if defined(__linux__) || defined(__APPLE__)
+#include <cerrno>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -223,25 +230,76 @@ void PipelineManager::Run() {
   auto session_encoder =
       std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
 
-  // Session write context for the write callback
+  // --- Non-blocking socket sink (Bug B: decouple write from tick loop) ---
+  // dup() the fd so SocketSink can take ownership without closing ctx_->fd.
+  int sink_fd = dup(ctx_->fd);
+  if (sink_fd < 0) {
+    std::cerr << "[PipelineManager] dup(fd) failed: " << strerror(errno)
+              << std::endl;
+    if (callbacks_.on_session_ended && !session_ended_fired_) {
+      session_ended_fired_ = true;
+      callbacks_.on_session_ended("dup_failed");
+    }
+    return;
+  }
+
+  // INV-SOCKET-NONBLOCK: SocketSink requires O_NONBLOCK.
+  int flags = fcntl(sink_fd, F_GETFL, 0);
+  if (flags < 0 || fcntl(sink_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    std::cerr << "[PipelineManager] fcntl(O_NONBLOCK) failed" << std::endl;
+    ::close(sink_fd);
+    if (callbacks_.on_session_ended && !session_ended_fired_) {
+      session_ended_fired_ = true;
+      callbacks_.on_session_ended("nonblock_failed");
+    }
+    return;
+  }
+
+  // Buffer capacity: configurable via kSinkBufferCapacity.
+  // Default ~128 KB ≈ 500ms at 2 Mbps.  Small enough to detect slow
+  // consumers quickly, large enough to absorb transient kernel pressure.
+  // TODO: promote to BlockPlanSessionContext for runtime configurability.
+  static constexpr size_t kSinkBufferCapacity = 128 * 1024;
+  auto socket_sink = std::make_unique<output::SocketSink>(
+      sink_fd, "pipeline-sink", kSinkBufferCapacity);
+
+  // Slow-consumer detach → clean session stop.
+  // output_detached is checked in the tick loop condition for immediate exit
+  // without waiting for the next boundary check or spamming write errors.
+  std::atomic<bool> output_detached{false};
+  socket_sink->SetDetachOnOverflow(true);
+  socket_sink->SetDetachCallback([this, &output_detached](const std::string& reason) {
+    std::cerr << "[PipelineManager] SocketSink detach: " << reason << std::endl;
+    output_detached.store(true, std::memory_order_release);
+    ctx_->stop_requested.store(true, std::memory_order_release);
+  });
+
+  // Write callback context: enqueue into SocketSink (non-blocking).
   struct SessionWriteContext {
-    int fd;
+    output::SocketSink* sink;
     int64_t bytes_written;
   };
-  SessionWriteContext write_ctx{ctx_->fd, 0};
+  SessionWriteContext write_ctx{socket_sink.get(), 0};
 
+  // AVIO write callback:
+  // - While attached: enqueue bytes, return buf_size on success.
+  // - After detach/overflow: return AVERROR(EPIPE) so FFmpeg treats it as a
+  //   broken-pipe I/O error and unwinds cleanly (av_write_frame propagates it).
+  //   Do NOT return buf_size forever after detach — that lies to AVIO and
+  //   keeps the encoder producing packets nobody will ever receive.
   auto write_callback = [](void* opaque, uint8_t* buf, int buf_size) -> int {
     auto* wctx = static_cast<SessionWriteContext*>(opaque);
-#if defined(__linux__) || defined(__APPLE__)
-    ssize_t written = write(wctx->fd, buf, static_cast<size_t>(buf_size));
-    if (written > 0) {
-      wctx->bytes_written += written;
+    if (wctx->sink->IsDetached()) {
+      return AVERROR(EPIPE);  // Broken pipe — FFmpeg stops writing
     }
-    return static_cast<int>(written);
-#else
-    (void)buf;
-    return buf_size;
-#endif
+    if (wctx->sink->TryConsumeBytes(
+            reinterpret_cast<const uint8_t*>(buf),
+            static_cast<size_t>(buf_size))) {
+      wctx->bytes_written += buf_size;
+      return buf_size;
+    }
+    // Enqueue failed (overflow triggered detach) — fail the write
+    return AVERROR(EPIPE);
   };
 
   auto encoder_open_start = std::chrono::steady_clock::now();
@@ -268,6 +326,14 @@ void PipelineManager::Run() {
             << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps
             << "fps, open_ms=" << encoder_open_ms << std::endl;
 
+  // Disable EncoderPipeline's internal output timing gate.
+  // Verified: GateOutputTiming() is purely a pacing sleep (media PTS vs wall
+  // clock).  PTS monotonicity is enforced separately by EnforceMonotonicDts().
+  // The tick loop provides authoritative pacing via OutputClock::WaitForFrame;
+  // GateOutputTiming would double-gate and add blocking sleep inside the
+  // AVIO write path — exactly what Bug B eliminates.
+  session_encoder->SetOutputTimingEnabled(false);
+
   // ========================================================================
   // ARCHITECTURAL TELEMETRY
   // ========================================================================
@@ -284,10 +350,12 @@ void PipelineManager::Run() {
   // 3. CREATE OUTPUT CLOCK
   // ========================================================================
   OutputClock clock(ctx_->fps_num, ctx_->fps_den);
-  clock.Start();
 
-  // INV-BLOCK-WALLFENCE-001: Record UTC epoch at session start.
-  // Maps FedBlock::end_utc_ms to session-relative frame indices.
+  // INV-BLOCK-WALLFENCE-001: Capture UTC schedule epoch BEFORE blocking I/O.
+  // Fence math maps absolute UTC schedule times (block.end_utc_ms) to session
+  // frame indices.  The epoch must reflect when the schedule timeline started,
+  // not when the first frame was emitted — the schedule is running regardless
+  // of probe/open/seek latency.
   session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -304,6 +372,15 @@ void PipelineManager::Run() {
 
   // P3.1b: Kick off preload for next block immediately
   TryKickoffPreviewPreload();
+
+  // ========================================================================
+  // 5b. START OUTPUT CLOCK (monotonic epoch) — after blocking I/O completes.
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001: Tick deadline enforcement anchored
+  // to monotonic clock, captured here so tick 0 is not born late.
+  // Separated from UTC schedule epoch (captured above) to prevent
+  // probe+open+seek latency from triggering a starvation spiral.
+  // ========================================================================
+  clock.Start();
 
   // ========================================================================
   // 6. MAIN LOOP
@@ -360,11 +437,28 @@ void PipelineManager::Run() {
   int64_t fence_session_frame = -1;
   int64_t fence_pad_counter = 0;  // pad frames since last fence
 
-  while (!ctx_->stop_requested.load(std::memory_order_acquire)) {
-    // Wait until absolute deadline for this frame
-    auto wake_time = clock.WaitForFrame(session_frame_index);
+  while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
+         !output_detached.load(std::memory_order_acquire)) {
+    // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
+    // Compute monotonic deadline, detect lateness, conditionally sleep.
+    // Causal order: compute_deadline → wait/detect → fence → emit → work → increment.
+    auto deadline = clock.DeadlineFor(session_frame_index);
+    auto now_mono = std::chrono::steady_clock::now();
+    bool tick_is_late = (now_mono > deadline);
 
-    if (ctx_->stop_requested.load(std::memory_order_acquire)) break;
+    if (!tick_is_late) {
+      // On-time: sleep until deadline (monotonic enforcement).
+      std::this_thread::sleep_until(deadline);
+    }
+    auto wake_time = std::chrono::steady_clock::now();
+
+    if (tick_is_late) {
+      std::lock_guard<std::mutex> lock(metrics_mutex_);
+      metrics_.late_ticks_total++;
+    }
+
+    if (ctx_->stop_requested.load(std::memory_order_acquire) ||
+        output_detached.load(std::memory_order_acquire)) break;
 
     // Compute PTS (unchanged from P3.0)
     int64_t video_pts_90k = clock.FrameIndexToPts90k(session_frame_index);
@@ -539,6 +633,21 @@ void PipelineManager::Run() {
       }
     }
 
+    // INV-TICK-DEADLINE-DISCIPLINE-001 R2: When late, MUST NOT block on decode.
+    // Force repeat/freeze path — TryGetFrame() is never called when late.
+    if (tick_is_late) {
+      should_decode = false;
+    }
+
+    // INV-BLOCK-PRIME-002 + R2: Primed frames are pre-decoded and non-blocking
+    // to retrieve. They qualify as "already available without blocking" and
+    // may be selected even on late ticks.
+    if (!should_decode &&
+        live_tp()->GetState() == ITickProducer::State::kReady &&
+        live_tp()->HasPrimedFrame()) {
+      should_decode = true;
+    }
+
     // TRY REAL FRAME from live producer (engine owns the tick)
     if (live_tp()->GetState() == ITickProducer::State::kReady) {
       if (should_decode) {
@@ -597,6 +706,16 @@ void PipelineManager::Run() {
                 << std::endl;
     }
 
+    // Log SocketSink buffer state periodically (every ~10s = 300 ticks at 30fps)
+    if (session_frame_index % 300 == 0 && socket_sink) {
+      std::cout << "[PipelineManager] sink_buffer="
+                << socket_sink->GetCurrentBufferSize()
+                << "/" << socket_sink->GetBufferCapacity()
+                << " delivered=" << socket_sink->GetBytesDelivered()
+                << " errors=" << socket_sink->GetWriteErrors()
+                << std::endl;
+    }
+
     // P3.2: Emit frame fingerprint for seam verification
     if (callbacks_.on_frame_emitted) {
       FrameFingerprint fp;
@@ -643,8 +762,11 @@ void PipelineManager::Run() {
       remaining_block_frames_--;
     }
 
-    // LOAD NEXT from queue if source is empty (fallback path)
-    if (live_tp()->GetState() == ITickProducer::State::kEmpty) {
+    // LOAD NEXT from queue if source is empty (fallback path).
+    // INV-TICK-DEADLINE-DISCIPLINE-001 R2: Skip when late — TryLoadLiveProducer
+    // may block on synchronous probe+open+seek.
+    if (!tick_is_late &&
+        live_tp()->GetState() == ITickProducer::State::kEmpty) {
       bool had_preview = (preview_ != nullptr);
       TryLoadLiveProducer();  // Outside timed tick window
 
@@ -734,6 +856,18 @@ void PipelineManager::Run() {
     session_encoder->close();
     std::cout << "[PipelineManager] Session encoder closed: "
               << write_ctx.bytes_written << " bytes written" << std::endl;
+  }
+
+  // Close SocketSink AFTER encoder — encoder->close() flushes final packets
+  // through the write callback into the sink buffer.  SocketSink::Close()
+  // signals the writer thread to drain remaining bytes and shut down.
+  if (socket_sink) {
+    socket_sink->Close();
+    std::cout << "[PipelineManager] SocketSink closed: delivered="
+              << socket_sink->GetBytesDelivered()
+              << " enqueued=" << socket_sink->GetBytesEnqueued()
+              << " errors=" << socket_sink->GetWriteErrors()
+              << " detached=" << socket_sink->IsDetached() << std::endl;
   }
 
   {
