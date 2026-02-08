@@ -155,12 +155,74 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 }
 
 // =============================================================================
+// PrimeFirstFrame — INV-BLOCK-PRIME-001: decode first frame into held slot
+// Called by ProducerPreloader::Worker after AssignBlock.
+// =============================================================================
+
+void TickProducer::PrimeFirstFrame() {
+  if (state_ != State::kReady || !decoder_ok_ || !decoder_) {
+    return;  // INV-BLOCK-PRIME-005: failure degrades safely
+  }
+
+  buffer::Frame video_frame;
+  if (!decoder_->DecodeFrameToBuffer(video_frame)) {
+    // INV-BLOCK-PRIME-005: decode failure → empty slot, still kReady
+    return;
+  }
+
+  std::vector<buffer::AudioFrame> audio_frames;
+  buffer::AudioFrame audio_frame;
+  int audio_count = 0;
+  while (audio_count < kMaxAudioFramesPerVideoFrame &&
+         decoder_->GetPendingAudioFrame(audio_frame)) {
+    audio_frames.push_back(std::move(audio_frame));
+    audio_count++;
+  }
+
+  // PTS-anchored CT — same logic as TryGetFrame (INV-BLOCK-PRIME-007)
+  int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
+  int64_t seg_asset_start = 0;
+  int64_t seg_start_ct = 0;
+  if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
+    seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
+  }
+  if (current_segment_index_ <
+      static_cast<int32_t>(validated_.plan.segments.size())) {
+    seg_asset_start =
+        validated_.plan.segments[current_segment_index_].asset_start_offset_ms;
+  }
+  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_asset_start);
+  block_ct_ms_ = ct_before + input_frame_duration_ms_;
+  next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
+
+  primed_frame_ = FrameData{
+      std::move(video_frame),
+      std::move(audio_frames),
+      current_asset_uri_,
+      ct_before
+  };
+
+  std::cout << "[TickProducer] INV-BLOCK-PRIME-001: primed frame 0"
+            << " pts_ms=" << decoded_pts_ms
+            << " ct_before=" << ct_before
+            << " asset=" << current_asset_uri_
+            << std::endl;
+}
+
+// =============================================================================
 // TryGetFrame — decode one frame, advance internal position
 // =============================================================================
 
 std::optional<FrameData> TickProducer::TryGetFrame() {
   if (state_ != State::kReady) {
     return std::nullopt;
+  }
+
+  // INV-BLOCK-PRIME-002: return primed frame without decode
+  if (primed_frame_.has_value()) {
+    auto frame = std::move(*primed_frame_);
+    primed_frame_.reset();
+    return frame;
   }
 
   if (!decoder_ok_) {
@@ -292,6 +354,7 @@ void TickProducer::Reset() {
   block_ct_ms_ = 0;
   frames_per_block_ = 0;
   boundaries_.clear();
+  primed_frame_.reset();
   input_fps_ = 0.0;
   input_frame_duration_ms_ = frame_duration_ms_;
   state_ = State::kEmpty;

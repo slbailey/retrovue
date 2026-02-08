@@ -89,6 +89,12 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height, double fps
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
+  // INV-BLOCK-PRIME-001/006: Decode first frame into held slot.
+  // Direct continuation of AssignBlock on worker thread — no poll, no timer.
+  source->PrimeFirstFrame();
+
+  if (cancel_requested_.load(std::memory_order_acquire)) return;
+
   std::cout << "[ProducerPreloader] Preload complete: block=" << block.block_id
             << " state=" << (source->GetState() == ITickProducer::State::kReady
                                  ? "READY" : "EMPTY")

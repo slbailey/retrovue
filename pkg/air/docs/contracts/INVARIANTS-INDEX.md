@@ -112,6 +112,18 @@ Decoded media time governs block execution and segment transitions. See [INV-AIR
 | **INV-AIR-MEDIA-TIME-004** | Cadence independence — output FPS does not affect media time tracking | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-005** | Pad is never primary — padding only when decoded media time exceeds block end | `TickProducer` | Semantic |
 
+### Wall-Clock Fence Invariants
+
+Block transitions are driven by wall-clock schedule, not content-time exhaustion. See [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) for full behavioral contract. **Supersedes INV-AIR-MEDIA-TIME-001 for block transition authority.**
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-BLOCK-WALLFENCE-001** | Wall clock is sole authority for block boundaries; no content-clock state may delay swap | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-002** | CT underrun at fence tick results in truncation, not delayed swap | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-003** | Early CT exhaustion results in freeze/pad until fence tick, not early advancement | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-004** | A/B swap executes on the fence tick (first tick at or after wall boundary) | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-005** | BlockCompleted is a consequence of the swap, not a gate for it | `PipelineManager` | Coordination (Broadcast-Grade) |
+
 **Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
 
 ---
@@ -188,6 +200,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **RealTimeHold** (freeze-then-pad, no-drop policy) | [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) |
 | **Component contracts** | [README.md](semantics/README.md) |
 | **Broadcast-grade output** (unconditional emission) | [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) · [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) · [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) |
+| **Block boundary timing** (wall-clock fence, A/B swap) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |
