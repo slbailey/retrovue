@@ -355,6 +355,14 @@ Enforcing it forced the architecture to become correct.
 Rule:
 Never “fix” a system by silencing its safety rails.
 
+----
 
 “The executor loop shape is now locked by contract tests.
 Any future timing or recovery behavior must be expressed outside the executor, or via new block plans.”
+
+----
+
+Wall-clock time decides which block owns the tick.
+Frame counting decides what happens during that block.
+
+----

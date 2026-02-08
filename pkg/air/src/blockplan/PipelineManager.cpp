@@ -283,7 +283,7 @@ void PipelineManager::Run() {
   // ========================================================================
   // 3. CREATE OUTPUT CLOCK
   // ========================================================================
-  OutputClock clock(ctx_->fps);
+  OutputClock clock(ctx_->fps_num, ctx_->fps_den);
   clock.Start();
 
   // INV-BLOCK-WALLFENCE-001: Record UTC epoch at session start.
@@ -327,11 +327,16 @@ void PipelineManager::Run() {
   int64_t session_frame_index = 0;
 
   // INV-BLOCK-WALLFENCE-001: Compute absolute session frame for block fence.
-  const int64_t frame_dur_ms = clock.FrameDurationMs();
-  auto compute_fence_frame = [this, frame_dur_ms](const FedBlock& block) -> int64_t {
+  // Uses rational fps_num/fps_den — NOT ms-quantized frame_duration_ms.
+  // Formula: fence_tick = ceil(delta_ms * fps_num / (fps_den * 1000))
+  // Integer ceil: (delta_ms * fps_num + fps_den * 1000 - 1) / (fps_den * 1000)
+  const int64_t fence_fps_num = ctx_->fps_num;
+  const int64_t fence_fps_den = ctx_->fps_den;
+  auto compute_fence_frame = [this, fence_fps_num, fence_fps_den](const FedBlock& block) -> int64_t {
     int64_t delta_ms = block.end_utc_ms - session_epoch_utc_ms_;
     if (delta_ms <= 0) return 0;
-    return (delta_ms + frame_dur_ms - 1) / frame_dur_ms;  // ceil division
+    int64_t denominator = fence_fps_den * 1000;
+    return (delta_ms * fence_fps_num + denominator - 1) / denominator;
   };
 
   std::chrono::steady_clock::time_point prev_frame_time{};
@@ -343,8 +348,9 @@ void PipelineManager::Run() {
   BlockAccumulator block_acc;
   if (live_tp()->GetState() == ITickProducer::State::kReady) {
     block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
-    // INV-FRAME-BUDGET-002: Initialize frame budget for first block.
-    remaining_block_frames_ = live_tp()->FramesPerBlock();
+    // INV-FRAME-BUDGET-002: Budget derived from fence, not FramesPerBlock().
+    remaining_block_frames_ = block_fence_frame_ - session_frame_index;
+    if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
     block_acc.Reset(live_tp()->GetBlock().block_id);
     emit_block_start("queue");
     InitCadence(live_tp());
@@ -364,6 +370,152 @@ void PipelineManager::Run() {
     int64_t video_pts_90k = clock.FrameIndexToPts90k(session_frame_index);
     int64_t audio_pts_90k =
         (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
+
+    // ==================================================================
+    // PROACTIVE FENCE CHECK — INV-BLOCK-WALLFENCE-004:
+    // Fires BEFORE frame emission when session_frame_index reaches the
+    // fence tick.  The fence tick belongs to the NEW block.
+    // Trigger: session_frame_index >= block_fence_frame_ (rational).
+    // remaining_block_frames_ == 0 is a verification, not the trigger.
+    // ==================================================================
+    if (session_frame_index >= block_fence_frame_ &&
+        live_tp()->GetState() == ITickProducer::State::kReady) {
+
+      // Snapshot outgoing block before A/B swap.
+      const FedBlock outgoing_block = live_tp()->GetBlock();
+      int64_t ct_at_fence_ms = -1;
+
+      // P3.3: Finalize and emit playback summary + proof before swap
+      if (!block_acc.block_id.empty()) {
+        auto summary = block_acc.Finalize();
+        ct_at_fence_ms = summary.last_block_ct_ms;
+        std::cout << FormatPlaybackSummary(summary) << std::endl;
+        if (callbacks_.on_block_summary) {
+          callbacks_.on_block_summary(summary);
+        }
+
+        // P3.3b: Build and emit playback proof (wanted vs showed)
+        auto proof = BuildPlaybackProof(
+            outgoing_block, summary, clock.FrameDurationMs());
+        std::cout << FormatPlaybackProof(proof) << std::endl;
+        if (callbacks_.on_playback_proof) {
+          callbacks_.on_playback_proof(proof);
+        }
+
+        // Audit: BLOCK_COMPLETE
+        {
+          int64_t base_offset = !outgoing_block.segments.empty()
+              ? outgoing_block.segments[0].asset_start_offset_ms : 0;
+          std::cout << "[PipelineManager] BLOCK_COMPLETE"
+                    << " block=" << summary.block_id
+                    << " fence_frame=" << block_fence_frame_
+                    << " emitted=" << summary.frames_emitted
+                    << " pad=" << summary.pad_frames
+                    << " asset=" << (!summary.asset_uris.empty()
+                        ? summary.asset_uris[0] : "pad");
+          if (summary.first_block_ct_ms >= 0) {
+            std::cout << " range_ms="
+                      << (base_offset + summary.first_block_ct_ms)
+                      << "->"
+                      << (base_offset + summary.last_block_ct_ms);
+          }
+          std::cout << std::endl;
+        }
+      }
+
+      // INV-BLOCK-WALLFENCE-001: Diagnostic — wall-clock fence timing.
+      {
+        int64_t now_utc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        int64_t delta_ms = now_utc_ms - outgoing_block.end_utc_ms;
+        std::cout << "[PipelineManager] INV-BLOCK-WALLFENCE-001: FENCE"
+                  << " block=" << outgoing_block.block_id
+                  << " scheduled_end_ms=" << outgoing_block.end_utc_ms
+                  << " actual_ms=" << now_utc_ms
+                  << " delta_ms=" << delta_ms
+                  << " ct_at_fence_ms=" << ct_at_fence_ms
+                  << " fence_frame=" << block_fence_frame_
+                  << " session_frame=" << session_frame_index
+                  << " remaining_budget=" << remaining_block_frames_
+                  << std::endl;
+      }
+
+      // P3.3: Record completed block for seam tracking
+      prev_completed_block_id = outgoing_block.block_id;
+      fence_session_frame = session_frame_index;
+      fence_pad_counter = 0;
+
+      // INV-BLOCK-WALLFENCE-004: Execute A/B swap BEFORE frame emission.
+      bool swapped = false;
+
+      // 1) Already have a preview_ ready?
+      if (preview_ &&
+          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+        live_ = std::move(preview_);
+        swapped = true;
+      }
+
+      // 2) Preloader has one ready?
+      if (!swapped) {
+        auto preloaded = TryTakePreviewProducer();
+        if (preloaded &&
+            AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
+          live_ = std::move(preloaded);
+          swapped = true;
+        }
+      }
+
+      // INV-BLOCK-WALLFENCE-005: BlockCompleted fires AFTER swap.
+      if (callbacks_.on_block_completed) {
+        callbacks_.on_block_completed(outgoing_block, session_frame_index);
+      }
+      {
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        metrics_.total_blocks_executed++;
+      }
+      ctx_->blocks_executed++;
+
+      if (swapped) {
+        // Compute fence for the new block.
+        block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
+        // INV-FRAME-BUDGET-002: Budget derived from fence, not FramesPerBlock().
+        remaining_block_frames_ = block_fence_frame_ - session_frame_index;
+        if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
+        {
+          std::lock_guard<std::mutex> lock(metrics_mutex_);
+          metrics_.source_swap_count++;
+        }
+        past_fence = false;
+
+        // P3.3: Emit seam transition log (seamless swap)
+        if (!prev_completed_block_id.empty()) {
+          SeamTransitionLog seam;
+          seam.from_block_id = prev_completed_block_id;
+          seam.to_block_id = live_tp()->GetBlock().block_id;
+          seam.fence_frame = fence_session_frame;
+          seam.pad_frames_at_fence = 0;
+          seam.seamless = true;
+          std::cout << FormatSeamTransition(seam) << std::endl;
+          if (callbacks_.on_seam_transition) {
+            callbacks_.on_seam_transition(seam);
+          }
+        }
+
+        // P3.3: Reset accumulator for new block
+        block_acc.Reset(live_tp()->GetBlock().block_id);
+        emit_block_start("preview");
+        InitCadence(live_tp());
+
+        // Immediately kick off preload for the following block
+        TryKickoffPreviewPreload();
+      } else {
+        // No next available — reset live and enter pad mode
+        live_tp()->Reset();
+        block_fence_frame_ = INT64_MAX;
+        past_fence = true;
+        ResetCadence();
+      }
+    }
 
     bool is_pad = true;
     std::optional<FrameData> frame_data;
@@ -491,149 +643,6 @@ void PipelineManager::Run() {
       remaining_block_frames_--;
     }
 
-    // ==================================================================
-    // FENCE CHECK — INV-FRAME-BUDGET-004: Block completes when frame
-    // budget is exhausted.  The wall-clock fence (WALLFENCE-001) serves
-    // as a diagnostic cross-check — by construction, budget exhaustion
-    // and the fence fire on the same tick.
-    // ==================================================================
-    if (remaining_block_frames_ == 0 &&
-        live_tp()->GetState() == ITickProducer::State::kReady) {
-
-      // Snapshot outgoing block before A/B swap.
-      const FedBlock outgoing_block = live_tp()->GetBlock();
-      int64_t ct_at_fence_ms = -1;
-
-      // P3.3: Finalize and emit playback summary + proof before swap
-      if (!block_acc.block_id.empty()) {
-        auto summary = block_acc.Finalize();
-        ct_at_fence_ms = summary.last_block_ct_ms;
-        std::cout << FormatPlaybackSummary(summary) << std::endl;
-        if (callbacks_.on_block_summary) {
-          callbacks_.on_block_summary(summary);
-        }
-
-        // P3.3b: Build and emit playback proof (wanted vs showed)
-        auto proof = BuildPlaybackProof(
-            outgoing_block, summary, clock.FrameDurationMs());
-        std::cout << FormatPlaybackProof(proof) << std::endl;
-        if (callbacks_.on_playback_proof) {
-          callbacks_.on_playback_proof(proof);
-        }
-
-        // Audit: BLOCK_COMPLETE
-        {
-          int64_t base_offset = !outgoing_block.segments.empty()
-              ? outgoing_block.segments[0].asset_start_offset_ms : 0;
-          std::cout << "[PipelineManager] BLOCK_COMPLETE"
-                    << " block=" << summary.block_id
-                    << " fence_frame=" << block_fence_frame_
-                    << " emitted=" << summary.frames_emitted
-                    << " pad=" << summary.pad_frames
-                    << " asset=" << (!summary.asset_uris.empty()
-                        ? summary.asset_uris[0] : "pad");
-          if (summary.first_block_ct_ms >= 0) {
-            std::cout << " range_ms="
-                      << (base_offset + summary.first_block_ct_ms)
-                      << "->"
-                      << (base_offset + summary.last_block_ct_ms);
-          }
-          std::cout << std::endl;
-        }
-      }
-
-      // INV-BLOCK-WALLFENCE-001: Diagnostic — wall-clock fence timing.
-      {
-        int64_t now_utc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        int64_t delta_ms = now_utc_ms - outgoing_block.end_utc_ms;
-        std::cout << "[PipelineManager] INV-BLOCK-WALLFENCE-001: FENCE"
-                  << " block=" << outgoing_block.block_id
-                  << " scheduled_end_ms=" << outgoing_block.end_utc_ms
-                  << " actual_ms=" << now_utc_ms
-                  << " delta_ms=" << delta_ms
-                  << " ct_at_fence_ms=" << ct_at_fence_ms
-                  << " fence_frame=" << block_fence_frame_
-                  << " session_frame=" << session_frame_index
-                  << std::endl;
-      }
-
-      // P3.3: Record completed block for seam tracking
-      prev_completed_block_id = outgoing_block.block_id;
-      fence_session_frame = session_frame_index;
-      fence_pad_counter = 0;
-
-      // INV-BLOCK-WALLFENCE-004: Execute A/B swap BEFORE firing completion.
-      bool swapped = false;
-
-      // 1) Already have a preview_ ready?
-      if (preview_ &&
-          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
-        live_ = std::move(preview_);
-        swapped = true;
-      }
-
-      // 2) Preloader has one ready?
-      if (!swapped) {
-        auto preloaded = TryTakePreviewProducer();
-        if (preloaded &&
-            AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
-          live_ = std::move(preloaded);
-          swapped = true;
-        }
-      }
-
-      // INV-BLOCK-WALLFENCE-005: BlockCompleted fires AFTER swap.
-      if (callbacks_.on_block_completed) {
-        callbacks_.on_block_completed(outgoing_block, session_frame_index);
-      }
-      {
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        metrics_.total_blocks_executed++;
-      }
-      ctx_->blocks_executed++;
-
-      if (swapped) {
-        // Compute fence for the new block.
-        block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
-        // INV-FRAME-BUDGET-002: Initialize frame budget for swapped block.
-        remaining_block_frames_ = live_tp()->FramesPerBlock();
-        {
-          std::lock_guard<std::mutex> lock(metrics_mutex_);
-          metrics_.source_swap_count++;
-        }
-        past_fence = false;
-
-        // P3.3: Emit seam transition log (seamless swap)
-        if (!prev_completed_block_id.empty()) {
-          SeamTransitionLog seam;
-          seam.from_block_id = prev_completed_block_id;
-          seam.to_block_id = live_tp()->GetBlock().block_id;
-          seam.fence_frame = fence_session_frame;
-          seam.pad_frames_at_fence = 0;
-          seam.seamless = true;
-          std::cout << FormatSeamTransition(seam) << std::endl;
-          if (callbacks_.on_seam_transition) {
-            callbacks_.on_seam_transition(seam);
-          }
-        }
-
-        // P3.3: Reset accumulator for new block
-        block_acc.Reset(live_tp()->GetBlock().block_id);
-        emit_block_start("preview");
-        InitCadence(live_tp());
-
-        // Immediately kick off preload for the following block
-        TryKickoffPreviewPreload();
-      } else {
-        // No next available — reset live and enter pad mode
-        live_tp()->Reset();
-        block_fence_frame_ = INT64_MAX;
-        past_fence = true;
-        ResetCadence();
-      }
-    }
-
     // LOAD NEXT from queue if source is empty (fallback path)
     if (live_tp()->GetState() == ITickProducer::State::kEmpty) {
       bool had_preview = (preview_ != nullptr);
@@ -641,8 +650,9 @@ void PipelineManager::Run() {
 
       if (live_tp()->GetState() == ITickProducer::State::kReady) {
         block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
-        // INV-FRAME-BUDGET-002: Initialize frame budget for fallback-loaded block.
-        remaining_block_frames_ = live_tp()->FramesPerBlock();
+        // INV-FRAME-BUDGET-002: Budget derived from fence, not FramesPerBlock().
+        remaining_block_frames_ = block_fence_frame_ - session_frame_index;
+        if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
 
         // P3.3: Emit seam transition log (padded transition)
         if (!prev_completed_block_id.empty()) {

@@ -130,7 +130,7 @@ TEST_F(ContinuousOutputContractTest, PTSMonotonicByConstruction) {
   // OutputClock guarantees PTS monotonicity by construction:
   // FrameIndexToPts90k(N) = N * frame_duration_90k
   // Verify the formula directly.
-  OutputClock clock(30.0);
+  OutputClock clock(30, 1);
   clock.Start();
 
   int64_t prev_pts = -1;
