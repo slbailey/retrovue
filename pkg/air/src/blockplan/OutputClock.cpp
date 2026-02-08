@@ -31,6 +31,13 @@ OutputClock::OutputClock(int64_t fps_num, int64_t fps_den)
                      static_cast<double>(fps_num)))) {}
 
 void OutputClock::Start() {
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001 R1: Monotonic epoch capture.
+  // Anchors all tick deadlines to steady_clock.  Called once per session,
+  // AFTER blocking I/O completes, so tick 0 is not born late.
+  //
+  // UTC schedule epoch is NOT captured here — it is owned by
+  // PipelineManager (captured before blocking I/O) to preserve
+  // fence math accuracy.  See PipelineManager::Run() §3.
   session_start_ = std::chrono::steady_clock::now();
 }
 
@@ -66,6 +73,15 @@ std::chrono::steady_clock::time_point OutputClock::WaitForFrame(
 
 std::chrono::steady_clock::time_point OutputClock::SessionStartTime() const {
   return session_start_;
+}
+
+std::chrono::steady_clock::time_point OutputClock::DeadlineFor(
+    int64_t session_frame_index) const {
+  return session_start_ + DeadlineOffsetNs(session_frame_index);
+}
+
+int64_t OutputClock::SessionEpochUtcMs() const {
+  return session_epoch_utc_ms_;
 }
 
 }  // namespace retrovue::blockplan

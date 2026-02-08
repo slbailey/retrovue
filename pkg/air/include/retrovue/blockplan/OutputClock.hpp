@@ -48,6 +48,17 @@ class OutputClock {
   // the cumulative drift from ms-quantized pacing.
   std::chrono::steady_clock::time_point WaitForFrame(int64_t session_frame_index);
 
+  // Compute the absolute monotonic deadline time_point for frame N.
+  // Pure arithmetic — no side effects, no sleeping.
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001: Deadline anchored to session
+  // monotonic epoch, immune to UTC clock steps.
+  std::chrono::steady_clock::time_point DeadlineFor(int64_t session_frame_index) const;
+
+  // Return the UTC epoch (ms since Unix epoch) captured at Start().
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001: UTC remains the schedule authority
+  // for fence math; monotonic is the enforcement anchor.
+  int64_t SessionEpochUtcMs() const;
+
   // Compute the exact nanosecond offset for frame N from session start.
   // Pure arithmetic — no side effects, no sleeping.  Exposed for testing.
   std::chrono::nanoseconds DeadlineOffsetNs(int64_t session_frame_index) const;
@@ -72,6 +83,10 @@ class OutputClock {
   int64_t frame_duration_90k_;  // round(90000 * fps_den / fps_num)
 
   std::chrono::steady_clock::time_point session_start_;
+
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001: UTC epoch captured alongside
+  // monotonic epoch at Start().  Used for fence math (schedule authority).
+  int64_t session_epoch_utc_ms_ = 0;
 };
 
 }  // namespace retrovue::blockplan

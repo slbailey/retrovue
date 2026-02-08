@@ -380,6 +380,10 @@ double TickProducer::GetInputFPS() const {
   return input_fps_;
 }
 
+bool TickProducer::HasPrimedFrame() const {
+  return primed_frame_.has_value();
+}
+
 // =============================================================================
 // IProducer implementation
 // =============================================================================
