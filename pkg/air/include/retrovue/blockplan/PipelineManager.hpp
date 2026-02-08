@@ -135,18 +135,22 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // P3.1a: Live producer for real-frame decoding (Input Bus A).
   std::unique_ptr<producers::IProducer> live_;
 
-  // INV-BLOCK-WALLFENCE-001: Wall-clock authoritative block fence.
-  // block_fence_frame_ is the absolute session frame index at which the
-  // current block's scheduled wall-clock end is reached.  INT64_MAX = no block.
+  // INV-BLOCK-WALLFENCE-001: Rational-timebase authoritative block fence.
+  // block_fence_frame_ = ceil(delta_ms * fps_num / (fps_den * 1000))
+  // where delta_ms = block.end_utc_ms - session_epoch_utc_ms_.
+  // The fence tick is the first session frame owned by the NEXT block.
+  // Swap fires proactively when session_frame_index >= block_fence_frame_.
+  // INT64_MAX = no block loaded.
   int64_t block_fence_frame_ = INT64_MAX;
   // UTC epoch (ms since Unix epoch) recorded at session start.  Used to map
   // FedBlock::end_utc_ms to a session frame index.
   int64_t session_epoch_utc_ms_ = 0;
 
   // INV-FRAME-BUDGET-002: Remaining output frames for the current block.
-  // Initialized to FramesPerBlock() when a block becomes live.
+  // Initialized to (block_fence_frame_ - session_frame_index) — derived
+  // from fence, NOT from FramesPerBlock().
   // Decremented by exactly 1 per emitted frame (real, freeze, or pad).
-  // Block completion triggers when this reaches 0.
+  // Reaches 0 on the fence tick as a verification (not a trigger).
   // Accessed only from the Run() thread — no mutex required.
   int64_t remaining_block_frames_ = 0;
 

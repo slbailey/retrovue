@@ -8,6 +8,7 @@
 #define RETROVUE_BLOCKPLAN_SESSION_TYPES_HPP_
 
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -68,12 +69,48 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
 // This avoids changing any field access patterns in existing code.
 // =============================================================================
 
+// =============================================================================
+// Rational FPS derivation — broadcast frame rate lookup.
+// Fence computation requires exact rational fps_num/fps_den.
+// round(1000/fps) is NOT authoritative for fence math.
+// =============================================================================
+inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
+  // Standard broadcast frame rates → exact rational representation.
+  // Tolerance: 0.01 for matching (handles 23.976 vs 23.9760239...).
+  struct Entry { double approx; int64_t num; int64_t den; };
+  static constexpr Entry kTable[] = {
+    {23.976, 24000, 1001},
+    {24.0,   24,    1},
+    {25.0,   25,    1},
+    {29.97,  30000, 1001},
+    {30.0,   30,    1},
+    {50.0,   50,    1},
+    {59.94,  60000, 1001},
+    {60.0,   60,    1},
+  };
+  for (const auto& e : kTable) {
+    if (std::abs(fps - e.approx) < 0.01) {
+      fps_num = e.num;
+      fps_den = e.den;
+      return;
+    }
+  }
+  // Fallback for non-standard rates: treat as integer fps.
+  fps_num = static_cast<int64_t>(fps + 0.5);
+  fps_den = 1;
+}
+
 struct BlockPlanSessionContext {
   int32_t channel_id = 0;
   int fd = -1;           // UDS file descriptor for output
   int width = 640;
   int height = 480;
   double fps = 30.0;
+  // Rational FPS for authoritative fence computation.
+  // Derived from fps via DeriveRationalFPS() at session init.
+  // fence_tick = ceil(delta_ms * fps_num / (fps_den * 1000))
+  int64_t fps_num = 30;
+  int64_t fps_den = 1;
 
   std::atomic<bool> stop_requested{false};
 

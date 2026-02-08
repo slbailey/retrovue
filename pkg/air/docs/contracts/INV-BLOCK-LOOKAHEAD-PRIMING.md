@@ -3,8 +3,9 @@
 **Classification:** INVARIANT (Coordination)
 **Owner:** ProducerPreloader / TickProducer / PipelineManager
 **Enforcement Phase:** Every block boundary in a BlockPlan session
-**Depends on:** INV-TICK-GUARANTEED-OUTPUT, INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
+**Depends on:** INV-TICK-GUARANTEED-OUTPUT, INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT, INV-BLOCK-WALLCLOCK-FENCE-001
 **Created:** 2026-02-07
+**Status:** Active
 
 ---
 
@@ -12,9 +13,15 @@
 
 When a TickProducer is prepared for the next block (via ProducerPreloader),
 the first video frame and its associated audio MUST be decoded into memory
-**before** the producer signals readiness.  The first post-swap call to
-`TryGetFrame()` MUST return this pre-decoded frame without invoking the
-decoder.
+**before** the producer signals readiness.  The fence tick's call to
+`TryGetFrame()` — the first call after the A/B swap — MUST return this
+pre-decoded frame without invoking the decoder.
+
+The fence tick is the first tick of the next block
+(INV-BLOCK-WALLFENCE-004).  Priming ensures that the frame emitted on the
+fence tick has zero decode latency: it was already decoded during the
+previous block's execution, using the look-ahead window between block load
+and fence tick arrival.
 
 ---
 
@@ -31,9 +38,20 @@ session.  They do not apply to:
 
 ---
 
+## Definitions
+
+| Term | Definition |
+|------|------------|
+| **Fence tick** | The first session frame index belonging to the next block, precomputed via rational formula (INV-BLOCK-WALLFENCE-001).  The A/B swap executes on this tick, before frame emission. |
+| **Primed frame** | The first video frame (and associated audio) of the next block, decoded into memory before the fence tick arrives.  Consumed on the fence tick's `TryGetFrame()` call. |
+| **Priming window** | The interval between the next block's TickProducer completing `AssignBlock()` and the fence tick arriving.  Priming must complete within this window. |
+| **Fence tick emission** | The frame emitted on the fence tick.  This frame comes from the NEW block's producer (after A/B swap).  If priming succeeded, it is the primed frame.  If priming failed, it falls through to live decode or fallback. |
+
+---
+
 ## Invariants
 
-### INV-BLOCK-PRIME-001: Decoder Readiness Before Boundary
+### INV-BLOCK-PRIME-001: Decoder Readiness Before Fence Tick
 
 > When the ProducerPreloader worker completes preparation of a
 > TickProducer for the next block, the producer MUST hold a decoded
@@ -50,28 +68,30 @@ session.  They do not apply to:
 
 **Why this invariant exists:**  Today, `AssignBlock()` opens and seeks
 the decoder but does not decode.  The decode cost is paid on the first
-`TryGetFrame()` call after the A/B swap — at the exact tick that must
+`TryGetFrame()` call after the A/B swap — on the fence tick that must
 emit the boundary frame.  For assets requiring long keyframe searches,
 this decode can exceed the frame-period budget (33ms at 30fps), causing
 the OutputClock deadline to be missed.  Pre-decoding eliminates this
-variable-latency operation from the boundary tick.
+variable-latency operation from the fence tick.
 
 ---
 
-### INV-BLOCK-PRIME-002: Zero Deadline Work at Boundary
+### INV-BLOCK-PRIME-002: Zero Deadline Work at Fence Tick
 
-> The first call to `TryGetFrame()` after an A/B swap MUST return the
-> primed frame from memory.  It MUST NOT invoke `decoder_->DecodeFrameToBuffer()`
-> or any other I/O or codec operation to produce this frame.
+> The first call to `TryGetFrame()` on the fence tick — the first call
+> after the A/B swap to the new block's producer — MUST return the
+> primed frame from memory.  It MUST NOT invoke
+> `decoder_->DecodeFrameToBuffer()` or any other I/O or codec operation
+> to produce this frame.
 >
-> The wall-clock cost of the first post-swap `TryGetFrame()` MUST be
+> The wall-clock cost of the fence tick's `TryGetFrame()` MUST be
 > bounded by memory access and metadata copy — no file I/O, no demuxing,
 > no decoding.
 
 **Why this invariant exists:**  Every output tick has an identical
 real-time budget (one frame period).  The fence tick is not special — it
 has the same deadline as every other tick.  If the first frame of the
-new block requires a synchronous decode at the boundary, the worst-case
+new block requires a synchronous decode on the fence tick, the worst-case
 latency is unbounded (depends on codec, container, keyframe distance).
 This invariant guarantees that the fence tick's cost is deterministic
 and equivalent to a steady-state repeat tick.
@@ -80,7 +100,7 @@ and equivalent to a steady-state repeat tick.
 
 ### INV-BLOCK-PRIME-003: No Duplicate Decoding
 
-> The primed frame MUST be consumed exactly once.  After the first
+> The primed frame MUST be consumed exactly once.  After the fence tick's
 > `TryGetFrame()` returns the primed frame, the decoder's read position
 > MUST be immediately past that frame.  The second and subsequent calls
 > to `TryGetFrame()` MUST resume normal sequential decoding from the
@@ -102,9 +122,9 @@ correctness and efficiency.
 
 ### INV-BLOCK-PRIME-004: No Impact on Steady-State Cadence
 
-> After the primed frame is consumed, the cadence gate (decode-budget
-> accumulator in PipelineManager) and the frame-repeat pattern MUST
-> behave identically to a block that was not primed.
+> After the primed frame is consumed on the fence tick, the cadence gate
+> (decode-budget accumulator in PipelineManager) and the frame-repeat
+> pattern MUST behave identically to a block that was not primed.
 >
 > Priming MUST NOT:
 >
@@ -140,8 +160,8 @@ change to *how many* decodes occur.
 > On failure:
 >
 > - The primed-frame slot MUST be empty (no partial or corrupt frame).
-> - The first `TryGetFrame()` after the swap MUST fall through to the
->   normal decode path (attempting a live decode) or return `nullopt`
+> - The fence tick's `TryGetFrame()` MUST fall through to the normal
+>   decode path (attempting a live decode) or return `nullopt`
 >   (triggering pad via INV-TICK-GUARANTEED-OUTPUT's fallback chain).
 > - PipelineManager MUST NOT distinguish between a primed producer and
 >   an unprimed producer at swap time.  The A/B swap MUST proceed
@@ -150,7 +170,7 @@ change to *how many* decodes occur.
 > Priming failure MUST NOT:
 >
 > - Prevent the TickProducer from reaching `State::kReady`
-> - Prevent the A/B swap from occurring at the fence
+> - Prevent the A/B swap from occurring at the fence tick
 > - Stall the PipelineManager main loop
 > - Leave the TickProducer in an intermediate state between kEmpty
 >   and kReady
@@ -158,12 +178,12 @@ change to *how many* decodes occur.
 **Why this invariant exists:**  INV-TICK-GUARANTEED-OUTPUT requires
 every tick to emit a frame (real, freeze, or black).  If a priming
 failure could block the readiness signal or prevent the A/B swap,
-PipelineManager would be unable to transition to the next block,
-causing extended pad or freeze frames beyond the normal fallback
-duration.  Safe degradation means: priming is best-effort; the block
-boundary always fires on schedule; the worst case without priming is
-identical to the current behavior (synchronous first-frame decode at
-the boundary tick, or pad if that also fails).
+PipelineManager would be unable to transition to the next block at the
+fence tick, violating INV-BLOCK-WALLFENCE-004.  Safe degradation means:
+priming is best-effort; the fence tick always fires on schedule; the
+worst case without priming is identical to the current behavior
+(synchronous first-frame decode on the fence tick, or pad if that also
+fails).
 
 ---
 
@@ -192,10 +212,7 @@ the boundary tick, or pad if that also fails).
 latency — the priming window between `AssignBlock()` completion and
 the fence tick is finite and variable.  An event-driven model uses
 100% of the available window.  A poll-based model wastes up to one
-poll interval per boundary.  Additionally, adding timers or polling
-threads increases the concurrency surface area for no benefit, since
-the ProducerPreloader worker thread is already running and idle after
-`AssignBlock()` returns.
+poll interval per boundary.
 
 ---
 
@@ -242,7 +259,7 @@ The priming step runs to completion as fast as the decoder allows.
 
 Priming holds exactly one frame.  There is no ring buffer, no
 multi-frame read-ahead queue, and no prefetch depth parameter.  The
-held frame is consumed on the first `TryGetFrame()` and never
+held frame is consumed on the fence tick's `TryGetFrame()` and never
 replenished by the priming mechanism.
 
 ### C4: Transparent to PipelineManager
@@ -259,18 +276,59 @@ or decoded on demand.
 
 | Failure | Required Behavior | Governing Invariant |
 |---------|-------------------|---------------------|
-| Decode error on prime | kReady with empty slot; first TryGetFrame falls through to live decode or pad | PRIME-005 |
+| Decode error on prime | kReady with empty slot; fence tick's TryGetFrame falls through to live decode or pad | PRIME-005 |
 | Asset not found | kReady with empty slot; TryGetFrame returns nullopt (pad) | PRIME-005 |
 | Preloader cancelled before prime completes | No result published; PipelineManager loads from queue (existing fallback) | PRIME-005 |
 | Corrupt first frame | Discard; empty slot; fall through to live decode | PRIME-005, PRIME-007 |
 | Primed frame has wrong PTS | Contract violation (PRIME-007); must be detected by test | PRIME-007 |
+| Priming completes after fence tick | Fence fires regardless (INV-BLOCK-WALLFENCE-004); late prime is discarded; live decode or pad on fence tick | PRIME-005, WALLFENCE-004 |
 
 ---
 
-## Related Contracts
+## Relationship to Existing Contracts
+
+### INV-BLOCK-WALLCLOCK-FENCE-001 (Timing Authority — Sibling)
+
+Priming and the fence solve **different halves** of the block transition:
+
+| Problem | Solution |
+|---------|----------|
+| **When** does the transition happen? | Fence tick (INV-BLOCK-WALLFENCE-001) |
+| **How fast** is the first frame of the next block? | Priming (this contract) |
+
+The fence tick is the tick on which the primed frame is consumed.
+Priming ensures zero decode latency on that tick.  Neither substitutes
+for the other.  The fence fires regardless of priming status
+(INV-BLOCK-WALLFENCE-004); priming is best-effort optimization.
+
+### INV-BLOCK-FRAME-BUDGET-AUTHORITY (Counting Authority — Sibling)
+
+The frame budget tracks how many frames the block emits.  The primed
+frame is the first frame emitted for the new block and decrements
+that block's budget.  Priming does not alter the budget count or
+the budget's derivation from the fence range.
+
+### INV-TICK-GUARANTEED-OUTPUT (Law — Parent)
+
+Every tick emits; priming failure falls through to this guarantee.
+The fallback chain (freeze → black) provides the frame on the fence
+tick if priming failed and live decode also fails.
+
+### INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT (Session Boot — Sibling)
+
+Session boot is governed by INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.
+Priming governs subsequent block swaps.  The first block is not primed
+(there is no preceding block to prime from).
+
+### INV-BOUNDARY-PTS-ALIGNMENT (Content — Downstream)
+
+The primed frame's PTS must satisfy boundary alignment requirements.
+This is a content constraint, not a timing constraint.
 
 | Contract | Relationship |
 |----------|-------------|
+| INV-BLOCK-WALLCLOCK-FENCE-001 | Sibling: timing authority; fence tick is when primed frame is consumed |
+| INV-BLOCK-FRAME-BUDGET-AUTHORITY | Sibling: counting authority; primed frame is first budget decrement for new block |
 | INV-TICK-GUARANTEED-OUTPUT | Parent: every tick emits; priming failure falls through to this guarantee |
 | INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT | Sibling: governs session boot; priming governs subsequent block swaps |
 | INV-BOUNDARY-PTS-ALIGNMENT | Downstream: primed frame's PTS must satisfy boundary alignment |
@@ -285,14 +343,14 @@ or decoded on demand.
 | Test Name | Invariant(s) | Description |
 |-----------|-------------|-------------|
 | `PrimedFrameAvailableBeforeReady` | 001 | After preload completes, the TickProducer holds a decoded frame before kReady is signaled. |
-| `FirstTryGetFrameReturnsWithoutDecode` | 002 | First TryGetFrame after swap returns a frame; verify no decoder invocation occurred during the call. |
-| `PrimedFrameConsumedExactlyOnce` | 003 | First TryGetFrame returns the primed frame; second TryGetFrame returns the *next* sequential frame (not the same frame). |
-| `DecoderPositionCorrectAfterPrime` | 003 | After primed frame is consumed, decoder read position is at frame 2 of the segment (frame 1 was primed). |
+| `FirstTryGetFrameReturnsWithoutDecode` | 002 | Fence tick's TryGetFrame returns a frame; verify no decoder invocation occurred during the call. |
+| `PrimedFrameConsumedExactlyOnce` | 003 | Fence tick's TryGetFrame returns the primed frame; next TryGetFrame returns the *next* sequential frame. |
+| `DecoderPositionCorrectAfterPrime` | 003 | After primed frame consumed on fence tick, decoder read position is at frame 2 of the segment (frame 1 was primed). |
 | `CadenceUnaffectedByPriming` | 004 | For 23.976->30fps, the decode/repeat pattern across a primed block boundary matches the pattern of a non-primed block. |
-| `CadenceAccumulatorNotBiased` | 004 | After primed frame consumption, decode_budget is identical to what it would be without priming. |
+| `CadenceAccumulatorNotBiased` | 004 | After primed frame consumption on fence tick, decode_budget is identical to what it would be without priming. |
 | `PrimeFailureStillReachesReady` | 005 | Inject decode failure at prime time; TickProducer still reaches kReady. |
-| `PrimeFailureFallsThrough` | 005 | After failed prime, first TryGetFrame attempts live decode (or returns nullopt for pad). |
-| `PrimeFailureDoesNotStallSwap` | 005 | PipelineManager A/B swap proceeds identically whether priming succeeded or failed. |
+| `PrimeFailureFallsThrough` | 005 | After failed prime, fence tick's TryGetFrame attempts live decode (or returns nullopt for pad). |
+| `PrimeFailureDoesNotStallSwap` | 005 | PipelineManager A/B swap proceeds identically on fence tick whether priming succeeded or failed. |
 | `PrimingExecutesAfterAssignBlock` | 006 | Priming runs as direct continuation of AssignBlock on preloader thread (no poll, no timer). |
 | `PrimedFramePtsMatchesNormalDecode` | 007 | Primed frame's video.metadata.pts equals what a normal TryGetFrame decode would produce. |
 | `PrimedFrameMetadataComplete` | 007 | Primed FrameData has correct asset_uri, block_ct_ms, and audio samples. |

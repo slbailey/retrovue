@@ -102,27 +102,67 @@ Output sink attachment policy. See [SinkLivenessPolicy.md](semantics/SinkLivenes
 
 ### Media Time Authority Invariants
 
-Decoded media time governs block execution and segment transitions. See [INV-AIR-MEDIA-TIME.md](semantics/INV-AIR-MEDIA-TIME.md) for full behavioral contract.
+Decoded media time governs **intra-block** segment transitions and CT tracking. See [INV-AIR-MEDIA-TIME.md](semantics/INV-AIR-MEDIA-TIME.md) for full behavioral contract. **Note:** INV-AIR-MEDIA-TIME-001 is **partially superseded** — CT is no longer timing authority for block transitions (see Wall-Clock Fence below). CT tracking (002–005) remains fully in force for segment-internal behavior.
 
 | ID | One-line | Owner | Type |
 |----|----------|-------|------|
-| **INV-AIR-MEDIA-TIME-001** | Block execution governed by decoded media time, not rounded FPS math | `TickProducer` | Semantic |
+| **INV-AIR-MEDIA-TIME-001** | ~~Block execution governed by decoded media time~~ — **Superseded for block transitions** by INV-BLOCK-WALLFENCE-001. CT remains authoritative for segment transitions within a block. | `TickProducer` | Semantic (Partially Superseded) |
 | **INV-AIR-MEDIA-TIME-002** | No cumulative drift — PTS-anchored tracking bounds error to one frame period | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-003** | Fence alignment — decoded media time converges to block end within one frame | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-004** | Cadence independence — output FPS does not affect media time tracking | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-005** | Pad is never primary — padding only when decoded media time exceeds block end | `TickProducer` | Semantic |
 
-### Wall-Clock Fence Invariants
+### Block Boundary Authorities (Canonical Model)
 
-Block transitions are driven by wall-clock schedule, not content-time exhaustion. See [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) for full behavioral contract. **Supersedes INV-AIR-MEDIA-TIME-001 for block transition authority.**
+Block transitions are governed by **three complementary authorities**, each owning a distinct concern. No authority substitutes for another. Together they define the complete block transition model.
+
+| Authority | Contract | Concern | Owner |
+|-----------|----------|---------|-------|
+| **Timing** | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) | **When** does the A/B swap fire? Precomputed rational fence tick. | `PipelineManager` |
+| **Counting** | [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md) | **How many** frames does the block emit? Budget derived from fence range. | `PipelineManager` / `TickProducer` |
+| **Latency** | [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) | **How fast** is the first frame of the next block? Zero-decode-latency priming. | `ProducerPreloader` / `TickProducer` |
+
+The fence tick is the single timing authority for block transitions. The frame budget is derived from the fence (`fence_tick - block_start_tick`) and converges to 0 on the fence tick by construction. Priming ensures zero decode latency on the fence tick. All three use rational `fps_num/fps_den` as the authoritative frame rate representation.
+
+#### Wall-Clock Fence Invariants (Timing Authority)
+
+Precomputed deterministic fence tick from rational timebase. **Supersedes INV-AIR-MEDIA-TIME-001 for block transition authority.** See [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md).
 
 | ID | One-line | Owner | Type |
 |----|----------|-------|------|
-| **INV-BLOCK-WALLFENCE-001** | Wall clock is sole authority for block boundaries; no content-clock state may delay swap | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-001** | Rational fence tick is sole authority for block boundaries; computed from `ceil(delta_ms * fps_num / (fps_den * 1000))`; immutable after computation | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-BLOCK-WALLFENCE-002** | CT underrun at fence tick results in truncation, not delayed swap | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-BLOCK-WALLFENCE-003** | Early CT exhaustion results in freeze/pad until fence tick, not early advancement | `PipelineManager` | Coordination (Broadcast-Grade) |
-| **INV-BLOCK-WALLFENCE-004** | A/B swap executes on the fence tick (first tick at or after wall boundary) | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-004** | A/B swap executes on the fence tick before frame emission; fence tick is first tick of next block | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-BLOCK-WALLFENCE-005** | BlockCompleted is a consequence of the swap, not a gate for it | `PipelineManager` | Coordination (Broadcast-Grade) |
+
+#### Frame Budget Invariants (Counting Authority)
+
+Per-block frame counter derived from fence range. Budget reaching 0 at fence tick is verification, not trigger. See [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-FRAME-BUDGET-001** | Frame budget derived from fence range: `fence_tick - block_start_tick`; not from `duration * fps` or `FramesPerBlock()` | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-FRAME-BUDGET-002** | Explicit remaining frame tracking — initialized once, decremented by 1 per emitted frame, never modified otherwise | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-FRAME-BUDGET-003** | One frame, one decrement — real, freeze, and black frames all decrement budget equally | `PipelineManager` / `TickProducer` | Coordination (Broadcast-Grade) |
+| **INV-FRAME-BUDGET-004** | Budget reaching 0 is diagnostic verification that fence fired, not the swap trigger | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-FRAME-BUDGET-005** | Segments must consult remaining budget before emitting; budget is hard ceiling | `TickProducer` | Coordination (Broadcast-Grade) |
+| **INV-FRAME-BUDGET-006** | Segment exhaustion does not cause block completion; only fence tick ends a block | `PipelineManager` / `TickProducer` | Coordination (Broadcast-Grade) |
+| **INV-FRAME-BUDGET-007** | No negative frame budget — violation is proof of bug | `PipelineManager` | Coordination (Broadcast-Grade) |
+
+#### Lookahead Priming Invariants (Latency Authority)
+
+Zero-decode-latency priming at block boundaries. See [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-BLOCK-PRIME-001** | Decoder readiness before fence tick — first frame decoded into memory before kReady | `ProducerPreloader` / `TickProducer` | Coordination |
+| **INV-BLOCK-PRIME-002** | Zero deadline work at fence tick — fence tick's TryGetFrame returns primed frame, no I/O | `TickProducer` | Coordination |
+| **INV-BLOCK-PRIME-003** | No duplicate decoding — primed frame consumed exactly once | `TickProducer` | Coordination |
+| **INV-BLOCK-PRIME-004** | No impact on steady-state cadence — priming does not alter decode/repeat pattern | `PipelineManager` / `TickProducer` | Coordination |
+| **INV-BLOCK-PRIME-005** | Priming failure degrades safely — kReady still reached, swap still fires at fence tick | `TickProducer` | Coordination |
+| **INV-BLOCK-PRIME-006** | Priming is event-driven — executes after AssignBlock, no polling or timers | `ProducerPreloader` | Coordination |
+| **INV-BLOCK-PRIME-007** | Primed frame metadata integrity — PTS, audio, asset_uri match normal decode | `TickProducer` | Coordination |
 
 **Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
 
@@ -200,7 +240,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **RealTimeHold** (freeze-then-pad, no-drop policy) | [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) |
 | **Component contracts** | [README.md](semantics/README.md) |
 | **Broadcast-grade output** (unconditional emission) | [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) · [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) · [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) |
-| **Block boundary timing** (wall-clock fence, A/B swap) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
+| **Block boundary model** (fence, budget, priming) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |
