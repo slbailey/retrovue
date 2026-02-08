@@ -664,6 +664,9 @@ void PipelineManager::Run() {
             audio_pts_90k =
                 (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
             audio_frames_this_tick++;
+            // Save last audio frame for hold-last on late-tick repeats
+            last_decoded_audio_ = af;
+            have_last_decoded_audio_ = true;
           }
           is_pad = false;
           did_decode = true;
@@ -681,26 +684,37 @@ void PipelineManager::Run() {
         is_pad = false;
         // did_decode stays false
 
-        // Late ticks: emit tick-aligned silence audio so the audio timeline
-        // advances exactly one tick.  Without this, video PTS advances but
-        // audio PTS freezes, causing progressive A/V desync.
+        // Late ticks: emit tick-aligned audio so the audio timeline advances
+        // exactly one tick.  Without this, video PTS advances but audio PTS
+        // freezes, causing progressive A/V desync.
+        //
+        // Hold-last: re-emit the last decoded audio frame (masked to current
+        // PTS) to avoid an audible silence blip.  Falls back to silence only
+        // if no audio has been decoded yet (session-start edge case).
         //
         // Cadence repeats (should_decode=false due to input_fps < output_fps)
         // intentionally skip audio — the content stream has no extra audio
         // at the higher output rate.  Only late ticks need the correction.
         if (tick_is_late) {
-          buffer::AudioFrame silence;
-          silence.sample_rate = buffer::kHouseAudioSampleRate;
-          silence.channels = buffer::kHouseAudioChannels;
-          silence.nb_samples = kAudioSamplesPerFrame;
-          silence.data.resize(
-              static_cast<size_t>(kAudioSamplesPerFrame *
-                                  buffer::kHouseAudioChannels) *
-                  sizeof(int16_t),
-              0);
-          session_encoder->encodeAudioFrame(silence, audio_pts_90k,
-                                            /*is_silence_pad=*/true);
-          audio_samples_emitted += kAudioSamplesPerFrame;
+          if (have_last_decoded_audio_) {
+            session_encoder->encodeAudioFrame(last_decoded_audio_,
+                                              audio_pts_90k, false);
+            audio_samples_emitted += last_decoded_audio_.nb_samples;
+          } else {
+            // No audio decoded yet — silence is the only option.
+            buffer::AudioFrame silence;
+            silence.sample_rate = buffer::kHouseAudioSampleRate;
+            silence.channels = buffer::kHouseAudioChannels;
+            silence.nb_samples = kAudioSamplesPerFrame;
+            silence.data.resize(
+                static_cast<size_t>(kAudioSamplesPerFrame *
+                                    buffer::kHouseAudioChannels) *
+                    sizeof(int16_t),
+                0);
+            session_encoder->encodeAudioFrame(silence, audio_pts_90k,
+                                              /*is_silence_pad=*/true);
+            audio_samples_emitted += kAudioSamplesPerFrame;
+          }
           audio_frames_this_tick = 1;
         }
       }
@@ -931,12 +945,14 @@ void PipelineManager::InitCadence(ITickProducer* tp) {
     cadence_ratio_ = input_fps / output_fps;
     decode_budget_ = 1.0;  // Guarantees first tick decodes
     have_last_decoded_video_ = false;
+    have_last_decoded_audio_ = false;
     std::cout << " cadence=ACTIVE ratio=" << cadence_ratio_ << std::endl;
   } else {
     cadence_active_ = false;
     cadence_ratio_ = 0.0;
     decode_budget_ = 0.0;
     have_last_decoded_video_ = false;
+    have_last_decoded_audio_ = false;
     std::cout << " cadence=OFF" << std::endl;
   }
 }
@@ -947,6 +963,8 @@ void PipelineManager::ResetCadence() {
   decode_budget_ = 0.0;
   have_last_decoded_video_ = false;
   last_decoded_video_ = buffer::Frame{};
+  have_last_decoded_audio_ = false;
+  last_decoded_audio_ = buffer::AudioFrame{};
 }
 
 void PipelineManager::SetPreloaderDelayHook(

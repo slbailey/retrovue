@@ -169,7 +169,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
   double cadence_ratio_ = 0.0;    // input_fps / output_fps (e.g. 0.7992)
   double decode_budget_ = 0.0;    // Accumulator: += ratio per tick, decode when >= 1.0
   buffer::Frame last_decoded_video_;
+  buffer::AudioFrame last_decoded_audio_;
   bool have_last_decoded_video_ = false;
+  bool have_last_decoded_audio_ = false;
 };
 
 }  // namespace retrovue::blockplan
