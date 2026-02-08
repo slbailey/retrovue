@@ -677,10 +677,32 @@ void PipelineManager::Run() {
         }
       } else if (have_last_decoded_video_) {
         // Repeat tick: re-encode last video frame with new output PTS.
-        // NO audio emitted — prevents audio PTS from racing ahead.
         session_encoder->encodeFrame(last_decoded_video_, video_pts_90k);
         is_pad = false;
         // did_decode stays false
+
+        // Late ticks: emit tick-aligned silence audio so the audio timeline
+        // advances exactly one tick.  Without this, video PTS advances but
+        // audio PTS freezes, causing progressive A/V desync.
+        //
+        // Cadence repeats (should_decode=false due to input_fps < output_fps)
+        // intentionally skip audio — the content stream has no extra audio
+        // at the higher output rate.  Only late ticks need the correction.
+        if (tick_is_late) {
+          buffer::AudioFrame silence;
+          silence.sample_rate = buffer::kHouseAudioSampleRate;
+          silence.channels = buffer::kHouseAudioChannels;
+          silence.nb_samples = kAudioSamplesPerFrame;
+          silence.data.resize(
+              static_cast<size_t>(kAudioSamplesPerFrame *
+                                  buffer::kHouseAudioChannels) *
+                  sizeof(int16_t),
+              0);
+          session_encoder->encodeAudioFrame(silence, audio_pts_90k,
+                                            /*is_silence_pad=*/true);
+          audio_samples_emitted += kAudioSamplesPerFrame;
+          audio_frames_this_tick = 1;
+        }
       }
     }
 
