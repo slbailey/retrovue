@@ -134,7 +134,21 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // P3.1a: Live producer for real-frame decoding (Input Bus A).
   std::unique_ptr<producers::IProducer> live_;
-  int64_t live_ticks_ = 0;  // Engine-owned tick counter for live bus
+
+  // INV-BLOCK-WALLFENCE-001: Wall-clock authoritative block fence.
+  // block_fence_frame_ is the absolute session frame index at which the
+  // current block's scheduled wall-clock end is reached.  INT64_MAX = no block.
+  int64_t block_fence_frame_ = INT64_MAX;
+  // UTC epoch (ms since Unix epoch) recorded at session start.  Used to map
+  // FedBlock::end_utc_ms to a session frame index.
+  int64_t session_epoch_utc_ms_ = 0;
+
+  // INV-FRAME-BUDGET-002: Remaining output frames for the current block.
+  // Initialized to FramesPerBlock() when a block becomes live.
+  // Decremented by exactly 1 per emitted frame (real, freeze, or pad).
+  // Block completion triggers when this reaches 0.
+  // Accessed only from the Run() thread — no mutex required.
+  int64_t remaining_block_frames_ = 0;
 
   // P3.1b: Preview producer (preloaded in background, Input Bus B).
   std::unique_ptr<producers::IProducer> preview_;

@@ -3327,6 +3327,9 @@ class BlockPlanProducer(Producer):
         # INV-FEED-EXACTLY-ONCE: Track fed blocks to prevent duplicates
         self._fed_block_ids: set[str] = set()
 
+        # INV-WALLCLOCK-FENCE-002: Track active (seeded/fed, not yet completed) blocks
+        self._in_flight_block_ids: set[str] = set()
+
         # Block generation state
         self._block_index = 0
         self._next_block_start_ms = 0
@@ -3459,6 +3462,10 @@ class BlockPlanProducer(Producer):
                 # INV-JIP-BP-007: Set cursor to JIP entry before seeding
                 self._block_index = jip_entry_index
 
+                # INV-WALLCLOCK-FENCE-005: Anchor block timestamps to real UTC
+                self._next_block_start_ms = join_utc_ms
+                self._in_flight_block_ids.clear()
+
                 # Generate and seed initial 2 blocks
                 # INV-JIP-BP-005/006: Only block_a carries JIP offset
                 block_a = self._generate_next_block(
@@ -3470,6 +3477,10 @@ class BlockPlanProducer(Producer):
 
                 if not self._session.seed(block_a, block_b):
                     raise RuntimeError("PlayoutSession.seed() failed")
+
+                # INV-WALLCLOCK-FENCE-002: Track seeded blocks as active
+                self._in_flight_block_ids.add(block_a.block_id)
+                self._in_flight_block_ids.add(block_b.block_id)
 
                 # Feed a third block to maintain 2-block lookahead
                 # INV-FEED-QUEUE-001: _try_feed_block handles QUEUE_FULL
@@ -3681,6 +3692,8 @@ class BlockPlanProducer(Producer):
         if self._session and self._session.feed(block):
             self._advance_cursor(block)
             self._pending_block = None
+            # INV-WALLCLOCK-FENCE-002: Track fed block as active
+            self._in_flight_block_ids.add(block.block_id)
             return True
         else:
             # INV-FEED-QUEUE-002: Store for retry on next BLOCK_COMPLETE
@@ -3719,7 +3732,18 @@ class BlockPlanProducer(Producer):
                     self.channel_id, block_id
                 )
                 return
+
+            # INV-WALLCLOCK-FENCE-002: Only active blocks may complete
+            if block_id not in self._in_flight_block_ids:
+                self._logger.warning(
+                    "INV-WALLCLOCK-FENCE-002: Channel %s: BlockCompleted for "
+                    "unknown/inactive block %s, discarding",
+                    self.channel_id, block_id
+                )
+                return
+
             self._fed_block_ids.add(block_id)
+            self._in_flight_block_ids.discard(block_id)
 
             self._logger.debug(
                 "Channel %s: Block %s completed, feeding next",

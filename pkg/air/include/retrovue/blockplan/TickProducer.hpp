@@ -86,6 +86,10 @@ class TickProducer : public producers::IProducer,
   bool HasDecoder() const override;
   double GetInputFPS() const override;
 
+  // INV-BLOCK-PRIME-001/006: Decode first frame into held slot.
+  // Called by ProducerPreloader::Worker after AssignBlock completes.
+  void PrimeFirstFrame();
+
   // --- IProducer ---
   bool start() override;
   void stop() override;
@@ -125,6 +129,9 @@ class TickProducer : public producers::IProducer,
   int64_t frame_duration_ms_;            // Output frame duration (for fence/frames_per_block)
   double input_fps_ = 0.0;              // Detected input FPS (0 = unknown)
   int64_t input_frame_duration_ms_ = 0;  // Content advance per decode (matches input cadence)
+
+  // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
+  std::optional<FrameData> primed_frame_;
 };
 
 }  // namespace retrovue::blockplan
