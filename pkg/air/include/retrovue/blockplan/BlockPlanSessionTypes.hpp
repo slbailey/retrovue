@@ -100,6 +100,13 @@ inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
   fps_den = 1;
 }
 
+struct BufferConfig {
+  int video_target_depth_frames = 0;  // 0 = auto: max(1, fps * 0.5)
+  int video_low_water_frames = 0;     // 0 = auto: max(1, target / 3)
+  int audio_target_depth_ms = 1000;
+  int audio_low_water_ms = 0;         // 0 = auto: max(1, target / 3)
+};
+
 struct BlockPlanSessionContext {
   int32_t channel_id = 0;
   int fd = -1;           // UDS file descriptor for output
@@ -111,6 +118,8 @@ struct BlockPlanSessionContext {
   // fence_tick = ceil(delta_ms * fps_num / (fps_den * 1000))
   int64_t fps_num = 30;
   int64_t fps_den = 1;
+
+  BufferConfig buffer_config;
 
   std::atomic<bool> stop_requested{false};
 

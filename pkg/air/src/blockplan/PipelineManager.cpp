@@ -6,6 +6,7 @@
 
 #include "retrovue/blockplan/PipelineManager.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -15,7 +16,9 @@
 #include <utility>
 #include <vector>
 
+#include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "retrovue/blockplan/OutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
@@ -360,10 +363,39 @@ void PipelineManager::Run() {
       std::chrono::system_clock::now().time_since_epoch()).count();
 
   // ========================================================================
-  // 4. AUDIO PTS TRACKING
+  // 4. LOOKAHEAD BUFFERS + AUDIO PTS TRACKING
   // ========================================================================
-  static constexpr int kAudioSamplesPerFrame = 1024;
+  static constexpr int kAudioSamplesPerFrame = 1024;  // pad silence size
   int64_t audio_samples_emitted = 0;
+
+  // INV-AUDIO-LOOKAHEAD-001: Create lookahead buffer for broadcast-grade audio.
+  // Audio frames from decode are pushed here; tick loop pops exact per-tick
+  // sample counts.  Underflow = hard fault (session stop).
+  const auto& bcfg = ctx_->buffer_config;
+  int audio_target = bcfg.audio_target_depth_ms;  // default: 1000
+  int audio_low = bcfg.audio_low_water_ms > 0
+      ? bcfg.audio_low_water_ms
+      : std::max(1, audio_target / 3);
+  audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+      audio_target, buffer::kHouseAudioSampleRate,
+      buffer::kHouseAudioChannels, audio_low);
+
+  // Track audio ticks and buffer-emitted samples separately from pad samples.
+  // Used for exact per-tick sample computation (drift-free rational arithmetic).
+  int64_t audio_ticks_emitted = 0;
+  int64_t audio_buffer_samples_emitted = 0;
+
+  // INV-VIDEO-LOOKAHEAD-001: Create video lookahead buffer.
+  // Background fill thread decodes ahead; tick loop pops one frame per tick.
+  // Target depth: ~500ms at output FPS (e.g. 15 frames at 30fps).
+  int video_target_depth = bcfg.video_target_depth_frames > 0
+      ? bcfg.video_target_depth_frames
+      : static_cast<int>(std::max(1.0, ctx_->fps * 0.5));
+  int video_low_water = bcfg.video_low_water_frames > 0
+      ? bcfg.video_low_water_frames
+      : std::max(1, video_target_depth / 3);
+  video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+      video_target_depth, video_low_water);
 
   // ========================================================================
   // 5. TRY LOADING FIRST BLOCK (before main loop)
@@ -430,7 +462,11 @@ void PipelineManager::Run() {
     if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
     block_acc.Reset(live_tp()->GetBlock().block_id);
     emit_block_start("queue");
-    InitCadence(live_tp());
+    // INV-VIDEO-LOOKAHEAD-001: Start fill thread (cadence resolved inside).
+    video_buffer_->StartFilling(
+        live_tp(), audio_buffer_.get(),
+        live_tp()->GetInputFPS(), ctx_->fps,
+        &ctx_->stop_requested);
   }
   // P3.3: Seam transition tracking
   std::string prev_completed_block_id;
@@ -474,6 +510,11 @@ void PipelineManager::Run() {
     // ==================================================================
     if (session_frame_index >= block_fence_frame_ &&
         live_tp()->GetState() == ITickProducer::State::kReady) {
+
+      // INV-VIDEO-LOOKAHEAD-001: Stop fill thread and flush buffer.
+      // Remaining frames are from the outgoing block; the fence tick
+      // belongs to the NEW block.
+      video_buffer_->StopFilling(/*flush=*/true);
 
       // Snapshot outgoing block before A/B swap.
       const FedBlock outgoing_block = live_tp()->GetBlock();
@@ -598,7 +639,11 @@ void PipelineManager::Run() {
         // P3.3: Reset accumulator for new block
         block_acc.Reset(live_tp()->GetBlock().block_id);
         emit_block_start("preview");
-        InitCadence(live_tp());
+        // INV-VIDEO-LOOKAHEAD-001: Start fill thread with new producer.
+        video_buffer_->StartFilling(
+            live_tp(), audio_buffer_.get(),
+            live_tp()->GetInputFPS(), ctx_->fps,
+            &ctx_->stop_requested);
 
         // Immediately kick off preload for the following block
         TryKickoffPreviewPreload();
@@ -607,116 +652,34 @@ void PipelineManager::Run() {
         live_tp()->Reset();
         block_fence_frame_ = INT64_MAX;
         past_fence = true;
-        ResetCadence();
+        // Video buffer already stopped+flushed above.
       }
     }
 
     bool is_pad = true;
-    std::optional<FrameData> frame_data;
-    bool did_decode = false;
+    VideoBufferFrame vbf;
     int audio_frames_this_tick = 0;
 
-    // ================================================================
-    // Cadence gate: decide whether to decode or repeat this tick.
-    // ratio = input_fps / output_fps (e.g. 0.7992 for 23.976→30).
-    // decode_budget accumulates ratio each tick; decode when >= 1.0.
-    // This produces a deterministic 4:1 dup pattern for 23.976→30.
-    // ================================================================
-    bool should_decode = true;
-    if (cadence_active_) {
-      decode_budget_ += cadence_ratio_;
-      if (decode_budget_ >= 1.0) {
-        decode_budget_ -= 1.0;
-        should_decode = true;
-      } else {
-        should_decode = false;
-      }
-    }
-
-    // INV-TICK-DEADLINE-DISCIPLINE-001 R2: When late, MUST NOT block on decode.
-    // Force repeat/freeze path — TryGetFrame() is never called when late.
-    if (tick_is_late) {
-      should_decode = false;
-    }
-
-    // INV-BLOCK-PRIME-002 + R2: Primed frames are pre-decoded and non-blocking
-    // to retrieve. They qualify as "already available without blocking" and
-    // may be selected even on late ticks.
-    if (!should_decode &&
-        live_tp()->GetState() == ITickProducer::State::kReady &&
-        live_tp()->HasPrimedFrame()) {
-      should_decode = true;
-    }
-
-    // TRY REAL FRAME from live producer (engine owns the tick)
-    if (live_tp()->GetState() == ITickProducer::State::kReady) {
-      if (should_decode) {
-        frame_data = live_tp()->TryGetFrame();  // Producer reacts
-        if (frame_data) {
-          // Save for potential repeat on next tick
-          last_decoded_video_ = frame_data->video;
-          have_last_decoded_video_ = true;
-
-          session_encoder->encodeFrame(frame_data->video, video_pts_90k);
-          for (auto& af : frame_data->audio) {
-            session_encoder->encodeAudioFrame(af, audio_pts_90k, false);
-            audio_samples_emitted += af.nb_samples;
-            audio_pts_90k =
-                (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
-            audio_frames_this_tick++;
-            // Save last audio frame for hold-last on late-tick repeats
-            last_decoded_audio_ = af;
-            have_last_decoded_audio_ = true;
-          }
-          is_pad = false;
-          did_decode = true;
-        } else if (have_last_decoded_video_) {
-          // Content exhausted but block not finished — hold last frame
-          // instead of emitting pad (black). This prevents flicker at
-          // end-of-asset when rounding causes content to run out a few
-          // hundred ticks before the fence fires.
-          session_encoder->encodeFrame(last_decoded_video_, video_pts_90k);
-          is_pad = false;
-        }
-      } else if (have_last_decoded_video_) {
-        // Repeat tick: re-encode last video frame with new output PTS.
-        session_encoder->encodeFrame(last_decoded_video_, video_pts_90k);
+    // ==================================================================
+    // INV-VIDEO-LOOKAHEAD-001: Pop pre-decoded video from buffer.
+    // The fill thread handles cadence (decode vs repeat) and hold-last.
+    // Late ticks consume buffered frames normally — no decode suppression.
+    // ==================================================================
+    if (video_buffer_->IsPrimed()) {
+      if (video_buffer_->TryPopFrame(vbf)) {
+        session_encoder->encodeFrame(vbf.video, video_pts_90k);
         is_pad = false;
-        // did_decode stays false
-
-        // Late ticks: emit tick-aligned audio so the audio timeline advances
-        // exactly one tick.  Without this, video PTS advances but audio PTS
-        // freezes, causing progressive A/V desync.
-        //
-        // Hold-last: re-emit the last decoded audio frame (masked to current
-        // PTS) to avoid an audible silence blip.  Falls back to silence only
-        // if no audio has been decoded yet (session-start edge case).
-        //
-        // Cadence repeats (should_decode=false due to input_fps < output_fps)
-        // intentionally skip audio — the content stream has no extra audio
-        // at the higher output rate.  Only late ticks need the correction.
-        if (tick_is_late) {
-          if (have_last_decoded_audio_) {
-            session_encoder->encodeAudioFrame(last_decoded_audio_,
-                                              audio_pts_90k, false);
-            audio_samples_emitted += last_decoded_audio_.nb_samples;
-          } else {
-            // No audio decoded yet — silence is the only option.
-            buffer::AudioFrame silence;
-            silence.sample_rate = buffer::kHouseAudioSampleRate;
-            silence.channels = buffer::kHouseAudioChannels;
-            silence.nb_samples = kAudioSamplesPerFrame;
-            silence.data.resize(
-                static_cast<size_t>(kAudioSamplesPerFrame *
-                                    buffer::kHouseAudioChannels) *
-                    sizeof(int16_t),
-                0);
-            session_encoder->encodeAudioFrame(silence, audio_pts_90k,
-                                              /*is_silence_pad=*/true);
-            audio_samples_emitted += kAudioSamplesPerFrame;
-          }
-          audio_frames_this_tick = 1;
-        }
+      } else {
+        // UNDERFLOW — hard fault: session stop.
+        std::cerr << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
+                  << " frame=" << session_frame_index
+                  << " buffer_depth=" << video_buffer_->DepthFrames()
+                  << " total_pushed=" << video_buffer_->TotalFramesPushed()
+                  << " total_popped=" << video_buffer_->TotalFramesPopped()
+                  << std::endl;
+        { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
+        ctx_->stop_requested.store(true, std::memory_order_release);
+        break;
       }
     }
 
@@ -730,26 +693,106 @@ void PipelineManager::Run() {
       }
     }
 
-    // Per-tick cadence diagnostic (metric 2: decoded, decode_budget, audio_frames)
-    // Rate-limited: log every 300 frames (~10 seconds at 30fps) when cadence active
-    if (cadence_active_ && session_frame_index % 300 == 0) {
-      std::cout << "[PipelineManager] CADENCE_TICK: frame=" << session_frame_index
-                << " decoded=" << (did_decode ? 1 : 0)
-                << " decode_budget=" << decode_budget_
-                << " audio_frames=" << audio_frames_this_tick
-                << " video_pts_90k=" << video_pts_90k
-                << " audio_pts_90k=" << audio_pts_90k
-                << std::endl;
+    // ==================================================================
+    // INV-AUDIO-LOOKAHEAD-001: Centralized audio emission from buffer.
+    // On every non-pad tick, pop exactly one tick's worth of samples
+    // from the AudioLookaheadBuffer.  Audio is only pushed to the buffer
+    // on decode ticks (cadence repeats produce no audio); the buffer
+    // accumulates enough to cover repeat ticks.
+    // Underflow = hard fault → session stop.
+    // ==================================================================
+    if (!is_pad && audio_buffer_->IsPrimed()) {
+      // Exact per-tick sample count via rational arithmetic (drift-free).
+      // samples_this_tick = floor((N+1)*sr*fps_den/fps_num)
+      //                   - floor(N*sr*fps_den/fps_num)
+      int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
+      int64_t next_total =
+          ((audio_ticks_emitted + 1) * sr * ctx_->fps_den) / ctx_->fps_num;
+      int samples_this_tick =
+          static_cast<int>(next_total - audio_buffer_samples_emitted);
+
+      buffer::AudioFrame audio_out;
+      if (audio_buffer_->TryPopSamples(samples_this_tick, audio_out)) {
+        session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, false);
+        audio_samples_emitted += samples_this_tick;
+        audio_buffer_samples_emitted += samples_this_tick;
+        audio_ticks_emitted++;
+        audio_frames_this_tick = 1;
+      } else {
+        // UNDERFLOW — hard fault: detach viewer, stop session.
+        std::cerr << "[PipelineManager] INV-AUDIO-LOOKAHEAD-001: UNDERFLOW"
+                  << " frame=" << session_frame_index
+                  << " buffer_depth_ms=" << audio_buffer_->DepthMs()
+                  << " needed=" << samples_this_tick
+                  << " total_pushed=" << audio_buffer_->TotalSamplesPushed()
+                  << " total_popped=" << audio_buffer_->TotalSamplesPopped()
+                  << std::endl;
+        { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
+        ctx_->stop_requested.store(true, std::memory_order_release);
+        break;
+      }
     }
 
-    // Log SocketSink buffer state periodically (every ~10s = 300 ticks at 30fps)
-    if (session_frame_index % 300 == 0 && socket_sink) {
-      std::cout << "[PipelineManager] sink_buffer="
-                << socket_sink->GetCurrentBufferSize()
-                << "/" << socket_sink->GetBufferCapacity()
-                << " delivered=" << socket_sink->GetBytesDelivered()
-                << " errors=" << socket_sink->GetWriteErrors()
-                << std::endl;
+    // Consolidated heartbeat — every ~10s (300 ticks at 30fps).
+    if (session_frame_index % 300 == 0) {
+      // Snapshot live metrics under metrics_mutex_.
+      {
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        if (video_buffer_) {
+          metrics_.video_buffer_depth_frames = video_buffer_->DepthFrames();
+          metrics_.video_buffer_underflows = video_buffer_->UnderflowCount();
+          metrics_.video_buffer_frames_pushed = video_buffer_->TotalFramesPushed();
+          metrics_.video_buffer_frames_popped = video_buffer_->TotalFramesPopped();
+          metrics_.decode_latency_p95_us = video_buffer_->DecodeLatencyP95Us();
+          metrics_.decode_latency_mean_us = video_buffer_->DecodeLatencyMeanUs();
+          metrics_.video_refill_rate_fps = video_buffer_->RefillRateFps();
+          metrics_.video_low_water_frames = video_buffer_->LowWaterFrames();
+        }
+        if (audio_buffer_) {
+          metrics_.audio_buffer_depth_ms = audio_buffer_->DepthMs();
+          metrics_.audio_buffer_underflows = audio_buffer_->UnderflowCount();
+          metrics_.audio_buffer_samples_pushed = audio_buffer_->TotalSamplesPushed();
+          metrics_.audio_buffer_samples_popped = audio_buffer_->TotalSamplesPopped();
+          metrics_.audio_low_water_ms = audio_buffer_->LowWaterMs();
+        }
+      }
+
+      // Single consolidated log line.
+      std::cout << "[PipelineManager] HEARTBEAT"
+                << " frame=" << session_frame_index;
+      if (video_buffer_) {
+        std::cout << " video=" << video_buffer_->DepthFrames()
+                  << "/" << video_buffer_->TargetDepthFrames()
+                  << " refill=" << video_buffer_->RefillRateFps() << "fps"
+                  << " decode_p95=" << video_buffer_->DecodeLatencyP95Us() << "us";
+      }
+      if (audio_buffer_) {
+        std::cout << " audio=" << audio_buffer_->DepthMs() << "ms"
+                  << "/" << audio_buffer_->TargetDepthMs() << "ms";
+      }
+      if (socket_sink) {
+        std::cout << " sink=" << socket_sink->GetCurrentBufferSize()
+                  << "/" << socket_sink->GetBufferCapacity();
+      }
+      std::cout << std::endl;
+
+      // Low-water warnings (throttled to heartbeat interval).
+      if (video_buffer_ && video_buffer_->IsBelowLowWater()) {
+        std::cerr << "[PipelineManager] LOW_WATER video="
+                  << video_buffer_->DepthFrames()
+                  << " threshold=" << video_buffer_->LowWaterFrames()
+                  << std::endl;
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        metrics_.video_low_water_events++;
+      }
+      if (audio_buffer_ && audio_buffer_->IsBelowLowWater()) {
+        std::cerr << "[PipelineManager] LOW_WATER audio="
+                  << audio_buffer_->DepthMs() << "ms"
+                  << " threshold=" << audio_buffer_->LowWaterMs() << "ms"
+                  << std::endl;
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        metrics_.audio_low_water_events++;
+      }
     }
 
     // P3.2: Emit frame fingerprint for seam verification
@@ -760,10 +803,10 @@ void PipelineManager::Run() {
       if (live_tp()->GetState() == ITickProducer::State::kReady) {
         fp.active_block_id = live_tp()->GetBlock().block_id;
       }
-      if (!is_pad && frame_data) {
-        fp.asset_uri = frame_data->asset_uri;
-        fp.asset_offset_ms = frame_data->block_ct_ms;
-        const auto& vid = frame_data->video;
+      if (!is_pad && vbf.was_decoded) {
+        fp.asset_uri = vbf.asset_uri;
+        fp.asset_offset_ms = vbf.block_ct_ms;
+        const auto& vid = vbf.video;
         if (!vid.data.empty()) {
           size_t y_size = static_cast<size_t>(vid.width * vid.height);
           fp.y_crc32 = CRC32YPlane(vid.data.data(),
@@ -774,15 +817,15 @@ void PipelineManager::Run() {
     }
 
     // P3.3: Accumulate frame into current block summary
-    // ct_ms = -1 sentinel when no frame_data (cadence repeat or hold-last-frame).
+    // ct_ms = -1 sentinel when vbf is cadence repeat or hold-last.
     // Accumulator only updates CT tracking when ct_ms >= 0.
     if (live_tp()->GetState() == ITickProducer::State::kReady &&
         !block_acc.block_id.empty()) {
       std::string uri;
       int64_t ct_ms = -1;
-      if (!is_pad && frame_data) {
-        uri = frame_data->asset_uri;
-        ct_ms = frame_data->block_ct_ms;
+      if (!is_pad && vbf.was_decoded) {
+        uri = vbf.asset_uri;
+        ct_ms = vbf.block_ct_ms;
       }
       block_acc.AccumulateFrame(session_frame_index, is_pad, uri, ct_ms);
     }
@@ -830,7 +873,11 @@ void PipelineManager::Run() {
         // P3.3: Reset accumulator for new block
         block_acc.Reset(live_tp()->GetBlock().block_id);
         emit_block_start((had_preview && !preview_) ? "preview" : "queue");
-        InitCadence(live_tp());
+        // INV-VIDEO-LOOKAHEAD-001: Start fill thread with loaded producer.
+        video_buffer_->StartFilling(
+            live_tp(), audio_buffer_.get(),
+            live_tp()->GetInputFPS(), ctx_->fps,
+            &ctx_->stop_requested);
         fence_pad_counter = 0;
 
         past_fence = false;
@@ -881,6 +928,11 @@ void PipelineManager::Run() {
     termination_reason = "stopped";
   }
 
+  // INV-VIDEO-LOOKAHEAD-001: Stop video fill thread before resetting producers.
+  if (video_buffer_) {
+    video_buffer_->StopFilling(/*flush=*/true);
+  }
+
   // Cancel preloader and reset sources before closing encoder
   preloader_->Cancel();
   preview_.reset();
@@ -914,6 +966,25 @@ void PipelineManager::Run() {
         std::chrono::duration_cast<std::chrono::milliseconds>(
             session_end_time - session_start_time).count();
     metrics_.continuous_mode_active = false;
+
+    // INV-AUDIO-LOOKAHEAD-001: Capture audio buffer metrics at session end.
+    if (audio_buffer_) {
+      metrics_.audio_buffer_depth_ms = audio_buffer_->DepthMs();
+      metrics_.audio_buffer_underflows = audio_buffer_->UnderflowCount();
+      metrics_.audio_buffer_samples_pushed = audio_buffer_->TotalSamplesPushed();
+      metrics_.audio_buffer_samples_popped = audio_buffer_->TotalSamplesPopped();
+    }
+
+    // INV-VIDEO-LOOKAHEAD-001: Capture video buffer metrics at session end.
+    if (video_buffer_) {
+      metrics_.video_buffer_depth_frames = video_buffer_->DepthFrames();
+      metrics_.video_buffer_underflows = video_buffer_->UnderflowCount();
+      metrics_.video_buffer_frames_pushed = video_buffer_->TotalFramesPushed();
+      metrics_.video_buffer_frames_popped = video_buffer_->TotalFramesPopped();
+      metrics_.decode_latency_p95_us = video_buffer_->DecodeLatencyP95Us();
+      metrics_.decode_latency_mean_us = video_buffer_->DecodeLatencyMeanUs();
+      metrics_.video_refill_rate_fps = video_buffer_->RefillRateFps();
+    }
   }
 
   std::cout << "[PipelineManager] Thread exiting: frames_emitted="
@@ -924,47 +995,6 @@ void PipelineManager::Run() {
     session_ended_fired_ = true;
     callbacks_.on_session_ended(termination_reason);
   }
-}
-
-// =============================================================================
-// InitCadence — detect input/output FPS mismatch and activate frame repeat
-// =============================================================================
-
-void PipelineManager::InitCadence(ITickProducer* tp) {
-  double input_fps = tp->GetInputFPS();
-  double output_fps = ctx_->fps;
-
-  // Log once per asset open (metric 1: input_fps, output_fps)
-  std::cout << "[PipelineManager] FPS_CADENCE: input_fps=" << input_fps
-            << " output_fps=" << output_fps;
-
-  // Activate cadence only when input is meaningfully slower than output.
-  // Tolerance: 2% — avoids activation for 29.97 vs 30.
-  if (input_fps > 0.0 && input_fps < output_fps * 0.98) {
-    cadence_active_ = true;
-    cadence_ratio_ = input_fps / output_fps;
-    decode_budget_ = 1.0;  // Guarantees first tick decodes
-    have_last_decoded_video_ = false;
-    have_last_decoded_audio_ = false;
-    std::cout << " cadence=ACTIVE ratio=" << cadence_ratio_ << std::endl;
-  } else {
-    cadence_active_ = false;
-    cadence_ratio_ = 0.0;
-    decode_budget_ = 0.0;
-    have_last_decoded_video_ = false;
-    have_last_decoded_audio_ = false;
-    std::cout << " cadence=OFF" << std::endl;
-  }
-}
-
-void PipelineManager::ResetCadence() {
-  cadence_active_ = false;
-  cadence_ratio_ = 0.0;
-  decode_budget_ = 0.0;
-  have_last_decoded_video_ = false;
-  last_decoded_video_ = buffer::Frame{};
-  have_last_decoded_audio_ = false;
-  last_decoded_audio_ = buffer::AudioFrame{};
 }
 
 void PipelineManager::SetPreloaderDelayHook(
