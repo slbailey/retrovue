@@ -85,6 +85,7 @@ class TickProducer : public producers::IProducer,
   int64_t FramesPerBlock() const override;
   bool HasDecoder() const override;
   double GetInputFPS() const override;
+  bool HasPrimedFrame() const override;
 
   // INV-BLOCK-PRIME-001/006: Decode first frame into held slot.
   // Called by ProducerPreloader::Worker after AssignBlock completes.

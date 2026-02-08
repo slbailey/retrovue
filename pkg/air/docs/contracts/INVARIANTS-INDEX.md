@@ -164,6 +164,15 @@ Zero-decode-latency priming at block boundaries. See [INV-BLOCK-LOOKAHEAD-PRIMIN
 | **INV-BLOCK-PRIME-006** | Priming is event-driven — executes after AssignBlock, no polling or timers | `ProducerPreloader` | Coordination |
 | **INV-BLOCK-PRIME-007** | Primed frame metadata integrity — PTS, audio, asset_uri match normal decode | `TickProducer` | Coordination |
 
+### Tick Deadline Enforcement (Derived)
+
+These invariants ensure that tick progression remains wall-clock anchored so that block boundary authorities defined above are enforced even when execution falls behind. Tick deadlines are derived from the session epoch and rational FPS; they do not define schedule semantics.
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-TICK-DEADLINE-DISCIPLINE-001** | Hard deadline discipline: each tick anchored to session epoch; late ticks emit fallback, no catch-up bursts, no drift. Contract: [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-TICK-MONOTONIC-UTC-ANCHOR-001** | Monotonic clock enforcement for tick deadlines; UTC remains schedule authority but enforcement uses monotonic time to resist NTP/system-time steps. Contract: [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) | `PipelineManager` | Coordination (Broadcast-Grade) |
+
 **Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
 
 ---
@@ -241,6 +250,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Component contracts** | [README.md](semantics/README.md) |
 | **Broadcast-grade output** (unconditional emission) | [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) · [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) · [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) |
 | **Block boundary model** (fence, budget, priming) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
+| **Tick deadline enforcement** (deadline discipline, monotonic anchor) | [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) · [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |

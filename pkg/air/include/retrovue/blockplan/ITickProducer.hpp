@@ -43,6 +43,10 @@ class ITickProducer {
   // Return the detected input (source) FPS from the decoder.
   // Returns 0.0 if unknown (no decoder, probe failed, etc.).
   virtual double GetInputFPS() const = 0;
+
+  // INV-BLOCK-PRIME-002: True when a pre-decoded primed frame is available.
+  // Retrieving a primed frame via TryGetFrame() is non-blocking.
+  virtual bool HasPrimedFrame() const = 0;
 };
 
 }  // namespace retrovue::blockplan

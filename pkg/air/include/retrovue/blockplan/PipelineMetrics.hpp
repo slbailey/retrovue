@@ -36,6 +36,9 @@ struct PipelineMetrics {
   int32_t next_preload_failed_count = 0;
   int64_t fence_pad_frames_total = 0;
 
+  // ---- Tick Deadline Discipline (INV-TICK-DEADLINE-DISCIPLINE-001) ----
+  int64_t late_ticks_total = 0;
+
   // ---- Frame Cadence ----
   int64_t max_inter_frame_gap_us = 0;
   int64_t sum_inter_frame_gap_us = 0;
@@ -108,6 +111,12 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_fence_pad_frames_total counter\n";
     oss << "air_continuous_fence_pad_frames_total{channel=\"" << ch << "\"} "
         << fence_pad_frames_total << "\n";
+
+    // Tick deadline discipline
+    oss << "\n# HELP air_continuous_late_ticks_total Ticks where monotonic now exceeded deadline\n";
+    oss << "# TYPE air_continuous_late_ticks_total counter\n";
+    oss << "air_continuous_late_ticks_total{channel=\"" << ch << "\"} "
+        << late_ticks_total << "\n";
 
     // Frame cadence
     oss << "\n# HELP air_continuous_max_inter_frame_gap_us Maximum inter-frame gap (microseconds)\n";
