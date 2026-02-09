@@ -31,10 +31,23 @@ import time
 import types
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import grpc
+
+
+class FeedResult(Enum):
+    """Result of a feed() attempt to AIR.
+
+    Distinguishes QUEUE_FULL (capacity, not an error) from ERROR
+    (gRPC/transport failure). Enables credit-based flow control
+    in BlockPlanProducer.
+    """
+    ACCEPTED = "accepted"
+    QUEUE_FULL = "queue_full"
+    ERROR = "error"
 
 
 def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
@@ -454,20 +467,22 @@ class PlayoutSession:
                 logger.error(f"[PlayoutSession:{self.channel_id}] Seed RPC error: {e}")
                 return False
 
-    def feed(self, block: BlockPlan) -> bool:
+    def feed(self, block: BlockPlan) -> FeedResult:
         """
         Feed the next block to the executor queue.
 
         Call this when a block completes to maintain the 2-block window.
         Block must be contiguous with the current pending block.
 
-        INV-FEED-NO-FEED-AFTER-END: Returns False if session has ended.
+        INV-FEED-NO-FEED-AFTER-END: Returns ERROR if session has ended.
 
         Args:
             block: Next block to feed
 
         Returns:
-            True if feeding succeeded
+            FeedResult.ACCEPTED if feeding succeeded,
+            FeedResult.QUEUE_FULL if AIR's queue is full (capacity, not error),
+            FeedResult.ERROR on gRPC/transport failure or invalid state.
         """
         with self._lock:
             # INV-FEED-NO-FEED-AFTER-END: Defense-in-depth guard
@@ -476,11 +491,11 @@ class PlayoutSession:
                     f"[PlayoutSession:{self.channel_id}] INV-FEED-NO-FEED-AFTER-END: "
                     f"Cannot feed after session ended (reason={self._state.session_end_reason})"
                 )
-                return False
+                return FeedResult.ERROR
 
             if not self._state.is_running:
                 logger.error(f"[PlayoutSession:{self.channel_id}] Cannot feed - not running")
-                return False
+                return FeedResult.ERROR
 
             try:
                 request = playout_pb2.FeedBlockPlanRequest(
@@ -493,22 +508,23 @@ class PlayoutSession:
                 if response.success:
                     self._state.blocks_fed += 1
                     logger.info(f"[PlayoutSession:{self.channel_id}] Fed: {block.block_id}")
-                    return True
+                    return FeedResult.ACCEPTED
                 else:
                     if response.queue_full:
                         logger.warning(
                             f"[PlayoutSession:{self.channel_id}] Feed skipped - queue full"
                         )
+                        return FeedResult.QUEUE_FULL
                     else:
                         logger.error(
                             f"[PlayoutSession:{self.channel_id}] Feed failed: "
                             f"{response.message} (code={response.result_code})"
                         )
-                    return False
+                        return FeedResult.ERROR
 
             except grpc.RpcError as e:
                 logger.error(f"[PlayoutSession:{self.channel_id}] Feed RPC error: {e}")
-                return False
+                return FeedResult.ERROR
 
     def stop(self, reason: str = "requested") -> bool:
         """

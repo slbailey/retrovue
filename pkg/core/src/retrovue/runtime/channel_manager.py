@@ -134,7 +134,15 @@ from .metrics import (
     prefeed_lead_time_violations_total,
     switch_lead_time_ms,
     switch_lead_time_violations_total,
+    feed_ahead_horizon_current_ms,
+    feed_ahead_horizon_target_ms,
+    feed_ahead_ready_by_miss_total,
+    feed_ahead_miss_lateness_ms,
+    feed_credits_at_decision,
+    feed_error_backoff_total,
 )
+
+from .playout_session import FeedResult
 
 
 # ----------------------------------------------------------------------
@@ -3274,6 +3282,30 @@ class Phase8AirProducer(Producer):
 # =============================================================================
 
 
+class _FeedState(Enum):
+    """Feed-ahead controller state machine.
+
+    CREATED → SEEDED → RUNNING → DRAINING
+    """
+    CREATED = auto()   # Before seed
+    SEEDED = auto()    # After seed, before first BlockCompleted
+    RUNNING = auto()   # Active feeding (maintain runway >= horizon)
+    DRAINING = auto()  # Session ending, no new feeds
+
+
+@dataclass(frozen=True)
+class _AsRunAnnotation:
+    """Lightweight as-run annotation for block-level events.
+
+    In-process only. Will be piped into the full AsRunLogger
+    when that integration lands.
+    """
+    annotation_type: str       # e.g. "missed_ready_by"
+    block_id: str
+    timestamp_utc_ms: int
+    metadata: dict[str, Any]   # e.g. {"lateness_ms": 3200}
+
+
 class BlockPlanProducer(Producer):
     """
     Producer that uses BlockPlan-based execution via PlayoutSession.
@@ -3295,6 +3327,11 @@ class BlockPlanProducer(Producer):
 
     # Block duration in milliseconds (configurable via configuration)
     DEFAULT_BLOCK_DURATION_MS = 30_000  # 30 seconds
+
+    # Credit-based flow control constants (INV-FEED-CREDIT-*)
+    AIR_QUEUE_DEPTH = 2                # AIR block queue: one executing, one pending
+    ERROR_BACKOFF_BASE_TICKS = 4       # ~1s at 3.75 Hz
+    ERROR_BACKOFF_MAX_TICKS = 112      # ~30s at 3.75 Hz
 
     def __init__(
         self,
@@ -3339,6 +3376,31 @@ class BlockPlanProducer(Producer):
 
         # INV-FEED-QUEUE-002: Pending block slot for QUEUE_FULL retry
         self._pending_block: "BlockPlan | None" = None
+
+        # ---- Feed-ahead controller state ----
+        self._feed_state: _FeedState = _FeedState.CREATED
+        # Max end_utc_ms of all blocks delivered to AIR (seed + feed)
+        self._max_delivered_end_utc_ms: int = 0
+        # Feed-ahead horizon: maintain this many ms of runway (configurable)
+        self._feed_ahead_horizon_ms: int = configuration.get(
+            "feed_ahead_horizon_ms", 20_000
+        )
+        # Preload budget: how far before a block's start_utc_ms it must arrive
+        # at AIR to guarantee preload completes on time. Based on observed
+        # p95/p99 decode-open-seek latency + margin.
+        self._preload_budget_ms: int = configuration.get(
+            "preload_budget_ms", 10_000
+        )
+        # Tick throttle counter (on_paced_tick runs at 30 Hz, we evaluate at ~4 Hz)
+        self._feed_tick_counter: int = 0
+        # Credit-based flow control (INV-FEED-CREDIT-*)
+        self._feed_credits: int = 0
+        self._consecutive_feed_errors: int = 0
+        self._error_backoff_remaining: int = 0
+        # Deadline miss counter (in-process, also exported to Prometheus)
+        self._ready_by_miss_count: int = 0
+        # As-run annotations (in-process; future AsRunLogger integration)
+        self._asrun_annotations: list[_AsRunAnnotation] = []
 
         # Retained playout plan for block cycling (set at start, reused on feed)
         self._playout_plan: list[dict[str, Any]] = []
@@ -3482,10 +3544,16 @@ class BlockPlanProducer(Producer):
                 self._in_flight_block_ids.add(block_a.block_id)
                 self._in_flight_block_ids.add(block_b.block_id)
 
-                # Feed a third block to maintain 2-block lookahead
-                # INV-FEED-QUEUE-001: _try_feed_block handles QUEUE_FULL
-                block_c = self._generate_next_block(playout_plan)
-                self._try_feed_block(block_c)
+                # Feed-ahead controller: enter SEEDED state.
+                # Do NOT feed block_c immediately — AIR's queue is full after seed.
+                # _feed_ahead() will fill the queue proactively after the first
+                # BlockCompleted (SEEDED→RUNNING transition).
+                self._feed_state = _FeedState.SEEDED
+                self._max_delivered_end_utc_ms = block_b.end_utc_ms
+                self._feed_credits = 0  # Queue full after seed(A, B)
+                self._consecutive_feed_errors = 0
+                self._error_backoff_remaining = 0
+                self._feed_tick_counter = 0
 
                 self._started = True
                 self.status = ProducerStatus.RUNNING
@@ -3601,6 +3669,16 @@ class BlockPlanProducer(Producer):
         self._fed_block_ids.clear()
         self._pending_block = None  # INV-FEED-QUEUE-002: Clear pending slot
 
+        # Reset feed-ahead controller state
+        self._feed_state = _FeedState.CREATED
+        self._max_delivered_end_utc_ms = 0
+        self._feed_credits = 0
+        self._consecutive_feed_errors = 0
+        self._error_backoff_remaining = 0
+        self._feed_tick_counter = 0
+        self._ready_by_miss_count = 0
+        self._asrun_annotations.clear()
+
     def _generate_next_block(
         self,
         playout_plan: list[dict[str, Any]],
@@ -3678,31 +3756,231 @@ class BlockPlanProducer(Producer):
         self._block_index += 1
         self._next_block_start_ms = block.end_utc_ms
 
-    def _try_feed_block(self, block: "BlockPlan") -> bool:
+    def _try_feed_block(self, block: "BlockPlan") -> FeedResult:
         """
-        Attempt to feed a block to AIR. On QUEUE_FULL, store in _pending_block.
+        Attempt to feed a block to AIR.
 
-        INV-FEED-QUEUE-001: Cursor advances only on success.
+        INV-FEED-QUEUE-001: Cursor advances only on ACCEPTED.
         INV-FEED-QUEUE-002: Rejected block stored in _pending_block.
-
-        Returns:
-            True if feed succeeded (cursor advanced, pending cleared).
-            False if QUEUE_FULL (block stored in _pending_block).
+        INV-FEED-CREDIT-001: Credits decremented on ACCEPTED, zeroed on QUEUE_FULL.
         """
-        if self._session and self._session.feed(block):
+        if not self._session:
+            return FeedResult.ERROR
+
+        result = self._session.feed(block)
+
+        if result == FeedResult.ACCEPTED:
             self._advance_cursor(block)
             self._pending_block = None
+            self._feed_credits = max(0, self._feed_credits - 1)
             # INV-WALLCLOCK-FENCE-002: Track fed block as active
             self._in_flight_block_ids.add(block.block_id)
-            return True
-        else:
-            # INV-FEED-QUEUE-002: Store for retry on next BLOCK_COMPLETE
+            # Success clears error state
+            self._consecutive_feed_errors = 0
+            self._error_backoff_remaining = 0
+            return FeedResult.ACCEPTED
+
+        elif result == FeedResult.QUEUE_FULL:
             self._pending_block = block
+            self._feed_credits = 0  # Authoritative correction
             self._logger.warning(
-                "INV-FEED-QUEUE-002: Block %s stored as pending (QUEUE_FULL)",
+                "INV-FEED-QUEUE-002: Block %s pending (QUEUE_FULL), credits=0",
                 block.block_id,
             )
-            return False
+            return FeedResult.QUEUE_FULL
+
+        else:  # ERROR
+            self._pending_block = block
+            self._consecutive_feed_errors += 1
+            self._error_backoff_remaining = min(
+                self.ERROR_BACKOFF_BASE_TICKS
+                * (2 ** (self._consecutive_feed_errors - 1)),
+                self.ERROR_BACKOFF_MAX_TICKS,
+            )
+            if feed_error_backoff_total is not None:
+                feed_error_backoff_total.labels(
+                    channel_id=self.channel_id
+                ).inc()
+            self._logger.error(
+                "FEED-ERROR: Block %s pending, errors=%d backoff=%d ticks",
+                block.block_id,
+                self._consecutive_feed_errors,
+                self._error_backoff_remaining,
+            )
+            return FeedResult.ERROR
+
+    def _feed_ahead(self) -> None:
+        """Deadline-driven feed-ahead: feed blocks whose ready_by deadline
+        has arrived or whose absence would let runway drop below horizon.
+
+        For each candidate block X (pending or next-to-generate):
+          ready_by_utc_ms = X.start_utc_ms - preload_budget_ms
+
+        Feed when: now_utc_ms >= ready_by_utc_ms  OR  runway < horizon.
+
+        Must be called under self._lock.
+
+        Invariants preserved:
+        - INV-FEED-QUEUE-003: Retry _pending_block before generating new
+        - INV-FEED-QUEUE-001: Cursor advances only on successful feed
+        - INV-FEED-NO-FEED-AFTER-END: Gated by _feed_state
+
+        FLOW CONTROL (credit-based, INV-FEED-CREDIT-*):
+          - Credits = available queue slots in AIR, tracked locally.
+          - If credits <= 0, return immediately (no gRPC call).
+          - BlockCompleted increments credits; ACCEPTED decrements.
+          - QUEUE_FULL authoritatively resets credits to 0.
+          - gRPC errors trigger escalating backoff; credits unchanged.
+
+        MISS POLICY (deterministic, passive):
+        When a block is fed after its start_utc_ms (now > start_utc_ms):
+          1. Do NOT reorder blocks — sequence is sacred (INV-FEED-SEQUENCE).
+          2. Do NOT swap to emergency filler — no reactive substitution.
+          3. Continue feeding ahead as normal — loop proceeds unchanged.
+          4. Allow AIR to output black+silence (PADDED_GAP) — Core does not fight it.
+          5. Record as-run annotation: missed_ready_by with block_id and lateness_ms.
+        Core's only response to a miss is observability (log, metric, annotation).
+        No control flow changes occur on miss.
+        """
+        if self._feed_state != _FeedState.RUNNING:
+            return
+        if self._session_ended or not self._started or not self._session:
+            return
+
+        # Credit gate: no slots available → return immediately.
+        # Eliminates QUEUE_FULL thrash on the tick-driven path.
+        if feed_credits_at_decision is not None:
+            feed_credits_at_decision.labels(
+                channel_id=self.channel_id
+            ).observe(self._feed_credits)
+        if self._feed_credits <= 0:
+            return
+
+        now_utc_ms = int(time.time() * 1000)
+
+        for _ in range(min(self._feed_credits, self.AIR_QUEUE_DEPTH)):
+            # INV-FEED-QUEUE-003: Retry pending before generating new
+            if self._pending_block is not None:
+                block = self._pending_block
+            else:
+                block = self._generate_next_block(self._playout_plan)
+
+            # Compute per-block deadline
+            ready_by_utc_ms = block.start_utc_ms - self._preload_budget_ms
+            runway_ms = self._compute_runway_ms()
+            deadline_due = now_utc_ms >= ready_by_utc_ms
+            runway_low = runway_ms < self._feed_ahead_horizon_ms
+
+            if not deadline_due and not runway_low:
+                # Neither trigger met — nothing to feed yet
+                self._logger.debug(
+                    "FEED_AHEAD_DECISION now=%d block=%s start=%d "
+                    "ready_by=%d reason=skip_not_due runway=%dms",
+                    now_utc_ms, block.block_id, block.start_utc_ms,
+                    ready_by_utc_ms, runway_ms,
+                )
+                return
+
+            # Determine reason for feeding
+            if deadline_due and runway_low:
+                reason = "deadline+runway"
+            elif deadline_due:
+                reason = "deadline"
+            else:
+                reason = "runway"
+
+            # MISS POLICY: detect and record, but do NOT alter control flow.
+            # AIR handles the gap via PADDED_GAP (black+silence).
+            is_miss = now_utc_ms > block.start_utc_ms
+            if is_miss:
+                lateness_ms = now_utc_ms - block.start_utc_ms
+                self._ready_by_miss_count += 1
+                self._record_miss_annotation(block.block_id, lateness_ms)
+                if feed_ahead_ready_by_miss_total is not None:
+                    feed_ahead_ready_by_miss_total.labels(
+                        channel_id=self.channel_id
+                    ).inc()
+                if feed_ahead_miss_lateness_ms is not None:
+                    feed_ahead_miss_lateness_ms.labels(
+                        channel_id=self.channel_id
+                    ).observe(lateness_ms)
+                self._logger.warning(
+                    "MISS_READY_BY channel=%s block=%s lateness_ms=%d "
+                    "ready_by=%d start=%d now=%d",
+                    self.channel_id, block.block_id, lateness_ms,
+                    ready_by_utc_ms, block.start_utc_ms, now_utc_ms,
+                )
+
+            self._logger.info(
+                "FEED_AHEAD_DECISION now=%d block=%s start=%d "
+                "ready_by=%d reason=%s runway=%dms miss=%s",
+                now_utc_ms, block.block_id, block.start_utc_ms,
+                ready_by_utc_ms, reason, runway_ms, is_miss,
+            )
+
+            result = self._try_feed_block(block)
+            if result != FeedResult.ACCEPTED:
+                self._logger.info(
+                    "FEED-AHEAD: %s for %s, credits=%d",
+                    result.value, block.block_id, self._feed_credits,
+                )
+                return
+
+            # Update runway tracker
+            self._max_delivered_end_utc_ms = max(
+                self._max_delivered_end_utc_ms, block.end_utc_ms
+            )
+
+            # Emit metrics
+            new_runway_ms = self._compute_runway_ms()
+            lead_time_ms = max(0, block.start_utc_ms - now_utc_ms)
+            if feed_ahead_horizon_current_ms is not None:
+                feed_ahead_horizon_current_ms.labels(
+                    channel_id=self.channel_id
+                ).observe(new_runway_ms)
+            if feed_ahead_horizon_target_ms is not None:
+                feed_ahead_horizon_target_ms.labels(
+                    channel_id=self.channel_id
+                ).observe(lead_time_ms)
+
+            # Credit re-check after successful feed
+            if self._feed_credits <= 0:
+                return
+
+    def _compute_runway_ms(self) -> int:
+        """How many ms of delivered content remain ahead of current UTC."""
+        if self._max_delivered_end_utc_ms == 0:
+            return 0
+        current_utc_ms = int(time.time() * 1000)
+        return max(0, self._max_delivered_end_utc_ms - current_utc_ms)
+
+    def _compute_ready_by_ms(self, block: "BlockPlan") -> int:
+        """Compute the ready_by deadline for a block.
+
+        ready_by_utc_ms = start_utc_ms - preload_budget_ms
+        """
+        return block.start_utc_ms - self._preload_budget_ms
+
+    def _record_miss_annotation(self, block_id: str, lateness_ms: int) -> None:
+        """Record a missed_ready_by as-run annotation.
+
+        Called under self._lock.
+        """
+        annotation = _AsRunAnnotation(
+            annotation_type="missed_ready_by",
+            block_id=block_id,
+            timestamp_utc_ms=int(time.time() * 1000),
+            metadata={"lateness_ms": lateness_ms},
+        )
+        self._asrun_annotations.append(annotation)
+
+    def get_asrun_annotations(self) -> list[_AsRunAnnotation]:
+        """Return a copy of the as-run annotations list.
+
+        Thread-safe. For testing and future AsRunLogger integration.
+        """
+        with self._lock:
+            return list(self._asrun_annotations)
 
     def _on_block_complete(self, block_id: str):
         """
@@ -3750,17 +4028,25 @@ class BlockPlanProducer(Producer):
                 self.channel_id, block_id
             )
 
-            # INV-FEED-QUEUE-003: Retry pending block before generating new
-            if self._pending_block is not None:
+            # State transition: SEEDED → RUNNING on first BlockCompleted
+            if self._feed_state == _FeedState.SEEDED:
+                self._feed_state = _FeedState.RUNNING
                 self._logger.info(
-                    "INV-FEED-QUEUE-003: Retrying pending block %s",
-                    self._pending_block.block_id,
+                    "FEED-AHEAD: SEEDED->RUNNING on BlockCompleted(%s) "
+                    "runway=%dms horizon=%dms",
+                    block_id,
+                    self._compute_runway_ms(),
+                    self._feed_ahead_horizon_ms,
                 )
-                self._try_feed_block(self._pending_block)
-            else:
-                # Generate and feed next block using retained playout plan
-                next_block = self._generate_next_block(self._playout_plan)
-                self._try_feed_block(next_block)
+
+            # A BlockCompleted means a queue slot freed — increment credit
+            self._feed_credits = min(self._feed_credits + 1, self.AIR_QUEUE_DEPTH)
+            # AIR is responsive: clear error state
+            self._consecutive_feed_errors = 0
+            self._error_backoff_remaining = 0
+
+            # Proactive feed-ahead (replaces direct _try_feed_block)
+            self._feed_ahead()
 
     def _on_session_end(self, reason: str):
         """
@@ -3772,6 +4058,7 @@ class BlockPlanProducer(Producer):
         with self._lock:
             self._session_ended = True
             self._session_end_reason = reason
+            self._feed_state = _FeedState.DRAINING
 
         self._logger.info(
             "INV-FEED-SESSION-END-REASON: Channel %s: Session ended: %s",
@@ -3813,19 +4100,32 @@ class BlockPlanProducer(Producer):
         """Get unique identifier for this producer."""
         return f"blockplan_{self.channel_id}"
 
+    # Throttle: evaluate feed-ahead at ~4 Hz (every 8th tick of 30 Hz pace)
+    FEED_AHEAD_TICK_DIVISOR = 8
+
     def on_paced_tick(self, t_now: float, dt: float) -> None:
         """
         Advance producer state using pacing ticks.
 
         In BlockPlan mode, most work happens asynchronously in AIR.
-        This tick only handles teardown advancement.
+        Tick handles teardown advancement and throttled feed-ahead evaluation.
         """
         # Handle graceful teardown if in progress
         if self._advance_teardown(dt):
             return
 
-        # BlockPlan execution is autonomous - no per-tick work needed
-        # Block feeding happens via on_block_complete callback
+        # Throttled feed-ahead evaluation
+        self._feed_tick_counter += 1
+        if self._feed_tick_counter % self.FEED_AHEAD_TICK_DIVISOR != 0:
+            return
+
+        with self._lock:
+            if self._error_backoff_remaining > 0:
+                self._error_backoff_remaining -= 1
+                return
+
+            if self._feed_state == _FeedState.RUNNING:
+                self._feed_ahead()
 
     def get_socket_path(self) -> Path | None:
         """Return the UDS socket path for TS output."""
