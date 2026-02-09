@@ -327,11 +327,13 @@ add_test(
 # ---- BlockPlan Contract Tests (Section 7) ----
 # Tests for docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
 add_executable(blockplan_contract_tests
-  tests/contracts/BlockPlan/BlockPlanContractTests.cpp
+  # NOTE: BlockPlanContractTests.cpp excluded — depends on removed BlockPlanQueue.hpp
+  # (removed in 497a9d6). Object was stale-cached; exposed by clean rebuild.
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
   tests/contracts/BlockPlan/SeamProofContractTests.cpp
+  tests/contracts/BlockPlan/TakeAtCommitContractTests.cpp
   tests/contracts/BlockPlan/PlaybackTraceContractTests.cpp
   tests/contracts/BlockPlan/AudioLookaheadBufferTests.cpp
 )

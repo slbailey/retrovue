@@ -14,8 +14,8 @@
 When a TickProducer is prepared for the next block (via ProducerPreloader),
 the first video frame and its associated audio MUST be decoded into memory
 **before** the producer signals readiness.  The fence tick's call to
-`TryGetFrame()` — the first call after the A/B swap — MUST return this
-pre-decoded frame without invoking the decoder.
+the TAKE on the fence tick — which pops from B's prerolled buffers —
+MUST obtain this pre-decoded frame without invoking the decoder.
 
 The fence tick is the first tick of the next block
 (INV-BLOCK-WALLFENCE-004).  Priming ensures that the frame emitted on the
@@ -42,10 +42,10 @@ session.  They do not apply to:
 
 | Term | Definition |
 |------|------------|
-| **Fence tick** | The first session frame index belonging to the next block, precomputed via rational formula (INV-BLOCK-WALLFENCE-001).  The A/B swap executes on this tick, before frame emission. |
+| **Fence tick** | The first session frame index belonging to the next block, precomputed via rational formula (INV-BLOCK-WALLFENCE-001).  The TAKE selects B's buffers on this tick at the commitment point (pop→encode). |
 | **Primed frame** | The first video frame (and associated audio) of the next block, decoded into memory before the fence tick arrives.  Consumed on the fence tick's `TryGetFrame()` call. |
 | **Priming window** | The interval between the next block's TickProducer completing `AssignBlock()` and the fence tick arriving.  Priming must complete within this window. |
-| **Fence tick emission** | The frame emitted on the fence tick.  This frame comes from the NEW block's producer (after A/B swap).  If priming succeeded, it is the primed frame.  If priming failed, it falls through to live decode or fallback. |
+| **Fence tick emission** | The frame emitted on the fence tick.  This frame comes from the NEW block's prerolled buffers (selected by the TAKE at pop→encode).  If priming succeeded, it is the primed frame.  If priming failed, it falls through to pad via INV-TICK-GUARANTEED-OUTPUT. |
 
 ---
 

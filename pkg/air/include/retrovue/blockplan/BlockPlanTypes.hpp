@@ -223,7 +223,7 @@ enum class PlayoutExecutionMode {
 
   // Authoritative mode: continuous output via PipelineManager.
   // Session-long encoder, OutputClock at fixed cadence, pad frames when
-  // no block content is available, A/B producer swap at fence.
+  // no block content is available, TAKE-at-commit source selection at fence.
   kContinuousOutput,
 };
 

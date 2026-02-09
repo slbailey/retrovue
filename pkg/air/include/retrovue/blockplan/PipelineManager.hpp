@@ -9,8 +9,8 @@
 // cadence, pad frames when no block content is available.
 // P3.1a: Active Producer — real decoded frames from blocks with pad
 // fallback.  Single active source only (no A/B switching).
-// P3.1b: A/B source swap with background preloading — preview_ is
-// preloaded off-thread so the fence swap is instant.
+// P3.1b: TAKE-at-commit with background preloading — preview_ is
+// preloaded off-thread; source selection happens at pop→encode.
 
 #ifndef RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_
 #define RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_
@@ -64,7 +64,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
     std::function<void(const BlockPlaybackSummary&)> on_block_summary;
 
     // P3.3: Seam transition log (optional — test/diagnostics).
-    // Fired at source swap or new block load after fence.
+    // Fired at fence TAKE (post-TAKE B→A rotation) or new block load.
     std::function<void(const SeamTransitionLog&)> on_seam_transition;
 
     // P3.3b: Playback proof — wanted vs showed comparison.
@@ -141,7 +141,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // block_fence_frame_ = ceil(delta_ms * fps_num / (fps_den * 1000))
   // where delta_ms = block.end_utc_ms - session_epoch_utc_ms_.
   // The fence tick is the first session frame owned by the NEXT block.
-  // Swap fires proactively when session_frame_index >= block_fence_frame_.
+  // TAKE selects B's buffers when session_frame_index >= block_fence_frame_.
   // INT64_MAX = no block loaded.
   int64_t block_fence_frame_ = INT64_MAX;
   // UTC epoch (ms since Unix epoch) recorded at session start.  Used to map
@@ -161,7 +161,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   std::unique_ptr<ProducerPreloader> preloader_;
 
   // Deferred fill thread and producer from async stop at fence.
-  // The old fill thread may still be decoding when we swap to block B.
+  // The old fill thread may still be decoding when B rotates into A.
   // The old producer must stay alive until the old fill thread exits.
   std::thread deferred_fill_thread_;
   std::unique_ptr<producers::IProducer> deferred_producer_;
@@ -177,6 +177,14 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Audio frames from decode are pushed here; the tick loop pops
   // exact per-tick sample counts.  Underflow = hard fault.
   std::unique_ptr<AudioLookaheadBuffer> audio_buffer_;
+
+  // --- Preroll B buffers: filled by preview producer BEFORE fence ---
+  // The preview producer's fill thread writes decoded frames here while
+  // producer A is still live.  At the commitment point (TryPopFrame),
+  // the tick loop selects A or B based on session_frame_index vs fence.
+  // After the TAKE (first tick >= fence_tick), B rotates into A.
+  std::unique_ptr<VideoLookaheadBuffer> preview_video_buffer_;
+  std::unique_ptr<AudioLookaheadBuffer> preview_audio_buffer_;
 };
 
 }  // namespace retrovue::blockplan

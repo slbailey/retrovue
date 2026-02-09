@@ -17,10 +17,11 @@ fence tick derived from the block's UTC schedule and the session's rational
 output frame rate.  The fence tick is an absolute session frame index,
 computed once at block-load time and immutable thereafter.
 
-The A/B swap fires when `session_frame_index >= fence_tick`.  The fence
-tick is the first tick owned by the NEXT block.  The swap occurs BEFORE
-frame emission on that tick, so the fence tick's output frame comes from
-the new block's producer.
+Source selection (the TAKE) occurs at the frame commitment point
+(pop→encode) on each tick.  When `session_frame_index >= fence_tick`,
+the TAKE selects the next block's prerolled buffers.  The fence tick is
+the first tick owned by the NEXT block.  Post-TAKE rotation (B→A) is
+housekeeping that runs after the frame is committed.
 
 Content time, decoder state, frame budget counters, and runtime clock
 reads are never timing authority for block transitions.
@@ -32,7 +33,7 @@ reads are never timing authority for block transitions.
 These invariants apply to:
 
 - **Every scheduled block boundary** within a BlockPlan playout session.
-- **The A/B producer swap** that executes the transition.
+- **The TAKE** (source selection at pop→encode) that executes the transition.
 - **The mapping between UTC block schedules and session frame indices.**
 
 These invariants do NOT apply to:
@@ -60,7 +61,7 @@ These invariants do NOT apply to:
 | **Fence tick ownership** | The fence tick is the first tick of the NEXT block, not the last tick of the current block.  Block N owns ticks `[block_start_tick, fence_tick)`.  Block N+1 owns ticks starting at `fence_tick`. |
 | **CT (content time)** | Decoded media time tracked by TickProducer during block execution, anchored to decoder PTS. |
 | **BlockCompleted** | The event signaling that a block's execution has finished.  Under this contract, BlockCompleted is a consequence of the fence tick firing, not a precondition for it. |
-| **A/B swap** | The atomic switch from the current live TickProducer to the next block's TickProducer.  Executes on the fence tick, before frame emission. |
+| **TAKE** | Source selection at the frame commitment point (pop→encode).  On the fence tick, the TAKE selects the next block's prerolled buffers.  Post-TAKE rotation (B→A buffer swap) is housekeeping that runs after the frame is committed. |
 | **Truncation** | Early termination of a block's content stream because the fence tick arrived before CT exhaustion.  Remaining content is discarded; it is not deferred or carried forward. |
 | **Freeze/pad** | Emission of the last decoded frame (freeze) or black+silence (pad) because CT exhausted before the fence tick.  Governed by INV-TICK-GUARANTEED-OUTPUT's fallback chain. |
 
@@ -190,30 +191,40 @@ that block N+1 always starts at its intended tick.
 
 ---
 
-### INV-BLOCK-WALLFENCE-004: A/B Swap Executes on the Fence Tick Before Frame Emission
+### INV-BLOCK-WALLFENCE-004: TAKE Selects Next Block at the Frame Commitment Point
 
-> The A/B swap from the current block's TickProducer to the next block's
-> TickProducer MUST occur on the fence tick — the first session frame
-> index at or past the precomputed fence value.
+> On every tick, the TAKE selects which block's buffers to pop from at
+> the frame commitment point (TryPopFrame → encodeFrame).  The selector
+> is purely:
+>
+>     T < fence_tick  → pop from A (current block's) buffers
+>     T >= fence_tick → pop from B (next block's) buffers (or pad if B not primed)
 >
 > Specifically:
 >
 > - The fence tick is identified by: `session_frame_index >= fence_tick`
 >   (precomputed integer comparison, not a runtime clock read)
-> - The swap occurs BEFORE frame emission on this tick
-> - The next block's TickProducer provides the frame for this tick
->   (primed frame per INV-BLOCK-PRIME-002, or live decode, or fallback)
-> - The swap is atomic from the perspective of the output stream: the
->   fence tick emits exactly one frame from exactly one producer
+> - Source selection happens at the commitment point (pop→encode), not
+>   at an earlier producer swap
+> - The next block's prerolled buffers provide the frame for the fence tick
+>   (primed frame per INV-BLOCK-PRIME-002, or fallback to pad)
+> - The TAKE is atomic from the perspective of the output stream: the
+>   fence tick emits exactly one frame from exactly one source
 > - The fence tick belongs to the NEW block, not the old block
+> - Post-TAKE rotation (B→A buffer swap, A fill stop, outgoing block
+>   finalization) is housekeeping that runs AFTER the frame is committed
 >
-> The swap MUST NOT be deferred to a "convenient" tick after the fence.
+> The TAKE MUST NOT be deferred to a "convenient" tick after the fence.
+> Downstream FIFO buffers (encoder queue, mux queue) only ever contain
+> already-committed frames — no stale-source frames can leak past the
+> commitment point.
 
 **Why:** Any deferral past the fence tick introduces variable-latency
 drift.  The fence tick is the single deterministic point at which the
-transition occurs.  Combined with INV-BLOCK-LOOKAHEAD-PRIMING (which
-guarantees the next producer has a primed frame ready), the swap is both
-timely and zero-cost.
+source changes.  Combined with INV-BLOCK-LOOKAHEAD-PRIMING (which
+guarantees the next block's buffers have a primed frame ready), the
+TAKE is both timely and zero-cost.  Post-TAKE rotation is non-critical
+housekeeping — the frame is already committed before rotation runs.
 
 ---
 
@@ -225,8 +236,9 @@ timely and zero-cost.
 > The causal sequence is:
 >
 > 1. `session_frame_index >= fence_tick` (precomputed comparison)
-> 2. A/B swap executes before frame emission (new producer becomes live)
-> 3. BlockCompleted fires (previous block is now done)
+> 2. TAKE selects B's buffers at pop→encode (frame committed from new block)
+> 3. Post-TAKE rotation: B→A, outgoing block finalized
+> 4. BlockCompleted fires (previous block is now done)
 >
 > No component may wait for BlockCompleted before initiating or permitting
 > the swap.  BlockCompleted is an after-the-fact notification for

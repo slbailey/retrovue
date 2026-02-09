@@ -1,6 +1,6 @@
 // Repository: Retrovue-playout
 // Component: Producer Preloader Implementation
-// Purpose: Background TickProducer preparation for PipelineManager A/B swap
+// Purpose: Background TickProducer preparation for fence readiness
 // Contract Reference: PlayoutAuthorityContract.md (P3.1b)
 // Copyright (c) 2025 RetroVue
 

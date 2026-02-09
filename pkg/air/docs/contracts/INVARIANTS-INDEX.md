@@ -133,7 +133,7 @@ Precomputed deterministic fence tick from rational timebase. **Supersedes INV-AI
 | **INV-BLOCK-WALLFENCE-001** | Rational fence tick is sole authority for block boundaries; computed from `ceil(delta_ms * fps_num / (fps_den * 1000))`; immutable after computation | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-BLOCK-WALLFENCE-002** | CT underrun at fence tick results in truncation, not delayed swap | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-BLOCK-WALLFENCE-003** | Early CT exhaustion results in freeze/pad until fence tick, not early advancement | `PipelineManager` | Coordination (Broadcast-Grade) |
-| **INV-BLOCK-WALLFENCE-004** | A/B swap executes on the fence tick before frame emission; fence tick is first tick of next block | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-BLOCK-WALLFENCE-004** | TAKE selects next block's buffers at pop→encode on the fence tick; fence tick is first tick of next block | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-BLOCK-WALLFENCE-005** | BlockCompleted is a consequence of the swap, not a gate for it | `PipelineManager` | Coordination (Broadcast-Grade) |
 
 #### Frame Budget Invariants (Counting Authority)

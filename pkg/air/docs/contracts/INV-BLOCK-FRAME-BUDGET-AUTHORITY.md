@@ -28,7 +28,7 @@ live.  The budget is decremented by exactly 1 for every output frame emitted.
 
 By construction, the budget reaches 0 on the exact tick that
 `session_frame_index == fence_tick`.  This convergence is an arithmetic
-identity, not a runtime coincidence.  The fence triggers the A/B swap
+identity, not a runtime coincidence.  The fence determines TAKE source selection
 (timing authority); the budget reaching 0 is a **diagnostic verification**
 that the fence and budget agree.
 
@@ -185,7 +185,8 @@ to disagree with the fence, breaking convergence.
 > The causal sequence is:
 >
 >     session_frame_index >= fence_tick           (timing authority)
->       → A/B swap executes before frame emission (INV-BLOCK-WALLFENCE-004)
+>       → TAKE selects B at pop→encode            (INV-BLOCK-WALLFENCE-004)
+>       → post-TAKE rotation (B→A)                (housekeeping)
 >       → BlockCompleted fires                    (INV-BLOCK-WALLFENCE-005)
 >       → remaining_block_frames == 0             (verification)
 >
@@ -391,7 +392,7 @@ The fence and the frame budget are **two views of the same block boundary**:
 
 | Concern | Authority |
 |---------|-----------|
-| **When** does the A/B swap fire? | Fence tick (INV-BLOCK-WALLFENCE-001) — timing authority |
+| **When** does the TAKE select the next block? | Fence tick (INV-BLOCK-WALLFENCE-001) — timing authority |
 | **How many** frames does the block emit? | Frame budget (this contract) — counting authority |
 
 The budget is derived from the fence: `budget = fence_tick - block_start_tick`.

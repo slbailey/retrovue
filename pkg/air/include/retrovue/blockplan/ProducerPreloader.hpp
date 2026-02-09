@@ -1,13 +1,13 @@
 // Repository: Retrovue-playout
 // Component: Producer Preloader
-// Purpose: Background preparation of a TickProducer for PipelineManager A/B swap.
+// Purpose: Background preparation of a TickProducer for fence readiness.
 //          Runs AssignBlock (probe + open + seek) off the tick thread so the
-//          engine can swap sources at the fence without stalling.
+//          next block is preloaded before the TAKE selects it at pop→encode.
 // Contract Reference: PlayoutAuthorityContract.md (P3.1b)
 // Copyright (c) 2025 RetroVue
 //
 // ProducerPreloader produces a fully READY IProducer (backed by TickProducer)
-// that PipelineManager can adopt via pointer swap at the fence boundary.
+// that PipelineManager can adopt for preroll before the fence tick arrives.
 
 #ifndef RETROVUE_BLOCKPLAN_PRODUCER_PRELOADER_HPP_
 #define RETROVUE_BLOCKPLAN_PRODUCER_PRELOADER_HPP_

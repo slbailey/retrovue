@@ -366,3 +366,46 @@ Wall-clock time decides which block owns the tick.
 Frame counting decides what happens during that block.
 
 ----
+
+📓 Eureka Log — Broadcast Reality vs Viewer Reality
+
+Insight:
+A frame-accurate TAKE does not imply a frame-accurate viewer transition.
+
+What finally clicked:
+Broadcast systems operate with multiple simultaneous truths:
+
+Plant truth — the exact frame where the cut occurs (authoritative, logged, contractual)
+
+Transport truth — bytes in motion through bounded, non-retractable buffers
+
+Viewer truth — when the cut becomes observable on screen
+
+Trying to force these to collapse into a single instant is a category error.
+
+Critical realization:
+If you refuse to drop frames and refuse to flush committed bytes (correct), then post-TAKE old tail is inevitable.
+The only thing you can control is its maximum bound.
+
+Once that bound is known, the correct move is not to move the TAKE —
+it is to shift viewer-facing semantics (UI, “Now Playing”, block labels, perceived seams) by that bound.
+
+This is not lying.
+This is how real broadcast systems work.
+
+Reframe:
+The TAKE is a plant event.
+The seam is a perceptual event.
+They are related by a bounded, deterministic offset.
+
+Invariant learned:
+
+Never align human-visible state to internal commitment points.
+Always align it to observable reality.
+
+Conclusion:
+A correct broadcast engine does not eliminate latency.
+It models it, bounds it, and designs around it.
+
+----
+
