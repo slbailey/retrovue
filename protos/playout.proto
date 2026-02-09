@@ -353,4 +353,3 @@ message SessionEnded {
   int64 final_ct_ms = 2;            // Final CT at termination
   int32 blocks_executed_total = 3;  // Total blocks completed
 }
-

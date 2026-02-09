@@ -22,18 +22,22 @@ AudioLookaheadBuffer::AudioLookaheadBuffer(int target_depth_ms,
 
 AudioLookaheadBuffer::~AudioLookaheadBuffer() = default;
 
-void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame) {
+void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
+                                uint64_t expected_generation) {
   if (frame.nb_samples <= 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
+  if (expected_generation != 0 && expected_generation != generation_) return;
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
   frames_.push_back(frame);
 }
 
-void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame) {
+void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
+                                uint64_t expected_generation) {
   if (frame.nb_samples <= 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
+  if (expected_generation != 0 && expected_generation != generation_) return;
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
@@ -150,6 +154,7 @@ bool AudioLookaheadBuffer::IsPrimed() const {
 
 void AudioLookaheadBuffer::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
+  generation_++;  // Invalidate any in-flight Push from old fill thread
   frames_.clear();
   partial_ = buffer::AudioFrame{};
   partial_consumed_samples_ = 0;
@@ -159,6 +164,11 @@ void AudioLookaheadBuffer::Reset() {
   total_samples_popped_ = 0;
   underflow_count_ = 0;
   primed_ = false;
+}
+
+uint64_t AudioLookaheadBuffer::CurrentGeneration() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return generation_;
 }
 
 bool AudioLookaheadBuffer::IsBelowLowWater() const {

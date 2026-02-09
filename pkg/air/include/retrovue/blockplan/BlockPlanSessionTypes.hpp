@@ -121,6 +121,11 @@ struct BlockPlanSessionContext {
 
   BufferConfig buffer_config;
 
+  // Dev-mode fence fallback policy: if true, fence path will synchronously
+  // load from queue when preload is not ready (blocks on probe+open+seek).
+  // Default false (strict mode): preload miss = error log + pad mode.
+  bool fence_fallback_sync = false;
+
   std::atomic<bool> stop_requested{false};
 
   // Block queue (2-block window)
