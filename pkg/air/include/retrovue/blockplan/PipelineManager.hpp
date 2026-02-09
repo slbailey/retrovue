@@ -23,10 +23,12 @@
 #include <string>
 #include <thread>
 
+#include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
+#include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
 
@@ -158,20 +160,23 @@ class PipelineManager : public IPlayoutExecutionEngine {
   std::unique_ptr<producers::IProducer> preview_;
   std::unique_ptr<ProducerPreloader> preloader_;
 
-  // --- Cadence-based frame repeat (input_fps < output_fps support) ---
-  // When input source FPS is lower than output FPS, we decode fewer
-  // frames and repeat the last decoded video frame on intervening ticks.
-  // Audio is emitted only on decode ticks to prevent PTS racing.
-  void InitCadence(ITickProducer* tp);
-  void ResetCadence();
+  // Deferred fill thread and producer from async stop at fence.
+  // The old fill thread may still be decoding when we swap to block B.
+  // The old producer must stay alive until the old fill thread exits.
+  std::thread deferred_fill_thread_;
+  std::unique_ptr<producers::IProducer> deferred_producer_;
+  void CleanupDeferredFill();
 
-  bool cadence_active_ = false;
-  double cadence_ratio_ = 0.0;    // input_fps / output_fps (e.g. 0.7992)
-  double decode_budget_ = 0.0;    // Accumulator: += ratio per tick, decode when >= 1.0
-  buffer::Frame last_decoded_video_;
-  buffer::AudioFrame last_decoded_audio_;
-  bool have_last_decoded_video_ = false;
-  bool have_last_decoded_audio_ = false;
+  // --- VideoLookaheadBuffer: non-blocking video frame buffer ---
+  // Decoded video frames are pushed by a background fill thread;
+  // the tick loop pops one frame per tick.  Underflow = hard fault.
+  // Cadence (decode vs repeat) is resolved in the fill thread.
+  std::unique_ptr<VideoLookaheadBuffer> video_buffer_;
+
+  // --- AudioLookaheadBuffer: broadcast-grade audio buffering ---
+  // Audio frames from decode are pushed here; the tick loop pops
+  // exact per-tick sample counts.  Underflow = hard fault.
+  std::unique_ptr<AudioLookaheadBuffer> audio_buffer_;
 };
 
 }  // namespace retrovue::blockplan

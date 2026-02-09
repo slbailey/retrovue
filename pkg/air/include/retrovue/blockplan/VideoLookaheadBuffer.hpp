@@ -77,6 +77,11 @@ class VideoLookaheadBuffer {
   //
   // If the producer has a primed frame, it is consumed synchronously
   // (non-blocking) and pushed to the buffer before the fill thread starts.
+  // INV-AUDIO-PRIME-001: When the primed frame was created by PrimeFirstTick,
+  // its audio vector contains accumulated audio covering the prime threshold.
+  // All accumulated audio is pushed to audio_buffer in one call here.
+  // Buffered video frames (from PrimeFirstTick) are returned by subsequent
+  // TryGetFrame calls in the fill thread — no special handling needed.
   void StartFilling(ITickProducer* producer,
                     AudioLookaheadBuffer* audio_buffer,
                     double input_fps, double output_fps,
@@ -85,6 +90,14 @@ class VideoLookaheadBuffer {
   // Stop the fill loop and join the thread.
   // If flush=true, clears all buffered frames and resets IsPrimed().
   void StopFilling(bool flush = false);
+
+  // Async stop: signal fill thread to exit, optionally flush buffer,
+  // extract thread handle for deferred join.  Does NOT join.
+  // Increments fill_generation_ so any late push from the old thread is rejected.
+  struct DetachedFill {
+    std::thread thread;  // Must be joined before producer is destroyed
+  };
+  DetachedFill StopFillingAsync(bool flush = false);
 
   // True while the fill thread is running.
   bool IsFilling() const;
@@ -153,6 +166,7 @@ class VideoLookaheadBuffer {
   std::thread fill_thread_;
   std::atomic<bool> fill_stop_{false};
   bool fill_running_ = false;
+  uint64_t fill_generation_ = 0;  // Monotonic; bumped at StopFillingAsync/StartFilling
 
   // Fill thread parameters (set by StartFilling, read by FillLoop).
   ITickProducer* producer_ = nullptr;
