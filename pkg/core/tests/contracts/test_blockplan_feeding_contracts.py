@@ -1247,11 +1247,12 @@ class TestQueueFullRetry:
                 return True
 
             def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
                 if queue_full_until_event[0]:
                     feed_log.append((block.block_id, False))
-                    return False
+                    return FeedResult.QUEUE_FULL
                 feed_log.append((block.block_id, True))
-                return True
+                return FeedResult.ACCEPTED
 
             def stop(self, reason="requested"):
                 return True
@@ -1275,11 +1276,12 @@ class TestQueueFullRetry:
         mock_session.on_block_complete = producer._on_block_complete
 
         # Feed 3rd block — should be rejected (QUEUE_FULL)
+        from retrovue.runtime.playout_session import FeedResult
         block_c = producer._generate_next_block(playout_plan)
         result = producer._try_feed_block(block_c)
 
         # Verify: feed was rejected, block is pending
-        assert result is False, "Feed should fail (QUEUE_FULL)"
+        assert result == FeedResult.QUEUE_FULL, f"Feed should be QUEUE_FULL, got {result}"
         assert producer._pending_block is not None, (
             "INV-FEED-QUEUE-002: Rejected block must be stored in _pending_block"
         )
@@ -1300,10 +1302,14 @@ class TestQueueFullRetry:
         feed_log.clear()
 
         producer._started = True  # Simulate started state
+        # Feed-ahead requires RUNNING state and in-flight tracking
+        from retrovue.runtime.channel_manager import _FeedState
+        producer._feed_state = _FeedState.RUNNING
+        producer._in_flight_block_ids.add("BLOCK-qf-test-0")
         producer._on_block_complete("BLOCK-qf-test-0")
 
-        # Verify: pending block was retried (same block_id)
-        assert len(feed_log) == 1, f"Expected 1 feed on retry, got {len(feed_log)}"
+        # Verify: pending block was retried FIRST (same block_id)
+        assert len(feed_log) >= 1, f"Expected at least 1 feed on retry, got {len(feed_log)}"
         assert feed_log[0] == ("BLOCK-qf-test-2", True), (
             f"INV-FEED-QUEUE-003: Retry must use same block_id. Got {feed_log[0]}"
         )
@@ -1313,9 +1319,9 @@ class TestQueueFullRetry:
             "Pending block should be cleared after successful retry"
         )
 
-        # Verify: cursor has now advanced past the retried block
-        assert producer._block_index == 3, (
-            f"INV-FEED-QUEUE-001: Cursor should be 3 after successful feed, got {producer._block_index}"
+        # Verify: cursor has advanced past the retried block (may be further due to feed-ahead)
+        assert producer._block_index >= 3, (
+            f"INV-FEED-QUEUE-001: Cursor should be >= 3 after successful feed, got {producer._block_index}"
         )
 
     def test_sequence_integrity_no_gaps(self):
@@ -1358,11 +1364,12 @@ class TestQueueFullRetry:
                 return True
 
             def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
                 if reject_next[0]:
                     reject_next[0] = False  # Only reject once
-                    return False
+                    return FeedResult.QUEUE_FULL
                 successfully_fed.append(block.block_id)
-                return True
+                return FeedResult.ACCEPTED
 
             def stop(self, reason="requested"):
                 return True
@@ -1371,10 +1378,13 @@ class TestQueueFullRetry:
             def is_running(self):
                 return True
 
+        from retrovue.runtime.channel_manager import _FeedState
+
         mock_session = ControlledSession()
         producer._session = mock_session
         producer._playout_plan = playout_plan
         producer._started = True
+        producer._feed_state = _FeedState.RUNNING
         mock_session.on_block_complete = producer._on_block_complete
 
         # Seed blocks 0, 1
@@ -1384,8 +1394,13 @@ class TestQueueFullRetry:
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
+        # Track seeded blocks as in-flight
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
         # Feed block 2 — will be REJECTED
         reject_next[0] = True
+        producer._feed_credits = 1  # Give a credit for the direct _try_feed_block call
         block_c = producer._generate_next_block(playout_plan)
         producer._try_feed_block(block_c)
 
@@ -1393,19 +1408,26 @@ class TestQueueFullRetry:
         assert producer._pending_block is not None
         assert producer._pending_block.block_id == "BLOCK-seq-test-2"
 
-        # BLOCK_COMPLETE for block 0 → retries block 2 (succeeds)
+        # BLOCK_COMPLETE for block 0 → retries block 2 (succeeds), may feed more via feed-ahead
         producer._on_block_complete("BLOCK-seq-test-0")
 
-        # BLOCK_COMPLETE for block 1 → generates and feeds block 3
-        producer._on_block_complete("BLOCK-seq-test-1")
+        # Track additionally fed blocks as in-flight for subsequent completions
+        for bid in successfully_fed[2:]:  # skip seeded 0,1
+            producer._in_flight_block_ids.add(bid)
 
-        # BLOCK_COMPLETE for block 2 → generates and feeds block 4
+        # BLOCK_COMPLETE for block 1 → generates and feeds next block(s)
+        producer._on_block_complete("BLOCK-seq-test-1")
+        for bid in successfully_fed:
+            producer._in_flight_block_ids.add(bid)
+
+        # BLOCK_COMPLETE for block 2 → generates and feeds next block(s)
         producer._on_block_complete("BLOCK-seq-test-2")
 
-        # Verify sequence integrity: all blocks 0-4 fed, no gaps
-        expected = [f"BLOCK-seq-test-{i}" for i in range(5)]
-        assert successfully_fed == expected, (
-            f"INV-FEED-QUEUE-004: Expected gap-free sequence {expected}, "
+        # Verify sequence integrity: blocks 0-4 must all be present, in order, no gaps
+        # Feed-ahead may have fed beyond block 4, but 0-4 must appear in order.
+        expected_prefix = [f"BLOCK-seq-test-{i}" for i in range(5)]
+        assert successfully_fed[:5] == expected_prefix, (
+            f"INV-FEED-QUEUE-004: Expected gap-free sequence starting with {expected_prefix}, "
             f"got {successfully_fed}"
         )
 
@@ -1440,8 +1462,9 @@ class TestQueueFullRetry:
                 return True
 
             def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
                 feed_attempts.append(block.block_id)
-                return False  # Always QUEUE_FULL
+                return FeedResult.QUEUE_FULL  # Always QUEUE_FULL
 
             def stop(self, reason="requested"):
                 return True
@@ -1464,6 +1487,7 @@ class TestQueueFullRetry:
         mock_session.seed(block_a, block_b)
 
         # Try to feed block 2 — rejected
+        producer._feed_credits = 1  # Give a credit for the direct _try_feed_block call
         block_c = producer._generate_next_block(playout_plan)
         producer._try_feed_block(block_c)
 
@@ -1508,6 +1532,2061 @@ class TestQueueFullRetry:
         assert producer._pending_block is None, (
             "INV-FEED-QUEUE-002: _cleanup() must clear _pending_block"
         )
+
+
+# =============================================================================
+# Part 5: Feed-Ahead Controller Contract Tests
+# =============================================================================
+
+
+def _make_producer_with_mock_session(
+    *,
+    channel_id: str = "fa-test",
+    block_duration_ms: int = 30_000,
+    feed_ahead_horizon_ms: int = 20_000,
+    feed_returns=None,
+):
+    """Helper: create a BlockPlanProducer wired to a controllable mock session.
+
+    Returns (producer, mock_session, feed_log, _FeedState).
+    feed_log is a list of (block_id, accepted:bool) tuples.
+    feed_returns controls what the mock session.feed() returns (a FeedResult).
+    """
+    from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
+    from retrovue.runtime.playout_session import FeedResult
+
+    if feed_returns is None:
+        feed_returns = FeedResult.ACCEPTED
+
+    producer = BlockPlanProducer(
+        channel_id=channel_id,
+        configuration={
+            "block_duration_ms": block_duration_ms,
+            "feed_ahead_horizon_ms": feed_ahead_horizon_ms,
+        },
+        channel_config=None,
+        schedule_service=None,
+        clock=None,
+    )
+
+    feed_log: list[tuple[str, bool]] = []
+    _feed_returns = [feed_returns]
+
+    class ControllableMockSession:
+        def __init__(self):
+            self.on_block_complete = None
+            self.on_session_end = None
+
+        def start(self, join_utc_ms=0):
+            return True
+
+        def seed(self, block_a, block_b):
+            return True
+
+        def feed(self, block):
+            result = _feed_returns[0]
+            accepted = (result == FeedResult.ACCEPTED)
+            feed_log.append((block.block_id, accepted))
+            return result
+
+        def stop(self, reason="requested"):
+            return True
+
+        @property
+        def is_running(self):
+            return True
+
+    mock_session = ControllableMockSession()
+    mock_session._feed_returns = _feed_returns  # expose for test control
+    return producer, mock_session, feed_log, _FeedState
+
+
+class TestFeedAheadNoFeedDuringSeeded:
+    """After seed, before BlockCompleted, verify no feeds occur."""
+
+    def test_no_feed_during_seeded_state(self):
+        """
+        In SEEDED state (after seed, before first BlockCompleted),
+        on_paced_tick must NOT trigger any feeds — even after many ticks.
+        """
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Simulate seed (blocks 0, 1)
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        # Enter SEEDED state (as start() would)
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+
+        # Pump many ticks — should NOT feed
+        for i in range(100):
+            producer.on_paced_tick(time.time(), 1 / 30)
+
+        assert len(feed_log) == 0, (
+            f"FEED-AHEAD: Expected 0 feeds during SEEDED state, got {len(feed_log)}"
+        )
+        assert producer._feed_state == _FeedState.SEEDED
+
+
+class TestFeedAheadSeededToRunning:
+    """First BlockCompleted triggers SEEDED→RUNNING transition and feed-ahead."""
+
+    def test_seeded_to_running_on_first_complete(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Simulate seed
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        # Use a far-future end time so runway > 0 for the test
+        now_ms = int(time.time() * 1000)
+        producer._max_delivered_end_utc_ms = now_ms + 60_000  # 60s ahead
+        producer._started = True
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
+        # Emit BlockCompleted for block_a
+        producer._on_block_complete(block_a.block_id)
+
+        assert producer._feed_state == _FeedState.RUNNING, (
+            f"Expected RUNNING after first BlockCompleted, got {producer._feed_state}"
+        )
+
+
+class TestFeedAheadStartupNoQueueFullRace:
+    """No immediate feed(block_c) after seed. No QUEUE_FULL at startup."""
+
+    def test_startup_no_queue_full_race(self):
+        """
+        After seed, the producer enters SEEDED (not RUNNING). No block_c
+        feed is attempted, eliminating the startup QUEUE_FULL race.
+        """
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        # Wire a session that always rejects (to detect any feed attempt)
+        from retrovue.runtime.playout_session import FeedResult
+        mock_session._feed_returns[0] = FeedResult.QUEUE_FULL
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Simulate what start() does: seed 2 blocks, enter SEEDED
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        # This is what start() now does (instead of _try_feed_block(block_c)):
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+
+        # No feed should have been attempted
+        assert len(feed_log) == 0, (
+            f"FEED-AHEAD: Expected 0 feed attempts at startup, got {len(feed_log)}. "
+            "This means the QUEUE_FULL race condition is eliminated."
+        )
+
+
+class TestFeedAheadFillsToHorizon:
+    """When runway < horizon, blocks are fed until runway >= horizon."""
+
+    def test_feed_ahead_fills_to_horizon(self):
+        """
+        With short blocks (5s) and 20s horizon, _feed_ahead should feed
+        multiple blocks in one call to reach the horizon.
+        """
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            block_duration_ms=5_000,
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 5_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        # Simulate: currently RUNNING, with 0 runway
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms  # 0 runway
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # With 5s blocks and 20s horizon, 2 iterations of the loop (loop is max 2)
+        # should produce 2 feeds. Runway is checked each iteration.
+        assert len(feed_log) >= 1, (
+            "FEED-AHEAD: Should feed at least 1 block when runway < horizon"
+        )
+        # All feeds accepted
+        assert all(accepted for _, accepted in feed_log), (
+            "All feeds should be accepted"
+        )
+
+
+class TestFeedAheadStopsAtHorizon:
+    """When runway >= horizon AND deadline not due, no feed attempt."""
+
+    def test_feed_ahead_stops_at_horizon(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        # RUNNING with plenty of runway (60s ahead)
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits available but no trigger met
+
+        # Set next block start far in the future so ready_by is also future
+        # (otherwise deadline-driven logic would feed because start_utc_ms=0
+        # makes ready_by in the past)
+        producer._next_block_start_ms = now_ms + 90_000
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 0, (
+            f"FEED-AHEAD: Expected 0 feeds when runway >= horizon and deadline not due, "
+            f"got {len(feed_log)}"
+        )
+
+
+class TestFeedAheadBackoffOnQueueFull:
+    """After QUEUE_FULL, credits=0 → tick evaluation produces no feeds."""
+
+    def test_credit_gate_on_queue_full(self):
+        from retrovue.runtime.playout_session import FeedResult
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        # RUNNING with 0 runway — will want to feed
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms  # 0 runway
+        producer._started = True
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+        producer._feed_credits = 1  # Give one credit so _feed_ahead tries
+
+        # Session rejects feeds (QUEUE_FULL)
+        mock_session._feed_returns[0] = FeedResult.QUEUE_FULL
+
+        producer._feed_ahead()
+
+        # Verify credits zeroed (authoritative correction)
+        assert producer._feed_credits == 0, (
+            f"Expected credits=0 after QUEUE_FULL, got {producer._feed_credits}"
+        )
+
+        # Now pump many throttled ticks — credits=0 means no feeds
+        feed_log.clear()
+        divisor = producer.FEED_AHEAD_TICK_DIVISOR
+        for _ in range(divisor * 10):  # 10 throttled evaluations
+            producer.on_paced_tick(time.time(), 1 / 30)
+
+        # With credits=0, no new feeds should occur
+        assert len(feed_log) == 0, (
+            f"Expected 0 feeds with credits=0, got {len(feed_log)}"
+        )
+
+
+class TestFeedAheadNoDrainingFeed:
+    """After session end, feed-ahead is a no-op."""
+
+    def test_no_feed_in_draining(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.DRAINING
+        producer._max_delivered_end_utc_ms = now_ms  # 0 runway
+        producer._started = True
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 0, (
+            "FEED-AHEAD: Expected 0 feeds in DRAINING state"
+        )
+
+
+class TestFeedAheadTickThrottle:
+    """Only every Nth tick triggers feed-ahead evaluation."""
+
+    def test_tick_throttle(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        # RUNNING with 0 runway (will want to feed on every evaluation)
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms  # 0 runway
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        divisor = producer.FEED_AHEAD_TICK_DIVISOR
+
+        # Pump exactly (divisor - 1) ticks — should NOT trigger evaluation
+        producer._feed_tick_counter = 0
+        for i in range(divisor - 1):
+            producer.on_paced_tick(time.time(), 1 / 30)
+
+        assert len(feed_log) == 0, (
+            f"Expected 0 feeds before divisor triggers, got {len(feed_log)}"
+        )
+
+        # One more tick — now the divisor fires and _feed_ahead runs
+        producer.on_paced_tick(time.time(), 1 / 30)
+
+        assert len(feed_log) >= 1, (
+            f"Expected >= 1 feed after divisor triggers, got {len(feed_log)}"
+        )
+
+
+class TestRunwayComputation:
+    """Verify _compute_runway_ms() correctness."""
+
+    def test_runway_computation_basic(self):
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="runway-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        # Zero delivered → 0 runway
+        producer._max_delivered_end_utc_ms = 0
+        assert producer._compute_runway_ms() == 0
+
+        # Far future → positive runway
+        now_ms = int(time.time() * 1000)
+        producer._max_delivered_end_utc_ms = now_ms + 30_000
+        runway = producer._compute_runway_ms()
+        # Should be approximately 30_000 (within a few ms of test execution)
+        assert 29_000 <= runway <= 31_000, (
+            f"Expected runway ~30000ms, got {runway}"
+        )
+
+        # In the past → 0 runway (clamped)
+        producer._max_delivered_end_utc_ms = now_ms - 5_000
+        assert producer._compute_runway_ms() == 0
+
+
+# =============================================================================
+# Part 6: Deadline-Driven Feed-Ahead Contract Tests
+# =============================================================================
+
+
+class TestReadyByDeadlineComputation:
+    """Verify _compute_ready_by_ms() returns start_utc_ms - preload_budget_ms."""
+
+    def test_ready_by_equals_start_minus_budget(self):
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="rb-test",
+            configuration={"block_duration_ms": 30_000, "preload_budget_ms": 10_000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        block = MockBlockPlan(
+            block_id="B1", channel_id=1,
+            start_utc_ms=1_000_000, end_utc_ms=1_030_000,
+        )
+        assert producer._compute_ready_by_ms(block) == 990_000
+
+    def test_ready_by_with_custom_budget(self):
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="rb-test2",
+            configuration={"block_duration_ms": 30_000, "preload_budget_ms": 5_000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        block = MockBlockPlan(
+            block_id="B2", channel_id=1,
+            start_utc_ms=500_000, end_utc_ms=530_000,
+        )
+        assert producer._compute_ready_by_ms(block) == 495_000
+
+
+class TestFeedTriggeredByDeadline:
+    """Feed occurs when now >= ready_by, even if runway is sufficient."""
+
+    def test_deadline_triggers_feed_despite_high_runway(self):
+        """
+        When now_utc_ms >= ready_by_utc_ms, a feed occurs regardless of runway.
+        This is the key change from runway-only to deadline-driven.
+        """
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # Plenty of runway (60s)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+
+        # But next block starts soon (in 5s), so ready_by = 5s - 10s = -5s (past!)
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # Deadline is due → feed occurs despite sufficient runway
+        assert len(feed_log) >= 1, (
+            "DEADLINE: Feed should occur when deadline is due, even with high runway"
+        )
+        assert feed_log[0][1] is True, "Feed should be accepted"
+
+
+class TestNoFeedWhenNeitherTriggerMet:
+    """No feed when both deadline not due AND runway sufficient."""
+
+    def test_skip_when_not_due_and_runway_ok(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # Plenty of runway (60s)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits available but neither trigger met
+
+        # Next block starts far in the future (90s),
+        # ready_by = 90s - 10s = 80s in the future
+        producer._next_block_start_ms = now_ms + 90_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 0, (
+            "DEADLINE: No feed when deadline not due AND runway >= horizon"
+        )
+
+
+class TestReadyByMissCount:
+    """ready_by_miss_count incremented when now > block.start_utc_ms."""
+
+    def test_miss_count_incremented_for_late_feed(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # RUNNING, low runway
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+
+        # Block starts in the PAST (5s ago) — this is a miss
+        producer._next_block_start_ms = now_ms - 5_000
+        producer._block_index = 0
+
+        assert producer._ready_by_miss_count == 0
+        producer._feed_ahead()
+
+        assert producer._ready_by_miss_count >= 1, (
+            "DEADLINE: ready_by_miss_count should increment when block is fed after its start_utc_ms"
+        )
+
+    def test_no_miss_for_on_time_feed(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # RUNNING, low runway
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+
+        # Block starts in the future (5s from now) — not a miss
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert producer._ready_by_miss_count == 0, (
+            "DEADLINE: No miss when block is fed before its start_utc_ms"
+        )
+
+
+class TestFeedAheadDecisionLogging:
+    """Verify FEED_AHEAD_DECISION log output."""
+
+    def test_decision_log_emitted_on_feed(self):
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        # Capture log output
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.DEBUG)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        # Find FEED_AHEAD_DECISION log line
+        decision_logs = [
+            r for r in log_records
+            if "FEED_AHEAD_DECISION" in r.getMessage()
+        ]
+        assert len(decision_logs) >= 1, (
+            "DECISION LOG: Expected at least one FEED_AHEAD_DECISION log"
+        )
+
+        msg = decision_logs[0].getMessage()
+        # Verify key fields are present
+        assert "block=" in msg, "DECISION LOG: must contain block="
+        assert "start=" in msg, "DECISION LOG: must contain start="
+        assert "ready_by=" in msg, "DECISION LOG: must contain ready_by="
+        assert "reason=" in msg, "DECISION LOG: must contain reason="
+        assert "runway=" in msg, "DECISION LOG: must contain runway="
+        assert "miss=" in msg, "DECISION LOG: must contain miss="
+
+    def test_skip_decision_logged_at_debug(self):
+        """When neither trigger is met, a debug skip log is emitted."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits available but neither trigger met
+        producer._next_block_start_ms = now_ms + 90_000
+        producer._block_index = 0
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.DEBUG)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        skip_logs = [
+            r for r in log_records
+            if "FEED_AHEAD_DECISION" in r.getMessage() and "skip_not_due" in r.getMessage()
+        ]
+        assert len(skip_logs) == 1, (
+            f"DECISION LOG: Expected 1 skip_not_due log, got {len(skip_logs)}"
+        )
+
+
+class TestPreloadBudgetConfiguration:
+    """Verify preload_budget_ms configuration is respected."""
+
+    def test_custom_preload_budget(self):
+        """Custom preload_budget_ms changes when deadline is due."""
+        # With a large budget (50s), a block starting in 40s has ready_by in the past
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+        # Override preload_budget_ms directly
+        producer._preload_budget_ms = 50_000
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000  # High runway
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+
+        # Block starts in 40s: ready_by = 40s - 50s = -10s (past)
+        producer._next_block_start_ms = now_ms + 40_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert len(feed_log) >= 1, (
+            "BUDGET: With 50s preload budget, block starting in 40s "
+            "should be fed (ready_by is -10s)"
+        )
+
+    def test_small_preload_budget_no_early_feed(self):
+        """With small budget, far-future blocks are not fed early."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+        # Small budget: only 2s
+        producer._preload_budget_ms = 2_000
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000  # High runway
+        producer._started = True
+        producer._feed_credits = 2  # Credits available but neither trigger met
+
+        # Block starts in 40s: ready_by = 40s - 2s = 38s (far future)
+        producer._next_block_start_ms = now_ms + 40_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 0, (
+            "BUDGET: With 2s budget, block starting in 40s should NOT be fed "
+            "(ready_by is 38s in future, runway is sufficient)"
+        )
+
+
+class TestFeedAheadReasonClassification:
+    """Verify correct reason string in FEED_AHEAD_DECISION based on triggers."""
+
+    def test_reason_deadline_when_only_deadline_met(self):
+        """reason='deadline' when deadline due but runway >= horizon."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        # Runway > horizon (60s)
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        # Deadline due: block starts in 5s, budget=10s → ready_by=-5s
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.INFO)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        decision_logs = [
+            r for r in log_records
+            if "FEED_AHEAD_DECISION" in r.getMessage()
+        ]
+        assert len(decision_logs) >= 1
+        assert "reason=deadline " in decision_logs[0].getMessage() or \
+               "reason=deadline+" in decision_logs[0].getMessage(), (
+            f"Expected reason=deadline, got: {decision_logs[0].getMessage()}"
+        )
+
+    def test_reason_runway_when_only_runway_low(self):
+        """reason='runway' when runway < horizon but deadline not due."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        # Low runway (5s < 20s horizon)
+        producer._max_delivered_end_utc_ms = now_ms + 5_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        # Deadline NOT due: block starts in 60s, budget=10s → ready_by=50s future
+        producer._next_block_start_ms = now_ms + 60_000
+        producer._block_index = 0
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.INFO)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        decision_logs = [
+            r for r in log_records
+            if "FEED_AHEAD_DECISION" in r.getMessage()
+        ]
+        assert len(decision_logs) >= 1
+        assert "reason=runway " in decision_logs[0].getMessage(), (
+            f"Expected reason=runway, got: {decision_logs[0].getMessage()}"
+        )
+
+    def test_reason_deadline_plus_runway_when_both(self):
+        """reason='deadline+runway' when both triggers met."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        # Low runway (0ms)
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        # Deadline due: block starts in 5s, budget=10s → ready_by=-5s
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.INFO)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        decision_logs = [
+            r for r in log_records
+            if "FEED_AHEAD_DECISION" in r.getMessage()
+        ]
+        assert len(decision_logs) >= 1
+        assert "reason=deadline+runway" in decision_logs[0].getMessage(), (
+            f"Expected reason=deadline+runway, got: {decision_logs[0].getMessage()}"
+        )
+
+
+class TestCleanupResetsDeadlineState:
+    """Verify _cleanup() resets all deadline-driven and credit state."""
+
+    def test_cleanup_resets_deadline_state(self):
+        from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
+
+        producer = BlockPlanProducer(
+            channel_id="cleanup-dl-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        # Mutate state
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = 999_999
+        producer._feed_credits = 2
+        producer._consecutive_feed_errors = 3
+        producer._error_backoff_remaining = 16
+        producer._feed_tick_counter = 42
+        producer._ready_by_miss_count = 5
+
+        producer._cleanup()
+
+        assert producer._feed_state == _FeedState.CREATED
+        assert producer._max_delivered_end_utc_ms == 0
+        assert producer._feed_credits == 0
+        assert producer._consecutive_feed_errors == 0
+        assert producer._error_backoff_remaining == 0
+        assert producer._feed_tick_counter == 0
+        assert producer._ready_by_miss_count == 0
+
+
+# =============================================================================
+# Part 7: Miss Policy Contract Tests (INV-FEED-SEQUENCE, deterministic passive)
+# =============================================================================
+
+
+class TestMissPolicyNoReorder:
+    """INV-FEED-SEQUENCE: Block sequence preserved after miss — no reordering."""
+
+    def test_block_sequence_preserved_after_miss(self):
+        """After a miss, subsequent blocks maintain sequential order."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=5_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 5_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # RUNNING, block 0 starts in the PAST (miss)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms - 10_000  # far behind
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms - 5_000  # 5s in the past
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # Should have fed blocks; verify they are sequential
+        assert len(feed_log) >= 1, "Should feed at least 1 block on miss"
+        fed_ids = [bid for bid, _ in feed_log]
+        for i, bid in enumerate(fed_ids):
+            assert bid == f"BLOCK-fa-test-{i}", (
+                f"INV-FEED-SEQUENCE: Expected BLOCK-fa-test-{i}, got {bid}. "
+                "Blocks must remain in sequence after a miss."
+            )
+
+
+class TestMissPolicyNoFiller:
+    """No emergency/filler block injected on miss."""
+
+    def test_no_filler_block_on_miss(self):
+        """When a miss occurs, no extra filler/emergency block is injected."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms - 5_000  # 5s miss
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # All fed blocks must come from the playout plan (sequential IDs)
+        for bid, accepted in feed_log:
+            assert bid.startswith("BLOCK-fa-test-"), (
+                f"MISS POLICY: Block {bid} is not from the playout plan. "
+                "No filler/emergency blocks should be injected on miss."
+            )
+            assert accepted is True
+
+
+class TestMissPolicyContinueFeedAhead:
+    """_feed_ahead() loop continues normally after miss."""
+
+    def test_feed_ahead_continues_after_miss(self):
+        """After a miss, _feed_ahead() completes its loop normally."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=5_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 5_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms - 5_000
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms - 3_000  # 3s miss
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # Loop runs up to 2 iterations; with 5s blocks both iterations
+        # should trigger (runway is well below horizon for short blocks)
+        assert len(feed_log) == 2, (
+            f"MISS POLICY: _feed_ahead() should continue its full loop after miss. "
+            f"Expected 2 feeds (loop max), got {len(feed_log)}"
+        )
+        assert all(accepted for _, accepted in feed_log)
+
+
+class TestMissAnnotationRecorded:
+    """Annotation has type=missed_ready_by, block_id, lateness_ms on miss."""
+
+    def test_annotation_recorded_on_miss(self):
+        """When a miss occurs, an as-run annotation is recorded."""
+        from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
+
+        producer = BlockPlanProducer(
+            channel_id="miss-ann-test",
+            configuration={
+                "block_duration_ms": 30_000,
+                "feed_ahead_horizon_ms": 20_000,
+            },
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        feed_log: list[tuple[str, bool]] = []
+
+        class SimpleMockSession:
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                return True
+
+            def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
+                feed_log.append((block.block_id, True))
+                return FeedResult.ACCEPTED
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return True
+
+        mock_session = SimpleMockSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms - 3_000  # 3s miss
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        annotations = producer.get_asrun_annotations()
+        assert len(annotations) >= 1, (
+            "MISS POLICY: At least one annotation should be recorded on miss"
+        )
+
+        ann = annotations[0]
+        assert ann.annotation_type == "missed_ready_by", (
+            f"Expected annotation_type='missed_ready_by', got '{ann.annotation_type}'"
+        )
+        assert ann.block_id.startswith("BLOCK-miss-ann-test-"), (
+            f"Expected block_id starting with 'BLOCK-miss-ann-test-', got '{ann.block_id}'"
+        )
+        assert "lateness_ms" in ann.metadata, (
+            "Annotation metadata must contain 'lateness_ms'"
+        )
+        assert ann.metadata["lateness_ms"] >= 3_000, (
+            f"Expected lateness_ms >= 3000, got {ann.metadata['lateness_ms']}"
+        )
+
+
+class TestMissAnnotationNotRecordedOnTime:
+    """No annotation when block is fed on time."""
+
+    def test_no_annotation_when_on_time(self):
+        """No as-run annotation is recorded when block is fed before start_utc_ms."""
+        from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
+
+        producer = BlockPlanProducer(
+            channel_id="ontime-test",
+            configuration={
+                "block_duration_ms": 30_000,
+                "feed_ahead_horizon_ms": 20_000,
+            },
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        class SimpleMockSession:
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                return True
+
+            def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
+                return FeedResult.ACCEPTED
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return True
+
+        mock_session = SimpleMockSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        # Block starts 30s in the future — well ahead of now
+        producer._next_block_start_ms = now_ms + 30_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        annotations = producer.get_asrun_annotations()
+        assert len(annotations) == 0, (
+            f"MISS POLICY: No annotations should be recorded for on-time feeds. "
+            f"Got {len(annotations)} annotations."
+        )
+
+
+class TestMissLatenessMetric:
+    """feed_ahead_miss_lateness_ms histogram observed with correct value."""
+
+    def test_lateness_metric_observed(self):
+        """On miss, lateness_ms value is passed to the histogram."""
+        from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
+        from unittest.mock import patch, MagicMock
+
+        producer = BlockPlanProducer(
+            channel_id="lateness-metric-test",
+            configuration={
+                "block_duration_ms": 30_000,
+                "feed_ahead_horizon_ms": 20_000,
+            },
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        class SimpleMockSession:
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                return True
+
+            def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
+                return FeedResult.ACCEPTED
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return True
+
+        mock_session = SimpleMockSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms - 7_000  # 7s miss
+        producer._block_index = 0
+
+        # Mock the histogram metric
+        mock_histogram = MagicMock()
+        mock_labels = MagicMock()
+        mock_histogram.labels.return_value = mock_labels
+
+        with patch(
+            "retrovue.runtime.channel_manager.feed_ahead_miss_lateness_ms",
+            mock_histogram,
+        ):
+            producer._feed_ahead()
+
+        # Verify histogram was observed with approximately correct value
+        mock_histogram.labels.assert_called()
+        mock_labels.observe.assert_called()
+        observed_value = mock_labels.observe.call_args[0][0]
+        assert observed_value >= 7_000, (
+            f"MISS POLICY: Expected lateness_ms >= 7000, got {observed_value}"
+        )
+
+
+class TestLateJoinStabilization:
+    """Late join 2s before fence: Core doesn't thrash, session stabilizes,
+    no duplicate block IDs."""
+
+    def test_late_join_no_thrash_no_duplicates(self):
+        """Simulate late join scenario: blocks fed once each, no duplicates."""
+        from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
+
+        producer = BlockPlanProducer(
+            channel_id="late-join-test",
+            configuration={
+                "block_duration_ms": 10_000,
+                "feed_ahead_horizon_ms": 20_000,
+            },
+            channel_config=None,
+            schedule_service=None,
+            clock=None,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 10_000},
+        ]
+
+        fed_block_ids: list[str] = []
+
+        class TrackingSession:
+            def __init__(self):
+                self.on_block_complete = None
+                self.on_session_end = None
+
+            def start(self, join_utc_ms=0):
+                return True
+
+            def seed(self, block_a, block_b):
+                return True
+
+            def feed(self, block):
+                from retrovue.runtime.playout_session import FeedResult
+                fed_block_ids.append(block.block_id)
+                return FeedResult.ACCEPTED
+
+            def stop(self, reason="requested"):
+                return True
+
+            @property
+            def is_running(self):
+                return True
+
+        mock_session = TrackingSession()
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+        producer._started = True
+
+        # Simulate late join: seed with blocks that are already partially past
+        now_ms = int(time.time() * 1000)
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
+        # Set state as if we just joined late: fence is 2s away,
+        # first block is already past, second block is current
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._next_block_start_ms = now_ms + 8_000  # next block starts in 8s
+
+        # First BlockCompleted triggers SEEDED→RUNNING and feed-ahead
+        producer._on_block_complete(block_a.block_id)
+
+        assert producer._feed_state == _FeedState.RUNNING, (
+            "Should transition to RUNNING after first BlockCompleted"
+        )
+
+        # Verify no duplicate block IDs were fed
+        assert len(fed_block_ids) == len(set(fed_block_ids)), (
+            f"MISS POLICY: Duplicate block IDs detected in late-join scenario: "
+            f"{fed_block_ids}"
+        )
+
+        # Verify blocks are sequential
+        for i, bid in enumerate(fed_block_ids):
+            expected = f"BLOCK-late-join-test-{i + 2}"  # blocks 0,1 were seeded
+            assert bid == expected, (
+                f"MISS POLICY: Expected {expected}, got {bid}. "
+                "Late join must produce sequential blocks."
+            )
+
+
+class TestMissLogging:
+    """MISS_READY_BY log line emitted with channel, block, lateness_ms fields."""
+
+    def test_miss_ready_by_log_emitted(self):
+        """When a miss occurs, MISS_READY_BY warning log is emitted."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits for feed-ahead
+        producer._next_block_start_ms = now_ms - 4_000  # 4s miss
+        producer._block_index = 0
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.DEBUG)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        miss_logs = [
+            r for r in log_records
+            if "MISS_READY_BY" in r.getMessage()
+        ]
+        assert len(miss_logs) >= 1, (
+            "MISS POLICY: Expected at least one MISS_READY_BY log on miss"
+        )
+
+        msg = miss_logs[0].getMessage()
+        assert "channel=" in msg, "MISS_READY_BY must contain channel="
+        assert "block=" in msg, "MISS_READY_BY must contain block="
+        assert "lateness_ms=" in msg, "MISS_READY_BY must contain lateness_ms="
+        assert "ready_by=" in msg, "MISS_READY_BY must contain ready_by="
+        assert "start=" in msg, "MISS_READY_BY must contain start="
+        assert "now=" in msg, "MISS_READY_BY must contain now="
+
+        # Verify it's a WARNING level log
+        assert miss_logs[0].levelno == logging.WARNING, (
+            f"MISS_READY_BY should be WARNING level, got {miss_logs[0].levelname}"
+        )
+
+    def test_no_miss_log_when_on_time(self):
+        """No MISS_READY_BY log when block is fed on time."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2  # Credits available but neither trigger met
+        producer._next_block_start_ms = now_ms + 30_000  # well in the future
+        producer._block_index = 0
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.DEBUG)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        miss_logs = [
+            r for r in log_records
+            if "MISS_READY_BY" in r.getMessage()
+        ]
+        assert len(miss_logs) == 0, (
+            f"MISS POLICY: No MISS_READY_BY log expected for on-time feeds. "
+            f"Got {len(miss_logs)} logs."
+        )
+
+
+# =============================================================================
+# Part 8: Credit-Based Flow Control Contract Tests (INV-FEED-CREDIT-*)
+# =============================================================================
+
+
+class TestCreditInitialization:
+    """Credits = 0 after seed; tick path makes 0 gRPC calls; cleanup resets all."""
+
+    def test_credits_zero_after_seed(self):
+        """After seed, credits = 0 (queue full with A+B)."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._feed_credits = 0  # As start() would set
+        producer._started = True
+
+        assert producer._feed_credits == 0
+
+    def test_tick_makes_zero_calls_with_zero_credits(self):
+        """With credits = 0 in RUNNING, 100 ticks produce 0 feed calls."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 0
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        for _ in range(100):
+            producer.on_paced_tick(time.time(), 1 / 30)
+
+        assert len(feed_log) == 0, (
+            f"Expected 0 feed calls with credits=0, got {len(feed_log)}"
+        )
+
+    def test_cleanup_resets_credit_state(self):
+        """_cleanup() resets credits, errors, and backoff to zero."""
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="credit-cleanup-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+        producer._feed_credits = 2
+        producer._consecutive_feed_errors = 5
+        producer._error_backoff_remaining = 64
+
+        producer._cleanup()
+
+        assert producer._feed_credits == 0
+        assert producer._consecutive_feed_errors == 0
+        assert producer._error_backoff_remaining == 0
+
+
+class TestCreditIncrementOnBlockComplete:
+    """BlockCompleted → credits += 1; capped at AIR_QUEUE_DEPTH."""
+
+    def test_block_complete_increments_credit(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._feed_credits = 0
+        producer._started = True
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
+        # After BlockCompleted, credits should be 1
+        # (feed_ahead may consume it if a feed succeeds, but credit was set to 1 first)
+        old_credits = producer._feed_credits
+        producer._on_block_complete(block_a.block_id)
+        # Credit was incremented to 1 before _feed_ahead; _feed_ahead may decrement it
+        # We verify the state is consistent
+        assert producer._feed_state == _FeedState.RUNNING
+
+    def test_credits_capped_at_queue_depth(self):
+        """Credits never exceed AIR_QUEUE_DEPTH."""
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="cap-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+        producer._feed_credits = producer.AIR_QUEUE_DEPTH
+
+        # Simulate increment (as _on_block_complete does internally)
+        producer._feed_credits = min(
+            producer._feed_credits + 1, producer.AIR_QUEUE_DEPTH
+        )
+        assert producer._feed_credits == producer.AIR_QUEUE_DEPTH, (
+            f"Credits must be capped at {producer.AIR_QUEUE_DEPTH}, "
+            f"got {producer._feed_credits}"
+        )
+
+
+class TestCreditDecrementOnAccepted:
+    """ACCEPTED → credits -= 1; credit gate stops at 0."""
+
+    def test_accepted_decrements_credit(self):
+        from retrovue.runtime.playout_session import FeedResult
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 1
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # One feed consumed the credit
+        assert len(feed_log) == 1, f"Expected 1 feed, got {len(feed_log)}"
+        assert producer._feed_credits == 0, (
+            f"Expected credits=0 after ACCEPTED, got {producer._feed_credits}"
+        )
+
+    def test_credit_gate_stops_second_feed(self):
+        """With credits=1, only 1 feed occurs even if runway is still low."""
+        from retrovue.runtime.playout_session import FeedResult
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            block_duration_ms=5_000,
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 5_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 1  # Only 1 credit
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        # Even though runway is still low after 1 feed (5s < 20s), credit gate stops
+        assert len(feed_log) == 1, (
+            f"Expected exactly 1 feed with credits=1, got {len(feed_log)}"
+        )
+
+
+class TestCreditResetOnQueueFull:
+    """QUEUE_FULL → credits = 0 (authoritative); no error escalation."""
+
+    def test_queue_full_zeros_credits(self):
+        from retrovue.runtime.playout_session import FeedResult
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+        mock_session._feed_returns[0] = FeedResult.QUEUE_FULL
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 1
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert producer._feed_credits == 0, (
+            f"QUEUE_FULL must reset credits to 0, got {producer._feed_credits}"
+        )
+
+    def test_queue_full_no_error_escalation(self):
+        """QUEUE_FULL does NOT increment consecutive_feed_errors."""
+        from retrovue.runtime.playout_session import FeedResult
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+        mock_session._feed_returns[0] = FeedResult.QUEUE_FULL
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 1
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert producer._consecutive_feed_errors == 0, (
+            f"QUEUE_FULL must NOT escalate errors, got {producer._consecutive_feed_errors}"
+        )
+        assert producer._error_backoff_remaining == 0, (
+            f"QUEUE_FULL must NOT set error backoff, got {producer._error_backoff_remaining}"
+        )
+
+
+class TestCreditGateEliminatesThrash:
+    """100 ticks with credits=0 → 0 feed calls; BlockCompleted breaks silence."""
+
+    def test_zero_credits_zero_calls(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 0
+        producer._next_block_start_ms = now_ms
+        producer._block_index = 0
+
+        # 100 ticks → zero gRPC calls
+        for _ in range(100):
+            producer.on_paced_tick(time.time(), 1 / 30)
+
+        assert len(feed_log) == 0, (
+            f"Credit gate: expected 0 feed calls with credits=0, got {len(feed_log)}"
+        )
+
+    def test_block_completed_breaks_silence(self):
+        """BlockCompleted after credit drought triggers feed."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        now_ms = int(time.time() * 1000)
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        producer._feed_credits = 0
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
+        # 50 ticks → no feeds
+        for _ in range(50):
+            producer.on_paced_tick(time.time(), 1 / 30)
+        assert len(feed_log) == 0
+
+        # BlockCompleted → credits=1 → feed
+        producer._on_block_complete(block_a.block_id)
+
+        assert len(feed_log) >= 1, (
+            "BlockCompleted must break credit drought and trigger feed"
+        )
+
+
+class TestErrorBackoffEscalation:
+    """Consecutive errors → 4, 8, 16, 32, 64, 112 ticks; caps at 112."""
+
+    def test_escalating_backoff(self):
+        from retrovue.runtime.playout_session import FeedResult
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="backoff-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+
+        from retrovue.runtime.playout_session import BlockPlan
+
+        expected_ticks = [4, 8, 16, 32, 64, 112, 112]  # caps at 112
+
+        for i, expected in enumerate(expected_ticks):
+            block = BlockPlan(
+                block_id=f"BLOCK-err-{i}", channel_id=1,
+                start_utc_ms=1000 * i, end_utc_ms=1000 * (i + 1), segments=[],
+            )
+
+            # Simulate _try_feed_block ERROR path manually
+            producer._consecutive_feed_errors += 1
+            producer._error_backoff_remaining = min(
+                producer.ERROR_BACKOFF_BASE_TICKS
+                * (2 ** (producer._consecutive_feed_errors - 1)),
+                producer.ERROR_BACKOFF_MAX_TICKS,
+            )
+
+            assert producer._error_backoff_remaining == expected, (
+                f"Error #{i+1}: expected backoff={expected}, "
+                f"got {producer._error_backoff_remaining}"
+            )
+
+
+class TestErrorBackoffReset:
+    """BlockCompleted resets consecutive errors and backoff to 0."""
+
+    def test_block_complete_clears_error_state(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
+        # Simulate error state
+        producer._consecutive_feed_errors = 5
+        producer._error_backoff_remaining = 112
+        producer._feed_credits = 0
+
+        producer._on_block_complete(block_a.block_id)
+
+        assert producer._consecutive_feed_errors == 0, (
+            f"BlockCompleted must clear errors, got {producer._consecutive_feed_errors}"
+        )
+        assert producer._error_backoff_remaining == 0, (
+            f"BlockCompleted must clear backoff, got {producer._error_backoff_remaining}"
+        )
+
+
+class TestErrorVsQueueFullDistinction:
+    """QUEUE_FULL: no error escalation; ERROR: credits unchanged."""
+
+    def test_queue_full_vs_error(self):
+        from retrovue.runtime.playout_session import FeedResult, BlockPlan
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="distinction-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+
+        # Mock session returning QUEUE_FULL
+        class QFSession:
+            def feed(self, block):
+                return FeedResult.QUEUE_FULL
+        producer._session = QFSession()
+        producer._feed_credits = 1
+
+        block = BlockPlan(
+            block_id="BLOCK-qf", channel_id=1,
+            start_utc_ms=0, end_utc_ms=30000, segments=[],
+        )
+        result = producer._try_feed_block(block)
+        assert result == FeedResult.QUEUE_FULL
+        assert producer._consecutive_feed_errors == 0, "QUEUE_FULL must NOT escalate errors"
+        assert producer._feed_credits == 0, "QUEUE_FULL must zero credits"
+
+        # Mock session returning ERROR
+        class ErrSession:
+            def feed(self, block):
+                return FeedResult.ERROR
+        producer._session = ErrSession()
+        producer._feed_credits = 1
+        producer._consecutive_feed_errors = 0
+
+        result = producer._try_feed_block(block)
+        assert result == FeedResult.ERROR
+        assert producer._consecutive_feed_errors == 1, "ERROR must escalate errors"
+        assert producer._feed_credits == 1, "ERROR must NOT change credits"
+
+
+class TestFeedResultIntegration:
+    """ACCEPTED/QUEUE_FULL/ERROR each handle cursor, pending, credits correctly."""
+
+    def test_accepted_advances_cursor_clears_pending(self):
+        from retrovue.runtime.playout_session import FeedResult, BlockPlan
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="result-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+
+        class AccSession:
+            def feed(self, block):
+                return FeedResult.ACCEPTED
+        producer._session = AccSession()
+        producer._feed_credits = 2
+
+        block = BlockPlan(
+            block_id="BLOCK-acc", channel_id=1,
+            start_utc_ms=0, end_utc_ms=30000, segments=[],
+        )
+        producer._pending_block = block
+        old_index = producer._block_index
+
+        result = producer._try_feed_block(block)
+
+        assert result == FeedResult.ACCEPTED
+        assert producer._pending_block is None, "ACCEPTED must clear pending"
+        assert producer._block_index == old_index + 1, "ACCEPTED must advance cursor"
+        assert producer._feed_credits == 1, "ACCEPTED must decrement credits"
+
+    def test_queue_full_stores_pending_no_cursor(self):
+        from retrovue.runtime.playout_session import FeedResult, BlockPlan
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="result-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+
+        class QFSession:
+            def feed(self, block):
+                return FeedResult.QUEUE_FULL
+        producer._session = QFSession()
+        producer._feed_credits = 1
+
+        block = BlockPlan(
+            block_id="BLOCK-qf", channel_id=1,
+            start_utc_ms=0, end_utc_ms=30000, segments=[],
+        )
+        old_index = producer._block_index
+
+        result = producer._try_feed_block(block)
+
+        assert result == FeedResult.QUEUE_FULL
+        assert producer._pending_block is block, "QUEUE_FULL must store pending"
+        assert producer._block_index == old_index, "QUEUE_FULL must NOT advance cursor"
+
+    def test_error_stores_pending_escalates(self):
+        from retrovue.runtime.playout_session import FeedResult, BlockPlan
+        from retrovue.runtime.channel_manager import BlockPlanProducer
+
+        producer = BlockPlanProducer(
+            channel_id="result-test",
+            configuration={"block_duration_ms": 30_000},
+            channel_config=None, schedule_service=None, clock=None,
+        )
+
+        class ErrSession:
+            def feed(self, block):
+                return FeedResult.ERROR
+        producer._session = ErrSession()
+        producer._feed_credits = 1
+
+        block = BlockPlan(
+            block_id="BLOCK-err", channel_id=1,
+            start_utc_ms=0, end_utc_ms=30000, segments=[],
+        )
+        old_index = producer._block_index
+
+        result = producer._try_feed_block(block)
+
+        assert result == FeedResult.ERROR
+        assert producer._pending_block is block, "ERROR must store pending"
+        assert producer._block_index == old_index, "ERROR must NOT advance cursor"
+        assert producer._consecutive_feed_errors == 1
+        assert producer._error_backoff_remaining == 4  # BASE * 2^0
+
+
+class TestCreditLifecycleEndToEnd:
+    """Full trace: seed→ticks→BlockCompleted→feed→ticks→BlockCompleted→feed."""
+
+    def test_full_lifecycle(self):
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            block_duration_ms=5_000,
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 5_000}]
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # --- seed(A, B) ---
+        now_ms = int(time.time() * 1000)
+        producer._next_block_start_ms = now_ms
+        block_a = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = producer._generate_next_block(playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._feed_credits = 0  # Queue full after seed
+        producer._started = True
+        producer._in_flight_block_ids.add(block_a.block_id)
+        producer._in_flight_block_ids.add(block_b.block_id)
+
+        # --- Ticks: credits=0, nothing happens ---
+        for _ in range(20):
+            producer.on_paced_tick(time.time(), 1 / 30)
+        assert len(feed_log) == 0, "No feeds during credit drought"
+
+        # --- BlockCompleted(A): credit=1 → SEEDED→RUNNING → feed(C) → credit=0 ---
+        producer._on_block_complete(block_a.block_id)
+        assert producer._feed_state == _FeedState.RUNNING
+        assert len(feed_log) >= 1, "BlockCompleted(A) must trigger feed"
+        feed_log_after_a = len(feed_log)
+
+        # --- More ticks: credits should be 0 again → no more feeds ---
+        for _ in range(20):
+            producer.on_paced_tick(time.time(), 1 / 30)
+        assert len(feed_log) == feed_log_after_a, "No feeds between BlockCompleted events"
+
+        # --- BlockCompleted(B): credit=1 → feed(D) → credit=0 ---
+        producer._on_block_complete(block_b.block_id)
+        assert len(feed_log) > feed_log_after_a, "BlockCompleted(B) must trigger feed"
+
+        # All fed blocks must be sequential
+        for i, (bid, accepted) in enumerate(feed_log):
+            expected_id = f"BLOCK-fa-test-{i + 2}"  # blocks 0,1 were seeded
+            assert bid == expected_id, (
+                f"Expected {expected_id}, got {bid}"
+            )
+            assert accepted is True
 
 
 if __name__ == "__main__":

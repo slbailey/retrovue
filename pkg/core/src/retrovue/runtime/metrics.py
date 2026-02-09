@@ -118,9 +118,51 @@ try:
         "Count of SwitchToLive calls with insufficient lead time",
         ["channel_id"],
     )
+
+    # Feed-ahead controller metrics
+    feed_ahead_horizon_current_ms = Histogram(
+        "retrovue_feed_ahead_horizon_current_ms",
+        "Actual feed-ahead runway in ms at each feed decision",
+        ["channel_id"],
+        buckets=[0, 1000, 2000, 5000, 10000, 15000, 20000, 30000, 60000],
+    )
+    feed_ahead_horizon_target_ms = Histogram(
+        "retrovue_feed_ahead_horizon_target_ms",
+        "Target ready_by lead time in ms for each fed block",
+        ["channel_id"],
+        buckets=[0, 1000, 2000, 5000, 10000, 15000, 20000, 30000, 60000],
+    )
+    feed_ahead_ready_by_miss_total = Counter(
+        "retrovue_feed_ahead_ready_by_miss_total",
+        "Count of blocks fed after their ready_by deadline had passed",
+        ["channel_id"],
+    )
+    feed_ahead_miss_lateness_ms = Histogram(
+        "retrovue_feed_ahead_miss_lateness_ms",
+        "How late in ms a block was fed past its start_utc_ms",
+        ["channel_id"],
+        buckets=[0, 500, 1000, 2000, 5000, 10000, 30000, 60000],
+    )
+    feed_credits_at_decision = Histogram(
+        "retrovue_feed_credits_at_decision",
+        "Available feed credits when _feed_ahead evaluates",
+        ["channel_id"],
+        buckets=[0, 1, 2],
+    )
+    feed_error_backoff_total = Counter(
+        "retrovue_feed_error_backoff_total",
+        "Count of error backoff activations (gRPC/transport failures)",
+        ["channel_id"],
+    )
 except ImportError:
     prefeed_lead_time_ms = None
     prefeed_lead_time_violations_total = None
     switch_lead_time_ms = None
     switch_lead_time_violations_total = None
+    feed_ahead_horizon_current_ms = None
+    feed_ahead_horizon_target_ms = None
+    feed_ahead_ready_by_miss_total = None
+    feed_ahead_miss_lateness_ms = None
+    feed_credits_at_decision = None
+    feed_error_backoff_total = None
 
