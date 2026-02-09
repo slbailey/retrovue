@@ -43,7 +43,11 @@ class ProducerPreloader {
   //   block: the FedBlock to assign (copied for thread safety)
   //   width, height: output dimensions for the TickProducer
   //   fps: frame rate for the TickProducer
-  void StartPreload(const FedBlock& block, int width, int height, double fps);
+  //   min_audio_prime_ms: if > 0, PrimeFirstTick must reach this audio
+  //     threshold for the preload to be considered READY.  If the threshold
+  //     is not met, IsReady() stays false (preload failure).
+  void StartPreload(const FedBlock& block, int width, int height, double fps,
+                    int min_audio_prime_ms = 0);
 
   // Non-blocking: true if the background work has finished.
   bool IsReady() const;
@@ -60,7 +64,8 @@ class ProducerPreloader {
   void SetDelayHook(DelayHookFn hook);
 
  private:
-  void Worker(FedBlock block, int width, int height, double fps);
+  void Worker(FedBlock block, int width, int height, double fps,
+              int min_audio_prime_ms);
   void JoinThread();
 
   std::thread thread_;

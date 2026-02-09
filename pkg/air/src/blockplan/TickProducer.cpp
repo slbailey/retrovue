@@ -210,6 +210,65 @@ void TickProducer::PrimeFirstFrame() {
 }
 
 // =============================================================================
+// PrimeFirstTick — INV-AUDIO-PRIME-001: prime video + audio for fence readiness
+// =============================================================================
+
+bool TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
+  PrimeFirstFrame();
+  if (!primed_frame_.has_value()) return false;
+
+  // No audio threshold → behaves like PrimeFirstFrame.
+  if (min_audio_prime_ms <= 0) return true;
+
+  // Count audio already in primed frame.
+  int64_t audio_samples = 0;
+  for (const auto& af : primed_frame_->audio) {
+    audio_samples += af.nb_samples;
+  }
+
+  int depth_ms = static_cast<int>(
+      (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
+  if (depth_ms >= min_audio_prime_ms) return true;
+
+  // Continue decoding to accumulate audio.  Additional video frames are
+  // stored in buffered_frames_ (with empty audio — audio goes to primed).
+  constexpr int kMaxPrimeDecodes = 30;
+  for (int i = 0; i < kMaxPrimeDecodes; i++) {
+    // Use the same decode path as TryGetFrame (segment boundary handling,
+    // EOF loop, etc.) but call the live-decode section directly.
+    // We temporarily clear primed_frame_ so TryGetFrame doesn't return it,
+    // then restore it after.
+    auto held = std::move(primed_frame_);
+    primed_frame_.reset();
+    auto fd = TryGetFrame();
+    primed_frame_ = std::move(held);
+
+    if (!fd) break;  // Content exhausted or decode failure
+
+    // Move audio into primed_frame_; keep video in buffered.
+    for (auto& af : fd->audio) {
+      audio_samples += af.nb_samples;
+      primed_frame_->audio.push_back(std::move(af));
+    }
+    fd->audio.clear();
+    buffered_frames_.push_back(std::move(*fd));
+
+    depth_ms = static_cast<int>(
+        (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
+    if (depth_ms >= min_audio_prime_ms) break;
+  }
+
+  std::cout << "[TickProducer] INV-AUDIO-PRIME-001: PrimeFirstTick"
+            << " wanted_ms=" << min_audio_prime_ms
+            << " got_ms=" << depth_ms
+            << " buffered_video=" << buffered_frames_.size()
+            << " audio_frames=" << primed_frame_->audio.size()
+            << std::endl;
+
+  return depth_ms >= min_audio_prime_ms;
+}
+
+// =============================================================================
 // TryGetFrame — decode one frame, advance internal position
 // =============================================================================
 
@@ -222,6 +281,13 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (primed_frame_.has_value()) {
     auto frame = std::move(*primed_frame_);
     primed_frame_.reset();
+    return frame;
+  }
+
+  // INV-AUDIO-PRIME-001: return buffered frames from PrimeFirstTick
+  if (!buffered_frames_.empty()) {
+    auto frame = std::move(buffered_frames_.front());
+    buffered_frames_.pop_front();
     return frame;
   }
 
@@ -355,6 +421,7 @@ void TickProducer::Reset() {
   frames_per_block_ = 0;
   boundaries_.clear();
   primed_frame_.reset();
+  buffered_frames_.clear();
   input_fps_ = 0.0;
   input_frame_duration_ms_ = frame_duration_ms_;
   state_ = State::kEmpty;

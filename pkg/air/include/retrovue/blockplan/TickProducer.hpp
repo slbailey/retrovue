@@ -12,6 +12,7 @@
 #define RETROVUE_BLOCKPLAN_TICK_PRODUCER_HPP_
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -91,6 +92,15 @@ class TickProducer : public producers::IProducer,
   // Called by ProducerPreloader::Worker after AssignBlock completes.
   void PrimeFirstFrame();
 
+  // INV-AUDIO-PRIME-001: Decode first frame + enough audio to meet threshold.
+  // Calls PrimeFirstFrame internally, then continues decoding until audio
+  // depth accumulated in primed_frame_.audio >= min_audio_prime_ms.
+  // Additional video frames are buffered internally and returned by
+  // subsequent TryGetFrame() calls (non-blocking, before live decode).
+  // Returns true if threshold met (or min_audio_prime_ms <= 0).
+  // Returns false if threshold not met (content exhausted / decode failure).
+  bool PrimeFirstTick(int min_audio_prime_ms);
+
   // --- IProducer ---
   bool start() override;
   void stop() override;
@@ -132,7 +142,14 @@ class TickProducer : public producers::IProducer,
   int64_t input_frame_duration_ms_ = 0;  // Content advance per decode (matches input cadence)
 
   // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
+  // When populated by PrimeFirstTick, audio vector may contain accumulated
+  // audio from multiple decodes (covering min_audio_prime_ms threshold).
   std::optional<FrameData> primed_frame_;
+
+  // INV-AUDIO-PRIME-001: Buffered video frames from PrimeFirstTick audio
+  // priming.  TryGetFrame returns these (FIFO) after primed_frame_, before
+  // live decode.  Audio has been moved into primed_frame_.audio.
+  std::deque<FrameData> buffered_frames_;
 };
 
 }  // namespace retrovue::blockplan

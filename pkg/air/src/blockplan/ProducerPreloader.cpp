@@ -25,7 +25,8 @@ void ProducerPreloader::JoinThread() {
 }
 
 void ProducerPreloader::StartPreload(const FedBlock& block,
-                                   int width, int height, double fps) {
+                                   int width, int height, double fps,
+                                   int min_audio_prime_ms) {
   Cancel();
 
   cancel_requested_.store(false, std::memory_order_release);
@@ -36,7 +37,7 @@ void ProducerPreloader::StartPreload(const FedBlock& block,
   in_progress_ = true;
 
   thread_ = std::thread(&ProducerPreloader::Worker, this,
-                         block, width, height, fps);
+                         block, width, height, fps, min_audio_prime_ms);
 }
 
 bool ProducerPreloader::IsReady() const {
@@ -71,10 +72,12 @@ void ProducerPreloader::SetDelayHook(DelayHookFn hook) {
 
 // =============================================================================
 // Worker — runs on background thread
-// Creates a TickProducer and calls AssignBlock (the heavy work).
+// Creates a TickProducer, calls AssignBlock + PrimeFirstTick.
+// Publishes result only if PrimeFirstTick meets the audio threshold.
 // =============================================================================
 
-void ProducerPreloader::Worker(FedBlock block, int width, int height, double fps) {
+void ProducerPreloader::Worker(FedBlock block, int width, int height,
+                               double fps, int min_audio_prime_ms) {
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
   // Test hook: artificial delay before AssignBlock
@@ -89,16 +92,29 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height, double fps
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  // INV-BLOCK-PRIME-001/006: Decode first frame into held slot.
-  // Direct continuation of AssignBlock on worker thread — no poll, no timer.
-  source->PrimeFirstFrame();
+  // INV-AUDIO-PRIME-001: PrimeFirstTick decodes video frame 0 plus enough
+  // audio to cover min_audio_prime_ms.  All decode I/O happens here on the
+  // worker thread — the fence path does zero decode.
+  bool primed = source->PrimeFirstTick(min_audio_prime_ms);
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
+
+  // If an audio threshold was requested but not met, treat as preload
+  // failure.  IsReady() stays false, forcing the fence path into its
+  // fallback/detach logic rather than swapping in a producer with no audio.
+  if (!primed && min_audio_prime_ms > 0) {
+    std::cerr << "[ProducerPreloader] AUDIO_PRIME_FAIL: block=" << block.block_id
+              << " wanted_ms=" << min_audio_prime_ms
+              << " decoder_ok=" << source->HasDecoder()
+              << std::endl;
+    return;  // result_ remains null — IsReady() == false
+  }
 
   std::cout << "[ProducerPreloader] Preload complete: block=" << block.block_id
             << " state=" << (source->GetState() == ITickProducer::State::kReady
                                  ? "READY" : "EMPTY")
             << " decoder_ok=" << source->HasDecoder()
+            << " has_primed=" << source->HasPrimedFrame()
             << std::endl;
 
   {

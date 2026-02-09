@@ -51,6 +51,12 @@ void VideoLookaheadBuffer::StartFilling(
   // INV-BLOCK-PRIME-002: Consume primed frame synchronously (non-blocking).
   // This guarantees the buffer has at least one frame immediately after
   // StartFilling returns, enabling the fence-tick to pop without delay.
+  // INV-AUDIO-PRIME-001: When primed via PrimeFirstTick, the primed frame's
+  // audio vector contains accumulated audio from multiple decodes (covering
+  // the audio prime threshold).  All audio is pushed to AudioLookaheadBuffer
+  // here in one call — zero decode I/O on the tick thread.
+  // Buffered video frames from PrimeFirstTick are returned by TryGetFrame
+  // in the fill thread (they sit in TickProducer::buffered_frames_).
   if (producer_->HasPrimedFrame()) {
     auto fd = producer_->TryGetFrame();
     if (fd) {
@@ -85,6 +91,10 @@ void VideoLookaheadBuffer::StartFilling(
   std::cout << std::endl;
 
   fill_running_ = true;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fill_generation_++;  // New generation for new fill thread
+  }
   fill_thread_ = std::thread(&VideoLookaheadBuffer::FillLoop, this);
 }
 
@@ -114,6 +124,33 @@ void VideoLookaheadBuffer::StopFilling(bool flush) {
   stop_signal_ = nullptr;
 }
 
+// =============================================================================
+// StopFillingAsync — signal fill thread, flush, extract thread for deferred join
+// =============================================================================
+
+VideoLookaheadBuffer::DetachedFill
+VideoLookaheadBuffer::StopFillingAsync(bool flush) {
+  DetachedFill result;
+  if (fill_running_) {
+    fill_stop_.store(true, std::memory_order_release);
+    space_cv_.notify_all();
+    result.thread = std::move(fill_thread_);
+    fill_running_ = false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fill_generation_++;  // Invalidate any in-flight push from old thread
+    if (flush) {
+      frames_.clear();
+      primed_ = false;
+    }
+  }
+  producer_ = nullptr;
+  audio_buffer_ = nullptr;
+  stop_signal_ = nullptr;
+  return result;
+}
+
 bool VideoLookaheadBuffer::IsFilling() const {
   return fill_running_;
 }
@@ -123,6 +160,19 @@ bool VideoLookaheadBuffer::IsFilling() const {
 // =============================================================================
 
 void VideoLookaheadBuffer::FillLoop() {
+  // Capture generation at thread start; any mismatch means fence happened.
+  uint64_t my_gen;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    my_gen = fill_generation_;
+  }
+
+  // Capture audio generation for generation-gated audio pushes.
+  uint64_t my_audio_gen = 0;
+  if (audio_buffer_) {
+    my_audio_gen = audio_buffer_->CurrentGeneration();
+  }
+
   // --- Cadence setup (same logic as old PipelineManager::InitCadence) ---
   bool cadence_active = false;
   double cadence_ratio = 0.0;
@@ -206,10 +256,13 @@ void VideoLookaheadBuffer::FillLoop() {
         vf.block_ct_ms = fd->block_ct_ms;
         vf.was_decoded = true;
 
-        // Push decoded audio to AudioLookaheadBuffer.
+        // Bail out before pushing if stop was requested or generation changed.
+        if (fill_stop_.load(std::memory_order_acquire)) break;
+
+        // Push decoded audio to AudioLookaheadBuffer (generation-gated).
         if (audio_buffer_) {
           for (auto& af : fd->audio) {
-            audio_buffer_->Push(std::move(af));
+            audio_buffer_->Push(std::move(af), my_audio_gen);
           }
         }
       } else if (have_last_decoded) {
@@ -233,9 +286,13 @@ void VideoLookaheadBuffer::FillLoop() {
       continue;
     }
 
-    // Push to buffer.
+    // Bail out before pushing if stop was requested or generation changed.
+    if (fill_stop_.load(std::memory_order_acquire)) break;
+
+    // Push to buffer — generation gate prevents stale-frame bleed.
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (fill_generation_ != my_gen) break;  // Fence happened during decode
       frames_.push_back(std::move(vf));
       total_pushed_++;
       primed_ = true;

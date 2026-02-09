@@ -41,6 +41,14 @@ extern "C" {
 
 namespace retrovue::blockplan {
 
+// INV-AUDIO-PRIME-001: Minimum audio buffer depth (ms) required from
+// TickProducer::PrimeFirstTick.  The preloader worker thread calls
+// PrimeFirstTick which accumulates audio into the primed frame's audio
+// vector.  StartFilling() consumes the primed frame synchronously, pushing
+// all accumulated audio to the AudioLookaheadBuffer in one non-blocking call.
+// At 30fps, one tick ≈ 33ms.  100ms gives ~3 ticks of margin.
+static constexpr int kMinAudioPrimeMs = 100;
+
 PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
     Callbacks callbacks)
@@ -72,6 +80,13 @@ void PipelineManager::Stop() {
     thread_.join();
   }
   started_ = false;
+}
+
+void PipelineManager::CleanupDeferredFill() {
+  if (deferred_fill_thread_.joinable()) {
+    deferred_fill_thread_.join();
+  }
+  deferred_producer_.reset();
 }
 
 PipelineMetrics PipelineManager::SnapshotMetrics() const {
@@ -177,7 +192,8 @@ void PipelineManager::TryKickoffPreviewPreload() {
     ctx_->block_queue.erase(ctx_->block_queue.begin());
   }
 
-  preloader_->StartPreload(block, ctx_->width, ctx_->height, ctx_->fps);
+  preloader_->StartPreload(block, ctx_->width, ctx_->height, ctx_->fps,
+                           kMinAudioPrimeMs);
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.next_preload_started_count++;
@@ -473,6 +489,14 @@ void PipelineManager::Run() {
   int64_t fence_session_frame = -1;
   int64_t fence_pad_counter = 0;  // pad frames since last fence
 
+  // Seam-proof diagnostics: track fence activation for post-emission logging.
+  // Answers: did block B activate on the fence tick? Is there cross-block bleed?
+  int64_t seam_proof_fence_tick = -1;        // Outgoing block's fence tick
+  std::string seam_proof_outgoing_id;        // Outgoing block ID at last fence
+  std::string seam_proof_incoming_id;        // Incoming block ID (empty = no swap)
+  bool seam_proof_swapped = false;           // Whether swap succeeded
+  bool seam_proof_first_frame_logged = true; // First incoming content frame logged?
+
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
     // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
@@ -511,51 +535,183 @@ void PipelineManager::Run() {
     if (session_frame_index >= block_fence_frame_ &&
         live_tp()->GetState() == ITickProducer::State::kReady) {
 
-      // INV-VIDEO-LOOKAHEAD-001: Stop fill thread and flush buffer.
-      // Remaining frames are from the outgoing block; the fence tick
-      // belongs to the NEW block.
-      video_buffer_->StopFilling(/*flush=*/true);
+      // Step 1: Join PREVIOUS fence's deferred fill thread (fast: had full
+      // block duration to exit).
+      CleanupDeferredFill();
 
-      // Snapshot outgoing block before A/B swap.
+      // Step 2: G1 FIX — Non-blocking async stop.  Signal fill thread,
+      // flush buffer, bump generation.  Does NOT join.
+      auto detached = video_buffer_->StopFillingAsync(/*flush=*/true);
+
+      // Step 3: G4 FIX — Flush stale audio + bump audio generation.
+      // Safe: fill_stop_ is set, video generation is bumped — any late
+      // audio Push from the old fill thread is rejected by generation gate.
+      audio_buffer_->Reset();
+
+      // Step 4: Snapshot outgoing block and finalize accumulator.
       const FedBlock outgoing_block = live_tp()->GetBlock();
+      // Finalize accumulator NOW (before reset) — results emitted after swap.
+      std::optional<BlockPlaybackSummary> outgoing_summary;
+      std::optional<BlockPlaybackProof> outgoing_proof;
       int64_t ct_at_fence_ms = -1;
-
-      // P3.3: Finalize and emit playback summary + proof before swap
       if (!block_acc.block_id.empty()) {
         auto summary = block_acc.Finalize();
         ct_at_fence_ms = summary.last_block_ct_ms;
-        std::cout << FormatPlaybackSummary(summary) << std::endl;
-        if (callbacks_.on_block_summary) {
-          callbacks_.on_block_summary(summary);
-        }
-
-        // P3.3b: Build and emit playback proof (wanted vs showed)
         auto proof = BuildPlaybackProof(
             outgoing_block, summary, clock.FrameDurationMs());
-        std::cout << FormatPlaybackProof(proof) << std::endl;
-        if (callbacks_.on_playback_proof) {
-          callbacks_.on_playback_proof(proof);
+        outgoing_summary = std::move(summary);
+        outgoing_proof = std::move(proof);
+      }
+
+      // Save old live_ — must stay alive until deferred fill thread exits.
+      auto outgoing_producer = std::move(live_);
+      // Recreate live_ as empty TickProducer for potential swap below.
+      live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+
+      // Step 5: INV-BLOCK-WALLFENCE-004: Execute A/B swap BEFORE frame emission.
+      bool swapped = false;
+
+      // 5a) Already have a preview_ ready?
+      if (preview_ &&
+          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+        live_ = std::move(preview_);
+        swapped = true;
+      }
+
+      // 5b) Preloader has one ready?
+      if (!swapped) {
+        auto preloaded = TryTakePreviewProducer();
+        if (preloaded &&
+            AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
+          live_ = std::move(preloaded);
+          swapped = true;
+        }
+      }
+
+      // Step 6: G5 FIX — Policy-gated fence fallback.
+      if (!swapped) {
+        if (ctx_->fence_fallback_sync) {
+          // DEV MODE: synchronous fallback — blocks on probe+open+seek.
+          std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+          if (!ctx_->block_queue.empty()) {
+            FedBlock block = ctx_->block_queue.front();
+            ctx_->block_queue.erase(ctx_->block_queue.begin());
+            auto fresh = std::make_unique<TickProducer>(
+                ctx_->width, ctx_->height, ctx_->fps);
+            AsTickProducer(fresh.get())->AssignBlock(block);
+            live_ = std::move(fresh);
+            swapped = true;
+          }
+        } else {
+          // STRICT MODE: preload miss is a session-stopping invariant failure.
+          std::cerr << "[PipelineManager] INV-FENCE-READY VIOLATION: preload not ready at fence "
+                    << session_frame_index << ". Detaching." << std::endl;
+          { std::lock_guard<std::mutex> lock(metrics_mutex_);
+            metrics_.fence_preload_miss_count++;
+            metrics_.detach_count++; }
+          ctx_->stop_requested.store(true, std::memory_order_release);
+          break;
+        }
+      }
+
+      // Step 7: If not swapped, enter pad mode.
+      if (!swapped) {
+        live_tp()->Reset();
+        block_fence_frame_ = INT64_MAX;
+        past_fence = true;
+      }
+
+      // Step 8: If swapped, start block B immediately.
+      // INV-AUDIO-PRIME-001: The producer's primed frame (from PrimeFirstTick)
+      // contains video frame 0 + accumulated audio covering kMinAudioPrimeMs.
+      // StartFilling consumes this primed frame synchronously, pushing all
+      // audio to AudioLookaheadBuffer in one non-blocking call.  Zero decode
+      // I/O on the tick thread.  Buffered video frames from PrimeFirstTick
+      // are returned by subsequent TryGetFrame calls in the fill thread.
+      if (swapped) {
+        // Compute fence for the new block.
+        block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
+        // INV-FRAME-BUDGET-002: Budget derived from fence, not FramesPerBlock().
+        remaining_block_frames_ = block_fence_frame_ - session_frame_index;
+        if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
+        {
+          std::lock_guard<std::mutex> lock(metrics_mutex_);
+          metrics_.source_swap_count++;
+        }
+        past_fence = false;
+
+        // P3.3: Reset accumulator for new block
+        block_acc.Reset(live_tp()->GetBlock().block_id);
+        emit_block_start("preview");
+        // INV-VIDEO-LOOKAHEAD-001: Start fill thread with new producer.
+        // Bumps video generation; new fill thread captures audio generation.
+        video_buffer_->StartFilling(
+            live_tp(), audio_buffer_.get(),
+            live_tp()->GetInputFPS(), ctx_->fps,
+            &ctx_->stop_requested);
+
+        // INV-AUDIO-PRIME-001: Post-activation verification.
+        // After StartFilling consumed the primed frame (which carries all
+        // accumulated audio from PrimeFirstTick), audio_buffer_ must have
+        // at least kMinAudioPrimeMs of depth.  If not, the primed payload
+        // was deficient — count as fence_preload_miss and detach.
+        if (!ctx_->fence_fallback_sync) {
+          int audio_depth = audio_buffer_->DepthMs();
+          if (audio_depth < kMinAudioPrimeMs) {
+            std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001 VIOLATION: "
+                      << "audio_depth_ms=" << audio_depth
+                      << " required=" << kMinAudioPrimeMs
+                      << " at fence frame " << session_frame_index
+                      << ". Detaching." << std::endl;
+            { std::lock_guard<std::mutex> lock(metrics_mutex_);
+              metrics_.fence_preload_miss_count++;
+              metrics_.detach_count++; }
+            ctx_->stop_requested.store(true, std::memory_order_release);
+            break;
+          }
         }
 
-        // Audit: BLOCK_COMPLETE
-        {
-          int64_t base_offset = !outgoing_block.segments.empty()
-              ? outgoing_block.segments[0].asset_start_offset_ms : 0;
-          std::cout << "[PipelineManager] BLOCK_COMPLETE"
-                    << " block=" << summary.block_id
-                    << " fence_frame=" << block_fence_frame_
-                    << " emitted=" << summary.frames_emitted
-                    << " pad=" << summary.pad_frames
-                    << " asset=" << (!summary.asset_uris.empty()
-                        ? summary.asset_uris[0] : "pad");
-          if (summary.first_block_ct_ms >= 0) {
-            std::cout << " range_ms="
-                      << (base_offset + summary.first_block_ct_ms)
-                      << "->"
-                      << (base_offset + summary.last_block_ct_ms);
-          }
-          std::cout << std::endl;
+        // Immediately kick off preload for the following block.
+        TryKickoffPreviewPreload();
+      }
+
+      // Step 9: Store deferred thread + producer for later cleanup.
+      deferred_fill_thread_ = std::move(detached.thread);
+      deferred_producer_ = std::move(outgoing_producer);
+
+      // Step 10: G2 FIX — Emit finalization logs AFTER swap+StartFilling.
+      // Summary and proof were computed in Step 4 (before swap), emitted now.
+      if (outgoing_summary) {
+        std::cout << FormatPlaybackSummary(*outgoing_summary) << std::endl;
+        if (callbacks_.on_block_summary) {
+          callbacks_.on_block_summary(*outgoing_summary);
         }
+      }
+      if (outgoing_proof) {
+        std::cout << FormatPlaybackProof(*outgoing_proof) << std::endl;
+        if (callbacks_.on_playback_proof) {
+          callbacks_.on_playback_proof(*outgoing_proof);
+        }
+      }
+
+      // Audit: BLOCK_COMPLETE
+      if (outgoing_summary) {
+        int64_t base_offset = !outgoing_block.segments.empty()
+            ? outgoing_block.segments[0].asset_start_offset_ms : 0;
+        std::cout << "[PipelineManager] BLOCK_COMPLETE"
+                  << " block=" << outgoing_summary->block_id
+                  << " fence_frame=" << compute_fence_frame(outgoing_block)
+                  << " emitted=" << outgoing_summary->frames_emitted
+                  << " pad=" << outgoing_summary->pad_frames
+                  << " asset=" << (!outgoing_summary->asset_uris.empty()
+                      ? outgoing_summary->asset_uris[0] : "pad");
+        if (outgoing_summary->first_block_ct_ms >= 0) {
+          std::cout << " range_ms="
+                    << (base_offset + outgoing_summary->first_block_ct_ms)
+                    << "->"
+                    << (base_offset + outgoing_summary->last_block_ct_ms);
+        }
+        std::cout << std::endl;
       }
 
       // INV-BLOCK-WALLFENCE-001: Diagnostic — wall-clock fence timing.
@@ -569,38 +725,32 @@ void PipelineManager::Run() {
                   << " actual_ms=" << now_utc_ms
                   << " delta_ms=" << delta_ms
                   << " ct_at_fence_ms=" << ct_at_fence_ms
-                  << " fence_frame=" << block_fence_frame_
+                  << " fence_frame=" << compute_fence_frame(outgoing_block)
                   << " session_frame=" << session_frame_index
                   << " remaining_budget=" << remaining_block_frames_
                   << std::endl;
       }
 
-      // P3.3: Record completed block for seam tracking
+      // P3.3: Record completed block for seam tracking.
       prev_completed_block_id = outgoing_block.block_id;
       fence_session_frame = session_frame_index;
       fence_pad_counter = 0;
 
-      // INV-BLOCK-WALLFENCE-004: Execute A/B swap BEFORE frame emission.
-      bool swapped = false;
-
-      // 1) Already have a preview_ ready?
-      if (preview_ &&
-          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
-        live_ = std::move(preview_);
-        swapped = true;
-      }
-
-      // 2) Preloader has one ready?
-      if (!swapped) {
-        auto preloaded = TryTakePreviewProducer();
-        if (preloaded &&
-            AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
-          live_ = std::move(preloaded);
-          swapped = true;
+      // P3.3: Emit seam transition log (seamless swap).
+      if (swapped && !prev_completed_block_id.empty()) {
+        SeamTransitionLog seam;
+        seam.from_block_id = prev_completed_block_id;
+        seam.to_block_id = live_tp()->GetBlock().block_id;
+        seam.fence_frame = fence_session_frame;
+        seam.pad_frames_at_fence = 0;
+        seam.seamless = true;
+        std::cout << FormatSeamTransition(seam) << std::endl;
+        if (callbacks_.on_seam_transition) {
+          callbacks_.on_seam_transition(seam);
         }
       }
 
-      // INV-BLOCK-WALLFENCE-005: BlockCompleted fires AFTER swap.
+      // Step 11: G3 FIX — BlockCompleted fires AFTER StartFilling.
       if (callbacks_.on_block_completed) {
         callbacks_.on_block_completed(outgoing_block, session_frame_index);
       }
@@ -610,50 +760,28 @@ void PipelineManager::Run() {
       }
       ctx_->blocks_executed++;
 
-      if (swapped) {
-        // Compute fence for the new block.
-        block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
-        // INV-FRAME-BUDGET-002: Budget derived from fence, not FramesPerBlock().
-        remaining_block_frames_ = block_fence_frame_ - session_frame_index;
-        if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
-        {
-          std::lock_guard<std::mutex> lock(metrics_mutex_);
-          metrics_.source_swap_count++;
-        }
-        past_fence = false;
+      // SEAM_PROOF_FENCE: Fence activation diagnostic.
+      // Records the fence state so SEAM_PROOF_TICK can attribute per-frame
+      // sources and detect cross-block bleed or activation delay.
+      seam_proof_fence_tick = compute_fence_frame(outgoing_block);
+      seam_proof_outgoing_id = outgoing_block.block_id;
+      seam_proof_incoming_id = swapped ? live_tp()->GetBlock().block_id : "";
+      seam_proof_swapped = swapped;
+      seam_proof_first_frame_logged = false;
 
-        // P3.3: Emit seam transition log (seamless swap)
-        if (!prev_completed_block_id.empty()) {
-          SeamTransitionLog seam;
-          seam.from_block_id = prev_completed_block_id;
-          seam.to_block_id = live_tp()->GetBlock().block_id;
-          seam.fence_frame = fence_session_frame;
-          seam.pad_frames_at_fence = 0;
-          seam.seamless = true;
-          std::cout << FormatSeamTransition(seam) << std::endl;
-          if (callbacks_.on_seam_transition) {
-            callbacks_.on_seam_transition(seam);
-          }
-        }
-
-        // P3.3: Reset accumulator for new block
-        block_acc.Reset(live_tp()->GetBlock().block_id);
-        emit_block_start("preview");
-        // INV-VIDEO-LOOKAHEAD-001: Start fill thread with new producer.
-        video_buffer_->StartFilling(
-            live_tp(), audio_buffer_.get(),
-            live_tp()->GetInputFPS(), ctx_->fps,
-            &ctx_->stop_requested);
-
-        // Immediately kick off preload for the following block
-        TryKickoffPreviewPreload();
-      } else {
-        // No next available — reset live and enter pad mode
-        live_tp()->Reset();
-        block_fence_frame_ = INT64_MAX;
-        past_fence = true;
-        // Video buffer already stopped+flushed above.
-      }
+      std::cout << "[PipelineManager] SEAM_PROOF_FENCE"
+                << " tick=" << session_frame_index
+                << " fence_tick=" << seam_proof_fence_tick
+                << " outgoing=" << seam_proof_outgoing_id
+                << " incoming=" << (seam_proof_incoming_id.empty()
+                    ? "none" : seam_proof_incoming_id)
+                << " swapped=" << swapped
+                << " video_pts_90k=" << video_pts_90k
+                << " audio_pts_90k=" << audio_pts_90k
+                << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
+                << " video_buf_depth=" << video_buffer_->DepthFrames()
+                << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
+                << std::endl;
     }
 
     bool is_pad = true;
@@ -700,8 +828,14 @@ void PipelineManager::Run() {
     // on decode ticks (cadence repeats produce no audio); the buffer
     // accumulates enough to cover repeat ticks.
     // Underflow = hard fault → session stop.
+    //
+    // FENCE AUDIO CONTINUITY: After audio_buffer_->Reset() at a fence,
+    // the buffer may be empty if the primed frame had no audio packets
+    // (demuxer returned video before audio).  In that case, emit pad
+    // silence at the correct PTS so audio never skips a tick — otherwise
+    // the A/V delta permanently drifts by 1 frame period per fence.
     // ==================================================================
-    if (!is_pad && audio_buffer_->IsPrimed()) {
+    if (!is_pad) {
       // Exact per-tick sample count via rational arithmetic (drift-free).
       // samples_this_tick = floor((N+1)*sr*fps_den/fps_num)
       //                   - floor(N*sr*fps_den/fps_num)
@@ -711,26 +845,120 @@ void PipelineManager::Run() {
       int samples_this_tick =
           static_cast<int>(next_total - audio_buffer_samples_emitted);
 
-      buffer::AudioFrame audio_out;
-      if (audio_buffer_->TryPopSamples(samples_this_tick, audio_out)) {
-        session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, false);
+      if (audio_buffer_->IsPrimed()) {
+        buffer::AudioFrame audio_out;
+        if (audio_buffer_->TryPopSamples(samples_this_tick, audio_out)) {
+          session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, false);
+          audio_samples_emitted += samples_this_tick;
+          audio_buffer_samples_emitted += samples_this_tick;
+          audio_ticks_emitted++;
+          audio_frames_this_tick = 1;
+        } else {
+          // UNDERFLOW — hard fault: detach viewer, stop session.
+          std::cerr << "[PipelineManager] INV-AUDIO-LOOKAHEAD-001: UNDERFLOW"
+                    << " frame=" << session_frame_index
+                    << " buffer_depth_ms=" << audio_buffer_->DepthMs()
+                    << " needed=" << samples_this_tick
+                    << " total_pushed=" << audio_buffer_->TotalSamplesPushed()
+                    << " total_popped=" << audio_buffer_->TotalSamplesPopped()
+                    << std::endl;
+          { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
+          ctx_->stop_requested.store(true, std::memory_order_release);
+          break;
+        }
+      } else {
+        // SAFETY NET: Audio buffer not primed despite INV-AUDIO-PRIME-001.
+        // This should never happen — if it does, the priming in StartFilling
+        // didn't reach the threshold (e.g., content with no audio track).
+        // Emit pad silence to prevent A/V drift; log at WARNING level.
+        static constexpr int kChannels = buffer::kHouseAudioChannels;
+        static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
+
+        buffer::AudioFrame silence;
+        silence.sample_rate = kSampleRate;
+        silence.channels = kChannels;
+        silence.nb_samples = samples_this_tick;
+        silence.data.resize(
+            static_cast<size_t>(samples_this_tick * kChannels) * sizeof(int16_t), 0);
+
+        session_encoder->encodeAudioFrame(silence, audio_pts_90k,
+                                           /*is_silence_pad=*/true);
         audio_samples_emitted += samples_this_tick;
         audio_buffer_samples_emitted += samples_this_tick;
         audio_ticks_emitted++;
         audio_frames_this_tick = 1;
-      } else {
-        // UNDERFLOW — hard fault: detach viewer, stop session.
-        std::cerr << "[PipelineManager] INV-AUDIO-LOOKAHEAD-001: UNDERFLOW"
-                  << " frame=" << session_frame_index
-                  << " buffer_depth_ms=" << audio_buffer_->DepthMs()
-                  << " needed=" << samples_this_tick
-                  << " total_pushed=" << audio_buffer_->TotalSamplesPushed()
-                  << " total_popped=" << audio_buffer_->TotalSamplesPopped()
+
+        std::cerr << "[PipelineManager] WARNING FENCE_AUDIO_PAD: audio not primed"
+                  << " tick=" << session_frame_index
+                  << " samples=" << samples_this_tick
+                  << " audio_pts_90k=" << audio_pts_90k
+                  << " video_pts_90k=" << video_pts_90k
                   << std::endl;
-        { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
-        ctx_->stop_requested.store(true, std::memory_order_release);
-        break;
       }
+    }
+
+    // ==================================================================
+    // SEAM_PROOF_TICK: Per-frame source attribution on fence tick ±4.
+    // Answers: is the video frame from the incoming block?  Is audio
+    // from the incoming block?  Is there a PTS discontinuity at the seam?
+    // ==================================================================
+    if (seam_proof_fence_tick >= 0 &&
+        session_frame_index >= seam_proof_fence_tick &&
+        session_frame_index < seam_proof_fence_tick + 5) {
+
+      std::string video_source_block;
+      if (live_tp()->GetState() == ITickProducer::State::kReady) {
+        video_source_block = live_tp()->GetBlock().block_id;
+      }
+
+      // Classify audio source for this tick.
+      const char* audio_source = "none";
+      if (is_pad) {
+        audio_source = "pad_frame";  // Full pad frame (video + audio)
+      } else if (audio_frames_this_tick > 0 && audio_buffer_->IsPrimed()) {
+        audio_source = "buffer";     // Popped from AudioLookaheadBuffer
+      } else if (audio_frames_this_tick > 0) {
+        audio_source = "fence_pad";  // Fence silence (buffer not yet primed)
+      }
+
+      std::cout << "[PipelineManager] SEAM_PROOF_TICK"
+                << " tick=" << session_frame_index
+                << " fence_tick=" << seam_proof_fence_tick
+                << " is_pad=" << is_pad
+                << " video_block=" << (video_source_block.empty()
+                    ? "none" : video_source_block)
+                << " video_asset=" << (is_pad ? "pad"
+                    : (vbf.asset_uri.empty() ? "unknown" : vbf.asset_uri))
+                << " video_decoded=" << (!is_pad && vbf.was_decoded)
+                << " video_ct_ms=" << (is_pad ? -1 : vbf.block_ct_ms)
+                << " video_pts_90k=" << video_pts_90k
+                << " audio_pts_90k=" << audio_pts_90k
+                << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
+                << " audio_source=" << audio_source
+                << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
+                << " video_buf_depth=" << video_buffer_->DepthFrames()
+                << std::endl;
+    }
+
+    // SEAM_PROOF_FIRST_FRAME: Log when first non-pad frame from the incoming
+    // block reaches the encoder.  activation_delay_ticks=0 means the incoming
+    // block's first frame was emitted on the fence tick itself.
+    if (!seam_proof_first_frame_logged && !is_pad &&
+        seam_proof_fence_tick >= 0) {
+      seam_proof_first_frame_logged = true;
+      int64_t activation_delay = session_frame_index - seam_proof_fence_tick;
+      std::cout << "[PipelineManager] SEAM_PROOF_FIRST_FRAME"
+                << " tick=" << session_frame_index
+                << " fence_tick=" << seam_proof_fence_tick
+                << " incoming=" << seam_proof_incoming_id
+                << " activation_delay_ticks=" << activation_delay
+                << " video_pts_90k=" << video_pts_90k
+                << " audio_pts_90k=" << audio_pts_90k
+                << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
+                << " video_asset=" << vbf.asset_uri
+                << " video_ct_ms=" << vbf.block_ct_ms
+                << " video_decoded=" << vbf.was_decoded
+                << std::endl;
     }
 
     // Consolidated heartbeat — every ~10s (300 ticks at 30fps).
@@ -842,10 +1070,9 @@ void PipelineManager::Run() {
     }
 
     // LOAD NEXT from queue if source is empty (fallback path).
-    // INV-TICK-DEADLINE-DISCIPLINE-001 R2: Skip when late — TryLoadLiveProducer
-    // may block on synchronous probe+open+seek.
-    if (!tick_is_late &&
-        live_tp()->GetState() == ITickProducer::State::kEmpty) {
+    // G6 FIX: No late-tick guard for kEmpty — pad-mode ticks have no decode
+    // work; loading a block is always preferable to emitting more pad frames.
+    if (live_tp()->GetState() == ITickProducer::State::kEmpty) {
       bool had_preview = (preview_ != nullptr);
       TryLoadLiveProducer();  // Outside timed tick window
 
@@ -927,6 +1154,9 @@ void PipelineManager::Run() {
       termination_reason == "unknown") {
     termination_reason = "stopped";
   }
+
+  // Join any deferred fill thread from the last fence swap.
+  CleanupDeferredFill();
 
   // INV-VIDEO-LOOKAHEAD-001: Stop video fill thread before resetting producers.
   if (video_buffer_) {
