@@ -164,6 +164,15 @@ Zero-decode-latency priming at block boundaries. See [INV-BLOCK-LOOKAHEAD-PRIMIN
 | **INV-BLOCK-PRIME-006** | Priming is event-driven — executes after AssignBlock, no polling or timers | `ProducerPreloader` | Coordination |
 | **INV-BLOCK-PRIME-007** | Primed frame metadata integrity — PTS, audio, asset_uri match normal decode | `TickProducer` | Coordination |
 
+### Lookahead Buffer Authority Invariants (Decode Decoupling)
+
+Tick-thread decode decoupling and hard-fault underflow semantics. Background fill threads own all decode; the tick loop only consumes pre-decoded frames. See [INV-LOOKAHEAD-BUFFER-AUTHORITY.md](INV-LOOKAHEAD-BUFFER-AUTHORITY.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-VIDEO-LOOKAHEAD-001** | Tick thread MUST NOT call video decode APIs; fill thread decodes into bounded buffer; underflow = hard fault (no pad/hold injection) | `VideoLookaheadBuffer` / `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-AUDIO-LOOKAHEAD-001** | Audio pushed by video fill thread; tick thread pops only; underflow = hard fault (no silence injection); buffer not flushed at fence | `AudioLookaheadBuffer` / `PipelineManager` | Coordination (Broadcast-Grade) |
+
 ### Tick Deadline Enforcement (Derived)
 
 These invariants ensure that tick progression remains wall-clock anchored so that block boundary authorities defined above are enforced even when execution falls behind. Tick deadlines are derived from the session epoch and rational FPS; they do not define schedule semantics.
@@ -251,6 +260,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Broadcast-grade output** (unconditional emission) | [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) · [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) · [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) |
 | **Block boundary model** (fence, budget, priming) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
 | **Tick deadline enforcement** (deadline discipline, monotonic anchor) | [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) · [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) |
+| **Lookahead buffer authority** (decode decoupling, underflow semantics) | [INV-LOOKAHEAD-BUFFER-AUTHORITY.md](INV-LOOKAHEAD-BUFFER-AUTHORITY.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |

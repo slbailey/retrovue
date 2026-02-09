@@ -46,8 +46,13 @@ class AudioLookaheadBuffer {
   // --- Producer ---
 
   // Push a decoded audio frame into the buffer.
-  void Push(const buffer::AudioFrame& frame);
-  void Push(buffer::AudioFrame&& frame);
+  // If expected_generation != 0 and doesn't match current generation_,
+  // the push is silently dropped (stale data from old fill thread).
+  void Push(const buffer::AudioFrame& frame, uint64_t expected_generation = 0);
+  void Push(buffer::AudioFrame&& frame, uint64_t expected_generation = 0);
+
+  // Current generation counter (for fill thread capture).
+  uint64_t CurrentGeneration() const;
 
   // --- Consumer ---
 
@@ -106,6 +111,9 @@ class AudioLookaheadBuffer {
   int channels_;
   int target_depth_ms_;
   int low_water_ms_;
+
+  // Monotonic generation counter — bumped on Reset().
+  uint64_t generation_ = 0;
 
   // Running counters.
   int64_t total_samples_in_buffer_ = 0;
