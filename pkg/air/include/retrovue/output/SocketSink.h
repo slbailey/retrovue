@@ -89,6 +89,15 @@ class SocketSink {
   // After detach, all subsequent calls return false.
   bool TryConsumeBytes(const uint8_t* data, size_t len);
 
+  // Blocking variant: waits up to `timeout` for buffer space, then enqueues.
+  // Returns false on timeout, close, or detach — never drops data.
+  //
+  // Safe to call from the AVIO write callback (tick thread).  The writer
+  // thread drains the queue independently; no circular dependency exists.
+  // On close/detach, drain_cv_ is signalled so this unblocks promptly.
+  bool WaitAndConsumeBytes(const uint8_t* data, size_t len,
+                           std::chrono::milliseconds timeout);
+
   // Closes the socket sink. Idempotent.
   // Shuts down and closes the file descriptor.
   void Close();
@@ -136,7 +145,8 @@ class SocketSink {
 
   // Bounded buffer queue (SS-002, SS-003)
   mutable std::mutex queue_mutex_;
-  std::condition_variable queue_cv_;
+  std::condition_variable queue_cv_;     // writer waits here for data
+  std::condition_variable drain_cv_;     // producer waits here for space
   std::queue<std::vector<uint8_t>> packet_queue_;
   size_t current_buffer_size_{0};
 

@@ -68,6 +68,7 @@ void SocketSink::DetachSlowConsumer(const std::string& reason) {
   closed_.store(true, std::memory_order_release);
   writer_stop_.store(true, std::memory_order_release);
   queue_cv_.notify_all();
+  drain_cv_.notify_all();  // Unblock WaitAndConsumeBytes
 
   // Close FD immediately to unblock writer thread if in poll()
   if (fd_ >= 0) {
@@ -148,6 +149,36 @@ bool SocketSink::TryConsumeBytes(const uint8_t* data, size_t len) {
   return true;
 }
 
+bool SocketSink::WaitAndConsumeBytes(const uint8_t* data, size_t len,
+                                     std::chrono::milliseconds timeout) {
+  if (closed_.load(std::memory_order_acquire) ||
+      detached_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (!data || len == 0) return true;
+
+  std::unique_lock<std::mutex> lock(queue_mutex_);
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+
+  // Block until space is available, or timeout / shutdown.
+  while (current_buffer_size_ + len > buffer_capacity_) {
+    if (closed_.load(std::memory_order_acquire) ||
+        detached_.load(std::memory_order_acquire)) {
+      return false;
+    }
+    if (drain_cv_.wait_until(lock, deadline) == std::cv_status::timeout) {
+      return false;
+    }
+  }
+
+  // Space confirmed — enqueue (same as TryConsumeBytes happy path).
+  packet_queue_.emplace(data, data + len);
+  current_buffer_size_ += len;
+  bytes_enqueued_.fetch_add(len, std::memory_order_relaxed);
+  queue_cv_.notify_one();
+  return true;
+}
+
 void SocketSink::WriterThreadLoop() {
   constexpr int kPollTimeoutMs = 100;  // Check for stop every 100ms
 
@@ -168,6 +199,8 @@ void SocketSink::WriterThreadLoop() {
       packet_queue_.pop();
       current_buffer_size_ -= packet.size();
     }
+    // Space freed — wake any producer blocked in WaitAndConsumeBytes.
+    drain_cv_.notify_one();
 
     // Write to socket
     const uint8_t* ptr = packet.data();
@@ -267,6 +300,7 @@ void SocketSink::Close() {
   // Signal writer thread to stop
   writer_stop_.store(true, std::memory_order_release);
   queue_cv_.notify_all();
+  drain_cv_.notify_all();  // Unblock WaitAndConsumeBytes
 
   // Wait for writer thread to finish
   if (writer_thread_.joinable()) {

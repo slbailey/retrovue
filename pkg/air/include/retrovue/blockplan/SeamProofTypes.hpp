@@ -38,6 +38,11 @@ struct FrameFingerprint {
   std::string asset_uri;
   int64_t asset_offset_ms = 0;  // block_ct_ms before frame advance
   uint32_t y_crc32 = 0;
+  // TAKE source: 'A' = popped from current (live) buffer,
+  //              'B' = popped from preview (preroll) buffer,
+  //              'P' = pad frame (no buffer supplied this tick).
+  // Set at the commitment point — authoritative for TAKE verification.
+  char commit_source = 'P';
 };
 
 // Boundary report: last kWindow frames of block A + first kWindow of block B.

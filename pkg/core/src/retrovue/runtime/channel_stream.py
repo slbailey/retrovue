@@ -83,14 +83,29 @@ class UdsTsSource:
             self.sock.settimeout(None)  # Blocking mode for reads
             self._connected = True
 
+            # Bound UDS kernel recv buffer to limit post-fence old-tail latency.
+            # At ~284.6 KB/s TS wire rate, 32 KB ≈ 115 ms (Linux doubles to ~64 KB ≈ 225 ms).
+            import sys
+            if sys.platform.startswith("linux"):
+                try:
+                    _requested_rcvbuf = 32768
+                    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _requested_rcvbuf)
+                    effective = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                    _logger.info(
+                        "[UDS-BUF] SO_RCVBUF: requested=%d effective=%d", _requested_rcvbuf, effective
+                    )
+                except Exception as e:
+                    _logger.warning(
+                        "[UDS-BUF] setsockopt(SO_RCVBUF=%d) failed: %s (continuing with default)",
+                        32768, e,
+                    )
+
             # AUDIT: Log actual kernel buffer sizes
             try:
                 rcvbuf = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
                 sndbuf = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
                 _logger.info("[AUDIT-BUF] UdsTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
                             rcvbuf, sndbuf)
-                if rcvbuf < 131072:  # < 128KB
-                    _logger.warning("[AUDIT-BUF] SO_RCVBUF < 128KB - risk of overrun during startup!")
             except Exception as e:
                 _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
 
@@ -154,14 +169,29 @@ class SocketTsSource:
         self.sock = sock
         self._connected = True
 
+        # Bound UDS kernel recv buffer to limit post-fence old-tail latency.
+        # At ~284.6 KB/s TS wire rate, 32 KB ≈ 115 ms (Linux doubles to ~64 KB ≈ 225 ms).
+        import sys
+        if sys.platform.startswith("linux"):
+            try:
+                _requested_rcvbuf = 32768
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _requested_rcvbuf)
+                effective = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                _logger.info(
+                    "[UDS-BUF] SO_RCVBUF: requested=%d effective=%d", _requested_rcvbuf, effective
+                )
+            except Exception as e:
+                _logger.warning(
+                    "[UDS-BUF] setsockopt(SO_RCVBUF=%d) failed: %s (continuing with default)",
+                    32768, e,
+                )
+
         # AUDIT: Log actual kernel buffer sizes
         try:
             rcvbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
             sndbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
             _logger.info("[AUDIT-BUF] SocketTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
                         rcvbuf, sndbuf)
-            if rcvbuf < 131072:  # < 128KB
-                _logger.warning("[AUDIT-BUF] SO_RCVBUF < 128KB - risk of overrun during startup!")
         except Exception as e:
             _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
 
@@ -456,20 +486,48 @@ class ChannelStream:
                 )
                 break
 
-            # Fan-out to all subscribers
+            # Fan-out to all subscribers with bounded-latency backpressure.
+            # Snapshot under lock, then release so blocking put() doesn't
+            # prevent subscribe/unsubscribe.
             with self.subscribers_lock:
-                for client_id, client_queue in self.subscribers.items():
-                    try:
-                        # Non-blocking put; if queue is full, drop this chunk for
-                        # that client (backpressure: slow client misses data but
-                        # stays subscribed — contract says no per-client buffering
-                        # required and slow clients must not stall others).
-                        client_queue.put_nowait(chunk)
-                    except Full:
-                        pass  # Expected: slow client, drop chunk
-                    except Exception:
+                subscribers_snapshot = list(self.subscribers.items())
+
+            slow_clients: list[str] = []
+            for client_id, client_queue in subscribers_snapshot:
+                try:
+                    # Blocking put with timeout.  If the client can drain one
+                    # 1880-byte chunk within 100 ms it stays; otherwise it is
+                    # evicted.  While blocked, recv() stalls → UDS recv buffer
+                    # fills → kernel back-pressures AIR's send() → SocketSink
+                    # fills → WaitAndConsumeBytes blocks the tick thread.
+                    client_queue.put(chunk, timeout=0.1)
+                except Full:
+                    slow_clients.append(client_id)
+                except Exception:
+                    self._logger.warning(
+                        "Unexpected fanout error for client %s", client_id, exc_info=True
+                    )
+
+            # Evict slow clients outside the iteration.
+            if slow_clients:
+                with self.subscribers_lock:
+                    for client_id in slow_clients:
+                        evicted_queue = self.subscribers.pop(client_id, None)
+                        if evicted_queue is not None:
+                            # Drain one slot to make room for EOF signal.
+                            try:
+                                evicted_queue.get_nowait()
+                            except Empty:
+                                pass
+                            try:
+                                evicted_queue.put_nowait(b"")  # EOF
+                            except Full:
+                                pass  # Client will timeout naturally
                         self._logger.warning(
-                            "Unexpected fanout error for client %s", client_id, exc_info=True
+                            "[channel %s] evicted slow client %s "
+                            "(queue full >100 ms)",
+                            self.channel_id,
+                            client_id,
                         )
 
         # AUDIT: Log recv-gap telemetry at session exit
@@ -559,13 +617,13 @@ class ChannelStream:
         self._stopped = True
         self._logger.info("ChannelStream stopped for channel %s", self.channel_id)
 
-    def subscribe(self, client_id: str, queue_size: int = 100) -> Queue[bytes]:
+    def subscribe(self, client_id: str, queue_size: int = 15) -> Queue[bytes]:
         """
         Subscribe a new HTTP client to receive TS chunks.
 
         Args:
             client_id: Unique identifier for this client
-            queue_size: Maximum queue size (default: 100 chunks)
+            queue_size: Maximum queue size (default: 15 chunks ≈ 100 ms at ~284.6 KB/s)
 
         Returns:
             Queue that will receive TS chunks

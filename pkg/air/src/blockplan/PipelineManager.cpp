@@ -1,6 +1,6 @@
 // Repository: Retrovue-playout
 // Component: Pipeline Manager
-// Purpose: Continuous output loop with A/B Producer swap (P3.0 + P3.1a + P3.1b)
+// Purpose: Continuous output loop with TAKE-at-commit source selection (P3.0 + P3.1a + P3.1b)
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 
@@ -28,6 +28,10 @@
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/output/SocketSink.h"
+
+#ifdef __linux__
+#include <sys/socket.h>
+#endif
 
 extern "C" {
 #include <libavutil/error.h>
@@ -93,6 +97,11 @@ void PipelineManager::Stop() {
     std::cerr << "[PipelineManager] BUG: video fill thread still running "
               << "after Stop(). Stopping to prevent std::terminate." << std::endl;
     video_buffer_->StopFilling(/*flush=*/true);
+  }
+  if (preview_video_buffer_ && preview_video_buffer_->IsFilling()) {
+    std::cerr << "[PipelineManager] BUG: preview video fill thread still running "
+              << "after Stop(). Stopping to prevent std::terminate." << std::endl;
+    preview_video_buffer_->StopFilling(/*flush=*/true);
   }
 }
 
@@ -228,7 +237,7 @@ std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer() 
 }
 
 // =============================================================================
-// Run() — P3.0 + P3.1a + P3.1b main loop (pad + A/B Producer swap)
+// Run() — P3.0 + P3.1a + P3.1b main loop (pad + TAKE-at-commit)
 // =============================================================================
 
 void PipelineManager::Run() {
@@ -288,11 +297,32 @@ void PipelineManager::Run() {
     return;
   }
 
-  // Buffer capacity: configurable via kSinkBufferCapacity.
-  // Default ~128 KB ≈ 500ms at 2 Mbps.  Small enough to detect slow
-  // consumers quickly, large enough to absorb transient kernel pressure.
-  // TODO: promote to BlockPlanSessionContext for runtime configurability.
-  static constexpr size_t kSinkBufferCapacity = 128 * 1024;
+  // Bound UDS kernel send buffer to limit post-fence old-tail latency.
+  // At ~284.6 KB/s TS wire rate, 32 KB ≈ 115 ms (Linux doubles to ~64 KB ≈ 225 ms).
+#ifdef __linux__
+  {
+    const int requested_sndbuf = 32768;
+    if (setsockopt(sink_fd, SOL_SOCKET, SO_SNDBUF,
+                   &requested_sndbuf, sizeof(requested_sndbuf)) < 0) {
+      std::cerr << "[PipelineManager] WARNING: setsockopt(SO_SNDBUF="
+                << requested_sndbuf << ") failed: " << strerror(errno)
+                << " (continuing with default)" << std::endl;
+    }
+    int effective_sndbuf = 0;
+    socklen_t elen = sizeof(effective_sndbuf);
+    if (getsockopt(sink_fd, SOL_SOCKET, SO_SNDBUF,
+                   &effective_sndbuf, &elen) == 0) {
+      std::cerr << "[PipelineManager] UDS SO_SNDBUF: requested="
+                << requested_sndbuf << " effective=" << effective_sndbuf
+                << std::endl;
+    }
+  }
+#endif
+
+  // Buffer capacity: 32 KB ≈ 115 ms at ~284.6 KB/s TS wire rate.
+  // Small buffer bounds post-fence old-tail latency; backpressure via
+  // WaitAndConsumeBytes blocks the tick thread until the writer drains.
+  static constexpr size_t kSinkBufferCapacity = 32 * 1024;
   auto socket_sink = std::make_unique<output::SocketSink>(
       sink_fd, "pipeline-sink", kSinkBufferCapacity);
 
@@ -307,31 +337,40 @@ void PipelineManager::Run() {
     ctx_->stop_requested.store(true, std::memory_order_release);
   });
 
-  // Write callback context: enqueue into SocketSink (non-blocking).
+  // Write callback context: enqueue into SocketSink (blocking if full).
   struct SessionWriteContext {
     output::SocketSink* sink;
     int64_t bytes_written;
   };
   SessionWriteContext write_ctx{socket_sink.get(), 0};
 
-  // AVIO write callback:
-  // - While attached: enqueue bytes, return buf_size on success.
-  // - After detach/overflow: return AVERROR(EPIPE) so FFmpeg treats it as a
-  //   broken-pipe I/O error and unwinds cleanly (av_write_frame propagates it).
-  //   Do NOT return buf_size forever after detach — that lies to AVIO and
-  //   keeps the encoder producing packets nobody will ever receive.
+  // AVIO write callback — backpressure via blocking wait.
+  //
+  // When the SocketSink buffer is full, WaitAndConsumeBytes blocks the tick
+  // thread (up to 500 ms) until the writer thread drains space.  This is
+  // safe because:
+  //   - Writer thread only reads the queue and calls send() — no dependency
+  //     on the tick thread, so no circular wait / deadlock.
+  //   - OutputClock pacing is upstream of encodeFrame; blocking here simply
+  //     delays the tick, and the next OutputClock sleep self-corrects.
+  //   - On close/detach, drain_cv_ is signalled so the wait exits promptly.
+  //
+  // Timeout (500 ms) → AVERROR(EPIPE) → encoder error → session stop.
+  // This only fires if the consumer is critically stuck (no drain for 500 ms).
+  static constexpr int kAvioWaitMs = 500;
   auto write_callback = [](void* opaque, uint8_t* buf, int buf_size) -> int {
     auto* wctx = static_cast<SessionWriteContext*>(opaque);
-    if (wctx->sink->IsDetached()) {
-      return AVERROR(EPIPE);  // Broken pipe — FFmpeg stops writing
+    if (wctx->sink->IsDetached() || wctx->sink->IsClosed()) {
+      return AVERROR(EPIPE);
     }
-    if (wctx->sink->TryConsumeBytes(
+    if (wctx->sink->WaitAndConsumeBytes(
             reinterpret_cast<const uint8_t*>(buf),
-            static_cast<size_t>(buf_size))) {
+            static_cast<size_t>(buf_size),
+            std::chrono::milliseconds(kAvioWaitMs))) {
       wctx->bytes_written += buf_size;
       return buf_size;
     }
-    // Enqueue failed (overflow triggered detach) — fail the write
+    // Timed out or closed — signal broken pipe to FFmpeg.
     return AVERROR(EPIPE);
   };
 
@@ -511,6 +550,10 @@ void PipelineManager::Run() {
   bool seam_proof_swapped = false;           // Whether swap succeeded
   bool seam_proof_first_frame_logged = true; // First incoming content frame logged?
 
+  // TAKE rotation guard: ensures post-TAKE housekeeping (B→A rotation,
+  // A fill stop, outgoing block finalization) fires exactly once per fence.
+  bool take_rotated = false;
+
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
     // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
@@ -540,31 +583,156 @@ void PipelineManager::Run() {
         (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
 
     // ==================================================================
-    // PROACTIVE FENCE CHECK — INV-BLOCK-WALLFENCE-004:
-    // Fires BEFORE frame emission when session_frame_index reaches the
-    // fence tick.  The fence tick belongs to the NEW block.
-    // Trigger: session_frame_index >= block_fence_frame_ (rational).
-    // remaining_block_frames_ == 0 is a verification, not the trigger.
+    // PRE-TAKE READINESS: Stash + preroll BEFORE source selection.
+    //
+    // The preloader worker may have finished during the sleep.  We must
+    // capture the result and start B's fill thread NOW so the TAKE can
+    // select B on this tick.  If this ran at the tail, a preloader that
+    // finishes during the fence tick's sleep would be invisible to the
+    // TAKE, causing a needless pad frame.
+    //
+    // StartFilling is synchronous for the primed frame: it calls
+    // HasPrimedFrame() → TryGetFrame() → push, all non-blocking,
+    // so this adds no decode I/O to the tick-critical path.
     // ==================================================================
-    if (session_frame_index >= block_fence_frame_ &&
-        live_tp()->GetState() == ITickProducer::State::kReady) {
+    if (!preview_ && preloader_->IsReady()) {
+      preview_ = TryTakePreviewProducer();
+    }
+    if (preview_ && !preview_video_buffer_ &&
+        AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+      preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+          video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
+      const auto& pcfg = ctx_->buffer_config;
+      int pa_target = pcfg.audio_target_depth_ms;
+      int pa_low = pcfg.audio_low_water_ms > 0
+          ? pcfg.audio_low_water_ms
+          : std::max(1, pa_target / 3);
+      preview_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+          pa_target, buffer::kHouseAudioSampleRate,
+          buffer::kHouseAudioChannels, pa_low);
+      auto* preview_tp = AsTickProducer(preview_.get());
+      preview_video_buffer_->StartFilling(
+          preview_tp, preview_audio_buffer_.get(),
+          preview_tp->GetInputFPS(), ctx_->fps,
+          &ctx_->stop_requested);
+      std::cout << "[PipelineManager] PREROLL_START"
+                << " block=" << preview_tp->GetBlock().block_id
+                << " fence_tick=" << block_fence_frame_
+                << " tick=" << session_frame_index
+                << " headroom=" << (block_fence_frame_ - session_frame_index)
+                << std::endl;
+    }
 
-      // Step 1: Join PREVIOUS fence's deferred fill thread (fast: had full
-      // block duration to exit).
+    // ==================================================================
+    // FRAME-ACCURATE TAKE — source selection at the commitment point.
+    //
+    // The TAKE decision happens HERE, at the pop that binds a frame to
+    // tick T.  Both producer A (live) and producer B (preview) may have
+    // prerolled buffers.  The selector is purely:
+    //   T < fence_tick  → pop from A buffers
+    //   T >= fence_tick → pop from B buffers (or pad if B not primed)
+    //
+    // After the first B-source frame is committed (the TAKE fires),
+    // a one-shot rotation moves B→A and updates the fence for the
+    // next block.  A's fill thread is stopped; A's buffers are
+    // destroyed.  From that point, A is the former B, and the cycle
+    // repeats.
+    // ==================================================================
+
+    bool is_pad = true;
+    VideoBufferFrame vbf;
+    int audio_frames_this_tick = 0;
+
+    // ── TAKE: select source based on tick vs fence ──
+    const bool take_b = (session_frame_index >= block_fence_frame_);
+    VideoLookaheadBuffer* v_src = take_b
+        ? preview_video_buffer_.get() : video_buffer_.get();
+    AudioLookaheadBuffer* a_src = take_b
+        ? preview_audio_buffer_.get() : audio_buffer_.get();
+    const char* commit_source = take_b ? "B" : "A";
+    // Authoritative TAKE source for fingerprint: 'A', 'B', or 'P' (pad).
+    char take_source_char = 'P';
+
+    // INV-PREROLL-READY-001: On the fence tick, B SHOULD be primed.
+    // If it's not, log the failure mode for diagnostics.  The TAKE
+    // falls through to pad — no correctness violation, but a missed
+    // preroll that should be investigated.
+    if (take_b && (!v_src || !v_src->IsPrimed()) && !take_rotated) {
+      std::cerr << "[PipelineManager] INV-PREROLL-READY-001: B NOT PRIMED at fence"
+                << " tick=" << session_frame_index
+                << " fence_tick=" << block_fence_frame_
+                << " preview_exists=" << (preview_ != nullptr)
+                << " preview_vbuf=" << (preview_video_buffer_ != nullptr)
+                << " preloader_ready=" << preloader_->IsReady()
+                << std::endl;
+    }
+
+    if (v_src && v_src->IsPrimed() && v_src->TryPopFrame(vbf)) {
+      session_encoder->encodeFrame(vbf.video, video_pts_90k);
+      is_pad = false;
+      take_source_char = take_b ? 'B' : 'A';
+    } else if (take_b) {
+      // B not primed at fence — PADDED_GAP.  A is NEVER consulted.
+      // (pad frame emitted below)
+    } else if (v_src && v_src->IsPrimed()) {
+      // A underflow — hard fault: session stop.
+      std::cerr << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
+                << " frame=" << session_frame_index
+                << " buffer_depth=" << v_src->DepthFrames()
+                << " total_pushed=" << v_src->TotalFramesPushed()
+                << " total_popped=" << v_src->TotalFramesPopped()
+                << std::endl;
+      { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
+      ctx_->stop_requested.store(true, std::memory_order_release);
+      break;
+    }
+    // else: A not primed (no block loaded) — falls through to pad.
+
+    // TAKE commit log: emitted on every fence-adjacent tick and the
+    // first 3 ticks of each block for seam verification.
+    if (take_b || session_frame_index == block_fence_frame_ - 1 ||
+        (session_frame_index < block_fence_frame_ &&
+         session_frame_index >= block_fence_frame_ - 3)) {
+      std::string block_id;
+      std::string asset_uri;
+      if (take_b && preview_ &&
+          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+        block_id = AsTickProducer(preview_.get())->GetBlock().block_id;
+      } else if (!take_b &&
+                 live_tp()->GetState() == ITickProducer::State::kReady) {
+        block_id = live_tp()->GetBlock().block_id;
+      }
+      if (!is_pad) asset_uri = vbf.asset_uri;
+      std::cout << "[PipelineManager] TAKE_COMMIT"
+                << " tick=" << session_frame_index
+                << " fence_tick=" << block_fence_frame_
+                << " source=" << commit_source
+                << " is_pad=" << is_pad
+                << " block=" << (block_id.empty() ? "none" : block_id)
+                << " asset=" << (asset_uri.empty() ? (is_pad ? "pad" : "unknown") : asset_uri)
+                << " v_buf_depth=" << (v_src ? v_src->DepthFrames() : -1)
+                << " a_buf_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
+                << std::endl;
+    }
+
+    // ==================================================================
+    // POST-TAKE ROTATION: On the first tick at or past the fence, stop
+    // A's fill thread, rotate B→A, and set up the next block's fence.
+    // This runs AFTER the frame is committed so the TAKE itself is the
+    // selector — not a buffer swap.
+    // ==================================================================
+    if (take_b && !take_rotated) {
+      take_rotated = true;
+
+      // Step 1: Join PREVIOUS fence's deferred fill thread.
       CleanupDeferredFill();
 
-      // Step 2: G1 FIX — Non-blocking async stop.  Signal fill thread,
-      // flush buffer, bump generation.  Does NOT join.
+      // Step 2: Stop A's fill thread (non-blocking async stop).
       auto detached = video_buffer_->StopFillingAsync(/*flush=*/true);
-
-      // Step 3: G4 FIX — Flush stale audio + bump audio generation.
-      // Safe: fill_stop_ is set, video generation is bumped — any late
-      // audio Push from the old fill thread is rejected by generation gate.
       audio_buffer_->Reset();
 
-      // Step 4: Snapshot outgoing block and finalize accumulator.
+      // Step 3: Snapshot outgoing block and finalize accumulator.
       const FedBlock outgoing_block = live_tp()->GetBlock();
-      // Finalize accumulator NOW (before reset) — results emitted after swap.
       std::optional<BlockPlaybackSummary> outgoing_summary;
       std::optional<BlockPlaybackProof> outgoing_proof;
       int64_t ct_at_fence_ms = -1;
@@ -577,50 +745,59 @@ void PipelineManager::Run() {
         outgoing_proof = std::move(proof);
       }
 
-      // Save old live_ — must stay alive until deferred fill thread exits.
+      // Step 4: Save old live_ for deferred cleanup.
       auto outgoing_producer = std::move(live_);
-      // Recreate live_ as empty TickProducer for potential swap below.
-      live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
 
-      // Step 5: INV-BLOCK-WALLFENCE-004: Execute A/B swap BEFORE frame emission.
+      // Step 5: Rotate B → A.
       bool swapped = false;
-
-      // 5a) Already have a preview_ ready?
-      if (preview_ &&
-          AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+      if (preview_video_buffer_) {
+        // B buffers become the new A buffers.
+        video_buffer_ = std::move(preview_video_buffer_);
+        audio_buffer_ = std::move(preview_audio_buffer_);
         live_ = std::move(preview_);
         swapped = true;
-      }
-
-      // 5b) Preloader has one ready?
-      if (!swapped) {
-        auto preloaded = TryTakePreviewProducer();
-        if (preloaded &&
-            AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
-          live_ = std::move(preloaded);
+      } else {
+        // B was never prerolled — check for late preview or sync fallback.
+        // This mirrors the old fence fallback paths.
+        if (preview_ &&
+            AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
+          live_ = std::move(preview_);
           swapped = true;
+        }
+        if (!swapped) {
+          auto preloaded = TryTakePreviewProducer();
+          if (preloaded &&
+              AsTickProducer(preloaded.get())->GetState() == ITickProducer::State::kReady) {
+            live_ = std::move(preloaded);
+            swapped = true;
+          }
+        }
+        if (!swapped && ctx_->fence_fallback_sync) {
+          std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+          if (!ctx_->block_queue.empty()) {
+            FedBlock block = ctx_->block_queue.front();
+            ctx_->block_queue.erase(ctx_->block_queue.begin());
+            auto fresh = std::make_unique<TickProducer>(
+                ctx_->width, ctx_->height, ctx_->fps);
+            AsTickProducer(fresh.get())->AssignBlock(block);
+            live_ = std::move(fresh);
+            swapped = true;
+          }
+        }
+        // If swapped via fallback, start fill on existing A buffers.
+        if (swapped) {
+          video_buffer_->StopFilling(/*flush=*/true);
+          audio_buffer_->Reset();
+          video_buffer_->StartFilling(
+              AsTickProducer(live_.get()), audio_buffer_.get(),
+              AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
+              &ctx_->stop_requested);
         }
       }
 
-      // Step 6: G5 FIX — Policy-gated fence fallback.
-      // Try synchronous queue load if fence_fallback_sync is enabled.
-      // If that also fails (or sync is disabled), fall through to PADDED_GAP.
-      if (!swapped && ctx_->fence_fallback_sync) {
-        std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
-        if (!ctx_->block_queue.empty()) {
-          FedBlock block = ctx_->block_queue.front();
-          ctx_->block_queue.erase(ctx_->block_queue.begin());
-          auto fresh = std::make_unique<TickProducer>(
-              ctx_->width, ctx_->height, ctx_->fps);
-          AsTickProducer(fresh.get())->AssignBlock(block);
-          live_ = std::move(fresh);
-          swapped = true;
-        }
-      }
-
-      // Step 7: If not swapped, enter PADDED_GAP — emit black+silence until ready.
       if (!swapped) {
-        live_tp()->Reset();
+        // No B available — PADDED_GAP.
+        live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
         block_fence_frame_ = INT64_MAX;
         past_fence = true;
         { std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -632,22 +809,8 @@ void PipelineManager::Run() {
                   << std::endl;
       }
 
-      // Step 8: If swapped, start block B immediately.
-      // INV-AUDIO-PRIME-001: The producer's primed frame (from PrimeFirstTick)
-      // contains video frame 0 + accumulated audio covering kMinAudioPrimeMs.
-      // StartFilling consumes this primed frame synchronously, pushing all
-      // audio to AudioLookaheadBuffer in one non-blocking call.  Zero decode
-      // I/O on the tick thread.  Buffered video frames from PrimeFirstTick
-      // are returned by subsequent TryGetFrame calls in the fill thread.
-      //
-      // If audio priming is insufficient, the safety-net silence in the
-      // audio emission path (FENCE_AUDIO_PAD) covers the gap.  We never
-      // discard a block due to audio prime shortfall — that would silently
-      // lose content from the schedule.
       if (swapped) {
-        // Compute fence for the new block.
         block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
-        // INV-FRAME-BUDGET-002: Budget derived from fence, not FramesPerBlock().
         remaining_block_frames_ = block_fence_frame_ - session_frame_index;
         if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
         {
@@ -656,19 +819,9 @@ void PipelineManager::Run() {
         }
         past_fence = false;
 
-        // P3.3: Reset accumulator for new block
         block_acc.Reset(live_tp()->GetBlock().block_id);
-        emit_block_start("preview");
-        // INV-VIDEO-LOOKAHEAD-001: Start fill thread with new producer.
-        // Bumps video generation; new fill thread captures audio generation.
-        video_buffer_->StartFilling(
-            live_tp(), audio_buffer_.get(),
-            live_tp()->GetInputFPS(), ctx_->fps,
-            &ctx_->stop_requested);
+        emit_block_start("take");
 
-        // INV-AUDIO-PRIME-001: Telemetry — log if audio priming is below
-        // threshold.  Safety-net silence handles the gap; block is NOT
-        // discarded.
         int audio_depth = audio_buffer_->DepthMs();
         if (audio_depth < kMinAudioPrimeMs) {
           std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001 WARN: audio_depth_ms="
@@ -678,18 +831,14 @@ void PipelineManager::Run() {
                     << " — safety-net silence will cover" << std::endl;
         }
 
-        // Immediately kick off preload for the following block.
         TryKickoffPreviewPreload();
       }
 
-      // Step 9: Store deferred thread + producer for later cleanup.
-      // CRITICAL: detached.thread must be moved to a member — destroying a
-      // joinable std::thread calls std::terminate().
+      // Step 6: Store deferred thread + producer for later cleanup.
       deferred_fill_thread_ = std::move(detached.thread);
       deferred_producer_ = std::move(outgoing_producer);
 
-      // Step 10: G2 FIX — Emit finalization logs AFTER swap+StartFilling.
-      // Summary and proof were computed in Step 4 (before swap), emitted now.
+      // Step 7: Emit finalization logs.
       if (outgoing_summary) {
         std::cout << FormatPlaybackSummary(*outgoing_summary) << std::endl;
         if (callbacks_.on_block_summary) {
@@ -703,7 +852,6 @@ void PipelineManager::Run() {
         }
       }
 
-      // Audit: BLOCK_COMPLETE
       if (outgoing_summary) {
         int64_t base_offset = !outgoing_block.segments.empty()
             ? outgoing_block.segments[0].asset_start_offset_ms : 0;
@@ -723,7 +871,6 @@ void PipelineManager::Run() {
         std::cout << std::endl;
       }
 
-      // INV-BLOCK-WALLFENCE-001: Diagnostic — wall-clock fence timing.
       {
         int64_t now_utc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -740,12 +887,10 @@ void PipelineManager::Run() {
                   << std::endl;
       }
 
-      // P3.3: Record completed block for seam tracking.
       prev_completed_block_id = outgoing_block.block_id;
       fence_session_frame = session_frame_index;
       fence_pad_counter = 0;
 
-      // P3.3: Emit seam transition log (seamless swap).
       if (swapped && !prev_completed_block_id.empty()) {
         SeamTransitionLog seam;
         seam.from_block_id = prev_completed_block_id;
@@ -759,7 +904,6 @@ void PipelineManager::Run() {
         }
       }
 
-      // Step 11: G3 FIX — BlockCompleted fires AFTER StartFilling.
       if (callbacks_.on_block_completed) {
         callbacks_.on_block_completed(outgoing_block, session_frame_index);
       }
@@ -769,9 +913,6 @@ void PipelineManager::Run() {
       }
       ctx_->blocks_executed++;
 
-      // SEAM_PROOF_FENCE: Fence activation diagnostic.
-      // Records the fence state so SEAM_PROOF_TICK can attribute per-frame
-      // sources and detect cross-block bleed or activation delay.
       seam_proof_fence_tick = compute_fence_frame(outgoing_block);
       seam_proof_outgoing_id = outgoing_block.block_id;
       seam_proof_incoming_id = swapped ? live_tp()->GetBlock().block_id : "";
@@ -791,33 +932,9 @@ void PipelineManager::Run() {
                 << " video_buf_depth=" << video_buffer_->DepthFrames()
                 << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
                 << std::endl;
-    }
 
-    bool is_pad = true;
-    VideoBufferFrame vbf;
-    int audio_frames_this_tick = 0;
-
-    // ==================================================================
-    // INV-VIDEO-LOOKAHEAD-001: Pop pre-decoded video from buffer.
-    // The fill thread handles cadence (decode vs repeat) and hold-last.
-    // Late ticks consume buffered frames normally — no decode suppression.
-    // ==================================================================
-    if (video_buffer_->IsPrimed()) {
-      if (video_buffer_->TryPopFrame(vbf)) {
-        session_encoder->encodeFrame(vbf.video, video_pts_90k);
-        is_pad = false;
-      } else {
-        // UNDERFLOW — hard fault: session stop.
-        std::cerr << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
-                  << " frame=" << session_frame_index
-                  << " buffer_depth=" << video_buffer_->DepthFrames()
-                  << " total_pushed=" << video_buffer_->TotalFramesPushed()
-                  << " total_popped=" << video_buffer_->TotalFramesPopped()
-                  << std::endl;
-        { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
-        ctx_->stop_requested.store(true, std::memory_order_release);
-        break;
-      }
+      // Reset take_rotated for next fence cycle.
+      take_rotated = false;
     }
 
     if (is_pad) {
@@ -854,9 +971,9 @@ void PipelineManager::Run() {
       int samples_this_tick =
           static_cast<int>(next_total - audio_buffer_samples_emitted);
 
-      if (audio_buffer_->IsPrimed()) {
+      if (a_src && a_src->IsPrimed()) {
         buffer::AudioFrame audio_out;
-        if (audio_buffer_->TryPopSamples(samples_this_tick, audio_out)) {
+        if (a_src->TryPopSamples(samples_this_tick, audio_out)) {
           session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, false);
           audio_samples_emitted += samples_this_tick;
           audio_buffer_samples_emitted += samples_this_tick;
@@ -866,10 +983,10 @@ void PipelineManager::Run() {
           // UNDERFLOW — hard fault: detach viewer, stop session.
           std::cerr << "[PipelineManager] INV-AUDIO-LOOKAHEAD-001: UNDERFLOW"
                     << " frame=" << session_frame_index
-                    << " buffer_depth_ms=" << audio_buffer_->DepthMs()
+                    << " buffer_depth_ms=" << a_src->DepthMs()
                     << " needed=" << samples_this_tick
-                    << " total_pushed=" << audio_buffer_->TotalSamplesPushed()
-                    << " total_popped=" << audio_buffer_->TotalSamplesPopped()
+                    << " total_pushed=" << a_src->TotalSamplesPushed()
+                    << " total_popped=" << a_src->TotalSamplesPopped()
                     << std::endl;
           { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
           ctx_->stop_requested.store(true, std::memory_order_release);
@@ -1040,6 +1157,7 @@ void PipelineManager::Run() {
       FrameFingerprint fp;
       fp.session_frame_index = session_frame_index;
       fp.is_pad = is_pad;
+      fp.commit_source = take_source_char;
       if (live_tp()->GetState() == ITickProducer::State::kReady) {
         fp.active_block_id = live_tp()->GetBlock().block_id;
       }
@@ -1130,12 +1248,8 @@ void PipelineManager::Run() {
       }
     }
 
-    // P3.1b: Opportunistically check preloader result and stash it
-    if (!preview_ && preloader_->IsReady()) {
-      preview_ = TryTakePreviewProducer();
-    }
-
     // P3.1b: Try to start preloading if conditions met
+    // (stash + preroll moved to pre-TAKE readiness block above)
     TryKickoffPreviewPreload();
 
     // ---- Inter-frame gap measurement ----
@@ -1179,6 +1293,12 @@ void PipelineManager::Run() {
   if (video_buffer_) {
     video_buffer_->StopFilling(/*flush=*/true);
   }
+  // Stop B preroll buffers if still running.
+  if (preview_video_buffer_) {
+    preview_video_buffer_->StopFilling(/*flush=*/true);
+    preview_video_buffer_.reset();
+  }
+  preview_audio_buffer_.reset();
 
   // Cancel preloader and reset sources before closing encoder
   preloader_->Cancel();
