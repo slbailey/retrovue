@@ -36,6 +36,7 @@ struct PipelineMetrics {
   int32_t next_preload_failed_count = 0;
   int64_t fence_pad_frames_total = 0;
   int64_t fence_preload_miss_count = 0;
+  int64_t padded_gap_count = 0;  // PADDED_GAP events (fence without ready block)
 
   // ---- Tick Deadline Discipline (INV-TICK-DEADLINE-DISCIPLINE-001) ----
   int64_t late_ticks_total = 0;
@@ -145,6 +146,11 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_fence_preload_miss_count counter\n";
     oss << "air_continuous_fence_preload_miss_count{channel=\"" << ch << "\"} "
         << fence_preload_miss_count << "\n";
+
+    oss << "\n# HELP air_continuous_padded_gap_count PADDED_GAP events (fence without ready block)\n";
+    oss << "# TYPE air_continuous_padded_gap_count counter\n";
+    oss << "air_continuous_padded_gap_count{channel=\"" << ch << "\"} "
+        << padded_gap_count << "\n";
 
     // Tick deadline discipline
     oss << "\n# HELP air_continuous_late_ticks_total Ticks where monotonic now exceeded deadline\n";

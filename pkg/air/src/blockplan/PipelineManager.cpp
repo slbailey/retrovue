@@ -80,6 +80,20 @@ void PipelineManager::Stop() {
     thread_.join();
   }
   started_ = false;
+
+  // Defensive thread-joinable audit: after Run() exits and thread_ is joined,
+  // no owned threads should remain joinable.  Hitting any of these means the
+  // teardown in Run() (section 7) missed a join — a latent std::terminate bug.
+  if (deferred_fill_thread_.joinable()) {
+    std::cerr << "[PipelineManager] BUG: deferred_fill_thread_ still joinable "
+              << "after Stop(). Joining to prevent std::terminate." << std::endl;
+    deferred_fill_thread_.join();
+  }
+  if (video_buffer_ && video_buffer_->IsFilling()) {
+    std::cerr << "[PipelineManager] BUG: video fill thread still running "
+              << "after Stop(). Stopping to prevent std::terminate." << std::endl;
+    video_buffer_->StopFilling(/*flush=*/true);
+  }
 }
 
 void PipelineManager::CleanupDeferredFill() {
@@ -589,36 +603,33 @@ void PipelineManager::Run() {
       }
 
       // Step 6: G5 FIX — Policy-gated fence fallback.
-      if (!swapped) {
-        if (ctx_->fence_fallback_sync) {
-          // DEV MODE: synchronous fallback — blocks on probe+open+seek.
-          std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
-          if (!ctx_->block_queue.empty()) {
-            FedBlock block = ctx_->block_queue.front();
-            ctx_->block_queue.erase(ctx_->block_queue.begin());
-            auto fresh = std::make_unique<TickProducer>(
-                ctx_->width, ctx_->height, ctx_->fps);
-            AsTickProducer(fresh.get())->AssignBlock(block);
-            live_ = std::move(fresh);
-            swapped = true;
-          }
-        } else {
-          // STRICT MODE: preload miss is a session-stopping invariant failure.
-          std::cerr << "[PipelineManager] INV-FENCE-READY VIOLATION: preload not ready at fence "
-                    << session_frame_index << ". Detaching." << std::endl;
-          { std::lock_guard<std::mutex> lock(metrics_mutex_);
-            metrics_.fence_preload_miss_count++;
-            metrics_.detach_count++; }
-          ctx_->stop_requested.store(true, std::memory_order_release);
-          break;
+      // Try synchronous queue load if fence_fallback_sync is enabled.
+      // If that also fails (or sync is disabled), fall through to PADDED_GAP.
+      if (!swapped && ctx_->fence_fallback_sync) {
+        std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+        if (!ctx_->block_queue.empty()) {
+          FedBlock block = ctx_->block_queue.front();
+          ctx_->block_queue.erase(ctx_->block_queue.begin());
+          auto fresh = std::make_unique<TickProducer>(
+              ctx_->width, ctx_->height, ctx_->fps);
+          AsTickProducer(fresh.get())->AssignBlock(block);
+          live_ = std::move(fresh);
+          swapped = true;
         }
       }
 
-      // Step 7: If not swapped, enter pad mode.
+      // Step 7: If not swapped, enter PADDED_GAP — emit black+silence until ready.
       if (!swapped) {
         live_tp()->Reset();
         block_fence_frame_ = INT64_MAX;
         past_fence = true;
+        { std::lock_guard<std::mutex> lock(metrics_mutex_);
+          metrics_.fence_preload_miss_count++;
+          metrics_.padded_gap_count++; }
+        std::cout << "[PipelineManager] PADDED_GAP_ENTER"
+                  << " fence_frame=" << session_frame_index
+                  << " outgoing=" << (outgoing_summary ? outgoing_summary->block_id : "none")
+                  << std::endl;
       }
 
       // Step 8: If swapped, start block B immediately.
@@ -628,6 +639,11 @@ void PipelineManager::Run() {
       // audio to AudioLookaheadBuffer in one non-blocking call.  Zero decode
       // I/O on the tick thread.  Buffered video frames from PrimeFirstTick
       // are returned by subsequent TryGetFrame calls in the fill thread.
+      //
+      // If audio priming is insufficient, the safety-net silence in the
+      // audio emission path (FENCE_AUDIO_PAD) covers the gap.  We never
+      // discard a block due to audio prime shortfall — that would silently
+      // lose content from the schedule.
       if (swapped) {
         // Compute fence for the new block.
         block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
@@ -650,25 +666,16 @@ void PipelineManager::Run() {
             live_tp()->GetInputFPS(), ctx_->fps,
             &ctx_->stop_requested);
 
-        // INV-AUDIO-PRIME-001: Post-activation verification.
-        // After StartFilling consumed the primed frame (which carries all
-        // accumulated audio from PrimeFirstTick), audio_buffer_ must have
-        // at least kMinAudioPrimeMs of depth.  If not, the primed payload
-        // was deficient — count as fence_preload_miss and detach.
-        if (!ctx_->fence_fallback_sync) {
-          int audio_depth = audio_buffer_->DepthMs();
-          if (audio_depth < kMinAudioPrimeMs) {
-            std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001 VIOLATION: "
-                      << "audio_depth_ms=" << audio_depth
-                      << " required=" << kMinAudioPrimeMs
-                      << " at fence frame " << session_frame_index
-                      << ". Detaching." << std::endl;
-            { std::lock_guard<std::mutex> lock(metrics_mutex_);
-              metrics_.fence_preload_miss_count++;
-              metrics_.detach_count++; }
-            ctx_->stop_requested.store(true, std::memory_order_release);
-            break;
-          }
+        // INV-AUDIO-PRIME-001: Telemetry — log if audio priming is below
+        // threshold.  Safety-net silence handles the gap; block is NOT
+        // discarded.
+        int audio_depth = audio_buffer_->DepthMs();
+        if (audio_depth < kMinAudioPrimeMs) {
+          std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001 WARN: audio_depth_ms="
+                    << audio_depth << " required=" << kMinAudioPrimeMs
+                    << " at fence frame " << session_frame_index
+                    << " block=" << live_tp()->GetBlock().block_id
+                    << " — safety-net silence will cover" << std::endl;
         }
 
         // Immediately kick off preload for the following block.
@@ -676,6 +683,8 @@ void PipelineManager::Run() {
       }
 
       // Step 9: Store deferred thread + producer for later cleanup.
+      // CRITICAL: detached.thread must be moved to a member — destroying a
+      // joinable std::thread calls std::terminate().
       deferred_fill_thread_ = std::move(detached.thread);
       deferred_producer_ = std::move(outgoing_producer);
 
@@ -961,8 +970,11 @@ void PipelineManager::Run() {
                 << std::endl;
     }
 
-    // Consolidated heartbeat — every ~10s (300 ticks at 30fps).
-    if (session_frame_index % 300 == 0) {
+    // HEARTBEAT: telemetry snapshot for performance regression detection.
+    // ~3000 ticks ≈ 100s at 30fps.  Metrics are always available via
+    // /metrics endpoint regardless of log frequency.
+    static constexpr int64_t kHeartbeatInterval = 3000;
+    if (session_frame_index % kHeartbeatInterval == 0) {
       // Snapshot live metrics under metrics_mutex_.
       {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -1105,6 +1117,11 @@ void PipelineManager::Run() {
             live_tp(), audio_buffer_.get(),
             live_tp()->GetInputFPS(), ctx_->fps,
             &ctx_->stop_requested);
+        std::cout << "[PipelineManager] PADDED_GAP_EXIT"
+                  << " frame=" << session_frame_index
+                  << " gap_frames=" << fence_pad_counter
+                  << " block=" << live_tp()->GetBlock().block_id
+                  << std::endl;
         fence_pad_counter = 0;
 
         past_fence = false;

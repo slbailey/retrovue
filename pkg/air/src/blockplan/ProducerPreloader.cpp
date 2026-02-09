@@ -73,7 +73,9 @@ void ProducerPreloader::SetDelayHook(DelayHookFn hook) {
 // =============================================================================
 // Worker — runs on background thread
 // Creates a TickProducer, calls AssignBlock + PrimeFirstTick.
-// Publishes result only if PrimeFirstTick meets the audio threshold.
+// Always publishes the producer if AssignBlock succeeded (kReady state).
+// Audio prime shortfall is telemetry — the tick loop's safety-net silence
+// handles audio gaps.  No block that enters the system is ever silently lost.
 // =============================================================================
 
 void ProducerPreloader::Worker(FedBlock block, int width, int height,
@@ -99,15 +101,12 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height,
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  // If an audio threshold was requested but not met, treat as preload
-  // failure.  IsReady() stays false, forcing the fence path into its
-  // fallback/detach logic rather than swapping in a producer with no audio.
   if (!primed && min_audio_prime_ms > 0) {
-    std::cerr << "[ProducerPreloader] AUDIO_PRIME_FAIL: block=" << block.block_id
+    std::cerr << "[ProducerPreloader] AUDIO_PRIME_WARN: block=" << block.block_id
               << " wanted_ms=" << min_audio_prime_ms
               << " decoder_ok=" << source->HasDecoder()
+              << " — safety-net silence will cover audio gap"
               << std::endl;
-    return;  // result_ remains null — IsReady() == false
   }
 
   std::cout << "[ProducerPreloader] Preload complete: block=" << block.block_id
@@ -115,6 +114,7 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height,
                                  ? "READY" : "EMPTY")
             << " decoder_ok=" << source->HasDecoder()
             << " has_primed=" << source->HasPrimedFrame()
+            << " audio_primed=" << primed
             << std::endl;
 
   {
