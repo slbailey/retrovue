@@ -12,8 +12,10 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/BlockPlanTypes.hpp"
 
 namespace retrovue::blockplan {
 
@@ -47,6 +49,10 @@ class ITickProducer {
   // INV-BLOCK-PRIME-002: True when a pre-decoded primed frame is available.
   // Retrieving a primed frame via TryGetFrame() is non-blocking.
   virtual bool HasPrimedFrame() const = 0;
+
+  // INV-SEAM-SEG: Return computed segment boundaries for the assigned block.
+  // Empty if no block assigned or validation failed.
+  virtual const std::vector<SegmentBoundary>& GetBoundaries() const = 0;
 };
 
 }  // namespace retrovue::blockplan

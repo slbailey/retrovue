@@ -151,6 +151,11 @@ class ThreadTrackingProducer : public ITickProducer {
   double GetInputFPS() const override { return input_fps_; }
   bool HasPrimedFrame() const override { return has_primed_; }
 
+  const std::vector<SegmentBoundary>& GetBoundaries() const override {
+    static const std::vector<SegmentBoundary> empty;
+    return empty;
+  }
+
   // Test helpers
   void SetPrimedFrame(FrameData fd) {
     primed_frame_ = std::move(fd);

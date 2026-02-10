@@ -6,6 +6,7 @@
 
 #include "retrovue/blockplan/ProducerPreloader.hpp"
 
+#include <cassert>
 #include <iostream>
 
 #include "retrovue/blockplan/ITickProducer.hpp"
@@ -33,6 +34,7 @@ void ProducerPreloader::StartPreload(const FedBlock& block,
   {
     std::lock_guard<std::mutex> lock(mutex_);
     result_.reset();
+    audio_prime_depth_ms_ = 0;
   }
   in_progress_ = true;
 
@@ -43,6 +45,16 @@ void ProducerPreloader::StartPreload(const FedBlock& block,
 bool ProducerPreloader::IsReady() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return result_ != nullptr;
+}
+
+bool ProducerPreloader::IsRunning() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return in_progress_ && !result_;
+}
+
+int ProducerPreloader::AudioPrimeDepthMs() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return audio_prime_depth_ms_;
 }
 
 std::unique_ptr<producers::IProducer> ProducerPreloader::TakeSource() {
@@ -97,28 +109,37 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height,
   // INV-AUDIO-PRIME-001: PrimeFirstTick decodes video frame 0 plus enough
   // audio to cover min_audio_prime_ms.  All decode I/O happens here on the
   // worker thread — the fence path does zero decode.
-  bool primed = source->PrimeFirstTick(min_audio_prime_ms);
+  auto prime_result = source->PrimeFirstTick(min_audio_prime_ms);
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  if (!primed && min_audio_prime_ms > 0) {
+  if (!prime_result.met_threshold && min_audio_prime_ms > 0) {
     std::cerr << "[ProducerPreloader] AUDIO_PRIME_WARN: block=" << block.block_id
               << " wanted_ms=" << min_audio_prime_ms
+              << " got_ms=" << prime_result.actual_depth_ms
               << " decoder_ok=" << source->HasDecoder()
               << " — safety-net silence will cover audio gap"
               << std::endl;
   }
+
+  // READY invariant assert: if decoder is OK and we asked for audio priming,
+  // the threshold must be met.  Fires in debug builds only.
+  assert((!source->HasDecoder() || min_audio_prime_ms <= 0 ||
+          prime_result.met_threshold) &&
+         "INV-AUDIO-PRIME-001: READY reached with insufficient audio depth");
 
   std::cout << "[ProducerPreloader] Preload complete: block=" << block.block_id
             << " state=" << (source->GetState() == ITickProducer::State::kReady
                                  ? "READY" : "EMPTY")
             << " decoder_ok=" << source->HasDecoder()
             << " has_primed=" << source->HasPrimedFrame()
-            << " audio_primed=" << primed
+            << " audio_depth_ms=" << prime_result.actual_depth_ms
+            << " audio_met=" << prime_result.met_threshold
             << std::endl;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    audio_prime_depth_ms_ = prime_result.actual_depth_ms;
     result_ = std::move(source);
   }
 }

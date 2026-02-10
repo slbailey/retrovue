@@ -213,7 +213,14 @@ void VideoLookaheadBuffer::FillLoop() {
     }
   }
 
-  bool content_exhausted = false;
+  // INV-BLOCK-WALLFENCE-003: content_gap tracks whether the CURRENT
+  // TryGetFrame cycle returned nullopt.  Unlike the old permanent
+  // content_exhausted flag, this is RE-EVALUATED every decode cycle so
+  // the TickProducer's segment-advancement logic (boundary check inside
+  // TryGetFrame) continues to fire.  When TryGetFrame eventually opens
+  // the next segment (filler/pad), content_gap clears and real frames
+  // flow again.
+  bool content_gap = false;
 
   while (!fill_stop_.load(std::memory_order_acquire) &&
          !(stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
@@ -223,15 +230,30 @@ void VideoLookaheadBuffer::FillLoop() {
     // LOW_WATER), the effective target doubles so the fill thread decodes
     // more frames — each decode also produces audio, refilling the audio
     // buffer.  PipelineManager toggles audio_boost_ from the tick loop.
+    //
+    // INV-TICK-GUARANTEED-OUTPUT: Audio burst-fill mode.
+    // After a segment transition, audio buffer may be critically low while
+    // video buffer is full (hold-last frames).  Allow decoding even when
+    // video exceeds its normal target so audio can rebuild headroom.
+    // Bounded by 4× video target to prevent unbounded growth.
     {
       std::unique_lock<std::mutex> lock(mutex_);
       space_cv_.wait(lock, [this] {
+        bool stopping = fill_stop_.load(std::memory_order_acquire) ||
+            (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
+        if (stopping) return true;
+
         int effective_target = audio_boost_.load(std::memory_order_relaxed)
             ? target_depth_frames_ * 2
             : target_depth_frames_;
-        return static_cast<int>(frames_.size()) < effective_target ||
-               fill_stop_.load(std::memory_order_acquire) ||
-               (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
+        if (static_cast<int>(frames_.size()) < effective_target) return true;
+
+        // Audio burst: proceed past video target when audio is critically low.
+        if (audio_buffer_ && audio_buffer_->DepthMs() < audio_burst_threshold_ms_) {
+          int burst_cap = target_depth_frames_ * 4;
+          return static_cast<int>(frames_.size()) < burst_cap;
+        }
+        return false;
       });
       if (fill_stop_.load(std::memory_order_acquire) ||
           (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
@@ -256,11 +278,16 @@ void VideoLookaheadBuffer::FillLoop() {
 
     VideoBufferFrame vf;
 
-    if (should_decode && !content_exhausted) {
+    // INV-SEAM-SEG-006: TryGetFrame returns nullopt permanently when the
+    // current segment's content is exhausted.  The fill thread enters
+    // hold-last mode until PipelineManager performs the segment swap
+    // (pointer rotation).  No decoder lifecycle work happens on this thread.
+    if (should_decode) {
       auto decode_start = std::chrono::steady_clock::now();
       auto fd = producer_->TryGetFrame();
       auto decode_end = std::chrono::steady_clock::now();
       if (fd) {
+        content_gap = false;
         // Record decode latency (separate lock scope from frame push).
         {
           auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -289,8 +316,9 @@ void VideoLookaheadBuffer::FillLoop() {
           }
         }
       } else if (have_last_decoded) {
-        // Content exhausted — hold last frame to prevent underflow.
-        content_exhausted = true;
+        // Content gap — hold last frame while TryGetFrame advances block_ct_ms
+        // toward the next segment boundary (filler/pad).
+        content_gap = true;
         vf.video = last_decoded;
         vf.was_decoded = false;
         // INV-HOLD-LAST-AUDIO: Push silence so audio buffer doesn't underflow.
@@ -303,16 +331,12 @@ void VideoLookaheadBuffer::FillLoop() {
         break;
       }
     } else if (have_last_decoded) {
-      // Cadence repeat (or content exhausted hold-last).
+      // Cadence repeat (or content-gap hold-last).
       vf.video = last_decoded;
       vf.was_decoded = false;
-      // Cadence repeats push NO audio.  Real decodes produce ~2002
-      // samples vs 1600 consumed per tick at 30fps; the surplus covers
-      // repeat ticks without silence injection.  Silence causes audible
-      // 33ms gaps on ~20% of ticks under 23.976→30 cadence.
-      // Only push silence when content is truly exhausted (hold-last
-      // after EOF) to prevent hard underflow on the block tail.
-      if (content_exhausted && audio_buffer_ && silence_samples_per_frame > 0) {
+      // Push silence on cadence-skip cycles when in a content gap
+      // to prevent audio underflow on the block tail.
+      if (content_gap && audio_buffer_ && silence_samples_per_frame > 0) {
         audio_buffer_->Push(silence_template, my_audio_gen);
       }
     } else {
@@ -411,9 +435,10 @@ bool VideoLookaheadBuffer::IsBelowLowWater() const {
 }
 
 void VideoLookaheadBuffer::SetAudioBoost(bool enable) {
-  bool prev = audio_boost_.exchange(enable, std::memory_order_release);
-  if (enable && !prev) {
-    // Wake fill thread so it sees the expanded target depth.
+  audio_boost_.store(enable, std::memory_order_release);
+  if (enable) {
+    // Wake fill thread on every enable call (not just transition) so it
+    // re-evaluates the audio burst condition while audio is critically low.
     space_cv_.notify_all();
   }
 }

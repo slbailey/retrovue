@@ -115,6 +115,11 @@ class MockTickProducer : public ITickProducer {
 
   bool HasPrimedFrame() const override { return has_primed_; }
 
+  const std::vector<SegmentBoundary>& GetBoundaries() const override {
+    static const std::vector<SegmentBoundary> empty;
+    return empty;
+  }
+
   void SetPrimedFrame(FrameData fd) {
     primed_frame_ = std::move(fd);
     has_primed_ = true;

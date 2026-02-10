@@ -111,6 +111,11 @@ class MockTickProducer : public ITickProducer {
   double GetInputFPS() const override { return input_fps_; }
   bool HasPrimedFrame() const override { return false; }
 
+  const std::vector<SegmentBoundary>& GetBoundaries() const override {
+    static const std::vector<SegmentBoundary> empty;
+    return empty;
+  }
+
   void SetDecodeDelay(std::chrono::milliseconds delay) {
     decode_delay_ = delay;
   }

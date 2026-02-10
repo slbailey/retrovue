@@ -37,6 +37,13 @@ struct PipelineMetrics {
   int64_t fence_pad_frames_total = 0;
   int64_t fence_preload_miss_count = 0;
   int64_t padded_gap_count = 0;  // PADDED_GAP events (fence without ready block)
+  int32_t degraded_take_count = 0;  // Policy B: TAKEs with audio below kMinAudioPrimeMs
+
+  // ---- Segment Seam (INV-SEAM-SEG) ----
+  int32_t segment_seam_count = 0;        // Total segment seam transitions
+  int32_t segment_seam_ready_count = 0;  // Segment seams where prep was ready
+  int32_t segment_seam_miss_count = 0;   // Segment seams where prep was NOT ready
+  int32_t segment_prep_armed_count = 0;  // Segment prep requests submitted
 
   // ---- Tick Deadline Discipline (INV-TICK-DEADLINE-DISCIPLINE-001) ----
   int64_t late_ticks_total = 0;
@@ -73,6 +80,12 @@ struct PipelineMetrics {
 
   // ---- Session Detach (underflow-triggered stops) ----
   int32_t detach_count = 0;
+
+  // ---- Audio Silence Injection (INV-TICK-GUARANTEED-OUTPUT) ----
+  int64_t audio_silence_injected = 0;
+
+  // ---- Consecutive Fallback KPI (OUT-SEG-005b) ----
+  int64_t max_consecutive_audio_fallback_ticks = 0;  // Broadcast KPI: worst fallback burst
 
   // ---- Encoder Lifetime ----
   int32_t encoder_open_count = 0;
@@ -151,6 +164,32 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_padded_gap_count counter\n";
     oss << "air_continuous_padded_gap_count{channel=\"" << ch << "\"} "
         << padded_gap_count << "\n";
+
+    oss << "\n# HELP air_continuous_degraded_take_count TAKEs with audio below prime threshold (Policy B)\n";
+    oss << "# TYPE air_continuous_degraded_take_count counter\n";
+    oss << "air_continuous_degraded_take_count{channel=\"" << ch << "\"} "
+        << degraded_take_count << "\n";
+
+    // Segment seam (INV-SEAM-SEG)
+    oss << "\n# HELP air_continuous_segment_seam_count Total segment seam transitions\n";
+    oss << "# TYPE air_continuous_segment_seam_count counter\n";
+    oss << "air_continuous_segment_seam_count{channel=\"" << ch << "\"} "
+        << segment_seam_count << "\n";
+
+    oss << "\n# HELP air_continuous_segment_seam_ready_count Segment seams where prep was ready\n";
+    oss << "# TYPE air_continuous_segment_seam_ready_count counter\n";
+    oss << "air_continuous_segment_seam_ready_count{channel=\"" << ch << "\"} "
+        << segment_seam_ready_count << "\n";
+
+    oss << "\n# HELP air_continuous_segment_seam_miss_count Segment seams where prep was NOT ready\n";
+    oss << "# TYPE air_continuous_segment_seam_miss_count counter\n";
+    oss << "air_continuous_segment_seam_miss_count{channel=\"" << ch << "\"} "
+        << segment_seam_miss_count << "\n";
+
+    oss << "\n# HELP air_continuous_segment_prep_armed_count Segment prep requests submitted\n";
+    oss << "# TYPE air_continuous_segment_prep_armed_count counter\n";
+    oss << "air_continuous_segment_prep_armed_count{channel=\"" << ch << "\"} "
+        << segment_prep_armed_count << "\n";
 
     // Tick deadline discipline
     oss << "\n# HELP air_continuous_late_ticks_total Ticks where monotonic now exceeded deadline\n";
@@ -247,6 +286,18 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_detach_count counter\n";
     oss << "air_continuous_detach_count{channel=\"" << ch << "\"} "
         << detach_count << "\n";
+
+    // Audio silence injection (INV-TICK-GUARANTEED-OUTPUT)
+    oss << "\n# HELP air_continuous_audio_silence_injected Ticks where silence bridged audio underflow\n";
+    oss << "# TYPE air_continuous_audio_silence_injected counter\n";
+    oss << "air_continuous_audio_silence_injected{channel=\"" << ch << "\"} "
+        << audio_silence_injected << "\n";
+
+    // Consecutive fallback KPI (OUT-SEG-005b)
+    oss << "\n# HELP air_continuous_max_consecutive_audio_fallback_ticks Worst consecutive fallback burst at seam\n";
+    oss << "# TYPE air_continuous_max_consecutive_audio_fallback_ticks gauge\n";
+    oss << "air_continuous_max_consecutive_audio_fallback_ticks{channel=\"" << ch << "\"} "
+        << max_consecutive_audio_fallback_ticks << "\n";
 
     // Encoder lifetime
     oss << "\n# HELP air_continuous_encoder_open_count Encoder open count (must be 1)\n";

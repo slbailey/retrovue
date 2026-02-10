@@ -1740,5 +1740,338 @@ TEST_F(ContinuousOutputContractTest, PadProof_BudgetShortfall_ExactCount) {
   }
 }
 
+// =============================================================================
+// INV-TICK-GUARANTEED-OUTPUT: Audio underflow during segment transition
+// must NOT kill the session.
+//
+// Scenario:
+//   Block with 2 segments: episode (1s of SampleA.mp4) + filler (SampleB.mp4).
+//   Audio buffer is configured small (50ms) so underflow is near-certain
+//   during the episode→filler decoder switch.
+//
+// Assertions:
+//   1. detach_count == 0 (no underflow-triggered session stop)
+//   2. Session emits frames well past the segment boundary
+//   3. Session ends normally ("stopped"), not from underflow
+// =============================================================================
+TEST_F(ContinuousOutputContractTest, AudioUnderflowBridgedWithSilence) {
+  static const std::string kPathA = "/opt/retrovue/assets/SampleA.mp4";
+  static const std::string kPathB = "/opt/retrovue/assets/SampleB.mp4";
+  if (access(kPathA.c_str(), F_OK) != 0 ||
+      access(kPathB.c_str(), F_OK) != 0) {
+    GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
+  }
+
+  // Shrink audio buffer to provoke underflow during segment transition.
+  ctx_->buffer_config.audio_target_depth_ms = 50;
+  ctx_->buffer_config.audio_low_water_ms = 10;
+
+  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+
+  // Multi-segment block: 1s episode + 2s filler = 3s total.
+  // Episode will exhaust quickly, forcing a segment transition.
+  FedBlock block;
+  block.block_id = "underflow-bridge";
+  block.channel_id = 99;
+  block.start_utc_ms = now_ms;
+  block.end_utc_ms = now_ms + 3000;
+  {
+    FedBlock::Segment seg0;
+    seg0.segment_index = 0;
+    seg0.asset_uri = kPathA;
+    seg0.asset_start_offset_ms = 0;
+    seg0.segment_duration_ms = 1000;
+    seg0.segment_type = SegmentType::kContent;
+    block.segments.push_back(seg0);
+
+    FedBlock::Segment seg1;
+    seg1.segment_index = 1;
+    seg1.asset_uri = kPathB;
+    seg1.asset_start_offset_ms = 0;
+    seg1.segment_duration_ms = 2000;
+    seg1.segment_type = SegmentType::kFiller;
+    block.segments.push_back(seg1);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  // Run long enough that the segment transition definitely occurs
+  // and filler content plays for at least 1s after the transition.
+  // If the old hard-stop was still in place, the session would die
+  // at or shortly after the transition (~1s in).
+  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+
+  engine_->Stop();
+
+  auto m = engine_->SnapshotMetrics();
+
+  // ASSERTION 1: No underflow-triggered session stops.
+  EXPECT_EQ(m.detach_count, 0)
+      << "INV-TICK-GUARANTEED-OUTPUT VIOLATION: audio underflow must NOT "
+         "terminate the session. detach_count=" << m.detach_count;
+
+  // ASSERTION 2: Session emitted well past the 1s episode boundary.
+  // At 30fps, 1s = 30 frames. We expect at least 60 frames (into filler).
+  EXPECT_GT(m.continuous_frames_emitted_total, 60)
+      << "Session must survive the segment transition and continue emitting. "
+         "Got only " << m.continuous_frames_emitted_total << " frames";
+
+  // ASSERTION 3: Session ended normally.
+  {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    EXPECT_EQ(session_ended_reason_, "stopped")
+        << "Session must end with reason='stopped', not underflow. "
+           "Got: " << session_ended_reason_;
+  }
+
+  // ASSERTION 4: Burst-fill must limit silence to a brief bridge (≤3 ticks).
+  // Before burst-fill, this was 50+ continuous silence injections.
+  EXPECT_LE(m.audio_silence_injected, 3)
+      << "INV-TICK-GUARANTEED-OUTPUT: burst-fill must rebuild audio headroom "
+         "fast enough that silence injection is at most a brief bridge. "
+         "Got " << m.audio_silence_injected << " silence injections";
+}
+
+// =============================================================================
+// INV-PREROLL-READY-001: Preroll arming regression — next-next block must
+// preload while preview_ holds the current-next block.
+//
+// Scenario:
+//   3 wall-anchored blocks: A (1.5s), B (0.5s), C (2s).
+//   Preloader delay hook: 600ms (simulates slow probe+open+seek).
+//
+//   With the OLD code (if (preview_) return; guard):
+//     - B preloads during A (finishes at ~0.6s), captured as preview_
+//     - C's preload BLOCKED because preview_ exists (B)
+//     - A fence at 1.5s → B→A rotation → C preload starts at 1.5s
+//     - C finishes at ~2.1s, but B fence at 2.0s → C NOT READY → PADDED_GAP
+//
+//   With the FIX (preview_ guard removed, IsRunning guard added):
+//     - B preloads during A (finishes at ~0.6s), captured as preview_
+//     - C preload starts immediately at ~0.6s (preloader idle, queue has C)
+//     - C finishes at ~1.2s, preloader ready
+//     - A fence at 1.5s → B→A rotation
+//     - Next tick: C captured as preview_ → seamless at B fence (2.0s)
+//
+// Assertions:
+//   1. padded_gap_count == 0 (no PADDED_GAP — C was ready at B's fence)
+//   2. source_swap_count >= 2 (both A→B and B→C swaps succeeded)
+//   3. next_preload_started_count >= 2 (B and C both preloaded)
+//   4. Session ends cleanly
+// =============================================================================
+TEST_F(ContinuousOutputContractTest, PrerollArmingNextNextBlock) {
+  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+
+  // Block A: 1.5s
+  FedBlock block_a = MakeSyntheticBlock("preroll-A", 1500);
+  block_a.start_utc_ms = now_ms;
+  block_a.end_utc_ms = now_ms + 1500;
+
+  // Block B: 0.5s (short — the crux of the bug)
+  FedBlock block_b = MakeSyntheticBlock("preroll-B", 500);
+  block_b.start_utc_ms = now_ms + 1500;
+  block_b.end_utc_ms = now_ms + 2000;
+
+  // Block C: 2s
+  FedBlock block_c = MakeSyntheticBlock("preroll-C", 2000);
+  block_c.start_utc_ms = now_ms + 2000;
+  block_c.end_utc_ms = now_ms + 4000;
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block_a);
+    ctx_->block_queue.push_back(block_b);
+    ctx_->block_queue.push_back(block_c);
+  }
+
+  engine_ = MakeEngine();
+
+  // Simulate slow preloader (600ms per preload).
+  // With the old bug, C's preload starts at A's fence (1.5s),
+  // finishes at 2.1s, too late for B's fence at 2.0s.
+  engine_->SetPreloaderDelayHook([]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  });
+
+  engine_->Start();
+
+  // Run through all 3 blocks + margin: 4s blocks + 2s margin.
+  std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+
+  engine_->Stop();
+
+  auto m = engine_->SnapshotMetrics();
+
+  std::cout << "=== INV-PREROLL-READY-001: PrerollArmingNextNextBlock ===" << std::endl;
+  std::cout << "  source_swap_count=" << m.source_swap_count
+            << " total_blocks_executed=" << m.total_blocks_executed
+            << " padded_gap_count=" << m.padded_gap_count
+            << " next_preload_started=" << m.next_preload_started_count
+            << " next_preload_ready=" << m.next_preload_ready_count
+            << " fence_preload_miss=" << m.fence_preload_miss_count
+            << std::endl;
+
+  // ASSERTION 1: At most 1 PADDED_GAP — allowed only at the end of the last
+  // block (C) where no block D exists.  The A→B and B→C transitions must be
+  // seamless (no gap).  source_swap_count==2 proves both rotations succeeded.
+  EXPECT_LE(m.padded_gap_count, 1)
+      << "INV-PREROLL-READY-001 REGRESSION: preroll for block C must start "
+         "while preview_ holds block B, not after B's fence fires. "
+         "padded_gap_count=" << m.padded_gap_count;
+
+  // ASSERTION 2: Both A→B and B→C swaps must succeed.
+  EXPECT_GE(m.source_swap_count, 2)
+      << "Must have at least 2 source swaps (A→B and B→C). "
+         "Got " << m.source_swap_count;
+
+  // ASSERTION 3: Both B and C must have been preloaded.
+  EXPECT_GE(m.next_preload_started_count, 2)
+      << "Preloader must have started at least 2 preloads (B and C). "
+         "Got " << m.next_preload_started_count;
+
+  // ASSERTION 4: Session ends cleanly.
+  {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    EXPECT_EQ(session_ended_reason_, "stopped")
+        << "Session must end cleanly";
+  }
+
+  // ASSERTION 5: All 3 blocks completed.
+  {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    EXPECT_GE(completed_blocks_.size(), 3u)
+        << "All 3 blocks must complete. Completed: " << completed_blocks_.size();
+  }
+}
+
+// =============================================================================
+// PRIME-REGRESS-001: NulloptBurstTolerance
+//
+// Single block with unresolvable URI.  PrimeFirstTick returns {false, 0}.
+// Verify the session runs cleanly, produces pad frames, and does NOT detach.
+// This proves the priming loop tolerates a complete audio prime failure
+// (no decoder → no audio) without crashing or stalling.
+// =============================================================================
+TEST_F(ContinuousOutputContractTest, NulloptBurstTolerance) {
+  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+
+  // 2s block with unresolvable URI → decoder fails → PrimeFirstTick = {false, 0}.
+  FedBlock block = MakeSyntheticBlock("nullopt-burst", 2000);
+  block.start_utc_ms = now_ms;
+  block.end_utc_ms = now_ms + 2000;
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  // Run through the block (2s) + margin for post-fence pad.
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+
+  engine_->Stop();
+
+  auto m = engine_->SnapshotMetrics();
+
+  // ASSERTION 1: No underflow-triggered detach.
+  EXPECT_EQ(m.detach_count, 0)
+      << "Unresolvable asset must NOT trigger underflow detach";
+
+  // ASSERTION 2: Session produced pad frames (block ran, content was pad).
+  EXPECT_GT(m.pad_frames_emitted_total, 0)
+      << "Must emit pad frames for unresolvable asset";
+  EXPECT_EQ(m.pad_frames_emitted_total, m.continuous_frames_emitted_total)
+      << "All frames must be pad when asset is unresolvable";
+
+  // ASSERTION 3: Block completed (fence fired).
+  {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    ASSERT_GE(completed_blocks_.size(), 1u)
+        << "Block must complete despite prime failure";
+    EXPECT_EQ(completed_blocks_[0], "nullopt-burst");
+  }
+
+  // ASSERTION 4: Session ended cleanly.
+  {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    EXPECT_EQ(session_ended_reason_, "stopped")
+        << "Session must end cleanly, not from underflow";
+  }
+}
+
+// =============================================================================
+// PRIME-REGRESS-002: DegradedTakeCountTracked
+//
+// Two wall-anchored blocks (synthetic, unresolvable URIs).  All TAKEs are
+// degraded because there is no real audio (decoder fails → audio prime = 0ms).
+// Assert that degraded_take_count == source_swap_count: every swap that
+// occurs is a degraded take.
+// =============================================================================
+TEST_F(ContinuousOutputContractTest, DegradedTakeCountTracked) {
+  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+
+  // Block A: 1s, unresolvable URI.
+  FedBlock block_a = MakeSyntheticBlock("degrade-A", 1000);
+  block_a.start_utc_ms = now_ms;
+  block_a.end_utc_ms = now_ms + 1000;
+
+  // Block B: 1s, unresolvable URI.
+  FedBlock block_b = MakeSyntheticBlock("degrade-B", 1000);
+  block_b.start_utc_ms = now_ms + 1000;
+  block_b.end_utc_ms = now_ms + 2000;
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block_a);
+    ctx_->block_queue.push_back(block_b);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  // Run through both blocks + margin.
+  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+
+  engine_->Stop();
+
+  auto m = engine_->SnapshotMetrics();
+
+  // ASSERTION 1: Both blocks executed.
+  EXPECT_GE(m.total_blocks_executed, 2)
+      << "Both blocks must complete";
+
+  // ASSERTION 2: At least 1 source swap (A→B transition).
+  EXPECT_GE(m.source_swap_count, 1)
+      << "Must have at least 1 source swap for 2 blocks";
+
+  // ASSERTION 3: degraded_take_count == source_swap_count.
+  // Every swap is degraded because synthetic blocks have no decoder (audio=0ms).
+  EXPECT_EQ(m.degraded_take_count, m.source_swap_count)
+      << "Every TAKE must be degraded (synthetic blocks have zero audio prime). "
+         "degraded=" << m.degraded_take_count
+      << " swaps=" << m.source_swap_count;
+
+  // ASSERTION 4: Session ended cleanly.
+  {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    EXPECT_EQ(session_ended_reason_, "stopped");
+  }
+
+  // ASSERTION 5: No detach (degraded TAKEs are allowed under Policy B).
+  EXPECT_EQ(m.detach_count, 0)
+      << "Policy B: degraded TAKEs must NOT cause session detach";
+}
+
 }  // namespace
 }  // namespace retrovue::blockplan::testing

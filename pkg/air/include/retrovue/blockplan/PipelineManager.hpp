@@ -25,9 +25,11 @@
 
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
+#include "retrovue/blockplan/SeamPreparer.hpp"
 #include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
@@ -40,7 +42,6 @@ class EncoderPipeline;
 namespace retrovue::blockplan {
 
 class PadProducer;
-class ProducerPreloader;
 struct FrameData;
 struct FrameFingerprint;
 struct BlockPlaybackSummary;
@@ -97,9 +98,10 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Called ONLY when live_ is EMPTY — outside the timed tick window.
   void TryLoadLiveProducer();
 
-  // P3.1b: If preview_ is EMPTY and queue has a block, kick off preload.
-  // Called outside the tick window only.
-  void TryKickoffPreviewPreload();
+  // P3.1b: If SeamPreparer is idle and queue has a block, kick off block preload.
+  // Called outside the tick window only.  Now allows preloading the
+  // next-next block while preview_ holds the current-next block.
+  void TryKickoffBlockPreload(int64_t tick = -1);
 
   // P3.1b: Pop the preloaded preview_ if ready.  Returns non-null if
   // a fully READY IProducer was obtained.  Non-blocking.
@@ -155,7 +157,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // P3.1b: Preview producer (preloaded in background, Input Bus B).
   std::unique_ptr<producers::IProducer> preview_;
-  std::unique_ptr<ProducerPreloader> preloader_;
+  std::unique_ptr<SeamPreparer> seam_preparer_;
+
+  // Policy B observability: audio prime depth (ms) captured from preloader
+  // BEFORE TakeSource(), so we know the headroom at TAKE time.
+  int preview_audio_prime_depth_ms_ = 0;
 
   // Deferred fill thread and producer from async stop at fence.
   // The old fill thread may still be decoding when B rotates into A.
@@ -182,6 +188,41 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // After the TAKE (first tick >= fence_tick), B rotates into A.
   std::unique_ptr<VideoLookaheadBuffer> preview_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> preview_audio_buffer_;
+
+  // --- Segment seam tracking (INV-SEAM-SEG) ---
+  // Original multi-segment FedBlock, stored at block activation so that
+  // ArmSegmentPrep can build synthetic blocks for ANY segment index (not
+  // just the one currently live).  After segment swap, live_->GetBlock()
+  // returns the synthetic single-segment block — not the original.
+  FedBlock live_parent_block_;
+  std::vector<SegmentBoundary> live_boundaries_;
+  int32_t current_segment_index_ = 0;
+  std::vector<int64_t> segment_seam_frames_;  // One per segment boundary
+
+  // Block activation frame — session_frame_index at the moment the block became active.
+  // All segment seam frames are computed relative to this anchor.  No UTC math.
+  int64_t block_activation_frame_ = 0;
+
+  // Unified seam frame — min(next segment seam, block fence).
+  int64_t next_seam_frame_ = INT64_MAX;
+  enum class SeamType { kSegment, kBlock, kNone };
+  SeamType next_seam_type_ = SeamType::kNone;
+
+  // Segment preview (mirrors preview_ / preview_video_buffer_ / preview_audio_buffer_)
+  std::unique_ptr<producers::IProducer> segment_preview_;
+  std::unique_ptr<VideoLookaheadBuffer> segment_preview_video_buffer_;
+  std::unique_ptr<AudioLookaheadBuffer> segment_preview_audio_buffer_;
+
+  // Segment seam private methods
+  void ComputeSegmentSeamFrames();
+  void UpdateNextSeamFrame();
+  void ArmSegmentPrep(int64_t session_frame_index);
+  void PerformSegmentSwap(int64_t session_frame_index);
+
+  // Static helper: build synthetic single-segment FedBlock for segment prep.
+  static FedBlock MakeSyntheticSegmentBlock(
+      const FedBlock& parent, int32_t seg_idx,
+      const std::vector<SegmentBoundary>& boundaries);
 
   // INV-PAD-PRODUCER: Session-lifetime pad source. Created once in Run().
   std::unique_ptr<PadProducer> pad_producer_;

@@ -6,6 +6,7 @@
 
 #include "retrovue/blockplan/TickProducer.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -162,7 +163,16 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   next_frame_offset_ms_ = first_seg.asset_start_offset_ms;
   current_segment_index_ = 0;
   block_ct_ms_ = 0;
+  seg_first_pts_ms_ = -1;  // INV-PTS-ANCHOR-RESET: capture from first decode
   decoder_ok_ = true;
+  open_generation_++;
+  std::cout << "[TickProducer] SEGMENT_DECODER_OPEN"
+            << " block_id=" << block.block_id
+            << " segment_index=0"
+            << " asset_uri=" << first_seg.asset_uri
+            << " open_generation=" << open_generation_
+            << " seek_offset_ms=" << first_seg.asset_start_offset_ms
+            << std::endl;
 
   // Detect input FPS from decoder for cadence support.
   // If input FPS differs from output FPS, PipelineManager will use
@@ -215,17 +225,17 @@ void TickProducer::PrimeFirstFrame() {
 
   // PTS-anchored CT — same logic as TryGetFrame (INV-BLOCK-PRIME-007)
   int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
-  int64_t seg_asset_start = 0;
+
+  // INV-PTS-ANCHOR-RESET: Capture PTS origin on first decode of segment.
+  if (seg_first_pts_ms_ < 0) {
+    seg_first_pts_ms_ = decoded_pts_ms;
+  }
+
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
-  if (current_segment_index_ <
-      static_cast<int32_t>(validated_.plan.segments.size())) {
-    seg_asset_start =
-        validated_.plan.segments[current_segment_index_].asset_start_offset_ms;
-  }
-  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_asset_start);
+  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
   block_ct_ms_ = ct_before + input_frame_duration_ms_;
   next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
 
@@ -247,12 +257,12 @@ void TickProducer::PrimeFirstFrame() {
 // PrimeFirstTick — INV-AUDIO-PRIME-001: prime video + audio for fence readiness
 // =============================================================================
 
-bool TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
+TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
   PrimeFirstFrame();
-  if (!primed_frame_.has_value()) return false;
+  if (!primed_frame_.has_value()) return {false, 0};
 
   // No audio threshold → behaves like PrimeFirstFrame.
-  if (min_audio_prime_ms <= 0) return true;
+  if (min_audio_prime_ms <= 0) return {true, 0};
 
   // Count audio already in primed frame.
   int64_t audio_samples = 0;
@@ -262,23 +272,70 @@ bool TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
 
   int depth_ms = static_cast<int>(
       (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
-  if (depth_ms >= min_audio_prime_ms) return true;
+  if (depth_ms >= min_audio_prime_ms) return {true, depth_ms};
 
-  // Continue decoding to accumulate audio.  Additional video frames are
-  // stored in buffered_frames_ (with empty audio — audio goes to primed).
-  constexpr int kMaxPrimeDecodes = 30;
-  for (int i = 0; i < kMaxPrimeDecodes; i++) {
-    // Use the same decode path as TryGetFrame (segment boundary handling,
-    // EOF loop, etc.) but call the live-decode section directly.
-    // We temporarily clear primed_frame_ so TryGetFrame doesn't return it,
+  // Helper: drain ALL pending audio from the decoder into primed_frame_.
+  // Fix B — ReadAndDecodeFrame queues audio internally while spinning for
+  // video packets.  TryGetFrame only extracts kMaxAudioFramesPerVideoFrame=2.
+  // During priming we want every available sample.
+  auto drain_pending_audio = [&]() {
+    if (!decoder_ok_ || !decoder_) return;
+    buffer::AudioFrame extra;
+    while (decoder_->GetPendingAudioFrame(extra)) {
+      audio_samples += extra.nb_samples;
+      primed_frame_->audio.push_back(std::move(extra));
+    }
+    depth_ms = static_cast<int>(
+        (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
+  };
+
+  // Fix A — consecutive-nullopt-gated loop.
+  // null_run counts consecutive nullopts; reset on successful decode.
+  // A segment transition may produce 2-3 transient nullopts (decoder
+  // close/open/first-frame-fail) which is fine.  10 consecutive means
+  // content is genuinely exhausted or the decoder is stuck.
+  //
+  // Fix C — wallclock safety timeout.
+  // Prevents indefinite hang on broken containers or slow I/O.
+  constexpr int kMaxNullRun = 10;
+  constexpr int kMaxTotalDecodes = 60;
+  constexpr int kMaxPrimeWallclockMs = 2000;
+  auto prime_start = std::chrono::steady_clock::now();
+  int null_run = 0;
+  int total_decodes = 0;
+
+  while (total_decodes < kMaxTotalDecodes) {
+    // Fix C: wallclock timeout check.
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - prime_start).count();
+    if (elapsed_ms >= kMaxPrimeWallclockMs) {
+      std::cerr << "[TickProducer] INV-AUDIO-PRIME-001: wallclock timeout"
+                << " elapsed_ms=" << elapsed_ms
+                << " depth_ms=" << depth_ms
+                << " total_decodes=" << total_decodes
+                << std::endl;
+      break;
+    }
+
+    total_decodes++;
+
+    // Temporarily clear primed_frame_ so TryGetFrame doesn't return it,
     // then restore it after.
     auto held = std::move(primed_frame_);
     primed_frame_.reset();
     auto fd = TryGetFrame();
     primed_frame_ = std::move(held);
 
-    if (!fd) continue;  // Transient: EAGAIN, packet run, seek flush.
-                         // Genuine EOF exhausts kMaxPrimeDecodes iterations.
+    if (!fd) {
+      null_run++;
+      // Fix B: even on nullopt, drain any audio that ReadAndDecodeFrame
+      // queued internally (audio packets decoded while spinning for video).
+      drain_pending_audio();
+      if (depth_ms >= min_audio_prime_ms) break;
+      if (null_run >= kMaxNullRun) break;  // content exhausted or stuck
+      continue;
+    }
+    null_run = 0;  // reset on successful decode
 
     // Move audio into primed_frame_; keep video in buffered.
     for (auto& af : fd->audio) {
@@ -288,19 +345,25 @@ bool TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
     fd->audio.clear();
     buffered_frames_.push_back(std::move(*fd));
 
-    depth_ms = static_cast<int>(
-        (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
+    // Fix B: drain any additional audio beyond the 2-per-video-frame cap.
+    drain_pending_audio();
+
     if (depth_ms >= min_audio_prime_ms) break;
   }
+
+  bool met = depth_ms >= min_audio_prime_ms;
 
   std::cout << "[TickProducer] INV-AUDIO-PRIME-001: PrimeFirstTick"
             << " wanted_ms=" << min_audio_prime_ms
             << " got_ms=" << depth_ms
+            << " met=" << met
+            << " total_decodes=" << total_decodes
+            << " null_run=" << null_run
             << " buffered_video=" << buffered_frames_.size()
             << " audio_frames=" << primed_frame_->audio.size()
             << std::endl;
 
-  return depth_ms >= min_audio_prime_ms;
+  return {met, depth_ms};
 }
 
 // =============================================================================
@@ -334,69 +397,8 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   }
 
   if (!decoder_ok_) {
-    block_ct_ms_ += input_frame_duration_ms_;
-    return std::nullopt;
-  }
-
-  // Check segment boundary
-  if (!boundaries_.empty() &&
-      current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
-    const auto& boundary = boundaries_[current_segment_index_];
-    if (block_ct_ms_ >= boundary.end_ct_ms) {
-      // Transition to next segment
-      int32_t next_index = current_segment_index_ + 1;
-      if (next_index >= static_cast<int32_t>(validated_.plan.segments.size())) {
-        // Past last segment — pad
-        block_ct_ms_ += input_frame_duration_ms_;
-        return std::nullopt;
-      }
-
-      const auto& next_seg = validated_.plan.segments[next_index];
-      current_segment_index_ = next_index;
-
-      // Entering planned PAD segment — close decoder, generate pad frames
-      if (next_seg.segment_type == SegmentType::kPad) {
-        decoder_.reset();
-        decoder_ok_ = false;
-        current_asset_uri_.clear();
-        return GeneratePadFrame();
-      }
-
-      // Open decoder for new content/filler segment
-      decode::DecoderConfig dec_config;
-      dec_config.input_uri = next_seg.asset_uri;
-      dec_config.target_width = width_;
-      dec_config.target_height = height_;
-
-      decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
-      if (!decoder_->Open()) {
-        std::cerr << "[TickProducer] Failed to open decoder for segment "
-                  << next_index << ": " << next_seg.asset_uri << std::endl;
-        decoder_.reset();
-        decoder_ok_ = false;
-        block_ct_ms_ += input_frame_duration_ms_;
-        return std::nullopt;
-      }
-
-      if (next_seg.asset_start_offset_ms > 0) {
-        int preroll =
-            decoder_->SeekPreciseToMs(next_seg.asset_start_offset_ms);
-        if (preroll < 0) {
-          decoder_.reset();
-          decoder_ok_ = false;
-          block_ct_ms_ += input_frame_duration_ms_;
-          return std::nullopt;
-        }
-      }
-
-      current_asset_uri_ = next_seg.asset_uri;
-      next_frame_offset_ms_ = next_seg.asset_start_offset_ms;
-    }
-  }
-
-  // Check if asset offset exceeds asset duration (underrun → pad)
-  const auto* asset_info = assets_.GetAsset(current_asset_uri_);
-  if (asset_info && next_frame_offset_ms_ >= asset_info->duration_ms) {
+    // INV-SEAM-SEG-006: Permanent exhaustion — return nullopt until
+    // PipelineManager performs the segment swap (pointer rotation).
     block_ct_ms_ += input_frame_duration_ms_;
     return std::nullopt;
   }
@@ -405,16 +407,21 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   buffer::Frame video_frame;
   if (!decoder_->DecodeFrameToBuffer(video_frame)) {
     if (decoder_->IsEOF()) {
-      // Loop: seek to 0 and retry
-      decoder_->SeekToMs(0);
-      if (!decoder_->DecodeFrameToBuffer(video_frame)) {
-        block_ct_ms_ += input_frame_duration_ms_;
-        return std::nullopt;
-      }
-    } else {
-      block_ct_ms_ += input_frame_duration_ms_;
+      // INV-SEAM-SEG-006: EOF means segment content exhausted.
+      // Set decoder_ok_ = false permanently.  No segment advancement here.
+      // PipelineManager's eager overlap mechanism handles the transition.
+      std::cout << "[TickProducer] SEGMENT_EOF"
+                << " segment_index=" << current_segment_index_
+                << " asset_uri=" << current_asset_uri_
+                << " block_ct_ms=" << block_ct_ms_
+                << " block_id=" << block_.block_id
+                << std::endl;
+      decoder_ok_ = false;
       return std::nullopt;
     }
+    // Transient decode error (not EOF) — return nullopt for this tick.
+    block_ct_ms_ += input_frame_duration_ms_;
+    return std::nullopt;
   }
 
   // Extract audio (up to 2 frames)
@@ -432,17 +439,22 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   // PTS is in microseconds from stream start; convert to milliseconds.
   int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
 
+  // INV-PTS-ANCHOR-RESET: Capture PTS origin on first decode of each segment.
+  // Using (decoded_pts_ms - seg_first_pts_ms_) as relative offset ensures
+  // the first frame maps to seg_start_ct exactly, regardless of the asset's
+  // absolute PTS epoch.  This prevents the PTS anchoring formula from
+  // overwriting the snapped block_ct_ms_ after AdvanceToNextSegment().
+  if (seg_first_pts_ms_ < 0) {
+    seg_first_pts_ms_ = decoded_pts_ms;
+  }
+
   // Derive block CT from actual decoded position within current segment
-  int64_t seg_asset_start = 0;
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
-  if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size())) {
-    seg_asset_start = validated_.plan.segments[current_segment_index_].asset_start_offset_ms;
-  }
 
-  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_asset_start);
+  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
 
   // Advance: +1 frame estimate for NEXT-frame boundary/underrun checks.
   // Single-frame rounding (max 0.3ms), never accumulated.
@@ -479,6 +491,9 @@ void TickProducer::InitPadFrames() {
   pad_audio_samples_per_frame_ = static_cast<int>(
       (sr + fps_num_i - 1) / fps_num_i);
 }
+
+// AdvanceToNextSegment REMOVED — reactive segment advancement replaced by
+// eager overlap via SeamPreparer.  See INV-SEAM-SEG-001..006.
 
 // =============================================================================
 // GeneratePadFrame — return black+silence FrameData, advance CT
@@ -529,6 +544,8 @@ void TickProducer::Reset() {
   has_pad_segments_ = false;
   input_fps_ = 0.0;
   input_frame_duration_ms_ = frame_duration_ms_;
+  seg_first_pts_ms_ = -1;
+  open_generation_ = 0;
   state_ = State::kEmpty;
 }
 
@@ -554,6 +571,10 @@ double TickProducer::GetInputFPS() const {
 
 bool TickProducer::HasPrimedFrame() const {
   return primed_frame_.has_value();
+}
+
+const std::vector<SegmentBoundary>& TickProducer::GetBoundaries() const {
+  return boundaries_;
 }
 
 // =============================================================================

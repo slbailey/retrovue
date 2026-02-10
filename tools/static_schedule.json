@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-02-10T01:02:03.478290+00:00",
+  "generated_at": "2026-02-10T12:14:53.508242+00:00",
   "description": "Static 24-hour burn-in schedule. 48 \u00d7 30-min blocks rotating 3 Cheers episodes. Each block: [episode][filler][pad 10s].",
   "channel_id": "retrovue-classic",
   "block_duration_ms": 1800000,

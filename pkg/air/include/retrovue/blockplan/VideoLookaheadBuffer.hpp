@@ -165,6 +165,12 @@ class VideoLookaheadBuffer {
   int low_water_frames_;
   std::atomic<bool> audio_boost_{false};
 
+  // INV-TICK-GUARANTEED-OUTPUT: Audio burst-fill threshold.
+  // When audio_buffer_->DepthMs() < this, the fill thread proceeds past
+  // the normal video target (up to 4× cap) to rebuild audio headroom.
+  // Default 200ms — enough to bridge a segment transition without silence.
+  int audio_burst_threshold_ms_ = 200;
+
   static constexpr int kLatencyRingSize = 128;
 
   mutable std::mutex mutex_;

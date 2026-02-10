@@ -25,6 +25,7 @@
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/PadProducer.hpp"
 #include "retrovue/blockplan/ProducerPreloader.hpp"
+#include "retrovue/blockplan/SeamPreparer.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
@@ -67,7 +68,7 @@ PipelineManager::PipelineManager(
       callbacks_(std::move(callbacks)),
       live_(std::make_unique<TickProducer>(ctx->width, ctx->height,
                                                     ctx->fps)),
-      preloader_(std::make_unique<ProducerPreloader>()) {
+      seam_preparer_(std::make_unique<SeamPreparer>()) {
   metrics_.channel_id = ctx->channel_id;
 }
 
@@ -86,7 +87,7 @@ void PipelineManager::Stop() {
   if (!started_) return;
   ctx_->stop_requested.store(true, std::memory_order_release);
   ctx_->queue_cv.notify_all();
-  preloader_->Cancel();
+  seam_preparer_->Cancel();
   if (thread_.joinable()) {
     thread_.join();
   }
@@ -109,6 +110,11 @@ void PipelineManager::Stop() {
     std::cerr << "[PipelineManager] BUG: preview video fill thread still running "
               << "after Stop(). Stopping to prevent std::terminate." << std::endl;
     preview_video_buffer_->StopFilling(/*flush=*/true);
+  }
+  if (segment_preview_video_buffer_ && segment_preview_video_buffer_->IsFilling()) {
+    std::cerr << "[PipelineManager] BUG: segment preview video fill thread still running "
+              << "after Stop(). Stopping to prevent std::terminate." << std::endl;
+    segment_preview_video_buffer_->StopFilling(/*flush=*/true);
   }
 }
 
@@ -164,26 +170,62 @@ void PipelineManager::TryLoadLiveProducer() {
 }
 
 // =============================================================================
-// TryKickoffPreviewPreload — start preloading the next block if conditions met.
+// TryKickoffBlockPreload — start preloading the next block if conditions met.
 // Called outside the tick window only.
 // =============================================================================
 
-void PipelineManager::TryKickoffPreviewPreload() {
-  // Only preload when: live is READY, preview is empty, no preload running
+void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
+  // Guard 1: Live must be READY (no preload during PADDED_GAP — handled by
+  // the dedicated PADDED_GAP exit path instead).
   if (AsTickProducer(live_.get())->GetState() != ITickProducer::State::kReady) return;
-  if (preview_) return;  // Already have a preloaded preview
-  if (preloader_->IsReady()) return;  // Preload finished, not yet consumed
 
+  // Guard 2: SeamPreparer already has a block result — wait for PRE-TAKE to consume it.
+  if (seam_preparer_->HasBlockResult()) return;
+
+  // Guard 3: SeamPreparer worker is currently running and no block result yet — don't cancel.
+  if (seam_preparer_->IsRunning() && !seam_preparer_->HasBlockResult()) return;
+
+  bool has_next = false;
   FedBlock block;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
-    if (ctx_->block_queue.empty()) return;
+    has_next = !ctx_->block_queue.empty();
+    if (!has_next) {
+      if (tick >= 0 && block_fence_frame_ != INT64_MAX &&
+          (block_fence_frame_ - tick) < 3000 &&
+          (tick == block_fence_frame_ || tick % 900 == 0)) {
+        std::cout << "[PipelineManager] PREROLL_DIAG"
+                  << " tick=" << tick
+                  << " fence_tick=" << block_fence_frame_
+                  << " has_next_block=0"
+                  << " preview_exists=" << (preview_ != nullptr)
+                  << " seam_preparer_has_block=0"
+                  << " seam_preparer_running=" << seam_preparer_->IsRunning()
+                  << std::endl;
+      }
+      return;
+    }
     block = ctx_->block_queue.front();
     ctx_->block_queue.erase(ctx_->block_queue.begin());
   }
 
-  preloader_->StartPreload(block, ctx_->width, ctx_->height, ctx_->fps,
-                           kMinAudioPrimeMs);
+  SeamRequest req;
+  req.type = SeamRequestType::kBlock;
+  req.block = block;
+  req.seam_frame = block_fence_frame_;
+  req.width = ctx_->width;
+  req.height = ctx_->height;
+  req.fps = ctx_->fps;
+  req.min_audio_prime_ms = kMinAudioPrimeMs;
+  req.parent_block_id = block.block_id;
+  seam_preparer_->Submit(std::move(req));
+
+  std::cout << "[PipelineManager] PREROLL_ARMED"
+            << " tick=" << tick
+            << " fence_tick=" << block_fence_frame_
+            << " block=" << block.block_id
+            << " preview_exists=" << (preview_ != nullptr)
+            << std::endl;
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.next_preload_started_count++;
@@ -195,12 +237,17 @@ void PipelineManager::TryKickoffPreviewPreload() {
 // =============================================================================
 
 std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer() {
-  auto src = preloader_->TakeSource();
-  if (src) {
+  auto result = seam_preparer_->TakeBlockResult();
+  if (!result) return nullptr;
+
+  // Policy B: capture audio prime depth for TAKE_READINESS and degraded_take_count.
+  preview_audio_prime_depth_ms_ = result->audio_prime_depth_ms;
+
+  {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.next_preload_ready_count++;
   }
-  return src;
+  return std::move(result->producer);
 }
 
 // =============================================================================
@@ -446,6 +493,10 @@ void PipelineManager::Run() {
   int64_t audio_ticks_emitted = 0;
   int64_t audio_buffer_samples_emitted = 0;
 
+  // OUT-SEG-005b: Track consecutive fallback ticks for broadcast KPI.
+  // Counts ticks in a row where decoded audio was NOT emitted from a real asset.
+  int64_t current_consecutive_fallback_ticks = 0;
+
   // INV-VIDEO-LOOKAHEAD-001: Create video lookahead buffer.
   // Background fill thread decodes ahead; tick loop pops one frame per tick.
   // Target depth: ~500ms at output FPS (e.g. 15 frames at 30fps).
@@ -469,11 +520,17 @@ void PipelineManager::Run() {
   // at tick 0.  PrimeFirstTick is safe: it only decodes, no timing dependency.
   if (AsTickProducer(live_.get())->GetState() == ITickProducer::State::kReady &&
       AsTickProducer(live_.get())->HasDecoder()) {
-    static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
+    auto prime_result =
+        static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
+    if (!prime_result.met_threshold) {
+      std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001: block A prime shortfall"
+                << " wanted_ms=" << kMinAudioPrimeMs
+                << " got_ms=" << prime_result.actual_depth_ms << std::endl;
+    }
   }
 
   // P3.1b: Kick off preload for next block immediately
-  TryKickoffPreviewPreload();
+  TryKickoffBlockPreload(0);
 
   // ========================================================================
   // 5b. START OUTPUT CLOCK (monotonic epoch) — after blocking I/O completes.
@@ -542,6 +599,13 @@ void PipelineManager::Run() {
         live_tp(), audio_buffer_.get(),
         live_tp()->GetInputFPS(), ctx_->fps,
         &ctx_->stop_requested);
+
+    // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
+    block_activation_frame_ = session_frame_index;
+    live_parent_block_ = live_tp()->GetBlock();
+    live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
+    ComputeSegmentSeamFrames();
+    ArmSegmentPrep(session_frame_index);
   }
   // P3.3: Seam transition tracking
   std::string prev_completed_block_id;
@@ -605,8 +669,54 @@ void PipelineManager::Run() {
     // HasPrimedFrame() → TryGetFrame() → push, all non-blocking,
     // so this adds no decode I/O to the tick-critical path.
     // ==================================================================
-    if (!preview_ && preloader_->IsReady()) {
+    // INV-SEAM-SEG: Segment PRE-TAKE readiness — stash segment preview if ready.
+    if (!segment_preview_ && seam_preparer_->HasSegmentResult()) {
+      auto seg_result = seam_preparer_->TakeSegmentResult();
+      if (seg_result) {
+        segment_preview_ = std::move(seg_result->producer);
+        std::cout << "[PipelineManager] SEGMENT_PREROLL_STATUS"
+                  << " block=" << seg_result->block_id
+                  << " segment_index=" << seg_result->segment_index
+                  << " segment_type=" << SegmentTypeName(seg_result->segment_type)
+                  << " audio_depth_ms=" << seg_result->audio_prime_depth_ms
+                  << std::endl;
+      }
+    }
+    if (segment_preview_ && !segment_preview_video_buffer_ &&
+        AsTickProducer(segment_preview_.get())->GetState() == ITickProducer::State::kReady) {
+      segment_preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+          video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
+      const auto& scfg = ctx_->buffer_config;
+      int sa_target = scfg.audio_target_depth_ms;
+      int sa_low = scfg.audio_low_water_ms > 0
+          ? scfg.audio_low_water_ms
+          : std::max(1, sa_target / 3);
+      segment_preview_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+          sa_target, buffer::kHouseAudioSampleRate,
+          buffer::kHouseAudioChannels, sa_low);
+      auto* seg_tp = AsTickProducer(segment_preview_.get());
+      segment_preview_video_buffer_->StartFilling(
+          seg_tp, segment_preview_audio_buffer_.get(),
+          seg_tp->GetInputFPS(), ctx_->fps,
+          &ctx_->stop_requested);
+      std::cout << "[PipelineManager] SEGMENT_PREROLL_START"
+                << " tick=" << session_frame_index
+                << " next_seam_frame=" << next_seam_frame_
+                << " headroom=" << (next_seam_frame_ - session_frame_index)
+                << std::endl;
+    }
+
+    if (!preview_ && seam_preparer_->HasBlockResult()) {
       preview_ = TryTakePreviewProducer();
+      if (preview_) {
+        const bool met = (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs);
+        std::cout << "[PipelineManager] PREROLL_STATUS"
+                  << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
+                  << " met_threshold=" << met
+                  << " depth_ms=" << preview_audio_prime_depth_ms_
+                  << " wanted_ms=" << kMinAudioPrimeMs
+                  << std::endl;
+      }
     }
     if (preview_ && !preview_video_buffer_ &&
         AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
@@ -653,13 +763,38 @@ void PipelineManager::Run() {
     VideoBufferFrame vbf;
     int audio_frames_this_tick = 0;
 
-    // ── TAKE: select source based on tick vs fence ──
-    const bool take_b = (session_frame_index >= block_fence_frame_);
-    VideoLookaheadBuffer* v_src = take_b
-        ? preview_video_buffer_.get() : video_buffer_.get();
-    AudioLookaheadBuffer* a_src = take_b
-        ? preview_audio_buffer_.get() : audio_buffer_.get();
-    const char* commit_slot = take_b ? "B" : "A";
+    // ── TAKE: unified source selection based on tick vs next seam ──
+    const bool take = (session_frame_index >= next_seam_frame_);
+    const bool take_b = take && (next_seam_type_ == SeamType::kBlock);
+    const bool take_segment = take && (next_seam_type_ == SeamType::kSegment);
+
+    // Policy B: TAKE_READINESS — log audio headroom at the moment of TAKE.
+    if (take_b && !take_rotated && preview_) {
+      const bool met = (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs);
+      std::cout << "[PipelineManager] TAKE_READINESS"
+                << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
+                << " depth_ms_at_take=" << preview_audio_prime_depth_ms_
+                << " wanted_ms=" << kMinAudioPrimeMs
+                << " met_threshold=" << met
+                << std::endl;
+    }
+
+    VideoLookaheadBuffer* v_src;
+    AudioLookaheadBuffer* a_src;
+    if (take_b && preview_video_buffer_) {
+      v_src = preview_video_buffer_.get();        // Block swap: B buffers
+      a_src = preview_audio_buffer_.get();
+    } else if (take_segment && segment_preview_video_buffer_) {
+      v_src = segment_preview_video_buffer_.get(); // Segment swap: segment B buffers
+      a_src = segment_preview_audio_buffer_.get();
+    } else if (take_b) {
+      v_src = preview_video_buffer_.get();         // Block swap: may be null
+      a_src = preview_audio_buffer_.get();
+    } else {
+      v_src = video_buffer_.get();                 // No swap: A buffers
+      a_src = audio_buffer_.get();
+    }
+    const char* commit_slot = take_b ? "B" : (take_segment ? "S" : "A");
     // Authoritative TAKE slot source for fingerprint:
     //   'A' = live buffer slot, 'B' = preview buffer slot, 'P' = pad.
     // This is a slot identifier, not a block identifier.  After PADDED_GAP
@@ -677,7 +812,7 @@ void PipelineManager::Run() {
                 << " fence_tick=" << block_fence_frame_
                 << " preview_exists=" << (preview_ != nullptr)
                 << " preview_vbuf=" << (preview_video_buffer_ != nullptr)
-                << " preloader_ready=" << preloader_->IsReady()
+                << " seam_has_block=" << seam_preparer_->HasBlockResult()
                 << std::endl;
     }
 
@@ -858,6 +993,8 @@ void PipelineManager::Run() {
         // No B available — PADDED_GAP.
         live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
         block_fence_frame_ = INT64_MAX;
+        next_seam_frame_ = INT64_MAX;
+        next_seam_type_ = SeamType::kNone;
         past_fence = true;
         { std::lock_guard<std::mutex> lock(metrics_mutex_);
           metrics_.fence_preload_miss_count++;
@@ -881,6 +1018,13 @@ void PipelineManager::Run() {
         block_acc.Reset(live_tp()->GetBlock().block_id);
         emit_block_start("take");
 
+        // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
+        block_activation_frame_ = session_frame_index;
+        live_parent_block_ = live_tp()->GetBlock();
+        live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
+        ComputeSegmentSeamFrames();
+        ArmSegmentPrep(session_frame_index);
+
         int audio_depth = audio_buffer_->DepthMs();
         if (audio_depth < kMinAudioPrimeMs) {
           std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001 WARN: audio_depth_ms="
@@ -890,7 +1034,20 @@ void PipelineManager::Run() {
                     << " — safety-net silence will cover" << std::endl;
         }
 
-        TryKickoffPreviewPreload();
+        // Policy B: track degraded TAKEs where audio prime was below threshold.
+        // Uses preview_audio_prime_depth_ms_ captured at preloader TakeSource time.
+        if (preview_audio_prime_depth_ms_ < kMinAudioPrimeMs) {
+          std::cerr << "[PipelineManager] DEGRADED_TAKE"
+                    << " block=" << live_tp()->GetBlock().block_id
+                    << " prime_depth_ms=" << preview_audio_prime_depth_ms_
+                    << " wanted_ms=" << kMinAudioPrimeMs
+                    << " audio_buf_depth_ms=" << audio_depth
+                    << std::endl;
+          std::lock_guard<std::mutex> lock(metrics_mutex_);
+          metrics_.degraded_take_count++;
+        }
+
+        TryKickoffBlockPreload(session_frame_index);
       }
 
       // Step 6: Store deferred thread + producer for later cleanup.
@@ -996,6 +1153,14 @@ void PipelineManager::Run() {
       take_rotated = false;
     }
 
+    // ==================================================================
+    // SEGMENT POST-TAKE: On the segment seam tick, swap segment preview
+    // into live.  Only fires when take_segment is true (not a block seam).
+    // ==================================================================
+    if (take_segment) {
+      PerformSegmentSwap(session_frame_index);
+    }
+
     if (is_pad) {
       // INV-PAD-PRODUCER-005: TAKE selects PadProducer at commitment point.
       // Same encodeFrame path as content (single commitment path).
@@ -1032,6 +1197,9 @@ void PipelineManager::Run() {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.fence_pad_frames_total++;
       }
+
+      // OUT-SEG-005b: Pad tick = fallback (no real decoded audio).
+      current_consecutive_fallback_ticks++;
     }
 
     // ==================================================================
@@ -1066,18 +1234,40 @@ void PipelineManager::Run() {
           audio_buffer_samples_emitted += samples_this_tick;
           audio_ticks_emitted++;
           audio_frames_this_tick = 1;
+          // OUT-SEG-005b: Real decoded audio — reset fallback streak.
+          current_consecutive_fallback_ticks = 0;
         } else {
-          // UNDERFLOW — hard fault: detach viewer, stop session.
-          std::cerr << "[PipelineManager] INV-AUDIO-LOOKAHEAD-001: UNDERFLOW"
+          // INV-TICK-GUARANTEED-OUTPUT: Audio underflow MUST NOT terminate
+          // the session.  Inject silence to bridge the gap (e.g. segment
+          // transition where filler decoder hasn't filled the audio buffer
+          // yet).  Log diagnostic for observability.
+          std::cerr << "[PipelineManager] AUDIO_UNDERFLOW_SILENCE"
                     << " frame=" << session_frame_index
                     << " buffer_depth_ms=" << a_src->DepthMs()
                     << " needed=" << samples_this_tick
                     << " total_pushed=" << a_src->TotalSamplesPushed()
                     << " total_popped=" << a_src->TotalSamplesPopped()
                     << std::endl;
-          { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
-          ctx_->stop_requested.store(true, std::memory_order_release);
-          break;
+
+          static constexpr int kChannels = buffer::kHouseAudioChannels;
+          static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
+
+          buffer::AudioFrame silence;
+          silence.sample_rate = kSampleRate;
+          silence.channels = kChannels;
+          silence.nb_samples = samples_this_tick;
+          silence.data.resize(
+              static_cast<size_t>(samples_this_tick * kChannels) * sizeof(int16_t), 0);
+
+          session_encoder->encodeAudioFrame(silence, audio_pts_90k,
+                                             /*is_silence_pad=*/true);
+          audio_samples_emitted += samples_this_tick;
+          audio_buffer_samples_emitted += samples_this_tick;
+          audio_ticks_emitted++;
+          audio_frames_this_tick = 1;
+          { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.audio_silence_injected++; }
+          // OUT-SEG-005b: Underflow silence = fallback tick.
+          current_consecutive_fallback_ticks++;
         }
       } else {
         // SAFETY NET: Audio buffer not primed despite INV-AUDIO-PRIME-001.
@@ -1114,6 +1304,16 @@ void PipelineManager::Run() {
                   << " audio_pts_90k=" << audio_pts_90k
                   << " video_pts_90k=" << video_pts_90k
                   << std::endl;
+        // OUT-SEG-005b: Fence pad silence = fallback tick.
+        current_consecutive_fallback_ticks++;
+      }
+    }
+
+    // OUT-SEG-005b: Update max consecutive fallback ticks metric.
+    if (current_consecutive_fallback_ticks > 0) {
+      std::lock_guard<std::mutex> lock(metrics_mutex_);
+      if (current_consecutive_fallback_ticks > metrics_.max_consecutive_audio_fallback_ticks) {
+        metrics_.max_consecutive_audio_fallback_ticks = current_consecutive_fallback_ticks;
       }
     }
 
@@ -1230,8 +1430,18 @@ void PipelineManager::Run() {
                   << " decode_p95=" << video_buffer_->DecodeLatencyP95Us() << "us";
       }
       if (audio_buffer_) {
+        int64_t a_pushed = audio_buffer_->TotalSamplesPushed();
+        int64_t a_popped = audio_buffer_->TotalSamplesPopped();
         std::cout << " audio=" << audio_buffer_->DepthMs() << "ms"
-                  << "/" << audio_buffer_->TargetDepthMs() << "ms";
+                  << "/" << audio_buffer_->TargetDepthMs() << "ms"
+                  << " a_pushed=" << a_pushed
+                  << " a_popped=" << a_popped;
+      }
+      {
+        std::lock_guard<std::mutex> lock(metrics_mutex_);
+        if (metrics_.audio_silence_injected > 0) {
+          std::cout << " silence_injected=" << metrics_.audio_silence_injected;
+        }
       }
       if (socket_sink) {
         std::cout << " sink=" << socket_sink->GetCurrentBufferSize()
@@ -1309,10 +1519,15 @@ void PipelineManager::Run() {
       remaining_block_frames_--;
     }
 
-    // LOAD NEXT from queue if source is empty (fallback path).
-    // G6 FIX: No late-tick guard for kEmpty — pad-mode ticks have no decode
-    // work; loading a block is always preferable to emitting more pad frames.
-    if (live_tp()->GetState() == ITickProducer::State::kEmpty) {
+    // LOAD NEXT from queue if source is empty AND no active block fence.
+    // INV-BLOCK-WALLFENCE-003: A new block may only be loaded when no
+    // active block owns the timeline.  block_fence_frame_ == INT64_MAX
+    // is the sentinel for "no current block" — set at session init and
+    // on PADDED_GAP entry.  Any other value means a block's fence is
+    // still pending; the tick loop MUST continue emitting from the
+    // current block (freeze/pad) until the fence fires.
+    if (live_tp()->GetState() == ITickProducer::State::kEmpty &&
+        block_fence_frame_ == INT64_MAX) {
       bool had_preview = (preview_ != nullptr);
       TryLoadLiveProducer();  // Outside timed tick window
 
@@ -1345,6 +1560,14 @@ void PipelineManager::Run() {
             live_tp(), audio_buffer_.get(),
             live_tp()->GetInputFPS(), ctx_->fps,
             &ctx_->stop_requested);
+
+        // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
+        block_activation_frame_ = session_frame_index;
+        live_parent_block_ = live_tp()->GetBlock();
+        live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
+        ComputeSegmentSeamFrames();
+        ArmSegmentPrep(session_frame_index);
+
         std::cout << "[PipelineManager] PADDED_GAP_EXIT"
                   << " frame=" << session_frame_index
                   << " gap_frames=" << fence_pad_counter
@@ -1354,13 +1577,13 @@ void PipelineManager::Run() {
 
         past_fence = false;
         // Kick off preload for the next one
-        TryKickoffPreviewPreload();
+        TryKickoffBlockPreload(session_frame_index);
       }
     }
 
     // P3.1b: Try to start preloading if conditions met
     // (stash + preroll moved to pre-TAKE readiness block above)
-    TryKickoffPreviewPreload();
+    TryKickoffBlockPreload(session_frame_index);
 
     // ---- Inter-frame gap measurement ----
     if (have_prev_frame_time) {
@@ -1410,11 +1633,19 @@ void PipelineManager::Run() {
   }
   preview_audio_buffer_.reset();
 
+  // Stop segment preview buffers if still running.
+  if (segment_preview_video_buffer_) {
+    segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+    segment_preview_video_buffer_.reset();
+  }
+  segment_preview_audio_buffer_.reset();
+  segment_preview_.reset();
+
   // INV-PAD-PRODUCER: Release session-lifetime pad source.
   pad_producer_.reset();
 
-  // Cancel preloader and reset sources before closing encoder
-  preloader_->Cancel();
+  // Cancel seam preparer and reset sources before closing encoder
+  seam_preparer_->Cancel();
   preview_.reset();
   live_tp()->Reset();
   block_fence_frame_ = INT64_MAX;
@@ -1479,7 +1710,255 @@ void PipelineManager::Run() {
 
 void PipelineManager::SetPreloaderDelayHook(
     std::function<void()> hook) {
-  preloader_->SetDelayHook(std::move(hook));
+  seam_preparer_->SetDelayHook(std::move(hook));
+}
+
+// =============================================================================
+// MakeSyntheticSegmentBlock — build single-segment FedBlock for segment prep
+// =============================================================================
+
+FedBlock PipelineManager::MakeSyntheticSegmentBlock(
+    const FedBlock& parent, int32_t seg_idx,
+    const std::vector<SegmentBoundary>& boundaries) {
+  assert(seg_idx < static_cast<int32_t>(parent.segments.size()) &&
+         "MakeSyntheticSegmentBlock: seg_idx out of range in parent block");
+  assert(seg_idx < static_cast<int32_t>(boundaries.size()) &&
+         "MakeSyntheticSegmentBlock: seg_idx out of range in boundaries");
+
+  FedBlock synth;
+  synth.block_id = parent.block_id;
+  synth.channel_id = parent.channel_id;
+  synth.start_utc_ms = parent.start_utc_ms + boundaries[seg_idx].start_ct_ms;
+  synth.end_utc_ms = parent.start_utc_ms + boundaries[seg_idx].end_ct_ms;
+
+  FedBlock::Segment seg = parent.segments[seg_idx];
+  seg.segment_index = 0;  // Single-segment block
+  synth.segments.push_back(std::move(seg));
+
+  assert(synth.segments.size() == 1 &&
+         "MakeSyntheticSegmentBlock: result must have exactly 1 segment");
+  return synth;
+}
+
+// =============================================================================
+// ComputeSegmentSeamFrames — populate segment_seam_frames_ from live_boundaries_
+// =============================================================================
+
+void PipelineManager::ComputeSegmentSeamFrames() {
+  segment_seam_frames_.clear();
+  current_segment_index_ = 0;
+  const int64_t fps_num = ctx_->fps_num;
+  const int64_t fps_den = ctx_->fps_den;
+  int64_t denom = fps_den * 1000;
+  for (const auto& boundary : live_boundaries_) {
+    int64_t ct_ms = boundary.end_ct_ms;
+    int64_t seam = (ct_ms > 0)
+        ? block_activation_frame_ + (ct_ms * fps_num + denom - 1) / denom
+        : block_activation_frame_;
+    segment_seam_frames_.push_back(seam);
+  }
+  UpdateNextSeamFrame();
+}
+
+// =============================================================================
+// UpdateNextSeamFrame — set next_seam_frame_ = min(next segment seam, block fence)
+// =============================================================================
+
+void PipelineManager::UpdateNextSeamFrame() {
+  int64_t next_seg = INT64_MAX;
+  // Current segment's end is the next segment seam — UNLESS it's the last segment.
+  if (current_segment_index_ + 1 <
+      static_cast<int32_t>(segment_seam_frames_.size())) {
+    next_seg = segment_seam_frames_[current_segment_index_];
+  }
+  if (next_seg < block_fence_frame_) {
+    next_seam_frame_ = next_seg;
+    next_seam_type_ = SeamType::kSegment;
+  } else {
+    next_seam_frame_ = block_fence_frame_;
+    next_seam_type_ = SeamType::kBlock;
+  }
+}
+
+// =============================================================================
+// ArmSegmentPrep — submit segment N+1 prep to SeamPreparer
+// =============================================================================
+
+void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
+  // No-op for single-segment blocks or when on the last segment.
+  if (live_boundaries_.size() <= 1) return;
+  int32_t next_seg = current_segment_index_ + 1;
+  if (next_seg >= static_cast<int32_t>(live_boundaries_.size())) return;
+
+  // Use live_parent_block_ (the original multi-segment block stored at block
+  // activation), NOT live_->GetBlock().  After a segment swap, live_ holds a
+  // synthetic single-segment block, so live_->GetBlock().segments[next_seg]
+  // would be out of range.
+  FedBlock synth = MakeSyntheticSegmentBlock(
+      live_parent_block_, next_seg, live_boundaries_);
+
+  // Determine segment type for logging.
+  const char* seg_type_name = "UNKNOWN";
+  if (next_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
+    seg_type_name = SegmentTypeName(
+        live_parent_block_.segments[next_seg].segment_type);
+  }
+
+  SeamRequest req;
+  req.type = SeamRequestType::kSegment;
+  req.block = std::move(synth);
+  req.seam_frame = (current_segment_index_ < static_cast<int32_t>(segment_seam_frames_.size()))
+      ? segment_seam_frames_[current_segment_index_]
+      : INT64_MAX;
+  req.width = ctx_->width;
+  req.height = ctx_->height;
+  req.fps = ctx_->fps;
+  req.min_audio_prime_ms = kMinAudioPrimeMs;
+  req.parent_block_id = live_parent_block_.block_id;
+  req.segment_index = next_seg;
+  seam_preparer_->Submit(std::move(req));
+
+  std::cout << "[PipelineManager] SEGMENT_PREP_ARMED"
+            << " tick=" << session_frame_index
+            << " parent_block=" << live_parent_block_.block_id
+            << " next_segment=" << next_seg
+            << " segment_type=" << seg_type_name
+            << " seam_frame=" << (current_segment_index_ < static_cast<int32_t>(segment_seam_frames_.size())
+                ? segment_seam_frames_[current_segment_index_] : INT64_MAX)
+            << std::endl;
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex_);
+    metrics_.segment_prep_armed_count++;
+  }
+}
+
+// =============================================================================
+// PerformSegmentSwap — segment POST-TAKE: rotate segment preview into live
+// =============================================================================
+
+void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
+  // Capture from/to segment info BEFORE any mutations.
+  const int32_t from_seg = current_segment_index_;
+  const int32_t to_seg = current_segment_index_ + 1;
+  const char* from_type = "UNKNOWN";
+  const char* to_type = "UNKNOWN";
+  if (from_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
+    from_type = SegmentTypeName(live_parent_block_.segments[from_seg].segment_type);
+  }
+  SegmentType to_seg_type = SegmentType::kContent;
+  if (to_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
+    to_seg_type = live_parent_block_.segments[to_seg].segment_type;
+    to_type = SegmentTypeName(to_seg_type);
+  }
+  const bool incoming_is_pad = (to_seg_type == SegmentType::kPad);
+
+  // Step 1: Join any deferred fill thread.
+  CleanupDeferredFill();
+
+  // Step 2: Stop A's fill thread (async).
+  auto detached = video_buffer_->StopFillingAsync(/*flush=*/true);
+  audio_buffer_->Reset();
+
+  // Step 3: Save old live_ for deferred cleanup.
+  auto outgoing_producer = std::move(live_);
+
+  // Step 4: Swap segment preview into live.
+  // prep_mode tracks how the incoming segment was acquired:
+  //   PREROLLED — preview buffers were filled ahead of time
+  //   INSTANT   — PAD segment (trivially prepared, no decoder work)
+  //   MISS      — neither preview nor result available; emergency PAD fallback
+  const char* prep_mode = "MISS";
+  bool swapped = false;
+  if (segment_preview_video_buffer_) {
+    video_buffer_ = std::move(segment_preview_video_buffer_);
+    audio_buffer_ = std::move(segment_preview_audio_buffer_);
+    live_ = std::move(segment_preview_);
+    swapped = true;
+    // PAD segments go through the same prep pipeline but complete trivially
+    // (no decoder open, no audio prime).  Label as INSTANT to distinguish
+    // from content/filler segments that required real decode work.
+    prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
+  } else if (seam_preparer_->HasSegmentResult()) {
+    auto result = seam_preparer_->TakeSegmentResult();
+    if (result && result->producer) {
+      live_ = std::move(result->producer);
+      // Create fresh buffers and start filling.
+      video_buffer_->StopFilling(/*flush=*/true);
+      audio_buffer_->Reset();
+      video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+          video_buffer_ ? video_buffer_->TargetDepthFrames() : 15,
+          video_buffer_ ? video_buffer_->LowWaterFrames() : 5);
+      const auto& bcfg = ctx_->buffer_config;
+      int a_target = bcfg.audio_target_depth_ms;
+      int a_low = bcfg.audio_low_water_ms > 0
+          ? bcfg.audio_low_water_ms
+          : std::max(1, a_target / 3);
+      audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+          a_target, buffer::kHouseAudioSampleRate,
+          buffer::kHouseAudioChannels, a_low);
+      video_buffer_->StartFilling(
+          AsTickProducer(live_.get()), audio_buffer_.get(),
+          AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
+          &ctx_->stop_requested);
+      swapped = true;
+      prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
+    }
+  }
+
+  if (!swapped) {
+    // INV-SEAM-SEG-007: Segment miss — PAD fallback (no audio underflow).
+    live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+    video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+    const auto& bcfg = ctx_->buffer_config;
+    int a_target = bcfg.audio_target_depth_ms;
+    int a_low = bcfg.audio_low_water_ms > 0
+        ? bcfg.audio_low_water_ms
+        : std::max(1, a_target / 3);
+    audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+        a_target, buffer::kHouseAudioSampleRate,
+        buffer::kHouseAudioChannels, a_low);
+    video_buffer_->StartFilling(
+        AsTickProducer(live_.get()), audio_buffer_.get(),
+        0.0, ctx_->fps,
+        &ctx_->stop_requested);
+    swapped = true;
+    prep_mode = "MISS";
+    std::cerr << "[PipelineManager] SEGMENT_SEAM_PAD_FALLBACK"
+              << " tick=" << session_frame_index
+              << " segment_index=" << current_segment_index_
+              << std::endl;
+    {
+      std::lock_guard<std::mutex> lock(metrics_mutex_);
+      metrics_.segment_seam_miss_count++;
+    }
+  } else {
+    std::lock_guard<std::mutex> lock(metrics_mutex_);
+    metrics_.segment_seam_ready_count++;
+  }
+
+  // Step 5: Advance segment index and update next seam frame.
+  current_segment_index_++;
+  UpdateNextSeamFrame();
+
+  // Step 6: Store deferred thread + producer.
+  deferred_fill_thread_ = std::move(detached.thread);
+  deferred_producer_ = std::move(outgoing_producer);
+
+  // Step 7: Arm next segment prep (call site #4).
+  ArmSegmentPrep(session_frame_index);
+
+  // Step 8: Log and metrics.
+  std::cout << "[PipelineManager] SEGMENT_SEAM_TAKE"
+            << " tick=" << session_frame_index
+            << " from_segment=" << from_seg << " (" << from_type << ")"
+            << " to_segment=" << to_seg << " (" << to_type << ")"
+            << " prep_mode=" << prep_mode
+            << " next_seam_frame=" << next_seam_frame_
+            << std::endl;
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex_);
+    metrics_.segment_seam_count++;
+  }
 }
 
 }  // namespace retrovue::blockplan

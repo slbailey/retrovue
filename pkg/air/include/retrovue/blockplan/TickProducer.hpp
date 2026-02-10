@@ -87,6 +87,7 @@ class TickProducer : public producers::IProducer,
   bool HasDecoder() const override;
   double GetInputFPS() const override;
   bool HasPrimedFrame() const override;
+  const std::vector<SegmentBoundary>& GetBoundaries() const override;
 
   // INV-BLOCK-PRIME-001/006: Decode first frame into held slot.
   // Called by ProducerPreloader::Worker after AssignBlock completes.
@@ -97,9 +98,15 @@ class TickProducer : public producers::IProducer,
   // depth accumulated in primed_frame_.audio >= min_audio_prime_ms.
   // Additional video frames are buffered internally and returned by
   // subsequent TryGetFrame() calls (non-blocking, before live decode).
-  // Returns true if threshold met (or min_audio_prime_ms <= 0).
-  // Returns false if threshold not met (content exhausted / decode failure).
-  bool PrimeFirstTick(int min_audio_prime_ms);
+  //
+  // Returns: {met_threshold, actual_depth_ms}.
+  //   met_threshold: true if audio depth >= min_audio_prime_ms (or <= 0).
+  //   actual_depth_ms: accumulated audio in ms (0 if no primed frame).
+  struct PrimeResult {
+    bool met_threshold = false;
+    int actual_depth_ms = 0;
+  };
+  PrimeResult PrimeFirstTick(int min_audio_prime_ms);
 
   // --- IProducer ---
   bool start() override;
@@ -159,6 +166,20 @@ class TickProducer : public producers::IProducer,
 
   void InitPadFrames();
   std::optional<FrameData> GeneratePadFrame();
+
+  // REMOVED: AdvanceToNextSegment() — reactive segment advancement replaced by
+  // eager overlap via SeamPreparer.  See INV-SEAM-SEG-001..006.
+
+  // INV-PTS-ANCHOR-RESET: First decoded PTS (ms) of the current segment.
+  // Set to -1 on segment switch / reset; captured from the first decoded
+  // frame.  PTS anchoring uses (decoded_pts_ms - seg_first_pts_ms_) as the
+  // relative offset, so a new segment's PTS origin cannot corrupt the
+  // snapped block_ct_ms_.
+  int64_t seg_first_pts_ms_ = -1;
+
+  // Monotonic counter: incremented each time a segment decoder is opened.
+  // Logged for correlation across segment transitions.
+  int32_t open_generation_ = 0;
 };
 
 }  // namespace retrovue::blockplan

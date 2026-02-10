@@ -101,6 +101,16 @@ enum class SegmentType : int32_t {
   kPad     = 2,
 };
 
+// Human-readable segment type name for structured logging.
+inline const char* SegmentTypeName(SegmentType t) {
+  switch (t) {
+    case SegmentType::kContent: return "CONTENT";
+    case SegmentType::kFiller:  return "FILLER";
+    case SegmentType::kPad:     return "PAD";
+  }
+  return "UNKNOWN";
+}
+
 // =============================================================================
 // Segment Structure
 // CONTRACT-BLOCK-001 I6: Segment fields
