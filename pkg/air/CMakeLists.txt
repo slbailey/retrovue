@@ -167,6 +167,7 @@ set(AIR_CORE_SOURCES
   src/blockplan/OutputClock.cpp
   src/blockplan/TickProducer.cpp
   src/blockplan/ProducerPreloader.cpp
+  src/blockplan/SeamPreparer.cpp
   src/blockplan/PipelineManager.cpp
   # AudioLookaheadBuffer: broadcast-grade audio buffering (INV-AUDIO-LOOKAHEAD-001)
   src/blockplan/AudioLookaheadBuffer.cpp
@@ -337,6 +338,11 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/PadProducerContractTests.cpp
   tests/contracts/BlockPlan/PlaybackTraceContractTests.cpp
   tests/contracts/BlockPlan/AudioLookaheadBufferTests.cpp
+  tests/contracts/BlockPlan/SegmentAdvanceOnEOFTests.cpp
+  tests/contracts/BlockPlan/SegmentContinuityContractTests.cpp
+  tests/contracts/BlockPlan/ProgramBlockAuthorityContractTests.cpp
+  tests/contracts/BlockPlan/SeamContinuityEngineContractTests.cpp
+  tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests

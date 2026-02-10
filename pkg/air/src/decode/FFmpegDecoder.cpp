@@ -198,6 +198,10 @@ void FFmpegDecoder::Close() {
     avformat_close_input(&format_ctx_);
   }
 
+  // Fix B safety: drain pending audio queue to prevent unbounded growth
+  // across Close()/reopen cycles.
+  while (!pending_audio_frames_.empty()) pending_audio_frames_.pop();
+
   video_stream_index_ = -1;
   audio_stream_index_ = -1;
   eof_reached_ = false;
@@ -207,6 +211,18 @@ void FFmpegDecoder::Close() {
 
 bool FFmpegDecoder::SeekToMs(int64_t position_ms) {
   if (!format_ctx_ || video_stream_index_ < 0) {
+    return false;
+  }
+
+  // INV-BLOCK-WALLFENCE-003: Seeking to position 0 is a looping violation.
+  // Segments default to loop=false.  EOF means "segment exhausted" and must
+  // advance to the next segment, not restart the current one.
+  // Hard violation: log and refuse the seek.
+  if (position_ms == 0) {
+    std::cerr << "[FFmpegDecoder] VIOLATION: SeekToMs(0) called"
+              << " — refusing seek (EOF-loop prohibited)"
+              << " uri=" << (config_.input_uri.empty() ? "unknown" : config_.input_uri)
+              << std::endl;
     return false;
   }
 
@@ -616,10 +632,15 @@ bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) {
           if (drain_ret < 0) {
             break;  // Error
           }
-          // Phase 8.9: Convert and queue the audio frame
+          // Phase 8.9: Convert and queue the audio frame.
+          // Fix B safety: cap queue size to prevent unbounded memory growth
+          // when audio packets arrive faster than they are consumed.
+          static constexpr size_t kMaxPendingAudioFrames = 120;
           buffer::AudioFrame converted_audio;
           if (ConvertAudioFrame(audio_frame_, converted_audio)) {
-            pending_audio_frames_.push(std::move(converted_audio));
+            if (pending_audio_frames_.size() < kMaxPendingAudioFrames) {
+              pending_audio_frames_.push(std::move(converted_audio));
+            }
           }
           av_frame_unref(audio_frame_);
         }

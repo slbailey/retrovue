@@ -24,6 +24,25 @@
 
 ---
 
+## Ownership Domains
+
+Four domains govern decoder transition behavior. Each domain owns a distinct
+concern. No domain substitutes for another.
+
+| Domain | Concern | Contracts |
+|--------|---------|-----------|
+| **Channel Clock** | Tick cadence, guaranteed output, monotonic enforcement | Clock Law, INV-TICK-GUARANTEED-OUTPUT, INV-TICK-DEADLINE-DISCIPLINE-001, INV-TICK-MONOTONIC-UTC-ANCHOR-001, MasterClockContract |
+| **Seam Continuity Engine** | Decoder overlap, clock isolation, readiness, swap, fallback observability | SeamContinuityEngine (INV-SEAM-*), SegmentContinuityContract (OUT-SEG-*) |
+| **Program Block Authority** | Fence-driven block lifecycle, editorial boundaries, frame budget | ProgramBlockAuthorityContract (OUT-BLOCK-*), INV-BLOCK-WALLFENCE-*, INV-FRAME-BUDGET-* |
+| **Content Engine** | Decoder lifecycle, buffer fill, priming, decode decoupling | INV-BLOCK-LOOKAHEAD-PRIMING, INV-LOOKAHEAD-BUFFER-AUTHORITY, FileProducerContract |
+
+**Dependency direction:** Channel Clock → Seam Continuity Engine → Content Engine.
+Program Block Authority feeds seam tick timing to Seam Continuity Engine.
+Content Engine fills buffers that Seam Continuity Engine swaps. No domain
+references the implementation details of a domain below it.
+
+---
+
 ## Layer 0 – Constitutional Laws
 
 Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** Phase invariants refine these; they do not replace them.
@@ -47,7 +66,7 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 
 Truths about correctness and time: CT monotonicity, provenance, determinism, time-blindness, wall-clock correspondence, output safety/liveness semantics, format correctness.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) · [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) · Core `ScheduleManagerPhase8Contract.md`
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) · [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) · [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md) · [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md) · Core `ScheduleManagerPhase8Contract.md`
 
 ### Primitive Invariants
 
@@ -99,6 +118,46 @@ Output sink attachment policy. See [SinkLivenessPolicy.md](semantics/SinkLivenes
 | INV-AIR-IDR-BEFORE-OUTPUT | AIR must not emit any video packets for a segment until an IDR frame has been produced by the encoder for that segment. Gate resets on segment switch (ResetOutputTiming). | Semantic |
 | **INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT** | After AttachStream, emit decodable TS within 500ms using fallback if needed. Output-first, content-second. Contract: [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) | Semantic |
 | ~~INV-AIR-CONTENT-BEFORE-PAD~~ | **RETIRED** — Replaced by INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT. Old philosophy (gate output on content) was backwards. | — |
+
+### Segment Continuity Invariants
+
+Decoder transition correctness at segment seams (episode→filler, block→block, content→pad). See [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **OUT-SEG-001** | Seam safety gate — incoming segment must be ready or fallback emitted | `PipelineManager` | Semantic |
+| **OUT-SEG-002** | No stream death on segment seam — decoder latency must not stop channel | `PipelineManager` | Semantic |
+| **OUT-SEG-003** | Continuous audio output across segment seam — every tick produces audio | `PipelineManager` | Semantic |
+| **OUT-SEG-004** | Audio underflow is survivable and observable — inject fallback, increment metric, log | `PipelineManager` | Semantic |
+| **OUT-SEG-005** | Segment seam is mechanically equivalent to a prepared source swap — tick loop must not block | `PipelineManager` / `ProducerPreloader` | Semantic |
+| **OUT-SEG-005b** | Bounded fallback at seams — well-formed assets SHOULD NOT require >N consecutive fallback ticks (default 5). `max_consecutive_audio_fallback_ticks` tracked as observable metric. | `PipelineManager` | Semantic |
+| **OUT-SEG-006** | Segment transition invariants apply uniformly to all decoder transitions | `PipelineManager` | Semantic |
+
+### Seam Continuity Engine Invariants
+
+Decoder-overlapped transition model: clock isolation, readiness gates, audio continuity, mechanical equivalence, and bounded fallback observability. These invariants formalize the decoder-overlap model that the OUT-SEG-* outcomes require. See [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-SEAM-001** | Clock isolation — channel clock MUST NOT observe, wait for, or be influenced by any decoder lifecycle event. Decoder open/probe/seek/prime execute on background threads within the overlap window. Fatal if systematic. | Seam Continuity Engine | Semantic (Broadcast-Grade) |
+| **INV-SEAM-002** | Decoder readiness before seam tick — incoming decoder MUST achieve readiness (video frame + audio prime) before the seam tick arrives. Readiness gate MUST NOT hang; failure signals "not ready" and tick thread selects fallback. Recoverable per-instance; fatal if systematic. | `ProducerPreloader` / `TickProducer` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-003** | Audio continuity across seam — at the seam tick, real decoded audio MUST be emitted from the incoming source (not silence, not pad). Stronger than INV-TICK-GUARANTEED-OUTPUT which only requires *something*. Assets with no audio track are exempt (pad is correct output). Recoverable. | `AudioLookaheadBuffer` / `PipelineManager` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-004** | Segment/block mechanical equivalence — all decoder transitions MUST use the same prepared-swap primitive regardless of editorial context. Swap mechanism is context-blind; only seam tick determination differs (fence tick vs. media-time exhaustion). Fatal. | Seam Continuity Engine | Semantic (Broadcast-Grade) |
+| **INV-SEAM-005** | Bounded fallback observability — `max_consecutive_audio_fallback_ticks` MUST be tracked as session-lifetime high-water mark, exposed via Prometheus, and bounded (default threshold: 5 ticks for well-formed assets). Metric MUST NOT influence execution. Recoverable (metric absence is fatal). | `PipelineManager` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-006** | Eager decoder preparation — decoder preparation for segment N+1 MUST begin no later than the tick where segment N becomes active. Segment duration, type, and block boundaries MUST NOT delay preparation. Overlap is eager, not reactive. Fatal. | Seam Continuity Engine | Semantic (Broadcast-Grade) |
+
+### Segment Seam Overlap Invariants
+
+Structural constraints enforcing eager decoder overlap for intra-block segment transitions. These invariants specify which thread may perform which operation, eliminating the reactive `AdvanceToNextSegment` path. See [SegmentSeamOverlapContract.md](semantics/SegmentSeamOverlapContract.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-SEAM-SEG-001** | Clock isolation at segment seams — tick thread does no FFmpeg work at any seam (segment or block). Fatal if systematic. | `PipelineManager` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-SEG-002** | No reactive transitions — `TryGetFrame` MUST NOT perform decoder lifecycle or segment advancement. `AdvanceToNextSegment` must not exist. Fatal. | `TickProducer` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-SEG-003** | Eager arming — when segment N becomes active, prep for N+1 MUST be armed on the same tick (subject only to "N+1 exists"). No condition may delay arming. Fatal. | `PipelineManager` / `SeamPreparer` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-SEG-004** | Deterministic seam tick — `segment_seam_frame = block_activation_frame + ceil(boundary.end_ct_ms × fps_num / (fps_den × 1000))`. Same rational arithmetic as block fence. Fatal. | `PipelineManager` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-SEG-005** | Unified swap mechanism — segment seams use the same pointer-swap (buffer rotation + fill thread lifecycle) as block seams. Context-blind swap primitive. Fatal. | `PipelineManager` | Semantic (Broadcast-Grade) |
+| **INV-SEAM-SEG-006** | No decoder lifecycle on fill thread — `FillLoop` cannot call Open/Close/Seek or any function that does. Fill thread decodes from an already-open decoder only. Fatal. | `VideoLookaheadBuffer` / `TickProducer` | Semantic (Broadcast-Grade) |
 
 ### Media Time Authority Invariants
 
@@ -190,7 +249,7 @@ These invariants ensure that tick progression remains wall-clock anchored so tha
 
 Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, no-deadlock rules, ordering and sequencing that coordinate components.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md)
+**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md) · [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md)
 
 | ID | One-line | Type |
 |----|----------|------|
@@ -228,6 +287,18 @@ Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, 
 | INV-P10-NO-SILENCE-INJECTION | Audio liveness must be disabled when PCR-paced mux is active | Coordination |
 | **INV-P10-AUDIO-VIDEO-GATE** | When segment video epoch is established, first audio frame MUST be queued within 100ms. Complements INV-P8-AV-SYNC. | Coordination |
 
+### Program Block Authority Outcomes
+
+Block lifecycle ownership and fence-driven transfer. See [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **OUT-BLOCK-001** | Fence is sole authority for block ownership transfer — no early advancement | `PipelineManager` | Coordination |
+| **OUT-BLOCK-002** | Block identity is externally observable — lifecycle events with block_id, fence, verdict | `PipelineManager` | Coordination |
+| **OUT-BLOCK-003** | Block completion must be recorded at fence — frame count, pad count, asset ranges | `PipelineManager` | Coordination |
+| **OUT-BLOCK-004** | Block-to-block transition must invoke segment continuity outcomes | `PipelineManager` | Coordination |
+| **OUT-BLOCK-005** | Missing/late next block results in PADDED_GAP, not stream death | `PipelineManager` | Coordination |
+
 ---
 
 ## Layer 3 – Diagnostic / Enforcement Invariants
@@ -261,6 +332,9 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Block boundary model** (fence, budget, priming) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
 | **Tick deadline enforcement** (deadline discipline, monotonic anchor) | [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) · [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) |
 | **Lookahead buffer authority** (decode decoupling, underflow semantics) | [INV-LOOKAHEAD-BUFFER-AUTHORITY.md](INV-LOOKAHEAD-BUFFER-AUTHORITY.md) |
+| **Segment continuity** (decoder transition correctness, fallback KPI) | [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md) |
+| **Seam continuity engine** (clock isolation, decoder overlap, mechanical equivalence) | [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md) |
+| **Program block authority** (fence ownership, block lifecycle) | [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md) |
 | **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |

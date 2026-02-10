@@ -409,3 +409,8 @@ It models it, bounds it, and designs around it.
 
 ----
 
+A broadcast system cannot trust the content engine to be well-behaved.
+Therefore it must have a continuity engine above it whose only job is:
+“the channel stays alive, no matter what the content engine does.”
+
+----

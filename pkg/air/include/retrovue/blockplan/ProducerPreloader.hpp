@@ -52,6 +52,15 @@ class ProducerPreloader {
   // Non-blocking: true if the background work has finished.
   bool IsReady() const;
 
+  // Non-blocking: true if a preload worker is active but hasn't produced
+  // a result yet.  Used by TryKickoffPreviewPreload to avoid cancelling
+  // an in-flight preload.
+  bool IsRunning() const;
+
+  // Audio prime depth (ms) achieved by the last completed preload.
+  // Valid after IsReady() returns true.  Returns 0 if no preload completed.
+  int AudioPrimeDepthMs() const;
+
   // Non-blocking: returns the preloaded IProducer if ready, nullptr otherwise.
   // Ownership transfers to caller.  After this call, the preloader is idle.
   std::unique_ptr<producers::IProducer> TakeSource();
@@ -73,6 +82,7 @@ class ProducerPreloader {
   std::atomic<bool> cancel_requested_{false};
   std::unique_ptr<producers::IProducer> result_;  // Guarded by mutex_
   bool in_progress_ = false;
+  int audio_prime_depth_ms_ = 0;  // Guarded by mutex_
 
   DelayHookFn delay_hook_;  // Test-only
 };

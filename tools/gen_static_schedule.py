@@ -68,9 +68,9 @@ def generate_schedule() -> dict:
 
     for i in range(BLOCKS_PER_DAY):
         ep = EPISODES[i % len(EPISODES)]
-        ep_ms = min(ep["duration_ms"], PLANNED_WINDOW_MS)
-        filler_ms = PLANNED_WINDOW_MS - ep_ms
+        ep_ms = min(ep["duration_ms"], BLOCK_DURATION_MS - PAD_TAIL_MS)
         pad_ms = PAD_TAIL_MS
+        filler_ms = BLOCK_DURATION_MS - ep_ms - pad_ms
 
         # Sanity: gap-free
         assert ep_ms + filler_ms + pad_ms == BLOCK_DURATION_MS, (
