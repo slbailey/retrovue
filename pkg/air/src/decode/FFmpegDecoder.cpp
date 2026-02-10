@@ -275,9 +275,20 @@ int FFmpegDecoder::SeekPreciseToMs(int64_t target_ms) {
       // This is the first on-target frame — store it as pending
       has_pending_frame_ = true;
       pending_frame_ = std::move(frame);
-      // Flush audio frames from preroll period
-      while (!pending_audio_frames_.empty()) {
-        pending_audio_frames_.pop();
+      // Flush audio from the preroll period but keep frames whose PTS
+      // is at or after the target — they belong to the on-target
+      // neighbourhood and are needed by PrimeFirstTick.
+      {
+        int64_t target_us = target_ms * 1000;
+        std::queue<buffer::AudioFrame> kept;
+        while (!pending_audio_frames_.empty()) {
+          auto& af = pending_audio_frames_.front();
+          if (af.pts_us >= target_us) {
+            kept.push(std::move(af));
+          }
+          pending_audio_frames_.pop();
+        }
+        pending_audio_frames_ = std::move(kept);
       }
       return preroll_count;
     }
@@ -622,8 +633,36 @@ bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) {
       continue;
     }
 
-    // Send packet to decoder
-    ret = avcodec_send_packet(codec_ctx_, packet_);
+    // Send packet to decoder.
+    // With FF_THREAD_FRAME, send_packet may return EAGAIN when the
+    // decoder's internal frame buffer is full.  Drain all buffered
+    // frames via receive_frame, then retry send_packet with the same
+    // packet.  Bounded to prevent infinite spin.
+    static constexpr int kMaxEagainRetries = 4;
+    for (int eagain_try = 0; eagain_try <= kMaxEagainRetries; ++eagain_try) {
+      ret = avcodec_send_packet(codec_ctx_, packet_);
+      if (ret != AVERROR(EAGAIN)) break;  // Sent (or hard error)
+
+      // Decoder full — drain receive_frame until EAGAIN.
+      // If any drained frame is a valid video frame, return it now;
+      // the un-sent packet will be re-read on the next call (FFmpeg
+      // keeps the read position; we just unref the packet below).
+      while (true) {
+        int drain_ret = avcodec_receive_frame(codec_ctx_, frame_);
+        if (drain_ret == AVERROR(EAGAIN) || drain_ret == AVERROR_EOF) {
+          break;  // Fully drained — retry send_packet
+        }
+        if (drain_ret < 0) {
+          break;  // Error during drain
+        }
+        // Got a valid frame from the drain — return it.
+        // Unref the packet we haven't sent yet; it will be re-read
+        // on the next call to ReadAndDecodeFrame.
+        av_packet_unref(packet_);
+        return ConvertFrame(frame_, output_frame);
+      }
+      // Drained without a usable frame — retry send_packet.
+    }
     av_packet_unref(packet_);
 
     if (ret < 0) {

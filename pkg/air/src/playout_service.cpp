@@ -5,9 +5,11 @@
 
 #include "playout_service.h"
 
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -66,6 +68,30 @@ namespace retrovue
       constexpr char kApiVersion[] = "1.0.0";
       constexpr char kPhase80Payload[] = "HELLO\n";
       constexpr size_t kPhase80PayloadLen = 6;
+
+      // INV-BLOCKPLAN-QUARANTINE: Process-lifetime counters.
+      // Observable in core dumps and via /metrics (when wired).
+      // A non-zero value proves the legacy path was called during a
+      // BlockPlan session — a hard contract violation.
+      std::atomic<uint64_t> legacy_path_attempted_total{0};
+      std::atomic<uint64_t> legacy_path_aborted_total{0};
+
+      // Shared quarantine enforcement.  Called with blockplan_mutex_ held.
+      // Logs, increments counters, asserts (debug), aborts (release).
+      [[noreturn]] void EnforceBlockPlanQuarantine(
+          const char* rpc_name, int32_t channel_id) {
+        legacy_path_attempted_total.fetch_add(1, std::memory_order_relaxed);
+        std::cerr << "[PlayoutControlImpl] INV-BLOCKPLAN-QUARANTINE: " << rpc_name
+                  << " called while BlockPlan session is active"
+                  << " (channel_id=" << channel_id << ")"
+                  << " legacy_path_attempted_total="
+                  << legacy_path_attempted_total.load(std::memory_order_relaxed)
+                  << " — aborting to prevent dual-path execution"
+                  << std::endl;
+        legacy_path_aborted_total.fetch_add(1, std::memory_order_relaxed);
+        assert(false && "INV-BLOCKPLAN-QUARANTINE: legacy RPC during active BlockPlan session");
+        std::abort();  // Release builds: assert is compiled out, abort is unconditional.
+      }
     } // namespace
 
     PlayoutControlImpl::PlayoutControlImpl(
@@ -138,6 +164,7 @@ namespace retrovue
         s.asset_uri = seg.asset_uri();
         s.asset_start_offset_ms = seg.asset_start_offset_ms();
         s.segment_duration_ms = seg.segment_duration_ms();
+        s.segment_type = static_cast<blockplan::SegmentType>(seg.segment_type());
         block.segments.push_back(s);
       }
       return block;
@@ -156,6 +183,16 @@ namespace retrovue
       const int32_t port = request->port();
       const std::string &program_format_json = request->program_format_json();
       std::optional<std::string> uds_path = std::nullopt;
+
+      // INV-BLOCKPLAN-QUARANTINE: Legacy ProducerBus path is forbidden while a
+      // BlockPlan session is active.  If this fires, Core (or a manual gRPC call)
+      // is attempting to start a legacy channel during BlockPlan execution.
+      {
+        std::lock_guard<std::mutex> lock(blockplan_mutex_);
+        if (blockplan_session_ && blockplan_session_->active) {
+          EnforceBlockPlanQuarantine("StartChannel", channel_id);
+        }
+      }
 
       std::cout << "[StartChannel] Request received: channel_id=" << channel_id
                 << ", plan_handle=" << plan_handle << ", port=" << port
@@ -259,6 +296,15 @@ namespace retrovue
       const int32_t fps_numerator = request->fps_numerator();
       const int32_t fps_denominator = request->fps_denominator();
 
+      // INV-BLOCKPLAN-QUARANTINE: Legacy ProducerBus path is forbidden while a
+      // BlockPlan session is active.
+      {
+        std::lock_guard<std::mutex> lock(blockplan_mutex_);
+        if (blockplan_session_ && blockplan_session_->active) {
+          EnforceBlockPlanQuarantine("LoadPreview", channel_id);
+        }
+      }
+
       // INV-FRAME-003: Reject if fps not provided (denominator 0 is invalid)
       if (fps_denominator <= 0) {
         response->set_success(false);
@@ -300,6 +346,15 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const int64_t target_boundary_time_ms = request->target_boundary_time_ms();  // P11C-001 (0 = legacy)
       const int64_t issued_at_time_ms = request->issued_at_time_ms();  // P11D-012: INV-LEADTIME-MEASUREMENT-001
+
+      // INV-BLOCKPLAN-QUARANTINE: Legacy ProducerBus path is forbidden while a
+      // BlockPlan session is active.
+      {
+        std::lock_guard<std::mutex> lock(blockplan_mutex_);
+        if (blockplan_session_ && blockplan_session_->active) {
+          EnforceBlockPlanQuarantine("SwitchToLive", channel_id);
+        }
+      }
 
       std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
 
@@ -647,6 +702,9 @@ namespace retrovue
           std::cerr << "[StartBlockPlanSession] Failed to parse program_format_json" << std::endl;
         }
       }
+
+      // INV-JIP-ANCHOR-001: Propagate Core-authoritative join time to engine.
+      blockplan_session_->join_utc_ms = request->join_utc_ms();
 
       // Seed the block queue with both blocks
       {

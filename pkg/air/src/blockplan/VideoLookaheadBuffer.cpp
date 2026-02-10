@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <numeric>
 #include <utility>
@@ -186,6 +187,21 @@ void VideoLookaheadBuffer::FillLoop() {
     decode_budget = 1.0;  // guarantees first tick decodes
   }
 
+  // Pre-build silence template for hold-last / cadence-repeat ticks.
+  // One tick demands at most ceil(48000 / output_fps) samples.
+  buffer::AudioFrame silence_template;
+  int silence_samples_per_frame = 0;
+  if (audio_buffer_ && output_fps_ > 0.0) {
+    silence_samples_per_frame = static_cast<int>(
+        std::ceil(static_cast<double>(buffer::kHouseAudioSampleRate) / output_fps_));
+    silence_template.sample_rate = buffer::kHouseAudioSampleRate;
+    silence_template.channels = buffer::kHouseAudioChannels;
+    silence_template.nb_samples = silence_samples_per_frame;
+    silence_template.data.resize(
+        static_cast<size_t>(silence_samples_per_frame) *
+        buffer::kHouseAudioChannels * sizeof(int16_t), 0);
+  }
+
   // Seed last_decoded from the primed frame (if consumed in StartFilling).
   buffer::Frame last_decoded;
   bool have_last_decoded = false;
@@ -203,10 +219,17 @@ void VideoLookaheadBuffer::FillLoop() {
          !(stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
 
     // Wait for space in buffer.
+    // INV-AUDIO-BUFFER-POLICY-001: When audio_boost_ is set (audio below
+    // LOW_WATER), the effective target doubles so the fill thread decodes
+    // more frames — each decode also produces audio, refilling the audio
+    // buffer.  PipelineManager toggles audio_boost_ from the tick loop.
     {
       std::unique_lock<std::mutex> lock(mutex_);
       space_cv_.wait(lock, [this] {
-        return static_cast<int>(frames_.size()) < target_depth_frames_ ||
+        int effective_target = audio_boost_.load(std::memory_order_relaxed)
+            ? target_depth_frames_ * 2
+            : target_depth_frames_;
+        return static_cast<int>(frames_.size()) < effective_target ||
                fill_stop_.load(std::memory_order_acquire) ||
                (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
       });
@@ -270,6 +293,10 @@ void VideoLookaheadBuffer::FillLoop() {
         content_exhausted = true;
         vf.video = last_decoded;
         vf.was_decoded = false;
+        // INV-HOLD-LAST-AUDIO: Push silence so audio buffer doesn't underflow.
+        if (audio_buffer_ && silence_samples_per_frame > 0) {
+          audio_buffer_->Push(silence_template, my_audio_gen);
+        }
       } else {
         // No frame ever decoded (decoder failure on first frame).
         // Exit fill loop; tick loop will remain in pad mode.
@@ -277,9 +304,17 @@ void VideoLookaheadBuffer::FillLoop() {
       }
     } else if (have_last_decoded) {
       // Cadence repeat (or content exhausted hold-last).
-      // No audio produced — content stream has no extra audio at higher rate.
       vf.video = last_decoded;
       vf.was_decoded = false;
+      // Cadence repeats push NO audio.  Real decodes produce ~2002
+      // samples vs 1600 consumed per tick at 30fps; the surplus covers
+      // repeat ticks without silence injection.  Silence causes audible
+      // 33ms gaps on ~20% of ticks under 23.976→30 cadence.
+      // Only push silence when content is truly exhausted (hold-last
+      // after EOF) to prevent hard underflow on the block tail.
+      if (content_exhausted && audio_buffer_ && silence_samples_per_frame > 0) {
+        audio_buffer_->Push(silence_template, my_audio_gen);
+      }
     } else {
       // No frame available yet — shouldn't happen (first tick always decodes
       // unless content_exhausted on first frame, handled above).
@@ -373,6 +408,14 @@ void VideoLookaheadBuffer::Reset() {
 bool VideoLookaheadBuffer::IsBelowLowWater() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return primed_ && static_cast<int>(frames_.size()) < low_water_frames_;
+}
+
+void VideoLookaheadBuffer::SetAudioBoost(bool enable) {
+  bool prev = audio_boost_.exchange(enable, std::memory_order_release);
+  if (enable && !prev) {
+    // Wake fill thread so it sees the expanded target depth.
+    space_cv_.notify_all();
+  }
 }
 
 int64_t VideoLookaheadBuffer::DecodeLatencyP95Us() const {

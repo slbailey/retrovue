@@ -37,7 +37,8 @@ class AudioLookaheadBuffer {
       int target_depth_ms = 1000,
       int sample_rate = buffer::kHouseAudioSampleRate,
       int channels = buffer::kHouseAudioChannels,
-      int low_water_ms = 333);
+      int low_water_ms = 333,
+      int high_water_ms = 800);
   ~AudioLookaheadBuffer();
 
   AudioLookaheadBuffer(const AudioLookaheadBuffer&) = delete;
@@ -87,8 +88,14 @@ class AudioLookaheadBuffer {
   // Low-water mark in milliseconds (configuration).
   int LowWaterMs() const { return low_water_ms_; }
 
+  // High-water mark in milliseconds (configuration).
+  int HighWaterMs() const { return high_water_ms_; }
+
   // True when primed AND current depth_ms < low_water_ms.
   bool IsBelowLowWater() const;
+
+  // True when current depth_ms >= high_water_ms.
+  bool IsAboveHighWater() const;
 
   // --- Lifecycle ---
 
@@ -111,6 +118,7 @@ class AudioLookaheadBuffer {
   int channels_;
   int target_depth_ms_;
   int low_water_ms_;
+  int high_water_ms_;
 
   // Monotonic generation counter — bumped on Reset().
   uint64_t generation_ = 0;

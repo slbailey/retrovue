@@ -3,6 +3,13 @@
 // Purpose: Internal failsafe producer that outputs valid black video frames.
 // Contract: docs/contracts/architecture/BlackFrameProducerContract.md
 // Copyright (c) 2025 RetroVue
+//
+// DEPRECATED for BlockPlan live playout.
+// BlockPlan sessions use PadProducer (INV-PAD-PRODUCER) as the TAKE-selectable
+// pad source, replacing BlackFrameProducer's failsafe role.  PadProducer provides
+// both black video and silent audio through the same commitment path as content.
+// This component remains active for legacy (non-BlockPlan) playout sessions
+// where it serves as the dead-man failsafe on the ProducerBus live bus.
 
 #ifndef RETROVUE_PRODUCERS_BLACK_BLACK_FRAME_PRODUCER_H_
 #define RETROVUE_PRODUCERS_BLACK_BLACK_FRAME_PRODUCER_H_
@@ -42,6 +49,13 @@ namespace retrovue::producers::black {
 // This producer runs its own thread and writes to a FrameRingBuffer.
 // It respects MasterClock for timing (real-time pacing in production,
 // deterministic in tests).
+//
+// DEPRECATED for BlockPlan live playout.  BlockPlan sessions use PadProducer
+// (INV-PAD-PRODUCER) — a session-lifetime, zero-allocation, TAKE-selectable
+// source that provides both black video and silent audio.  PadProducer
+// participates in TAKE source selection at the commitment point rather than
+// running as an independent threaded producer on a bus.
+// Retained for legacy (non-BlockPlan) ProducerBus failsafe path.
 class BlackFrameProducer : public retrovue::producers::IProducer {
  public:
   // Constructs a BlackFrameProducer with the given program format.

@@ -334,6 +334,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
   tests/contracts/BlockPlan/SeamProofContractTests.cpp
   tests/contracts/BlockPlan/TakeAtCommitContractTests.cpp
+  tests/contracts/BlockPlan/PadProducerContractTests.cpp
   tests/contracts/BlockPlan/PlaybackTraceContractTests.cpp
   tests/contracts/BlockPlan/AudioLookaheadBufferTests.cpp
 )

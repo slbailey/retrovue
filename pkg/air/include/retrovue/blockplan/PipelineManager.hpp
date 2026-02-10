@@ -39,6 +39,7 @@ class EncoderPipeline;
 
 namespace retrovue::blockplan {
 
+class PadProducer;
 class ProducerPreloader;
 struct FrameData;
 struct FrameFingerprint;
@@ -91,10 +92,6 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
  private:
   void Run();
-
-  // Emit one pad video frame + one silence audio frame at the given PTS.
-  void EmitPadFrame(playout_sinks::mpegts::EncoderPipeline* encoder,
-                    int64_t video_pts_90k, int64_t audio_pts_90k);
 
   // Dequeue next block from ctx_->block_queue and assign to live_.
   // Called ONLY when live_ is EMPTY — outside the timed tick window.
@@ -185,6 +182,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // After the TAKE (first tick >= fence_tick), B rotates into A.
   std::unique_ptr<VideoLookaheadBuffer> preview_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> preview_audio_buffer_;
+
+  // INV-PAD-PRODUCER: Session-lifetime pad source. Created once in Run().
+  std::unique_ptr<PadProducer> pad_producer_;
 };
 
 }  // namespace retrovue::blockplan

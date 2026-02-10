@@ -90,6 +90,18 @@ enum class JoinClassification {
 };
 
 // =============================================================================
+// Segment Type
+// Distinguishes planned segment roles: content, filler, pad.
+// Wire-compatible with proto SegmentType enum.
+// =============================================================================
+
+enum class SegmentType : int32_t {
+  kContent = 0,
+  kFiller  = 1,
+  kPad     = 2,
+};
+
+// =============================================================================
 // Segment Structure
 // CONTRACT-BLOCK-001 I6: Segment fields
 // =============================================================================
@@ -97,9 +109,10 @@ enum class JoinClassification {
 struct Segment {
   // Execution fields (AIR uses these)
   int32_t segment_index;           // 0-based, execution order
-  std::string asset_uri;           // File path to media asset
+  std::string asset_uri;           // File path to media asset (empty for PAD)
   int64_t asset_start_offset_ms;   // Where to seek in asset
   int64_t segment_duration_ms;     // Allocated time for this segment
+  SegmentType segment_type = SegmentType::kContent;  // Segment role
 
   // EXTENSION POINT: Segment metadata (Section 8.2.1)
   // INV-BLOCKPLAN-METADATA-IGNORED: AIR MUST NOT alter execution based on this

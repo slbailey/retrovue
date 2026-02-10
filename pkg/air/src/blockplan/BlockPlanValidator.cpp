@@ -148,9 +148,22 @@ BlockPlanValidator::ValidationResult BlockPlanValidator::ValidateDurationSum(
 
 // CONTRACT-BLOCK-001 P5: All asset_uri files exist and are readable
 // CONTRACT-BLOCK-001 P6: asset_start_offset_ms < asset_duration
+// PAD segments: skip asset validation; validate no asset_uri present.
 BlockPlanValidator::ValidationResult BlockPlanValidator::ValidateAssets(
     const BlockPlan& plan) const {
   for (const auto& seg : plan.segments) {
+    if (seg.segment_type == SegmentType::kPad) {
+      // PAD segments must NOT have an asset_uri
+      if (!seg.asset_uri.empty()) {
+        std::ostringstream detail;
+        detail << "PAD segment " << seg.segment_index
+               << " has non-empty asset_uri: " << seg.asset_uri;
+        return ValidationResult::Failure(
+            BlockPlanError::kInvalidSegmentIndex, detail.str());
+      }
+      continue;  // Skip asset probing for PAD
+    }
+
     // Check asset exists
     int64_t asset_duration = asset_duration_fn_(seg.asset_uri);
     if (asset_duration < 0) {

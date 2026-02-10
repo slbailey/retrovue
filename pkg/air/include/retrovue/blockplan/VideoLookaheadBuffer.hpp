@@ -134,6 +134,13 @@ class VideoLookaheadBuffer {
   // True when primed AND current depth < low-water mark.
   bool IsBelowLowWater() const;
 
+  // INV-AUDIO-BUFFER-POLICY-001: Audio boost mode.
+  // When enabled, the fill thread's effective target depth doubles,
+  // allowing more decodes (and thus more audio) before parking.
+  // Called by PipelineManager when audio drops below LOW_WATER (enable)
+  // or rises above HIGH_WATER (disable).
+  void SetAudioBoost(bool enable);
+
   // P95 decode latency in microseconds (from last kLatencyRingSize decodes).
   // Returns 0 when no decodes have occurred.
   int64_t DecodeLatencyP95Us() const;
@@ -156,6 +163,7 @@ class VideoLookaheadBuffer {
 
   int target_depth_frames_;
   int low_water_frames_;
+  std::atomic<bool> audio_boost_{false};
 
   static constexpr int kLatencyRingSize = 128;
 

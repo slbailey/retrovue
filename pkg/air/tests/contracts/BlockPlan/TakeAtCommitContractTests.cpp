@@ -141,6 +141,16 @@ class TakeAtCommitContractTest : public ::testing::Test {
         });
   }
 
+  // Wait for a fence to fire (block completion at the fence boundary).
+  // This is the correct wait primitive under the fence-authoritative model:
+  // block completion = commit sweep after fence, not media exhaustion.
+  bool WaitForFence(int timeout_ms = 15000) {
+    std::unique_lock<std::mutex> lock(cb_mutex_);
+    return blocks_completed_cv_.wait_for(
+        lock, std::chrono::milliseconds(timeout_ms),
+        [this] { return !fence_frame_indices_.empty(); });
+  }
+
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -162,16 +172,16 @@ class TakeAtCommitContractTest : public ::testing::Test {
 // INV-TAKE-AT-COMMIT-001: Frame-Accurate Source Selection
 //
 // Two real-media blocks A (1s) and B (1s).  Known fence_tick derived from
-// block A's duration.  After both blocks complete, inspect the commit_source
+// block A's duration.  After both blocks complete, inspect the commit_slot
 // field on every fingerprint.
 // Block durations kept short to avoid audio lookahead underflow at
 // block B's tail (fill thread throughput < 100% real-time).
 //
 // Assert:
-//   - tick == fence_tick - 1 has commit_source == 'A'
-//   - tick == fence_tick     has commit_source == 'B'
-//   - ALL ticks >= fence_tick have commit_source != 'A'
-//   - ALL non-pad ticks < fence_tick have commit_source == 'A'
+//   - tick == fence_tick - 1 has commit_slot == 'A'
+//   - tick == fence_tick     has commit_slot == 'B'
+//   - ALL ticks >= fence_tick have commit_slot != 'A'
+//   - ALL non-pad ticks < fence_tick have commit_slot == 'A'
 // =============================================================================
 TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
   if (!FileExists(kPathA) || !FileExists(kPathB)) {
@@ -234,7 +244,7 @@ TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
 
   // ── Core assertions ──
   // Use active_block_id (block identity) for invariant checks.
-  // commit_source tracks buffer slot ('A'=live, 'B'=preview) which rotates
+  // commit_slot tracks buffer slot ('A'=live, 'B'=preview) which rotates
   // at the fence; active_block_id tracks the actual block that produced
   // the frame regardless of buffer slot assignment.
 
@@ -296,7 +306,7 @@ TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
        t++) {
     const auto& fp = fps[static_cast<size_t>(t)];
     std::cout << "  tick=" << fp.session_frame_index
-              << " source=" << fp.commit_source
+              << " source=" << fp.commit_slot
               << " pad=" << fp.is_pad
               << " block=" << fp.active_block_id
               << " asset=" << fp.asset_uri
@@ -309,7 +319,7 @@ TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
 //
 // Same setup as 001, but focuses purely on the sweep invariant:
 // for ALL ticks T in the session, if T >= fence_tick then
-// commit_source != 'A'.  This is the single-predicate version.
+// commit_slot != 'A'.  This is the single-predicate version.
 // =============================================================================
 TEST_F(TakeAtCommitContractTest, NoAFramesAfterFenceSweep) {
   if (!FileExists(kPathA) || !FileExists(kPathB)) {
@@ -332,8 +342,11 @@ TEST_F(TakeAtCommitContractTest, NoAFramesAfterFenceSweep) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 10000))
-      << "Block A must complete within timeout";
+  // Wait for block A's fence (not completion count) — under the
+  // fence-authoritative model, block completion fires only after the
+  // commit sweep at the fence, not when media frames are exhausted.
+  ASSERT_TRUE(WaitForFence(10000))
+      << "Fence must fire for block A";
 
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   engine_->Stop();
@@ -365,7 +378,7 @@ TEST_F(TakeAtCommitContractTest, NoAFramesAfterFenceSweep) {
 // =============================================================================
 // INV-TAKE-AT-COMMIT-003: Commit Source Field Populated
 //
-// Run a single short block.  Verify that commit_source is set on every
+// Run a single short block.  Verify that commit_slot is set on every
 // fingerprint — it must be 'A' or 'P', never the default 'P' for all
 // when real frames exist.  This catches accidental non-population.
 // =============================================================================
@@ -402,17 +415,17 @@ TEST_F(TakeAtCommitContractTest, CommitSourceFieldPopulated) {
   int a_count = 0;
   int p_count = 0;
   for (const auto& fp : fps) {
-    EXPECT_TRUE(fp.commit_source == 'A' || fp.commit_source == 'P')
-        << "Single-block session: commit_source must be 'A' or 'P', got '"
-        << fp.commit_source << "' at tick " << fp.session_frame_index;
-    if (fp.commit_source == 'A') a_count++;
-    if (fp.commit_source == 'P') p_count++;
+    EXPECT_TRUE(fp.commit_slot == 'A' || fp.commit_slot == 'P')
+        << "Single-block session: commit_slot must be 'A' or 'P', got '"
+        << fp.commit_slot << "' at tick " << fp.session_frame_index;
+    if (fp.commit_slot == 'A') a_count++;
+    if (fp.commit_slot == 'P') p_count++;
   }
 
   // With real media, we expect mostly 'A' frames (after initial pad startup).
   EXPECT_GT(a_count, 0)
       << "Real media block must produce at least one A-sourced frame";
-  std::cout << "commit_source distribution: A=" << a_count
+  std::cout << "commit_slot distribution: A=" << a_count
             << " P=" << p_count << " total=" << fps.size() << std::endl;
 }
 

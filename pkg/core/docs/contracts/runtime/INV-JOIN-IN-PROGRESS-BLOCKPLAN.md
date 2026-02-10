@@ -73,19 +73,29 @@ These two values fully determine the initial seeding state:
 
 - **First seeded block (block_a):**
   - Generated from `playout_plan[active_entry_index]`
-  - `asset_start_offset_ms` = entry's own `asset_start_offset_ms` + `block_offset_ms`
-  - `segment_duration_ms` = entry's resolved duration - `block_offset_ms`
-  - Presentation time: `start_utc_ms = 0`, `end_utc_ms = segment_duration_ms`
+  - `block_start_utc_ms` = `floor(join_utc_ms / block_duration_ms) * block_duration_ms`
+    (grid-aligned wall-clock boundary)
+  - `block_duration_ms` = entry's resolved duration (full, never reduced)
+  - `end_utc_ms` = `block_start_utc_ms + block_duration_ms`
+  - Segment within the block:
+    - `asset_start_offset_ms` = entry's own `asset_start_offset_ms` + `block_offset_ms`
+    - `segment_duration_ms` = entry's resolved duration - `block_offset_ms`
+  - The block owns its full grid slot.  The segment is shorter than the
+    block by `block_offset_ms`.  The remaining time at the block's tail
+    is filled by the TAKE fallback chain (freeze/pad per
+    INV-TICK-GUARANTEED-OUTPUT).
 
 - **Second seeded block (block_b):**
   - Generated from `playout_plan[(active_entry_index + 1) % len(playout_plan)]`
   - Uses the entry's own `asset_start_offset_ms` (no JIP offset added)
-  - Full entry duration
-  - Presentation time contiguous with block_a
+  - Full entry duration; `segment_duration_ms == block_duration_ms`
+  - Presentation time contiguous with block_a:
+    `start_utc_ms = block_a.end_utc_ms`
 
 - **Cursor after seeding:**
-  - `_block_index = active_entry_index + 2`
   - `_next_block_start_ms = block_b.end_utc_ms`
+  - `_block_index = active_entry_index + 2` (ordinal counter for block IDs only;
+    does not determine playlist entry selection)
 
 ---
 
@@ -140,44 +150,68 @@ point is strictly determined by elapsed wall-clock time.
 
 ---
 
-### INV-JIP-BP-005: First Seed Carries Offset, Second Seed Starts Clean
+### INV-JIP-BP-005: First Seed Carries Segment Offset, Second Seed Starts Clean
 
 > The first seeded block (block_a) has its segment's
 > `asset_start_offset_ms` increased by `block_offset_ms` and its
 > `segment_duration_ms` decreased by `block_offset_ms`.
+> The block's own duration (`end_utc_ms - start_utc_ms`) is NOT
+> reduced; it remains equal to `block_duration_ms`.
 > The second seeded block (block_b) uses its plan entry's own
-> `asset_start_offset_ms` unmodified, with full entry duration.
+> `asset_start_offset_ms` unmodified, with full entry duration and
+> `segment_duration_ms == block_duration_ms`.
 
-**Rationale:** Only the first block is a partial block.  All subsequent
-blocks are full blocks aligned to entry boundaries.
+**Rationale:** Only the first block's segment is partial — content
+begins at the JIP offset and ends before the block boundary.  The
+block itself occupies its full grid-aligned wall-clock slot.  The
+time between segment exhaustion and the block fence is filled by the
+TAKE fallback chain (INV-TICK-GUARANTEED-OUTPUT).  All subsequent
+blocks have `segment_duration_ms == block_duration_ms`.
 
 ---
 
-### INV-JIP-BP-006: First Block Duration Reduced
+### INV-JIP-BP-006: First Block Duration Immutable, First Segment Reduced
 
-> The first seeded block's effective duration is
-> `active_entry_duration_ms - block_offset_ms`.  Its
-> `end_utc_ms - start_utc_ms` equals this reduced duration.
+> The first seeded block's duration (`end_utc_ms - start_utc_ms`)
+> MUST equal `block_duration_ms`.  It is NOT reduced by JIP offset.
+>
+> The first segment's playable duration within the block is
+> `block_duration_ms - block_offset_ms`.  This is shorter than the
+> block by exactly `block_offset_ms`.
+>
+> The time between segment exhaustion and the block's fence tick is
+> filled by the TAKE fallback chain (freeze/pad per
+> INV-TICK-GUARANTEED-OUTPUT).  This tail pad is an expected
+> consequence of JIP, not a content underrun.
 
-**Rationale:** The viewer joins mid-block.  The first block
-contains only the remaining portion of the active entry, not
-the full entry replayed from the beginning.
+**Rationale:** The viewer joins mid-block.  The first segment begins
+at the JIP offset and plays the remaining portion of the active entry.
+The block's temporal envelope is fixed to the wall-clock grid — it
+occupies its full `block_duration_ms` slot regardless of how much
+content the segment contains.  This ensures all blocks chain with
+identical duration, fence computation is uniform, and no cumulative
+drift occurs from shortened first blocks.
 
 ---
 
 ### INV-JIP-BP-007: Cursor Consistency After Seeding
 
 > After seeding two blocks, the cursor state satisfies:
-> - `_block_index % len(playout_plan) == (active_entry_index + 2) % len(playout_plan)`
 > - `_next_block_start_ms == block_b.end_utc_ms`
+> - `_block_index` is an ordinal counter used only for block ID
+>   generation; it does NOT determine playlist entry selection.
 >
-> The next call to `_generate_next_block()` produces the entry at
-> `(active_entry_index + 2) % len(playout_plan)` with `start_utc_ms`
-> equal to `block_b.end_utc_ms`.
+> Playlist entry selection is derived from `_next_block_start_ms` via
+> `compute_jip_position()`, which maps wall-clock position to the
+> correct cycle entry.  The next call to `_generate_next_block()`
+> produces the entry at the wall-clock position corresponding to
+> `_next_block_start_ms`, with `start_utc_ms` equal to
+> `block_b.end_utc_ms`.
 
 **Rationale:** Steady-state feeding must resume seamlessly from the
-position established by JIP seeding.  The cursor must reflect that
-two entries have been consumed (one partial, one full).
+position established by JIP seeding.  Entry selection derives from
+wall-clock position (LAW-DOWNWARD-CONCRETIZATION), not from an
+ordinal block counter which is an execution-layer artifact.
 
 ---
 
@@ -229,12 +263,12 @@ counters (`start_utc_ms`, `end_utc_ms`, `_block_index`) for execution
 | `test_jip_offset_within_bounds` | INV-JIP-BP-002 | For various elapsed times, `block_offset_ms` is in `[0, entry_duration)`. |
 | `test_jip_deterministic_mapping` | INV-JIP-BP-003 | Same inputs produce identical outputs across multiple calls. |
 | `test_jip_sequence_matches_continuous` | INV-JIP-BP-004 | Block sequence from JIP point matches the tail of a continuous sequence from origin. |
-| `test_jip_first_block_offset_second_block_clean` | INV-JIP-BP-005 | First block carries computed offset; second block has entry's natural offset. |
-| `test_jip_first_block_duration_reduced` | INV-JIP-BP-006 | First block's duration equals `entry_duration - offset`. |
+| `test_jip_first_block_offset_second_block_clean` | INV-JIP-BP-005 | First block's segment carries computed offset; block duration is full; second block has entry's natural offset. |
+| `test_jip_first_block_duration_immutable` | INV-JIP-BP-006 | First block's `end_utc_ms - start_utc_ms == block_duration_ms`; first segment's duration equals `block_duration_ms - offset`. |
 | `test_jip_cursor_consistent_after_seeding` | INV-JIP-BP-007 | `_block_index` and `_next_block_start_ms` allow correct next-block generation. |
 | `test_jip_steady_state_feeding_unchanged` | INV-JIP-BP-008 | After JIP seed, BLOCK_COMPLETE triggers normal feeding with no JIP side-effects. |
 | `test_jip_cycle_wraparound` | INV-JIP-BP-003, 004 | Elapsed time exceeding multiple full cycles still resolves correctly. |
 | `test_jip_variable_duration_entries` | INV-JIP-BP-002, 005 | Plan with heterogeneous per-entry `duration_ms` values computes correct index and offset. |
-| `test_jip_exact_boundary_offset_zero` | INV-JIP-BP-002, 006 | Join landing exactly on an entry boundary yields `offset = 0` and full-duration first block. |
+| `test_jip_exact_boundary_offset_zero` | INV-JIP-BP-002, 006 | Join landing exactly on a grid boundary yields `offset = 0`, full block, and `segment_duration_ms == block_duration_ms`. |
 | `test_jip_single_entry_plan` | INV-JIP-BP-003, 007 | Plan with one entry: every join resolves to index 0 with correct offset; cursor wraps. |
 | `test_jip_only_on_first_viewer` | INV-JIP-BP-001 | Second viewer join does not re-trigger JIP or alter block sequence. |

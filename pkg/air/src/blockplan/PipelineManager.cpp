@@ -23,11 +23,17 @@
 #include "retrovue/blockplan/OutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
+#include "retrovue/blockplan/PadProducer.hpp"
 #include "retrovue/blockplan/ProducerPreloader.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/output/SocketSink.h"
+
+// Define RETROVUE_DEBUG_PAD_EMIT to enable per-tick pad frame logging.
+// Disabled by default — zero runtime cost when off.
+// Enable at build time: -DRETROVUE_DEBUG_PAD_EMIT
+// #define RETROVUE_DEBUG_PAD_EMIT
 
 #ifdef __linux__
 #include <sys/socket.h>
@@ -50,8 +56,9 @@ namespace retrovue::blockplan {
 // PrimeFirstTick which accumulates audio into the primed frame's audio
 // vector.  StartFilling() consumes the primed frame synchronously, pushing
 // all accumulated audio to the AudioLookaheadBuffer in one non-blocking call.
-// At 30fps, one tick ≈ 33ms.  100ms gives ~3 ticks of margin.
-static constexpr int kMinAudioPrimeMs = 100;
+// 500ms provides headroom above LOW_WATER (333ms), preventing micro-underruns
+// during initial playback before the fill thread reaches steady state.
+static constexpr int kMinAudioPrimeMs = 500;
 
 PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
@@ -120,46 +127,6 @@ PipelineMetrics PipelineManager::SnapshotMetrics() const {
 std::string PipelineManager::GenerateMetricsText() const {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   return metrics_.GeneratePrometheusText();
-}
-
-// =============================================================================
-// EmitPadFrame — black video + silent audio at the given PTS
-// =============================================================================
-
-void PipelineManager::EmitPadFrame(
-    playout_sinks::mpegts::EncoderPipeline* encoder,
-    int64_t video_pts_90k,
-    int64_t audio_pts_90k) {
-  // --- Video: black YUV420P frame ---
-  const int w = ctx_->width;
-  const int h = ctx_->height;
-  const int y_size = w * h;
-  const int uv_size = (w / 2) * (h / 2);
-
-  buffer::Frame frame;
-  frame.width = w;
-  frame.height = h;
-  frame.data.resize(static_cast<size_t>(y_size + 2 * uv_size));
-
-  // Y = 0x10 (broadcast black), U/V = 0x80 (neutral chroma)
-  std::memset(frame.data.data(), 0x10, static_cast<size_t>(y_size));
-  std::memset(frame.data.data() + y_size, 0x80, static_cast<size_t>(2 * uv_size));
-
-  encoder->encodeFrame(frame, video_pts_90k);
-
-  // --- Audio: silence (1024 samples, stereo S16) ---
-  static constexpr int kSamplesPerFrame = 1024;
-  static constexpr int kChannels = buffer::kHouseAudioChannels;
-  static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
-
-  buffer::AudioFrame audio;
-  audio.sample_rate = kSampleRate;
-  audio.channels = kChannels;
-  audio.nb_samples = kSamplesPerFrame;
-  audio.data.resize(
-      static_cast<size_t>(kSamplesPerFrame * kChannels) * sizeof(int16_t), 0);
-
-  encoder->encodeAudioFrame(audio, audio_pts_90k, /*is_silence_pad=*/true);
 }
 
 // =============================================================================
@@ -406,6 +373,15 @@ void PipelineManager::Run() {
   // AVIO write path — exactly what Bug B eliminates.
   session_encoder->SetOutputTimingEnabled(false);
 
+  // Disable EncoderPipeline's independent audio silence injection
+  // (INV-P9-AUDIO-LIVENESS).  PipelineManager is the sole audio authority:
+  // it sends exactly one audio frame per tick via encodeAudioFrame() — either
+  // real content from the AudioLookaheadBuffer or silence from PadProducer /
+  // FENCE_AUDIO_PAD.  If the encoder also generates silence in
+  // GenerateSilenceFrames(), both streams hit the mux, doubling audio samples
+  // and desynchronising A/V.
+  session_encoder->SetAudioLivenessEnabled(false);
+
   // ========================================================================
   // ARCHITECTURAL TELEMETRY
   // ========================================================================
@@ -423,13 +399,29 @@ void PipelineManager::Run() {
   // ========================================================================
   OutputClock clock(ctx_->fps_num, ctx_->fps_den);
 
-  // INV-BLOCK-WALLFENCE-001: Capture UTC schedule epoch BEFORE blocking I/O.
-  // Fence math maps absolute UTC schedule times (block.end_utc_ms) to session
-  // frame indices.  The epoch must reflect when the schedule timeline started,
-  // not when the first frame was emitted — the schedule is running regardless
-  // of probe/open/seek latency.
-  session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+  // INV-PAD-PRODUCER: Session-lifetime pad source.
+  pad_producer_ = std::make_unique<PadProducer>(
+      ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+
+  // INV-JIP-ANCHOR-001 / INV-BLOCK-WALLFENCE-001: Session epoch for fence math.
+  // When Core provides join_utc_ms (non-zero), use it as the authoritative
+  // epoch.  This is the wall-clock instant Core captured at the 0→1 viewer
+  // transition — before subprocess spawn, gRPC wait, and stream attach.
+  // Using it eliminates startup-delay JIP drift: fences are computed from
+  // the same T_join that Core used for JIP math.
+  // Fallback to system_clock::now() for legacy / test paths (join_utc_ms == 0).
+  if (ctx_->join_utc_ms > 0) {
+    session_epoch_utc_ms_ = ctx_->join_utc_ms;
+    std::cout << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
+              << session_epoch_utc_ms_ << " (Core-authoritative join_utc_ms)"
+              << std::endl;
+  } else {
+    session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::cout << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
+              << session_epoch_utc_ms_ << " (local clock fallback, join_utc_ms=0)"
+              << std::endl;
+  }
 
   // ========================================================================
   // 4. LOOKAHEAD BUFFERS + AUDIO PTS TRACKING
@@ -471,6 +463,15 @@ void PipelineManager::Run() {
   // ========================================================================
   TryLoadLiveProducer();
 
+  // INV-AUDIO-PRIME-001: Prime first block's audio BEFORE clock start.
+  // Subsequent blocks are primed by ProducerPreloader::Worker, but block A
+  // is loaded synchronously and must be primed here to avoid FENCE_AUDIO_PAD
+  // at tick 0.  PrimeFirstTick is safe: it only decodes, no timing dependency.
+  if (AsTickProducer(live_.get())->GetState() == ITickProducer::State::kReady &&
+      AsTickProducer(live_.get())->HasDecoder()) {
+    static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
+  }
+
   // P3.1b: Kick off preload for next block immediately
   TryKickoffPreviewPreload();
 
@@ -503,6 +504,11 @@ void PipelineManager::Run() {
   };
 
   int64_t session_frame_index = 0;
+
+  // INV-PAD-PRODUCER-007: Content-before-pad gate.
+  // Do not emit pad until at least one real content frame has been committed.
+  // This ensures the encoder's first IDR comes from real content.
+  bool first_real_frame_committed = false;
 
   // INV-BLOCK-WALLFENCE-001: Compute absolute session frame for block fence.
   // Uses rational fps_num/fps_den — NOT ms-quantized frame_duration_ms.
@@ -553,6 +559,10 @@ void PipelineManager::Run() {
   // TAKE rotation guard: ensures post-TAKE housekeeping (B→A rotation,
   // A fill stop, outgoing block finalization) fires exactly once per fence.
   bool take_rotated = false;
+
+  // INV-PAD-PRODUCER: Track pad/content transitions for diagnostic logging.
+  // Rate-limited: one log line per transition, not per frame.
+  bool prev_was_pad = false;
 
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
@@ -649,8 +659,12 @@ void PipelineManager::Run() {
         ? preview_video_buffer_.get() : video_buffer_.get();
     AudioLookaheadBuffer* a_src = take_b
         ? preview_audio_buffer_.get() : audio_buffer_.get();
-    const char* commit_source = take_b ? "B" : "A";
-    // Authoritative TAKE source for fingerprint: 'A', 'B', or 'P' (pad).
+    const char* commit_slot = take_b ? "B" : "A";
+    // Authoritative TAKE slot source for fingerprint:
+    //   'A' = live buffer slot, 'B' = preview buffer slot, 'P' = pad.
+    // This is a slot identifier, not a block identifier.  After PADDED_GAP
+    // exit, the new block occupies the live slot and is labeled 'A'.
+    // Use active_block_id (from live_tp()->GetBlock()) for block identity.
     char take_source_char = 'P';
 
     // INV-PREROLL-READY-001: On the fence tick, B SHOULD be primed.
@@ -667,15 +681,21 @@ void PipelineManager::Run() {
                 << std::endl;
     }
 
-    if (v_src && v_src->IsPrimed() && v_src->TryPopFrame(vbf)) {
+    // INV-VIDEO-LOOKAHEAD-001: Sample IsPrimed BEFORE TryPopFrame to prevent
+    // TOCTOU race.  The fill thread may push between a failed TryPopFrame and
+    // a subsequent IsPrimed check, causing a false underflow detection.
+    // Sampling first is safe: only the tick loop pops, so if IsPrimed is true
+    // the frame is guaranteed to still be in the deque when TryPopFrame runs.
+    const bool a_was_primed = (!take_b && v_src) ? v_src->IsPrimed() : false;
+
+    if (v_src && v_src->TryPopFrame(vbf)) {
       session_encoder->encodeFrame(vbf.video, video_pts_90k);
       is_pad = false;
       take_source_char = take_b ? 'B' : 'A';
     } else if (take_b) {
-      // B not primed at fence — PADDED_GAP.  A is NEVER consulted.
-      // (pad frame emitted below)
-    } else if (v_src && v_src->IsPrimed()) {
-      // A underflow — hard fault: session stop.
+      // B not primed or empty at fence — PADDED_GAP.
+    } else if (a_was_primed) {
+      // A was primed before TryPopFrame, but pop still failed → genuine underflow.
       std::cerr << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
                 << " frame=" << session_frame_index
                 << " buffer_depth=" << v_src->DepthFrames()
@@ -686,7 +706,46 @@ void PipelineManager::Run() {
       ctx_->stop_requested.store(true, std::memory_order_release);
       break;
     }
-    // else: A not primed (no block loaded) — falls through to pad.
+    // else: A not primed (no block loaded yet or buffer warming up) — pad.
+
+    // INV-PAD-PRODUCER-007: Content-before-pad gate.
+    // Do not emit pad until at least one real content frame has been committed,
+    // UNLESS no decoder is available (unresolvable asset or no block loaded).
+    // This ensures the encoder's first IDR comes from real content when possible,
+    // while still allowing pad-only sessions to produce output.
+    if (is_pad && !first_real_frame_committed) {
+      // Gate opens if: (a) live has a decoder that might produce frames soon
+      // (video buffer is priming), AND we haven't seen a real frame yet.
+      // Gate stays closed ONLY while a decoder exists and content is expected.
+      bool decoder_might_produce = (live_tp()->GetState() == ITickProducer::State::kReady
+                                    && live_tp()->HasDecoder()
+                                    && video_buffer_ && !video_buffer_->IsPrimed());
+      if (decoder_might_produce) {
+        // Skip this tick — content is priming and should arrive shortly.
+        continue;
+      }
+      // No decoder, or buffer already primed (but popped nothing = underflow
+      // handled above), or no block loaded — allow pad emission.
+    }
+    if (!is_pad && !first_real_frame_committed) {
+      first_real_frame_committed = true;
+    }
+
+    // INV-PAD-PRODUCER: Log TAKE pad/content transitions (rate-limited).
+    if (is_pad && !prev_was_pad) {
+      std::cout << "[PipelineManager] TAKE_PAD_ENTER"
+                << " tick=" << session_frame_index
+                << " slot=" << commit_slot
+                << std::endl;
+    } else if (!is_pad && prev_was_pad) {
+      std::cout << "[PipelineManager] TAKE_PAD_EXIT"
+                << " tick=" << session_frame_index
+                << " slot=" << commit_slot
+                << " block=" << (live_tp()->GetState() == ITickProducer::State::kReady
+                    ? live_tp()->GetBlock().block_id : "none")
+                << std::endl;
+    }
+    prev_was_pad = is_pad;
 
     // TAKE commit log: emitted on every fence-adjacent tick and the
     // first 3 ticks of each block for seam verification.
@@ -706,7 +765,7 @@ void PipelineManager::Run() {
       std::cout << "[PipelineManager] TAKE_COMMIT"
                 << " tick=" << session_frame_index
                 << " fence_tick=" << block_fence_frame_
-                << " source=" << commit_source
+                << " slot=" << commit_slot
                 << " is_pad=" << is_pad
                 << " block=" << (block_id.empty() ? "none" : block_id)
                 << " asset=" << (asset_uri.empty() ? (is_pad ? "pad" : "unknown") : asset_uri)
@@ -938,9 +997,37 @@ void PipelineManager::Run() {
     }
 
     if (is_pad) {
-      EmitPadFrame(session_encoder.get(), video_pts_90k, audio_pts_90k);
-      audio_samples_emitted += kAudioSamplesPerFrame;
+      // INV-PAD-PRODUCER-005: TAKE selects PadProducer at commitment point.
+      // Same encodeFrame path as content (single commitment path).
+      // INV-PAD-PRODUCER-001: No per-tick allocation — pre-allocated frames.
+#ifdef RETROVUE_DEBUG_PAD_EMIT
+      std::cerr << "[PipelineManager] DBG-PAD-EMIT"
+                << " frame=" << session_frame_index
+                << " slot=" << take_source_char
+                << " y_crc32=0x" << std::hex << pad_producer_->VideoCRC32() << std::dec
+                << " video_pts_90k=" << video_pts_90k
+                << std::endl;
+#endif
+      session_encoder->encodeFrame(pad_producer_->VideoFrame(), video_pts_90k);
+
+      // INV-PAD-PRODUCER-002: Audio uses same rational accumulator as content.
+      int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
+      int64_t next_total =
+          ((audio_ticks_emitted + 1) * sr * ctx_->fps_den) / ctx_->fps_num;
+      int pad_samples_this_tick =
+          static_cast<int>(next_total - audio_buffer_samples_emitted);
+
+      // Zero-alloc: reuse pre-allocated silence buffer, just set nb_samples.
+      auto& pad_audio = pad_producer_->SilenceTemplate();
+      pad_audio.nb_samples = pad_samples_this_tick;
+      session_encoder->encodeAudioFrame(pad_audio, audio_pts_90k,
+                                        /*is_silence_pad=*/true);
+
+      audio_samples_emitted += pad_samples_this_tick;
+      audio_buffer_samples_emitted += pad_samples_this_tick;
+      audio_ticks_emitted++;
       audio_frames_this_tick = 1;
+
       if (past_fence) {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.fence_pad_frames_total++;
@@ -997,6 +1084,13 @@ void PipelineManager::Run() {
         // This should never happen — if it does, the priming in StartFilling
         // didn't reach the threshold (e.g., content with no audio track).
         // Emit pad silence to prevent A/V drift; log at WARNING level.
+        //
+        // DEPRECATED for BlockPlan live playout.  This inline silence
+        // generation allocates per-tick and bypasses the TAKE commitment
+        // path.  INV-PAD-PRODUCER replaces it: PadProducer provides
+        // pre-allocated silence via SilenceTemplate() through the TAKE.
+        // Retained as a defensive fallback until all audio-prime edge
+        // cases are verified to be unreachable.
         static constexpr int kChannels = buffer::kHouseAudioChannels;
         static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
 
@@ -1020,6 +1114,18 @@ void PipelineManager::Run() {
                   << " audio_pts_90k=" << audio_pts_90k
                   << " video_pts_90k=" << video_pts_90k
                   << std::endl;
+      }
+    }
+
+    // INV-AUDIO-BUFFER-POLICY-001: Toggle audio boost on the video fill
+    // thread.  When audio is below LOW_WATER, the fill thread's effective
+    // target depth doubles so it decodes more frames (and thus more audio)
+    // before parking.  Disabled once audio recovers above HIGH_WATER.
+    if (video_buffer_ && audio_buffer_ && !is_pad) {
+      if (audio_buffer_->IsBelowLowWater()) {
+        video_buffer_->SetAudioBoost(true);
+      } else if (audio_buffer_->IsAboveHighWater()) {
+        video_buffer_->SetAudioBoost(false);
       }
     }
 
@@ -1157,11 +1263,15 @@ void PipelineManager::Run() {
       FrameFingerprint fp;
       fp.session_frame_index = session_frame_index;
       fp.is_pad = is_pad;
-      fp.commit_source = take_source_char;
+      fp.commit_slot = take_source_char;
       if (live_tp()->GetState() == ITickProducer::State::kReady) {
         fp.active_block_id = live_tp()->GetBlock().block_id;
       }
-      if (!is_pad && vbf.was_decoded) {
+      if (is_pad) {
+        // INV-PAD-PRODUCER-003: Cached CRC32 — no per-tick recomputation.
+        fp.asset_uri = PadProducer::kAssetUri;
+        fp.y_crc32 = pad_producer_->VideoCRC32();
+      } else if (vbf.was_decoded) {
         fp.asset_uri = vbf.asset_uri;
         fp.asset_offset_ms = vbf.block_ct_ms;
         const auto& vid = vbf.video;
@@ -1299,6 +1409,9 @@ void PipelineManager::Run() {
     preview_video_buffer_.reset();
   }
   preview_audio_buffer_.reset();
+
+  // INV-PAD-PRODUCER: Release session-lifetime pad source.
+  pad_producer_.reset();
 
   // Cancel preloader and reset sources before closing encoder
   preloader_->Cancel();

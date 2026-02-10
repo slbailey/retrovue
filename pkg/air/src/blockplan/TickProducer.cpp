@@ -7,6 +7,7 @@
 #include "retrovue/blockplan/TickProducer.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <iostream>
 
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
@@ -48,9 +49,19 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   // Convert FedBlock → BlockPlan for validation
   BlockPlan plan = FedBlockToBlockPlan(block);
 
-  // Probe all segment assets
+  // Detect PAD segments
+  has_pad_segments_ = false;
+  for (const auto& seg : plan.segments) {
+    if (seg.segment_type == SegmentType::kPad) {
+      has_pad_segments_ = true;
+      break;
+    }
+  }
+
+  // Probe all segment assets (skip PAD — no asset to probe)
   bool all_probed = true;
   for (const auto& seg : plan.segments) {
+    if (seg.segment_type == SegmentType::kPad) continue;
     if (!assets_.HasAsset(seg.asset_uri)) {
       if (!assets_.ProbeAsset(seg.asset_uri)) {
         std::cerr << "[TickProducer] Failed to probe asset: " << seg.asset_uri
@@ -89,6 +100,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   validated_.boundaries = std::move(result.boundaries);
   boundaries_ = validated_.boundaries;
 
+  // Initialize pad frames if block has PAD segments
+  if (has_pad_segments_) {
+    InitPadFrames();
+  }
+
   // Open decoder for first segment
   if (plan.segments.empty()) {
     decoder_ok_ = false;
@@ -97,6 +113,23 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   }
 
   const auto& first_seg = plan.segments[0];
+
+  // First segment is PAD — no decoder needed, generate pad frames directly
+  if (first_seg.segment_type == SegmentType::kPad) {
+    decoder_ok_ = false;
+    current_asset_uri_.clear();
+    current_segment_index_ = 0;
+    block_ct_ms_ = 0;
+    state_ = State::kReady;
+    std::cout << "[TickProducer] Block assigned: " << block.block_id
+              << " frames_per_block=" << frames_per_block_
+              << " segments=" << plan.segments.size()
+              << " first_segment=PAD"
+              << " output_frame_dur_ms=" << frame_duration_ms_
+              << std::endl;
+    return;
+  }
+
   decode::DecoderConfig dec_config;
   dec_config.input_uri = first_seg.asset_uri;
   dec_config.target_width = width_;
@@ -148,6 +181,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " frames_per_block=" << frames_per_block_
             << " segments=" << plan.segments.size()
             << " decoder_ok=true"
+            << " has_pad=" << has_pad_segments_
             << " input_fps=" << input_fps_
             << " input_frame_dur_ms=" << input_frame_duration_ms_
             << " output_frame_dur_ms=" << frame_duration_ms_
@@ -243,7 +277,8 @@ bool TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
     auto fd = TryGetFrame();
     primed_frame_ = std::move(held);
 
-    if (!fd) break;  // Content exhausted or decode failure
+    if (!fd) continue;  // Transient: EAGAIN, packet run, seek flush.
+                         // Genuine EOF exhausts kMaxPrimeDecodes iterations.
 
     // Move audio into primed_frame_; keep video in buffered.
     for (auto& af : fd->audio) {
@@ -291,6 +326,13 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     return frame;
   }
 
+  // If current segment is PAD, generate pad frame (no decode needed)
+  if (has_pad_segments_ &&
+      current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
+      validated_.plan.segments[current_segment_index_].segment_type == SegmentType::kPad) {
+    return GeneratePadFrame();
+  }
+
   if (!decoder_ok_) {
     block_ct_ms_ += input_frame_duration_ms_;
     return std::nullopt;
@@ -312,7 +354,15 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       const auto& next_seg = validated_.plan.segments[next_index];
       current_segment_index_ = next_index;
 
-      // Open decoder for new segment
+      // Entering planned PAD segment — close decoder, generate pad frames
+      if (next_seg.segment_type == SegmentType::kPad) {
+        decoder_.reset();
+        decoder_ok_ = false;
+        current_asset_uri_.clear();
+        return GeneratePadFrame();
+      }
+
+      // Open decoder for new content/filler segment
       decode::DecoderConfig dec_config;
       dec_config.input_uri = next_seg.asset_uri;
       dec_config.target_width = width_;
@@ -408,6 +458,60 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
 }
 
 // =============================================================================
+// InitPadFrames — pre-allocate black video + silence audio template
+// =============================================================================
+
+void TickProducer::InitPadFrames() {
+  int y_size = width_ * height_;
+  int uv_size = (width_ / 2) * (height_ / 2);
+  pad_video_frame_.width = width_;
+  pad_video_frame_.height = height_;
+  pad_video_frame_.data.resize(
+      static_cast<size_t>(y_size + 2 * uv_size));
+  // Y = 0x10 (broadcast black), U/V = 0x80 (neutral chroma)
+  std::memset(pad_video_frame_.data.data(), 0x10,
+              static_cast<size_t>(y_size));
+  std::memset(pad_video_frame_.data.data() + y_size, 0x80,
+              static_cast<size_t>(2 * uv_size));
+
+  int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
+  int64_t fps_num_i = static_cast<int64_t>(output_fps_ + 0.5);
+  pad_audio_samples_per_frame_ = static_cast<int>(
+      (sr + fps_num_i - 1) / fps_num_i);
+}
+
+// =============================================================================
+// GeneratePadFrame — return black+silence FrameData, advance CT
+// =============================================================================
+
+std::optional<FrameData> TickProducer::GeneratePadFrame() {
+  buffer::Frame vf;
+  vf.width = pad_video_frame_.width;
+  vf.height = pad_video_frame_.height;
+  vf.data = pad_video_frame_.data;  // Copy from pre-allocated template
+
+  buffer::AudioFrame af;
+  af.sample_rate = buffer::kHouseAudioSampleRate;
+  af.channels = buffer::kHouseAudioChannels;
+  af.nb_samples = pad_audio_samples_per_frame_;
+  af.pts_us = 0;
+  af.data.resize(
+      static_cast<size_t>(pad_audio_samples_per_frame_) *
+      static_cast<size_t>(buffer::kHouseAudioChannels) *
+      sizeof(int16_t), 0);
+
+  int64_t ct_before = block_ct_ms_;
+  block_ct_ms_ += frame_duration_ms_;
+
+  return FrameData{
+      std::move(vf),
+      {std::move(af)},
+      "",         // No asset_uri for planned pad
+      ct_before
+  };
+}
+
+// =============================================================================
 // Reset — back to EMPTY
 // =============================================================================
 
@@ -422,6 +526,7 @@ void TickProducer::Reset() {
   boundaries_.clear();
   primed_frame_.reset();
   buffered_frames_.clear();
+  has_pad_segments_ = false;
   input_fps_ = 0.0;
   input_frame_duration_ms_ = frame_duration_ms_;
   state_ = State::kEmpty;

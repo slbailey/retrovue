@@ -14,11 +14,13 @@ namespace retrovue::blockplan {
 AudioLookaheadBuffer::AudioLookaheadBuffer(int target_depth_ms,
                                            int sample_rate,
                                            int channels,
-                                           int low_water_ms)
+                                           int low_water_ms,
+                                           int high_water_ms)
     : sample_rate_(sample_rate),
       channels_(channels),
       target_depth_ms_(target_depth_ms),
-      low_water_ms_(low_water_ms) {}
+      low_water_ms_(low_water_ms),
+      high_water_ms_(high_water_ms) {}
 
 AudioLookaheadBuffer::~AudioLookaheadBuffer() = default;
 
@@ -176,6 +178,13 @@ bool AudioLookaheadBuffer::IsBelowLowWater() const {
   if (!primed_ || sample_rate_ <= 0) return false;
   int depth_ms = static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_);
   return depth_ms < low_water_ms_;
+}
+
+bool AudioLookaheadBuffer::IsAboveHighWater() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (sample_rate_ <= 0) return false;
+  int depth_ms = static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_);
+  return depth_ms >= high_water_ms_;
 }
 
 }  // namespace retrovue::blockplan
