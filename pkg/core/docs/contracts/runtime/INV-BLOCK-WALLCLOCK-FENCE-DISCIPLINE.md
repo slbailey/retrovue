@@ -102,33 +102,47 @@ one feed) is the natural rate limiter.
 
 ---
 
-### INV-WALLCLOCK-FENCE-005: Session Anchor From Real UTC
+### INV-WALLCLOCK-FENCE-005: Session Anchor From Grid-Aligned Real UTC
 
 > When a session starts (including JIP), Core MUST establish the
 > correct `start_utc_ms` for block A by anchoring `_next_block_start_ms`
-> to the real UTC epoch time of the session start:
+> to the wall-clock grid boundary at or before the tune-in instant:
 >
->     _next_block_start_ms = join_utc_ms
+>     _next_block_start_ms = floor(join_utc_ms / block_duration_ms) * block_duration_ms
 >
 > where `join_utc_ms = int(start_at_station_time.timestamp() * 1000)`.
 >
-> JIP (`jip_offset_ms > 0`) affects `asset_start_offset_ms` and
-> `block_duration_ms` of the first block only.  It MUST NOT change
-> `_next_block_start_ms` to a non-UTC value.
+> The anchor MUST be a real UTC epoch value (milliseconds since
+> 1970-01-01T00:00:00Z) and MUST be aligned to a `block_duration_ms`
+> boundary.  It MUST NOT be set to a non-UTC value or to a value that
+> is not grid-aligned.
+>
+> JIP (`jip_offset_ms > 0`) affects only the first block's segment:
+> `asset_start_offset_ms` is increased and `segment_duration_ms` is
+> decreased by `block_offset_ms`.  JIP MUST NOT alter
+> `_next_block_start_ms` or the block's own `start_utc_ms`,
+> `end_utc_ms`, or `block_duration_ms`.
 >
 > The resulting block timestamps are:
 >
-> - Block A: `start_utc_ms = join_utc_ms`,
->   `end_utc_ms = join_utc_ms + (block_duration - jip_offset)`
+> - Block A: `start_utc_ms = _next_block_start_ms` (grid-aligned),
+>   `end_utc_ms = start_utc_ms + block_duration_ms` (full duration)
 > - Block B: `start_utc_ms = block_a.end_utc_ms`,
->   `end_utc_ms = block_a.end_utc_ms + block_duration`
+>   `end_utc_ms = block_a.end_utc_ms + block_duration_ms`
 > - Subsequent blocks chain from the previous block's `end_utc_ms`.
+>
+> All blocks have identical duration (`block_duration_ms`).  The first
+> block is not shortened; the JIP offset is carried entirely within
+> the segment.
 
 **Why:** The anchor MUST be real UTC so that `end_utc_ms` values sent
 to AIR are always in the near future relative to AIR's
 `session_epoch_utc_ms`.  A relative anchor (starting from 0) produces
 timestamps billions of milliseconds in the past, causing instant fence
-completion in AIR.
+completion in AIR.  Grid alignment ensures that block boundaries are
+deterministic and reproducible: any viewer joining within the same
+`block_duration_ms` window receives a block with the same
+`start_utc_ms` and `end_utc_ms`, differing only in JIP segment offset.
 
 ---
 
@@ -140,8 +154,8 @@ completion in AIR.
 > from the current wall clock.  It MUST NOT "fast-forward complete"
 > multiple blocks.
 >
-> Recovery: set `_next_block_start_ms = now_utc_ms` and regenerate
-> the block with fresh timestamps.
+> Recovery: set `_next_block_start_ms = floor(now_utc_ms / block_duration_ms) * block_duration_ms`
+> and regenerate the block with fresh grid-aligned timestamps.
 
 **Why:** If a session is torn down and restarted without clearing
 `_next_block_start_ms`, the old anchor value persists.  Since blocks
@@ -181,7 +195,7 @@ Per-session state additions:
 | `test_no_past_due_cascade_on_session_start` | 005, 006 | Stale anchor recomputed; no cascade of completions |
 | `test_only_active_blocks_can_complete` | 002 | Completion rejected for unknown/prior-session block IDs |
 | `test_one_completion_per_tick` | 004 | Even with time far past end, only one completion per callback |
-| `test_jip_does_not_shift_schedule_timing` | 005 | JIP offset changes asset offset, not start_utc_ms anchor |
+| `test_jip_does_not_shift_schedule_timing` | 005 | JIP offset changes segment offset only; block start remains grid-aligned, block duration unchanged |
 | `test_blocks_chain_correctly_from_anchor` | 001, 005 | Sequential blocks have contiguous UTC timestamps |
 
 ---

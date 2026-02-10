@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview Playlists produced by PlaylistScheduleManager.
+"""Preview Playlists produced by PlaylistScheduleManager or a static JSON schedule.
 
 Operator verification tool.  Prints a human-readable table of segments,
 validates tiling and frame math, and reports any anomalies.
@@ -14,22 +14,19 @@ Usage:
     # Custom channel id
     python tools/preview_playlist.py --channel retrovue-classic
 
-Requires the Core venv:
+    # Static JSON schedule (no Core venv required)
+    python tools/preview_playlist.py --json tools/static_schedule.json
+
+Requires the Core venv (unless using --json):
     source pkg/core/.venv/bin/activate
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-# Ensure pkg/core/src is importable when run from repo root.
-_CORE_SRC = Path(__file__).resolve().parent.parent / "pkg" / "core" / "src"
-if str(_CORE_SRC) not in sys.path:
-    sys.path.insert(0, str(_CORE_SRC))
-
-from retrovue.scheduling.playlist_schedule_manager import PlaylistScheduleManager
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -214,6 +211,156 @@ def _print_playlist(pi: int, pl, fps: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Static JSON schedule preview
+# ---------------------------------------------------------------------------
+
+def _ms_to_hms(ms: int) -> str:
+    """Convert milliseconds to HH:MM:SS.mmm."""
+    total_s, remainder_ms = divmod(ms, 1000)
+    h, remainder_s = divmod(total_s, 3600)
+    m, s = divmod(remainder_s, 60)
+    if remainder_ms:
+        return f"{h:02d}:{m:02d}:{s:02d}.{remainder_ms:03d}"
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _print_static_schedule(schedule: dict) -> None:
+    blocks = schedule["blocks"]
+    block_dur = schedule["block_duration_ms"]
+    pad_tail = schedule["pad_tail_ms"]
+
+    print()
+    print("=" * 100)
+    print("  Static Schedule Preview")
+    print(f"  Channel:    {schedule['channel_id']}")
+    print(f"  Generated:  {schedule['generated_at']}")
+    print(f"  Blocks:     {schedule['total_blocks']}")
+    print(f"  Duration:   {schedule['total_duration_ms'] / 3_600_000:.0f}h "
+          f"({schedule['total_duration_ms']:,} ms)")
+    print(f"  Block size: {block_dur / 60_000:.0f} min  "
+          f"Pad tail: {pad_tail / 1000:.0f}s")
+    print(f"  Filler:     {_basename(schedule['filler_path'])}")
+    print()
+
+    # Episode summary
+    print("  Episodes in rotation:")
+    for ep in schedule["episodes"]:
+        print(f"    {ep['title']:<45s}  "
+              f"{ep['duration_ms'] / 1000:8.1f}s  "
+              f"({_ms_to_hms(ep['duration_ms'])})")
+    print()
+    print("=" * 100)
+    print()
+
+    # Column headers
+    w_blk = 6
+    w_time = 14
+    w_type = 9
+    w_dur = 12
+    w_hms = 12
+    w_asset = 45
+
+    hdr = (
+        f"{'Blk':<{w_blk}}"
+        f"{'Abs Start':<{w_time}}"
+        f"{'Abs End':<{w_time}}"
+        f"{'Type':<{w_type}}"
+        f"{'Duration ms':>{w_dur}}"
+        f"{'Duration':>{w_hms}}"
+        f"  {'Asset':<{w_asset}}"
+    )
+    sep = "-" * len(hdr)
+
+    print(hdr)
+    print(sep)
+
+    warnings: list[str] = []
+
+    for blk in blocks:
+        bi = blk["block_index"]
+        blk_start = blk["block_start_offset_ms"]
+        seg_offset = blk_start
+
+        seg_total = 0
+        for seg in blk["segments"]:
+            seg_ms = seg["segment_duration_ms"]
+            seg_end = seg_offset + seg_ms
+            seg_total += seg_ms
+
+            asset = _basename(seg.get("asset_uri", "")) if seg.get("asset_uri") else "(black)"
+
+            print(
+                f"{bi:<{w_blk}}"
+                f"{_ms_to_hms(seg_offset):<{w_time}}"
+                f"{_ms_to_hms(seg_end):<{w_time}}"
+                f"{seg['segment_type']:<{w_type}}"
+                f"{seg_ms:>{w_dur},d}"
+                f"{_ms_to_hms(seg_ms):>{w_hms}}"
+                f"  {asset:<{w_asset}}"
+            )
+            seg_offset = seg_end
+
+        # Validate block totals
+        if seg_total != block_dur:
+            warnings.append(
+                f"Block {bi}: segment sum {seg_total:,} ms "
+                f"!= block_duration {block_dur:,} ms"
+            )
+        if seg_offset != blk_start + block_dur:
+            warnings.append(
+                f"Block {bi}: end offset {seg_offset:,} ms "
+                f"!= expected {blk_start + block_dur:,} ms"
+            )
+
+        # Check pad segment is last and correct duration
+        last_seg = blk["segments"][-1]
+        if last_seg["segment_type"] != "pad":
+            warnings.append(f"Block {bi}: last segment is not pad")
+        elif last_seg["segment_duration_ms"] != pad_tail:
+            warnings.append(
+                f"Block {bi}: pad is {last_seg['segment_duration_ms']} ms, "
+                f"expected {pad_tail} ms"
+            )
+
+        # Print block separator
+        print(f"{'':>{w_blk}}"
+              f"{'--- block boundary ---'}")
+
+    # Total duration check
+    expected_total = len(blocks) * block_dur
+    actual_total = schedule["total_duration_ms"]
+    if actual_total != expected_total:
+        warnings.append(
+            f"total_duration_ms {actual_total:,} != "
+            f"{len(blocks)} blocks * {block_dur:,} = {expected_total:,}"
+        )
+
+    # Contiguity check
+    for i in range(1, len(blocks)):
+        prev_end = blocks[i - 1]["block_start_offset_ms"] + block_dur
+        curr_start = blocks[i]["block_start_offset_ms"]
+        if prev_end != curr_start:
+            warnings.append(
+                f"Block {i-1}->{i}: gap/overlap "
+                f"prev_end={prev_end:,} curr_start={curr_start:,}"
+            )
+
+    print()
+    print(f"Total blocks:    {len(blocks)}")
+    print(f"Total duration:  {actual_total:,} ms  "
+          f"({actual_total / 3_600_000:.1f}h)")
+    print()
+
+    if warnings:
+        print(f"WARNINGS ({len(warnings)}):")
+        for w in warnings:
+            print(f"  !! {w}")
+    else:
+        print("Validation: ALL CHECKS PASSED")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -229,7 +376,7 @@ def _parse_dt(s: str) -> datetime:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Preview Playlists from PlaylistScheduleManager."
+        description="Preview Playlists from PlaylistScheduleManager or a static JSON schedule."
     )
     parser.add_argument(
         "window_start",
@@ -254,7 +401,32 @@ def main() -> None:
         default=FPS,
         help="Frames per second for validation (default: 30)",
     )
+    parser.add_argument(
+        "--json",
+        metavar="FILE",
+        default=None,
+        help="Path to a static JSON schedule file (no Core venv required)",
+    )
     args = parser.parse_args()
+
+    # -------------------------------------------------------------------
+    # Static JSON path — no Core imports needed.
+    # -------------------------------------------------------------------
+    if args.json is not None:
+        with open(args.json) as f:
+            schedule = json.load(f)
+        _print_static_schedule(schedule)
+        return
+
+    # -------------------------------------------------------------------
+    # Dynamic playlist path — requires Core venv.
+    # -------------------------------------------------------------------
+    # Ensure pkg/core/src is importable when run from repo root.
+    _CORE_SRC = Path(__file__).resolve().parent.parent / "pkg" / "core" / "src"
+    if str(_CORE_SRC) not in sys.path:
+        sys.path.insert(0, str(_CORE_SRC))
+
+    from retrovue.scheduling.playlist_schedule_manager import PlaylistScheduleManager
 
     if args.window_start is not None:
         window_start = _parse_dt(args.window_start)

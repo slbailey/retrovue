@@ -36,6 +36,7 @@ struct FedBlock {
     std::string asset_uri;
     int64_t asset_start_offset_ms = 0;
     int64_t segment_duration_ms = 0;
+    SegmentType segment_type = SegmentType::kContent;
   };
   std::vector<Segment> segments;
 };
@@ -55,6 +56,7 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
     s.asset_uri = seg.asset_uri;
     s.asset_start_offset_ms = seg.asset_start_offset_ms;
     s.segment_duration_ms = seg.segment_duration_ms;
+    s.segment_type = seg.segment_type;
     plan.segments.push_back(s);
   }
   return plan;
@@ -120,6 +122,12 @@ struct BlockPlanSessionContext {
   int64_t fps_den = 1;
 
   BufferConfig buffer_config;
+
+  // INV-JIP-ANCHOR-001: Core-authoritative join time (ms since Unix epoch).
+  // Set from StartBlockPlanSessionRequest.join_utc_ms.  When non-zero,
+  // PipelineManager uses this as session_epoch_utc_ms_ instead of
+  // system_clock::now(), eliminating startup-delay JIP drift.
+  int64_t join_utc_ms = 0;
 
   // Dev-mode fence fallback policy: if true, fence path will attempt synchronous
   // block load from queue when preload is not ready (blocks on probe+open+seek).

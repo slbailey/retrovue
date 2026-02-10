@@ -252,12 +252,22 @@ message BlockPlan {
   repeated BlockSegment segments = 5;  // Segments within this block
 }
 
+// SegmentType distinguishes planned segment roles.
+// Default 0 = CONTENT — backward-compatible with existing messages.
+enum SegmentType {
+  SEGMENT_TYPE_CONTENT = 0;
+  SEGMENT_TYPE_FILLER = 1;
+  SEGMENT_TYPE_PAD = 2;
+}
+
 // BlockSegment represents a contiguous portion of an asset within a block.
+// PAD segments have no asset_uri (planned silence/black at block tail).
 message BlockSegment {
   int32 segment_index = 1;           // Index within block (0-based, must be contiguous)
-  string asset_uri = 2;              // Asset file path
+  string asset_uri = 2;              // Asset file path (empty for PAD segments)
   int64 asset_start_offset_ms = 3;   // Offset within asset where segment starts
   int64 segment_duration_ms = 4;     // Duration of this segment
+  SegmentType segment_type = 5;      // Segment role (default CONTENT)
 }
 
 // StartBlockPlanSessionRequest initializes BlockPlan mode with 2 seed blocks.

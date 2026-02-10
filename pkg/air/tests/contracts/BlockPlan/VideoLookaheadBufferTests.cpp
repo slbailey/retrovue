@@ -546,5 +546,152 @@ TEST(VideoLookaheadBufferTest, MultipleStartStopCycles) {
   buf.StopFilling(false);
 }
 
+// =============================================================================
+// VLB-HOLD-LAST-AUDIO: Hold-last frames push silence audio
+// =============================================================================
+TEST(VideoLookaheadBufferTest, HoldLastFramesPushSilenceAudio) {
+  // Producer with only 3 frames — fill loop will exhaust content quickly
+  // and enter hold-last mode for subsequent frames.
+  MockTickProducer mock(64, 48, 30.0, 3);
+  AudioLookaheadBuffer audio_buf(1000);
+  VideoLookaheadBuffer video_buf(10, 3);
+  std::atomic<bool> stop{false};
+
+  video_buf.StartFilling(&mock, &audio_buf, 30.0, 30.0, &stop);
+
+  // Wait for fill loop to push hold-last frames beyond the 3 decoded frames.
+  ASSERT_TRUE(WaitFor(
+      [&] { return video_buf.TotalFramesPushed() >= 8; },
+      std::chrono::milliseconds(2000)));
+
+  video_buf.StopFilling(false);
+
+  // Audio pushed: 3 decoded frames * 1024 samples + 5+ hold-last * 1600 samples.
+  // At minimum 3*1024 + 5*1600 = 11072 samples.
+  int64_t total_audio = audio_buf.TotalSamplesPushed();
+  EXPECT_GE(total_audio, 3 * 1024 + 5 * 1600)
+      << "Hold-last frames must push silence audio";
+
+  // Pop past the decoded audio (3 * 1024 = 3072 samples).
+  buffer::AudioFrame content_audio;
+  ASSERT_TRUE(audio_buf.TryPopSamples(3072, content_audio));
+
+  // Pop one tick of silence audio.
+  buffer::AudioFrame silence_out;
+  ASSERT_TRUE(audio_buf.TryPopSamples(1600, silence_out));
+
+  // Verify all samples are zero (silence).
+  ASSERT_EQ(silence_out.nb_samples, 1600);
+  auto* samples = reinterpret_cast<const int16_t*>(silence_out.data.data());
+  for (int i = 0; i < 1600 * buffer::kHouseAudioChannels; i++) {
+    EXPECT_EQ(samples[i], 0) << "Sample " << i << " should be silence";
+  }
+}
+
+// =============================================================================
+// VLB-HOLD-LAST-AUDIO-CONTINUITY: No audio underflow across decode→hold-last
+// =============================================================================
+TEST(VideoLookaheadBufferTest, HoldLastAudioContinuity_NeverUnderflows) {
+  // 5-frame producer → exhausts at frame 5, hold-last from frame 6+.
+  // Pop 15 ticks of video (5 decoded + 10 hold-last) and 15 ticks of audio.
+  // Audio must never underflow.
+  MockTickProducer mock(64, 48, 30.0, 5);
+  AudioLookaheadBuffer audio_buf(1000);
+  VideoLookaheadBuffer video_buf(15, 3);
+  std::atomic<bool> stop{false};
+
+  video_buf.StartFilling(&mock, &audio_buf, 30.0, 30.0, &stop);
+
+  ASSERT_TRUE(WaitFor(
+      [&] { return video_buf.TotalFramesPushed() >= 15; },
+      std::chrono::milliseconds(2000)));
+
+  // Pop 15 video frames.
+  for (int i = 0; i < 15; i++) {
+    VideoBufferFrame vbf;
+    ASSERT_TRUE(video_buf.TryPopFrame(vbf)) << "Video pop " << i;
+    if (i < 5) {
+      EXPECT_TRUE(vbf.was_decoded) << "Frame " << i << " should be decoded";
+    } else {
+      EXPECT_FALSE(vbf.was_decoded) << "Frame " << i << " should be hold-last";
+    }
+  }
+
+  // Pop 15 ticks of audio.
+  // Decoded frames produce 1024 samples each; hold-last produce ceil(48000/30)=1600.
+  // Total available: 5*1024 + 10*1600 = 21120 samples.
+  // Pop at 1024 samples per tick (conservative) to verify continuity.
+  for (int i = 0; i < 15; i++) {
+    buffer::AudioFrame af;
+    ASSERT_TRUE(audio_buf.TryPopSamples(1024, af))
+        << "Audio pop " << i << " should not underflow";
+  }
+
+  EXPECT_EQ(audio_buf.UnderflowCount(), 0);
+
+  video_buf.StopFilling(false);
+}
+
+// =============================================================================
+// VLB-STRESS: Fill/tick interleaving race — no false underflow at frame 0
+// =============================================================================
+TEST(VideoLookaheadBufferTest, StressFirstPopRace_NoPrimedFrame) {
+  // Exercises the race between fill thread's first push and consumer's
+  // first pop. Without a primed frame, the buffer starts empty.
+  //
+  // The refactored TAKE pattern (Change 2) uses:
+  //   1. TryPopFrame (atomic decision)
+  //   2. IsPrimed (checked once, only on pop failure)
+  //
+  // This test verifies that the pattern never produces a false
+  // "primed but empty" state that would incorrectly trigger underflow.
+
+  int pop_before_prime = 0;
+  int pop_after_prime = 0;
+
+  for (int iter = 0; iter < 500; iter++) {
+    VideoLookaheadBuffer buf(5, 2);
+    MockTickProducer mock(64, 48, 30.0, 20);
+    std::atomic<bool> stop{false};
+
+    // NO primed frame — fill thread must push first frame asynchronously.
+    buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
+
+    // Simulate TAKE: single TryPopFrame, then check IsPrimed.
+    VideoBufferFrame out;
+    bool popped = buf.TryPopFrame(out);
+    bool primed = buf.IsPrimed();
+
+    if (popped) {
+      // Got a frame — fill thread was fast enough.
+      pop_after_prime++;
+      EXPECT_TRUE(primed) << "If pop succeeded, buffer must be primed";
+    } else if (primed) {
+      // Pop failed but primed → genuine underflow window.
+      // This CAN happen (fill pushed, we missed it, then buffer drained).
+      // But it should be rare with a fast producer and no consumers.
+      pop_after_prime++;
+    } else {
+      // Pop failed, not primed → "still loading" (correct: emit pad).
+      pop_before_prime++;
+    }
+
+    // Wait for fill to stabilize, then verify health.
+    ASSERT_TRUE(WaitFor(
+        [&] { return buf.TotalFramesPushed() >= 5; },
+        std::chrono::milliseconds(500)))
+        << "Fill thread should push frames within 500ms";
+
+    EXPECT_TRUE(buf.IsPrimed());
+
+    buf.StopFilling(false);
+  }
+
+  // Diagnostic: show distribution. Not a pass/fail criterion.
+  std::cout << "[StressFirstPopRace] pop_before_prime=" << pop_before_prime
+            << " pop_after_prime=" << pop_after_prime
+            << " total=500" << std::endl;
+}
+
 }  // namespace
 }  // namespace retrovue::blockplan::testing

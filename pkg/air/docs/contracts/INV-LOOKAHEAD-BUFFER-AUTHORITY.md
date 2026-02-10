@@ -66,7 +66,7 @@ Does NOT apply to:
 | Req | Statement |
 |-----|-----------|
 | R1 | Audio decode MUST NOT occur on the tick thread. Audio samples are pushed to the AudioLookaheadBuffer by the VideoLookaheadBuffer's fill thread as a side-effect of video decode (FrameData contains audio). |
-| R2 | `TryPopSamples()` MUST return `false` when insufficient samples are available. It MUST NOT inject silence, pad, or any substitute audio data. The buffer MUST be left untouched on failure. |
+| R2 | `TryPopSamples()` MUST return `false` when insufficient samples are available. The buffer itself MUST NOT inject silence, pad, or any substitute audio data into its ring.  The buffer MUST be left untouched on failure.  Note: the caller (PipelineManager) MAY synthesize silence for the audio output at fence ticks when the buffer is not yet primed for the incoming block (FENCE_AUDIO_PAD — see INV-PAD-PRODUCER-005).  This caller-side synthesis does not violate R2 because it occurs outside the buffer, after the buffer has returned failure. |
 | R3 | Audio buffer depth MUST absorb decode stalls. When the fill thread is slower than consumption but the buffer has headroom, audio output MUST continue uninterrupted. |
 | R4 | At fence transitions, the audio buffer is NOT flushed (preserving audio continuity across block cuts). New audio from the next block's primed frame is pushed during `StartFilling()`. |
 
@@ -79,9 +79,11 @@ Does NOT apply to:
 - **Silent underflow masking:** Returning a default/zero/black frame or silence samples when
   the buffer is empty. Underflow MUST be visible as a `false` return and an incremented
   underflow counter.
-- **Pad injection on underflow:** The buffer injecting pad/hold-last/freeze frames when
-  content is unavailable. Only the PipelineManager may emit pad frames, and only
-  when the buffer is not yet primed (pre-content).
+- **Buffer-level pad injection on underflow:** The buffer injecting pad/hold-last/freeze
+  frames or silence samples when content is unavailable.  Underflow MUST be reported
+  as `false`, never masked.  PipelineManager may synthesize silence at fence ticks
+  (FENCE_AUDIO_PAD) or select the PadProducer via the TAKE — both occur outside
+  the buffer, after it has reported failure.
 - **Blocking pop:** `TryPopFrame()` or `TryPopSamples()` blocking or waiting for the fill
   thread. These MUST be non-blocking.
 - **Fence-tick stale data:** The fence tick consuming a frame from the previous block after

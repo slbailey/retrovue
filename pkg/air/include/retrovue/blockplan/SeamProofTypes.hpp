@@ -38,11 +38,18 @@ struct FrameFingerprint {
   std::string asset_uri;
   int64_t asset_offset_ms = 0;  // block_ct_ms before frame advance
   uint32_t y_crc32 = 0;
-  // TAKE source: 'A' = popped from current (live) buffer,
-  //              'B' = popped from preview (preroll) buffer,
-  //              'P' = pad frame (no buffer supplied this tick).
+  // TAKE slot source — which buffer slot supplied this frame:
+  //   'A' = live slot (the currently-active video/audio buffer)
+  //   'B' = preview slot (preroll buffer, selected at fence rotation)
+  //   'P' = pad (no buffer supplied this tick; PadProducer selected)
+  //
+  // This is a SLOT identifier, not a block identifier.  After a PADDED_GAP
+  // exit, a new block loaded from the queue occupies the live slot and is
+  // labeled 'A' — even though it is the "next" block.  Use active_block_id
+  // to identify which scheduled block produced the frame.
+  //
   // Set at the commitment point — authoritative for TAKE verification.
-  char commit_source = 'P';
+  char commit_slot = 'P';
 };
 
 // Boundary report: last kWindow frames of block A + first kWindow of block B.

@@ -298,3 +298,7 @@ To get correct answers:
 
 ---
 
+Once commitment is unified, concurrency bugs move from semantic to temporal — and that’s progress.
+
+---
+

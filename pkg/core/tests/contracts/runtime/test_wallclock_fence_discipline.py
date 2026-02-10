@@ -13,7 +13,7 @@ time control.
     INV-WALLCLOCK-FENCE-002  Only active blocks may complete
     INV-WALLCLOCK-FENCE-003  No completion before scheduled start
     INV-WALLCLOCK-FENCE-004  At most one completion per event
-    INV-WALLCLOCK-FENCE-005  Session anchor from real UTC
+    INV-WALLCLOCK-FENCE-005  Session anchor from grid-aligned real UTC
     INV-WALLCLOCK-FENCE-006  Stale anchor recovery
 
 All tests are deterministic and require no AIR process, network, or
@@ -61,6 +61,7 @@ class BlockTimestamps:
     start_utc_ms: int
     end_utc_ms: int
     duration_ms: int
+    segment_duration_ms: int = 0
     asset_start_offset_ms: int = 0
 
 
@@ -69,7 +70,9 @@ class BlockPlanProducerModel:
     completion handling after the WALLCLOCK-FENCE-DISCIPLINE fix.
 
     Key behaviors modeled:
-    - _next_block_start_ms anchored to real UTC (not 0)
+    - _next_block_start_ms anchored to grid-aligned real UTC
+    - Block duration is ALWAYS full (never reduced by JIP)
+    - JIP reduces only segment_duration_ms within the block
     - Completion guards: active-only, no duplicates, no pre-start
     - One completion per callback invocation
     """
@@ -101,8 +104,8 @@ class BlockPlanProducerModel:
 
         Returns [block_a, block_b] for inspection.
         """
-        # INV-WALLCLOCK-FENCE-005: Anchor to real UTC
-        self._next_block_start_ms = join_utc_ms
+        # INV-WALLCLOCK-FENCE-005: Anchor to grid-aligned real UTC
+        self._next_block_start_ms = (join_utc_ms // self.block_duration_ms) * self.block_duration_ms
         self._block_index = jip_entry_index
         self._started = True
         self._in_flight_block_ids.clear()
@@ -126,10 +129,15 @@ class BlockPlanProducerModel:
         return [block_a, block_b]
 
     def _generate_block(self, jip_offset_ms: int = 0) -> BlockTimestamps:
-        """Generate a block with UTC-anchored timestamps."""
+        """Generate a block with UTC-anchored timestamps.
+
+        Block duration is ALWAYS full (INV-WALLCLOCK-FENCE-005).
+        JIP reduces only the segment duration within the block.
+        """
         start_ms = self._next_block_start_ms
-        dur_ms = self.block_duration_ms - jip_offset_ms
+        dur_ms = self.block_duration_ms  # Block duration is NEVER reduced
         end_ms = start_ms + dur_ms
+        seg_dur_ms = dur_ms - jip_offset_ms
 
         block_id = f"BLOCK-test-{self._block_index}"
         block = BlockTimestamps(
@@ -137,6 +145,7 @@ class BlockPlanProducerModel:
             start_utc_ms=start_ms,
             end_utc_ms=end_ms,
             duration_ms=dur_ms,
+            segment_duration_ms=seg_dur_ms,
             asset_start_offset_ms=jip_offset_ms,
         )
         self._block_registry[block_id] = block
@@ -198,8 +207,8 @@ class BlockPlanProducerModel:
         # Check: is the next block's end already in the past?
         hypothetical_end = self._next_block_start_ms + self.block_duration_ms
         if hypothetical_end < self.clock.now_utc_ms:
-            # Stale anchor — recompute
-            self._next_block_start_ms = self.clock.now_utc_ms
+            # Stale anchor — recompute (grid-aligned)
+            self._next_block_start_ms = (self.clock.now_utc_ms // self.block_duration_ms) * self.block_duration_ms
             return True
         return False
 
@@ -283,7 +292,7 @@ class TestNoCompletionBeforeStart:
     a block whose scheduled_start_ts is in the future."""
 
     def test_no_completion_before_start(self):
-        """Seed at t=100s with 30s blocks. No completion before t=130s."""
+        """Seed at t=100s with 30s blocks. Grid-aligned start at 90s."""
         epoch = 100_000  # 100 seconds in ms
         clock = FakeMasterClock(initial_utc_ms=epoch)
         model = BlockPlanProducerModel(clock=clock, block_duration_ms=30_000)
@@ -291,22 +300,20 @@ class TestNoCompletionBeforeStart:
         blocks = model.start(join_utc_ms=epoch)
         block_a = blocks[0]
 
-        # Block A: start=100000, end=130000
-        assert block_a.start_utc_ms == 100_000
-        assert block_a.end_utc_ms == 130_000
+        # Block A: start=90000 (grid-aligned), end=120000
+        assert block_a.start_utc_ms == 90_000
+        assert block_a.end_utc_ms == 120_000
 
-        # At t=100s (block just started): completion must be rejected?
-        # No — INV-003 says "now < start_ts". At t=100s, now == start_ts.
-        # Completion is valid (the block has started).
-        # But if we try completing block B (which starts at 130s):
+        # At t=100s (block started at 90s): block A is already in progress.
+        # But block B (starting at 120s) hasn't started yet:
         block_b = blocks[1]
-        assert block_b.start_utc_ms == 130_000
+        assert block_b.start_utc_ms == 120_000
 
         # At t=100s, completing block B should be rejected (not started yet)
         accepted = model.on_block_complete(block_b.block_id)
         assert not accepted, (
             "INV-WALLCLOCK-FENCE-003 VIOLATION: completion accepted for "
-            "block B whose start_utc_ms=130000 but now=100000."
+            "block B whose start_utc_ms=120000 but now=100000."
         )
         assert len(model._rejection_log) == 1
         assert model._rejection_log[0][1] == "before_start"
@@ -348,9 +355,9 @@ class TestNoPastDueCascade:
         blocks = model.start(join_utc_ms=clock.now_utc_ms)
         block_a = blocks[0]
 
-        # Block A end is 1000000 + 30000 = 1030000 (30 seconds from now)
-        assert block_a.end_utc_ms == 1_030_000, (
-            "Block A end should be 30s after session start, not in the past."
+        # Block A: start=990000 (grid-aligned), end=1020000
+        assert block_a.end_utc_ms == 1_020_000, (
+            "Block A end should be 30s after grid-aligned start, not in the past."
         )
 
         # At session start (t=1000000): block A's end is in the future
@@ -376,8 +383,9 @@ class TestNoPastDueCascade:
         assert recovered, (
             "INV-WALLCLOCK-FENCE-006 VIOLATION: stale anchor not detected."
         )
-        assert model._next_block_start_ms == 1_000_000, (
-            "INV-WALLCLOCK-FENCE-006 VIOLATION: anchor not recomputed to now."
+        assert model._next_block_start_ms == 990_000, (
+            "INV-WALLCLOCK-FENCE-006 VIOLATION: anchor not recomputed to "
+            "grid-aligned now (990000)."
         )
 
     def test_fresh_anchor_not_recomputed(self):
@@ -399,11 +407,11 @@ class TestNoPastDueCascade:
         # Pollute with stale state
         model._next_block_start_ms = 100  # Way in the past
 
-        # start() should overwrite with join_utc_ms
+        # start() should overwrite with grid-aligned join_utc_ms
         blocks = model.start(join_utc_ms=2_000_000)
-        assert blocks[0].start_utc_ms == 2_000_000, (
+        assert blocks[0].start_utc_ms == 1_980_000, (
             "INV-WALLCLOCK-FENCE-005 VIOLATION: start() did not anchor "
-            "to join_utc_ms."
+            "to grid-aligned join_utc_ms (1980000)."
         )
 
 
@@ -545,12 +553,13 @@ class TestOneCompletionPerTick:
 # =============================================================================
 
 class TestJIPDoesNotShiftTiming:
-    """INV-WALLCLOCK-FENCE-005: JIP affects asset_start_offset_ms only,
-    not the schedule anchor."""
+    """INV-WALLCLOCK-FENCE-005: JIP affects segment duration and
+    asset_start_offset_ms only.  Block duration is always full.
+    Block start is grid-aligned."""
 
     def test_jip_does_not_shift_schedule_timing(self):
-        """Block A with JIP offset has correct schedule timestamps."""
-        epoch = 1_000_000_000_000  # ~2001
+        """Block A with JIP offset has full block duration; only segment is reduced."""
+        epoch = 1_738_987_500_000  # ~Feb 2026, grid-aligned to 30s
         clock = FakeMasterClock(initial_utc_ms=epoch)
         model = BlockPlanProducerModel(clock=clock, block_duration_ms=30_000)
 
@@ -560,19 +569,25 @@ class TestJIPDoesNotShiftTiming:
         )
         block_a, block_b = blocks
 
-        # Block A: starts at epoch, duration reduced by JIP
+        # Block A: starts at grid-aligned epoch, FULL duration
         assert block_a.start_utc_ms == epoch, (
             "INV-WALLCLOCK-FENCE-005 VIOLATION: JIP shifted start_utc_ms. "
             f"Got {block_a.start_utc_ms}, expected {epoch}."
         )
-        assert block_a.duration_ms == 15_000, (
-            "Block A duration should be 30000 - 15000 = 15000."
+        assert block_a.duration_ms == 30_000, (
+            "INV-WALLCLOCK-FENCE-005 VIOLATION: block duration must be full "
+            f"(30000), got {block_a.duration_ms}. JIP must never reduce "
+            "block duration."
         )
-        assert block_a.end_utc_ms == epoch + 15_000, (
-            "Block A end should be epoch + reduced duration."
+        assert block_a.end_utc_ms == epoch + 30_000, (
+            "Block A end should be epoch + full duration."
         )
         assert block_a.asset_start_offset_ms == 15_000, (
             "JIP offset should be in asset_start_offset_ms."
+        )
+        # Segment duration is reduced by JIP offset
+        assert block_a.segment_duration_ms == 15_000, (
+            "Segment duration should be 30000 - 15000 = 15000."
         )
 
         # Block B: starts where A ends, full duration
@@ -581,26 +596,26 @@ class TestJIPDoesNotShiftTiming:
         assert block_b.end_utc_ms == block_a.end_utc_ms + 30_000
 
     def test_jip_completion_at_scheduled_end(self):
-        """Block A with JIP completes at its scheduled_end_ts, not shifted."""
-        epoch = 1_000_000_000_000
+        """Block A with JIP completes at its full-duration end, not reduced."""
+        epoch = 1_738_987_500_000
         clock = FakeMasterClock(initial_utc_ms=epoch)
         model = BlockPlanProducerModel(clock=clock, block_duration_ms=30_000)
 
         blocks = model.start(join_utc_ms=epoch, jip_offset_ms=10_000)
         block_a = blocks[0]
 
-        # Block A: end = epoch + 20000 (30000 - 10000)
-        assert block_a.end_utc_ms == epoch + 20_000
+        # Block A: end = epoch + 30000 (full duration, NOT epoch + 20000)
+        assert block_a.end_utc_ms == epoch + 30_000
 
         # Advance past block A's end
-        clock.advance(20_000)
+        clock.advance(30_000)
 
         accepted = model.on_block_complete(block_a.block_id)
         assert accepted
 
     def test_no_jip_full_duration(self):
-        """Without JIP, block A has full duration."""
-        epoch = 1_000_000_000_000
+        """Without JIP, block A has full duration and segment equals block."""
+        epoch = 1_738_987_500_000
         clock = FakeMasterClock(initial_utc_ms=epoch)
         model = BlockPlanProducerModel(clock=clock, block_duration_ms=30_000)
 
@@ -610,6 +625,23 @@ class TestJIPDoesNotShiftTiming:
         assert block_a.duration_ms == 30_000
         assert block_a.end_utc_ms == epoch + 30_000
         assert block_a.asset_start_offset_ms == 0
+        assert block_a.segment_duration_ms == 30_000
+
+    def test_block_duration_never_reduced_by_jip(self):
+        """Block duration MUST always equal block_duration_ms, regardless of JIP offset."""
+        epoch = 1_738_987_500_000
+        clock = FakeMasterClock(initial_utc_ms=epoch)
+        model = BlockPlanProducerModel(clock=clock, block_duration_ms=30_000)
+
+        for jip_offset in [0, 1, 5_000, 15_000, 29_999]:
+            blocks = model.start(join_utc_ms=epoch, jip_offset_ms=jip_offset)
+            for block in blocks:
+                assert block.duration_ms == 30_000, (
+                    f"INV-WALLCLOCK-FENCE-005 VIOLATION: block duration is "
+                    f"{block.duration_ms} (expected 30000) with "
+                    f"jip_offset={jip_offset}. "
+                    f"JIP must never reduce block duration."
+                )
 
 
 if __name__ == "__main__":

@@ -150,6 +150,15 @@ class TickProducer : public producers::IProducer,
   // priming.  TryGetFrame returns these (FIFO) after primed_frame_, before
   // live decode.  Audio has been moved into primed_frame_.audio.
   std::deque<FrameData> buffered_frames_;
+
+  // Planned PAD segment support — pre-allocated pad frames (black+silence).
+  // Constructed once in AssignBlock if block contains PAD segments.
+  bool has_pad_segments_ = false;
+  buffer::Frame pad_video_frame_;
+  int pad_audio_samples_per_frame_ = 0;
+
+  void InitPadFrames();
+  std::optional<FrameData> GeneratePadFrame();
 };
 
 }  // namespace retrovue::blockplan

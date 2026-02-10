@@ -138,12 +138,21 @@ class BlockPlan:
             end_utc_ms=self.end_utc_ms,
         )
         for seg in self.segments:
-            pb.segments.append(playout_pb2.BlockSegment(
+            seg_type = seg.get("segment_type", "content")
+            kwargs = dict(
                 segment_index=seg["segment_index"],
-                asset_uri=seg["asset_uri"],
-                asset_start_offset_ms=seg.get("asset_start_offset_ms", 0),
                 segment_duration_ms=seg["segment_duration_ms"],
-            ))
+            )
+            if seg_type == "pad":
+                kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_PAD
+                # PAD segments have no asset_uri or asset_start_offset_ms
+            else:
+                kwargs["asset_uri"] = seg["asset_uri"]
+                kwargs["asset_start_offset_ms"] = seg.get("asset_start_offset_ms", 0)
+                if seg_type == "filler":
+                    kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_FILLER
+                # else: CONTENT (proto default 0)
+            pb.segments.append(playout_pb2.BlockSegment(**kwargs))
         return pb
 
     @property
@@ -404,7 +413,8 @@ class PlayoutSession:
         self._event_thread.start()
         logger.debug(f"[PlayoutSession:{self.channel_id}] Event subscription started")
 
-    def seed(self, block_a: BlockPlan, block_b: BlockPlan) -> bool:
+    def seed(self, block_a: BlockPlan, block_b: BlockPlan, *,
+             join_utc_ms: int = 0) -> bool:
         """
         Seed the executor with 2 initial blocks.
 
@@ -414,6 +424,11 @@ class PlayoutSession:
         Args:
             block_a: First block (will start executing immediately)
             block_b: Second block (pending)
+            join_utc_ms: True tune-in instant (ms since Unix epoch).
+                         INV-JIP-ANCHOR-001: AIR uses this as session epoch so
+                         fence math is anchored to the viewer's join time, not
+                         AIR's process start time.  0 = legacy (AIR falls back
+                         to system_clock::now()).
 
         Returns:
             True if seeding succeeded
@@ -437,11 +452,23 @@ class PlayoutSession:
                 return False
 
             try:
+                # INV-JIP-ANCHOR-001: Send Core-authoritative tune-in instant.
+                # join_utc_ms is the wall-clock snapshot captured at the 0→1
+                # viewer transition — semantically "when the viewer joined",
+                # distinct from block_a.start_utc_ms ("where the timeline
+                # boundary is").  AIR uses this as session_epoch_utc_ms_.
+                logger.info(
+                    f"[PlayoutSession:{self.channel_id}] INV-JIP-ANCHOR-001: "
+                    f"join_utc_ms={join_utc_ms} "
+                    f"block_a.start={block_a.start_utc_ms} "
+                    f"block_a.end={block_a.end_utc_ms} "
+                    f"block_a.asset_offset={block_a.segments[0].get('asset_start_offset_ms', 0) if block_a.segments else 'N/A'}"
+                )
                 request = playout_pb2.StartBlockPlanSessionRequest(
                     channel_id=self.channel_id_int,
                     block_a=block_a.to_proto(),
                     block_b=block_b.to_proto(),
-                    join_utc_ms=block_a.start_utc_ms,  # Start at block beginning
+                    join_utc_ms=join_utc_ms,
                     program_format_json=json.dumps(self.program_format),
                 )
 

@@ -3,6 +3,9 @@
 // Purpose: Internal failsafe producer that outputs valid black video frames.
 // Contract: docs/contracts/architecture/BlackFrameProducerContract.md
 // Copyright (c) 2025 RetroVue
+//
+// DEPRECATED for BlockPlan live playout.
+// See BlackFrameProducer.h and INV-PAD-PRODUCER for details.
 
 #include "retrovue/producers/black/BlackFrameProducer.h"
 

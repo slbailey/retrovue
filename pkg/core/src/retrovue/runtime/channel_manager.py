@@ -1102,11 +1102,16 @@ class ChannelManager:
         jip_entry_index, jip_offset_ms = compute_jip_position(
             playout_plan, block_duration_ms, cycle_origin_utc_ms, now_utc_ms,
         )
+        block_start_utc_ms = (now_utc_ms // block_duration_ms) * block_duration_ms
         self._logger.info(
-            "INV-JIP-BP-BOOT: channel_id=%s station_now=%d base_epoch=%d "
-            "active_index=%d offset_ms=%d",
-            self.channel_id, now_utc_ms, cycle_origin_utc_ms,
-            jip_entry_index, jip_offset_ms,
+            "INV-JIP-BP-BOOT: channel_id=%s station_now=%d "
+            "block_start=%d block_dur=%d "
+            "jip_offset=%d (join - block_start = %d) "
+            "active_index=%d",
+            self.channel_id, now_utc_ms,
+            block_start_utc_ms, block_duration_ms,
+            jip_offset_ms, now_utc_ms - block_start_utc_ms,
+            jip_entry_index,
         )
 
         # Ask the Producer to start with JIP parameters.
@@ -1114,6 +1119,7 @@ class ChannelManager:
             playout_plan, station_time,
             jip_entry_index=jip_entry_index,
             jip_offset_ms=jip_offset_ms,
+            cycle_origin_utc_ms=cycle_origin_utc_ms,
         )
         if not started_ok:
             self.runtime_state.producer_status = "error"
@@ -3370,6 +3376,7 @@ class BlockPlanProducer(Producer):
         # Block generation state
         self._block_index = 0
         self._next_block_start_ms = 0
+        self._cycle_origin_utc_ms = 0
         self._block_duration_ms = configuration.get(
             "block_duration_ms", self.DEFAULT_BLOCK_DURATION_MS
         )
@@ -3438,6 +3445,7 @@ class BlockPlanProducer(Producer):
         *,
         jip_entry_index: int = 0,
         jip_offset_ms: int = 0,
+        cycle_origin_utc_ms: int = 0,
     ) -> bool:
         """
         Start BlockPlan execution.
@@ -3523,9 +3531,14 @@ class BlockPlanProducer(Producer):
 
                 # INV-JIP-BP-007: Set cursor to JIP entry before seeding
                 self._block_index = jip_entry_index
+                self._cycle_origin_utc_ms = cycle_origin_utc_ms
 
-                # INV-WALLCLOCK-FENCE-005: Anchor block timestamps to real UTC
-                self._next_block_start_ms = join_utc_ms
+                # INV-JIP-WALLCLOCK-001: Block start = floor(join to :00/:30).
+                # Blocks are always wall-clock aligned and exactly
+                # _block_duration_ms long.  join_utc_ms only determines the
+                # offset INTO the block, never the block's start or duration.
+                block_dur = self._block_duration_ms
+                self._next_block_start_ms = (join_utc_ms // block_dur) * block_dur
                 self._in_flight_block_ids.clear()
 
                 # Generate and seed initial 2 blocks
@@ -3537,7 +3550,8 @@ class BlockPlanProducer(Producer):
                 block_b = self._generate_next_block(playout_plan)
                 self._advance_cursor(block_b)
 
-                if not self._session.seed(block_a, block_b):
+                if not self._session.seed(block_a, block_b,
+                                         join_utc_ms=join_utc_ms):
                     raise RuntimeError("PlayoutSession.seed() failed")
 
                 # INV-WALLCLOCK-FENCE-002: Track seeded blocks as active
@@ -3662,6 +3676,7 @@ class BlockPlanProducer(Producer):
         # Reset block generation state for next start
         self._block_index = 0
         self._next_block_start_ms = 0
+        self._cycle_origin_utc_ms = 0
 
         # INV-CM-RESTART-SAFETY: Reset session state flags
         self._session_ended = False
@@ -3694,18 +3709,27 @@ class BlockPlanProducer(Producer):
         Cycles through playout_plan entries round-robin, respecting per-entry
         asset_start_offset_ms for mid-asset seek support.
 
-        INV-JIP-BP-005/006: When jip_offset_ms > 0 (first block only),
-        asset_start_offset_ms is increased and segment_duration_ms is
-        decreased by jip_offset_ms.
+        INV-JIP-WALLCLOCK-001: Block duration is always _block_duration_ms.
+        When jip_offset_ms > 0 (first block only), asset_start_offset_ms is
+        increased by jip_offset_ms (seek into content) and segment_duration_ms
+        is reduced to (block_dur - jip_offset).  The block container
+        (start_utc_ms, end_utc_ms) is NEVER shortened.
         """
         from .playout_session import BlockPlan
 
         block_index = self._block_index
         start_ms = self._next_block_start_ms
 
-        # Cycle through playout plan entries round-robin
+        # LAW-DOWNWARD-CONCRETIZATION: Playlist entry is determined by
+        # wall-clock position, not ordinal block count.  compute_jip_position()
+        # walks the cycle to find which entry is active at start_ms, handling
+        # both uniform and variable-duration plans.
         if playout_plan:
-            entry = playout_plan[block_index % len(playout_plan)]
+            plan_idx, _ = compute_jip_position(
+                playout_plan, self._block_duration_ms,
+                self._cycle_origin_utc_ms, start_ms,
+            )
+            entry = playout_plan[plan_idx]
             asset_path = entry.get("asset_path", "assets/SampleA.mp4")
             asset_offset_ms = entry.get("asset_start_offset_ms", 0)
         else:
@@ -3717,11 +3741,16 @@ class BlockPlanProducer(Producer):
         # when present — allows playlist segments to define their own length.
         block_dur_ms = entry.get("duration_ms", self._block_duration_ms)
 
-        # INV-JIP-BP-005: First seeded block carries JIP offset
-        # INV-JIP-BP-006: First block duration reduced by offset
+        # INV-JIP-WALLCLOCK-001: Block duration is NEVER reduced.
+        # JIP offset only advances the asset seek position; the block
+        # container is always [block_start, block_start + block_dur_ms).
+        # Segment duration = remaining content from the seek point to
+        # block end.  The fence in AIR corroborates: it fires after
+        # (block_end - session_epoch) worth of frames.
+        segment_dur_ms = block_dur_ms
         if jip_offset_ms > 0:
             asset_offset_ms += jip_offset_ms
-            block_dur_ms -= jip_offset_ms
+            segment_dur_ms = block_dur_ms - jip_offset_ms
 
         end_ms = start_ms + block_dur_ms
 
@@ -3736,13 +3765,18 @@ class BlockPlanProducer(Producer):
                 "segment_index": 0,
                 "asset_uri": asset_path,
                 "asset_start_offset_ms": asset_offset_ms,
-                "segment_duration_ms": block_dur_ms,
+                "segment_duration_ms": segment_dur_ms,
             }],
         )
 
+        # INV-JIP-WALLCLOCK-001 diagnostics: prove wall-clock alignment.
         self._logger.info(
-            "BlockPlan generated: block_id=%s asset_uri=%s asset_start_offset_ms=%d",
-            block_id, asset_path, asset_offset_ms,
+            "BlockPlan generated: block_id=%s start=%d end=%d dur=%d "
+            "asset=%s seek=%d seg_dur=%d jip_offset=%d "
+            "aligned=%s",
+            block_id, start_ms, end_ms, end_ms - start_ms,
+            asset_path, asset_offset_ms, segment_dur_ms, jip_offset_ms,
+            start_ms % block_dur_ms == 0,
         )
 
         return block
