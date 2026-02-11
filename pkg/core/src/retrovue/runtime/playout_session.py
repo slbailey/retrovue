@@ -361,9 +361,14 @@ class PlayoutSession:
 
                     if event.HasField("block_completed"):
                         completed = event.block_completed
+                        now_ms = int(time.time() * 1000)
+                        delta_ms = now_ms - completed.block_end_utc_ms
                         logger.info(
                             f"[PlayoutSession:{self.channel_id}] BlockCompleted: "
                             f"block_id={completed.block_id}, "
+                            f"scheduled_end_ms={completed.block_end_utc_ms}, "
+                            f"actual_wall_ms={now_ms}, "
+                            f"delta_ms={delta_ms}, "
                             f"final_ct_ms={completed.final_ct_ms}, "
                             f"blocks_total={completed.blocks_executed_total}"
                         )

@@ -39,13 +39,19 @@ def discover_collections(db: Session, *, source_id: str) -> list[dict[str, Any]]
     if source.type == "plex":
         config = source.config or {}
         servers = config.get("servers", [])
-        if not servers:
-            raise ValueError(f"No Plex servers configured for source '{source.name}'")
-        server = servers[0]
-        importer_config["base_url"] = server.get("base_url")
-        importer_config["token"] = server.get("token")
-        if not importer_config["base_url"] or not importer_config["token"]:
-            raise ValueError(f"Plex server configuration incomplete for source '{source.name}'")
+        if servers:
+            server = servers[0]
+            importer_config["base_url"] = server.get("base_url")
+            importer_config["token"] = server.get("token")
+        else:
+            # Single-server format from "source add --type plex --base-url ... --token ..."
+            importer_config["base_url"] = config.get("base_url")
+            importer_config["token"] = config.get("token")
+        if not importer_config.get("base_url") or not importer_config.get("token"):
+            raise ValueError(
+                f"No Plex servers configured for source '{source.name}'. "
+                "Add server details with: retrovue source update <source> --base-url <url> --token <token>"
+            )
     elif source.type == "filesystem":
         config = source.config or {}
         importer_config["source_name"] = source.name

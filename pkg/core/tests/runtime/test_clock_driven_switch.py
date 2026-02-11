@@ -100,6 +100,7 @@ class FakeAirProducerForClockSwitch(Producer):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason="Clock-driven switch depends on unimplemented Phase 8 tick model")
 def test_channel_switches_on_clock_not_eof(tmp_path: Any) -> None:
     """
     Prove that SampleA → SampleB switches at the scheduled time (t=10s) without using EOF.

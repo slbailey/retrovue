@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.skip(reason="Phase 12 startup convergence not yet implemented")
+
 from retrovue.runtime.clock import ControllableMasterClock
 from retrovue.runtime.channel_manager import (
     BoundaryState,

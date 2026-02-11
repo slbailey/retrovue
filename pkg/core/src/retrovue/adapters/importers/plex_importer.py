@@ -1294,7 +1294,12 @@ class PlexImporter(BaseImporter):
                     editorial["runtime_seconds"] = int(dur_ms) // 1000
             except Exception:
                 pass
-            # Episode/Show specifics
+            # Episode/Show specifics: stable external episode id for TV (stored in asset_editorial.payload)
+            rk = item.get("ratingKey")
+            if rk is not None and (
+                series_title or meta.get("grandparentTitle") or meta.get("parentTitle")
+            ):
+                editorial["episode_id"] = str(rk)
             if series_title or meta.get("grandparentTitle") or meta.get("parentTitle"):
                 editorial["series_title"] = (
                     meta.get("grandparentTitle")

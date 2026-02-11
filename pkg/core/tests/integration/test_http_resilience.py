@@ -39,6 +39,8 @@ from typing import Any, Iterator
 import pytest
 import requests
 
+pytestmark = pytest.mark.skip(reason="Integration test requires live server with runtime environment")
+
 from retrovue.runtime.channel_stream import ChannelStream, TsSource
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.runtime.producer.base import (

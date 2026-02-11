@@ -69,14 +69,17 @@ def construct_importer_for_collection(collection, db):
                 if source.type == "plex":
                     config = source.config or {}
                     servers = config.get("servers", [])
-                    if not servers:
-                        raise ValueError(f"No Plex servers configured for source '{source.name}'")
-                    server = servers[0]
-                    importer_config["base_url"] = server.get("base_url")
-                    importer_config["token"] = server.get("token")
-                    if not importer_config["base_url"] or not importer_config["token"]:
+                    if servers:
+                        server = servers[0]
+                        importer_config["base_url"] = server.get("base_url")
+                        importer_config["token"] = server.get("token")
+                    else:
+                        importer_config["base_url"] = config.get("base_url")
+                        importer_config["token"] = config.get("token")
+                    if not importer_config.get("base_url") or not importer_config.get("token"):
                         raise ValueError(
-                            f"Plex server configuration incomplete for source '{source.name}'"
+                            f"Plex server configuration incomplete for source '{source.name}'. "
+                            "Use: retrovue source update <source> --base-url <url> --token <token>"
                         )
                     # Capture collection library key for Plex (do not pass to constructor for backward compatibility)
                     collection_library_key = getattr(collection, "external_id", None)

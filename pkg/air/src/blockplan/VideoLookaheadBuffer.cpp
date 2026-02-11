@@ -231,6 +231,11 @@ void VideoLookaheadBuffer::FillLoop() {
     // more frames — each decode also produces audio, refilling the audio
     // buffer.  PipelineManager toggles audio_boost_ from the tick loop.
     //
+    // INV-AUDIO-PRIME-003: Bootstrap phase.
+    // During BOOTSTRAP, the fill thread must not park solely because
+    // video_depth >= target.  It must continue decoding until audio
+    // depth reaches the gate threshold, bounded by bootstrap_cap.
+    //
     // INV-TICK-GUARANTEED-OUTPUT: Audio burst-fill mode.
     // After a segment transition, audio buffer may be critically low while
     // video buffer is full (hold-last frames).  Allow decoding even when
@@ -243,15 +248,32 @@ void VideoLookaheadBuffer::FillLoop() {
             (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
         if (stopping) return true;
 
+        int depth = static_cast<int>(frames_.size());
+
+        // INV-AUDIO-PRIME-003: Bootstrap phase — audio-gated parking.
+        if (fill_phase_.load(std::memory_order_relaxed) ==
+            static_cast<int>(FillPhase::kBootstrap)) {
+          // Hard cap: never exceed bootstrap_cap regardless of audio state.
+          if (depth >= bootstrap_cap_frames_) return false;
+          // Below bootstrap target: always decode.
+          if (depth < bootstrap_target_frames_) return true;
+          // At/above bootstrap target but below cap: decode only if audio
+          // hasn't reached the gate threshold yet.
+          if (audio_buffer_ && audio_buffer_->DepthMs() < bootstrap_min_audio_ms_)
+            return true;
+          return false;
+        }
+
+        // STEADY phase: normal video-only throttle.
         int effective_target = audio_boost_.load(std::memory_order_relaxed)
             ? target_depth_frames_ * 2
             : target_depth_frames_;
-        if (static_cast<int>(frames_.size()) < effective_target) return true;
+        if (depth < effective_target) return true;
 
         // Audio burst: proceed past video target when audio is critically low.
         if (audio_buffer_ && audio_buffer_->DepthMs() < audio_burst_threshold_ms_) {
           int burst_cap = target_depth_frames_ * 4;
-          return static_cast<int>(frames_.size()) < burst_cap;
+          return depth < burst_cap;
         }
         return false;
       });
@@ -441,6 +463,32 @@ void VideoLookaheadBuffer::SetAudioBoost(bool enable) {
     // re-evaluates the audio burst condition while audio is critically low.
     space_cv_.notify_all();
   }
+}
+
+// =============================================================================
+// INV-AUDIO-PRIME-003: Bootstrap fill phase
+// =============================================================================
+
+void VideoLookaheadBuffer::EnterBootstrap(int bootstrap_target_frames,
+                                           int bootstrap_cap_frames,
+                                           int min_audio_ms) {
+  bootstrap_target_frames_ = bootstrap_target_frames;
+  bootstrap_cap_frames_ = bootstrap_cap_frames;
+  bootstrap_min_audio_ms_ = min_audio_ms;
+  fill_phase_.store(static_cast<int>(FillPhase::kBootstrap),
+                    std::memory_order_release);
+  // Wake fill thread so it re-evaluates with bootstrap policy.
+  space_cv_.notify_all();
+}
+
+void VideoLookaheadBuffer::EndBootstrap() {
+  fill_phase_.store(static_cast<int>(FillPhase::kSteady),
+                    std::memory_order_release);
+  // No wake needed — steady-state is more restrictive.
+}
+
+VideoLookaheadBuffer::FillPhase VideoLookaheadBuffer::GetFillPhase() const {
+  return static_cast<FillPhase>(fill_phase_.load(std::memory_order_acquire));
 }
 
 int64_t VideoLookaheadBuffer::DecodeLatencyP95Us() const {

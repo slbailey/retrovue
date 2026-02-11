@@ -3589,5 +3589,300 @@ class TestCreditLifecycleEndToEnd:
             assert accepted is True
 
 
+# =============================================================================
+# Part 9: Miss-Accuracy Contract Tests (INV-FEED-MISS-ACCURACY)
+# =============================================================================
+
+
+class TestMissAccuracyLateDecision:
+    """INV-FEED-MISS-ACCURACY: Separate 'decision evaluated late' from
+    'block became ready late'.
+
+    When _feed_ahead notices a block's deadline in the [ready_by, start)
+    window but cannot feed (credits=0), and then feeds after start_utc_ms
+    when credits arrive, this is a LATE_DECISION (INFO), not a
+    MISS_READY_BY (WARNING).
+    """
+
+    def test_late_decision_not_counted_as_miss(self):
+        """Block noticed before start but fed after start → late decision,
+        not a miss."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # RUNNING state, block starts 5s in the future
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        # Phase 1: credits=0, tick evaluates → sets first_due but can't feed.
+        # The block's ready_by = (now+5s) - 10s = now-5s, so deadline IS due.
+        producer._feed_credits = 0
+        producer._feed_ahead()
+        assert len(feed_log) == 0, "No feed with credits=0"
+        assert producer._next_block_first_due_utc_ms > 0, (
+            "first_due should be set even with credits=0"
+        )
+        assert producer._next_block_first_due_utc_ms <= now_ms + 1_000, (
+            "first_due should be approximately now"
+        )
+
+        # Phase 2: Simulate time passing (block start has now passed).
+        # Credits arrive (e.g. BlockCompleted). Feed should succeed
+        # but NOT count as a miss — it's a late decision.
+        import time as _time
+        _time.sleep(0.01)  # Ensure now > block.start if start was near now
+        # Set block start so that it is now in the past relative to "now"
+        # but first_due was set when start was in the future.
+        # Rewrite: block starts at now_ms+5s; we already set first_due at ~now_ms.
+        # To make now > start without actually waiting 5s, adjust the block start
+        # to be just slightly in the past.
+        producer._next_block_start_ms = now_ms - 100  # block start is now in past
+        producer._block_index = 0  # regenerate same slot
+        producer._feed_credits = 1
+
+        # first_due was set at ~now_ms, block.start = now_ms - 100
+        # first_due > start → would be a miss, but first_due was set BEFORE start?
+        # Actually first_due ≈ now_ms > now_ms - 100. So is_miss = True.
+        # We need first_due < start for it to be a late decision.
+        #
+        # Correct scenario: first_due was set at time T1 when start was T1+5s.
+        # Then start stays at T1+5s. Credits arrive at T2 > T1+5s.
+        # first_due = T1 < T1+5s = start → NOT a miss.
+        # now = T2 > T1+5s = start → IS late decision.
+        #
+        # Let's redo with the correct timeline:
+        producer._next_block_first_due_utc_ms = now_ms  # "noticed" at now_ms
+        producer._next_block_start_ms = now_ms + 100     # start is 100ms in future relative to first_due
+        producer._block_index = 0
+        producer._pending_block = None
+        producer._feed_credits = 1
+        producer._max_delivered_end_utc_ms = now_ms  # low runway triggers feed
+
+        # Wait so that actual now > start_utc_ms (now_ms + 100)
+        _time.sleep(0.15)
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 1, f"Expected 1 feed, got {len(feed_log)}"
+        assert producer._ready_by_miss_count == 0, (
+            "INV-FEED-MISS-ACCURACY: Block noticed before start should NOT "
+            f"be a miss. miss_count={producer._ready_by_miss_count}"
+        )
+        assert producer._late_decision_count == 1, (
+            "INV-FEED-MISS-ACCURACY: Block noticed before start but fed after "
+            f"start should be a late decision. count={producer._late_decision_count}"
+        )
+
+    def test_true_miss_still_detected(self):
+        """Block first noticed AFTER start_utc_ms → true miss."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # Block starts 5s in the PAST — first time _feed_ahead sees it
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2
+        producer._next_block_start_ms = now_ms - 5_000
+        producer._block_index = 0
+
+        # No prior first_due set — this is genuinely the first evaluation
+        assert producer._next_block_first_due_utc_ms == 0
+
+        producer._feed_ahead()
+
+        assert producer._ready_by_miss_count >= 1, (
+            "INV-FEED-MISS-ACCURACY: Block first noticed after start "
+            f"should be a true miss. miss_count={producer._ready_by_miss_count}"
+        )
+        assert producer._late_decision_count == 0, (
+            "INV-FEED-MISS-ACCURACY: True miss should not be counted as late decision"
+        )
+
+    def test_late_decision_log_emitted(self):
+        """LATE_DECISION log at INFO level when block noticed early but fed late."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        # Set up: first_due was noticed at now_ms, block starts at now_ms + 100
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._next_block_first_due_utc_ms = now_ms
+        producer._next_block_start_ms = now_ms + 100
+        producer._block_index = 0
+        producer._feed_credits = 1
+
+        import time as _time
+        _time.sleep(0.15)  # now > start
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.DEBUG)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        late_logs = [
+            r for r in log_records
+            if "LATE_DECISION" in r.getMessage()
+        ]
+        miss_logs = [
+            r for r in log_records
+            if "MISS_READY_BY" in r.getMessage()
+        ]
+
+        assert len(late_logs) >= 1, (
+            "INV-FEED-MISS-ACCURACY: LATE_DECISION log expected"
+        )
+        assert late_logs[0].levelno == logging.INFO, (
+            f"LATE_DECISION should be INFO level, got {late_logs[0].levelname}"
+        )
+        msg = late_logs[0].getMessage()
+        assert "channel=" in msg
+        assert "block=" in msg
+        assert "decision_lag_ms=" in msg
+        assert "first_due=" in msg
+
+        assert len(miss_logs) == 0, (
+            "INV-FEED-MISS-ACCURACY: MISS_READY_BY should NOT fire for "
+            f"late decisions. Got {len(miss_logs)} miss logs."
+        )
+
+    def test_first_due_reset_after_feed(self):
+        """_next_block_first_due_utc_ms resets to 0 after successful feed."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 2
+        producer._next_block_start_ms = now_ms - 5_000  # triggers feed
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert len(feed_log) >= 1, "At least one block should be fed"
+        assert producer._next_block_first_due_utc_ms == 0, (
+            "INV-FEED-MISS-ACCURACY: first_due must reset after successful feed"
+        )
+
+    def test_first_due_set_even_with_zero_credits(self):
+        """Pre-evaluation sets first_due even when credits=0."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 0  # No credits
+        # Block starts in 5s, ready_by = -5s (past) → deadline due
+        producer._next_block_start_ms = now_ms + 5_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 0, "No feeds with credits=0"
+        assert producer._next_block_first_due_utc_ms > 0, (
+            "INV-FEED-MISS-ACCURACY: first_due must be set even with credits=0"
+        )
+
+    def test_first_due_not_set_when_not_due(self):
+        """Pre-evaluation does NOT set first_due when ready_by is in the future."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        producer._playout_plan = playout_plan
+
+        now_ms = int(time.time() * 1000)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms
+        producer._started = True
+        producer._feed_credits = 0
+        # Block starts in 60s, ready_by = 50s in future → NOT due yet
+        producer._next_block_start_ms = now_ms + 60_000
+        producer._block_index = 0
+
+        producer._feed_ahead()
+
+        assert producer._next_block_first_due_utc_ms == 0, (
+            "INV-FEED-MISS-ACCURACY: first_due must NOT be set when "
+            "ready_by is in the future"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

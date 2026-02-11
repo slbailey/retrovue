@@ -138,6 +138,7 @@ from .metrics import (
     feed_ahead_horizon_target_ms,
     feed_ahead_ready_by_miss_total,
     feed_ahead_miss_lateness_ms,
+    feed_ahead_late_decision_total,
     feed_credits_at_decision,
     feed_error_backoff_total,
 )
@@ -3406,6 +3407,13 @@ class BlockPlanProducer(Producer):
         self._error_backoff_remaining: int = 0
         # Deadline miss counter (in-process, also exported to Prometheus)
         self._ready_by_miss_count: int = 0
+        # Late-decision counter: block noticed before start but fed after start
+        self._late_decision_count: int = 0
+        # Tracks when _feed_ahead first noticed the next block was due
+        # (ready_by deadline reached).  Set even when credits=0 so that
+        # a later feed can distinguish "decision evaluated late" from
+        # "block became ready late".  Reset after each successful feed.
+        self._next_block_first_due_utc_ms: int = 0
         # As-run annotations (in-process; future AsRunLogger integration)
         self._asrun_annotations: list[_AsRunAnnotation] = []
 
@@ -3692,7 +3700,25 @@ class BlockPlanProducer(Producer):
         self._error_backoff_remaining = 0
         self._feed_tick_counter = 0
         self._ready_by_miss_count = 0
+        self._late_decision_count = 0
+        self._next_block_first_due_utc_ms = 0
         self._asrun_annotations.clear()
+
+    def _resolve_plan_for_block(self) -> list[dict[str, Any]]:
+        """Query schedule service for the next block's content.
+
+        Falls back to boot-time plan if schedule service unavailable.
+        """
+        if self.schedule_service and self._next_block_start_ms > 0:
+            block_start_dt = datetime.fromtimestamp(
+                self._next_block_start_ms / 1000, tz=timezone.utc
+            )
+            fresh = self.schedule_service.get_playout_plan_now(
+                self.channel_id, block_start_dt
+            )
+            if fresh:
+                return fresh
+        return self._playout_plan
 
     def _generate_next_block(
         self,
@@ -3731,7 +3757,7 @@ class BlockPlanProducer(Producer):
             )
             entry = playout_plan[plan_idx]
             asset_path = entry.get("asset_path", "assets/SampleA.mp4")
-            asset_offset_ms = entry.get("asset_start_offset_ms", 0)
+            asset_offset_ms = entry.get("asset_start_offset_ms", entry.get("start_pts", 0))
         else:
             entry = {}
             asset_path = "assets/SampleA.mp4"
@@ -3875,11 +3901,38 @@ class BlockPlanProducer(Producer):
           5. Record as-run annotation: missed_ready_by with block_id and lateness_ms.
         Core's only response to a miss is observability (log, metric, annotation).
         No control flow changes occur on miss.
+
+        MISS vs LATE DECISION (INV-FEED-MISS-ACCURACY):
+        A block fed after start_utc_ms is classified as:
+          - MISS_READY_BY (WARNING): feed-ahead first noticed the block AFTER
+            start_utc_ms.  The block was genuinely not prepared in time.
+          - LATE_DECISION (INFO): feed-ahead noticed the block BEFORE start_utc_ms
+            (in the [ready_by, start) window) but could not feed due to no credits.
+            The block was prepared on time; seam-correct transitions cover this.
+        _next_block_first_due_utc_ms tracks when the deadline was first noticed,
+        even when credits=0.  This separates evaluation timing from readiness.
         """
         if self._feed_state != _FeedState.RUNNING:
             return
         if self._session_ended or not self._started or not self._session:
             return
+
+        now_utc_ms = int(time.time() * 1000)
+
+        # Pre-evaluate next block deadline BEFORE the credit gate.
+        # This records when _feed_ahead first noticed the upcoming block
+        # was due, even when credits=0.  Enables accurate miss vs
+        # late-decision classification when credits arrive later.
+        if self._next_block_first_due_utc_ms == 0:
+            next_start = (
+                self._pending_block.start_utc_ms
+                if self._pending_block is not None
+                else self._next_block_start_ms
+            )
+            if next_start > 0:
+                next_ready_by = next_start - self._preload_budget_ms
+                if now_utc_ms >= next_ready_by:
+                    self._next_block_first_due_utc_ms = now_utc_ms
 
         # Credit gate: no slots available → return immediately.
         # Eliminates QUEUE_FULL thrash on the tick-driven path.
@@ -3890,14 +3943,13 @@ class BlockPlanProducer(Producer):
         if self._feed_credits <= 0:
             return
 
-        now_utc_ms = int(time.time() * 1000)
-
         for _ in range(min(self._feed_credits, self.AIR_QUEUE_DEPTH)):
             # INV-FEED-QUEUE-003: Retry pending before generating new
             if self._pending_block is not None:
                 block = self._pending_block
             else:
-                block = self._generate_next_block(self._playout_plan)
+                plan = self._resolve_plan_for_block()
+                block = self._generate_next_block(plan)
 
             # Compute per-block deadline
             ready_by_utc_ms = block.start_utc_ms - self._preload_budget_ms
@@ -3925,7 +3977,21 @@ class BlockPlanProducer(Producer):
 
             # MISS POLICY: detect and record, but do NOT alter control flow.
             # AIR handles the gap via PADDED_GAP (black+silence).
-            is_miss = now_utc_ms > block.start_utc_ms
+            #
+            # A block is a TRUE miss only if the feed-ahead logic first
+            # noticed it AFTER start_utc_ms.  If the logic noticed the
+            # deadline earlier (in the [ready_by, start) window) but
+            # could not feed due to credits/queue, that is a LATE
+            # DECISION — the block was prepared on time but delivered
+            # late.  Seam-correct transitions cover this case.
+            first_due_utc_ms = (
+                self._next_block_first_due_utc_ms or now_utc_ms
+            )
+            is_miss = first_due_utc_ms > block.start_utc_ms
+            is_late_decision = (
+                not is_miss and now_utc_ms > block.start_utc_ms
+            )
+
             if is_miss:
                 lateness_ms = now_utc_ms - block.start_utc_ms
                 self._ready_by_miss_count += 1
@@ -3940,16 +4006,31 @@ class BlockPlanProducer(Producer):
                     ).observe(lateness_ms)
                 self._logger.warning(
                     "MISS_READY_BY channel=%s block=%s lateness_ms=%d "
-                    "ready_by=%d start=%d now=%d",
+                    "ready_by=%d start=%d now=%d first_due=%d",
                     self.channel_id, block.block_id, lateness_ms,
                     ready_by_utc_ms, block.start_utc_ms, now_utc_ms,
+                    first_due_utc_ms,
+                )
+            elif is_late_decision:
+                decision_lag_ms = now_utc_ms - block.start_utc_ms
+                self._late_decision_count += 1
+                if feed_ahead_late_decision_total is not None:
+                    feed_ahead_late_decision_total.labels(
+                        channel_id=self.channel_id
+                    ).inc()
+                self._logger.info(
+                    "LATE_DECISION channel=%s block=%s decision_lag_ms=%d "
+                    "ready_by=%d start=%d now=%d first_due=%d",
+                    self.channel_id, block.block_id, decision_lag_ms,
+                    ready_by_utc_ms, block.start_utc_ms, now_utc_ms,
+                    first_due_utc_ms,
                 )
 
             self._logger.info(
                 "FEED_AHEAD_DECISION now=%d block=%s start=%d "
-                "ready_by=%d reason=%s runway=%dms miss=%s",
+                "ready_by=%d reason=%s runway=%dms miss=%s late_decision=%s",
                 now_utc_ms, block.block_id, block.start_utc_ms,
-                ready_by_utc_ms, reason, runway_ms, is_miss,
+                ready_by_utc_ms, reason, runway_ms, is_miss, is_late_decision,
             )
 
             result = self._try_feed_block(block)
@@ -3959,6 +4040,9 @@ class BlockPlanProducer(Producer):
                     result.value, block.block_id, self._feed_credits,
                 )
                 return
+
+            # Block accepted — reset first-due tracker for next block.
+            self._next_block_first_due_utc_ms = 0
 
             # Update runway tracker
             self._max_delivered_end_utc_ms = max(

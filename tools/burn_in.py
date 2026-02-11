@@ -31,9 +31,15 @@ JIP:
 Usage:
     source pkg/core/.venv/bin/activate
     python tools/burn_in.py [--schedule PATH]
+    python tools/burn_in.py --pipeline
+    python tools/burn_in.py --horizon
+    python tools/burn_in.py --dump
 
 Arguments:
     --schedule PATH  -- static schedule JSON (default: tools/static_schedule.json)
+    --pipeline       -- use planning pipeline with rolling day adapter (legacy)
+    --horizon        -- use HorizonManager with ExecutionWindowStore (contract-aligned)
+    --dump           -- print transmission log and exit (implies --pipeline)
 
 Environment variables:
     RETROVUE_BURN_IN_PORT        -- HTTP server port (default: 8000)
@@ -46,7 +52,9 @@ import json
 import logging
 import os
 import signal
+import re
 import threading
+from datetime import date, datetime, time as time_type, timedelta, timezone
 from pathlib import Path
 
 from retrovue.runtime.config import (
@@ -69,8 +77,235 @@ FILLER_PATH = os.environ.get(
     "RETROVUE_BURN_IN_FILLER",
     "/opt/retrovue/assets/filler.mp4",
 )
+FILLER_DURATION_MS = 3_650_455
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CATALOG_PATH = REPO_ROOT / "config" / "asset_catalog.json"
+PROGRAMS_DIR = REPO_ROOT / "config" / "programs"
 
 logger = logging.getLogger("burn_in")
+
+
+# ===========================================================================
+# Pipeline helpers
+# ===========================================================================
+
+
+def _apply_jip_to_segments(segments, jip_offset_ms, block_dur_ms):
+    """Apply JIP offset to N pre-composed segments.
+
+    Walks segments from the start, skipping fully elapsed ones and trimming
+    the partially elapsed one.  Extends (or appends) a trailing pad so the
+    result sums to exactly block_dur_ms.
+    """
+    result = []
+    remaining = jip_offset_ms
+    for seg in segments:
+        seg = dict(seg)
+        dur = seg["segment_duration_ms"]
+        if remaining >= dur:
+            remaining -= dur
+            continue  # fully elapsed — skip
+        if remaining > 0:
+            if seg.get("asset_uri"):
+                seg["asset_start_offset_ms"] = (
+                    seg.get("asset_start_offset_ms", 0) + remaining
+                )
+            seg["segment_duration_ms"] -= remaining
+            remaining = 0
+        result.append(seg)
+    # Extend pad to fill block
+    placed = sum(s["segment_duration_ms"] for s in result)
+    gap = block_dur_ms - placed
+    if gap > 0:
+        if result and result[-1].get("segment_type") == "pad":
+            result[-1]["segment_duration_ms"] += gap
+        else:
+            result.append({"segment_type": "pad", "segment_duration_ms": gap})
+    return result
+
+
+class _PipelineContext:
+    """Shared pipeline state that persists across broadcast days.
+
+    Sequence and resolved stores are shared so that episode cursors
+    advance correctly from one day to the next.
+    """
+
+    def __init__(self):
+        from retrovue.catalog.static_asset_library import StaticAssetLibrary
+        from retrovue.runtime.phase3_schedule_service import (
+            InMemoryResolvedStore,
+            InMemorySequenceStore,
+            JsonFileProgramCatalog,
+        )
+        from retrovue.runtime.planning_pipeline import (
+            PlanningDirective,
+            ZoneDirective,
+        )
+        from retrovue.runtime.schedule_types import (
+            Phase3Config,
+            ProgramRef,
+            ProgramRefType,
+        )
+
+        self.catalog = JsonFileProgramCatalog(PROGRAMS_DIR)
+        self.catalog.load_all()
+
+        self.asset_library = StaticAssetLibrary(CATALOG_PATH)
+
+        self.sequence_store = InMemorySequenceStore()
+        self.resolved_store = InMemoryResolvedStore()
+
+        self.config = Phase3Config(
+            grid_minutes=30,
+            program_catalog=self.catalog,
+            sequence_store=self.sequence_store,
+            resolved_store=self.resolved_store,
+            filler_path=FILLER_PATH,
+            filler_duration_seconds=FILLER_DURATION_MS / 1000.0,
+            programming_day_start_hour=6,
+        )
+
+        self.directive = PlanningDirective(
+            channel_id=CHANNEL_ID,
+            grid_block_minutes=30,
+            programming_day_start_hour=6,
+            zones=[
+                ZoneDirective(
+                    start_time=time_type(6, 0),
+                    end_time=time_type(6, 0),  # same = full 24h wrap
+                    programs=[ProgramRef(ProgramRefType.PROGRAM, "cheers")],
+                    label="Cheers 24/7",
+                ),
+            ],
+        )
+
+    def generate_day(self, broadcast_date: date):
+        """Run the full planning pipeline for one broadcast date.
+
+        Returns a TransmissionLog.  Sequence cursors in the shared
+        store advance, so the next call picks up where this one left off.
+        """
+        from retrovue.runtime.planning_pipeline import (
+            PlanningRunRequest,
+            run_planning_pipeline,
+        )
+
+        run_req = PlanningRunRequest(
+            directive=self.directive,
+            broadcast_date=broadcast_date,
+            resolution_time=datetime(
+                broadcast_date.year, broadcast_date.month,
+                broadcast_date.day, 5, 0, 0,
+            ),
+        )
+        lock_time = datetime(
+            broadcast_date.year, broadcast_date.month,
+            broadcast_date.day, 5, 30, 0,
+        )
+        return run_planning_pipeline(
+            run_req, self.config, self.asset_library, lock_time=lock_time,
+        )
+
+
+def _run_pipeline():
+    """Run the planning pipeline for today (convenience wrapper).
+
+    Returns a TransmissionLog (48 blocks, Cheers 24/7, today's date).
+    Used by --dump and as the initial day in pipeline mode.
+    """
+    ctx = _PipelineContext()
+    return ctx.generate_day(date.today())
+
+
+def _episode_label(uri):
+    """Extract 'S01E01 Give Me a Ring Sometime' from asset URI."""
+    m = re.search(r"(S\d+E\d+)\s*-\s*([^[]+)", uri or "")
+    if m:
+        return f"{m.group(1)} {m.group(2).strip()}"
+    return os.path.basename(uri or "unknown")[:40]
+
+
+def _print_transmission_log(log):
+    """Print human-readable grid of the transmission log."""
+    print()
+    print(
+        f"Transmission Log: {log.channel_id}  "
+        f"date={log.broadcast_date}  locked={log.is_locked}"
+    )
+    print(f"Blocks: {len(log.entries)}")
+    print()
+    print(f"{'Block':>5}  {'Time':<13}  {'Episode':<40}  Segments")
+    print(f"{'─' * 5}  {'─' * 13}  {'─' * 40}  {'─' * 60}")
+
+    total_content_ms = 0
+    total_filler_ms = 0
+    total_pad_ms = 0
+    episode_uris: set[str] = set()
+
+    for entry in log.entries:
+        start_dt = datetime.fromtimestamp(
+            entry.start_utc_ms / 1000.0, tz=timezone.utc,
+        ).astimezone()
+        end_dt = datetime.fromtimestamp(
+            entry.end_utc_ms / 1000.0, tz=timezone.utc,
+        ).astimezone()
+        time_str = f"{start_dt:%H:%M}-{end_dt:%H:%M}"
+
+        # Episode label from first episode segment
+        ep_label = "\u2014"
+        for seg in entry.segments:
+            if seg["segment_type"] == "episode":
+                ep_label = _episode_label(seg.get("asset_uri"))
+                episode_uris.add(seg.get("asset_uri", ""))
+                break
+
+        # Segment summary
+        seg_parts = []
+        for seg in entry.segments:
+            t = seg["segment_type"]
+            dur_s = seg["segment_duration_ms"] // 1000
+            abbr = {
+                "episode": "ep", "filler": "fl", "pad": "pad",
+                "promo": "pr", "ad": "ad",
+            }.get(t, t[:3])
+            seg_parts.append(f"{abbr}:{dur_s}s")
+
+            if t == "episode":
+                total_content_ms += seg["segment_duration_ms"]
+            elif t in ("filler", "promo", "ad"):
+                total_filler_ms += seg["segment_duration_ms"]
+            elif t == "pad":
+                total_pad_ms += seg["segment_duration_ms"]
+
+        total_s = sum(
+            s["segment_duration_ms"] for s in entry.segments
+        ) // 1000
+        seg_str = " + ".join(seg_parts) + f" = {total_s}s"
+        print(
+            f"{entry.block_index:>5}  {time_str:<13}  "
+            f"{ep_label:<40}  {seg_str}"
+        )
+
+    print()
+    print(
+        f"Summary: {len(log.entries)} blocks, "
+        f"{len(episode_uris)} unique episodes"
+    )
+    print(
+        f"  Content: {total_content_ms / 1000:.0f}s "
+        f"({total_content_ms / 3_600_000:.1f}h)"
+    )
+    print(
+        f"  Filler:  {total_filler_ms / 1000:.0f}s "
+        f"({total_filler_ms / 3_600_000:.1f}h)"
+    )
+    print(
+        f"  Pad:     {total_pad_ms / 1000:.0f}s "
+        f"({total_pad_ms / 3_600_000:.1f}h)"
+    )
+    print()
 
 
 # ===========================================================================
@@ -163,6 +398,134 @@ class _StaticScheduleAdapter:
         return True, None
 
 
+class _RollingPipelineAdapter:
+    """Rolling schedule adapter that generates new days on demand.
+
+    Uses ``at_station_time`` (passed by ``_resolve_plan_for_block``) to
+    determine the broadcast date, then lazily generates and caches that
+    day's TransmissionLog via the shared ``_PipelineContext``.
+
+    Episode cursors advance correctly across day boundaries because
+    the context's sequence store persists across ``generate_day()`` calls.
+    """
+
+    def __init__(self, ctx: _PipelineContext, programming_day_start_hour: int = 6):
+        self._ctx = ctx
+        self._start_hour = programming_day_start_hour
+        self._day_cache: dict[date, list[dict]] = {}
+        self._lock = threading.Lock()
+
+    def _broadcast_date_for(self, dt: datetime) -> date:
+        """Determine which broadcast day a wall-clock time falls in.
+
+        Times before the programming day start hour belong to the
+        previous calendar day's broadcast day.
+        """
+        if dt.hour < self._start_hour:
+            return (dt - timedelta(days=1)).date()
+        return dt.date()
+
+    def get_playout_plan_now(self, channel_id: str, at_station_time) -> list[dict]:
+        bd = self._broadcast_date_for(at_station_time)
+        with self._lock:
+            if bd not in self._day_cache:
+                log = self._ctx.generate_day(bd)
+                self._day_cache[bd] = [
+                    {"segments": e.segments, "duration_ms": BLOCK_DURATION_MS}
+                    for e in log.entries
+                ]
+                logger.info(
+                    "BURN_IN: Generated schedule for %s (%d blocks)",
+                    bd.isoformat(), len(log.entries),
+                )
+            return self._day_cache[bd]
+
+    def load_schedule(self, channel_id: str):
+        return True, None
+
+
+# ===========================================================================
+# Horizon mode adapters
+# ===========================================================================
+
+
+class _PipelineScheduleExtender:
+    """Adapts _PipelineContext for HorizonManager's ScheduleExtender protocol.
+
+    Tracks which broadcast dates have been resolved.  The planning
+    pipeline resolves EPG as a side effect of generate_day().
+    """
+
+    def __init__(self):
+        self._resolved_dates: set[date] = set()
+
+    def epg_day_exists(self, broadcast_date: date) -> bool:
+        return broadcast_date in self._resolved_dates
+
+    def extend_epg_day(self, broadcast_date: date) -> None:
+        self._resolved_dates.add(broadcast_date)
+
+
+class _PipelineExecutionExtender:
+    """Adapts _PipelineContext for HorizonManager's ExecutionExtender protocol.
+
+    Returns ExecutionDayResult with entries for store population.
+    """
+
+    def __init__(self, ctx: _PipelineContext):
+        self._ctx = ctx
+
+    def extend_execution_day(self, broadcast_date: date):
+        from retrovue.runtime.execution_window_store import (
+            ExecutionDayResult,
+            ExecutionEntry,
+        )
+
+        log = self._ctx.generate_day(broadcast_date)
+        entries = [
+            ExecutionEntry(
+                block_id=e.block_id,
+                block_index=e.block_index,
+                start_utc_ms=e.start_utc_ms,
+                end_utc_ms=e.end_utc_ms,
+                segments=e.segments,
+            )
+            for e in log.entries
+        ]
+        end_ms = log.entries[-1].end_utc_ms if log.entries else 0
+        logger.info(
+            "HORIZON: Generated execution data for %s (%d blocks, "
+            "end_utc_ms=%d)",
+            broadcast_date.isoformat(), len(entries), end_ms,
+        )
+        return ExecutionDayResult(end_utc_ms=end_ms, entries=entries)
+
+
+class _HorizonScheduleAdapter:
+    """Schedule adapter that reads from ExecutionWindowStore.
+
+    Used in --horizon mode.  Entries are looked up by wall-clock time,
+    not by index modulo.  No direct pipeline calls.
+    """
+
+    def __init__(self, store):
+        self._store = store
+
+    def get_playout_plan_now(self, channel_id: str, at_station_time) -> list[dict]:
+        entries = self._store.get_all_entries()
+        return [
+            {
+                "segments": e.segments,
+                "duration_ms": BLOCK_DURATION_MS,
+                "start_utc_ms": e.start_utc_ms,
+            }
+            for e in entries
+        ]
+
+    def load_schedule(self, channel_id: str):
+        return True, None
+
+
 # ===========================================================================
 # Main
 # ===========================================================================
@@ -179,7 +542,30 @@ def main() -> None:
         default="tools/static_schedule.json",
         help="Path to static schedule JSON (default: tools/static_schedule.json)",
     )
+    parser.add_argument(
+        "--pipeline", action="store_true",
+        help="Use planning pipeline with rolling day adapter (legacy)",
+    )
+    parser.add_argument(
+        "--horizon", action="store_true",
+        help=(
+            "Use HorizonManager with ExecutionWindowStore "
+            "(contract-aligned, no modulo wrapping)"
+        ),
+    )
+    parser.add_argument(
+        "--dump", action="store_true",
+        help="Print transmission log and exit (implies --pipeline)",
+    )
     args = parser.parse_args()
+
+    horizon_mode = args.horizon
+    pipeline_mode = (args.pipeline or args.dump) and not horizon_mode
+
+    if args.dump:
+        log = _run_pipeline()
+        _print_transmission_log(log)
+        return
 
     port = int(os.environ.get("RETROVUE_BURN_IN_PORT", "8000"))
     use_test_assets = os.environ.get("RETROVUE_BURN_IN_TEST_ASSETS", "") == "1"
@@ -198,9 +584,64 @@ def main() -> None:
     # =====================================================================
     # 1. Build schedule service
     # =====================================================================
-    cycle_origin_utc_ms = 0
+    today = date.today()
+    day_start_dt = datetime(
+        today.year, today.month, today.day, 6, 0, 0, tzinfo=timezone.utc,
+    )
+    cycle_origin_utc_ms = int(day_start_dt.timestamp() * 1000)
 
-    if use_test_assets:
+    horizon_manager = None  # set only in --horizon mode
+
+    if horizon_mode:
+        from retrovue.runtime.clock import MasterClock
+        from retrovue.runtime.execution_window_store import ExecutionWindowStore
+        from retrovue.runtime.horizon_manager import HorizonManager
+
+        ctx = _PipelineContext()
+        # Generate today's log for the initial grid printout.
+        # The resolved store caches this, so HorizonManager won't re-resolve.
+        log = ctx.generate_day(today)
+        _print_transmission_log(log)
+
+        execution_store = ExecutionWindowStore()
+        schedule_extender = _PipelineScheduleExtender()
+        execution_extender = _PipelineExecutionExtender(ctx)
+
+        horizon_manager = HorizonManager(
+            schedule_manager=schedule_extender,
+            planning_pipeline=execution_extender,
+            master_clock=MasterClock(),
+            min_epg_days=3,
+            min_execution_hours=6,
+            evaluation_interval_seconds=30,
+            programming_day_start_hour=6,
+            execution_store=execution_store,
+        )
+
+        # Synchronous initial evaluation — populates the store before
+        # any viewer can connect.
+        horizon_manager.evaluate_once()
+        logger.info(
+            "HORIZON: Initial store populated: %d entries, "
+            "exec_depth=%.1fh, epg_depth=%.1fh",
+            len(execution_store.get_all_entries()),
+            horizon_manager.get_execution_depth_hours(),
+            horizon_manager.get_epg_depth_hours(),
+        )
+
+        schedule_service = _HorizonScheduleAdapter(execution_store)
+
+    elif pipeline_mode:
+        ctx = _PipelineContext()
+        log = ctx.generate_day(today)
+        _print_transmission_log(log)
+        schedule_service = _RollingPipelineAdapter(ctx)
+        # Seed the cache so the initial day isn't re-generated
+        schedule_service._day_cache[today] = [
+            {"segments": e.segments, "duration_ms": BLOCK_DURATION_MS}
+            for e in log.entries
+        ]
+    elif use_test_assets:
         logger.info("BURN_IN: Using test assets (SampleA.mp4, SampleB.mp4)")
         schedule_service = _TestAssetScheduleService()
     else:
@@ -436,7 +877,169 @@ def main() -> None:
                         segments=plan_segments,
                     )
 
-                producer._generate_next_block = _compose_block
+                # -------------------------------------------------------
+                # _compose_block_pipeline: pre-composed segments from
+                # the planning pipeline.  No episode/filler/pad rebuild;
+                # segments arrive ready-made.
+                # -------------------------------------------------------
+                def _compose_block_pipeline(playout_plan, *, jip_offset_ms=0):
+                    from retrovue.runtime.playout_session import BlockPlan
+
+                    idx = producer._block_index
+                    start_ms = producer._next_block_start_ms
+                    entry = playout_plan[idx % len(playout_plan)]
+                    block_dur_ms = BLOCK_DURATION_MS
+                    end_ms = start_ms + block_dur_ms
+
+                    # Deep-copy pre-composed segments
+                    plan_segments = [dict(s) for s in entry["segments"]]
+
+                    if jip_offset_ms > 0:
+                        plan_segments = _apply_jip_to_segments(
+                            plan_segments, jip_offset_ms, block_dur_ms,
+                        )
+                        logger.info(
+                            "BURN_IN: JIP block idx=%d "
+                            "jip_offset_ms=%d (%.1fs into block)",
+                            idx, jip_offset_ms, jip_offset_ms / 1000.0,
+                        )
+
+                    # Re-index contiguously
+                    for i, seg in enumerate(plan_segments):
+                        seg["segment_index"] = i
+
+                    # ---- Invariant: gap-free block -----------------
+                    total_ms = sum(
+                        s["segment_duration_ms"] for s in plan_segments
+                    )
+                    assert total_ms == block_dur_ms, (
+                        f"BURN_IN: segment sum {total_ms} != "
+                        f"block_dur {block_dur_ms}"
+                    )
+
+                    # ---- Validation: no internal:// URIs -----------
+                    for seg in plan_segments:
+                        uri = seg.get("asset_uri", "")
+                        assert "internal://" not in uri, (
+                            f"BURN_IN: internal:// forbidden, got '{uri}'"
+                        )
+
+                    block_id = f"BLOCK-{_ch_id_str}-{idx}"
+                    type_sums: dict[str, int] = {}
+                    for seg in plan_segments:
+                        t = seg["segment_type"]
+                        type_sums[t] = (
+                            type_sums.get(t, 0)
+                            + seg["segment_duration_ms"]
+                        )
+                    type_summary = " ".join(
+                        f"{t}={ms}ms" for t, ms in type_sums.items()
+                    )
+                    logger.info(
+                        "BURN_IN: %s %s segs=%d",
+                        block_id, type_summary, len(plan_segments),
+                    )
+
+                    return BlockPlan(
+                        block_id=block_id,
+                        channel_id=_ch_id_int,
+                        start_utc_ms=start_ms,
+                        end_utc_ms=end_ms,
+                        segments=plan_segments,
+                    )
+
+                # -------------------------------------------------------
+                # _compose_block_horizon: time-based lookup from
+                # ExecutionWindowStore.  No modulo wrapping — the
+                # correct entry is found by matching start_utc_ms.
+                # -------------------------------------------------------
+                def _compose_block_horizon(playout_plan, *, jip_offset_ms=0):
+                    from retrovue.runtime.playout_session import BlockPlan
+
+                    idx = producer._block_index
+                    start_ms = producer._next_block_start_ms
+                    block_dur_ms = BLOCK_DURATION_MS
+                    end_ms = start_ms + block_dur_ms
+
+                    # Time-based lookup — find the entry whose
+                    # start_utc_ms matches this block's start time.
+                    entry = None
+                    for e in playout_plan:
+                        if e.get("start_utc_ms") == start_ms:
+                            entry = e
+                            break
+
+                    if entry is None:
+                        raise RuntimeError(
+                            f"HORIZON: No execution entry for "
+                            f"start_utc_ms={start_ms} (block idx={idx}). "
+                            f"ExecutionWindowStore has "
+                            f"{len(playout_plan)} entries."
+                        )
+
+                    # Deep-copy pre-composed segments
+                    plan_segments = [dict(s) for s in entry["segments"]]
+
+                    if jip_offset_ms > 0:
+                        plan_segments = _apply_jip_to_segments(
+                            plan_segments, jip_offset_ms, block_dur_ms,
+                        )
+                        logger.info(
+                            "HORIZON: JIP block idx=%d "
+                            "jip_offset_ms=%d (%.1fs into block)",
+                            idx, jip_offset_ms, jip_offset_ms / 1000.0,
+                        )
+
+                    # Re-index contiguously
+                    for i, seg in enumerate(plan_segments):
+                        seg["segment_index"] = i
+
+                    # ---- Invariant: gap-free block -----------------
+                    total_ms = sum(
+                        s["segment_duration_ms"] for s in plan_segments
+                    )
+                    assert total_ms == block_dur_ms, (
+                        f"HORIZON: segment sum {total_ms} != "
+                        f"block_dur {block_dur_ms}"
+                    )
+
+                    # ---- Validation: no internal:// URIs -----------
+                    for seg in plan_segments:
+                        uri = seg.get("asset_uri", "")
+                        assert "internal://" not in uri, (
+                            f"HORIZON: internal:// forbidden, got '{uri}'"
+                        )
+
+                    block_id = f"BLOCK-{_ch_id_str}-{idx}"
+                    type_sums: dict[str, int] = {}
+                    for seg in plan_segments:
+                        t = seg["segment_type"]
+                        type_sums[t] = (
+                            type_sums.get(t, 0)
+                            + seg["segment_duration_ms"]
+                        )
+                    type_summary = " ".join(
+                        f"{t}={ms}ms" for t, ms in type_sums.items()
+                    )
+                    logger.info(
+                        "HORIZON: %s %s segs=%d",
+                        block_id, type_summary, len(plan_segments),
+                    )
+
+                    return BlockPlan(
+                        block_id=block_id,
+                        channel_id=_ch_id_int,
+                        start_utc_ms=start_ms,
+                        end_utc_ms=end_ms,
+                        segments=plan_segments,
+                    )
+
+                if horizon_mode:
+                    producer._generate_next_block = _compose_block_horizon
+                elif pipeline_mode:
+                    producer._generate_next_block = _compose_block_pipeline
+                else:
+                    producer._generate_next_block = _compose_block
                 return producer
 
             manager._build_producer_for_mode = build_blockplan_producer
@@ -479,6 +1082,10 @@ def main() -> None:
     # =====================================================================
     # 4. Start runtime
     # =====================================================================
+    if horizon_manager is not None:
+        horizon_manager.start()
+        logger.info("HORIZON: Background horizon maintenance started")
+
     director.start()
 
     url = f"http://localhost:{port}/channel/{CHANNEL_ID}.ts"
@@ -500,6 +1107,8 @@ def main() -> None:
     stop_event.wait()
 
     logger.info("Shutting down...")
+    if horizon_manager is not None:
+        horizon_manager.stop()
     director.stop()
     logger.info("Done.")
 

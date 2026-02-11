@@ -141,6 +141,29 @@ class VideoLookaheadBuffer {
   // or rises above HIGH_WATER (disable).
   void SetAudioBoost(bool enable);
 
+  // --- Bootstrap Phase (INV-AUDIO-PRIME-003) ---
+
+  // Fill-phase concept for session bootstrap.
+  // BOOTSTRAP: fill thread parks only when audio depth >= min_audio_ms
+  //            AND video depth >= bootstrap_target, OR video >= cap.
+  // STEADY:    normal steady-state policy (video depth only).
+  enum class FillPhase { kBootstrap, kSteady };
+
+  // Enter bootstrap phase.  Must be called AFTER StartFilling().
+  // bootstrap_target_frames: computed target for bootstrap
+  //   (typically max(target, ceil(min_audio_ms * input_fps / 1000) + margin))
+  // bootstrap_cap_frames: hard upper bound on video depth during bootstrap.
+  // min_audio_ms: audio depth threshold that ends bootstrap parking.
+  void EnterBootstrap(int bootstrap_target_frames,
+                      int bootstrap_cap_frames,
+                      int min_audio_ms);
+
+  // Exit bootstrap phase, restoring steady-state fill policy.
+  void EndBootstrap();
+
+  // Current fill phase (observable).
+  FillPhase GetFillPhase() const;
+
   // P95 decode latency in microseconds (from last kLatencyRingSize decodes).
   // Returns 0 when no decodes have occurred.
   int64_t DecodeLatencyP95Us() const;
@@ -164,6 +187,12 @@ class VideoLookaheadBuffer {
   int target_depth_frames_;
   int low_water_frames_;
   std::atomic<bool> audio_boost_{false};
+
+  // INV-AUDIO-PRIME-003: Bootstrap fill phase state.
+  std::atomic<int> fill_phase_{static_cast<int>(FillPhase::kSteady)};
+  int bootstrap_target_frames_ = 0;
+  int bootstrap_cap_frames_ = 60;
+  int bootstrap_min_audio_ms_ = 500;
 
   // INV-TICK-GUARANTEED-OUTPUT: Audio burst-fill threshold.
   // When audio_buffer_->DepthMs() < this, the fill thread proceeds past

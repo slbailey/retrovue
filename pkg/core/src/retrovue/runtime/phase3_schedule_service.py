@@ -337,6 +337,21 @@ class Phase3ScheduleService:
                 resolution_time=now,
             )
 
+        # Day-prime: resolve the next programming day so day-boundary
+        # crossings find content immediately (same pattern as get_epg_events).
+        next_day_date = programming_day_date + timedelta(days=1)
+        if not self._resolved_store.exists(channel_id, next_day_date):
+            self._logger.info(
+                "Day-prime: resolving next programming day %s for channel %s",
+                next_day_date, channel_id,
+            )
+            self._manager.resolve_schedule_day(
+                channel_id=channel_id,
+                programming_day_date=next_day_date,
+                slots=slots,
+                resolution_time=now,
+            )
+
         # Get program block from manager
         block = self._manager.get_program_at(channel_id, now)
         if not block or not block.segments:
