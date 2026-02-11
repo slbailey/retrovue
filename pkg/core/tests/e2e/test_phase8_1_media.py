@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 import requests
 
+pytestmark = pytest.mark.skip(reason="E2E test requires Air binary and runtime environment")
+
 # Reuse Phase 8.0 proto/grpc loading
 _PROTO_DIR = Path(__file__).resolve().parents[2] / "core" / "proto" / "retrovue"
 try:

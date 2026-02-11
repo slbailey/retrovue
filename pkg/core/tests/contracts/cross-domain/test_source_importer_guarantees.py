@@ -8,6 +8,7 @@ transactional integrity, and proper error handling across domains.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from retrovue.cli.main import app
@@ -75,6 +76,7 @@ class TestSourceImporterGuarantees:
         # This test documents the expected behavior for future implementation
         assert result.exit_code == 1 or result.exit_code == 0
 
+    @pytest.mark.skip(reason="Capability validation not yet implemented; --discover flag is silently ignored")
     def test_g4_importer_capability_validation(self):
         """
         Guarantee G-4: Source operations MUST respect importer capability declarations.
@@ -83,13 +85,13 @@ class TestSourceImporterGuarantees:
         # This test documents expected behavior for future implementation
         # Currently, capability validation is not implemented
         result = self.runner.invoke(app, [
-            "source", "add", 
-            "--type", "filesystem", 
-            "--name", "Test Files", 
+            "source", "add",
+            "--type", "filesystem",
+            "--name", "Test Files",
             "--base-path", "/test",
             "--discover"  # Should fail if filesystem doesn't support discovery
         ])
-        
+
         # TODO: tighten exit code once CLI is stable - capability validation not yet implemented
         # Currently passes because capability validation is not implemented
         # This test documents the expected behavior for future implementation

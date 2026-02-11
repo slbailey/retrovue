@@ -449,6 +449,26 @@ class SequenceState:
 
 
 @dataclass
+class ProgramEvent:
+    """A single scheduled airing — the canonical editorial unit.
+
+    Per docs/domains/ProgramEventSchedulingModel_v0.1.md:
+    - duration_ms is intrinsic program runtime, not grid occupancy
+    - Grid occupancy = block_span_count * grid_block_ms
+    - start_utc_ms MUST align to grid block boundaries
+    - Episode cursor advances once per ProgramEvent, not per block
+    """
+    id: str
+    program_id: str
+    episode_id: str
+    start_utc_ms: int
+    duration_ms: int
+    block_span_count: int
+    metadata: dict = field(default_factory=dict)
+    resolved_asset: ResolvedAsset | None = None
+
+
+@dataclass
 class ResolvedScheduleDay:
     """
     A ScheduleDay with all content resolved to specific assets.
@@ -461,9 +481,10 @@ class ResolvedScheduleDay:
     INV-P3-008: Resolution Idempotence - same (channel, day) resolved at most once.
     """
     programming_day_date: date
-    resolved_slots: list[ResolvedSlot]  # Ordered by slot_time
+    resolved_slots: list[ResolvedSlot]  # Per-block asset details for Stage 3+
     resolution_timestamp: datetime      # When this day was resolved
     sequence_state: SequenceState       # State snapshot at resolution time
+    program_events: list[ProgramEvent] = field(default_factory=list)
 
 
 @dataclass

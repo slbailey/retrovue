@@ -8,7 +8,7 @@ Implements ScheduleManager protocol as defined in:
     docs/contracts/runtime/ScheduleManagerPhase3Contract.md (Phase 3)
 """
 
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from fractions import Fraction
 import hashlib
 import math
@@ -26,6 +26,7 @@ from retrovue.runtime.schedule_types import (
     # Phase 3 types
     ProgramRefType,
     ProgramRef,
+    ProgramEvent,
     ScheduleSlot,
     Episode,
     Program,
@@ -631,6 +632,7 @@ class Phase3ScheduleManager:
         INV-P3-003: Resolution Independence - EPG exists even with no viewers.
         """
         events = []
+        grid_seconds = self._config.grid_minutes * 60
 
         # Normalize times for comparison (strip timezone if needed)
         start_naive = start_time.replace(tzinfo=None) if start_time.tzinfo else start_time
@@ -643,16 +645,40 @@ class Phase3ScheduleManager:
             day_date = self._get_programming_day_date(current)
             resolved = self._config.resolved_store.get(channel_id, day_date)
 
-            if resolved:
+            if resolved and resolved.program_events:
+                slot_idx = 0
+                for pe in resolved.program_events:
+                    first_slot = resolved.resolved_slots[slot_idx]
+                    event_start = self._slot_to_datetime(day_date, first_slot.slot_time)
+                    event_end = event_start + timedelta(
+                        seconds=pe.block_span_count * grid_seconds
+                    )
+
+                    if event_start < end_naive and event_end > start_naive:
+                        if has_tz:
+                            event_start = event_start.replace(tzinfo=start_time.tzinfo)
+                            event_end = event_end.replace(tzinfo=start_time.tzinfo)
+
+                        resolved_asset = pe.resolved_asset or first_slot.resolved_asset
+                        events.append(EPGEvent(
+                            channel_id=channel_id,
+                            start_time=event_start,
+                            end_time=event_end,
+                            title=resolved_asset.title,
+                            episode_title=resolved_asset.episode_title,
+                            episode_id=resolved_asset.episode_id,
+                            resolved_asset=resolved_asset,
+                            programming_day_date=day_date,
+                        ))
+
+                    slot_idx += pe.block_span_count
+            elif resolved:
+                # Legacy fallback for days without program_events
                 for slot in resolved.resolved_slots:
                     slot_start = self._slot_to_datetime(day_date, slot.slot_time)
-                    # INV-P4-001: EPG uses grid-aligned duration (minimum blocks)
-                    # slot.duration_seconds was computed during resolution as
-                    # ceil(content_duration / grid) * grid
                     slot_end = slot_start + timedelta(seconds=slot.duration_seconds)
 
                     if slot_start < end_naive and slot_end > start_naive:
-                        # Add timezone back if original times had one
                         if has_tz:
                             slot_start = slot_start.replace(tzinfo=start_time.tzinfo)
                             slot_end = slot_end.replace(tzinfo=start_time.tzinfo)
@@ -689,6 +715,10 @@ class Phase3ScheduleManager:
         This is the Editorial Resolution Pass. All content decisions
         are made here. Once resolved, the EPG identity is immutable.
 
+        Episode selection and cursor advancement happen once per ProgramEvent,
+        not once per grid block. A 90-minute movie spanning 3 blocks selects
+        one episode and advances the cursor once.
+
         INV-P3-008: Resolution Idempotence - if already resolved, return cached.
         INV-P3-002: EPG Identity Immutability - resolved content cannot change.
         """
@@ -697,32 +727,59 @@ class Phase3ScheduleManager:
         if existing is not None:
             return existing
 
-        # Resolve each slot
         resolved_slots = []
+        program_events = []
         grid_seconds = self._config.grid_minutes * 60
 
-        for slot in slots:
+        slot_idx = 0
+        while slot_idx < len(slots):
+            slot = slots[slot_idx]
+
+            # Resolve content once per ProgramEvent (not per block)
             resolved_asset = self._resolve_program_ref(
                 channel_id, slot.program_ref, programming_day_date, slot.slot_time
             )
 
-            # INV-P4-001: Minimum Grid Occupancy
-            # Compute exactly ceil(content_duration / grid) blocks
+            # Derive block span from content duration
             content_duration = resolved_asset.content_duration_seconds
             if content_duration > 0:
-                blocks_required = math.ceil(content_duration / grid_seconds)
-                actual_duration = blocks_required * grid_seconds
+                block_span = math.ceil(content_duration / grid_seconds)
             else:
-                # Fallback to slot duration if content duration unknown
-                actual_duration = slot.duration_seconds
+                block_span = 1
+            grid_occupancy_seconds = block_span * grid_seconds
 
-            resolved_slots.append(ResolvedSlot(
-                slot_time=slot.slot_time,
-                program_ref=slot.program_ref,
+            # Create ProgramEvent
+            slot_start_dt = self._slot_to_datetime(
+                programming_day_date, slot.slot_time
+            )
+            utc_dt = slot_start_dt.replace(tzinfo=timezone.utc)
+            start_utc_ms = int(utc_dt.timestamp() * 1000)
+            event_id = (
+                f"{channel_id}-{programming_day_date.isoformat()}-evt{slot_idx:04d}"
+            )
+            program_events.append(ProgramEvent(
+                id=event_id,
+                program_id=slot.program_ref.ref_id,
+                episode_id=resolved_asset.episode_id or "",
+                start_utc_ms=start_utc_ms,
+                duration_ms=int(content_duration * 1000),
+                block_span_count=block_span,
                 resolved_asset=resolved_asset,
-                duration_seconds=actual_duration,
-                label=slot.label,
             ))
+
+            # ResolvedSlots carry per-block asset details for Stage 3+.
+            consumed = min(block_span, len(slots) - slot_idx)
+            for block_offset in range(consumed):
+                s = slots[slot_idx + block_offset]
+                resolved_slots.append(ResolvedSlot(
+                    slot_time=s.slot_time,
+                    program_ref=slot.program_ref,
+                    resolved_asset=resolved_asset,
+                    duration_seconds=grid_occupancy_seconds,
+                    label=slot.label,
+                ))
+
+            slot_idx += consumed
 
         # Capture sequence state snapshot
         sequence_state = SequenceState(
@@ -735,6 +792,7 @@ class Phase3ScheduleManager:
             resolved_slots=resolved_slots,
             resolution_timestamp=resolution_time,
             sequence_state=sequence_state,
+            program_events=program_events,
         )
 
         # Store for idempotence (INV-P3-008)

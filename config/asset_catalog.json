@@ -1,0 +1,598 @@
+{
+  "catalog_version": 1,
+  "generated_at": "2026-02-11T12:29:21.182396+00:00",
+  "assets": {
+    "/opt/retrovue/assets/Cheers (1982) - S01E01 - Give Me a Ring Sometime [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1501653,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 153445,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 741908,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1465756,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/opt/retrovue/assets/Cheers (1982) - S01E02 - Sams Women [AMZN WEBDL-720p][AAC 2.0][x264]-Trollhd.mp4": {
+      "duration_ms": 1333457,
+      "asset_type": "episode",
+      "markers": []
+    },
+    "/opt/retrovue/assets/Cheers (1982) - S01E03 - The Tortelli Tort [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1499904,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 143143,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 639973,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1463587,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/opt/retrovue/assets/filler.mp4": {
+      "duration_ms": 3650455,
+      "asset_type": "filler",
+      "markers": []
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E01 - Give Me a Ring Sometime [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1501653,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 153445,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 741908,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1465756,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E02 - Sams Women [AMZN WEBDL-720p][AAC 2.0][x264]-Trollhd.mp4": {
+      "duration_ms": 1333457,
+      "asset_type": "episode",
+      "markers": []
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E03 - The Tortelli Tort [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1499904,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 143143,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 639973,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1463587,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E04 - Sam at Eleven [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1499946,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 189439,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 655738,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1463629,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E05 - Coachs Daughter [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1497472,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 97097,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 614864,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1461502,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E06 - Any Friend of Diane's [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1500842,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 125375,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 745912,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1464505,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E07 - Friends Romans Accountants [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1488554,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 124333,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 766057,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1452785,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E08 - Truce or Consequences [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1497941,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 101101,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 804804,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1461627,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E09 - Coach Returns to Action [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1499008,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 148231,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 913204,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1462670,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E10 - Endless Slumper [AMZN WEBDL-720p][AAC 2.0][x264]-Trollhd.mp4": {
+      "duration_ms": 1499497,
+      "asset_type": "episode",
+      "markers": []
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E11 - One for the Book [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1472064,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 147230,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 727727,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1435643,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E12 - The Spy Who Came in for a Cold One [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1499904,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 149358,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 821154,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1463545,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E13 - Now Pitching Sam Malone [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1456256,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 132382,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 828161,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1419710,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E14 - Let Me Count the Ways [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1454101,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 136178,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 693985,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1417499,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E15 - Father Knows Last [Bluray-720p Proper][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1452266,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 177344,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 665832,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1415539,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E16 - The Boys in the Bar [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1448597,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 160327,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 716007,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1412494,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E17 - Dianes Perfect Date [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1450517,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 155322,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 645895,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1414496,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E18 - No Contest [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1453226,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 183475,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 686728,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1416498,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E19 - Pick a Con. Any Con [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1452058,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 144227,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 709834,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1415539,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E20 - Someone Single Someone Blue [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1452672,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 147230,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 788079,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1416498,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E21 - Showdown 1 [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1450090,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 196196,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 653903,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1414163,
+          "label": "Chapter 4"
+        }
+      ]
+    },
+    "/mnt/data/media/tv/Cheers (1982) {imdb-tt0083399}/Season 01/Cheers (1982) - S01E22 - Showdown 2 [Bluray-720p][AAC 2.0][x264]-Bordure.mp4": {
+      "duration_ms": 1443968,
+      "asset_type": "episode",
+      "markers": [
+        {
+          "kind": "chapter",
+          "offset_ms": 0,
+          "label": "Chapter 1"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 123373,
+          "label": "Chapter 2"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 884926,
+          "label": "Chapter 3"
+        },
+        {
+          "kind": "chapter",
+          "offset_ms": 1407489,
+          "label": "Chapter 4"
+        }
+      ]
+    }
+  }
+}

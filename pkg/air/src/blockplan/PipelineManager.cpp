@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -533,15 +534,6 @@ void PipelineManager::Run() {
   TryKickoffBlockPreload(0);
 
   // ========================================================================
-  // 5b. START OUTPUT CLOCK (monotonic epoch) — after blocking I/O completes.
-  // INV-TICK-MONOTONIC-UTC-ANCHOR-001: Tick deadline enforcement anchored
-  // to monotonic clock, captured here so tick 0 is not born late.
-  // Separated from UTC schedule epoch (captured above) to prevent
-  // probe+open+seek latency from triggering a starvation spiral.
-  // ========================================================================
-  clock.Start();
-
-  // ========================================================================
   // 6. MAIN LOOP
   // ========================================================================
   // Convenience: get ITickProducer* for live_ (refreshed after swaps)
@@ -606,6 +598,125 @@ void PipelineManager::Run() {
     live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
     ComputeSegmentSeamFrames();
     ArmSegmentPrep(session_frame_index);
+
+    // ====================================================================
+    // INV-AUDIO-PRIME-002: Hard gate — do not start tick loop until
+    // AudioLookaheadBuffer depth >= kMinAudioPrimeMs.
+    //
+    // StartFilling() consumed the primed frame synchronously (pushing its
+    // audio into the AudioLookaheadBuffer) and spawned the fill thread.
+    // The fill thread decodes at faster-than-real-time, but at cold start
+    // the primed audio may be insufficient (PrimeFirstTick shortfall on
+    // cold file cache / slow I/O).  Without this gate, tick 0 consumes
+    // the shallow buffer immediately, causing AUDIO_UNDERFLOW_SILENCE and
+    // garbled TS on first playout.
+    //
+    // The gate gives the fill thread wall-clock time to build depth.
+    // Typical wait: 50-200ms.  Bounded by the same 2-second timeout used
+    // in PrimeFirstTick.  If timeout expires, degrade gracefully (same
+    // behavior as before this gate existed).
+    //
+    // Gate threshold is kMinAudioPrimeMs (500ms) — the same value the
+    // system uses for PrimeFirstTick.  One threshold, one enforcement.
+    // ====================================================================
+    {
+      constexpr int kGateTimeoutMs = 2000;
+      constexpr int kMarginFrames = 8;
+      constexpr int kBootstrapCapFrames = 60;
+
+      auto gate_start = std::chrono::steady_clock::now();
+      int depth_ms = audio_buffer_->DepthMs();
+
+      // INV-AUDIO-PRIME-003: Bootstrap fill phase.
+      // The fill thread parks when video_depth >= target_depth_frames_ (15).
+      // With cadence active (23.976→30), 15 pushed frames yield only ~490ms
+      // audio — below the 500ms gate threshold.  Enter BOOTSTRAP phase so
+      // the fill thread continues decoding until audio depth is satisfied,
+      // bounded by a hard video cap.
+      //
+      // GetInputFPS() may return 0 if the decoder hasn't finished probing
+      // (cold start, slow NFS).  Fall back to 24.0 fps — a conservative
+      // estimate that covers 23.976 (NTSC film) through 25 (PAL).
+      constexpr double kFallbackInputFps = 24.0;
+      double input_fps = live_tp()->GetInputFPS();
+      if (input_fps <= 0.0) input_fps = kFallbackInputFps;
+      int bootstrap_target = std::max(
+          video_buffer_->TargetDepthFrames(),
+          static_cast<int>(std::ceil(
+              kMinAudioPrimeMs * input_fps / 1000.0)) + kMarginFrames);
+      video_buffer_->EnterBootstrap(
+          bootstrap_target, kBootstrapCapFrames, kMinAudioPrimeMs);
+
+      std::cout << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_start"
+                << " audio_depth_ms=" << depth_ms
+                << " video_depth=" << video_buffer_->DepthFrames()
+                << " steady_target=" << video_buffer_->TargetDepthFrames()
+                << " bootstrap_target=" << bootstrap_target
+                << " bootstrap_cap=" << kBootstrapCapFrames
+                << std::endl;
+
+      while (depth_ms < kMinAudioPrimeMs) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - gate_start).count();
+        if (elapsed >= kGateTimeoutMs) {
+          std::cerr << "[PipelineManager] INV-AUDIO-PRIME-002: gate timeout"
+                    << " depth_ms=" << depth_ms
+                    << " required=" << kMinAudioPrimeMs
+                    << " elapsed_ms=" << elapsed << std::endl;
+          break;
+        }
+        if (ctx_->stop_requested.load(std::memory_order_acquire)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        depth_ms = audio_buffer_->DepthMs();
+      }
+
+      // Restore steady-state fill policy.
+      video_buffer_->EndBootstrap();
+
+      auto gate_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - gate_start).count();
+
+      std::cout << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_end"
+                << " audio_depth_ms=" << audio_buffer_->DepthMs()
+                << " video_depth=" << video_buffer_->DepthFrames()
+                << " steady_target=" << video_buffer_->TargetDepthFrames()
+                << " gate_ms=" << gate_elapsed
+                << std::endl;
+    }
+  }
+
+  // ========================================================================
+  // 5b. START OUTPUT CLOCK (monotonic epoch) — after audio depth gate.
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001: Tick deadline enforcement anchored
+  // to monotonic clock.  Captured AFTER the audio depth gate so tick 0 is
+  // not born late.  The gate ensures the AudioLookaheadBuffer has enough
+  // runway to survive initial consumption without underflow.
+  //
+  // INV-FENCE-WALLCLOCK-ANCHOR: Re-anchor session_epoch_utc_ms_ to the
+  // actual tick-loop start time.  The original join_utc_ms was captured
+  // by Core BEFORE subprocess spawn, gRPC connect, encoder open, probe,
+  // prime, and audio gate — adding a fixed offset D (typically 2-3s).
+  // Fences computed off join_utc_ms overshoot by exactly D seconds.
+  // Re-anchoring to system_clock::now() at clock.Start() eliminates D,
+  // making block fences hit wall-clock grid boundaries.
+  // ========================================================================
+  clock.Start();
+  {
+    int64_t join_epoch = session_epoch_utc_ms_;
+    session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t D_ms = session_epoch_utc_ms_ - join_epoch;
+    std::cout << "[PipelineManager] INV-FENCE-WALLCLOCK-ANCHOR:"
+              << " join_utc_ms=" << join_epoch
+              << " clock_start_utc_ms=" << session_epoch_utc_ms_
+              << " D_ms=" << D_ms << std::endl;
+
+    // Recompute first block's fence with corrected epoch.
+    if (live_tp()->GetState() == ITickProducer::State::kReady) {
+      block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
+      remaining_block_frames_ = block_fence_frame_ - session_frame_index;
+      if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
+    }
   }
   // P3.3: Seam transition tracking
   std::string prev_completed_block_id;
@@ -1121,7 +1232,9 @@ void PipelineManager::Run() {
       }
 
       if (callbacks_.on_block_completed) {
-        callbacks_.on_block_completed(outgoing_block, session_frame_index);
+        // ct_at_fence_ms is the actual content time (from decoded PTS),
+        // not session_frame_index.  The proto field is final_ct_ms.
+        callbacks_.on_block_completed(outgoing_block, ct_at_fence_ms);
       }
       {
         std::lock_guard<std::mutex> lock(metrics_mutex_);

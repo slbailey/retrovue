@@ -217,7 +217,7 @@ def source_persist_collections(
 ) -> bool:
     """
     Persist discovered collections to database.
-    
+
     Contract: SourceDiscoverContract.md
     Test: test_source_discover_contract.py
     """
@@ -227,11 +227,33 @@ def source_persist_collections(
     else:
         db = session()
         should_close = True
-    
+
     try:
-        # TODO: Implement collection persistence
-        # For now, just return True
+        source = _resolve_source_by_id(db, source_id)
+        if not source:
+            return False
+        for coll in collections:
+            config = {}
+            for key, value in coll.items():
+                if key not in ("external_id", "name", "http_status"):
+                    config[key] = value
+            if "type" not in config:
+                config["type"] = coll.get("type", "unknown")
+            c = Collection(
+                source_id=source.id,
+                external_id=str(coll["external_id"]),
+                name=coll["name"],
+                sync_enabled=False,
+                ingestible=False,
+                config=config or None,
+            )
+            db.add(c)
+        db.commit()
         return True
+    except Exception:
+        if db_session is None and db.in_transaction():
+            db.rollback()
+        raise
     finally:
         if should_close:
             db.close()
@@ -1392,8 +1414,8 @@ def discover_collections(
     """
     with session() as db:
         try:
-            # Get the source first to validate it exists
-            source = source_get_by_id(source_id)
+            # Resolve source using this session so it stays attached (avoid detached instance errors)
+            source = _resolve_source_by_id(db, source_id)
             if not source:
                 typer.echo(f"Error: Source '{source_id}' not found", err=True)
                 raise typer.Exit(1)
@@ -1506,7 +1528,7 @@ def discover_collections(
                     for summary in collection_summaries:
                         typer.echo(f"  • {summary['name']} (ID: {summary['external_id']}) - Disabled by default")
                     typer.echo()
-                    typer.echo("Use 'retrovue collection update <name> --sync-enabled true' to enable collections for sync")
+                    typer.echo("Use 'retrovue collection update <name> --sync-enable' to enable collections for sync")
                     
         except Exception as e:
             typer.echo(f"Error discovering collections: {e}", err=True)
@@ -1546,7 +1568,7 @@ def source_ingest(
             
             if not collections:
                 typer.echo(f"No sync-enabled collections found for source '{source.name}'")
-                typer.echo("Use 'retrovue collection update <name> --sync-enabled true' to enable collections")
+                typer.echo("Use 'retrovue collection update <name> --sync-enable' to enable collections")
                 return
             
             # Filter to only ingestible collections using persisted field

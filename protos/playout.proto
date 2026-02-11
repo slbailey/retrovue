@@ -275,9 +275,7 @@ message StartBlockPlanSessionRequest {
   int32 channel_id = 1;
   BlockPlan block_a = 2;         // First block (executing)
   BlockPlan block_b = 3;         // Second block (pending)
-  int64 join_utc_ms = 4;         // Join time for mid-block join (0 = block_a.start)
-
-  // Program format for encoding (same as StartChannelRequest)
+  int64 join_utc_ms = 4;         // Join time for mid-block join (0 = block_a.start)  // Program format for encoding (same as StartChannelRequest)
   string program_format_json = 10;
 }
 

@@ -785,7 +785,9 @@ class CollectionIngestService:
             # Map common enricher-derived labels onto asset fields
             try:
                 labels = getattr(item, "raw_labels", None)
-                
+                if labels is None and isinstance(item, dict):
+                    labels = item.get("raw_labels")
+
                 duration_val = _extract_label_value(labels, "duration_ms")
                 if duration_val is not None:
                     try:
@@ -801,9 +803,18 @@ class CollectionIngestService:
                 container_val = _extract_label_value(labels, "container")
                 if container_val is not None:
                     asset.container = container_val
-                
             except Exception:
                 pass
+            # When ffprobe (or other enricher) provides duration in probed but not in labels, set asset.duration_ms
+            if asset.duration_ms is None:
+                try:
+                    rf = handler_resolved_fields if isinstance(handler_resolved_fields, dict) else {}
+                    probed = rf.get("probed") or {}
+                    dm = probed.get("duration_ms")
+                    if dm is not None:
+                        asset.duration_ms = int(dm)
+                except Exception:
+                    pass
             # Persist when not a dry run
             if not dry_run:
                 repo.create(asset)

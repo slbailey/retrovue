@@ -143,6 +143,11 @@ try:
         ["channel_id"],
         buckets=[0, 500, 1000, 2000, 5000, 10000, 30000, 60000],
     )
+    feed_ahead_late_decision_total = Counter(
+        "retrovue_feed_ahead_late_decision_total",
+        "Count of blocks fed after start_utc_ms where deadline was noticed on time",
+        ["channel_id"],
+    )
     feed_credits_at_decision = Histogram(
         "retrovue_feed_credits_at_decision",
         "Available feed credits when _feed_ahead evaluates",
@@ -163,6 +168,7 @@ except ImportError:
     feed_ahead_horizon_target_ms = None
     feed_ahead_ready_by_miss_total = None
     feed_ahead_miss_lateness_ms = None
+    feed_ahead_late_decision_total = None
     feed_credits_at_decision = None
     feed_error_backoff_total = None
 

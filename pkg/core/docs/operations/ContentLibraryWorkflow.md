@@ -57,14 +57,18 @@ Verification: `retrovue collection list --source "Local Media"` should show Sync
 
 ### 4) (Optional) Attach ingest enrichers to a collection
 
-Attach an enricher to run during ingest (e.g., ffprobe metadata).
+Attach an enricher to run during ingest (e.g., ffprobe metadata). **For TV shows, attaching the ffprobe enricher is recommended** so that duration is probed from each media file and stored on the asset; episode id, title, and description are already captured from Plex into the asset’s editorial payload.
 
 ```bash
+# Create an ffprobe enricher instance if you don't have one
+retrovue enricher add --type ingest --name "FFprobe" --help   # then add with desired options
+
 # List configured enricher instances (and/or add one via `retrovue enricher ...`)
 retrovue enricher list
 
 # Attach to a collection with a priority (lower runs first)
 retrovue collection attach-enricher "Movies" enricher-ffprobe-1 --priority 1
+retrovue collection attach-enricher "TV Shows" enricher-ffprobe-1 --priority 1
 
 # Detach when needed
 retrovue collection detach-enricher "Movies" enricher-ffprobe-1

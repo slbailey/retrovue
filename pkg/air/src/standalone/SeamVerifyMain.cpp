@@ -158,10 +158,10 @@ int main(int argc, char** argv) {
   std::mutex fp_mu;
 
   PipelineManager::Callbacks callbacks;
-  callbacks.on_block_completed = [&](const FedBlock& block, int64_t frame_idx) {
+  callbacks.on_block_completed = [&](const FedBlock& block, int64_t final_ct_ms) {
     std::lock_guard<std::mutex> lock(mu);
     completed_blocks.push_back(block.block_id);
-    fence_indices.push_back(frame_idx);
+    fence_indices.push_back(final_ct_ms);  // actual content time at fence
     cv.notify_all();
   };
   callbacks.on_session_ended = [&](const std::string& reason) {
