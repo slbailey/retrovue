@@ -870,7 +870,21 @@ def lock_for_execution(
     """Mark the Transmission Log as execution-eligible and immutable.
 
     This is a lifecycle state transition, not a data transform.
+    Validates seam invariants before marking execution-eligible.
     """
+    from retrovue.runtime.transmission_log_validator import (
+        TransmissionLogSeamError,
+        validate_transmission_log_seams,
+    )
+
+    grid_min = log.metadata.get("grid_block_minutes")
+    if grid_min is None:
+        raise TransmissionLogSeamError(
+            "lock_for_execution: grid_block_minutes missing from log.metadata; "
+            "cannot validate seam invariants"
+        )
+    validate_transmission_log_seams(log, int(grid_min))
+
     new_metadata = dict(log.metadata)
     new_metadata["locked_at"] = lock_time.isoformat()
 
