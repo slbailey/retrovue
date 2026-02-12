@@ -122,6 +122,17 @@ See: `pkg/core/tests/contracts/architecture/test_phase8_decommission_contract.py
 
 ---
 
+## Deprecated Contracts (removed by this decommission)
+
+The following contracts described behavior that is no longer available; they are marked deprecated and retained for reference only:
+
+- **PlaylistScheduleManagerContract.md** — Playlist execution via `load_playlist()` and playlist-driven tick. Deprecated → Removed by Phase8DecommissionContract.
+- **ScheduleManagerContract.md** § LoadPreview / § SwitchToLive and related (CT-domain switching, INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION, INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY) — Per-segment LoadPreview/SwitchToLive RPC orchestration by Core. Deprecated → Removed by Phase8DecommissionContract.
+- **ScheduleManagerPhase7Contract.md** (segment transitions, prebuffering, LoadPreview/SwitchToLive ordering) — Deprecated → Removed by Phase8DecommissionContract.
+- **ScheduleManagerPhase8Contract.md** (Timeline Controller, segment mapping for preview/live switching) — Deprecated → Removed by Phase8DecommissionContract.
+
+---
+
 ## References
 
 - `pkg/core/docs/contracts/runtime/INV-CANONICAL-BOOTSTRAP.md` — Single bootstrap path (blockplan_only guard)

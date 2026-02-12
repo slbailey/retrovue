@@ -2,6 +2,8 @@
 
 Status: Design (pre-implementation)
 
+**Deprecated (LoadPreview / SwitchToLive):** Sections describing per-segment LoadPreview/SwitchToLive orchestration, CT-domain switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION, INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY), and validation at LoadPreview time are **deprecated → Removed by Phase8DecommissionContract.** The only valid runtime path is BlockPlan; Core no longer issues LoadPreview/SwitchToLive.
+
 ## Purpose
 
 ScheduleManager provides playout instructions to ChannelManager. It answers the question: "What should be playing right now, and what comes next?"

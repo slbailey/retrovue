@@ -2,6 +2,8 @@ _Related: [Playlist Architecture](../../architecture/PlaylistArchitecture.md) ·
 
 # Playlist ScheduleManager Contract
 
+**Deprecated → Removed by Phase8DecommissionContract.** No runtime can load or execute a Playlist; the only valid playout path is BlockPlan. This contract is retained for reference only.
+
 Status: **Accepted** — Frozen 2026-02-07. Do not modify unless a new invariant is discovered.
 
 ---

@@ -747,15 +747,11 @@ class ProgramDirector:
                         2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc
                     )
                 cfg = channel_config
-                # INV-PLAYOUT-AUTHORITY: Delegate to ChannelManager's own
-                # _build_producer_for_mode when a Playlist is loaded.
-                # Otherwise fall through to the PD producer factory (BlockPlan).
+                # Phase8DecommissionContract: ChannelManager always uses BlockPlanProducer.
                 _cm_build = ChannelManager._build_producer_for_mode
 
                 def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
-                    if getattr(manager, '_playlist', None) is not None:
-                        return _cm_build(manager, mode)
-                    return self._producer_factory(channel_id, mode, {}, channel_config=cfg)
+                    return _cm_build(manager, mode)
                 manager._build_producer_for_mode = factory_wrapper
                 self._managers[channel_id] = manager
                 self._logger.info(
