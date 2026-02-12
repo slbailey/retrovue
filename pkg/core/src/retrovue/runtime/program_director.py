@@ -403,8 +403,8 @@ class ProgramDirector:
     ) -> None:
         """Build schedule service, config provider, producer factory (embedded mode).
 
-        Phase8 Decommission Contract: embedded registry registers only BlockPlan path
-        services. Mock/playlist schedule services are not available.
+        Blockplan-only: embedded registry registers only BlockPlan path.
+        Mock/playlist schedule services are not available.
         """
         # ChannelManager and schedule services expect clock.now_utc() (datetime); use concrete MasterClock
         self._embedded_clock = MasterClock()
@@ -437,12 +437,11 @@ class ProgramDirector:
                 filler_duration_seconds=self._filler_duration_seconds,
             )
         else:
-            # Blockplan-only: no Phase8 mock/file schedule; require channel config provider.
+            # Blockplan-only: require channel config provider.
             self._schedule_service = None
             if channel_config_provider is None:
                 raise ValueError(
-                    "Phase8DecommissionContract: channel config is required; "
-                    "mock/playlist schedule services are not available. "
+                    "Channel config is required; mock/playlist schedule services are not available. "
                     "Provide a channels config file or use --mock-schedule-ab/--mock-schedule-grid."
                 )
         self._channel_config_provider = channel_config_provider
@@ -563,7 +562,7 @@ class ProgramDirector:
             return self._ensure_phase3_service(channel_id, channel_config)
 
         raise ValueError(
-            f"Phase8DecommissionContract: no schedule service for schedule_source={schedule_source!r}"
+            f"No schedule service for schedule_source={schedule_source!r}"
         )
 
     def _get_horizon_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
@@ -747,7 +746,7 @@ class ProgramDirector:
                         2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc
                     )
                 cfg = channel_config
-                # Phase8DecommissionContract: ChannelManager always uses BlockPlanProducer.
+                # ChannelManager always uses BlockPlanProducer.
                 _cm_build = ChannelManager._build_producer_for_mode
 
                 def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
@@ -795,7 +794,7 @@ class ProgramDirector:
                 self._logger.warning("Health check loop error: %s", e, exc_info=True)
 
     def load_all_schedules(self) -> list[str]:
-        """Load schedule data for discoverable channels (embedded mode). Blockplan-only; no Phase8."""
+        """Load schedule data for discoverable channels (embedded mode). Blockplan-only."""
         if self._schedule_service is None:
             # Config-driven channels only; list from provider.
             if self._channel_config_provider is None:

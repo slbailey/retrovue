@@ -41,8 +41,8 @@ def test_channel_config_rejects_schedule_source_mock():
     )
     with pytest.raises(ValueError) as exc_info:
         assert_schedule_source_valid(config)
-    assert "Phase8DecommissionContract" in str(exc_info.value)
-    assert "mock" in str(exc_info.value) or "schedule_source" in str(exc_info.value)
+    assert "schedule_source" in str(exc_info.value)
+    assert "mock" in str(exc_info.value) or "phase3" in str(exc_info.value)
 
 
 def test_channel_config_accepts_schedule_source_phase3():
@@ -68,7 +68,6 @@ def test_valid_schedule_sources_is_phase3():
 
 def test_program_director_registry_does_not_register_phase8_services():
     """ProgramDirector embedded registry must not reference Phase8* services."""
-    # Resolve path to program_director module (under pkg/core/src)
     repo_root = Path(__file__).resolve().parents[5]
     core_src = repo_root / "pkg" / "core" / "src"
     program_director_path = core_src / "retrovue" / "runtime" / "program_director.py"
@@ -84,6 +83,28 @@ def test_program_director_registry_does_not_register_phase8_services():
         assert name not in text, (
             f"Phase8DecommissionContract: ProgramDirector must not register {name}"
         )
+
+
+def test_no_phase8_classes_in_core_src():
+    """No Phase8 schedule/director class definitions remain in pkg/core/src."""
+    repo_root = Path(__file__).resolve().parents[5]
+    core_src = repo_root / "pkg" / "core" / "src"
+    assert core_src.exists(), f"Missing {core_src}"
+    forbidden_class_defs = (
+        "class Phase8ScheduleService",
+        "class Phase8MockScheduleService",
+        "class Phase8ProgramDirector",
+    )
+    found: list[str] = []
+    for py_path in core_src.rglob("*.py"):
+        rel = py_path.relative_to(core_src)
+        content = py_path.read_text()
+        for defn in forbidden_class_defs:
+            if defn in content:
+                found.append(f"{rel}: {defn}")
+    assert not found, (
+        f"Phase8DecommissionContract: No Phase8 classes in Core src. Found: {found}"
+    )
 
 
 # =============================================================================

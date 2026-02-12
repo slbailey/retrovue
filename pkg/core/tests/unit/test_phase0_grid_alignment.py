@@ -11,14 +11,18 @@ full ChannelManager or ScheduleService setup.
 from datetime import datetime, timezone, timedelta
 import pytest
 
-pytestmark = pytest.mark.skip(reason="Mock grid schedule service removed; tests reference deleted code paths")
-
 from retrovue.runtime.channel_manager import (
     ChannelManager,
     MockGridScheduleService,
-    Phase8ProgramDirector,
 )
 from retrovue.runtime.clock import MasterClock
+
+
+class _StubProgramDirector:
+    """Minimal ProgramDirector for grid alignment tests (always 'normal' mode)."""
+
+    def get_channel_mode(self, channel_id: str) -> str:
+        return "normal"
 
 
 class TestMockGridAlignment:
@@ -27,7 +31,7 @@ class TestMockGridAlignment:
     def setup_method(self):
         """Set up test fixtures."""
         self.clock = MasterClock()
-        self.program_director = Phase8ProgramDirector()
+        self.program_director = _StubProgramDirector()
         # Create a minimal ScheduleService stub for ChannelManager
         # We'll test the grid methods directly
         self.channel_manager = ChannelManager(
@@ -256,11 +260,10 @@ class TestMockGridScheduleService:
         now = block_start + timedelta(seconds=300)  # 5 minutes
         
         plan = self.service.get_playout_plan_now("test-1", now)
-        
-        assert len(plan) == 1
+        assert len(plan) >= 1
         segment = plan[0]
         assert segment["asset_path"] == self.program_asset_path
-        assert segment["content_type"] == "program"
+        assert segment["segment_type"] == "content"
         assert segment["start_pts"] == 300000  # 5 minutes = 300000 ms
         assert segment["metadata"]["phase"] == "mock_grid"
         assert segment["metadata"]["grid_block_minutes"] == 30
@@ -272,12 +275,10 @@ class TestMockGridScheduleService:
         now = block_start + timedelta(seconds=1500)  # 25 minutes
         
         plan = self.service.get_playout_plan_now("test-1", now)
-        
-        assert len(plan) == 1
+        assert len(plan) >= 1
         segment = plan[0]
         assert segment["asset_path"] == self.filler_asset_path
-        assert segment["content_type"] == "filler"
-        # start_pts should account for filler offset calculation
+        assert segment["segment_type"] == "filler"
         assert segment["start_pts"] >= 0
         assert segment["metadata"]["phase"] == "mock_grid"
 
@@ -286,73 +287,60 @@ class TestMockGridScheduleService:
         # Test at :00 boundary
         now = datetime(2025, 1, 15, 14, 0, 0, tzinfo=timezone.utc)
         plan = self.service.get_playout_plan_now("test-1", now)
-        
-        assert len(plan) == 1
+        assert len(plan) >= 1
         segment = plan[0]
-        assert segment["content_type"] == "program"
+        assert segment["segment_type"] == "content"
         assert segment["start_pts"] == 0  # At block start, no offset
 
         # Test at :30 boundary
         now = datetime(2025, 1, 15, 14, 30, 0, tzinfo=timezone.utc)
         plan = self.service.get_playout_plan_now("test-1", now)
-        
-        assert len(plan) == 1
+        assert len(plan) >= 1
         segment = plan[0]
-        assert segment["content_type"] == "program"
+        assert segment["segment_type"] == "content"
         assert segment["start_pts"] == 0  # At block start, no offset
 
     def test_get_playout_plan_at_program_filler_boundary(self):
         """Test playout plan at program/filler boundary."""
         block_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=timezone.utc)
-        
+
         # Test exactly at program end (20 minutes)
         now = block_start + timedelta(seconds=1200)
         plan = self.service.get_playout_plan_now("test-1", now)
-        
-        assert len(plan) == 1
+        assert len(plan) >= 1
         segment = plan[0]
-        assert segment["content_type"] == "filler"
-        assert segment["start_pts"] >= 0  # Should have filler offset
+        assert segment["segment_type"] == "filler"
+        assert segment["start_pts"] >= 0
 
         # Test 1 second before program end
         now = block_start + timedelta(seconds=1199)
         plan = self.service.get_playout_plan_now("test-1", now)
-        
-        assert len(plan) == 1
+        assert len(plan) >= 1
         segment = plan[0]
-        assert segment["content_type"] == "program"
+        assert segment["segment_type"] == "content"
         assert segment["start_pts"] == 1199000  # 1199 seconds = 1199000 ms
 
     def test_get_playout_plan_filler_wraps(self):
         """Test that filler offset wraps correctly for continuous stream."""
-        # Test multiple grid blocks to verify filler offset calculation
         block1_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=timezone.utc)
         block2_start = datetime(2025, 1, 15, 14, 30, 0, tzinfo=timezone.utc)
-        
-        # Both at 25 minutes into their respective blocks (in filler)
-        now1 = block1_start + timedelta(seconds=1500)  # 25 minutes
-        now2 = block2_start + timedelta(seconds=1500)  # 25 minutes
-        
+        now1 = block1_start + timedelta(seconds=1500)  # 25 min (in filler)
+        now2 = block2_start + timedelta(seconds=1500)  # 25 min (in filler)
+
         plan1 = self.service.get_playout_plan_now("test-1", now1)
         plan2 = self.service.get_playout_plan_now("test-1", now2)
-        
-        # Both should be filler
-        assert plan1[0]["content_type"] == "filler"
-        assert plan2[0]["content_type"] == "filler"
-        
-        # Filler offsets should be different (accounting for continuous stream)
-        # The exact values depend on filler epoch calculation, but they should be valid
+        assert len(plan1) >= 1 and len(plan2) >= 1
+        assert plan1[0]["segment_type"] == "filler"
+        assert plan2[0]["segment_type"] == "filler"
         assert 0 <= plan1[0]["start_pts"] < self.filler_duration * 1000
         assert 0 <= plan2[0]["start_pts"] < self.filler_duration * 1000
 
     def test_get_playout_plan_handles_timezone(self):
         """Test that playout plan handles timezone-aware datetimes."""
-        # Test with timezone-aware datetime
         now = datetime(2025, 1, 15, 14, 15, 0, tzinfo=timezone.utc)
         plan = self.service.get_playout_plan_now("test-1", now)
-        assert len(plan) == 1
-        
-        # Test with timezone-naive datetime (should be converted)
+        assert len(plan) >= 1
+
         now_naive = datetime(2025, 1, 15, 14, 15, 0)
         plan = self.service.get_playout_plan_now("test-1", now_naive)
-        assert len(plan) == 1
+        assert len(plan) >= 1

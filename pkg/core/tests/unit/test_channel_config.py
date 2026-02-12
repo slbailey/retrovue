@@ -134,7 +134,7 @@ class TestChannelConfig:
         assert cc.program_format == DEFAULT_PROGRAM_FORMAT
 
     def test_from_dict_rejects_mock_schedule_source(self):
-        """from_dict() rejects schedule_source 'mock' (Phase8 Decommission Contract)."""
+        """from_dict() rejects schedule_source 'mock' (blockplan-only)."""
         data = {
             "channel_id": "test",
             "channel_id_int": 1,
@@ -143,7 +143,7 @@ class TestChannelConfig:
         }
         with pytest.raises(ValueError) as exc_info:
             ChannelConfig.from_dict(data)
-        assert "Phase8DecommissionContract" in str(exc_info.value)
+        assert "schedule_source" in str(exc_info.value)
         assert "mock" in str(exc_info.value)
 
     def test_frozen_immutable(self):
