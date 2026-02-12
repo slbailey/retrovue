@@ -225,7 +225,7 @@ Both emit black + silence. The distinction is control: structural padding is Cor
 
 ## 9. Relationship to Other Contracts
 
-- **Phase 8 (INV-P8-XXX):** Timeline, CT/MT, segment mapping, write barrier, and output liveness are detailed in [Phase8-Invariants-Compiled](../phases/Phase8-Invariants-Compiled.md) and [ScheduleManagerPhase8Contract](../../../../core/docs/contracts/runtime/ScheduleManagerPhase8Contract.md). This document states the broadcast-grade laws; Phase 8 contracts refine and test them.
+- **Phase 8 (INV-P8-XXX):** Timeline, CT/MT, segment mapping, write barrier, and output liveness are detailed in [Phase8-Invariants-Compiled](../phases/Phase8-Invariants-Compiled.md) and [ScheduleManagerPhase8Contract](../../../../core/docs/contracts/runtime/ScheduleManagerContract.md). This document states the broadcast-grade laws; Phase 8 contracts refine and test them.
 - **Phase 9 / 10:** Bootstrap and pipeline flow control (INV-P10, etc.) must preserve these invariants. See [Phase9-OutputBootstrap](../phases/Phase9-OutputBootstrap.md) and [INV-P10-PIPELINE-FLOW-CONTROL](../phase10/INV-P10-PIPELINE-FLOW-CONTROL.md).
 - **Architecture contracts:** [MasterClockContract](../architecture/MasterClockContract.md), [OutputContinuityContract](../architecture/OutputContinuityContract.md), [ProducerBusContract](../architecture/ProducerBusContract.md), [BlackFrameProducerContract](../architecture/BlackFrameProducerContract.md), and [OutputBusAndOutputSinkContract](../architecture/OutputBusAndOutputSinkContract.md) specify component-level behavior that satisfies these laws.
 

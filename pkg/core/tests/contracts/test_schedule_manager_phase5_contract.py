@@ -2,7 +2,7 @@
 Schedule Manager Phase 5 Contract Tests
 
 Tests the runtime integration defined in:
-    docs/contracts/runtime/ScheduleManagerPhase5Contract.md
+    docs/contracts/runtime/ScheduleManagerContract.md
 
 Phase 5 wires Phase 3 ScheduleManager into the production runtime via:
 - ScheduleManagerBackedScheduleService adapter
@@ -41,6 +41,7 @@ from retrovue.runtime.schedule_manager_service import (
 )
 from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.config import ChannelConfig, ProgramFormat
+from retrovue.runtime.horizon_config import HorizonNoScheduleDataError
 
 
 # =============================================================================
@@ -171,6 +172,7 @@ class TestP5T002PlayoutPlanFormat:
     def test_playout_plan_has_required_keys(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Playout plan segments have required keys."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         # Query at 06:15 (mid-slot)
         at_time = datetime(2025, 1, 30, 6, 15, 0, tzinfo=timezone.utc)
@@ -187,6 +189,7 @@ class TestP5T002PlayoutPlanFormat:
     def test_start_pts_is_milliseconds(self, schedule_service: ScheduleManagerBackedScheduleService):
         """start_pts is in milliseconds."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         # Query at 06:15 (15 minutes = 900 seconds into slot)
         at_time = datetime(2025, 1, 30, 6, 15, 0, tzinfo=timezone.utc)
@@ -201,6 +204,7 @@ class TestP5T002PlayoutPlanFormat:
     def test_asset_path_is_string(self, schedule_service: ScheduleManagerBackedScheduleService):
         """asset_path is a valid string path."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
@@ -221,6 +225,7 @@ class TestP5T003EPGFormat:
     def test_epg_events_structure(self, schedule_service: ScheduleManagerBackedScheduleService):
         """EPG events have correct structure."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 10, 0, 0, tzinfo=timezone.utc)
@@ -242,6 +247,7 @@ class TestP5T003EPGFormat:
     def test_epg_events_title_is_program_name(self, schedule_service: ScheduleManagerBackedScheduleService):
         """EPG title is program name (e.g., 'Cheers')."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 7, 0, 0, tzinfo=timezone.utc)
@@ -253,6 +259,7 @@ class TestP5T003EPGFormat:
     def test_epg_events_has_episode_title(self, schedule_service: ScheduleManagerBackedScheduleService):
         """EPG events include episode title."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 7, 0, 0, tzinfo=timezone.utc)
@@ -264,21 +271,20 @@ class TestP5T003EPGFormat:
 
 
 # =============================================================================
-# P5-T004: Auto-Resolution Triggers on First Playout Access
+# P5-T004: No consumer-triggered resolution — raises on unresolved
 # =============================================================================
 
 
-class TestP5T004AutoResolution:
-    """Test that programming day is auto-resolved on first access."""
+class TestP5T004NoConsumerResolution:
+    """Test that unresolved access raises HorizonNoScheduleDataError."""
 
-    def test_auto_resolution_on_playout_access(
+    def test_playout_access_raises_when_unresolved(
         self,
         mock_clock: MasterClock,
         test_programs_dir: Path,
         test_schedules_dir: Path,
     ):
-        """First playout access triggers resolution."""
-        # Create service with fresh stores
+        """Playout access raises when day not resolved."""
         service = ScheduleManagerBackedScheduleService(
             clock=mock_clock,
             programs_dir=test_programs_dir,
@@ -289,24 +295,19 @@ class TestP5T004AutoResolution:
         )
         service.load_schedule("cheers-24-7")
 
-        # Resolved store should be empty initially
         assert not service._resolved_store.exists("cheers-24-7", date(2025, 1, 30))
 
-        # Access playout plan
         at_time = datetime(2025, 1, 30, 6, 15, 0, tzinfo=timezone.utc)
-        plan = service.get_playout_plan_now("cheers-24-7", at_time)
+        with pytest.raises(HorizonNoScheduleDataError):
+            service.get_playout_plan_now("cheers-24-7", at_time)
 
-        # Now the day should be resolved
-        assert service._resolved_store.exists("cheers-24-7", date(2025, 1, 30))
-        assert len(plan) >= 1
-
-    def test_auto_resolution_on_epg_access(
+    def test_epg_access_raises_when_unresolved(
         self,
         mock_clock: MasterClock,
         test_programs_dir: Path,
         test_schedules_dir: Path,
     ):
-        """First EPG access triggers resolution."""
+        """EPG access raises when day not resolved."""
         service = ScheduleManagerBackedScheduleService(
             clock=mock_clock,
             programs_dir=test_programs_dir,
@@ -319,14 +320,10 @@ class TestP5T004AutoResolution:
 
         assert not service._resolved_store.exists("cheers-24-7", date(2025, 1, 30))
 
-        # Access EPG
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 10, 0, 0, tzinfo=timezone.utc)
-        events = service.get_epg_events("cheers-24-7", start_time, end_time)
-
-        # Now the day should be resolved
-        assert service._resolved_store.exists("cheers-24-7", date(2025, 1, 30))
-        assert len(events) >= 1
+        with pytest.raises(HorizonNoScheduleDataError):
+            service.get_epg_events("cheers-24-7", start_time, end_time)
 
 
 # =============================================================================
@@ -372,6 +369,7 @@ class TestP5T006EpisodeIdentity:
     def test_episode_identity_consistency(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Same episode plays as what EPG shows."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         # Query at 06:00 exactly
         at_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
@@ -401,6 +399,7 @@ class TestP5T007SeekOffset:
     def test_mid_episode_seek_offset(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Joining mid-episode has correct seek offset."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         # Episode starts at 06:00, join at 06:12 (12 minutes in)
         at_time = datetime(2025, 1, 30, 6, 12, 0, tzinfo=timezone.utc)
@@ -412,6 +411,7 @@ class TestP5T007SeekOffset:
     def test_slot_boundary_no_offset(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Joining at slot start has zero offset."""
         schedule_service.load_schedule("cheers-24-7")
+        schedule_service.prime_schedule_day("cheers-24-7", date(2025, 1, 30))
 
         # Join exactly at 06:00
         at_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)

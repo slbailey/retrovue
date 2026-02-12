@@ -4,7 +4,7 @@ Implements the ScheduleService protocol expected by ChannelManager
 by reading exclusively from pre-populated stores.  Never triggers
 schedule resolution, pipeline execution, or any planning activity.
 
-Used in AUTHORITATIVE horizon mode.  Violations (missing data) are
+Read-only schedule service backed by HorizonManager. Violations (missing data) are
 reported as planning failures per ScheduleExecutionInterface §6.
 
 See: docs/contracts/ScheduleExecutionInterfaceContract_v0.1.md

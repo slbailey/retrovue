@@ -1,5 +1,5 @@
 """
-Contract Tests — Planning Pipeline (Stage 0 through Stage 6)
+Contract Tests — Planning Pipeline
 
 Tests assert on artifact structure and invariants.
 No database, no filesystem, no AIR.
@@ -40,13 +40,13 @@ from retrovue.runtime.planning_pipeline import (
     TransmissionLogEntry,
     ZoneDirective,
     run_planning_pipeline,
-    stage_0_build_schedule_plan,
-    stage_1_resolve_schedule_day,
-    stage_2_derive_epg,
-    stage_3_segment_blocks,
-    stage_4_fill_breaks,
-    stage_5_assemble_transmission_log,
-    stage_6_lock_for_execution,
+    build_schedule_plan,
+    resolve_schedule_day,
+    derive_epg,
+    segment_blocks,
+    fill_breaks,
+    assemble_transmission_log,
+    lock_for_execution,
     to_block_plan,
 )
 from retrovue.runtime.schedule_types import ResolvedAsset
@@ -152,7 +152,7 @@ class TestStage0_SchedulePlan:
 
     def test_directive_produces_plan_with_zones_and_programs(self):
         directive = _make_cheers_directive()
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
 
         assert isinstance(plan, SchedulePlanArtifact)
         assert plan.channel_id == "ch1"
@@ -162,7 +162,7 @@ class TestStage0_SchedulePlan:
 
     def test_plan_carries_no_broadcast_date(self):
         directive = _make_cheers_directive()
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         assert not hasattr(plan, "broadcast_date")
 
     def test_multiple_zones_preserved_in_order(self):
@@ -179,7 +179,7 @@ class TestStage0_SchedulePlan:
                               label="Afternoon"),
             ],
         )
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         assert len(plan.zones) == 2
         assert plan.zones[0].label == "Morning"
         assert plan.zones[1].label == "Afternoon"
@@ -197,7 +197,7 @@ class TestStage0_SchedulePlan:
                 ),
             ],
         )
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         assert plan.zones[0].day_filter == ["mon", "wed", "fri"]
 
 
@@ -210,11 +210,11 @@ class TestStage1_ScheduleDay:
 
     def test_zones_expanded_to_grid_aligned_slots(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(9, 0))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
 
-        result = stage_1_resolve_schedule_day(plan, run_req, config)
+        result = resolve_schedule_day(plan, run_req, config)
 
         assert isinstance(result, ScheduleDayArtifact)
         # 3 hours / 30 min = 6 slots
@@ -223,11 +223,11 @@ class TestStage1_ScheduleDay:
 
     def test_episode_resolution_produces_frozen_snapshot(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(7, 0))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
 
-        result = stage_1_resolve_schedule_day(plan, run_req, config)
+        result = resolve_schedule_day(plan, run_req, config)
 
         for slot in result.resolved_day.resolved_slots:
             assert slot.resolved_asset.file_path is not None
@@ -235,11 +235,11 @@ class TestStage1_ScheduleDay:
 
     def test_sequential_cursor_advances(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(7, 30))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
 
-        result = stage_1_resolve_schedule_day(plan, run_req, config)
+        result = resolve_schedule_day(plan, run_req, config)
 
         slots = result.resolved_day.resolved_slots
         # 3 slots → episodes s01e01, s01e02, s01e03
@@ -249,12 +249,12 @@ class TestStage1_ScheduleDay:
     def test_same_inputs_produce_equivalent_day(self):
         """Idempotence: same channel/date returns cached resolution."""
         directive = _make_cheers_directive(start=time(6, 0), end=time(7, 0))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
 
-        result1 = stage_1_resolve_schedule_day(plan, run_req, config)
-        result2 = stage_1_resolve_schedule_day(plan, run_req, config)
+        result1 = resolve_schedule_day(plan, run_req, config)
+        result2 = resolve_schedule_day(plan, run_req, config)
 
         # Same object returned from cache
         assert result1.resolved_day is result2.resolved_day
@@ -269,14 +269,14 @@ class TestStage2_EPGEvents:
 
     def _resolve_day(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(7, 0))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        return stage_1_resolve_schedule_day(plan, run_req, config)
+        return resolve_schedule_day(plan, run_req, config)
 
     def test_events_match_resolved_slots_one_to_one(self):
         sday = self._resolve_day()
-        events = stage_2_derive_epg("ch1", sday, 6)
+        events = derive_epg("ch1", sday, 6)
 
         assert len(events) == len(sday.resolved_day.resolved_slots)
         for event in events:
@@ -285,7 +285,7 @@ class TestStage2_EPGEvents:
 
     def test_absolute_timestamps_derived_correctly(self):
         sday = self._resolve_day()
-        events = stage_2_derive_epg("ch1", sday, 6)
+        events = derive_epg("ch1", sday, 6)
 
         first = events[0]
         expected_start = datetime(2025, 7, 15, 6, 0, 0)
@@ -298,11 +298,11 @@ class TestStage2_EPGEvents:
             programming_day_start_hour=6,
             zones=[],
         )
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        sday = stage_1_resolve_schedule_day(plan, run_req, config)
-        events = stage_2_derive_epg("ch1", sday, 6)
+        sday = resolve_schedule_day(plan, run_req, config)
+        events = derive_epg("ch1", sday, 6)
 
         assert events == []
 
@@ -317,11 +317,11 @@ class TestStage3_SegmentedBlocks:
     def _get_schedule_day(self, config=None, directive=None):
         if directive is None:
             directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         if config is None:
             config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        return stage_1_resolve_schedule_day(plan, run_req, config)
+        return resolve_schedule_day(plan, run_req, config)
 
     def test_chapter_markers_produce_segments_with_breaks(self):
         markers = [
@@ -331,7 +331,7 @@ class TestStage3_SegmentedBlocks:
         lib = _make_asset_library(episode_dur_ms=1_320_000, markers=markers)
         sday = self._get_schedule_day()
 
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         assert len(result) == 1
         block = result[0]
@@ -343,7 +343,7 @@ class TestStage3_SegmentedBlocks:
         lib = _make_asset_library(episode_dur_ms=1_320_000)
         sday = self._get_schedule_day()
 
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block = result[0]
         # Default profile: 3 segments, 2 breaks for 30-min block
@@ -354,7 +354,7 @@ class TestStage3_SegmentedBlocks:
         lib = _make_asset_library(episode_dur_ms=1_320_000)
         sday = self._get_schedule_day()
 
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block = result[0]
         total_break_ms = sum(b.duration_ms for b in block.breaks)
@@ -364,7 +364,7 @@ class TestStage3_SegmentedBlocks:
         lib = _make_asset_library(episode_dur_ms=1_320_000)
         sday = self._get_schedule_day()
 
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block = result[0]
         if len(block.breaks) >= 2:
@@ -377,7 +377,7 @@ class TestStage3_SegmentedBlocks:
         lib = _make_asset_library(episode_dur_ms=1_320_000)  # 22 min
         sday = self._get_schedule_day()
 
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block = result[0]
         total_break_ms = sum(b.duration_ms for b in block.breaks)
@@ -390,7 +390,7 @@ class TestStage3_SegmentedBlocks:
         lib = _make_asset_library(episode_dur_ms=1_800_000)  # exactly 30 min
         sday = self._get_schedule_day()
 
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block = result[0]
         assert len(block.breaks) == 0
@@ -406,16 +406,16 @@ class TestStage4_Playlist:
 
     def _get_segmented(self, episode_dur_ms=1_320_000, filler_dur_ms=30_000):
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        sday = stage_1_resolve_schedule_day(plan, run_req, config)
+        sday = resolve_schedule_day(plan, run_req, config)
         lib = _make_asset_library(episode_dur_ms=episode_dur_ms, filler_dur_ms=filler_dur_ms)
-        return stage_3_segment_blocks(sday, 30, lib), lib
+        return segment_blocks(sday, 30, lib), lib
 
     def test_filler_fills_break_to_exact_duration(self):
         segmented, lib = self._get_segmented()
-        filled = stage_4_fill_breaks(segmented, lib)
+        filled = fill_breaks(segmented, lib)
 
         for fb in filled:
             for brk in fb.filled_breaks:
@@ -423,7 +423,7 @@ class TestStage4_Playlist:
 
     def test_greedy_packing_with_multiple_items(self):
         segmented, lib = self._get_segmented(filler_dur_ms=30_000)
-        filled = stage_4_fill_breaks(segmented, lib)
+        filled = fill_breaks(segmented, lib)
 
         for fb in filled:
             for brk in fb.filled_breaks:
@@ -433,7 +433,7 @@ class TestStage4_Playlist:
     def test_allow_repeat_within_break_true(self):
         segmented, lib = self._get_segmented(filler_dur_ms=30_000)
         policy = BreakFillPolicy(allow_repeat_within_break=True)
-        filled = stage_4_fill_breaks(segmented, lib, policy)
+        filled = fill_breaks(segmented, lib, policy)
 
         for fb in filled:
             for brk in fb.filled_breaks:
@@ -445,7 +445,7 @@ class TestStage4_Playlist:
     def test_allow_repeat_within_break_false(self):
         segmented, lib = self._get_segmented(filler_dur_ms=30_000)
         policy = BreakFillPolicy(allow_repeat_within_break=False)
-        filled = stage_4_fill_breaks(segmented, lib, policy)
+        filled = fill_breaks(segmented, lib, policy)
 
         for fb in filled:
             for brk in fb.filled_breaks:
@@ -455,7 +455,7 @@ class TestStage4_Playlist:
 
     def test_duration_invariant(self):
         segmented, lib = self._get_segmented()
-        filled = stage_4_fill_breaks(segmented, lib)
+        filled = fill_breaks(segmented, lib)
 
         for fb in filled:
             content_ms = sum(s.duration_ms for s in fb.content_segments)
@@ -474,19 +474,19 @@ class TestStage5_TransmissionLog:
 
     def _get_filled(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        sday = stage_1_resolve_schedule_day(plan, run_req, config)
+        sday = resolve_schedule_day(plan, run_req, config)
         lib = _make_asset_library()
-        epg = stage_2_derive_epg("ch1", sday, 6)
-        segmented = stage_3_segment_blocks(sday, 30, lib)
-        filled = stage_4_fill_breaks(segmented, lib)
+        epg = derive_epg("ch1", sday, 6)
+        segmented = segment_blocks(sday, 30, lib)
+        filled = fill_breaks(segmented, lib)
         return filled, epg
 
     def test_content_and_breaks_interleaved_with_wall_clock(self):
         filled, epg = self._get_filled()
-        log = stage_5_assemble_transmission_log(
+        log = assemble_transmission_log(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -498,7 +498,7 @@ class TestStage5_TransmissionLog:
 
     def test_segment_type_uses_execution_semantics(self):
         filled, epg = self._get_filled()
-        log = stage_5_assemble_transmission_log(
+        log = assemble_transmission_log(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -509,7 +509,7 @@ class TestStage5_TransmissionLog:
 
     def test_pad_segment_appended_when_needed(self):
         filled, epg = self._get_filled()
-        log = stage_5_assemble_transmission_log(
+        log = assemble_transmission_log(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -521,15 +521,15 @@ class TestStage5_TransmissionLog:
 
     def test_block_ids_sequential(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(7, 0))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        sday = stage_1_resolve_schedule_day(plan, run_req, config)
+        sday = resolve_schedule_day(plan, run_req, config)
         lib = _make_asset_library()
-        epg = stage_2_derive_epg("ch1", sday, 6)
-        segmented = stage_3_segment_blocks(sday, 30, lib)
-        filled = stage_4_fill_breaks(segmented, lib)
-        log = stage_5_assemble_transmission_log(
+        epg = derive_epg("ch1", sday, 6)
+        segmented = segment_blocks(sday, 30, lib)
+        filled = fill_breaks(segmented, lib)
+        log = assemble_transmission_log(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -538,7 +538,7 @@ class TestStage5_TransmissionLog:
 
     def test_to_block_plan_conversion(self):
         filled, epg = self._get_filled()
-        log = stage_5_assemble_transmission_log(
+        log = assemble_transmission_log(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -561,22 +561,22 @@ class TestStage6_HorizonLock:
 
     def _get_log(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         config = _make_config()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        sday = stage_1_resolve_schedule_day(plan, run_req, config)
+        sday = resolve_schedule_day(plan, run_req, config)
         lib = _make_asset_library()
-        epg = stage_2_derive_epg("ch1", sday, 6)
-        segmented = stage_3_segment_blocks(sday, 30, lib)
-        filled = stage_4_fill_breaks(segmented, lib)
-        return stage_5_assemble_transmission_log(
+        epg = derive_epg("ch1", sday, 6)
+        segmented = segment_blocks(sday, 30, lib)
+        filled = fill_breaks(segmented, lib)
+        return assemble_transmission_log(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
     def test_lock_sets_is_locked_and_metadata(self):
         log = self._get_log()
         lock_time = datetime(2025, 7, 15, 5, 30, 0)
-        locked = stage_6_lock_for_execution(log, lock_time)
+        locked = lock_for_execution(log, lock_time)
 
         assert locked.is_locked is True
         assert "locked_at" in locked.metadata
@@ -585,7 +585,7 @@ class TestStage6_HorizonLock:
     def test_data_content_unchanged(self):
         log = self._get_log()
         lock_time = datetime(2025, 7, 15, 5, 30, 0)
-        locked = stage_6_lock_for_execution(log, lock_time)
+        locked = lock_for_execution(log, lock_time)
 
         assert locked.channel_id == log.channel_id
         assert locked.broadcast_date == log.broadcast_date
@@ -717,13 +717,13 @@ class TestStage2_MultiBlockEPG:
                 ),
             ],
         )
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        return stage_1_resolve_schedule_day(plan, run_req, config)
+        return resolve_schedule_day(plan, run_req, config)
 
     def test_multi_block_movie_produces_single_epg_event(self):
         sday = self._resolve_movie_day()
-        events = stage_2_derive_epg("ch2", sday, 6)
+        events = derive_epg("ch2", sday, 6)
 
         # 90-min movie → 1 ProgramEvent → 1 EPGEvent (not 3)
         assert len(events) == 1
@@ -735,7 +735,7 @@ class TestStage2_MultiBlockEPG:
 
     def test_multi_block_epg_event_carries_resolved_asset(self):
         sday = self._resolve_movie_day()
-        events = stage_2_derive_epg("ch2", sday, 6)
+        events = derive_epg("ch2", sday, 6)
 
         event = events[0]
         assert isinstance(event.resolved_asset, ResolvedAsset)
@@ -764,9 +764,9 @@ class TestStage3_MultiBlockSegmentation:
                 ),
             ],
         )
-        plan = stage_0_build_schedule_plan(directive)
+        plan = build_schedule_plan(directive)
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-        sday = stage_1_resolve_schedule_day(plan, run_req, config)
+        sday = resolve_schedule_day(plan, run_req, config)
 
         lib = InMemoryAssetLibrary()
         lib.register_asset("/media/movies/big_movie.mp4", 5_400_000, markers)
@@ -776,7 +776,7 @@ class TestStage3_MultiBlockSegmentation:
 
     def test_multi_block_movie_block_0_starts_at_offset_0(self):
         sday, lib = self._get_movie_schedule_day()
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block_0 = result[0]
         assert block_0.block_index_within_event == 0
@@ -785,7 +785,7 @@ class TestStage3_MultiBlockSegmentation:
 
     def test_multi_block_movie_block_1_starts_at_block_duration(self):
         sday, lib = self._get_movie_schedule_day()
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         block_1 = result[1]
         assert block_1.block_index_within_event == 1
@@ -794,7 +794,7 @@ class TestStage3_MultiBlockSegmentation:
 
     def test_multi_block_movie_last_block_has_correct_pad(self):
         sday, lib = self._get_movie_schedule_day()
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         # 90-min movie in 3x30-min blocks: content exactly fills all blocks
         for block in result[:3]:
@@ -808,7 +808,7 @@ class TestStage3_MultiBlockSegmentation:
             MarkerInfo("chapter", 1_980_000, "33min"),  # block 1 (1800-3600s)
         ]
         sday, lib = self._get_movie_schedule_day(markers=markers)
-        result = stage_3_segment_blocks(sday, 30, lib)
+        result = segment_blocks(sday, 30, lib)
 
         # Block 0 should have the 15min chapter (at 900_000ms within full asset)
         block_0 = result[0]

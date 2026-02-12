@@ -58,7 +58,6 @@ from retrovue.runtime.config import (
     InlineChannelConfigProvider,
 )
 from retrovue.runtime.schedule_manager_service import ScheduleManagerBackedScheduleService
-from retrovue.runtime.horizon_config import HorizonAuthorityMode, get_horizon_authority_mode
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -338,11 +337,9 @@ class ProgramDirector:
         self._managers: dict[str, Any] = {}
         self._managers_lock = threading.Lock()
         self._schedule_service: Optional[Any] = None
-        # Horizon authority mode
-        self._horizon_mode = get_horizon_authority_mode()
         # Phase 5: Per-channel schedule services
         self._schedule_manager_services: dict[str, ScheduleManagerBackedScheduleService] = {}
-        # Horizon management (shadow + authoritative modes)
+        # Horizon management
         self._horizon_managers: dict[str, Any] = {}
         self._horizon_execution_stores: dict[str, Any] = {}
         self._horizon_resolved_stores: dict[str, Any] = {}
@@ -479,10 +476,9 @@ class ProgramDirector:
 
             self._logger.info(
                 "[channel %s] Creating ScheduleManagerBackedScheduleService "
-                "(schedule_source=%s, horizon_mode=%s)",
+                "(schedule_source=%s)",
                 channel_id,
                 channel_config.schedule_source,
-                self._horizon_mode.value,
             )
 
             service = ScheduleManagerBackedScheduleService(
@@ -492,7 +488,6 @@ class ProgramDirector:
                 filler_path=filler_path,
                 filler_duration_seconds=filler_duration,
                 grid_minutes=grid_minutes,
-                horizon_mode=self._horizon_mode,
             )
             self._schedule_manager_services[channel_id] = service
 
@@ -516,19 +511,14 @@ class ProgramDirector:
 
         schedule_source = channel_config.schedule_source
         if schedule_source == "phase3":
-            if self._horizon_mode in (
-                HorizonAuthorityMode.AUTHORITATIVE,
-                HorizonAuthorityMode.SHADOW,
-            ):
-                return self._get_horizon_backed_service(channel_id, channel_config)
-            return self._ensure_schedule_manager_service(channel_id, channel_config)
+            return self._get_horizon_backed_service(channel_id, channel_config)
 
         raise ValueError(
             f"No schedule service for schedule_source={schedule_source!r}"
         )
 
     def _get_horizon_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
-        """Create or return a HorizonBackedScheduleService for shadow/authoritative mode."""
+        """Create or return a HorizonBackedScheduleService for phase3 channels."""
         from retrovue.runtime.horizon_backed_schedule_service import HorizonBackedScheduleService
 
         # Return cached if exists
@@ -559,9 +549,9 @@ class ProgramDirector:
         return service
 
     def _init_horizon_managers(self) -> None:
-        """Create and start HorizonManagers for Phase3 channels (shadow/authoritative).
+        """Create and start HorizonManagers for Phase3 channels.
 
-        Called from start() when horizon mode is not LEGACY.  For each
+        Called from start().  For each
         Phase3 channel:
         1. Creates ScheduleManagerBackedScheduleService and loads the schedule
         2. Creates ExecutionWindowStore
@@ -588,9 +578,8 @@ class ProgramDirector:
                 continue
 
             self._logger.info(
-                "[channel %s] Initializing HorizonManager (mode=%s)",
+                "[channel %s] Initializing HorizonManager",
                 channel_id,
-                self._horizon_mode.value,
             )
 
             # Ensure ScheduleManagerBackedScheduleService exists (always needed for adapters)
@@ -637,25 +626,14 @@ class ProgramDirector:
             )
 
             if not report.is_healthy:
-                if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
-                    raise RuntimeError(
-                        f"[channel {channel_id}] HorizonManager readiness gate "
-                        f"FAILED in authoritative mode. "
-                        f"epg={report.epg_depth_hours:.1f}h "
-                        f"exec={report.execution_depth_hours:.1f}h "
-                        f"(min_epg={report.min_epg_days}d "
-                        f"min_exec={report.min_execution_hours}h). "
-                        f"Cannot start with insufficient horizon depth.",
-                    )
-                else:
-                    self._logger.warning(
-                        "[channel %s] HorizonManager readiness gate: "
-                        "UNHEALTHY at startup (shadow mode, continuing). "
-                        "epg=%.1fh exec=%.1fh",
-                        channel_id,
-                        report.epg_depth_hours,
-                        report.execution_depth_hours,
-                    )
+                raise RuntimeError(
+                    f"[channel {channel_id}] HorizonManager readiness gate "
+                    f"FAILED. epg={report.epg_depth_hours:.1f}h "
+                    f"exec={report.execution_depth_hours:.1f}h "
+                    f"(min_epg={report.min_epg_days}d "
+                    f"min_exec={report.min_execution_hours}h). "
+                    f"Cannot start with insufficient horizon depth.",
+                )
 
             # Lock all initial entries for execution
             locked = execution_store.lock_all()
@@ -669,9 +647,8 @@ class ProgramDirector:
             self._horizon_managers[channel_id] = horizon_mgr
 
         self._logger.info(
-            "HorizonManagers initialized: %d channels (mode=%s)",
+            "HorizonManagers initialized: %d channels",
             len(self._horizon_managers),
-            self._horizon_mode.value,
         )
 
     def _get_or_create_manager(self, channel_id: str) -> Any:
@@ -892,8 +869,7 @@ class ProgramDirector:
         if self._channel_manager_provider is None:
             self.load_all_schedules()
             # Horizon management: create/start HorizonManagers before HTTP server
-            if self._horizon_mode != HorizonAuthorityMode.LEGACY:
-                self._init_horizon_managers()
+            self._init_horizon_managers()
             if self._health_check_stop is not None:
                 self._health_check_stop.clear()
                 self._health_check_thread = Thread(
@@ -1500,14 +1476,7 @@ class ProgramDirector:
 
             Returns HorizonManager health snapshot including EPG depth,
             execution depth, compliance status, and store entry count.
-            Available in shadow and authoritative modes only.
             """
-            if self._horizon_mode == HorizonAuthorityMode.LEGACY:
-                return Response(
-                    content="Horizon management not active (mode=legacy)",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-
             hm = self._horizon_managers.get(channel_id)
             if hm is None:
                 return Response(
@@ -1519,7 +1488,6 @@ class ProgramDirector:
                 report = hm.get_health_report()
                 return {
                     "channel_id": channel_id,
-                    "horizon_mode": self._horizon_mode.value,
                     "is_healthy": report.is_healthy,
                     "epg_depth_hours": report.epg_depth_hours,
                     "epg_compliant": report.epg_compliant,

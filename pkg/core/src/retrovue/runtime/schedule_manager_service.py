@@ -6,12 +6,10 @@ Enables production runtime to use dynamic content selection.
 
 Implements:
 - INV-P5-001: Config-Driven Activation - schedule_source: "phase3" enables this service
-- INV-P5-002: Auto-Resolution - programming day resolved on first access
-  ** DEPRECATED in authoritative horizon mode.  See INV-P5-005. **
 - INV-P5-003: Playout Plan Transformation - ProgramBlock → list[dict] correctly
 - INV-P5-004: EPG Endpoint Independence - EPG works without active viewers
-- INV-P5-005: Horizon Authority Guard - in authoritative mode, auto-resolve is
-  prohibited; missing data is a planning failure logged as POLICY_VIOLATION.
+- INV-P5-005: Horizon Authority Guard - auto-resolve is prohibited; missing data
+  is a planning failure logged as POLICY_VIOLATION.
 """
 
 from __future__ import annotations
@@ -25,11 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from retrovue.runtime.clock import MasterClock
-from retrovue.runtime.horizon_config import (
-    HorizonAuthorityMode,
-    HorizonNoScheduleDataError,
-    get_horizon_authority_mode,
-)
+from retrovue.runtime.horizon_config import HorizonNoScheduleDataError
 from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.schedule_types import (
     Episode,
@@ -220,7 +214,6 @@ class ScheduleManagerBackedScheduleService:
         filler_duration_seconds: float = 0.0,
         grid_minutes: int = 30,
         programming_day_start_hour: int = 6,
-        horizon_mode: HorizonAuthorityMode | None = None,
     ) -> None:
         self._clock = clock
         self._programs_dir = programs_dir
@@ -229,7 +222,6 @@ class ScheduleManagerBackedScheduleService:
         self._filler_duration_seconds = filler_duration_seconds
         self._grid_minutes = grid_minutes
         self._programming_day_start_hour = programming_day_start_hour
-        self._horizon_mode = horizon_mode or get_horizon_authority_mode()
 
         # Create stores
         self._sequence_store = InMemorySequenceStore()
@@ -312,6 +304,28 @@ class ScheduleManagerBackedScheduleService:
             self._logger.error(error_msg)
             return (False, error_msg)
 
+    def prime_schedule_day(
+        self,
+        channel_id: str,
+        programming_day_date: date,
+        resolution_time: datetime | None = None,
+    ) -> None:
+        """Prime the resolved store for a given day. Used by HorizonManager adapters
+        and tests. Not part of the consumer API."""
+        with self._lock:
+            slots = self._schedules.get(channel_id, [])
+        if not slots:
+            return
+        now = resolution_time or self._clock.now_utc()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        self._manager.resolve_schedule_day(
+            channel_id=channel_id,
+            programming_day_date=programming_day_date,
+            slots=slots,
+            resolution_time=now,
+        )
+
     def get_playout_plan_now(
         self,
         channel_id: str,
@@ -320,7 +334,6 @@ class ScheduleManagerBackedScheduleService:
         """
         Return the resolved segment sequence that should be airing 'right now'.
 
-        INV-P5-002: Auto-Resolution - programming day resolved on first access.
         INV-P5-003: Playout Plan Transformation - ProgramBlock → list[dict].
         """
         with self._lock:
@@ -334,55 +347,24 @@ class ScheduleManagerBackedScheduleService:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        # INV-P5-002 / INV-P5-005: Resolve programming day, gated by mode.
+        # INV-P5-005: Missing data is a planning failure. No consumer-triggered resolution.
         programming_day_date = self._get_programming_day_date(now)
         if not self._resolved_store.exists(channel_id, programming_day_date):
-            if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
-                msg = (
-                    f"POLICY_VIOLATION: Programming day {programming_day_date} "
-                    f"not resolved for channel {channel_id}. "
-                    f"Authoritative mode prohibits consumer-triggered resolution. "
-                    f"This is a HorizonManager planning failure."
-                )
-                self._logger.error(msg)
-                raise HorizonNoScheduleDataError(msg)
-            # Legacy / shadow: auto-resolve (INV-P5-002)
-            self._logger.info(
-                "Auto-resolving programming day %s for channel %s "
-                "(horizon_mode=%s)",
-                programming_day_date,
-                channel_id,
-                self._horizon_mode.value,
+            msg = (
+                f"POLICY_VIOLATION: Programming day {programming_day_date} "
+                f"not resolved for channel {channel_id}. "
+                f"HorizonManager planning failure."
             )
-            self._manager.resolve_schedule_day(
-                channel_id=channel_id,
-                programming_day_date=programming_day_date,
-                slots=slots,
-                resolution_time=now,
-            )
+            self._logger.error(msg)
+            raise HorizonNoScheduleDataError(msg)
 
-        # Day-prime: resolve the next programming day so day-boundary
-        # crossings find content immediately (same pattern as get_epg_events).
+        # Day-prime: HorizonManager is responsible for extending horizon.
         next_day_date = programming_day_date + timedelta(days=1)
         if not self._resolved_store.exists(channel_id, next_day_date):
-            if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
-                self._logger.info(
-                    "Authoritative mode: skipping day-prime for %s "
-                    "(HorizonManager responsible)",
-                    next_day_date,
-                )
-            else:
-                self._logger.info(
-                    "Day-prime: resolving next programming day %s for "
-                    "channel %s (horizon_mode=%s)",
-                    next_day_date, channel_id, self._horizon_mode.value,
-                )
-                self._manager.resolve_schedule_day(
-                    channel_id=channel_id,
-                    programming_day_date=next_day_date,
-                    slots=slots,
-                    resolution_time=now,
-                )
+            self._logger.info(
+                "Skipping day-prime for %s (HorizonManager responsible)",
+                next_day_date,
+            )
 
         # Get program block from manager
         block = self._manager.get_program_at(channel_id, now)
@@ -440,8 +422,7 @@ class ScheduleManagerBackedScheduleService:
     def _ensure_day_resolved(self, channel_id: str, at_dt: datetime) -> None:
         """Ensure the programming day containing at_dt is resolved.
 
-        Idempotent. INV-P5-002/INV-P5-005: Gated by horizon authority mode.
-        This calls resolve_schedule_day() (one-time) — NOT extend_execution_day().
+        INV-P5-005: Missing data is a planning failure. No consumer-triggered resolution.
         """
         with self._lock:
             slots = self._schedules.get(channel_id, [])
@@ -454,25 +435,13 @@ class ScheduleManagerBackedScheduleService:
 
         programming_day_date = self._get_programming_day_date(now)
         if not self._resolved_store.exists(channel_id, programming_day_date):
-            if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
-                msg = (
-                    f"POLICY_VIOLATION: Programming day {programming_day_date} "
-                    f"not resolved for channel {channel_id}. "
-                    f"Authoritative mode prohibits consumer-triggered resolution."
-                )
-                self._logger.error(msg)
-                raise HorizonNoScheduleDataError(msg)
-            self._logger.info(
-                "Auto-resolving programming day %s for channel %s "
-                "(horizon_mode=%s)",
-                programming_day_date, channel_id, self._horizon_mode.value,
+            msg = (
+                f"POLICY_VIOLATION: Programming day {programming_day_date} "
+                f"not resolved for channel {channel_id}. "
+                f"HorizonManager planning failure."
             )
-            self._manager.resolve_schedule_day(
-                channel_id=channel_id,
-                programming_day_date=programming_day_date,
-                slots=slots,
-                resolution_time=now,
-            )
+            self._logger.error(msg)
+            raise HorizonNoScheduleDataError(msg)
 
     def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Return a ScheduledBlock covering utc_ms from ScheduleManager.
@@ -531,33 +500,18 @@ class ScheduleManagerBackedScheduleService:
         if end.tzinfo is None:
             end = end.replace(tzinfo=timezone.utc)
 
-        # Resolve needed programming days — gated by horizon authority mode.
+        # INV-P5-005: Missing data is a planning failure. No consumer-triggered resolution.
         current = start
         while current < end:
             programming_day_date = self._get_programming_day_date(current)
             if not self._resolved_store.exists(channel_id, programming_day_date):
-                if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
-                    msg = (
-                        f"POLICY_VIOLATION: Programming day {programming_day_date} "
-                        f"not resolved for EPG query on channel {channel_id}. "
-                        f"Authoritative mode prohibits consumer-triggered resolution. "
-                        f"This is a HorizonManager planning failure."
-                    )
-                    self._logger.error(msg)
-                    raise HorizonNoScheduleDataError(msg)
-                else:
-                    self._logger.info(
-                        "Auto-resolving programming day %s for EPG query "
-                        "(horizon_mode=%s)",
-                        programming_day_date,
-                        self._horizon_mode.value,
-                    )
-                    self._manager.resolve_schedule_day(
-                        channel_id=channel_id,
-                        programming_day_date=programming_day_date,
-                        slots=slots,
-                        resolution_time=current,
-                    )
+                msg = (
+                    f"POLICY_VIOLATION: Programming day {programming_day_date} "
+                    f"not resolved for EPG query on channel {channel_id}. "
+                    f"HorizonManager planning failure."
+                )
+                self._logger.error(msg)
+                raise HorizonNoScheduleDataError(msg)
             current += timedelta(days=1)
 
         # Get EPG events from manager
