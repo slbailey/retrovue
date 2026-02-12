@@ -721,7 +721,7 @@ def main() -> None:
         channel_id_int=1,
         name="RetroVue Classic (burn-in)",
         program_format=program_format,
-        schedule_source="mock",
+        schedule_source="phase3",
         schedule_config={"cycle_origin_utc_ms": cycle_origin_utc_ms},
         blockplan_only=True,
     )

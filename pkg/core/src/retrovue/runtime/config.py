@@ -120,23 +120,40 @@ class ChannelConfig:
     channel_id_int: int       # AIR gRPC ID (1, 2, 3...)
     name: str
     program_format: ProgramFormat
-    schedule_source: str      # "mock", "file", "grid"
+    schedule_source: str      # blockplan only, e.g. "phase3" (Phase8 Decommission Contract)
     schedule_config: dict[str, Any] = field(default_factory=dict)
     blockplan_only: bool = False  # When True, only BlockPlanProducer is permitted
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChannelConfig:
-        """Deserialize from dict (e.g. loaded from JSON)."""
+        """Deserialize from dict (e.g. loaded from JSON).
+
+        Phase8 Decommission Contract: schedule_source is required and must be
+        a blockplan schedule source (e.g. "phase3"). No default; invalid values raise.
+        """
         program_format_data = data.get("program_format", {})
-        return cls(
+        schedule_source = data.get("schedule_source")
+        if schedule_source is None:
+            raise ValueError(
+                "Phase8DecommissionContract: schedule_source is required; "
+                "mock/playlist schedule services are not available."
+            )
+        if schedule_source not in valid_schedule_sources():
+            raise ValueError(
+                f"Phase8DecommissionContract: schedule_source must be one of "
+                f"{valid_schedule_sources()}, got {schedule_source!r}"
+            )
+        config = cls(
             channel_id=data["channel_id"],
             channel_id_int=data["channel_id_int"],
             name=data["name"],
             program_format=ProgramFormat.from_dict(program_format_data) if program_format_data else DEFAULT_PROGRAM_FORMAT,
-            schedule_source=data.get("schedule_source", "mock"),
+            schedule_source=schedule_source,
             schedule_config=data.get("schedule_config", {}),
             blockplan_only=data.get("blockplan_only", False),
         )
+        assert_schedule_source_valid(config)
+        return config
 
 
 # Phase8 Decommission Contract: only blockplan schedule source is valid.
@@ -214,13 +231,13 @@ class InlineChannelConfigProvider:
         return list(self._configs.keys())
 
 
-# Default mock channel config (backwards compatibility)
+# Default channel config for tests/fallback (blockplan-only; no mock schedule)
 MOCK_CHANNEL_CONFIG = ChannelConfig(
     channel_id="mock",
     channel_id_int=1,
     name="Mock Channel",
     program_format=DEFAULT_PROGRAM_FORMAT,
-    schedule_source="mock",
+    schedule_source=BLOCKPLAN_SCHEDULE_SOURCE,
     schedule_config={},
 )
 

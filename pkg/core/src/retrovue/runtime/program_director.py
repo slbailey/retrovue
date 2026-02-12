@@ -51,10 +51,11 @@ from retrovue.runtime.channel_stream import (
     generate_ts_stream_async,
 )
 from retrovue.runtime.config import (
+    BLOCKPLAN_SCHEDULE_SOURCE,
     ChannelConfig,
     ChannelConfigProvider,
+    DEFAULT_PROGRAM_FORMAT,
     InlineChannelConfigProvider,
-    MOCK_CHANNEL_CONFIG,
 )
 from retrovue.runtime.phase3_schedule_service import Phase3ScheduleService
 from retrovue.runtime.horizon_config import HorizonAuthorityMode, get_horizon_authority_mode
@@ -345,7 +346,6 @@ class ProgramDirector:
         self._horizon_managers: dict[str, Any] = {}
         self._horizon_execution_stores: dict[str, Any] = {}
         self._horizon_resolved_stores: dict[str, Any] = {}
-        self._phase8_program_director: Optional[Any] = None
         self._channel_config_provider: Optional[Any] = None
         self._producer_factory: Optional[Callable[..., Any]] = None
         self._health_check_stop: Optional[threading.Event] = None
@@ -364,9 +364,6 @@ class ProgramDirector:
         self._asset_b_path = asset_b_path
         self._segment_seconds = segment_seconds
         self._schedule_dir = schedule_dir or Path(".")
-        self._mock_schedule = (
-            schedule_dir is None and not mock_schedule_grid_mode and not mock_schedule_ab_mode
-        )
 
         if self._channel_manager_provider is None:
             self._init_embedded_registry(channel_config_provider)
@@ -404,7 +401,11 @@ class ProgramDirector:
     def _init_embedded_registry(
         self, channel_config_provider: Optional[Any] = None
     ) -> None:
-        """Build schedule service, program director, config provider, producer factory (embedded mode)."""
+        """Build schedule service, config provider, producer factory (embedded mode).
+
+        Phase8 Decommission Contract: embedded registry registers only BlockPlan path
+        services. Mock/playlist schedule services are not available.
+        """
         # ChannelManager and schedule services expect clock.now_utc() (datetime); use concrete MasterClock
         self._embedded_clock = MasterClock()
         from retrovue.runtime.channel_manager import (
@@ -412,10 +413,6 @@ class ProgramDirector:
             ChannelManager,
             MockAlternatingScheduleService,
             MockGridScheduleService,
-            Phase8AirProducer,
-            Phase8MockScheduleService,
-            Phase8ProgramDirector,
-            Phase8ScheduleService,
         )
 
         if self._mock_schedule_ab_mode:
@@ -439,16 +436,28 @@ class ProgramDirector:
                 filler_asset_path=self._filler_asset_path,
                 filler_duration_seconds=self._filler_duration_seconds,
             )
-        elif self._mock_schedule:
-            self._schedule_service = Phase8MockScheduleService(self._embedded_clock)
         else:
-            self._schedule_service = Phase8ScheduleService(self._schedule_dir, self._embedded_clock)
-        self._phase8_program_director = Phase8ProgramDirector()
-        self._channel_config_provider = (
-            channel_config_provider
-            if channel_config_provider is not None
-            else InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG])
-        )
+            # Blockplan-only: no Phase8 mock/file schedule; require channel config provider.
+            self._schedule_service = None
+            if channel_config_provider is None:
+                raise ValueError(
+                    "Phase8DecommissionContract: channel config is required; "
+                    "mock/playlist schedule services are not available. "
+                    "Provide a channels config file or use --mock-schedule-ab/--mock-schedule-grid."
+                )
+        self._channel_config_provider = channel_config_provider
+        # Mock A/B without config file: provide minimal blockplan config for test-1.
+        if self._channel_config_provider is None and self._mock_schedule_ab_mode:
+            from retrovue.runtime.channel_manager import MockAlternatingScheduleService
+            test1_config = ChannelConfig(
+                channel_id=MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID,
+                channel_id_int=1,
+                name="Test A/B",
+                program_format=DEFAULT_PROGRAM_FORMAT,
+                schedule_source=BLOCKPLAN_SCHEDULE_SOURCE,
+                schedule_config={},
+            )
+            self._channel_config_provider = InlineChannelConfigProvider([test1_config])
 
         def _create_air_producer(
             channel_id: str,
@@ -533,26 +542,29 @@ class ProgramDirector:
         Get appropriate schedule service based on channel config and horizon mode.
 
         INV-P5-001: Config-Driven Activation - schedule_source: "phase3" enables Phase 3 mode.
-        INV-P5-005: In shadow/authoritative mode, returns HorizonBackedScheduleService.
-        Phase3ScheduleService is only used by HorizonManager adapters, never by consumers.
+        Embedded mock A/B or grid takes precedence for those channel(s).
         """
-        schedule_source = channel_config.schedule_source
+        # Embedded mock A/B or grid: use the single embedded schedule service for that channel.
+        if self._schedule_service is not None:
+            if self._mock_schedule_ab_mode:
+                from retrovue.runtime.channel_manager import MockAlternatingScheduleService
+                if channel_id == MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID:
+                    return self._schedule_service
+            if self._mock_schedule_grid_mode:
+                return self._schedule_service
 
+        schedule_source = channel_config.schedule_source
         if schedule_source == "phase3":
-            # Shadow / authoritative → HorizonBackedScheduleService (read-only).
-            # Phase3ScheduleService is only used internally by HorizonManager's
-            # adapters to drive resolution.  Consumers never call it directly.
             if self._horizon_mode in (
                 HorizonAuthorityMode.AUTHORITATIVE,
                 HorizonAuthorityMode.SHADOW,
             ):
                 return self._get_horizon_backed_service(channel_id, channel_config)
-
-            # Legacy only → Phase3ScheduleService (auto-resolve on access)
             return self._ensure_phase3_service(channel_id, channel_config)
 
-        # Default: use the existing schedule service (Phase 8 or mock)
-        return self._schedule_service
+        raise ValueError(
+            f"Phase8DecommissionContract: no schedule service for schedule_source={schedule_source!r}"
+        )
 
     def _get_horizon_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
         """Create or return a HorizonBackedScheduleService for shadow/authoritative mode."""
@@ -707,11 +719,10 @@ class ProgramDirector:
             if channel_id not in self._managers:
                 channel_config = self._channel_config_provider.get_channel_config(channel_id)
                 if channel_config is None:
-                    self._logger.warning(
-                        "[channel %s] No config found, using mock config",
-                        channel_id,
+                    raise ValueError(
+                        f"[channel {channel_id}] No channel config found; "
+                        "blockplan-only mode requires config for each channel."
                     )
-                    channel_config = MOCK_CHANNEL_CONFIG
 
                 # INV-P5-001: Select schedule service based on channel config
                 schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
@@ -725,7 +736,7 @@ class ProgramDirector:
                     channel_id=channel_id,
                     clock=self._embedded_clock,
                     schedule_service=schedule_service,
-                    program_director=self._phase8_program_director,
+                    program_director=self,
                 )
                 manager.channel_config = channel_config
                 if self._mock_schedule_grid_mode:
@@ -737,9 +748,8 @@ class ProgramDirector:
                     )
                 cfg = channel_config
                 # INV-PLAYOUT-AUTHORITY: Delegate to ChannelManager's own
-                # _build_producer_for_mode when a Playlist is loaded (it
-                # selects Phase8AirProducer with playlist_authorized=True).
-                # Otherwise fall through to the PD producer factory.
+                # _build_producer_for_mode when a Playlist is loaded.
+                # Otherwise fall through to the PD producer factory (BlockPlan).
                 _cm_build = ChannelManager._build_producer_for_mode
 
                 def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
@@ -789,28 +799,23 @@ class ProgramDirector:
                 self._logger.warning("Health check loop error: %s", e, exc_info=True)
 
     def load_all_schedules(self) -> list[str]:
-        """Load schedule data for discoverable channels (embedded mode)."""
+        """Load schedule data for discoverable channels (embedded mode). Blockplan-only; no Phase8."""
         if self._schedule_service is None:
-            return []
+            # Config-driven channels only; list from provider.
+            if self._channel_config_provider is None:
+                return []
+            return self._channel_config_provider.list_channel_ids()
         if self._mock_schedule_ab_mode:
             from retrovue.runtime.channel_manager import MockAlternatingScheduleService
             channel_id = MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID
             success, _ = self._schedule_service.load_schedule(channel_id)
             return [channel_id] if success else []
-        if self._mock_schedule:
-            from retrovue.runtime.channel_manager import Phase8MockScheduleService
-            channel_id = Phase8MockScheduleService.MOCK_CHANNEL_ID
-            success, _ = self._schedule_service.load_schedule(channel_id)
-            return [channel_id] if success else []
-        if not Path(self._schedule_dir).exists():
-            return []
-        loaded = []
-        for schedule_file in Path(self._schedule_dir).glob("*.json"):
-            channel_id = schedule_file.stem
-            success, _ = self._schedule_service.load_schedule(channel_id)
-            if success:
-                loaded.append(channel_id)
-        return loaded
+        if self._mock_schedule_grid_mode:
+            # Grid mode: channel list from config provider if available.
+            if self._channel_config_provider is None:
+                return []
+            return self._channel_config_provider.list_channel_ids()
+        return []
 
     def _list_channels_internal(self) -> list[str]:
         """List channel IDs in active registry (embedded mode)."""
@@ -1222,6 +1227,12 @@ class ProgramDirector:
         elif self._system_mode == SystemMode.MAINTENANCE:
             return "maintenance"
         return "normal"
+
+    def get_channel_config(self, channel_id: str) -> Optional[ChannelConfig]:
+        """Return channel config for channel_id from embedded config provider (if any)."""
+        if self._channel_config_provider is None:
+            return None
+        return self._channel_config_provider.get_channel_config(channel_id)
 
     def _get_or_create_fanout_buffer(self, channel_id: str, manager: Any) -> Optional[ChannelStream]:
         """

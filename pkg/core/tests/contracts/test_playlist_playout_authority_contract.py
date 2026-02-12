@@ -158,7 +158,7 @@ class TestPlaylistPlayoutAuthority:
             channel_id_int=1,
             name="Test Channel",
             program_format=DEFAULT_PROGRAM_FORMAT,
-            schedule_source="test",
+            schedule_source="phase3",
         )
         pd = ProgramDirector(
             channel_config_provider=InlineChannelConfigProvider([config]),
@@ -171,7 +171,9 @@ class TestPlaylistPlayoutAuthority:
             def get_playout_plan_now(self, channel_id, at_station_time):
                 return []
 
-        pd._schedule_service = _StubSvc()
+        stub_svc = _StubSvc()
+        # Blockplan-only: route this channel to stub so we don't need real schedule files.
+        pd._get_schedule_service_for_channel = lambda cid, cfg: stub_svc
 
         manager = pd._get_or_create_manager("test-ch")
         manager.load_playlist(_make_playlist("test-ch"))

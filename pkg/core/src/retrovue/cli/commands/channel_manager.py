@@ -18,7 +18,7 @@ app = typer.Typer(help="Retrovue Channel Manager commands (alias for program-dir
 
 @app.command("start")
 def start(
-    schedule_dir: str = typer.Option(..., help="Directory containing schedule.json files"),
+    schedule_dir: str = typer.Option(None, help="(Deprecated; unused.) Blockplan mode uses channel config only."),
     port: int = typer.Option(9000, help="Port to serve the HTTP API and TS streams"),
     channel_config: str = typer.Option(
         None,
@@ -28,7 +28,7 @@ def start(
     """
     Starts the RetroVue Core runtime (ProgramDirector with embedded ChannelManager registry).
 
-    Alias for 'retrovue program-director start' with schedule_dir and port.
+    Alias for 'retrovue program-director start'. Requires channel config file (blockplan-only).
     Default port is 9000 for backward compatibility; use program-director start for default 8000.
     """
     logging.basicConfig(
@@ -45,10 +45,18 @@ def start(
         config_provider = FileChannelConfigProvider(config_path)
         typer.echo(f"Loading channel config from: {config_path}")
 
+    if config_provider is None:
+        typer.echo(
+            "Error: Channel config file is required (blockplan-only). "
+            "Create config/channels.json or pass --channel-config.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     program_director = ProgramDirector(
         host="0.0.0.0",
         port=port,
-        schedule_dir=Path(schedule_dir),
+        schedule_dir=Path(schedule_dir) if schedule_dir else None,
         channel_config_provider=config_provider,
     )
     program_director.start()
@@ -65,7 +73,7 @@ def start(
 @app.command("start-channel")
 def start_channel_cmd(
     channel_id: str = typer.Argument(..., help="Channel ID to start (e.g. retro1)"),
-    schedule_dir: str = typer.Option(..., help="Directory containing schedule.json files"),
+    schedule_dir: str = typer.Option(None, help="(Deprecated; unused.) Blockplan mode uses channel config."),
     port: int = typer.Option(9000, help="Port to serve the HTTP API and TS streams"),
     channel_config: str = typer.Option(
         None,
@@ -105,10 +113,14 @@ def start_channel_cmd(
         config_provider = FileChannelConfigProvider(config_path)
         typer.echo(f"Loading channel config from: {config_path}")
 
+    if config_provider is None:
+        typer.echo("Error: Channel config file is required.", err=True)
+        raise typer.Exit(1)
+
     program_director = ProgramDirector(
         host="0.0.0.0",
         port=port,
-        schedule_dir=Path(schedule_dir),
+        schedule_dir=Path(schedule_dir) if schedule_dir else None,
         channel_config_provider=config_provider,
     )
     # CLI-started channel: pass grace period so channel tears down if no viewer connects in time

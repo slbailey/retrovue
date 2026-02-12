@@ -97,7 +97,7 @@ class TestChannelConfig:
                 "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
                 "audio": {"sample_rate": 48000, "channels": 2},
             },
-            "schedule_source": "file",
+            "schedule_source": "phase3",
             "schedule_config": {"path": "/schedules/retro1.json"},
         }
         cc = ChannelConfig.from_dict(data)
@@ -106,22 +106,45 @@ class TestChannelConfig:
         assert cc.channel_id_int == 5
         assert cc.name == "Retro Channel 1"
         assert cc.program_format.video_width == 1920
-        assert cc.schedule_source == "file"
+        assert cc.schedule_source == "phase3"
         assert cc.schedule_config["path"] == "/schedules/retro1.json"
 
-    def test_from_dict_defaults(self):
-        """from_dict() uses defaults for optional fields."""
+    def test_from_dict_requires_schedule_source(self):
+        """from_dict() requires schedule_source (blockplan only; no mock default)."""
         data = {
             "channel_id": "test",
             "channel_id_int": 99,
             "name": "Test Channel",
         }
-        cc = ChannelConfig.from_dict(data)
+        with pytest.raises(ValueError) as exc_info:
+            ChannelConfig.from_dict(data)
+        assert "schedule_source" in str(exc_info.value)
 
-        assert cc.schedule_source == "mock"
+    def test_from_dict_accepts_phase3(self):
+        """from_dict() accepts schedule_source 'phase3' and uses defaults for other optional fields."""
+        data = {
+            "channel_id": "test",
+            "channel_id_int": 99,
+            "name": "Test Channel",
+            "schedule_source": "phase3",
+        }
+        cc = ChannelConfig.from_dict(data)
+        assert cc.schedule_source == "phase3"
         assert cc.schedule_config == {}
-        # Default program format
         assert cc.program_format == DEFAULT_PROGRAM_FORMAT
+
+    def test_from_dict_rejects_mock_schedule_source(self):
+        """from_dict() rejects schedule_source 'mock' (Phase8 Decommission Contract)."""
+        data = {
+            "channel_id": "test",
+            "channel_id_int": 1,
+            "name": "Test",
+            "schedule_source": "mock",
+        }
+        with pytest.raises(ValueError) as exc_info:
+            ChannelConfig.from_dict(data)
+        assert "Phase8DecommissionContract" in str(exc_info.value)
+        assert "mock" in str(exc_info.value)
 
     def test_frozen_immutable(self):
         """ChannelConfig is frozen/immutable."""
@@ -171,7 +194,7 @@ class TestFileChannelConfigProvider:
                         "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
                         "audio": {"sample_rate": 48000, "channels": 2},
                     },
-                    "schedule_source": "mock",
+                    "schedule_source": "phase3",
                     "schedule_config": {},
                 }
             ]
@@ -205,12 +228,12 @@ class TestFileChannelConfigProvider:
         """reload() re-reads from file."""
         content1 = json.dumps({
             "channels": [
-                {"channel_id": "ch1", "channel_id_int": 1, "name": "Channel 1"}
+                {"channel_id": "ch1", "channel_id_int": 1, "name": "Channel 1", "schedule_source": "phase3"}
             ]
         })
         content2 = json.dumps({
             "channels": [
-                {"channel_id": "ch2", "channel_id_int": 2, "name": "Channel 2"}
+                {"channel_id": "ch2", "channel_id_int": 2, "name": "Channel 2", "schedule_source": "phase3"}
             ]
         })
 

@@ -67,7 +67,7 @@ def _blockplan_only_config() -> ChannelConfig:
         channel_id_int=1,
         name="Guard Test Channel",
         program_format=DEFAULT_PROGRAM_FORMAT,
-        schedule_source="mock",
+        schedule_source="phase3",
         blockplan_only=True,
     )
 
@@ -79,7 +79,7 @@ def _normal_config() -> ChannelConfig:
         channel_id_int=1,
         name="Guard Test Channel",
         program_format=DEFAULT_PROGRAM_FORMAT,
-        schedule_source="mock",
+        schedule_source="phase3",
         blockplan_only=False,
     )
 

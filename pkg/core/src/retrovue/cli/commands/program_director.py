@@ -20,7 +20,6 @@ app = typer.Typer(help="Retrovue Program Director commands")
 @app.command("start")
 def start(
     config_file: str = typer.Option(None, "--config", "-c", help="Path to retrovue.json (default: auto-detect)"),
-    schedule_dir: str = typer.Option(None, help="Directory containing schedule.json files (Phase 8); if omitted, use config file or mock schedule"),
     port: int = typer.Option(None, help="Port for HTTP server (default: from config or 8000)"),
     # Mock schedule: grid + filler (no real schedule)
     mock_schedule_grid: bool = typer.Option(False, help="Use mock grid schedule (program + filler on 30-minute grid)"),
@@ -55,7 +54,6 @@ def start(
     Mock grid (--mock-schedule-grid):
     - Uses fixed 30-minute grid with program + filler model
     - Requires --program-asset, --program-duration, and --filler-asset
-    - Does not require schedule_dir (uses grid-based scheduling)
 
     Mock A/B (--mock-schedule-ab): Air harness for channel test-1
     - Alternating asset A and B every N seconds, 24/7
@@ -79,24 +77,20 @@ def start(
     # CLI options override config file values (single port; no separate daemon)
     http_port = port if port is not None else runtime_config.program_director_port
 
-    # Load channel config provider from config file path
+    # Load channel config provider from config file path (required for blockplan channels)
     channel_config_provider = None
     channels_config_path = runtime_config.get_channels_config_path()
     if channels_config_path.exists():
         channel_config_provider = FileChannelConfigProvider(channels_config_path)
         typer.echo(f"Loaded channel configs from {channels_config_path}")
 
-    # Determine schedule directory
-    # Priority: CLI arg > config file > None (mock schedule)
-    effective_schedule_dir = None
-    if schedule_dir:
-        effective_schedule_dir = Path(schedule_dir)
-    elif not mock_schedule_grid and not mock_schedule_ab:
-        # Check if schedules_dir from config exists and has schedule files
-        schedules_dir_path = runtime_config.get_schedules_dir_path()
-        if schedules_dir_path.exists() and list(schedules_dir_path.glob("*.json")):
-            effective_schedule_dir = schedules_dir_path
-            typer.echo(f"Using schedules from {schedules_dir_path}")
+    if not mock_schedule_ab and not mock_schedule_grid and channel_config_provider is None:
+        typer.echo(
+            "Error: Channel config is required. Create a channels config file (e.g. config/channels.json) "
+            "or use --mock-schedule-ab / --mock-schedule-grid for testing.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     # Validate mock A/B configuration
     if mock_schedule_ab:
@@ -135,7 +129,6 @@ def start(
         program_director = ProgramDirector(
             host="0.0.0.0",
             port=http_port,
-            schedule_dir=Path("/tmp"),
             channel_config_provider=channel_config_provider,
             mock_schedule_ab_mode=True,
             asset_a_path=asset_a,
@@ -146,7 +139,6 @@ def start(
         program_director = ProgramDirector(
             host="0.0.0.0",
             port=http_port,
-            schedule_dir=Path("/tmp"),
             channel_config_provider=channel_config_provider,
             mock_schedule_grid_mode=True,
             program_asset_path=program_asset,
@@ -158,7 +150,6 @@ def start(
         program_director = ProgramDirector(
             host="0.0.0.0",
             port=http_port,
-            schedule_dir=effective_schedule_dir,
             channel_config_provider=channel_config_provider,
         )
 
