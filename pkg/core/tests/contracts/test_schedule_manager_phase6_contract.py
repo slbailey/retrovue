@@ -2,7 +2,7 @@
 Schedule Manager Phase 6 Contract Tests
 
 Tests the mid-segment join (seek) functionality defined in:
-    docs/contracts/runtime/ScheduleManagerPhase6Contract.md
+    docs/contracts/runtime/ScheduleManagerContract.md
 
 Phase 6 implements mid-segment join (seek) functionality. When a viewer tunes in
 mid-program, playback starts at the correct position within the episode rather
@@ -162,6 +162,7 @@ class TestP6T001OffsetCalculation:
     ):
         """Offset is elapsed time from segment start, not slot start."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Segment starts at 14:00, query at 14:22:30
         at_time = datetime(2025, 1, 30, 14, 22, 30, tzinfo=timezone.utc)
@@ -176,6 +177,7 @@ class TestP6T001OffsetCalculation:
     ):
         """Offset calculation preserves subsecond precision."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Segment starts at 14:00, query at 14:05:00.500 (500ms)
         at_time = datetime(2025, 1, 30, 14, 5, 0, 500000, tzinfo=timezone.utc)
@@ -199,6 +201,7 @@ class TestP6T002OffsetAtSegmentStart:
     ):
         """Offset is 0 when now equals segment.start_utc."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Query exactly at 14:00:00
         at_time = datetime(2025, 1, 30, 14, 0, 0, tzinfo=timezone.utc)
@@ -211,6 +214,7 @@ class TestP6T002OffsetAtSegmentStart:
     ):
         """Per INV-P6-001: if now < segment.start_utc, offset MUST be 0."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Query before first slot (13:59:00, before 14:00 segment)
         # The schedule service should return next segment with 0 offset
@@ -234,6 +238,7 @@ class TestP6T003OffsetMidSegment:
     def test_offset_at_5_minutes(self, schedule_service: ScheduleManagerBackedScheduleService):
         """5 minutes into segment = 300000 ms offset."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 5, 0, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("test-channel", at_time)
@@ -245,6 +250,7 @@ class TestP6T003OffsetMidSegment:
     ):
         """12:30 into segment = 750000 ms offset."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 12, 30, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("test-channel", at_time)
@@ -254,6 +260,7 @@ class TestP6T003OffsetMidSegment:
     def test_offset_near_segment_end(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Offset near end of 30-minute segment."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # 28 minutes into 30-minute segment
         at_time = datetime(2025, 1, 30, 14, 28, 0, tzinfo=timezone.utc)
@@ -310,6 +317,7 @@ class TestP6T011ZeroOffset:
     ):
         """start_pts=0 indicates playback from beginning (no seek needed)."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 0, 0, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("test-channel", at_time)
@@ -339,6 +347,7 @@ class TestP6T012NearEOFSeek:
         - Signal special handling
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Query at 14:29:00 (29 minutes into 30-minute episode)
         at_time = datetime(2025, 1, 30, 14, 29, 0, tzinfo=timezone.utc)
@@ -372,6 +381,7 @@ class TestINVP6001SeekOffsetCalculation:
         Note: seek_offset_seconds is for multi-part segments (not tested here).
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Segment starts at 14:00, query at 14:15:45
         at_time = datetime(2025, 1, 30, 14, 15, 45, tzinfo=timezone.utc)
@@ -384,6 +394,7 @@ class TestINVP6001SeekOffsetCalculation:
     def test_offset_never_negative(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Offset must never be negative, even with clock drift."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Various query times
         times = [
@@ -417,6 +428,7 @@ class TestIllusionGuarantee:
         3. Verify playback position is approximately 12:30 into episode
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Tune in at 14:12:30
         at_time = datetime(2025, 1, 30, 14, 12, 30, tzinfo=timezone.utc)
@@ -434,6 +446,7 @@ class TestIllusionGuarantee:
         the same offset (shared timeline).
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 20, 0, tzinfo=timezone.utc)
 
@@ -462,6 +475,7 @@ class TestEdgeCases:
         behavior should be well-defined.
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # Query at 14:29:57 (3 seconds before 14:30 segment boundary)
         at_time = datetime(2025, 1, 30, 14, 29, 57, tzinfo=timezone.utc)
@@ -476,6 +490,7 @@ class TestEdgeCases:
     ):
         """start_pts must be an integer (milliseconds)."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 7, 33, 123456, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("test-channel", at_time)
@@ -494,6 +509,7 @@ class TestPlayoutPlanFormat:
     def test_plan_contains_start_pts(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Playout plan must contain start_pts field for seek."""
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 10, 0, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("test-channel", at_time)
@@ -508,6 +524,7 @@ class TestPlayoutPlanFormat:
         AIR receives this as start_offset_ms.
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         at_time = datetime(2025, 1, 30, 14, 10, 0, tzinfo=timezone.utc)
         plan = schedule_service.get_playout_plan_now("test-channel", at_time)

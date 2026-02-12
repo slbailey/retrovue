@@ -2,7 +2,7 @@
 Schedule Manager Phase 3 Contract Tests
 
 Tests the invariants and behaviors defined in:
-    docs/contracts/runtime/ScheduleManagerPhase3Contract.md
+    docs/contracts/runtime/ScheduleManagerContract.md
 
 Status: Implemented
 

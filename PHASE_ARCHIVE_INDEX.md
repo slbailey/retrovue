@@ -89,15 +89,7 @@ Cross-repo index of markdown documentation under `docs/`, `pkg/air/docs/`, and `
 | core | pkg/core/docs/contracts/README.md | — | contracts index | yes | high | Authoritative index; normative contracts. |
 | core | pkg/core/docs/contracts/resources/MasterClockContract.md | — | clock | yes | high | MC-001–MC-007; Core runtime clock. |
 | core | pkg/core/docs/contracts/resources/ChannelManagerContract.md | — | channel, runtime | yes | high | ChannelManager behavior. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerContract.md | 0 | scheduling | yes | high | Phase 0 design; INVARIANT refs; links to Air laws. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase1Contract.md | 1 | scheduling | yes | high | ScheduleManager Phase 1. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase2Contract.md | 2 | scheduling | yes | high | ScheduleManager Phase 2. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase3Contract.md | 3 | scheduling | yes | high | ScheduleManager Phase 3. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase4Contract.md | 4 | scheduling | yes | high | PlayoutPipeline mapping; cross-refs Air. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase5Contract.md | 5 | scheduling | yes | high | ScheduleManager Phase 5. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase6Contract.md | 6 | scheduling | yes | high | ScheduleManager Phase 6. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase7Contract.md | 7 | scheduling | yes | high | ScheduleManager Phase 7. |
-| core | pkg/core/docs/contracts/runtime/ScheduleManagerPhase8Contract.md | 8 | scheduling | yes | high | Frame-accurate; cross-refs Air INV-FRAME-001. |
+| core | pkg/core/docs/contracts/runtime/ScheduleManagerContract.md | — | scheduling | yes | high | Consolidated ScheduleManager; grid, ScheduleDay, dynamic content, runtime, mid-segment seek. |
 | core | pkg/core/docs/contracts/resources/*.md | — | CLI, resources | yes | med | 40+ resource contracts (Source, Asset, Channel, etc.). |
 | core | pkg/core/docs/contracts/_ops/*.md | — | ops | yes | med | UnitOfWork, ProductionSafety, DestructiveOperation, SyncIdempotency. |
 | core | pkg/core/docs/contracts/cli/*.md | — | CLI | yes | low | CLI command contracts. |

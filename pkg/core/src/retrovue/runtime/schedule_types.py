@@ -237,7 +237,7 @@ class DailyScheduleConfig:
     programs are needed throughout the broadcast day.
 
     Note: DailyScheduleConfig is the concrete runtime config implementing
-    the DailySchedule contract from ScheduleManagerPhase1Contract.md.
+    the DailySchedule contract from ScheduleManagerContract.md.
     """
     grid_minutes: int                      # Grid slot duration (e.g., 30)
     programs: list[ScheduledProgram]       # Programs throughout the day
@@ -401,7 +401,7 @@ class ResolvedScheduleDay:
     INV-P3-008: Resolution Idempotence - same (channel, day) resolved at most once.
     """
     programming_day_date: date
-    resolved_slots: list[ResolvedSlot]  # Per-block asset details for Stage 3+
+    resolved_slots: list[ResolvedSlot]  # Per-block asset details (from segmentation)
     resolution_timestamp: datetime      # When this day was resolved
     sequence_state: SequenceState       # State snapshot at resolution time
     program_events: list[ProgramEvent] = field(default_factory=list)

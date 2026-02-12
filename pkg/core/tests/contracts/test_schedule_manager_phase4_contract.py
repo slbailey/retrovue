@@ -2,7 +2,7 @@
 Schedule Manager Phase 4 Contract Tests
 
 Tests the validation scenarios defined in:
-    docs/contracts/runtime/ScheduleManagerPhase4Contract.md
+    docs/contracts/runtime/ScheduleManagerContract.md
 
 Phase 4 is a demonstration/validation phase that proves Phase 3 works
 with real episode durations. No new runtime behavior is tested.

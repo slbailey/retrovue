@@ -2,7 +2,7 @@
 Schedule Manager Implementation
 
 Production ScheduleManager as defined in:
-    docs/contracts/runtime/ScheduleManagerPhase3Contract.md
+    docs/contracts/runtime/ScheduleManagerContract.md
 """
 
 from datetime import datetime, date, time, timedelta, timezone
@@ -250,7 +250,7 @@ class ScheduleManager:
                 resolved_asset=resolved_asset,
             ))
 
-            # ResolvedSlots carry per-block asset details for Stage 3+.
+            # ResolvedSlots carry per-block asset details (from segmentation).
             consumed = min(block_span, len(slots) - slot_idx)
             for block_offset in range(consumed):
                 s = slots[slot_idx + block_offset]

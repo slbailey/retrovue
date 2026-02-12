@@ -1,18 +1,10 @@
-"""
-Planning Pipeline — Stage 0 through Stage 6
+"""Planning Pipeline
 
 Headless, artifact-producing pipeline that transforms editorial intent into
-execution-ready transmission logs. Each stage produces a named artifact
-governed by contract. Testable with no database, no filesystem, no AIR.
+execution-ready transmission logs. Directive → SchedulePlan → ScheduleDay →
+EPG → SegmentedBlocks → FilledBlocks → TransmissionLog (optionally locked).
 
-Artifact Map:
-  Stage 0: SchedulePlanArtifact    (editorial intent, date-independent)
-  Stage 1: ScheduleDayArtifact     (frozen snapshot for one channel/date)
-  Stage 2: list[EPGEvent]          (viewer-facing guide, derived)
-  Stage 3: list[SegmentedBlock]    (content segments + inserted breaks)
-  Stage 4: list[FilledBlock]       (breaks filled with filler material)
-  Stage 5: TransmissionLog         (wall-clock aligned, execution-ready)
-  Stage 6: TransmissionLog         (horizon-locked, immutable)
+Testable with no database, no filesystem, no AIR.
 
 Contract authorities:
   ScheduleManagerPlanningAuthority v0.1
@@ -108,7 +100,7 @@ class BreakFillPolicy:
 
 
 # =============================================================================
-# Stage 0 Types — Editorial Intent (date-independent)
+# Editorial Intent (date-independent)
 # =============================================================================
 
 
@@ -136,9 +128,9 @@ class PlanningDirective:
 
 @dataclass
 class SchedulePlanArtifact:
-    """Stage 0 output: editorial intent, date-independent template.
+    """Editorial intent, date-independent template.
 
-    Carries NO broadcast_date. Reusable across any date in Stage 1.
+    Carries NO broadcast_date. Reusable across any date for resolution.
     """
     channel_id: str
     grid_block_minutes: int
@@ -148,7 +140,7 @@ class SchedulePlanArtifact:
 
 
 # =============================================================================
-# Stage 1 Type — Schedule Day wrapper
+# Schedule Day
 # =============================================================================
 
 
@@ -165,7 +157,7 @@ class PlanningRunRequest:
 
 @dataclass
 class ScheduleDayArtifact:
-    """Stage 1 output: frozen snapshot of what airs when for one channel/date.
+    """Frozen snapshot of what airs when for one channel/date.
 
     Wraps the internal ResolvedScheduleDay to present the contract-named artifact.
     """
@@ -174,7 +166,7 @@ class ScheduleDayArtifact:
 
 
 # =============================================================================
-# Stage 3 Types — Segmentation (per-block, no wall-clock)
+# Segmentation (per-block, no wall-clock)
 # =============================================================================
 
 
@@ -198,7 +190,7 @@ class BreakSpec:
 
 @dataclass
 class SegmentedBlock:
-    """Stage 3 output per block: content segments + inserted breaks.
+    """Per block: content segments + inserted breaks.
 
     All offsets relative to block start (ms). No wall-clock times.
     Identity derived from ProgramEvent per Grid Block Model
@@ -216,7 +208,7 @@ class SegmentedBlock:
 
 
 # =============================================================================
-# Stage 4 Types — Playlist (filled breaks)
+# Playlist (filled breaks)
 # =============================================================================
 
 
@@ -242,7 +234,7 @@ class FilledBreak:
 
 @dataclass
 class FilledBlock:
-    """Stage 4 output: content + filled breaks (Playlist)."""
+    """Content + filled breaks (Playlist)."""
     slot_index: int
     resolved_slot: ResolvedSlot
     content_segments: list[ContentSegmentSpec]
@@ -255,7 +247,7 @@ class FilledBlock:
 
 
 # =============================================================================
-# Stage 5 Types — Transmission Log (wall-clock aligned)
+# Transmission Log (wall-clock aligned)
 # =============================================================================
 
 
@@ -280,16 +272,16 @@ class TransmissionLog:
 
 
 # =============================================================================
-# Stage 0: Directive → Schedule Plan
+# Directive → Schedule Plan
 # =============================================================================
 
 
-def stage_0_build_schedule_plan(
+def build_schedule_plan(
     directive: PlanningDirective,
 ) -> SchedulePlanArtifact:
     """Capture editorial intent as a date-independent plan.
 
-    Stage 0 does NOT:
+    Does NOT:
     - Perform grid expansion or produce ScheduleSlots
     - Do any grid math, duration calculation, or date-specific logic
     - Query the Asset Library or resolve episodes
@@ -313,7 +305,7 @@ def stage_0_build_schedule_plan(
 
 
 # =============================================================================
-# Stage 1: Schedule Plan + Date → Schedule Day
+# Schedule Plan + Date → Schedule Day
 # =============================================================================
 
 
@@ -357,7 +349,7 @@ def _zone_to_slots(
     return slots
 
 
-def stage_1_resolve_schedule_day(
+def resolve_schedule_day(
     plan: SchedulePlanArtifact,
     run_request: PlanningRunRequest,
     config: ScheduleManagerConfig,
@@ -392,11 +384,11 @@ def stage_1_resolve_schedule_day(
 
 
 # =============================================================================
-# Stage 2: Schedule Day → EPG Events
+# Schedule Day → EPG Events
 # =============================================================================
 
 
-def stage_2_derive_epg(
+def derive_epg(
     channel_id: str,
     schedule_day: ScheduleDayArtifact,
     programming_day_start_hour: int,
@@ -471,11 +463,11 @@ def _slot_time_to_datetime(
 
 
 # =============================================================================
-# Stage 3: Schedule Day → Segmented Blocks
+# Schedule Day → Segmented Blocks
 # =============================================================================
 
 
-def stage_3_segment_blocks(
+def segment_blocks(
     schedule_day: ScheduleDayArtifact,
     grid_block_minutes: int,
     asset_library: AssetLibrary,
@@ -664,11 +656,11 @@ def _segment_synthetic(
 
 
 # =============================================================================
-# Stage 4: Segmented Blocks → Playlist (Filled Blocks)
+# Fill breaks Segmented Blocks → Playlist (Filled Blocks)
 # =============================================================================
 
 
-def stage_4_fill_breaks(
+def fill_breaks(
     segmented_blocks: list[SegmentedBlock],
     asset_library: AssetLibrary,
     policy: BreakFillPolicy | None = None,
@@ -753,11 +745,11 @@ def _fill_one_break(
 
 
 # =============================================================================
-# Stage 5: Playlist → Transmission Log
+# Assemble transmission log Playlist → Transmission Log
 # =============================================================================
 
 
-def stage_5_assemble_transmission_log(
+def assemble_transmission_log(
     channel_id: str,
     broadcast_date: date,
     filled_blocks: list[FilledBlock],
@@ -867,11 +859,11 @@ def to_block_plan(entry: TransmissionLogEntry, channel_id_int: int) -> dict[str,
 
 
 # =============================================================================
-# Stage 6: Transmission Log → Horizon-Locked Transmission Log
+# Transmission Log → Horizon-Locked Transmission Log
 # =============================================================================
 
 
-def stage_6_lock_for_execution(
+def lock_for_execution(
     log: TransmissionLog,
     lock_time: datetime,
 ) -> TransmissionLog:
@@ -904,42 +896,29 @@ def run_planning_pipeline(
     break_profile: SyntheticBreakProfile | None = None,
     break_fill_policy: BreakFillPolicy | None = None,
 ) -> TransmissionLog:
-    """Execute Stages 0→6 in sequence.
-
-    Each stage produces its named artifact, which becomes input to the next.
-    If lock_time is provided, Stage 6 marks the log as execution-eligible.
+    """Execute pipeline: Directive → SchedulePlan → ScheduleDay → EPG →
+    SegmentedBlocks → FilledBlocks → TransmissionLog (optionally locked).
     """
     directive = run_request.directive
 
-    # Stage 0
-    plan = stage_0_build_schedule_plan(directive)
-
-    # Stage 1
-    schedule_day = stage_1_resolve_schedule_day(plan, run_request, config)
-
-    # Stage 2
-    epg_events = stage_2_derive_epg(
+    plan = build_schedule_plan(directive)
+    schedule_day = resolve_schedule_day(plan, run_request, config)
+    epg_events = derive_epg(
         directive.channel_id,
         schedule_day,
         directive.programming_day_start_hour,
         grid_block_minutes=directive.grid_block_minutes,
     )
-
-    # Stage 3
-    segmented = stage_3_segment_blocks(
+    segmented = segment_blocks(
         schedule_day,
         directive.grid_block_minutes,
         asset_library,
         break_profile=break_profile,
     )
-
-    # Stage 4
-    filled = stage_4_fill_breaks(
+    filled = fill_breaks(
         segmented, asset_library, policy=break_fill_policy
     )
-
-    # Stage 5
-    log = stage_5_assemble_transmission_log(
+    log = assemble_transmission_log(
         channel_id=directive.channel_id,
         broadcast_date=run_request.broadcast_date,
         filled_blocks=filled,
@@ -948,10 +927,8 @@ def run_planning_pipeline(
         grid_block_minutes=directive.grid_block_minutes,
         generation_time=run_request.resolution_time,
     )
-
-    # Stage 6 (optional)
     if lock_time is not None:
-        log = stage_6_lock_for_execution(log, lock_time)
+        log = lock_for_execution(log, lock_time)
 
     return log
 

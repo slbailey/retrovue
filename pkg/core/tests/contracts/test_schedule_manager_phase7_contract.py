@@ -2,7 +2,7 @@
 Schedule Manager Phase 7 Contract Tests
 
 Tests the seamless segment transitions defined in:
-    docs/contracts/runtime/ScheduleManagerPhase7Contract.md
+    docs/contracts/runtime/ScheduleManagerContract.md
 
 Phase 7 guarantees that segment transitions appear seamless to viewers. When one
 segment ends and the next begins, the transition must be imperceptible - no pauses,
@@ -385,6 +385,7 @@ class TestP7T005PrebufferReadiness:
         LoadPreview must be called before SwitchToLive is needed.
         """
         schedule_service.load_schedule("test-channel")
+        schedule_service.prime_schedule_day("test-channel", date(2025, 1, 30))
 
         # At 14:00, get playout plan
         at_time = datetime(2025, 1, 30, 14, 0, 0, tzinfo=timezone.utc)

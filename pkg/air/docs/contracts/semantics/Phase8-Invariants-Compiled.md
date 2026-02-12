@@ -10,13 +10,13 @@ This document describes legacy playlist/Phase8 execution and is no longer active
 
 **Authoritative definition of broadcast-grade laws** (clock authority, CT monotonicity, output liveness, audio format, seamless switching) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** This document compiles Phase 8 refinements only.
 
-Compiled from: Core `ScheduleManagerPhase8Contract.md`, AIR `LegacyPreviewSwitchModel.md` (Retired), and code comments. For full statements see source docs.
+Compiled from: Core `ScheduleManagerContract.md` (deprecated sections), AIR `LegacyPreviewSwitchModel.md` (Retired), and code comments. For full statements see source docs.
 
 ## Document Role
 
 This document is a **Coordination Contract**, refining higher-level laws. It does not override laws defined in this directory (see [PlayoutInvariants-BroadcastGradeGuarantees.md](../PlayoutInvariants-BroadcastGradeGuarantees.md)).
 
-## 1. Timeline (Core — ScheduleManagerPhase8Contract)
+## 1. Timeline (Core — ScheduleManagerContract, deprecated)
 
 | ID | Name |
 |----|------|
@@ -72,7 +72,7 @@ This document is a **Coordination Contract**, refining higher-level laws. It doe
 
 ## 5. Source locations
 
-- **Core:** `pkg/core/docs/contracts/runtime/ScheduleManagerPhase8Contract.md` (§8, §14–15, Appendix A)
+- **Core:** `pkg/core/docs/contracts/runtime/ScheduleManagerContract.md` (deprecated section 10)
 - **AIR 8.3 (Retired):** `pkg/air/docs/contracts/coordination/LegacyPreviewSwitchModel.md`
 - **Code:** PlayoutEngine.cpp, FileProducer.cpp, TimelineController.cpp, EncoderPipeline.cpp, MpegTSOutputSink.cpp, channel_manager.py
 
