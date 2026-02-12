@@ -8,25 +8,15 @@ These tests enforce the normative outcomes of "Phase 8 removed":
 - Single runtime playout authority: blockplan
 - No Phase8 services in ProgramDirector registry
 - ChannelConfig rejects non-blockplan schedule_source
-- load_playlist() raises canonical exception when blockplan-only
-- No production import of Phase8AirProducer
-
-Tests that assert Phase 8 absence may be xfail until the deletion PR lands.
+- No production import of Phase8AirProducer (playlist/load_playlist removed)
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from retrovue.runtime.channel_manager import (
-    ChannelManager,
-    Playlist,
-    PlaylistSegment,
-)
-from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.config import (
     BLOCKPLAN_SCHEDULE_SOURCE,
     ChannelConfig,
@@ -73,65 +63,6 @@ def test_valid_schedule_sources_is_phase3():
 
 
 # =============================================================================
-# load_playlist() raises canonical exception
-# =============================================================================
-
-class _StubScheduleService:
-    def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
-        return (True, None)
-
-    def get_playout_plan_now(self, channel_id: str, at_station_time) -> list[dict]:
-        return [{"asset_path": "assets/A.mp4", "duration_ms": 10_000}]
-
-
-class _StubProgramDirector:
-    def get_channel_mode(self, channel_id: str) -> str:
-        return "normal"
-
-
-def test_load_playlist_raises_canonical_exception():
-    """Attempting to call load_playlist() on blockplan-only channel raises RuntimeError."""
-    config = ChannelConfig(
-        channel_id="guard-test",
-        channel_id_int=1,
-        name="Guard Test Channel",
-        program_format=DEFAULT_PROGRAM_FORMAT,
-        schedule_source=BLOCKPLAN_SCHEDULE_SOURCE,
-        blockplan_only=True,
-    )
-    mgr = ChannelManager(
-        channel_id="guard-test",
-        clock=MasterClock(),
-        schedule_service=_StubScheduleService(),
-        program_director=_StubProgramDirector(),
-    )
-    mgr.channel_config = config
-    now = datetime.now(timezone.utc)
-    seg = PlaylistSegment(
-        segment_id="seg-0001",
-        start_at=now,
-        duration_seconds=10,
-        type="PROGRAM",
-        asset_id="asset-001",
-        asset_path="/a.mp4",
-        frame_count=300,
-    )
-    playlist = Playlist(
-        channel_id="guard-test",
-        channel_timezone="UTC",
-        window_start_at=now,
-        window_end_at=now + timedelta(seconds=10),
-        generated_at=now,
-        source="TEST",
-        segments=(seg,),
-    )
-    with pytest.raises(RuntimeError) as exc_info:
-        mgr.load_playlist(playlist)
-    msg = str(exc_info.value)
-    assert "INV-CANONICAL-BOOT" in msg or "forbidden" in msg.lower() or "blockplan_only" in msg
-
-
-# =============================================================================
 # ProgramDirector registry does not register Phase8 services
 # =============================================================================
 
@@ -156,10 +87,9 @@ def test_program_director_registry_does_not_register_phase8_services():
 
 
 # =============================================================================
-# No import of Phase8AirProducer in production code (xfail until removed)
+# No import of Phase8AirProducer in production code
 # =============================================================================
 
-@pytest.mark.xfail(reason="Phase8 not yet removed; Phase8AirProducer still referenced in Core")
 def test_no_import_of_phase8_air_producer_in_core_src():
     """No production code under pkg/core/src may import Phase8AirProducer."""
     repo_root = Path(__file__).resolve().parents[5]

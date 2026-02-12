@@ -149,7 +149,7 @@ def run_server():
             manager.schedule_service = simple_schedule
 
             # Also need to override _build_producer_for_mode because ProgramDirector
-            # overwrote it with a factory that uses Phase8AirProducer
+            # overwrote it with a factory that uses BlockPlanProducer
             def build_blockplan_producer(mode: str, mgr=manager, ch_config=channel_config):
                 logger.info(f"FIRST-ON-AIR: Building BlockPlanProducer for channel {channel_id}")
                 return BlockPlanProducer(
