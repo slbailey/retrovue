@@ -139,6 +139,30 @@ class ChannelConfig:
         )
 
 
+# Phase8 Decommission Contract: only blockplan schedule source is valid.
+# See docs/contracts/architecture/Phase8DecommissionContract.md
+BLOCKPLAN_SCHEDULE_SOURCE = "phase3"
+
+
+def valid_schedule_sources() -> tuple[str, ...]:
+    """Return the only allowed schedule_source values (blockplan-producing)."""
+    return (BLOCKPLAN_SCHEDULE_SOURCE,)
+
+
+def assert_schedule_source_valid(config: ChannelConfig) -> None:
+    """
+    Raise ValueError if config.schedule_source is not a valid blockplan schedule source.
+
+    Phase8 Decommission Contract: no channel config may use schedule_source
+    other than the blockplan one (e.g. "phase3"). Call this at config load or use.
+    """
+    if config.schedule_source not in valid_schedule_sources():
+        raise ValueError(
+            f"Phase8DecommissionContract: schedule_source must be one of "
+            f"{valid_schedule_sources()}, got {config.schedule_source!r}"
+        )
+
+
 class ChannelConfigProvider(Protocol):
     """Protocol for providing channel configuration."""
 
@@ -277,4 +301,7 @@ __all__ = [
     "RuntimeConfig",
     "DEFAULT_PROGRAM_FORMAT",
     "MOCK_CHANNEL_CONFIG",
+    "BLOCKPLAN_SCHEDULE_SOURCE",
+    "valid_schedule_sources",
+    "assert_schedule_source_valid",
 ]
