@@ -103,7 +103,7 @@ EPG and execution horizons ahead of wall-clock time.  See INV-P5-005.
 - `ScheduleManagerBackedScheduleService.get_playout_plan_now()` checks if day is resolved
 - If not resolved, calls `ScheduleManager.resolve_schedule_day()`
 - Same logic in `get_epg_events()` for EPG queries
-- In `authoritative` mode: raises `NoScheduleDataError` (planning failure)
+- In `authoritative` mode: raises `HorizonNoScheduleDataError` (planning failure)
 
 ### INV-P5-003: Playout Plan Transformation
 
@@ -154,7 +154,7 @@ in non-legacy modes.  Aligns with:
 
 **Enforcement:**
 - `ScheduleManagerBackedScheduleService`: In `authoritative` mode, `get_playout_plan_now()`
-  and `get_epg_events()` raise `NoScheduleDataError` if data is missing.
+  and `get_epg_events()` raise `HorizonNoScheduleDataError` if data is missing.
   No silent empty returns. Missing data is an explicit planning failure.
 - `HorizonBackedScheduleService`: Read-only consumer of
   `ExecutionWindowStore` (playout) and `ResolvedScheduleStore` (EPG).
@@ -163,7 +163,7 @@ in non-legacy modes.  Aligns with:
   in authoritative mode; `ScheduleManagerBackedScheduleService` in legacy/shadow modes.
 - `ExecutionWindowStore.get_entry_at()`: Defaults to `locked_only=True`.
   Unlocked entries are invisible to consumers. POLICY_VIOLATION logged.
-- `NoScheduleDataError`: Defined in `horizon_config.py`. Propagates
+- `HorizonNoScheduleDataError`: Defined in `horizon_config.py`. Propagates
   as an unhandled exception — callers must not catch and regenerate.
 
 **Mode matrix:**
@@ -172,7 +172,7 @@ in non-legacy modes.  Aligns with:
 |------|---------------|---------------------|--------------|
 | `legacy` | On-demand (INV-P5-002) | On-demand | Auto-resolve |
 | `shadow` | HorizonManager + on-demand fallback | HorizonManager + on-demand fallback | Auto-resolve (logged) |
-| `authoritative` | HorizonManager only | HorizonManager only | `NoScheduleDataError` raised |
+| `authoritative` | HorizonManager only | HorizonManager only | `HorizonNoScheduleDataError` raised |
 
 **Configuration:** `RETROVUE_HORIZON_AUTHORITY={legacy,shadow,authoritative}`
 
@@ -332,7 +332,7 @@ Returns HorizonManager health report for a channel (shadow/authoritative only).
 | P5-T005 | Config activation | schedule_source selects correct service |
 | P5-T006 | Episode identity | Playout episode matches EPG episode |
 | P5-T007 | Seek offset | Mid-episode join has correct offset |
-| P5-T008 | Authoritative no-resolve | authoritative mode raises `NoScheduleDataError` on unresolved access; zero resolve/pipeline calls from consumers |
+| P5-T008 | Authoritative no-resolve | authoritative mode raises `HorizonNoScheduleDataError` on unresolved access; zero resolve/pipeline calls from consumers |
 | P5-T009 | Shadow health logging | shadow mode logs health report each evaluation |
 | P5-T010 | Horizon readiness gate | evaluate_once() completes before HTTP server accepts requests |
 | P5-T011 | Lock gate default | `get_entry_at()` defaults to `locked_only=True`; unlocked entries invisible to consumers |

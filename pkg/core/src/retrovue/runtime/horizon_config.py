@@ -44,16 +44,10 @@ class HorizonAuthorityMode(Enum):
     AUTHORITATIVE = "authoritative"
 
 
-class NoScheduleDataError(Exception):
-    """Raised when a read path encounters missing schedule/execution data
-    in authoritative horizon mode.
-
-    This is a planning failure — the HorizonManager did not extend
-    the horizon far enough.  Consumers must NOT regenerate data in
-    response; they must propagate the error.
-
-    See: ScheduleHorizonManagementContract §5, §7
-         ScheduleExecutionInterfaceContract §6
+class HorizonNoScheduleDataError(Exception):
+    """Raised in authoritative horizon mode when required schedule or execution
+    data is missing because the horizon was not extended far enough.
+    This represents a planning failure and must not trigger auto-resolution.
     """
 
 
