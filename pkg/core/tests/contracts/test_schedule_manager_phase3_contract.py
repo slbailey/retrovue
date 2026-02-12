@@ -200,7 +200,7 @@ def deterministic_random_select(
 # Phase 3 ScheduleManager (Minimal Implementation for Testing)
 # =============================================================================
 
-class Phase3ScheduleManager:
+class ScheduleManager:
     """
     Phase 3 ScheduleManager implementation for testing.
 
@@ -497,9 +497,9 @@ def schedule_manager(
     program_catalog: MockProgramCatalog,
     sequence_store: MockSequenceStateStore,
     resolved_store: MockResolvedScheduleStore,
-) -> Phase3ScheduleManager:
+) -> ScheduleManager:
     """Create a Phase 3 ScheduleManager."""
-    return Phase3ScheduleManager(
+    return ScheduleManager(
         program_catalog=program_catalog,
         sequence_store=sequence_store,
         resolved_store=resolved_store,
@@ -515,7 +515,7 @@ class TestEpisodeSelection:
 
     def test_P3_T001_sequential_episode_selection(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
     ):
         """P3-T001: Sequential episode selection."""
@@ -547,7 +547,7 @@ class TestEpisodeSelection:
 
     def test_P3_T002_sequential_advancement_across_days(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
         resolved_store: MockResolvedScheduleStore,
     ):
@@ -583,7 +583,7 @@ class TestEpisodeSelection:
 
     def test_P3_T003_sequential_wrap_around(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
     ):
         """P3-T003: Sequential wrap-around."""
@@ -613,7 +613,7 @@ class TestEpisodeSelection:
 
     def test_P3_T004_random_selection_determinism(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         resolved_store: MockResolvedScheduleStore,
     ):
         """P3-T004: Random selection determinism."""
@@ -651,7 +651,7 @@ class TestEpisodeSelection:
 
     def test_P3_T005_random_selection_varies_by_day(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T005: Random selection varies by day."""
         slots = [
@@ -690,7 +690,7 @@ class TestEpisodeSelection:
 
     def test_P3_T006_manual_mode_direct_reference(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T006: Manual mode direct reference."""
         slots = [
@@ -720,7 +720,7 @@ class TestEPGIdentity:
 
     def test_P3_T007_epg_identity_immutability(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T007: EPG identity immutability."""
         slots = [
@@ -759,7 +759,7 @@ class TestEPGIdentity:
 
     def test_P3_T008_epg_exists_without_viewers(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T008: EPG exists without viewers."""
         slots = [
@@ -791,7 +791,7 @@ class TestEPGIdentity:
 
     def test_P3_T009_playout_matches_epg(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T009: Playout matches EPG."""
         slots = [
@@ -830,7 +830,7 @@ class TestMultiSlotEpisodes:
 
     def test_P3_T010_movie_spans_multiple_slots(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T010: Movie spans multiple slots."""
         # Movie of the Week (102 min) at 20:00 in 30-min grid
@@ -876,7 +876,7 @@ class TestMultiSlotEpisodes:
 
     def test_P3_T011_multi_slot_seek_offsets(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T011: Multi-slot seek offsets."""
         # This test validates that Traffic Logic would calculate correct offsets
@@ -916,7 +916,7 @@ class TestCrossDayEpisodes:
 
     def test_P3_T012_episode_spans_programming_day_boundary(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T012: Episode spans programming day boundary."""
         # Late movie at 05:00 (before 06:00 programming day start)
@@ -971,7 +971,7 @@ class TestCrossDayEpisodes:
 
     def test_P3_T013_cross_day_sequential_state(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
     ):
         """P3-T013: Cross-day sequential state."""
@@ -1016,7 +1016,7 @@ class TestStateIsolation:
 
     def test_P3_T014_playout_does_not_advance_state(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
     ):
         """P3-T014: Playout does not advance state."""
@@ -1055,7 +1055,7 @@ class TestStateIsolation:
 
     def test_P3_T015_state_advances_only_at_resolution(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
     ):
         """P3-T015: State advances only at resolution."""
@@ -1099,7 +1099,7 @@ class TestBackwardCompatibility:
 
     def test_P3_T016_file_programref_compatibility(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T016: FILE ProgramRef compatibility."""
         slots = [
@@ -1149,7 +1149,7 @@ class TestResolutionIdempotence:
 
     def test_P3_T018_double_resolution_returns_same_result(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
     ):
         """P3-T018: Double resolution returns same result."""
@@ -1189,7 +1189,7 @@ class TestResolutionIdempotence:
 
     def test_P3_T019_horizon_rebuild_does_not_re_resolve(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: MockSequenceStateStore,
         resolved_store: MockResolvedScheduleStore,
     ):
@@ -1236,7 +1236,7 @@ class TestResolutionIdempotence:
         # In production, this would use proper concurrency primitives
 
         resolved_store = MockResolvedScheduleStore()
-        manager = Phase3ScheduleManager(
+        manager = ScheduleManager(
             program_catalog=program_catalog,
             sequence_store=sequence_store,
             resolved_store=resolved_store,
@@ -1278,7 +1278,7 @@ class TestDurationAuthority:
 
     def test_P3_T021_content_shorter_than_slot(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T021: Content shorter than slot."""
         # Cheers episode is 22 min (1320s), slot is 30 min (1800s)
@@ -1309,7 +1309,7 @@ class TestDurationAuthority:
 
     def test_P3_T022_content_longer_than_slot(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T022: Content longer than slot."""
         # Movie is 102 min (6120s), slot is 30 min (1800s)
@@ -1335,7 +1335,7 @@ class TestDurationAuthority:
 
     def test_P3_T023_content_duration_wins_over_slot_metadata(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T023: Content duration wins over slot metadata."""
         # Drama episode is 45 min (2700s)
@@ -1370,7 +1370,7 @@ class TestPlayoutProjection:
 
     def test_P3_T024_playout_regeneration_after_discard(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         resolved_store: MockResolvedScheduleStore,
     ):
         """P3-T024: Playout regeneration after discard."""
@@ -1414,7 +1414,7 @@ class TestPlayoutProjection:
 
     def test_P3_T025_multiple_playout_derivations_match(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P3-T025: Multiple playout derivations match."""
         slots = [
@@ -1458,7 +1458,7 @@ class TestPlayoutProjection:
         """P3-T026: EPG survives playout layer restart."""
         # Create manager and resolve
         resolved_store = MockResolvedScheduleStore()
-        manager1 = Phase3ScheduleManager(
+        manager1 = ScheduleManager(
             program_catalog=program_catalog,
             sequence_store=sequence_store,
             resolved_store=resolved_store,
@@ -1487,7 +1487,7 @@ class TestPlayoutProjection:
         state_before = sequence_store.get_position("channel-1", "cheers")
 
         # "Restart" - create new manager with same stores
-        manager2 = Phase3ScheduleManager(
+        manager2 = ScheduleManager(
             program_catalog=program_catalog,
             sequence_store=sequence_store,
             resolved_store=resolved_store,  # Same resolved store
@@ -1513,7 +1513,7 @@ class TestInvariantSummary:
 
     def test_litmus_test_epg_before_playout(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """
         The Litmus Test: Can a viewer browse the EPG for tomorrow and see

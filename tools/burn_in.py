@@ -37,8 +37,9 @@ Usage:
 
 Arguments:
     --schedule PATH  -- static schedule JSON (default: tools/static_schedule.json)
-    --pipeline       -- use planning pipeline with rolling day adapter (legacy)
-    --horizon        -- use HorizonManager with ExecutionWindowStore (contract-aligned)
+    --pipeline       -- [DEPRECATED] use planning pipeline with rolling day adapter
+    --horizon        -- use HorizonManager with ExecutionWindowStore (contract-aligned;
+                        this is the default when pipeline context is available)
     --dump           -- print transmission log and exit (implies --pipeline)
 
 Environment variables:
@@ -144,7 +145,7 @@ class _PipelineContext:
             ZoneDirective,
         )
         from retrovue.runtime.schedule_types import (
-            Phase3Config,
+            ScheduleManagerConfig,
             ProgramRef,
             ProgramRefType,
         )
@@ -157,7 +158,7 @@ class _PipelineContext:
         self.sequence_store = InMemorySequenceStore()
         self.resolved_store = InMemoryResolvedStore()
 
-        self.config = Phase3Config(
+        self.config = ScheduleManagerConfig(
             grid_minutes=30,
             program_catalog=self.catalog,
             sequence_store=self.sequence_store,
@@ -308,6 +309,85 @@ def _print_transmission_log(log):
     print()
 
 
+def _print_execution_grid(entries, broadcast_date):
+    """Print human-readable grid from ExecutionWindowStore entries.
+
+    Structurally similar to _print_transmission_log but operates on
+    ExecutionEntry objects instead of TransmissionLog.
+    """
+    print()
+    print(f"Execution Grid: date={broadcast_date}  entries={len(entries)}")
+    print()
+    print(f"{'Block':>5}  {'Time':<13}  {'Episode':<40}  Segments")
+    print(f"{'─' * 5}  {'─' * 13}  {'─' * 40}  {'─' * 60}")
+
+    total_content_ms = 0
+    total_filler_ms = 0
+    total_pad_ms = 0
+    episode_uris: set[str] = set()
+
+    for entry in entries:
+        start_dt = datetime.fromtimestamp(
+            entry.start_utc_ms / 1000.0, tz=timezone.utc,
+        ).astimezone()
+        end_dt = datetime.fromtimestamp(
+            entry.end_utc_ms / 1000.0, tz=timezone.utc,
+        ).astimezone()
+        time_str = f"{start_dt:%H:%M}-{end_dt:%H:%M}"
+
+        ep_label = "\u2014"
+        for seg in entry.segments:
+            if seg.get("segment_type") == "episode":
+                ep_label = _episode_label(seg.get("asset_uri"))
+                episode_uris.add(seg.get("asset_uri", ""))
+                break
+
+        seg_parts = []
+        for seg in entry.segments:
+            t = seg.get("segment_type", "?")
+            dur_s = seg.get("segment_duration_ms", 0) // 1000
+            abbr = {
+                "episode": "ep", "filler": "fl", "pad": "pad",
+                "promo": "pr", "ad": "ad",
+            }.get(t, t[:3])
+            seg_parts.append(f"{abbr}:{dur_s}s")
+
+            if t == "episode":
+                total_content_ms += seg.get("segment_duration_ms", 0)
+            elif t in ("filler", "promo", "ad"):
+                total_filler_ms += seg.get("segment_duration_ms", 0)
+            elif t == "pad":
+                total_pad_ms += seg.get("segment_duration_ms", 0)
+
+        total_s = sum(
+            s.get("segment_duration_ms", 0) for s in entry.segments
+        ) // 1000
+        seg_str = " + ".join(seg_parts) + f" = {total_s}s"
+        print(
+            f"{entry.block_index:>5}  {time_str:<13}  "
+            f"{ep_label:<40}  {seg_str}"
+        )
+
+    print()
+    print(
+        f"Summary: {len(entries)} blocks, "
+        f"{len(episode_uris)} unique episodes"
+    )
+    print(
+        f"  Content: {total_content_ms / 1000:.0f}s "
+        f"({total_content_ms / 3_600_000:.1f}h)"
+    )
+    print(
+        f"  Filler:  {total_filler_ms / 1000:.0f}s "
+        f"({total_filler_ms / 3_600_000:.1f}h)"
+    )
+    print(
+        f"  Pad:     {total_pad_ms / 1000:.0f}s "
+        f"({total_pad_ms / 3_600_000:.1f}h)"
+    )
+    print()
+
+
 # ===========================================================================
 # Schedule adapters
 # ===========================================================================
@@ -393,52 +473,6 @@ class _StaticScheduleAdapter:
 
     def get_playout_plan_now(self, channel_id: str, at_station_time) -> list[dict]:
         return self._entries
-
-    def load_schedule(self, channel_id: str):
-        return True, None
-
-
-class _RollingPipelineAdapter:
-    """Rolling schedule adapter that generates new days on demand.
-
-    Uses ``at_station_time`` (passed by ``_resolve_plan_for_block``) to
-    determine the broadcast date, then lazily generates and caches that
-    day's TransmissionLog via the shared ``_PipelineContext``.
-
-    Episode cursors advance correctly across day boundaries because
-    the context's sequence store persists across ``generate_day()`` calls.
-    """
-
-    def __init__(self, ctx: _PipelineContext, programming_day_start_hour: int = 6):
-        self._ctx = ctx
-        self._start_hour = programming_day_start_hour
-        self._day_cache: dict[date, list[dict]] = {}
-        self._lock = threading.Lock()
-
-    def _broadcast_date_for(self, dt: datetime) -> date:
-        """Determine which broadcast day a wall-clock time falls in.
-
-        Times before the programming day start hour belong to the
-        previous calendar day's broadcast day.
-        """
-        if dt.hour < self._start_hour:
-            return (dt - timedelta(days=1)).date()
-        return dt.date()
-
-    def get_playout_plan_now(self, channel_id: str, at_station_time) -> list[dict]:
-        bd = self._broadcast_date_for(at_station_time)
-        with self._lock:
-            if bd not in self._day_cache:
-                log = self._ctx.generate_day(bd)
-                self._day_cache[bd] = [
-                    {"segments": e.segments, "duration_ms": BLOCK_DURATION_MS}
-                    for e in log.entries
-                ]
-                logger.info(
-                    "BURN_IN: Generated schedule for %s (%d blocks)",
-                    bd.isoformat(), len(log.entries),
-                )
-            return self._day_cache[bd]
 
     def load_schedule(self, channel_id: str):
         return True, None
@@ -544,13 +578,17 @@ def main() -> None:
     )
     parser.add_argument(
         "--pipeline", action="store_true",
-        help="Use planning pipeline with rolling day adapter (legacy)",
+        help=(
+            "[REMOVED] Legacy pipeline mode has been removed. "
+            "Use --horizon instead. This flag now exits with an error."
+        ),
     )
     parser.add_argument(
         "--horizon", action="store_true",
         help=(
             "Use HorizonManager with ExecutionWindowStore "
-            "(contract-aligned, no modulo wrapping)"
+            "(contract-aligned, no modulo wrapping). "
+            "This is the default when pipeline context is available."
         ),
     )
     parser.add_argument(
@@ -559,8 +597,32 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    horizon_mode = args.horizon
-    pipeline_mode = (args.pipeline or args.dump) and not horizon_mode
+    if args.pipeline:
+        logger.error(
+            "--pipeline has been removed.  Use --horizon instead.  "
+            "Execution-triggered planning violates "
+            "ScheduleHorizonManagementContract §5."
+        )
+        raise SystemExit(1)
+
+    # Default to horizon mode when pipeline context is available
+    pipeline_context_available = PROGRAMS_DIR.is_dir() and CATALOG_PATH.is_file()
+
+    if args.dump:
+        # --dump is a planning diagnostic (prints pipeline output, then exits).
+        # It does NOT serve viewers — no contract violation.
+        horizon_mode = False
+    elif args.horizon:
+        horizon_mode = True
+    elif pipeline_context_available:
+        horizon_mode = True
+        logger.info(
+            "BURN_IN: Defaulting to --horizon mode "
+            "(pipeline context available at %s)",
+            PROGRAMS_DIR,
+        )
+    else:
+        horizon_mode = False
 
     if args.dump:
         log = _run_pipeline()
@@ -598,10 +660,6 @@ def main() -> None:
         from retrovue.runtime.horizon_manager import HorizonManager
 
         ctx = _PipelineContext()
-        # Generate today's log for the initial grid printout.
-        # The resolved store caches this, so HorizonManager won't re-resolve.
-        log = ctx.generate_day(today)
-        _print_transmission_log(log)
 
         execution_store = ExecutionWindowStore()
         schedule_extender = _PipelineScheduleExtender()
@@ -618,29 +676,29 @@ def main() -> None:
             execution_store=execution_store,
         )
 
-        # Synchronous initial evaluation — populates the store before
-        # any viewer can connect.
+        # Readiness gate: synchronous initial evaluation populates the
+        # store before any viewer can connect.  No direct generate_day()
+        # call — HorizonManager drives generation through the
+        # ExecutionExtender protocol (contract-aligned).
         horizon_manager.evaluate_once()
+
+        entries = execution_store.get_all_entries()
+        report = horizon_manager.get_health_report()
         logger.info(
             "HORIZON: Initial store populated: %d entries, "
-            "exec_depth=%.1fh, epg_depth=%.1fh",
-            len(execution_store.get_all_entries()),
-            horizon_manager.get_execution_depth_hours(),
-            horizon_manager.get_epg_depth_hours(),
+            "exec_depth=%.1fh, epg_depth=%.1fh, healthy=%s",
+            len(entries),
+            report.execution_depth_hours,
+            report.epg_depth_hours,
+            report.is_healthy,
         )
+
+        # Print grid from execution store (no direct pipeline call)
+        if entries:
+            _print_execution_grid(entries, today)
 
         schedule_service = _HorizonScheduleAdapter(execution_store)
 
-    elif pipeline_mode:
-        ctx = _PipelineContext()
-        log = ctx.generate_day(today)
-        _print_transmission_log(log)
-        schedule_service = _RollingPipelineAdapter(ctx)
-        # Seed the cache so the initial day isn't re-generated
-        schedule_service._day_cache[today] = [
-            {"segments": e.segments, "duration_ms": BLOCK_DURATION_MS}
-            for e in log.entries
-        ]
     elif use_test_assets:
         logger.info("BURN_IN: Using test assets (SampleA.mp4, SampleB.mp4)")
         schedule_service = _TestAssetScheduleService()

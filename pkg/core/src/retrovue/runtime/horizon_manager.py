@@ -1,19 +1,21 @@
-"""Horizon Manager — Passive Mode (Phase 1)
+"""Horizon Manager — Production-Ready (Phase 1+)
 
 Wall-clock-driven policy enforcer for EPG and execution horizons.
 Evaluates horizon depth and triggers extensions when below threshold.
 
 See: docs/domains/HorizonManager_v0.1.md
+     docs/contracts/ScheduleHorizonManagementContract_v0.1.md
 
-Phase 1: Additive only. No integration with ChannelManager or burn_in.
-No pruning, no persistence, no async. Evaluation via evaluate_once()
-or a simple daemon thread via start()/stop().
+Phase 1+: Wired into ProgramDirector in shadow and authoritative modes.
+Evaluation via evaluate_once() or a background daemon thread via
+start()/stop().  Provides structured health reports for observability.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Protocol, runtime_checkable
 
@@ -26,7 +28,7 @@ from typing import Protocol, runtime_checkable
 class ScheduleExtender(Protocol):
     """What HorizonManager needs from the schedule/EPG layer.
 
-    Concrete adapters wrap Phase3ScheduleManager (or mocks) behind
+    Concrete adapters wrap ScheduleManager (or mocks) behind
     this interface.  HorizonManager never calls ScheduleManager directly.
     """
 
@@ -54,6 +56,31 @@ class ExecutionExtender(Protocol):
         TransmissionLog.
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# Health Report
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HorizonHealthReport:
+    """Snapshot of horizon health at a point in time.
+
+    Returned by HorizonManager.get_health_report() for endpoints
+    and structured logging.
+    """
+    epg_depth_hours: float
+    execution_depth_hours: float
+    min_epg_days: int
+    min_execution_hours: int
+    epg_farthest_date: str | None
+    execution_window_end_utc_ms: int
+    last_evaluation_utc_ms: int
+    is_healthy: bool
+    epg_compliant: bool
+    execution_compliant: bool
+    evaluation_interval_seconds: int
+    store_entry_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +174,46 @@ class HorizonManager:
         return (end_ms - now_ms) / 3_600_000.0
 
     # ------------------------------------------------------------------
+    # Health
+    # ------------------------------------------------------------------
+
+    @property
+    def is_healthy(self) -> bool:
+        """True when both EPG and execution depths meet configured minimums."""
+        return (
+            self.get_epg_depth_hours() >= self._min_epg_days * 24.0
+            and self.get_execution_depth_hours() >= self._min_execution_hours
+        )
+
+    def get_health_report(self) -> HorizonHealthReport:
+        """Build a point-in-time health snapshot."""
+        epg_h = self.get_epg_depth_hours()
+        exec_h = self.get_execution_depth_hours()
+        store_count = 0
+        if self._execution_store is not None:
+            try:
+                store_count = len(self._execution_store.get_all_entries())
+            except Exception:
+                pass
+        return HorizonHealthReport(
+            epg_depth_hours=round(epg_h, 2),
+            execution_depth_hours=round(exec_h, 2),
+            min_epg_days=self._min_epg_days,
+            min_execution_hours=self._min_execution_hours,
+            epg_farthest_date=(
+                self._epg_farthest_date.isoformat()
+                if self._epg_farthest_date else None
+            ),
+            execution_window_end_utc_ms=self._execution_window_end_utc_ms,
+            last_evaluation_utc_ms=self._last_evaluation_utc_ms,
+            is_healthy=self.is_healthy,
+            epg_compliant=epg_h >= self._min_epg_days * 24.0,
+            execution_compliant=exec_h >= self._min_execution_hours,
+            evaluation_interval_seconds=self._eval_interval_s,
+            store_entry_count=store_count,
+        )
+
+    # ------------------------------------------------------------------
     # Core evaluation
     # ------------------------------------------------------------------
 
@@ -180,17 +247,31 @@ class HorizonManager:
             self._extend_execution(current_bd, now_ms)
             extended = True
 
-        # --- Log status (only when an extension occurred) ---
-        if extended:
-            self._logger.info(
-                "HorizonManager: epg=%.1fh (%.1fd) exec=%.1fh "
-                "min_epg=%dd min_exec=%dh",
-                self.get_epg_depth_hours(),
-                self.get_epg_depth_hours() / 24.0,
-                self.get_execution_depth_hours(),
-                self._min_epg_days,
-                self._min_execution_hours,
-            )
+        # --- Structured status log ---
+        # Healthy + no extension = steady state → DEBUG (avoid log noise).
+        # Unhealthy or extension occurred = actionable → WARNING/INFO.
+        report = self.get_health_report()
+        if not report.is_healthy:
+            level = logging.WARNING
+        elif extended:
+            level = logging.INFO
+        else:
+            level = logging.DEBUG
+        self._logger.log(
+            level,
+            "HorizonManager: healthy=%s epg=%.1fh (%.1fd, %s) "
+            "exec=%.1fh min_epg=%dd min_exec=%dh "
+            "store_entries=%d extended=%s",
+            report.is_healthy,
+            report.epg_depth_hours,
+            report.epg_depth_hours / 24.0,
+            "compliant" if report.epg_compliant else "BELOW_THRESHOLD",
+            report.execution_depth_hours,
+            report.min_epg_days,
+            report.min_execution_hours,
+            report.store_entry_count,
+            extended,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

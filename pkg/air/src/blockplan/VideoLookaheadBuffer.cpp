@@ -58,7 +58,12 @@ void VideoLookaheadBuffer::StartFilling(
   // here in one call — zero decode I/O on the tick thread.
   // Buffered video frames from PrimeFirstTick are returned by TryGetFrame
   // in the fill thread (they sit in TickProducer::buffered_frames_).
-  if (producer_->HasPrimedFrame()) {
+  bool has_primed = producer_->HasPrimedFrame();
+  std::cout << "[VideoBuffer] StartFilling: HasPrimedFrame=" << has_primed
+            << " has_decoder=" << producer_->HasDecoder()
+            << " audio_buffer=" << (audio_buffer_ ? "yes" : "null")
+            << std::endl;
+  if (has_primed) {
     auto fd = producer_->TryGetFrame();
     if (fd) {
       VideoBufferFrame vf;
@@ -68,10 +73,14 @@ void VideoLookaheadBuffer::StartFilling(
       vf.was_decoded = true;
 
       // Push decoded audio to AudioLookaheadBuffer.
+      std::cout << "[VideoBuffer] StartFilling: primed_frame audio_count="
+                << fd->audio.size() << std::endl;
       if (audio_buffer_) {
         for (auto& af : fd->audio) {
           audio_buffer_->Push(std::move(af));
         }
+        std::cout << "[VideoBuffer] StartFilling: audio_depth_ms="
+                  << audio_buffer_->DepthMs() << std::endl;
       }
 
       std::lock_guard<std::mutex> lock(mutex_);
@@ -222,6 +231,13 @@ void VideoLookaheadBuffer::FillLoop() {
   // flow again.
   bool content_gap = false;
 
+  std::cout << "[FillLoop] ENTER input_fps=" << input_fps_
+            << " output_fps=" << output_fps_
+            << " cadence_active=" << cadence_active
+            << " my_audio_gen=" << my_audio_gen
+            << " have_last_decoded=" << have_last_decoded
+            << std::endl;
+
   while (!fill_stop_.load(std::memory_order_acquire) &&
          !(stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
 
@@ -280,6 +296,18 @@ void VideoLookaheadBuffer::FillLoop() {
       if (fill_stop_.load(std::memory_order_acquire) ||
           (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
         break;
+      }
+      // BOOTSTRAP TRACE: log fill decisions during bootstrap phase only
+      if (fill_phase_.load(std::memory_order_relaxed) ==
+          static_cast<int>(FillPhase::kBootstrap)) {
+        int d = static_cast<int>(frames_.size());
+        int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+        std::cout << "[FillLoop] BOOTSTRAP_WAKE video_depth=" << d
+                  << " bootstrap_target=" << bootstrap_target_frames_
+                  << " cap=" << bootstrap_cap_frames_
+                  << " audio_depth_ms=" << a_ms
+                  << " min_audio_ms=" << bootstrap_min_audio_ms_
+                  << std::endl;
       }
     }
 
@@ -475,6 +503,14 @@ void VideoLookaheadBuffer::EnterBootstrap(int bootstrap_target_frames,
   bootstrap_target_frames_ = bootstrap_target_frames;
   bootstrap_cap_frames_ = bootstrap_cap_frames;
   bootstrap_min_audio_ms_ = min_audio_ms;
+  int vd = static_cast<int>(frames_.size());
+  int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+  std::cout << "[VideoBuffer] EnterBootstrap target=" << bootstrap_target_frames
+            << " cap=" << bootstrap_cap_frames
+            << " min_audio_ms=" << min_audio_ms
+            << " video_depth=" << vd
+            << " audio_depth_ms=" << a_ms
+            << std::endl;
   fill_phase_.store(static_cast<int>(FillPhase::kBootstrap),
                     std::memory_order_release);
   // Wake fill thread so it re-evaluates with bootstrap policy.
@@ -482,6 +518,10 @@ void VideoLookaheadBuffer::EnterBootstrap(int bootstrap_target_frames,
 }
 
 void VideoLookaheadBuffer::EndBootstrap() {
+  int vd = static_cast<int>(frames_.size());
+  int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+  std::cout << "[VideoBuffer] EndBootstrap video_depth=" << vd
+            << " audio_depth_ms=" << a_ms << std::endl;
   fill_phase_.store(static_cast<int>(FillPhase::kSteady),
                     std::memory_order_release);
   // No wake needed — steady-state is more restrictive.

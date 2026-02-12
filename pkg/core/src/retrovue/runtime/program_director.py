@@ -132,7 +132,7 @@ class _Phase3ScheduleExtender:
     """Adapts Phase3ScheduleService for HorizonManager's ScheduleExtender protocol.
 
     Checks the resolved store for existence and calls
-    Phase3ScheduleManager.resolve_schedule_day() to extend EPG.
+    ScheduleManager.resolve_schedule_day() to extend EPG.
     """
 
     def __init__(self, schedule_service: Phase3ScheduleService, channel_id: str):
@@ -164,7 +164,7 @@ class _Phase3ExecutionExtender:
     Generates ExecutionEntry objects from resolved schedule data
     without requiring the full planning pipeline infrastructure.
     Ensures the broadcast date is resolved first, then builds
-    execution entries from Phase3ScheduleManager's program blocks.
+    execution entries from ScheduleManager's program blocks.
     """
 
     def __init__(self, schedule_service: Phase3ScheduleService, channel_id: str):

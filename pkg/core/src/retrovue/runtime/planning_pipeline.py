@@ -28,10 +28,10 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Protocol
 
-from retrovue.runtime.schedule_manager import Phase3ScheduleManager
+from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.schedule_types import (
     EPGEvent,
-    Phase3Config,
+    ScheduleManagerConfig,
     ProgramEvent,
     ProgramRef,
     ProgramRefType,
@@ -360,12 +360,12 @@ def _zone_to_slots(
 def stage_1_resolve_schedule_day(
     plan: SchedulePlanArtifact,
     run_request: PlanningRunRequest,
-    config: Phase3Config,
+    config: ScheduleManagerConfig,
 ) -> ScheduleDayArtifact:
     """Expand zones into grid-aligned slots, then resolve episodes.
 
     This is the only stage with side effects (cursor advancement).
-    Delegates to Phase3ScheduleManager.resolve_schedule_day().
+    Delegates to ScheduleManager.resolve_schedule_day() for resolution.
     """
     all_slots: list[ScheduleSlot] = []
     for zone in plan.zones:
@@ -377,7 +377,7 @@ def stage_1_resolve_schedule_day(
         )
         all_slots.extend(zone_slots)
 
-    manager = Phase3ScheduleManager(config)
+    manager = ScheduleManager(config)
     resolved_day = manager.resolve_schedule_day(
         channel_id=plan.channel_id,
         programming_day_date=run_request.broadcast_date,
@@ -898,7 +898,7 @@ def stage_6_lock_for_execution(
 
 def run_planning_pipeline(
     run_request: PlanningRunRequest,
-    config: Phase3Config,
+    config: ScheduleManagerConfig,
     asset_library: AssetLibrary,
     lock_time: datetime | None = None,
     break_profile: SyntheticBreakProfile | None = None,

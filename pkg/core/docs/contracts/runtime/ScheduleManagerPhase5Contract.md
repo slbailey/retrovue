@@ -22,6 +22,8 @@ Phase 5 is **integration only**:
 
 ## Architecture
 
+### Legacy / Shadow Mode
+
 ```
 config/channels.json
     └─► schedule_source: "phase3"
@@ -34,10 +36,36 @@ config/channels.json
                             ├─► InMemorySequenceStore
                             ├─► InMemoryResolvedStore
                             │
-                            └─► Phase3ScheduleManager
+                            └─► ScheduleManager
                                     │
                                     ├─► get_program_at() → ProgramBlock → playout plan
                                     └─► get_epg_events() → EPG endpoint
+```
+
+### Authoritative Mode (INV-P5-005)
+
+```
+config/channels.json
+    └─► schedule_source: "phase3"
+            │
+            ├─► ProgramDirector._init_horizon_managers()
+            │       │
+            │       ├─► Phase3ScheduleService (for adapters)
+            │       ├─► ExecutionWindowStore (populated by HorizonManager)
+            │       ├─► _Phase3ScheduleExtender → ScheduleExtender protocol
+            │       ├─► _Phase3ExecutionExtender → ExecutionExtender protocol
+            │       │
+            │       └─► HorizonManager (background thread)
+            │               ├─► evaluate_once() → readiness gate
+            │               ├─► EPG extension → resolve_schedule_day()
+            │               └─► Execution extension → ExecutionEntry generation
+            │
+            └─► ProgramDirector._get_schedule_service_for_channel()
+                    │
+                    └─► HorizonBackedScheduleService (read-only)
+                            │
+                            ├─► ExecutionWindowStore.get_entry_at(locked_only=True)
+                            └─► ResolvedScheduleStore.get() → EPG
 ```
 
 ## Invariants
@@ -53,24 +81,36 @@ channels using legacy schedule sources.
 - `ProgramDirector._get_schedule_service_for_channel()` checks `schedule_source`
 - Returns `Phase3ScheduleService` for "phase3", default service otherwise
 
-### INV-P5-002: Auto-Resolution
+### INV-P5-002: Auto-Resolution [DEPRECATED]
+
+**Status:** DEPRECATED — retained for legacy mode only.
 
 **Statement:** Programming day is resolved on first playout or EPG access.
 
 **Rationale:** Lazily resolves schedules when needed, avoiding eager resolution
 of days that may never be accessed.
 
-**Enforcement:**
+**Deprecation Note:** Auto-resolution at consumption time directly contradicts
+ScheduleHorizonManagementContract §5 ("No last-second horizon generation")
+and ScheduleExecutionInterfaceContract §2 ("At no time does automation request
+the creation of execution data").  In `shadow` and `authoritative` horizon
+modes, auto-resolution is prohibited.  HorizonManager proactively extends
+EPG and execution horizons ahead of wall-clock time.  See INV-P5-005.
+
+**Active in:** `RETROVUE_HORIZON_AUTHORITY=legacy` only.
+
+**Enforcement (legacy mode):**
 - `Phase3ScheduleService.get_playout_plan_now()` checks if day is resolved
-- If not resolved, calls `Phase3ScheduleManager.resolve_schedule_day()`
+- If not resolved, calls `ScheduleManager.resolve_schedule_day()`
 - Same logic in `get_epg_events()` for EPG queries
+- In `authoritative` mode: raises `NoScheduleDataError` (planning failure)
 
 ### INV-P5-003: Playout Plan Transformation
 
 **Statement:** ProgramBlock segments are correctly transformed to ChannelManager format.
 
 **Rationale:** ChannelManager expects `list[dict]` with specific keys, while
-Phase3ScheduleManager returns `ProgramBlock` with `PlayoutSegment` objects.
+ScheduleManager returns `ProgramBlock` with `PlayoutSegment` objects.
 
 **Format:**
 ```python
@@ -98,6 +138,43 @@ integrations before any viewer tunes in.
 - `GET /api/epg/{channel_id}` endpoint exists independently of stream endpoints
 - Auto-resolution triggers on EPG query if needed
 - No dependency on `ChannelManager` or `Producer` state
+
+### INV-P5-005: Horizon Authority Guard
+
+**Statement:** In `authoritative` horizon mode, consumers never trigger
+planning.  All EPG resolution and execution data generation is driven
+by HorizonManager ahead of wall-clock time.
+
+**Rationale:** Enforces the separation between planning (proactive, ahead
+of time) and execution (reactive, read-only).  Supersedes INV-P5-002
+in non-legacy modes.  Aligns with:
+- ScheduleHorizonManagementContract §5 (no last-second generation)
+- ScheduleExecutionInterfaceContract §2 (automation never requests creation)
+- ScheduleManagerPlanningAuthority §2 (all planning ahead of real time)
+
+**Enforcement:**
+- `Phase3ScheduleService`: In `authoritative` mode, `get_playout_plan_now()`
+  and `get_epg_events()` raise `NoScheduleDataError` if data is missing.
+  No silent empty returns. Missing data is an explicit planning failure.
+- `HorizonBackedScheduleService`: Read-only consumer of
+  `ExecutionWindowStore` (playout) and `ResolvedScheduleStore` (EPG).
+  Never calls planning pipeline or schedule resolution.
+- `ProgramDirector`: Routes Phase3 channels to `HorizonBackedScheduleService`
+  in authoritative mode; `Phase3ScheduleService` in legacy/shadow modes.
+- `ExecutionWindowStore.get_entry_at()`: Defaults to `locked_only=True`.
+  Unlocked entries are invisible to consumers. POLICY_VIOLATION logged.
+- `NoScheduleDataError`: Defined in `horizon_config.py`. Propagates
+  as an unhandled exception — callers must not catch and regenerate.
+
+**Mode matrix:**
+
+| Mode | EPG Resolution | Execution Generation | Missing Data |
+|------|---------------|---------------------|--------------|
+| `legacy` | On-demand (INV-P5-002) | On-demand | Auto-resolve |
+| `shadow` | HorizonManager + on-demand fallback | HorizonManager + on-demand fallback | Auto-resolve (logged) |
+| `authoritative` | HorizonManager only | HorizonManager only | `NoScheduleDataError` raised |
+
+**Configuration:** `RETROVUE_HORIZON_AUTHORITY={legacy,shadow,authoritative}`
 
 ## Data Structures
 
@@ -187,12 +264,12 @@ Returns EPG events for a channel.
 
 ### Phase3ScheduleService
 
-Adapter bridging Phase3ScheduleManager to ScheduleService protocol.
+Adapter bridging ScheduleManager to ScheduleService protocol.
 
 **Responsibilities:**
 - Load schedule slots from JSON files
 - Load programs from catalog directory
-- Create and configure Phase3ScheduleManager
+- Create and configure ScheduleManager
 - Transform ProgramBlock to ChannelManager playout plan format
 - Provide EPG events via get_epg_events()
 
@@ -200,7 +277,7 @@ Adapter bridging Phase3ScheduleManager to ScheduleService protocol.
 - JsonFileProgramCatalog
 - InMemorySequenceStore
 - InMemoryResolvedStore
-- Phase3ScheduleManager
+- ScheduleManager
 
 ### JsonFileProgramCatalog
 
@@ -220,6 +297,30 @@ In-memory ResolvedScheduleStore for resolved schedule days.
 
 **Note:** Lost on process restart. Production should use persistent store.
 
+### GET /debug/horizon/{channel_id}
+
+Returns HorizonManager health report for a channel (shadow/authoritative only).
+
+**Response:**
+```json
+{
+    "channel_id": "cheers-24-7",
+    "horizon_mode": "authoritative",
+    "is_healthy": true,
+    "epg_depth_hours": 72.5,
+    "epg_compliant": true,
+    "epg_farthest_date": "2025-02-14",
+    "execution_depth_hours": 8.2,
+    "execution_compliant": true,
+    "execution_window_end_utc_ms": 1739520000000,
+    "min_epg_days": 3,
+    "min_execution_hours": 6,
+    "evaluation_interval_seconds": 30,
+    "last_evaluation_utc_ms": 1739491200000,
+    "store_entry_count": 48
+}
+```
+
 ## Test Specifications
 
 | ID | Test | Description |
@@ -227,10 +328,17 @@ In-memory ResolvedScheduleStore for resolved schedule days.
 | P5-T001 | Load Phase 3 schedule | Schedule loads successfully from JSON |
 | P5-T002 | Playout plan format | Format matches ChannelManager expectations |
 | P5-T003 | EPG endpoint format | Returns correct JSON structure |
-| P5-T004 | Auto-resolution | First access triggers resolution |
+| P5-T004 | Auto-resolution | First access triggers resolution (legacy only) |
 | P5-T005 | Config activation | schedule_source selects correct service |
 | P5-T006 | Episode identity | Playout episode matches EPG episode |
 | P5-T007 | Seek offset | Mid-episode join has correct offset |
+| P5-T008 | Authoritative no-resolve | authoritative mode raises `NoScheduleDataError` on unresolved access; zero resolve/pipeline calls from consumers |
+| P5-T009 | Shadow health logging | shadow mode logs health report each evaluation |
+| P5-T010 | Horizon readiness gate | evaluate_once() completes before HTTP server accepts requests |
+| P5-T011 | Lock gate default | `get_entry_at()` defaults to `locked_only=True`; unlocked entries invisible to consumers |
+| P5-T012 | Lock window enforcement | unlocked entry at query time returns None + POLICY_VIOLATION log |
+| P5-T013 | Pipeline flag removed | `burn_in.py --pipeline` exits with error, `_RollingPipelineAdapter` deleted |
+| P5-T014 | Horizon-only burn-in | `burn_in.py` serves multiple blocks using HorizonManager without any direct generate_day() calls |
 
 ## Verification Procedure
 
