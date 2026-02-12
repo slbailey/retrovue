@@ -20,19 +20,16 @@ class FileChannelConfigProvider:
     """
     ChannelConfigProvider that loads configurations from a JSON file.
 
-    Expected JSON format:
+    Expected JSON format (schedule_source must be blockplan, e.g. "phase3"):
     {
       "channels": [
         {
-          "channel_id": "mock",
+          "channel_id": "cheers-24-7",
           "channel_id_int": 1,
-          "name": "Mock Channel",
-          "program_format": {
-            "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
-            "audio": {"sample_rate": 48000, "channels": 2}
-          },
-          "schedule_source": "mock",
-          "schedule_config": {}
+          "name": "Cheers 24/7",
+          "program_format": {...},
+          "schedule_source": "phase3",
+          "schedule_config": {"programs_dir": "...", "schedules_dir": "...", ...}
         }
       ]
     }

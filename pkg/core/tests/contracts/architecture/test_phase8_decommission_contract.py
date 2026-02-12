@@ -132,10 +132,9 @@ def test_load_playlist_raises_canonical_exception():
 
 
 # =============================================================================
-# ProgramDirector registry does not register Phase8 services (xfail until removed)
+# ProgramDirector registry does not register Phase8 services
 # =============================================================================
 
-@pytest.mark.xfail(reason="Phase8 not yet removed; ProgramDirector still registers Phase8 services")
 def test_program_director_registry_does_not_register_phase8_services():
     """ProgramDirector embedded registry must not reference Phase8* services."""
     # Resolve path to program_director module (under pkg/core/src)

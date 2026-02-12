@@ -42,6 +42,7 @@ import requests
 pytestmark = pytest.mark.skip(reason="Integration test requires live server with runtime environment")
 
 from retrovue.runtime.channel_stream import ChannelStream, TsSource
+from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.runtime.producer.base import (
     ContentSegment,
@@ -277,8 +278,10 @@ class TestHttpResilience:
         """
         caplog.set_level(logging.INFO)
 
-        # Set up provider with fake producer
-        provider = ProgramDirector(schedule_dir=None)
+        # Set up provider with blockplan channel config and fake producer
+        provider = ProgramDirector(
+            channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+        )
         provider._producer_factory = lambda cid, mode, cfg, channel_config=None: (
             FakeProducerWithDeficit(cid, ProducerMode.NORMAL, cfg or {})
         )
@@ -395,7 +398,9 @@ class TestHttpResilience:
         """
         caplog.set_level(logging.INFO)
 
-        provider = ProgramDirector(schedule_dir=None)
+        provider = ProgramDirector(
+            channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+        )
         provider._producer_factory = lambda cid, mode, cfg, channel_config=None: (
             FakeProducerWithDeficit(cid, ProducerMode.NORMAL, cfg or {})
         )

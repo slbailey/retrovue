@@ -57,11 +57,13 @@ Before the decommission is complete, the following must be removed or replaced.
 
 ### Core – ProgramDirector / embedded registry
 
+**Contract (runtime registry):** The embedded registry registers only BlockPlan path services. Mock/playlist schedule services are not available in production paths.
+
 | Item | Location / name |
 |------|------------------|
-| Phase8 schedule service registration | `ProgramDirector._init_embedded_registry`: `Phase8MockScheduleService`, `Phase8ScheduleService` |
-| Phase8 program director | `ProgramDirector._phase8_program_director`, `Phase8ProgramDirector` |
-| Phase8 producer factory path | Any code path that constructs or returns `Phase8AirProducer` |
+| ~~Phase8 schedule service registration~~ | Removed: no `Phase8MockScheduleService`, `Phase8ScheduleService` in `_init_embedded_registry` |
+| ~~Phase8 program director~~ | Removed: ProgramDirector passes `self` to ChannelManager; no `Phase8ProgramDirector` |
+| Phase8 producer factory path | Any code path that constructs or returns `Phase8AirProducer` (to be removed later) |
 
 ### Core – ChannelManager
 

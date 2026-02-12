@@ -175,7 +175,7 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
             "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
             "audio": {"sample_rate": 48000, "channels": 2}
         }),
-        "schedule_source": channel_data.get("schedule_source", "file"),
+        "schedule_source": channel_data.get("schedule_source", "phase3"),
         "schedule_config": channel_data.get("schedule_config", {}),
     }
     channel_config = ChannelConfig.from_dict(config_data)

@@ -94,7 +94,7 @@ def run_server():
         channel_id_int=1,
         name="Test Channel",
         program_format=program_format,
-        schedule_source="mock",
+        schedule_source="phase3",
         blockplan_only=True,  # INV-CANONICAL-BOOT: reject legacy paths
     )
 

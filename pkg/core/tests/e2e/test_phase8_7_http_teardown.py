@@ -139,7 +139,10 @@ def test_http_close_teardown_within_500ms_no_reconnect(caplog: pytest.LogCapture
     """
     caplog.set_level(logging.INFO, logger="retrovue.runtime")
 
-    provider = ProgramDirector(schedule_dir=None)
+    from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
+    provider = ProgramDirector(
+        channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+    )
     provider._producer_factory = lambda cid, mode, cfg, channel_config=None: FakeProducerWithSocket(
         cid, ProducerMode.NORMAL, cfg or {}
     )

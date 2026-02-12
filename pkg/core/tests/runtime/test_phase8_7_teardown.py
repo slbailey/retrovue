@@ -85,8 +85,11 @@ CHANNEL_ID = "mock"
 
 @pytest.fixture
 def channel_manager_provider() -> ProgramDirector:
-    """ProgramDirector with embedded registry, mock schedule, and FakeProducer; no start() so no HTTP/Air."""
-    provider = ProgramDirector(schedule_dir=None)
+    """ProgramDirector with embedded registry, blockplan channel config, and FakeProducer; no start() so no HTTP/Air."""
+    from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
+    provider = ProgramDirector(
+        channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+    )
     provider._producer_factory = lambda channel_id, mode, config, channel_config=None: FakeProducer(
         channel_id, ProducerMode.NORMAL, config or {}
     )
