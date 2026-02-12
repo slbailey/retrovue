@@ -57,7 +57,7 @@ from retrovue.runtime.config import (
     DEFAULT_PROGRAM_FORMAT,
     InlineChannelConfigProvider,
 )
-from retrovue.runtime.phase3_schedule_service import Phase3ScheduleService
+from retrovue.runtime.schedule_manager_service import ScheduleManagerBackedScheduleService
 from retrovue.runtime.horizon_config import HorizonAuthorityMode, get_horizon_authority_mode
 
 try:
@@ -125,18 +125,18 @@ class ChannelManagerProvider(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Horizon adapters — bridge Phase3ScheduleService to HorizonManager protocols
+# Horizon adapters — bridge ScheduleManagerBackedScheduleService to HorizonManager protocols
 # ---------------------------------------------------------------------------
 
 
-class _Phase3ScheduleExtender:
-    """Adapts Phase3ScheduleService for HorizonManager's ScheduleExtender protocol.
+class _EpgHorizonExtender:
+    """Adapts ScheduleManagerBackedScheduleService for HorizonManager's ScheduleExtender protocol.
 
     Checks the resolved store for existence and calls
     ScheduleManager.resolve_schedule_day() to extend EPG.
     """
 
-    def __init__(self, schedule_service: Phase3ScheduleService, channel_id: str):
+    def __init__(self, schedule_service: ScheduleManagerBackedScheduleService, channel_id: str):
         self._service = schedule_service
         self._channel_id = channel_id
 
@@ -159,8 +159,8 @@ class _Phase3ScheduleExtender:
         )
 
 
-class _Phase3ExecutionExtender:
-    """Adapts Phase3ScheduleService for HorizonManager's ExecutionExtender protocol.
+class _ExecutionHorizonExtender:
+    """Adapts ScheduleManagerBackedScheduleService for HorizonManager's ExecutionExtender protocol.
 
     Generates ExecutionEntry objects from resolved schedule data
     without requiring the full planning pipeline infrastructure.
@@ -168,7 +168,7 @@ class _Phase3ExecutionExtender:
     execution entries from ScheduleManager's program blocks.
     """
 
-    def __init__(self, schedule_service: Phase3ScheduleService, channel_id: str):
+    def __init__(self, schedule_service: ScheduleManagerBackedScheduleService, channel_id: str):
         self._service = schedule_service
         self._channel_id = channel_id
         self._logger = logging.getLogger(__name__)
@@ -246,7 +246,7 @@ class _Phase3ExecutionExtender:
 
         end_ms = entries[-1].end_utc_ms if entries else 0
         self._logger.info(
-            "Phase3ExecutionExtender: Generated %d entries for %s (end_utc_ms=%d)",
+            "ExecutionHorizonExtender: Generated %d entries for %s (end_utc_ms=%d)",
             len(entries), broadcast_date.isoformat(), end_ms,
         )
         return ExecutionDayResult(end_utc_ms=end_ms, entries=entries)
@@ -340,8 +340,8 @@ class ProgramDirector:
         self._schedule_service: Optional[Any] = None
         # Horizon authority mode
         self._horizon_mode = get_horizon_authority_mode()
-        # Phase 5: Per-channel schedule services for Phase 3 mode
-        self._phase3_schedule_services: dict[str, Phase3ScheduleService] = {}
+        # Phase 5: Per-channel schedule services
+        self._schedule_manager_services: dict[str, ScheduleManagerBackedScheduleService] = {}
         # Horizon management (shadow + authoritative modes)
         self._horizon_managers: dict[str, Any] = {}
         self._horizon_execution_stores: dict[str, Any] = {}
@@ -459,17 +459,17 @@ class ProgramDirector:
 
         self._health_check_stop = threading.Event()
 
-    def _ensure_phase3_service(
+    def _ensure_schedule_manager_service(
         self, channel_id: str, channel_config: ChannelConfig,
-    ) -> Phase3ScheduleService:
-        """Get or create the Phase3ScheduleService for a channel.
+    ) -> ScheduleManagerBackedScheduleService:
+        """Get or create the ScheduleManagerBackedScheduleService for a channel.
 
-        Always returns the Phase3ScheduleService (not the horizon-backed one).
+        Always returns the ScheduleManagerBackedScheduleService (not the horizon-backed one).
         Used by both the normal schedule-service routing and by
         _init_horizon_managers() which needs the underlying service
         regardless of horizon mode.
         """
-        if channel_id not in self._phase3_schedule_services:
+        if channel_id not in self._schedule_manager_services:
             schedule_config = channel_config.schedule_config
             programs_dir = Path(schedule_config.get("programs_dir", "/opt/retrovue/config/programs"))
             schedules_dir = Path(schedule_config.get("schedules_dir", "/opt/retrovue/config/schedules"))
@@ -478,14 +478,14 @@ class ProgramDirector:
             grid_minutes = schedule_config.get("grid_minutes", 30)
 
             self._logger.info(
-                "[channel %s] Creating Phase3ScheduleService "
+                "[channel %s] Creating ScheduleManagerBackedScheduleService "
                 "(schedule_source=%s, horizon_mode=%s)",
                 channel_id,
                 channel_config.schedule_source,
                 self._horizon_mode.value,
             )
 
-            service = Phase3ScheduleService(
+            service = ScheduleManagerBackedScheduleService(
                 clock=self._embedded_clock,
                 programs_dir=programs_dir,
                 schedules_dir=schedules_dir,
@@ -494,9 +494,9 @@ class ProgramDirector:
                 grid_minutes=grid_minutes,
                 horizon_mode=self._horizon_mode,
             )
-            self._phase3_schedule_services[channel_id] = service
+            self._schedule_manager_services[channel_id] = service
 
-        return self._phase3_schedule_services[channel_id]
+        return self._schedule_manager_services[channel_id]
 
     def _get_schedule_service_for_channel(self, channel_id: str, channel_config: ChannelConfig) -> Any:
         """
@@ -521,7 +521,7 @@ class ProgramDirector:
                 HorizonAuthorityMode.SHADOW,
             ):
                 return self._get_horizon_backed_service(channel_id, channel_config)
-            return self._ensure_phase3_service(channel_id, channel_config)
+            return self._ensure_schedule_manager_service(channel_id, channel_config)
 
         raise ValueError(
             f"No schedule service for schedule_source={schedule_source!r}"
@@ -563,7 +563,7 @@ class ProgramDirector:
 
         Called from start() when horizon mode is not LEGACY.  For each
         Phase3 channel:
-        1. Creates Phase3ScheduleService and loads the schedule
+        1. Creates ScheduleManagerBackedScheduleService and loads the schedule
         2. Creates ExecutionWindowStore
         3. Creates ScheduleExtender / ExecutionExtender adapters
         4. Creates HorizonManager and runs evaluate_once() (readiness gate)
@@ -593,8 +593,8 @@ class ProgramDirector:
                 self._horizon_mode.value,
             )
 
-            # Ensure Phase3ScheduleService exists (always needed for adapters)
-            phase3_service = self._ensure_phase3_service(channel_id, config)
+            # Ensure ScheduleManagerBackedScheduleService exists (always needed for adapters)
+            phase3_service = self._ensure_schedule_manager_service(channel_id, config)
             phase3_service.load_schedule(channel_id)
 
             # Create stores
@@ -603,8 +603,8 @@ class ProgramDirector:
             self._horizon_resolved_stores[channel_id] = phase3_service._resolved_store
 
             # Create adapters
-            schedule_extender = _Phase3ScheduleExtender(phase3_service, channel_id)
-            execution_extender = _Phase3ExecutionExtender(phase3_service, channel_id)
+            schedule_extender = _EpgHorizonExtender(phase3_service, channel_id)
+            execution_extender = _ExecutionHorizonExtender(phase3_service, channel_id)
 
             # Create HorizonManager
             schedule_config = config.schedule_config

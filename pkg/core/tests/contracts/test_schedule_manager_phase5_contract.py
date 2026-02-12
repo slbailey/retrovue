@@ -5,7 +5,7 @@ Tests the runtime integration defined in:
     docs/contracts/runtime/ScheduleManagerPhase5Contract.md
 
 Phase 5 wires Phase 3 ScheduleManager into the production runtime via:
-- Phase3ScheduleService adapter
+- ScheduleManagerBackedScheduleService adapter
 - Config-driven activation (schedule_source: "phase3")
 - EPG HTTP endpoint
 
@@ -33,8 +33,8 @@ from retrovue.runtime.schedule_types import (
     ScheduleManagerConfig,
 )
 from retrovue.runtime.schedule_manager import ScheduleManager
-from retrovue.runtime.phase3_schedule_service import (
-    Phase3ScheduleService,
+from retrovue.runtime.schedule_manager_service import (
+    ScheduleManagerBackedScheduleService,
     InMemorySequenceStore,
     InMemoryResolvedStore,
     JsonFileProgramCatalog,
@@ -122,13 +122,13 @@ def mock_clock() -> MasterClock:
 
 
 @pytest.fixture
-def phase3_service(
+def schedule_service(
     mock_clock: MasterClock,
     test_programs_dir: Path,
     test_schedules_dir: Path,
-) -> Phase3ScheduleService:
-    """Create Phase3ScheduleService with test fixtures."""
-    return Phase3ScheduleService(
+) -> ScheduleManagerBackedScheduleService:
+    """Create ScheduleManagerBackedScheduleService with test fixtures."""
+    return ScheduleManagerBackedScheduleService(
         clock=mock_clock,
         programs_dir=test_programs_dir,
         schedules_dir=test_schedules_dir,
@@ -146,15 +146,15 @@ def phase3_service(
 class TestP5T001LoadSchedule:
     """Test that Phase 3 schedule loads successfully from JSON."""
 
-    def test_load_schedule_success(self, phase3_service: Phase3ScheduleService):
+    def test_load_schedule_success(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Schedule loads without error."""
-        success, error = phase3_service.load_schedule("cheers-24-7")
+        success, error = schedule_service.load_schedule("cheers-24-7")
         assert success is True
         assert error is None
 
-    def test_load_schedule_not_found(self, phase3_service: Phase3ScheduleService):
+    def test_load_schedule_not_found(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Non-existent schedule returns error."""
-        success, error = phase3_service.load_schedule("nonexistent")
+        success, error = schedule_service.load_schedule("nonexistent")
         assert success is False
         assert error is not None
         assert "not found" in error.lower()
@@ -168,13 +168,13 @@ class TestP5T001LoadSchedule:
 class TestP5T002PlayoutPlanFormat:
     """Test that playout plan format matches ChannelManager expectations."""
 
-    def test_playout_plan_has_required_keys(self, phase3_service: Phase3ScheduleService):
+    def test_playout_plan_has_required_keys(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Playout plan segments have required keys."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         # Query at 06:15 (mid-slot)
         at_time = datetime(2025, 1, 30, 6, 15, 0, tzinfo=timezone.utc)
-        plan = phase3_service.get_playout_plan_now("cheers-24-7", at_time)
+        plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
 
         assert len(plan) >= 1
         segment = plan[0]
@@ -184,13 +184,13 @@ class TestP5T002PlayoutPlanFormat:
         assert "start_pts" in segment
         assert "duration_seconds" in segment
 
-    def test_start_pts_is_milliseconds(self, phase3_service: Phase3ScheduleService):
+    def test_start_pts_is_milliseconds(self, schedule_service: ScheduleManagerBackedScheduleService):
         """start_pts is in milliseconds."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         # Query at 06:15 (15 minutes = 900 seconds into slot)
         at_time = datetime(2025, 1, 30, 6, 15, 0, tzinfo=timezone.utc)
-        plan = phase3_service.get_playout_plan_now("cheers-24-7", at_time)
+        plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
 
         segment = plan[0]
         start_pts = segment["start_pts"]
@@ -198,12 +198,12 @@ class TestP5T002PlayoutPlanFormat:
         # 15 minutes = 900 seconds = 900000 milliseconds
         assert start_pts == 900 * 1000
 
-    def test_asset_path_is_string(self, phase3_service: Phase3ScheduleService):
+    def test_asset_path_is_string(self, schedule_service: ScheduleManagerBackedScheduleService):
         """asset_path is a valid string path."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         at_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
-        plan = phase3_service.get_playout_plan_now("cheers-24-7", at_time)
+        plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
 
         segment = plan[0]
         assert isinstance(segment["asset_path"], str)
@@ -218,14 +218,14 @@ class TestP5T002PlayoutPlanFormat:
 class TestP5T003EPGFormat:
     """Test EPG endpoint returns correct JSON format."""
 
-    def test_epg_events_structure(self, phase3_service: Phase3ScheduleService):
+    def test_epg_events_structure(self, schedule_service: ScheduleManagerBackedScheduleService):
         """EPG events have correct structure."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 10, 0, 0, tzinfo=timezone.utc)
 
-        events = phase3_service.get_epg_events("cheers-24-7", start_time, end_time)
+        events = schedule_service.get_epg_events("cheers-24-7", start_time, end_time)
 
         assert len(events) >= 1
         event = events[0]
@@ -239,25 +239,25 @@ class TestP5T003EPGFormat:
         assert "episode_id" in event
         assert "asset" in event
 
-    def test_epg_events_title_is_program_name(self, phase3_service: Phase3ScheduleService):
+    def test_epg_events_title_is_program_name(self, schedule_service: ScheduleManagerBackedScheduleService):
         """EPG title is program name (e.g., 'Cheers')."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 7, 0, 0, tzinfo=timezone.utc)
 
-        events = phase3_service.get_epg_events("cheers-24-7", start_time, end_time)
+        events = schedule_service.get_epg_events("cheers-24-7", start_time, end_time)
 
         assert events[0]["title"] == "Cheers"
 
-    def test_epg_events_has_episode_title(self, phase3_service: Phase3ScheduleService):
+    def test_epg_events_has_episode_title(self, schedule_service: ScheduleManagerBackedScheduleService):
         """EPG events include episode title."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         start_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
         end_time = datetime(2025, 1, 30, 7, 0, 0, tzinfo=timezone.utc)
 
-        events = phase3_service.get_epg_events("cheers-24-7", start_time, end_time)
+        events = schedule_service.get_epg_events("cheers-24-7", start_time, end_time)
 
         # First slot should be first episode
         assert events[0]["episode_title"] == "Give Me a Ring Sometime"
@@ -279,7 +279,7 @@ class TestP5T004AutoResolution:
     ):
         """First playout access triggers resolution."""
         # Create service with fresh stores
-        service = Phase3ScheduleService(
+        service = ScheduleManagerBackedScheduleService(
             clock=mock_clock,
             programs_dir=test_programs_dir,
             schedules_dir=test_schedules_dir,
@@ -307,7 +307,7 @@ class TestP5T004AutoResolution:
         test_schedules_dir: Path,
     ):
         """First EPG access triggers resolution."""
-        service = Phase3ScheduleService(
+        service = ScheduleManagerBackedScheduleService(
             clock=mock_clock,
             programs_dir=test_programs_dir,
             schedules_dir=test_schedules_dir,
@@ -330,12 +330,12 @@ class TestP5T004AutoResolution:
 
 
 # =============================================================================
-# P5-T005: schedule_source: "phase3" Activates Phase3ScheduleService
+# P5-T005: schedule_source: "phase3" Activates ScheduleManagerBackedScheduleService
 # =============================================================================
 
 
 class TestP5T005ConfigActivation:
-    """Test that schedule_source: 'phase3' activates Phase3ScheduleService."""
+    """Test that schedule_source: 'phase3' activates ScheduleManagerBackedScheduleService."""
 
     def test_phase3_channel_config(self):
         """Channel config with schedule_source='phase3' is valid."""
@@ -369,18 +369,18 @@ class TestP5T005ConfigActivation:
 class TestP5T006EpisodeIdentity:
     """Test that playout episode matches EPG episode."""
 
-    def test_episode_identity_consistency(self, phase3_service: Phase3ScheduleService):
+    def test_episode_identity_consistency(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Same episode plays as what EPG shows."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         # Query at 06:00 exactly
         at_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
 
         # Get playout plan
-        plan = phase3_service.get_playout_plan_now("cheers-24-7", at_time)
+        plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
 
         # Get EPG for same time
-        events = phase3_service.get_epg_events(
+        events = schedule_service.get_epg_events(
             "cheers-24-7",
             at_time,
             at_time + timedelta(hours=1),
@@ -398,24 +398,24 @@ class TestP5T006EpisodeIdentity:
 class TestP5T007SeekOffset:
     """Test that seek offset is correct for mid-episode join."""
 
-    def test_mid_episode_seek_offset(self, phase3_service: Phase3ScheduleService):
+    def test_mid_episode_seek_offset(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Joining mid-episode has correct seek offset."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         # Episode starts at 06:00, join at 06:12 (12 minutes in)
         at_time = datetime(2025, 1, 30, 6, 12, 0, tzinfo=timezone.utc)
-        plan = phase3_service.get_playout_plan_now("cheers-24-7", at_time)
+        plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
 
         # start_pts should be 12 minutes = 720 seconds = 720000 ms
         assert plan[0]["start_pts"] == 720 * 1000
 
-    def test_slot_boundary_no_offset(self, phase3_service: Phase3ScheduleService):
+    def test_slot_boundary_no_offset(self, schedule_service: ScheduleManagerBackedScheduleService):
         """Joining at slot start has zero offset."""
-        phase3_service.load_schedule("cheers-24-7")
+        schedule_service.load_schedule("cheers-24-7")
 
         # Join exactly at 06:00
         at_time = datetime(2025, 1, 30, 6, 0, 0, tzinfo=timezone.utc)
-        plan = phase3_service.get_playout_plan_now("cheers-24-7", at_time)
+        plan = schedule_service.get_playout_plan_now("cheers-24-7", at_time)
 
         assert plan[0]["start_pts"] == 0
 

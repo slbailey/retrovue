@@ -42,7 +42,7 @@ No channel config may support:
 
 The **only** valid schedule inputs are those that produce **BlockPlans** via the ScheduleManager / ScheduleService chain (e.g. `schedule_source: "phase3"` as the config-driven activation for the service that yields BlockPlans).
 
-- Valid: schedule sources that resolve to Phase3ScheduleService (or equivalent) and produce BlockPlans.
+- Valid: schedule sources that resolve to ScheduleManagerBackedScheduleService (or equivalent) and produce BlockPlans.
 - Invalid: `"mock"`, `"file"` (if it does not produce BlockPlans), or any source that drives legacy playlist/segment switching.
 
 ### 4. Valid schedule inputs

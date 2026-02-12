@@ -36,8 +36,8 @@ from retrovue.runtime.schedule_types import (
     ScheduleManagerConfig,
 )
 from retrovue.runtime.schedule_manager import ScheduleManager
-from retrovue.runtime.phase3_schedule_service import (
-    Phase3ScheduleService,
+from retrovue.runtime.schedule_manager_service import (
+    ScheduleManagerBackedScheduleService,
     InMemorySequenceStore,
     InMemoryResolvedStore,
     JsonFileProgramCatalog,
@@ -155,13 +155,13 @@ def mock_clock() -> MasterClock:
 
 
 @pytest.fixture
-def phase3_service(
+def schedule_service(
     mock_clock: MasterClock,
     test_programs_dir: Path,
     test_schedules_dir: Path,
-) -> Phase3ScheduleService:
-    """Create Phase3ScheduleService with test fixtures."""
-    return Phase3ScheduleService(
+) -> ScheduleManagerBackedScheduleService:
+    """Create ScheduleManagerBackedScheduleService with test fixtures."""
+    return ScheduleManagerBackedScheduleService(
         clock=mock_clock,
         programs_dir=test_programs_dir,
         schedules_dir=test_schedules_dir,
@@ -378,17 +378,17 @@ class TestP7T005PrebufferReadiness:
     Test INV-P7-005: Next segment must be ready before current segment ends.
     """
 
-    def test_prebuffer_timing_requirement(self, phase3_service: Phase3ScheduleService):
+    def test_prebuffer_timing_requirement(self, schedule_service: ScheduleManagerBackedScheduleService):
         """
         Verify schedule provides sufficient lookahead for prebuffering.
 
         LoadPreview must be called before SwitchToLive is needed.
         """
-        phase3_service.load_schedule("test-channel")
+        schedule_service.load_schedule("test-channel")
 
         # At 14:00, get playout plan
         at_time = datetime(2025, 1, 30, 14, 0, 0, tzinfo=timezone.utc)
-        plan = phase3_service.get_playout_plan_now("test-channel", at_time)
+        plan = schedule_service.get_playout_plan_now("test-channel", at_time)
 
         # Plan should include current segment and next segment info
         # This allows prebuffering the next segment
@@ -421,7 +421,7 @@ class TestP7T006MissingSegmentFallback:
     """
 
     def test_missing_asset_returns_filler_plan(
-        self, phase3_service: Phase3ScheduleService, test_programs_dir: Path
+        self, schedule_service: ScheduleManagerBackedScheduleService, test_programs_dir: Path
     ):
         """
         When a segment's asset file doesn't exist, filler should be scheduled.
@@ -444,7 +444,7 @@ class TestP7T006MissingSegmentFallback:
         with open(test_programs_dir / "missing_show.json", "w") as f:
             json.dump(missing_program, f)
 
-        # Note: The actual fallback behavior depends on how Phase3ScheduleService
+        # Note: The actual fallback behavior depends on how ScheduleManagerBackedScheduleService
         # handles missing assets. This test validates the contract requirement.
         # Full implementation may need asset existence checks.
 

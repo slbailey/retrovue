@@ -25,7 +25,7 @@ class HorizonAuthorityMode(Enum):
     """Horizon authority policy for the Core process.
 
     LEGACY:
-        Current behavior. Phase3ScheduleService auto-resolves schedule
+        Current behavior. ScheduleManagerBackedScheduleService auto-resolves schedule
         days on first access (INV-P5-002). No HorizonManager involvement.
 
     SHADOW:
