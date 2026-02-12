@@ -103,7 +103,7 @@ When live decoder reaches EOF before the scheduled segment end:
 2. **Continue CT:** TimelineController continues advancing CT at real-time cadence
 3. **Fill:** ProgramOutput emits frames using a deterministic fill strategy at configured fps; pad (black + silence) is the guaranteed fallback
 4. **Log:** CONTENT_DEFICIT_FILL logged with deficit duration
-5. **Switch:** At boundary, SwitchToLive executes normally (fill → next segment)
+5. **Switch:** At boundary, legacy switch RPC executes normally (fill → next segment)
 
 The fill policy preserves:
 - CT monotonicity (INV-P8-002)
@@ -120,7 +120,7 @@ The fill policy preserves:
 | Field | Type | Purpose |
 |-------|------|---------|
 | `_eof_signaled` | `bool` | True when decoder reaches EOF; prevents re-signaling |
-| `_planned_frame_count` | `int64` | frame_count from LoadPreview; planning authority |
+| `_planned_frame_count` | `int64` | frame_count from legacy preload RPC; planning authority |
 | `_frames_delivered` | `int64` | Actual frames delivered to buffer |
 
 ### 3.2 PlayoutEngine (AIR)
@@ -153,7 +153,7 @@ The fill policy preserves:
 | **P8-FILL-001** | Implement content deficit detection in PlayoutEngine | AIR: PlayoutEngine | INV-P8-CONTENT-DEFICIT-FILL-001 | Black screen without pad | Log: `CONTENT_DEFICIT_FILL_START ct={ct} boundary={boundary_ct}` |
 | **P8-FILL-002** | Emit pad frames during content deficit | AIR: ProgramOutput | INV-P8-CONTENT-DEFICIT-FILL-001 | Output stalls; TS gaps | TS packets continue at cadence; HTTP connection maintained |
 | **P8-FILL-003** | End content deficit on boundary switch | AIR: PlayoutEngine | INV-P8-CONTENT-DEFICIT-FILL-001 | Pad continues into next segment | Log: `CONTENT_DEFICIT_FILL_END duration_ms={n}`; switch proceeds normally |
-| **P8-PLAN-001** | Store frame_count as planning authority in FileProducer | AIR: FileProducer | INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | Frame count computed locally | `_planned_frame_count` set from LoadPreview; used for deficit detection |
+| **P8-PLAN-001** | Store frame_count as planning authority in FileProducer | AIR: FileProducer | INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | Frame count computed locally | `_planned_frame_count` set from legacy preload RPC; used for deficit detection |
 | **P8-PLAN-002** | Detect early EOF (frames_delivered < planned_frame_count) | AIR: FileProducer | INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | Short content not detected | Log: `EARLY_EOF planned={p} delivered={d} deficit={p-d}` |
 | **P8-PLAN-003** | Handle long content (frames_delivered ≥ planned_frame_count) | AIR: FileProducer | INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001 | Content plays past boundary | Truncation at boundary; schedule remains authoritative |
 

@@ -1,6 +1,6 @@
 # Logging Delta Spec
 
-**Purpose:** Minimal new Air log events and fields required to diagnose SwitchToLive result_code=4 (PROTOCOL_VIOLATION) and satisfy Observability Parity Law.  
+**Purpose:** Minimal new Air log events and fields required to diagnose legacy switch RPC result_code=4 (PROTOCOL_VIOLATION) and satisfy Observability Parity Law.  
 **Traceability:** INCIDENT_DIAGNOSIS.md · ObservabilityParityLaw.md · PlayoutEngineContract.md Part 2.5
 
 ---
@@ -9,20 +9,20 @@
 
 Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineContract. Events marked **DELTA** extend existing specs with additional fields.
 
-### 1.1 SwitchToLive (Primary for result_code=4)
+### 1.1 legacy switch RPC (Primary for result_code=4)
 
 | Event | Status | When emitted | Required fields |
 |-------|--------|--------------|-----------------|
-| `AIR-SWITCHTOLIVE-RECEIVED` | DELTA (add structured) | On entry to SwitchToLive gRPC handler | channel_id, correlation_id, receipt_time_ms |
-| `AIR-SWITCHTOLIVE-RESPONSE` | DELTA (add structured) | Before returning SwitchToLive response | channel_id, correlation_id, success, result_code, message, completion_time_ms |
-| `AIR-PROTOCOL-VIOLATION-DIAG` | **NEW** | When SwitchToLive returns result_code=PROTOCOL_VIOLATION | channel_id, correlation_id, violation_reason, preview_loaded, preview_producer_null, last_loadpreview_correlation_id (if any) |
+| `AIR-SWITCHTOLIVE-RECEIVED` | DELTA (add structured) | On entry to legacy switch RPC gRPC handler | channel_id, correlation_id, receipt_time_ms |
+| `AIR-SWITCHTOLIVE-RESPONSE` | DELTA (add structured) | Before returning legacy switch RPC response | channel_id, correlation_id, success, result_code, message, completion_time_ms |
+| `AIR-PROTOCOL-VIOLATION-DIAG` | **NEW** | When legacy switch RPC returns result_code=PROTOCOL_VIOLATION | channel_id, correlation_id, violation_reason, preview_loaded, preview_producer_null, last_loadpreview_correlation_id (if any) |
 
-### 1.2 LoadPreview (Needed for Cause Correlation)
+### 1.2 legacy preload RPC (Needed for Cause Correlation)
 
 | Event | Status | When emitted | Required fields |
 |-------|--------|--------------|-----------------|
-| `AIR-LOADPREVIEW-RECEIVED` | DELTA (add structured) | On entry to LoadPreview gRPC handler | channel_id, correlation_id, asset_path, receipt_time_ms |
-| `AIR-LOADPREVIEW-RESPONSE` | DELTA (add structured) | Before returning LoadPreview response | channel_id, correlation_id, success, result_code, message, completion_time_ms |
+| `AIR-LOADPREVIEW-RECEIVED` | DELTA (add structured) | On entry to legacy preload RPC gRPC handler | channel_id, correlation_id, asset_path, receipt_time_ms |
+| `AIR-LOADPREVIEW-RESPONSE` | DELTA (add structured) | Before returning legacy preload RPC response | channel_id, correlation_id, success, result_code, message, completion_time_ms |
 
 ### 1.3 StartChannel (Context)
 
@@ -51,19 +51,19 @@ Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineCont
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `channel_id` | int32 | Channel that received SwitchToLive |
-| `correlation_id` | string | Correlation ID of the SwitchToLive call |
+| `channel_id` | int32 | Channel that received legacy switch RPC |
+| `correlation_id` | string | Correlation ID of the legacy switch RPC call |
 | `violation_reason` | string | Human-readable: "NO_PREVIEW_PRODUCER", "INV_P8_SWITCH_ARMED_FATAL", etc. |
 | `preview_loaded` | bool | state->preview_loaded at time of check |
 | `preview_producer_null` | bool | state->preview_producer == nullptr |
-| `last_loadpreview_correlation_id` | string | If LoadPreview was received for this channel, its correlation_id; else empty |
+| `last_loadpreview_correlation_id` | string | If legacy preload RPC was received for this channel, its correlation_id; else empty |
 | `switch_in_progress` | bool | state->switch_in_progress (for INV-P8-SWITCH-ARMED context) |
 
 ---
 
 ## 3. Sample Log Lines
 
-### 3.1 Happy Path (SwitchToLive succeeds)
+### 3.1 Happy Path (legacy switch RPC succeeds)
 
 ```
 [AIR] AIR-STARTCHANNEL-RECEIVED channel_id=3 correlation_id=ch3-sc1-1738340100000 receipt_time_ms=1738340100002
@@ -74,7 +74,7 @@ Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineCont
 [AIR] AIR-SWITCHTOLIVE-RESPONSE channel_id=3 correlation_id=ch3-stl1-1738340223000 success=true result_code=RESULT_CODE_OK completion_time_ms=1738340223015
 ```
 
-### 3.2 SwitchToLive result_code=4 — No LoadPreview
+### 3.2 legacy switch RPC result_code=4 — No legacy preload RPC
 
 ```
 [AIR] AIR-STARTCHANNEL-RECEIVED channel_id=3 correlation_id=ch3-sc1-1738340100000 receipt_time_ms=1738340100002
@@ -84,7 +84,7 @@ Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineCont
 [AIR] AIR-SWITCHTOLIVE-RESPONSE channel_id=3 correlation_id=ch3-stl1-1738340150000 success=false result_code=RESULT_CODE_PROTOCOL_VIOLATION message="No preview producer loaded for channel 3" completion_time_ms=1738340150003
 ```
 
-### 3.3 SwitchToLive result_code=4 — LoadPreview Failed Earlier
+### 3.3 legacy switch RPC result_code=4 — legacy preload RPC Failed Earlier
 
 ```
 [AIR] AIR-STARTCHANNEL-RECEIVED channel_id=3 correlation_id=ch3-sc1-1738340100000 receipt_time_ms=1738340100002
@@ -96,7 +96,7 @@ Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineCont
 [AIR] AIR-SWITCHTOLIVE-RESPONSE channel_id=3 correlation_id=ch3-stl1-1738340123500 success=false result_code=RESULT_CODE_PROTOCOL_VIOLATION message="No preview producer loaded for channel 3" completion_time_ms=1738340123505
 ```
 
-### 3.4 LoadPreview INV-P8-SWITCH-ARMED FATAL (LoadPreview returns PROTOCOL_VIOLATION)
+### 3.4 legacy preload RPC INV-P8-SWITCH-ARMED FATAL (legacy preload RPC returns PROTOCOL_VIOLATION)
 
 ```
 [AIR] AIR-LOADPREVIEW-RECEIVED channel_id=3 correlation_id=ch3-lp2-1738340200000 asset_path=/opt/retrovue/assets/SampleC.mp4 receipt_time_ms=1738340200002
@@ -120,7 +120,7 @@ Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineCont
 
 1. **Correlation ID:** Core MUST send `x-retrovue-correlation-id` in gRPC metadata. If missing, Air generates one (e.g. `air-gen-{channel_id}-{timestamp_ms}`) and logs it; diagnostic value is reduced for cross-component correlation.
 2. **AIR-PROTOCOL-VIOLATION-DIAG:** Emit immediately before returning the PROTOCOL_VIOLATION response. Do not emit for other result codes.
-3. **last_loadpreview_correlation_id:** Requires Air to track the most recent LoadPreview correlation_id per channel. Set when LoadPreview is received; clear when preview is cleared or channel stopped.
+3. **last_loadpreview_correlation_id:** Requires Air to track the most recent legacy preload RPC correlation_id per channel. Set when legacy preload RPC is received; clear when preview is cleared or channel stopped.
 4. **Performance:** Logging MUST NOT block the gRPC handler. Use async or fire-and-forget if necessary.
 
 ---
@@ -157,7 +157,7 @@ Events marked **NEW** are not yet in ObservabilityParityLaw or PlayoutEngineCont
 
 | Test ID | Assertion | Blocks |
 |---------|-----------|--------|
-| OBS-STL-001 | SwitchToLive result_code=4 → AIR-SWITCHTOLIVE-RESPONSE and AIR-PROTOCOL-VIOLATION-DIAG in logs | LOGGING_DELTA_SPEC implementation |
-| OBS-STL-002 | No LoadPreview before SwitchToLive → last_loadpreview_correlation_id empty in AIR-PROTOCOL-VIOLATION-DIAG | LOGGING_DELTA_SPEC implementation |
-| OBS-STL-003 | LoadPreview failed before SwitchToLive → last_loadpreview_correlation_id matches failed LoadPreview | LOGGING_DELTA_SPEC implementation |
-| Phase6A0_SwitchToLiveWithNoPreview_Error | Extend: captured log contains AIR-PROTOCOL-VIOLATION-DIAG | Log capture harness |
+| OBS-STL-001 | legacy switch RPC result_code=4 → AIR-SWITCHTOLIVE-RESPONSE and AIR-PROTOCOL-VIOLATION-DIAG in logs | LOGGING_DELTA_SPEC implementation |
+| OBS-STL-002 | No legacy preload RPC before legacy switch RPC → last_loadpreview_correlation_id empty in AIR-PROTOCOL-VIOLATION-DIAG | LOGGING_DELTA_SPEC implementation |
+| OBS-STL-003 | legacy preload RPC failed before legacy switch RPC → last_loadpreview_correlation_id matches failed legacy preload RPC | LOGGING_DELTA_SPEC implementation |
+| Phase6A0_legacy switch RPCWithNoPreview_Error | Extend: captured log contains AIR-PROTOCOL-VIOLATION-DIAG | Log capture harness |

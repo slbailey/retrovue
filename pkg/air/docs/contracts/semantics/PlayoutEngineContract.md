@@ -11,9 +11,9 @@ _Related: [Proto Schema](../../../protos/playout.proto) · [Phase 6A Overview](.
 
 Define the observable guarantees for the RetroVue Playout Engine's gRPC control plane and telemetry. This contract specifies **what** the engine guarantees, not how it is implemented internally.
 
-**THINK vs ACT:** Core performs THINK (authoritative timeline, what plays next, when transitions occur); Air performs ACT (executes explicit commands). Air **does not** make scheduling, timing, or sequencing decisions. Air does **not** track asset duration to decide transitions, initiate transitions on EOF or producer exhaustion, or decide "what comes next." Producers are treated as continuous sources; a producer ending does **not** imply a transition. Transitions occur **only** via explicit Core commands (e.g. LoadPreview, SwitchToLive). Air is intentionally "dumb" with respect to timing—it executes commands; it does not infer intent.
+**THINK vs ACT:** Core performs THINK (authoritative timeline, what plays next, when transitions occur); Air performs ACT (executes explicit commands). Air **does not** make scheduling, timing, or sequencing decisions. **Runtime** means **BlockPlan** only: Core supplies a BlockPlan; Air executes it. Transitions occur via block boundaries in the plan, not via per-segment RPCs. Air is intentionally "dumb" with respect to timing—it executes the plan; it does not infer intent.
 
-**Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Authoritative definition of the clock law lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** **Segment-based control** is canonical: execution is driven by LoadPreview (segment payload) + SwitchToLive (control-only); StartChannel initializes channel state and does not imply media playback.
+**Clock authority** lives in the Python runtime (MasterClock); Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time. **Authoritative definition of the clock law lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** **Canonical control:** StartChannel + UpdatePlan (BlockPlan); StartChannel initializes channel state and does not imply media playback. Legacy per-segment RPCs are retired; see [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).
 
 ---
 
@@ -29,24 +29,23 @@ service PlayoutControl {
   rpc UpdatePlan(UpdatePlanRequest) returns (UpdatePlanResponse);
   rpc StopChannel(StopChannelRequest) returns (StopChannelResponse);
   rpc GetVersion(ApiVersionRequest) returns (ApiVersion);
-  rpc LoadPreview(LoadPreviewRequest) returns (LoadPreviewResponse);
-  rpc SwitchToLive(SwitchToLiveRequest) returns (SwitchToLiveResponse);
+  // Legacy RPCs (retired; not used by Core): see Phase8DecommissionContract.
 }
 ```
+Full proto: `protos/playout.proto`.
 
 **Idempotency (per-RPC):**
 
 - **StartChannel:** Duplicate calls with the same `channel_id` (already-started channel) → **idempotent success** (same result as first start). No requirement that payload (plan_handle, port) match; broadcast systems favor safe, idempotent start.
 - **StopChannel:** Unknown or already-stopped channel → **idempotent success** (same result as first stop). Safe, idempotent stop.
-- **LoadPreview:** Not idempotent by argument; loading new preview replaces any existing preview. Duplicate LoadPreview with same segment is defined as “replace” — acceptable but not required to be no-op.
-- **SwitchToLive:** No segment payload; idempotency is by channel state (e.g. switching when already on that content may be no-op or success; see Phase 6A.0 for “no preview loaded” → error).
-- **UpdatePlan:** Treated as optional/legacy in Phase 6A; idempotency rules deferred with plan semantics.
+- **Legacy segment RPCs (retired):** Not used by Core; loading new preview replaces any existing preview. Duplicate legacy preload RPC with same segment is defined as “replace” — acceptable but not required to be no-op.
+- **UpdatePlan:** BlockPlan path; idempotency by plan handle / session. Legacy segment RPCs: see Phase8DecommissionContract.
 
 ---
 
 ### StartChannel
 
-**Purpose:** Initialize channel state for playout. Does **not** imply media playback or frame availability. **Execution begins only after LoadPreview + SwitchToLive.**
+**Purpose:** Initialize channel state for playout. Does **not** imply media playback or frame availability. **Execution begins when UpdatePlan (BlockPlan) is applied.**
 
 | Request Field | Type | Description |
 |---------------|------|-------------|
@@ -61,7 +60,7 @@ service PlayoutControl {
 
 **Guarantees (Phase 6A):**
 
-- On success, **channel state is initialized** and ready to accept LoadPreview for that channel.
+- On success, **channel state is initialized** and ready to accept UpdatePlan (BlockPlan) for that channel.
 - On failure, `success=false` with descriptive error message.
 - Duplicate calls with same `channel_id` (already-started) → idempotent success.
 
@@ -71,7 +70,7 @@ service PlayoutControl {
 
 ### UpdatePlan
 
-**Purpose:** Hot-swap playout plan without stopping the channel. **Optional/legacy for Phase 6A;** plans are not the canonical execution path; segment-based control (LoadPreview + SwitchToLive) is.
+**Purpose:** Hot-swap playout plan without stopping the channel. **Canonical path:** UpdatePlan (BlockPlan). Legacy segment-based control is retired (Phase8DecommissionContract).
 
 | Request Field | Type | Description |
 |---------------|------|-------------|
@@ -110,7 +109,7 @@ service PlayoutControl {
 
 ---
 
-### LoadPreview
+### legacy preload RPC
 
 **Purpose:** Load the next segment into the **preview slot**. This is the **primary execution instruction** for segment-based control. Segment payload: `asset_path`, `start_offset_ms` (media-relative), `hard_stop_time_ms` (wall-clock epoch ms, authoritative). Air may stop at or before `hard_stop_time_ms` but must never play past it.
 
@@ -131,7 +130,7 @@ service PlayoutControl {
 
 **Guarantees (Phase 6A):**
 
-- LoadPreview **before** StartChannel for that channel → **error** (`success=false`).
+- legacy preload RPC **before** StartChannel for that channel → **error** (`success=false`).
 - On success, preview slot holds the segment for the channel; loading new preview replaces any existing preview.
 - Invalid path (or unreadable file when file-backed producer is used) returns `success=false` with error.
 
@@ -139,7 +138,7 @@ service PlayoutControl {
 
 ---
 
-### SwitchToLive
+### legacy switch RPC
 
 **Purpose:** Promote the current preview to live atomically. **Control-only;** no segment payload.
 
@@ -156,8 +155,8 @@ service PlayoutControl {
 
 **Guarantees (Phase 6A):**
 
-- **SwitchToLive** with no preview loaded for that channel → **error** (`success=false`).
-- On success, preview content is promoted to live; old live producer is stopped or recycled; preview slot is cleared or ready for next LoadPreview.
+- **legacy switch RPC** with no preview loaded for that channel → **error** (`success=false`).
+- On success, preview content is promoted to live; old live producer is stopped or recycled; preview slot is cleared or ready for next legacy preload RPC.
 
 **Deferred (Applies Phase 7+):** “Switch completes within 100ms”, “PTS continuity maintained”, “no visual discontinuity”, “no black frames, no stutter” — see [Deferred (Applies Phase 7+)](#deferred-applies-phase-7). Phase 6A does not enforce output continuity or Renderer/TS semantics.
 
@@ -218,15 +217,15 @@ service PlayoutControl {
 |-------------|-----------|--------------|
 | StartChannel | `AIR-STARTCHANNEL-RECEIVED` | On gRPC handler entry |
 | StartChannel | `AIR-STARTCHANNEL-RESPONSE` | Before returning response |
-| LoadPreview | `AIR-LOADPREVIEW-RECEIVED` | On gRPC handler entry |
-| LoadPreview | `AIR-LOADPREVIEW-EFFECTIVE` | When preview segment installed (shadow decode ready) |
-| LoadPreview | `AIR-LOADPREVIEW-RESPONSE` | Before returning response |
-| SwitchToLive | `AIR-SWITCHTOLIVE-RECEIVED` | On gRPC handler entry |
-| SwitchToLive | `AIR-SWITCHTOLIVE-EFFECTIVE` | When switch committed (preview promoted to live) |
-| SwitchToLive | `AIR-SWITCHTOLIVE-RESPONSE` | Before returning response |
+| legacy preload RPC | `AIR-LOADPREVIEW-RECEIVED` | On gRPC handler entry |
+| legacy preload RPC | `AIR-LOADPREVIEW-EFFECTIVE` | When preview segment installed (shadow decode ready) |
+| legacy preload RPC | `AIR-LOADPREVIEW-RESPONSE` | Before returning response |
+| legacy switch RPC | `AIR-SWITCHTOLIVE-RECEIVED` | On gRPC handler entry |
+| legacy switch RPC | `AIR-SWITCHTOLIVE-EFFECTIVE` | When switch committed (preview promoted to live) |
+| legacy switch RPC | `AIR-SWITCHTOLIVE-RESPONSE` | Before returning response |
 | Producer clamp | `AIR-CLAMP-STARTED` | When producer reaches hard stop and output is clamped |
 | Producer clamp | `AIR-CLAMP-ACTIVE` | Optional; when clamp exceeds threshold (e.g. 1s) |
-| Producer clamp | `AIR-CLAMP-ENDED` | When SwitchToLive (or next LoadPreview) ends clamp |
+| Producer clamp | `AIR-CLAMP-ENDED` | When legacy switch RPC (or next legacy preload RPC) ends clamp |
 | Black/silence fallback | `AIR-FALLBACK-ENTERED` | When BlackFrameProducer or equivalent takes over (live underrun) |
 | Black/silence fallback | `AIR-FALLBACK-EXITED` | When real content resumes |
 | Mux/sink attach | `AIR-ATTACHSTREAM-RECEIVED`, `AIR-ATTACHSTREAM-RESPONSE` | On AttachStream gRPC |
@@ -238,20 +237,20 @@ service PlayoutControl {
 |-------|---------------|
 | `channel_id` | All events |
 | `correlation_id` | All intent/receive/response events (from gRPC metadata or proto) |
-| `segment_id` | LoadPreview, clamp events (when segment identified) |
-| `asset_path` | LoadPreview, clamp, fallback events |
-| `start_offset_ms` | LoadPreview (or `start_frame` if frame-indexed) |
-| `hard_stop_time_ms` | LoadPreview, clamp events (as `boundary_time`) |
+| `segment_id` | legacy preload RPC, clamp events (when segment identified) |
+| `asset_path` | legacy preload RPC, clamp, fallback events |
+| `start_offset_ms` | legacy preload RPC (or `start_frame` if frame-indexed) |
+| `hard_stop_time_ms` | legacy preload RPC, clamp events (as `boundary_time`) |
 | `boundary_time` | Clamp events (epoch ms when segment must stop) |
 | `result_code` | All response events |
 | `state_transitions` | When channel state changes (stopped → buffering → ready, etc.); log old and new state |
 | `receipt_time_ms` | All received events |
 | `completion_time_ms` | All response events |
-| `effective_time_ms` | LoadPreview-EFFECTIVE, SwitchToLive-EFFECTIVE |
+| `effective_time_ms` | legacy preload RPC-EFFECTIVE, legacy switch RPC-EFFECTIVE |
 
 ### Minimum Log Transcript Examples
 
-**Example 1: StartChannel → LoadPreview → SwitchToLive (happy path)**
+**Example 1: StartChannel → legacy preload RPC → legacy switch RPC (happy path)**
 
 ```
 [AIR] AIR-STARTCHANNEL-RECEIVED correlation_id=ch1-sc1-1738340100000 channel_id=1 receipt_time_ms=1738340100002
@@ -264,7 +263,7 @@ service PlayoutControl {
 [AIR] AIR-SWITCHTOLIVE-RESPONSE correlation_id=ch1-stl1-1738340223000 channel_id=1 success=true result_code=RESULT_CODE_OK pts_contiguous=true completion_time_ms=1738340223015
 ```
 
-**Example 2: Producer clamp (hard stop before SwitchToLive)**
+**Example 2: Producer clamp (hard stop before legacy switch RPC)**
 
 ```
 [AIR] AIR-LOADPREVIEW-RECEIVED correlation_id=ch1-lp2-1738340223000 channel_id=1 asset_path=/media/ep2.mp4 hard_stop_time_ms=1738340323000 receipt_time_ms=1738340223002
@@ -301,7 +300,7 @@ service PlayoutControl {
 | StartChannel → first frame | ≤ 2 seconds |
 | UpdatePlan downtime | ≤ 500ms |
 | StopChannel → stopped | ≤ 1 second |
-| SwitchToLive | ≤ 100ms |
+| legacy switch RPC | ≤ 100ms |
 | Frame decode (p95) | ≤ 25ms |
 | Frame decode (p99) | ≤ 50ms |
 
@@ -362,12 +361,12 @@ The following are **not required for Phase 6A** but are **retained** as institut
 
 | Category | Rule | Guarantee |
 |----------|------|-----------|
-| Startup | PE-START-001 | Channel state initialized; execution only after LoadPreview + SwitchToLive |
+| Startup | PE-START-001 | Channel state initialized; execution only after legacy preload RPC + legacy switch RPC |
 | Startup | PE-START-002 | StartChannel idempotent on already-started channel |
 | Stop | PE-STOP-001 | Stopped state; resources released |
 | Stop | PE-STOP-002 | StopChannel idempotent on unknown/stopped channel |
-| Control | PE-CTL-001 | LoadPreview before StartChannel → error |
-| Control | PE-CTL-002 | SwitchToLive with no preview loaded → error |
+| Control | PE-CTL-001 | legacy preload RPC before StartChannel → error |
+| Control | PE-CTL-002 | legacy switch RPC with no preview loaded → error |
 
 ### Deferred (Applies Phase 7+)
 
@@ -377,7 +376,7 @@ The following are **not required for Phase 6A** but are **retained** as institut
 | Update | PE-UPDATE-001 | Plan swap within 500ms |
 | Update | PE-UPDATE-002 | No frame loss during swap |
 | Stop | PE-STOP-D | Stopped within 1s |
-| Switch | PE-SWITCH-001 | SwitchToLive completes within 100ms |
+| Switch | PE-SWITCH-001 | legacy switch RPC completes within 100ms |
 | Switch | PE-SWITCH-002 | PTS continuity maintained |
 | Switch | PE-SWITCH-003 | No visual discontinuity |
 | Telemetry | PE-TEL-001–004 | Metric presence and guarantees |
@@ -389,10 +388,10 @@ The following are **not required for Phase 6A** but are **retained** as institut
 
 The following guarantees are **intentionally deferred** until Phase 7+ (see [Phase contracts](../phases/README.md)) when MPEG-TS serving, Renderer placement, and/or performance validation are in scope. **Nothing below is deleted;** it is re-scoped so Phase 6A tests do not conflict.
 
-- **StartChannel:** “Channel ready within 2 seconds”, “frames available for consumption within 2 seconds”, and any definition of “ready == outputting frames”. **Why deferred:** Phase 6A does not require real media playback or frame output; execution begins only after LoadPreview + SwitchToLive.
+- **StartChannel:** “Channel ready within 2 seconds”, “frames available for consumption within 2 seconds”, and any definition of “ready == outputting frames”. **Why deferred:** Phase 6A does not require real media playback or frame output; execution begins only after legacy preload RPC + legacy switch RPC.
 - **UpdatePlan:** Hot-swap timing (500ms), no frame loss, error state semantics. **Why deferred:** Plans are optional/legacy in 6A; segment-based control is canonical.
 - **StopChannel:** “Stopped within 1 second” timing. **Why deferred:** Phase 6A validates clean stop and idempotency; strict wall-clock timing is Phase 7.
-- **SwitchToLive:** “Completes within 100ms”, “PTS continuity maintained”, “no visual discontinuity”, “no black frames, no stutter”. **Why deferred:** No Renderer or TS path in 6A; continuity is enforced when output path exists.
+- **legacy switch RPC:** “Completes within 100ms”, “PTS continuity maintained”, “no visual discontinuity”, “no black frames, no stutter”. **Why deferred:** No Renderer or TS path in 6A; continuity is enforced when output path exists.
 - **Telemetry:** Full metrics presence, response time ≤ 100ms. **Why deferred:** Phase 6A.0 may use stub implementations; metrics validated in Phase 7.
 - **Performance targets:** All latency, throughput, and timing targets in Part 3. **Why deferred:** Phase 6A defers performance tuning and latency guarantees.
 - **Error recovery:** PE-ERR-001 through PE-ERR-005 (retry, backoff, slate, isolation). **Why deferred:** Validation in Phase 7; 6A focuses on control surface and producer lifecycle.
@@ -401,7 +400,7 @@ The following guarantees are **intentionally deferred** until Phase 7+ (see [Pha
 
 ## Test Coverage
 
-**Phase 6A:** Tests verify control-plane behavior and Phase 6A semantics (e.g. StartChannel → initialized; LoadPreview before StartChannel → error; SwitchToLive with no preview → error; idempotent Start/Stop). See [Phase6A-0 Control Surface](../phases/Phase6A-0-ControlSurface.md).
+**Phase 6A:** Tests verify control-plane behavior and Phase 6A semantics (e.g. StartChannel → initialized; legacy preload RPC before StartChannel → error; legacy switch RPC with no preview → error; idempotent Start/Stop). See [Phase6A-0 Control Surface](../phases/Phase6A-0-ControlSurface.md).
 
 **Phase 7+:** Tests for timing, metrics, switch seamlessness, and error recovery as in original contract (PE-START-D, PE-UPDATE-*, PE-SWITCH-*, PE-TEL-*, PE-ERR-*).
 

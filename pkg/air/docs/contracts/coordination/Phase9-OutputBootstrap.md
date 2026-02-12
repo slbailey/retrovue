@@ -1,6 +1,6 @@
 # Phase 9 — Output Bootstrap After Segment Commit
 
-_Related: [Phase 8 Overview](Phase8-Overview.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [OutputSwitchingContract](OutputSwitchingContract.md) · [PlayoutInvariants-BroadcastGradeGuarantees](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md)_
+_Related: [Phase 8 Overview](Phase8-Overview.md) · [LegacyPreviewSwitchModel (Retired model)](LegacyPreviewSwitchModel.md) · [OutputSwitchingContract](OutputSwitchingContract.md) · [PlayoutInvariants-BroadcastGradeGuarantees](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md)_
 
 **Principle:** After a segment commits and takes timeline ownership (Phase 8), there must be a deterministic path from commit to observable output. Phase 9 defines the minimal bootstrap required to break the readiness deadlock and route the first frame. **Authoritative definition of output liveness and timeline laws lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).**
 
@@ -150,7 +150,7 @@ This aids debugging by making the bootstrap vs. steady-state distinction visible
 ### G9-003: No Deadlock on Switch
 
 **Given:** Preview producer reaches shadow decode ready
-**When:** SwitchToLive is invoked
+**When:** legacy switch RPC is invoked
 **Then:** Output routing completes within 500ms (not 10s timeout)
 
 ### G9-004: Output Transition Occurs
@@ -165,7 +165,7 @@ This aids debugging by making the bootstrap vs. steady-state distinction visible
 ### Shape A: Synchronous Flush (Recommended)
 
 ```
-SwitchToLive():
+legacy switch RPC():
   1. SetWriteBarrier on live producer
   2. BeginSegmentFromPreview()
   3. SetShadowDecodeMode(false)
@@ -222,7 +222,7 @@ Phase 9 is strictly **downstream** of Phase 8. It consumes commit signals and en
 
 Phase 9 is complete when:
 
-1. **No readiness deadlock**: SwitchToLive completes in <500ms, not 10s timeout
+1. **No readiness deadlock**: legacy switch RPC completes in <500ms, not 10s timeout
 2. **First frame routable**: Buffer depth ≥1 immediately after SetShadowDecodeMode(false)
 3. **Output transitions**: Consumer receives frames from new segment after commit
 4. **Multi-switch stable**: 2nd, 3rd, Nth switches behave identically to 1st

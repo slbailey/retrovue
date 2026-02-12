@@ -14,7 +14,7 @@
 |------|--------|
 | **Constitutional laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md) · [ObservabilityParityLaw.md](laws/ObservabilityParityLaw.md) |
 | **Find an invariant by ID** | Tables below by layer; follow **Source** in each section |
-| **Phase 8 timeline / segment / switch** | [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) |
+| **RETIRED (Phase 8 / playlist path)** | [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md) — playlist/segment RPC orchestration removed; only BlockPlan is valid runtime |
 | **Phase 9 bootstrap / audio liveness** | [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) |
 | **Phase 10 pipeline flow control** | [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) |
 | **Primitive invariants** (pacing, decode rate, content depth) | [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) |
@@ -66,7 +66,7 @@ Top-level broadcast guarantees. **Authoritative definition lives in [PlayoutInva
 
 Truths about correctness and time: CT monotonicity, provenance, determinism, time-blindness, wall-clock correspondence, output safety/liveness semantics, format correctness.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) · [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) · [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md) · [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md) · Core `ScheduleManagerPhase8Contract.md`
+**Source:** [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) · [RealTimeHoldPolicy.md](semantics/RealTimeHoldPolicy.md) · [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md) · [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md). *(Phase8 / playlist-path refs retired: [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).)*
 
 ### Primitive Invariants
 
@@ -249,19 +249,19 @@ These invariants ensure that tick progression remains wall-clock anchored so tha
 
 Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, no-deadlock rules, ordering and sequencing that coordinate components.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) · [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md) · [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md)
+**Source:** [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md) · [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md). *(Phase8 refs retired: [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).)*
 
 | ID | One-line | Type |
 |----|----------|------|
 | INV-P8-007 | Write Barrier Finality — post-barrier writes = 0 | Coordination |
 | INV-P8-SWITCH-001 | Mapping must be pending BEFORE preview fills; write barrier on live before new segment | Coordination |
 | INV-P8-SHADOW-PACE | Shadow caches first frame, waits in place; no run-ahead decode | Coordination |
-| INV-P8-AUDIO-GATE | Audio gated only while shadow (and while mapping pending) | Coordination |
+| ~~INV-P8-AUDIO-GATE~~ | **RETIRED** — playlist-path only. See [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md). | — |
 | INV-P8-SEGMENT-COMMIT | First frame admitted → segment commits, owns CT; old segment RequestStop | Coordination |
 | INV-P8-SEGMENT-COMMIT-EDGE | Generation counter per commit for multi-switch edge detection | Coordination |
-| INV-P8-SWITCH-ARMED | No LoadPreview while switch armed; FATAL if reset code reached while armed | Coordination |
+| ~~INV-P8-SWITCH-ARMED~~ | **RETIRED** — playlist-path only. See [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md). | — |
 | INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live MUST wait until preview shadow decode ready | Coordination |
-| INV-P8-EOF-SWITCH | Live producer EOF → switch completes immediately (do not block on buffer depth) | Coordination |
+| ~~INV-P8-EOF-SWITCH~~ | **RETIRED** — playlist-path only. See [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md). | — |
 | INV-P8-PREVIEW-EOF | Preview EOF with frames → complete with lower thresholds (e.g. ≥1 video, ≥1 audio) | Coordination |
 | **INV-P8-SWITCHWATCHER-STOP-TARGET-001** | Switch machinery must not stop/disable/write-barrier successor as result of switch-completion or commit bookkeeping | Coordination |
 | **INV-P8-SWITCHWATCHER-COMMITGEN-EDGE-SAFETY-002** | Post-swap commit-gen transitions must not trigger retirement actions against successor | Coordination |
@@ -305,7 +305,7 @@ Block lifecycle ownership and fence-driven transfer. See [ProgramBlockAuthorityC
 
 Logging requirements, stall diagnostics, drop policies, safety rails, test-only guards. These make violations visible and enforce explicit handling.
 
-**Source:** [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md)
+**Source:** [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md). *(Phase8 refs retired: [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).)*
 
 | ID | One-line | Type |
 |----|----------|------|
@@ -322,7 +322,7 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 |-----------|----------------------|
 | **Laws** (Layer 0) | [PlayoutInvariants-BroadcastGradeGuarantees.md](laws/PlayoutInvariants-BroadcastGradeGuarantees.md) |
 | **Invariants by layer** (this index) | Layer 1–3 tables above |
-| **Phase 8** (timeline, segment, switch) | [Phase8-Invariants-Compiled.md](semantics/Phase8-Invariants-Compiled.md) + [Phase8-3-PreviewSwitchToLive.md](coordination/Phase8-3-PreviewSwitchToLive.md) |
+| **RETIRED (Phase 8 / playlist path)** | [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md) |
 | **Phase 9** (bootstrap, audio liveness) | [Phase9-OutputBootstrap.md](coordination/Phase9-OutputBootstrap.md) |
 | **Phase 10** (flow control, backpressure, mux) | [INV-P10-PIPELINE-FLOW-CONTROL.md](coordination/INV-P10-PIPELINE-FLOW-CONTROL.md) |
 | **Primitive invariants** (pacing, decode rate, content) | [PrimitiveInvariants.md](semantics/PrimitiveInvariants.md) |
@@ -335,7 +335,6 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Segment continuity** (decoder transition correctness, fallback KPI) | [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md) |
 | **Seam continuity engine** (clock isolation, decoder overlap, mechanical equivalence) | [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md) |
 | **Program block authority** (fence ownership, block lifecycle) | [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md) |
-| **Phase narrative** (what was built in Phase 8.0–8.9) | [Phase8-Overview.md](coordination/Phase8-Overview.md) · [README.md](coordination/README.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |
 

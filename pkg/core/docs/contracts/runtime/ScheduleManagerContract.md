@@ -2,7 +2,7 @@
 
 Status: Design (pre-implementation)
 
-**Deprecated (LoadPreview / SwitchToLive):** Sections describing per-segment LoadPreview/SwitchToLive orchestration, CT-domain switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION, INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY), and validation at LoadPreview time are **deprecated → Removed by Phase8DecommissionContract.** The only valid runtime path is BlockPlan; Core no longer issues LoadPreview/SwitchToLive.
+**Removed (playlist path):** Per-segment preview/live RPC orchestration, CT-domain switching (INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION, INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY), and validation at segment handoff are **removed by [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).** The only valid runtime path is BlockPlan.
 
 ## Purpose
 
@@ -376,7 +376,7 @@ Playout (AIR) executes this plan; it does not infer it.
 1. **`frame_count >= 0` is mandatory for filler segments**
    - `frame_count=-1` means "play until EOF" which is non-deterministic
    - Filler duration depends on file length, not schedule intent
-   - CORE MUST reject `frame_count < 0` at plan build time AND at LoadPreview time
+   - CORE MUST reject `frame_count < 0` at plan build time
 
 2. **CORE MUST calculate filler frame budget explicitly:**
    ```
@@ -397,7 +397,7 @@ Playout (AIR) executes this plan; it does not infer it.
    This preserves "avoid repeating first seconds" behavior while guaranteeing
    deterministic frame counts.
 
-4. **Validation at LoadPreview time:**
+4. **Validation at plan build time:**
    - If `frame_count < 0` for a filler segment, reject with error
    - If `frame_count > remaining_file_frames`, log warning (AIR may pad as last resort)
 
@@ -405,7 +405,7 @@ Playout (AIR) executes this plan; it does not infer it.
 
 This invariant guarantees frame budget correctness at schedule time.
 It does NOT guarantee runtime availability or readiness of filler frames.
-Runtime readiness is governed by [INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION](#inv-playout-switch-before-exhaustion-runtime).
+Runtime execution is governed by BlockPlan; see [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).
 
 **Verification:**
 
@@ -429,195 +429,11 @@ With frame-indexed execution:
 
 The frame model requires explicit answers that time-based execution papered over.
 
-### INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION: CT-Domain Switching
+### INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION / INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY / INV-PREVIEW-NEVER-EMPTY (removed)
 
-**Status:** Authoritative (runtime execution)
+**Status:** Removed by [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).
 
-CORE must ensure the successor segment is promoted to live no later than `ct_exhaust_us - switch_lead_us`.
-
-**Problem Statement:**
-
-CORE's switching decision was historically based on *intended* segment end time (grid boundary).
-But the live producer ends at *actual* segment exhaustion (EOF or frame_count reached).
-The system lacked a rule that actual exhaustion overrides intended timing.
-
-**CT-Domain Scheduling (no UTC conversions):**
-
-Each segment tracks:
-- `ct_start_us`: when segment began in CT domain
-- `frame_count`: explicit frame budget (>= 0, never -1)
-- `frame_duration_us`: derived from fps (e.g., 33333us for 30fps)
-
-Compute exhaustion point:
-```
-ct_exhaust_us = ct_start_us + (frame_count * frame_duration_us)
-```
-
-Derive switch thresholds (in CT domain):
-```
-ct_preload_us = ct_exhaust_us - preload_lead_us
-ct_switch_us  = ct_exhaust_us - switch_lead_us
-```
-
-The tick loop compares `current_ct_us` against these CT thresholds.
-**No epoch/wall-clock conversions needed.** This matches the MasterClock / single time authority model.
-
-**Required Guarantees:**
-
-1. **Preload triggered by CT threshold**
-   - When `current_ct_us >= ct_preload_us`, call `LoadPreview()` for successor
-   - `preload_lead_us` must be sufficient for gRPC latency + producer init + buffer filling
-
-2. **Switch triggered by CT threshold**
-   - When `current_ct_us >= ct_switch_us`, call `SwitchToLive()`
-   - `switch_lead_us` should be small (e.g., 100ms = 100000us)
-
-3. **Exhaustion overrides intended timing**
-   - If segment reaches EOF before `ct_exhaust_us` (e.g., file was shorter than expected),
-     actual exhaustion overrides intended timing
-   - See INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY for emergency handling
-
-**Invariant Violation Detection:**
-
-```
-IF current_ct_us > ct_exhaust_us AND switch_to_live() returns NOT_READY
-THEN LOG "INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION VIOLATION:
-          Channel {id} CT exhaustion passed without successor ready.
-          ct_exhaust_us={us}, current_ct_us={us}, delta_us={us}"
-```
-
-**Diagnostic Logging (each tick):**
-
-```
-[segment_id={id}] ct_now={us} ct_exhaust={us} time_to_exhaust={us} successor_loaded={bool} preview_ready={bool}
-```
-
-**Relationship to Other Invariants:**
-
-- Depends on: INV-SCHED-GRID-FILLER-PADDING (frame budget must be explicit)
-- Supplements: INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY (emergency fast-path)
-
-### INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY: Emergency Fast-Path
-
-**Status:** Authoritative (runtime safety)
-
-If AIR is emitting pad frames (BUFFER_TRULY_EMPTY) and preview has frames ready,
-CORE must call `SwitchToLive()` immediately.
-
-**Rationale:**
-
-Even with perfect budgeting, real systems encounter oddities:
-- Short files (asset shorter than metadata claimed)
-- Truncated assets (incomplete downloads)
-- Decode aborts (codec errors)
-
-Black frames are a **safety rail for violations**, not a pacing mechanism.
-This invariant ensures that if something goes wrong, recovery is immediate when possible.
-
-**Required Behavior:**
-
-```
-IF AIR reports live_buffer_empty=true
-AND preview_buffer_ready=true
-THEN CORE MUST call SwitchToLive() immediately
-     (even if ct_switch_us hasn't been reached)
-```
-
-**Implementation:**
-
-CORE should query AIR for buffer state OR receive a callback/signal when:
-- Live buffer becomes empty (BUFFER_TRULY_EMPTY)
-- Preview buffer becomes ready
-
-When both conditions are true simultaneously, bypass normal CT-threshold switching
-and execute immediate switch.
-
-**Diagnostic Logging:**
-
-```
-[EMERGENCY SWITCH] Channel {id}: live-starved + preview-ready.
-  Switching immediately. ct_now={us}, ct_switch_scheduled={us}, early_by={us}
-```
-
-**Relationship to Other Invariants:**
-
-- Safety net for: INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION
-- Turns pad frames into: true safety rail (not continuity mechanism)
-- Does NOT excuse: violations of INV-SCHED-GRID-FILLER-PADDING
-
-### INV-PREVIEW-NEVER-EMPTY: Preview Starvation is a CORE Violation
-
-**Status:** Authoritative (CORE responsibility)
-
-**CORE must ensure that AIR's preview buffer always has a segment loaded before
-the current live segment exhausts.** Preview starvation (BUFFER_TRULY_EMPTY with
-no preview ready) is a CORE invariant violation, NOT an AIR fallback condition.
-
-**Hard Invariant:**
-
-```
-AIR treats all segments equally.
-From AIR's POV, filler is just another segment.
-AIR only emits black frames when:
-  - Live output has no frames AND
-  - Preview has no frames
-AIR must NEVER be responsible for loading, requesting, or reasoning about filler.
-```
-
-**CORE Responsibilities (non-negotiable):**
-
-1. **CORE must ensure that some playable segment (program OR filler) is always
-   loaded into preview before it is needed.**
-
-2. **CORE must never allow the output pipeline to reach a state where preview
-   is empty during scheduled playout.**
-
-3. **Grid padding, filler timing, and continuity are CORE concerns only.**
-
-**Root Cause of Violations:**
-
-Preview starvation occurs when:
-- ScheduleService fails to return successor segment metadata (end_time_utc, frame_count)
-- tick() cannot determine when to preload (exits early if _segment_end_time_utc is None)
-- Filler is never loaded into preview before program ends
-
-**Required ScheduleService Behavior:**
-
-ScheduleService implementations MUST return:
-1. **Complete block structure:** Both current AND successor segments
-2. **Segment timing:** `end_time_utc` for each segment (required for preload scheduling)
-3. **Frame budget:** `frame_count` for each segment (required for CT-domain exhaustion)
-4. **Segment type:** `segment_type` field ("content" or "filler")
-
-Example response when querying during program segment:
-```python
-[
-    {"asset_path": "program.mp4", "end_time_utc": "...", "segment_type": "content", ...},
-    {"asset_path": "filler.mp4", "end_time_utc": "...", "segment_type": "filler", ...}
-]
-```
-
-This allows tick() to see the successor and preload it 3 seconds before the boundary.
-
-**Diagnostic Logging:**
-
-```
-[PREVIEW STARVATION] Channel {id}: live exhausted with no preview ready.
-  This is a CORE scheduling failure, not an AIR condition.
-  ScheduleService must return successor segment with end_time_utc.
-```
-
-**What This Invariant Does NOT Cover:**
-
-- AIR internal buffer management (AIR's concern)
-- Decode timing or buffer fill rates (AIR's concern)
-- Frame rate conversion or timing correction (AIR's concern)
-
-**Relationship to Other Invariants:**
-
-- Root cause of: INV-PLAYOUT-NO-PAD-WHEN-PREVIEW-READY triggers
-- Depends on: INV-SCHED-GRID-FILLER-PADDING (filler has explicit frame budget)
-- Depends on: INV-PLAYOUT-SWITCH-BEFORE-EXHAUSTION (preload timing)
+Per-segment CT-domain switching, emergency fast-path, and preview-starvation invariants applied to the retired playlist path. With **BlockPlan**, Core supplies the full plan at session start; AIR owns execution. Runtime always means BlockPlan. For historical semantics, see the decommission contract.
 
 ### INV-SM-006: Jump-In Anywhere
 

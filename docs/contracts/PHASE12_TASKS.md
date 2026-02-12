@@ -40,7 +40,7 @@ Phase 12 implements **live session authority and teardown semantics**. Task trac
 - [x] P12-CORE-002: Implement `_request_teardown()` guard (defer if transient, execute if stable)
 - [x] P12-CORE-003: Integrate deferred teardown into state transitions (execute when entering stable state)
 - [x] P12-CORE-004: Add grace timeout enforcement to `tick()` (force FAILED_TERMINAL on expiry)
-- [x] P12-CORE-005: Block new boundary work when `_teardown_pending` (no LoadPreview, SwitchToLive, or segment planning)
+- [x] P12-CORE-005: Block new boundary work when `_teardown_pending` (no legacy preload RPC, legacy switch RPC, or segment planning)
 - [x] P12-CORE-006: Update ProgramDirector viewer disconnect handler (call teardown guard; advisory during transient)
 - [x] P12-CORE-007: Add liveness query API (durably live only when `_boundary_state == LIVE`)
 - [x] P12-CORE-008: Add FAILED_TERMINAL check to halt scheduling intent (INV-TERMINAL-SCHEDULER-HALT-001) *(Terminal Semantics)*

@@ -5,7 +5,7 @@
 **Owner:** PlayoutEngine (SwitchWatcher)
 **Applies to:** Producer lifecycle during switch/preview transitions
 
-**Related:** [Phase8-3-PreviewSwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [PlayoutInvariants-BroadcastGradeGuarantees](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md)
+**Related:** [LegacyPreviewSwitchModel (Retired model)](LegacyPreviewSwitchModel.md) · [PlayoutInvariants-BroadcastGradeGuarantees](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md)
 
 ---
 

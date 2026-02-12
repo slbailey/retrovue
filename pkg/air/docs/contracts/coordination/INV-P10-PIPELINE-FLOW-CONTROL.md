@@ -322,7 +322,7 @@ The SwitchWatcher monitors buffer readiness and auto-completes the switch when t
 **Binding Rules:**
 - SwitchWatcher MUST NOT set `switch_auto_completed = true` until `IsOutputSinkAttached()` returns true
 - If buffer is ready but sink is not attached, remain in NOT_READY state
-- Core will attach the sink and retry SwitchToLive
+- Core will attach the sink and retry legacy switch RPC
 
 **Why this matters:**
 - MPEG-TS output is non-retentive and non-seekable
@@ -338,7 +338,7 @@ The SwitchWatcher monitors buffer readiness and auto-completes the switch when t
 
 ### 4.8 Switch Readiness Does Not Require Audio Data
 
-**INV-SWITCH-READINESS**: SwitchToLive may complete when:
+**INV-SWITCH-READINESS**: legacy switch RPC may complete when:
 - Video depth >= minimum threshold (2 frames)
 - Output pipeline is attached and ready
 - Audio format is locked (established at channel start)
@@ -364,7 +364,7 @@ Audio may legitimately lag video due to epoch alignment:
 **Log signatures:**
 ```
 # NOT_READY (waiting for video):
-[SwitchToLive] INV-SWITCH-READINESS: NOT_READY (video=1/2, audio=0, waiting for video)
+[legacy switch RPC] INV-SWITCH-READINESS: NOT_READY (video=1/2, audio=0, waiting for video)
 
 # PASSED (video ready, audio may be 0):
 
@@ -388,12 +388,12 @@ Audio may legitimately lag video due to epoch alignment:
 **Log signatures:**
 ```
 [TimelineController] ORCH-SWITCH-SUCCESSOR-OBSERVED: Segment N commit_gen=M (successor video emitted)
-[SwitchToLive] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission
+[legacy switch RPC] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission
 ```
 
 **4.8 continued — Switch Readiness log signatures:**
 ```
-[SwitchToLive] INV-SWITCH-READINESS: PASSED (video=4/2, audio=0)
+[legacy switch RPC] INV-SWITCH-READINESS: PASSED (video=4/2, audio=0)
 [SwitchWatcher] INV-SWITCH-READINESS: PASSED (video=4/2, audio=3)
 
 # WARNING (audio lag diagnostic):

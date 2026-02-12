@@ -1,3 +1,11 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8.3 — Preview / SwitchToLive (TS continuity)
 
 _Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-4 Persistent MPEG-TS Mux](Phase8-4-PersistentMpegTsMux.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [Phase6A-1 ExecutionProducer](../../archive/phases/Phase6A-1-ExecutionProducer.md) · [Phase6A-2 FileBackedProducer](../../archive/phases/Phase6A-2-FileBackedProducer.md)_
@@ -14,7 +22,7 @@ This document is a **Coordination Contract**, refining higher-level laws. It doe
 
 ## Purpose
 
-- Run **preview** and **live** decode pipelines under Air’s control; both produce decoded frames, but only one pipeline is admitted into the TS mux at any time.
+- Run **preview** and **live** decode pipelines under Air's control; both produce decoded frames, but only one pipeline is admitted into the TS mux at any time.
 - On **SwitchToLive**, the TS mux **atomically** transitions from consuming frames from the current live producer to consuming frames from the preview producer at a frame boundary (see below), so that:
   - The TS stream remains valid.
   - **No TS discontinuity** (no spurious discontinuity indicators unless intended).
@@ -93,7 +101,7 @@ These invariants govern how the TimelineController maps media time (MT) to chann
   - **Preview** path: decode pipeline for the next segment; produces decoded frames; does not yet feed the TS mux.
   - **Live** path: decode pipeline whose frames are currently admitted into the TS mux; mux writes to the **stream_fd** given by Python.
 - **Atomic switch at SwitchToLive:** the TS mux transitions from consuming frames from the current live producer to consuming frames from the preview producer **at a frame boundary**, without interrupting the mux or resetting state. No FD changes. No mux restart. No timestamp base reset. Preview becomes live; previous live stops producing into the mux.
-- **Switch timing:** the switch occurs on the first frame from the preview producer whose PTS is ≥ the next segment’s scheduled start time, consistent with Phase 8.2 frame-admission rules.
+- **Switch timing:** the switch occurs on the first frame from the preview producer whose PTS is ≥ the next segment's scheduled start time, consistent with Phase 8.2 frame-admission rules.
 - **Guarantees** on the byte stream seen by Python (and thus by HTTP viewers):
   - **No TS discontinuity** (continuity_counter and discontinuity_flag handled so the stream is seamless or explicitly marked per spec).
   - **No PID reset** (same PIDs across the switch).
@@ -106,7 +114,7 @@ These invariants govern how the TimelineController maps media time (MT) to chann
 ## Execution
 
 - LoadPreview(asset_A) → Air starts the preview decode pipeline (e.g. shadow decode for the next segment); frames are not yet admitted to the TS mux.
-- SwitchToLive → Air switches the single TS mux to consume from the preview producer at the scheduled frame boundary; stops the previous live producer’s admission; TS mux continues with no restart.
+- SwitchToLive → Air switches the single TS mux to consume from the preview producer at the scheduled frame boundary; stops the previous live producer's admission; TS mux continues with no restart.
 - Python keeps reading the same FD; it sees one continuous byte stream.
 
 ## Test assets
@@ -128,7 +136,7 @@ Paths are relative to repo root; tests may use `RETROVUE_TEST_VIDEO_PATH` or equ
 
 ## Explicitly out of scope (8.3)
 
-- Fan-out and “last viewer disconnects → stop” (8.5).
+- Fan-out and "last viewer disconnects → stop" (8.5).
 - Performance and latency targets.
 
 ## Exit criteria

@@ -36,6 +36,80 @@ from unittest.mock import MagicMock, Mock, patch, call
 
 import pytest
 
+from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+
+import sys as _sys
+import os as _os
+_sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "fixtures"))
+from fake_schedule_service import FakeScheduleService
+
+
+def _sb_from_plan(
+    plan: list[dict],
+    block_index: int,
+    start_ms: int,
+    block_duration_ms: int = 30_000,
+    channel_id: str = "test",
+) -> ScheduledBlock:
+    """Create a ScheduledBlock from a plan entry for test compatibility.
+
+    Mirrors the old _generate_next_block(plan) round-robin behavior:
+    picks plan[block_index % len(plan)], uses entry's duration_ms or fallback.
+    """
+    if not plan:
+        return ScheduledBlock(
+            block_id=f"BLOCK-{channel_id}-{block_index}",
+            start_utc_ms=start_ms,
+            end_utc_ms=start_ms + block_duration_ms,
+            segments=(
+                ScheduledSegment("episode", "assets/SampleA.mp4", 0, block_duration_ms),
+            ),
+        )
+    entry = plan[block_index % len(plan)]
+    dur = entry.get("duration_ms", block_duration_ms)
+    return ScheduledBlock(
+        block_id=f"BLOCK-{channel_id}-{block_index}",
+        start_utc_ms=start_ms,
+        end_utc_ms=start_ms + dur,
+        segments=(
+            ScheduledSegment(
+                segment_type=entry.get("segment_type", "episode"),
+                asset_uri=entry.get("asset_path", "assets/SampleA.mp4"),
+                asset_start_offset_ms=entry.get("asset_start_offset_ms", 0),
+                segment_duration_ms=dur,
+            ),
+        ),
+    )
+
+
+def _gen(producer, plan, block_duration_ms=30_000):
+    """Generate next block from plan using producer cursor state.
+
+    Replacement for the old producer._generate_next_block(playout_plan) call pattern.
+    """
+    sb = _sb_from_plan(plan, producer._block_index, producer._next_block_start_ms,
+                       block_duration_ms, producer.channel_id)
+    return producer._generate_next_block(sb)
+
+
+def _align_grid(producer):
+    """Align the FakeScheduleService grid origin so that
+    producer._next_block_start_ms falls on a grid boundary.
+
+    This ensures _feed_ahead() produces block IDs consistent with the
+    test's expected numbering (starting from block_index derived from
+    the position within the grid).
+
+    Call this after setting producer._next_block_start_ms to a wall-clock
+    value and producer._block_index to the expected starting index.
+    """
+    svc = producer.schedule_service
+    if svc is None:
+        return
+    dur = svc.block_duration_ms
+    idx = producer._block_index
+    svc.grid_origin_utc_ms = producer._next_block_start_ms - idx * dur
+
 
 # =============================================================================
 # Test Infrastructure - Mock Event System
@@ -1214,11 +1288,12 @@ class TestQueueFullRetry:
         """
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="qf-test", block_duration_ms=3000)
         producer = BlockPlanProducer(
             channel_id="qf-test",
-            configuration={"block_duration_ms": 3000},
+            configuration={},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -1264,12 +1339,12 @@ class TestQueueFullRetry:
         # Manually wire the mock session into the producer
         mock_session = QueueFullSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         # Simulate start() sequence: generate and seed first 2 blocks
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan, 3000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan, 3000)
         producer._advance_cursor(block_b)
 
         mock_session.seed(block_a, block_b)
@@ -1277,7 +1352,7 @@ class TestQueueFullRetry:
 
         # Feed 3rd block — should be rejected (QUEUE_FULL)
         from retrovue.runtime.playout_session import FeedResult
-        block_c = producer._generate_next_block(playout_plan)
+        block_c = _gen(producer, playout_plan, 3000)
         result = producer._try_feed_block(block_c)
 
         # Verify: feed was rejected, block is pending
@@ -1333,11 +1408,12 @@ class TestQueueFullRetry:
         """
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="seq-test", block_duration_ms=3000)
         producer = BlockPlanProducer(
             channel_id="seq-test",
-            configuration={"block_duration_ms": 3000},
+            configuration={},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -1382,15 +1458,15 @@ class TestQueueFullRetry:
 
         mock_session = ControlledSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         producer._started = True
         producer._feed_state = _FeedState.RUNNING
         mock_session.on_block_complete = producer._on_block_complete
 
         # Seed blocks 0, 1
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan, 3000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan, 3000)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -1401,7 +1477,7 @@ class TestQueueFullRetry:
         # Feed block 2 — will be REJECTED
         reject_next[0] = True
         producer._feed_credits = 1  # Give a credit for the direct _try_feed_block call
-        block_c = producer._generate_next_block(playout_plan)
+        block_c = _gen(producer, playout_plan, 3000)
         producer._try_feed_block(block_c)
 
         # Verify block 2 is pending
@@ -1438,11 +1514,12 @@ class TestQueueFullRetry:
         """
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="poll-test", block_duration_ms=3000)
         producer = BlockPlanProducer(
             channel_id="poll-test",
-            configuration={"block_duration_ms": 3000},
+            configuration={},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -1475,20 +1552,20 @@ class TestQueueFullRetry:
 
         mock_session = NeverAcceptSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         producer._started = True
         mock_session.on_block_complete = producer._on_block_complete
 
         # Seed blocks 0, 1
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan, 3000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan, 3000)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
         # Try to feed block 2 — rejected
         producer._feed_credits = 1  # Give a credit for the direct _try_feed_block call
-        block_c = producer._generate_next_block(playout_plan)
+        block_c = _gen(producer, playout_plan, 3000)
         producer._try_feed_block(block_c)
 
         # Wait without any BLOCK_COMPLETE events — should NOT retry
@@ -1507,11 +1584,12 @@ class TestQueueFullRetry:
         """
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="cleanup-test", block_duration_ms=3000)
         producer = BlockPlanProducer(
             channel_id="cleanup-test",
-            configuration={"block_duration_ms": 3000},
+            configuration={},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -1558,14 +1636,18 @@ def _make_producer_with_mock_session(
     if feed_returns is None:
         feed_returns = FeedResult.ACCEPTED
 
+    svc = FakeScheduleService(
+        channel_id=channel_id,
+        block_duration_ms=block_duration_ms,
+    )
+
     producer = BlockPlanProducer(
         channel_id=channel_id,
         configuration={
-            "block_duration_ms": block_duration_ms,
             "feed_ahead_horizon_ms": feed_ahead_horizon_ms,
         },
         channel_config=None,
-        schedule_service=None,
+        schedule_service=svc,
         clock=None,
     )
 
@@ -1616,13 +1698,13 @@ class TestFeedAheadNoFeedDuringSeeded:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
         # Simulate seed (blocks 0, 1)
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -1655,13 +1737,13 @@ class TestFeedAheadSeededToRunning:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
         # Simulate seed
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -1700,13 +1782,13 @@ class TestFeedAheadStartupNoQueueFullRace:
         mock_session._feed_returns[0] = FeedResult.QUEUE_FULL
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
         # Simulate what start() does: seed 2 blocks, enter SEEDED
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -1740,7 +1822,7 @@ class TestFeedAheadFillsToHorizon:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         # Simulate: currently RUNNING, with 0 runway
         now_ms = int(time.time() * 1000)
@@ -1777,7 +1859,7 @@ class TestFeedAheadStopsAtHorizon:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         # RUNNING with plenty of runway (60s ahead)
         now_ms = int(time.time() * 1000)
@@ -1814,7 +1896,7 @@ class TestFeedAheadBackoffOnQueueFull:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         # RUNNING with 0 runway — will want to feed
         now_ms = int(time.time() * 1000)
@@ -1858,7 +1940,7 @@ class TestFeedAheadNoDrainingFeed:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.DRAINING
@@ -1885,7 +1967,7 @@ class TestFeedAheadTickThrottle:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         # RUNNING with 0 runway (will want to feed on every evaluation)
         now_ms = int(time.time() * 1000)
@@ -1921,11 +2003,12 @@ class TestRunwayComputation:
     def test_runway_computation_basic(self):
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="runway-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="runway-test",
-            configuration={"block_duration_ms": 30_000},
+            configuration={},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -1958,11 +2041,12 @@ class TestReadyByDeadlineComputation:
     def test_ready_by_equals_start_minus_budget(self):
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="rb-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="rb-test",
-            configuration={"block_duration_ms": 30_000, "preload_budget_ms": 10_000},
+            configuration={"preload_budget_ms": 10_000},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -1975,11 +2059,12 @@ class TestReadyByDeadlineComputation:
     def test_ready_by_with_custom_budget(self):
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="rb-test2", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="rb-test2",
-            configuration={"block_duration_ms": 30_000, "preload_budget_ms": 5_000},
+            configuration={"preload_budget_ms": 5_000},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -2008,7 +2093,7 @@ class TestFeedTriggeredByDeadline:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -2045,7 +2130,7 @@ class TestNoFeedWhenNeitherTriggerMet:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -2081,7 +2166,7 @@ class TestReadyByMissCount:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -2113,7 +2198,7 @@ class TestReadyByMissCount:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -2126,6 +2211,7 @@ class TestReadyByMissCount:
         # Block starts in the future (5s from now) — not a miss
         producer._next_block_start_ms = now_ms + 5_000
         producer._block_index = 0
+        _align_grid(producer)
 
         producer._feed_ahead()
 
@@ -2150,7 +2236,7 @@ class TestFeedAheadDecisionLogging:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2203,7 +2289,7 @@ class TestFeedAheadDecisionLogging:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2251,7 +2337,7 @@ class TestPreloadBudgetConfiguration:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2284,7 +2370,7 @@ class TestPreloadBudgetConfiguration:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2321,7 +2407,7 @@ class TestFeedAheadReasonClassification:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2368,7 +2454,7 @@ class TestFeedAheadReasonClassification:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2414,7 +2500,7 @@ class TestFeedAheadReasonClassification:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2453,11 +2539,12 @@ class TestCleanupResetsDeadlineState:
     def test_cleanup_resets_deadline_state(self):
         from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
 
+        svc = FakeScheduleService(channel_id="cleanup-dl-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="cleanup-dl-test",
-            configuration={"block_duration_ms": 30_000},
+            configuration={},
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -2501,7 +2588,7 @@ class TestMissPolicyNoReorder:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -2512,6 +2599,7 @@ class TestMissPolicyNoReorder:
         producer._feed_credits = 2  # Credits for feed-ahead
         producer._next_block_start_ms = now_ms - 5_000  # 5s in the past
         producer._block_index = 0
+        _align_grid(producer)
 
         producer._feed_ahead()
 
@@ -2540,7 +2628,7 @@ class TestMissPolicyNoFiller:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2576,7 +2664,7 @@ class TestMissPolicyContinueFeedAhead:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2604,14 +2692,14 @@ class TestMissAnnotationRecorded:
         """When a miss occurs, an as-run annotation is recorded."""
         from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
 
+        svc = FakeScheduleService(channel_id="miss-ann-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="miss-ann-test",
             configuration={
-                "block_duration_ms": 30_000,
                 "feed_ahead_horizon_ms": 20_000,
             },
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -2646,7 +2734,7 @@ class TestMissAnnotationRecorded:
 
         mock_session = SimpleMockSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2685,14 +2773,14 @@ class TestMissAnnotationNotRecordedOnTime:
         """No as-run annotation is recorded when block is fed before start_utc_ms."""
         from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
 
+        svc = FakeScheduleService(channel_id="ontime-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="ontime-test",
             configuration={
-                "block_duration_ms": 30_000,
                 "feed_ahead_horizon_ms": 20_000,
             },
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -2724,7 +2812,7 @@ class TestMissAnnotationNotRecordedOnTime:
 
         mock_session = SimpleMockSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2752,14 +2840,14 @@ class TestMissLatenessMetric:
         from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
         from unittest.mock import patch, MagicMock
 
+        svc = FakeScheduleService(channel_id="lateness-metric-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="lateness-metric-test",
             configuration={
-                "block_duration_ms": 30_000,
                 "feed_ahead_horizon_ms": 20_000,
             },
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -2791,7 +2879,6 @@ class TestMissLatenessMetric:
 
         mock_session = SimpleMockSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2800,6 +2887,7 @@ class TestMissLatenessMetric:
         producer._feed_credits = 2  # Credits for feed-ahead
         producer._next_block_start_ms = now_ms - 7_000  # 7s miss
         producer._block_index = 0
+        _align_grid(producer)
 
         # Mock the histogram metric
         mock_histogram = MagicMock()
@@ -2829,14 +2917,14 @@ class TestLateJoinStabilization:
         """Simulate late join scenario: blocks fed once each, no duplicates."""
         from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
 
+        svc = FakeScheduleService(channel_id="late-join-test", block_duration_ms=10_000)
         producer = BlockPlanProducer(
             channel_id="late-join-test",
             configuration={
-                "block_duration_ms": 10_000,
                 "feed_ahead_horizon_ms": 20_000,
             },
             channel_config=None,
-            schedule_service=None,
+            schedule_service=svc,
             clock=None,
         )
 
@@ -2871,15 +2959,15 @@ class TestLateJoinStabilization:
 
         mock_session = TrackingSession()
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
         producer._started = True
 
         # Simulate late join: seed with blocks that are already partially past
         now_ms = int(time.time() * 1000)
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan, 10_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan, 10_000)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -2891,6 +2979,7 @@ class TestLateJoinStabilization:
         producer._feed_state = _FeedState.SEEDED
         producer._max_delivered_end_utc_ms = block_b.end_utc_ms
         producer._next_block_start_ms = now_ms + 8_000  # next block starts in 8s
+        _align_grid(producer)
 
         # First BlockCompleted triggers SEEDED→RUNNING and feed-ahead
         producer._on_block_complete(block_a.block_id)
@@ -2931,7 +3020,7 @@ class TestMissLogging:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -2987,7 +3076,7 @@ class TestMissLogging:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -3032,12 +3121,12 @@ class TestCreditInitialization:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -3054,7 +3143,7 @@ class TestCreditInitialization:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -3075,10 +3164,11 @@ class TestCreditInitialization:
         """_cleanup() resets credits, errors, and backoff to zero."""
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="credit-cleanup-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="credit-cleanup-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
         producer._feed_credits = 2
         producer._consecutive_feed_errors = 5
@@ -3099,12 +3189,12 @@ class TestCreditIncrementOnBlockComplete:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -3127,10 +3217,11 @@ class TestCreditIncrementOnBlockComplete:
         """Credits never exceed AIR_QUEUE_DEPTH."""
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="cap-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="cap-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
         producer._feed_credits = producer.AIR_QUEUE_DEPTH
 
@@ -3154,7 +3245,7 @@ class TestCreditDecrementOnAccepted:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -3183,7 +3274,7 @@ class TestCreditDecrementOnAccepted:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 5_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -3212,7 +3303,7 @@ class TestCreditResetOnQueueFull:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -3237,7 +3328,7 @@ class TestCreditResetOnQueueFull:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
@@ -3265,7 +3356,7 @@ class TestCreditGateEliminatesThrash:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
         now_ms = int(time.time() * 1000)
@@ -3290,13 +3381,13 @@ class TestCreditGateEliminatesThrash:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
         now_ms = int(time.time() * 1000)
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -3327,10 +3418,11 @@ class TestErrorBackoffEscalation:
         from retrovue.runtime.playout_session import FeedResult
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="backoff-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="backoff-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
 
         from retrovue.runtime.playout_session import BlockPlan
@@ -3365,12 +3457,12 @@ class TestErrorBackoffReset:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 30_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -3402,10 +3494,11 @@ class TestErrorVsQueueFullDistinction:
         from retrovue.runtime.playout_session import FeedResult, BlockPlan
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="distinction-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="distinction-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
 
         # Mock session returning QUEUE_FULL
@@ -3445,10 +3538,11 @@ class TestFeedResultIntegration:
         from retrovue.runtime.playout_session import FeedResult, BlockPlan
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="result-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="result-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
 
         class AccSession:
@@ -3475,10 +3569,11 @@ class TestFeedResultIntegration:
         from retrovue.runtime.playout_session import FeedResult, BlockPlan
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="result-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="result-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
 
         class QFSession:
@@ -3503,10 +3598,11 @@ class TestFeedResultIntegration:
         from retrovue.runtime.playout_session import FeedResult, BlockPlan
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
+        svc = FakeScheduleService(channel_id="result-test", block_duration_ms=30_000)
         producer = BlockPlanProducer(
             channel_id="result-test",
-            configuration={"block_duration_ms": 30_000},
-            channel_config=None, schedule_service=None, clock=None,
+            configuration={},
+            channel_config=None, schedule_service=svc, clock=None,
         )
 
         class ErrSession:
@@ -3541,15 +3637,15 @@ class TestCreditLifecycleEndToEnd:
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 5_000}]
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
         mock_session.on_block_complete = producer._on_block_complete
 
         # --- seed(A, B) ---
         now_ms = int(time.time() * 1000)
         producer._next_block_start_ms = now_ms
-        block_a = producer._generate_next_block(playout_plan)
+        block_a = _gen(producer, playout_plan, 5_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(playout_plan)
+        block_b = _gen(producer, playout_plan, 5_000)
         producer._advance_cursor(block_b)
         mock_session.seed(block_a, block_b)
 
@@ -3559,6 +3655,7 @@ class TestCreditLifecycleEndToEnd:
         producer._started = True
         producer._in_flight_block_ids.add(block_a.block_id)
         producer._in_flight_block_ids.add(block_b.block_id)
+        _align_grid(producer)
 
         # --- Ticks: credits=0, nothing happens ---
         for _ in range(20):
@@ -3617,7 +3714,7 @@ class TestMissAccuracyLateDecision:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -3668,6 +3765,7 @@ class TestMissAccuracyLateDecision:
         producer._next_block_first_due_utc_ms = now_ms  # "noticed" at now_ms
         producer._next_block_start_ms = now_ms + 100     # start is 100ms in future relative to first_due
         producer._block_index = 0
+        _align_grid(producer)
         producer._pending_block = None
         producer._feed_credits = 1
         producer._max_delivered_end_utc_ms = now_ms  # low runway triggers feed
@@ -3699,7 +3797,7 @@ class TestMissAccuracyLateDecision:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -3738,7 +3836,7 @@ class TestMissAccuracyLateDecision:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -3749,6 +3847,7 @@ class TestMissAccuracyLateDecision:
         producer._next_block_first_due_utc_ms = now_ms
         producer._next_block_start_ms = now_ms + 100
         producer._block_index = 0
+        _align_grid(producer)
         producer._feed_credits = 1
 
         import time as _time
@@ -3803,7 +3902,7 @@ class TestMissAccuracyLateDecision:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -3833,7 +3932,7 @@ class TestMissAccuracyLateDecision:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 
@@ -3864,7 +3963,7 @@ class TestMissAccuracyLateDecision:
         ]
 
         producer._session = mock_session
-        producer._playout_plan = playout_plan
+
 
         now_ms = int(time.time() * 1000)
 

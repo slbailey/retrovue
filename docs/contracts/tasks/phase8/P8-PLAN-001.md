@@ -11,7 +11,7 @@ Instructions:
 - FileProducer receives planning authority (frame_count) from Core and enforces runtime adaptation against it
 - Add `_planned_frame_count` field (int64) — planning authority received from Core
 - Add `_frames_delivered` counter (int64) — runtime tracking
-- Capture frame_count in LoadPreview handler
+- Capture frame_count in legacy preload RPC handler
 - Use these for deficit detection (P8-PLAN-002)
 
 ---
@@ -30,7 +30,7 @@ Implementation Notes:
    int64_t _frames_delivered = 0;
    ```
 
-2. In LoadPreview handler:
+2. In legacy preload RPC handler:
    ```cpp
    _planned_frame_count = request.frame_count();
    _frames_delivered = 0;
@@ -41,7 +41,7 @@ Implementation Notes:
 4. These fields enable deficit detection in P8-PLAN-002
 
 Observable Proof:
-- `_planned_frame_count` set from LoadPreview
+- `_planned_frame_count` set from legacy preload RPC
 - Value matches Core's playout plan
 - Counter increments per frame delivered
 

@@ -303,7 +303,7 @@ readiness=true
 
 safety_rail=false
 
-Clean, deterministic SwitchToLive execution
+Clean, deterministic legacy switch RPC execution
 
 📝 Log Entry 13 — Readiness Is Binary or It Is False
 

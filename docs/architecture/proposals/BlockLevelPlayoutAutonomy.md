@@ -81,9 +81,9 @@ Identical. Epoch refresh is explicitly forbidden as it would cause discontinuity
 **Invariant:** Phase 11 Authority Model (Core owns schedule, AIR owns execution)
 
 **Current enforcement:**
-- Core: Schedule, EPG, segment selection, LoadPreview/SwitchToLive commands
+- Core: Schedule, EPG, segment selection, legacy preload RPC/legacy switch RPC commands
 - AIR: CT, frame timing, encoding, muxing, output
-- Boundary: Per-segment RPCs (LoadPreview, SwitchToLive) at each transition
+- Boundary: Per-segment RPCs (legacy preload RPC, legacy switch RPC) at each transition
 
 **BlockPlan enforcement:**
 - Core: Schedule, EPG, block composition, BlockPlan delivery, lookahead maintenance

@@ -107,8 +107,8 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | [P11D-002](P11D-002.md) | FIX | AIR | Execute switch at deadline regardless of readiness |
 | [P11D-003](P11D-003.md) | FIX | AIR | Use safety rails if not ready at deadline |
 | [P11D-004](P11D-004.md) | FIX | AIR | Replace NOT_READY with PROTOCOL_VIOLATION |
-| [P11D-005](P11D-005.md) | FIX | Core | Remove SwitchToLive retry loop |
-| [P11D-006](P11D-006.md) | FIX | Core | Ensure LoadPreview with sufficient lead time |
+| [P11D-005](P11D-005.md) | FIX | Core | Remove legacy switch RPC retry loop |
+| [P11D-006](P11D-006.md) | FIX | Core | Ensure legacy preload RPC with sufficient lead time |
 | [P11D-007](P11D-007.md) | TEST | Test | Contract test: switch within 1 frame of boundary |
 | [P11D-008](P11D-008.md) | TEST | Test | Contract test: late prefeed → PROTOCOL_VIOLATION |
 | [P11D-009](P11D-009.md) | FIX | Core | Enforce planning-time feasibility (INV-SCHED-PLAN-BEFORE-EXEC-001) |
@@ -121,10 +121,10 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | Task | Type | Owner | Description |
 |------|------|-------|-------------|
 | [P11E-001](P11E-001.md) | FIX | Core | Define MIN_PREFEED_LEAD_TIME_MS constant |
-| [P11E-002](P11E-002.md) | FIX | Core | Issue LoadPreview at correct trigger time |
+| [P11E-002](P11E-002.md) | FIX | Core | Issue legacy preload RPC at correct trigger time |
 | [P11E-003](P11E-003.md) | LOG | Core | Log violations if lead time insufficient |
 | [P11E-004](P11E-004.md) | METRICS | Core | Add prefeed_lead_time_ms histogram |
-| [P11E-005](P11E-005.md) | TEST | Test | Contract test: all LoadPreview with sufficient lead time |
+| [P11E-005](P11E-005.md) | TEST | Test | Contract test: all legacy preload RPC with sufficient lead time |
 
 ### Phase 11F: Boundary Lifecycle State Machine
 
@@ -145,7 +145,7 @@ P11B-005 (baseline collection) and P11B-006 (analysis) are OPS tasks that:
 | Invariant | Description |
 |-----------|-------------|
 | INV-BOUNDARY-TOLERANCE-001 | Grid transitions within 1 frame of boundary |
-| INV-BOUNDARY-DECLARED-001 | SwitchToLive carries target_boundary_time_ms |
+| INV-BOUNDARY-DECLARED-001 | legacy switch RPC carries target_boundary_time_ms |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | No audio drops under backpressure |
 | INV-SCHED-PLAN-BEFORE-EXEC-001 | Scheduling feasibility determined at planning time, not runtime |
 | INV-STARTUP-BOUNDARY-FEASIBILITY-001 | First boundary must satisfy startup latency + MIN_PREFEED_LEAD_TIME |

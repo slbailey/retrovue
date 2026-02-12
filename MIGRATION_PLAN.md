@@ -81,9 +81,9 @@ PR-1, PR-2 (conflicts, doc-only)
 | **Rules migrated** | OBS-001, AIR-005 (weak → strong) |
 | **Acceptance criteria** | |
 
-- **Contract/law text added:** In PlayoutEngineContract §LoadPreview, §SwitchToLive: "LoadPreviewResponse SHOULD include `shadow_decode_started` when shadow decode is used. SwitchToLiveResponse SHOULD include `pts_contiguous` when implemented. Phase 6A tests MUST assert these fields when present."
-- **Tests added/updated:** Assert LoadPreviewResponse.shadow_decode_started when applicable; assert SwitchToLiveResponse.pts_contiguous when implemented. Update Phase 6A control-plane tests.
-- **Log requirements added:** LoadPreviewResponse.shadow_decode_started, SwitchToLiveResponse.pts_contiguous (as response fields) |
+- **Contract/law text added:** In PlayoutEngineContract §legacy preload RPC, §legacy switch RPC: "legacy preload RPCResponse SHOULD include `shadow_decode_started` when shadow decode is used. legacy switch RPCResponse SHOULD include `pts_contiguous` when implemented. Phase 6A tests MUST assert these fields when present."
+- **Tests added/updated:** Assert legacy preload RPCResponse.shadow_decode_started when applicable; assert legacy switch RPCResponse.pts_contiguous when implemented. Update Phase 6A control-plane tests.
+- **Log requirements added:** legacy preload RPCResponse.shadow_decode_started, legacy switch RPCResponse.pts_contiguous (as response fields) |
 
 | **Depends on** | None |
 
@@ -97,7 +97,7 @@ PR-1, PR-2 (conflicts, doc-only)
 | **Rules migrated** | CORE-002, CORE-003 |
 | **Acceptance criteria** | |
 
-- **Contract/law text added:** Add §Playout Instruction Semantics: "Every PlayoutSegment invocation MUST create a new instance; MUST NOT mutate shared state. PlayoutSegment MUST be immutable once issued to Air; changes MUST require new segment and new LoadPreview." Add §Prefeed and Switch Timing: "ChannelManager MUST issue LoadPreview for next segment no later than hard_stop_time_ms − prefeed_window_ms. MUST issue SwitchToLive at the boundary (after LoadPreview). MUST NOT wait for Air to ask; CM drives timeline. MUST NOT issue duplicate LoadPreview for the same next segment."
+- **Contract/law text added:** Add §Playout Instruction Semantics: "Every PlayoutSegment invocation MUST create a new instance; MUST NOT mutate shared state. PlayoutSegment MUST be immutable once issued to Air; changes MUST require new segment and new legacy preload RPC." Add §Prefeed and Switch Timing: "ChannelManager MUST issue legacy preload RPC for next segment no later than hard_stop_time_ms − prefeed_window_ms. MUST issue legacy switch RPC at the boundary (after legacy preload RPC). MUST NOT wait for Air to ask; CM drives timeline. MUST NOT issue duplicate legacy preload RPC for the same next segment."
 - **Tests added/updated:** `test_channel_manager_segment_immutability`, `test_channel_manager_prefeed_deadline`, `test_channel_manager_switch_at_boundary`, `test_channel_manager_no_duplicate_loadpreview`
 - **Log requirements added:** None
 
@@ -113,9 +113,9 @@ PR-1, PR-2 (conflicts, doc-only)
 | **Rules migrated** | AIR-010 (weak → strong) |
 | **Acceptance criteria** | |
 
-- **Contract/law text added:** In ChannelManagerContract §Prefeed and Switch Timing: "Log LoadPreview and SwitchToLive calls with timestamps for diagnostics: `[ChannelManager] LoadPreview channel={id} asset={path} boundary_ms={ms}`, `[ChannelManager] SwitchToLive channel={id} boundary_ms={ms}`."
-- **Tests added/updated:** `test_core_prefeed_before_boundary` — use gRPC mock, stepped clock; assert LoadPreview timestamp ≤ boundary − prefeed_window, SwitchToLive at boundary.
-- **Log requirements added:** `[ChannelManager] LoadPreview channel=...`, `[ChannelManager] SwitchToLive channel=...`
+- **Contract/law text added:** In ChannelManagerContract §Prefeed and Switch Timing: "Log legacy preload RPC and legacy switch RPC calls with timestamps for diagnostics: `[ChannelManager] legacy preload RPC channel={id} asset={path} boundary_ms={ms}`, `[ChannelManager] legacy switch RPC channel={id} boundary_ms={ms}`."
+- **Tests added/updated:** `test_core_prefeed_before_boundary` — use gRPC mock, stepped clock; assert legacy preload RPC timestamp ≤ boundary − prefeed_window, legacy switch RPC at boundary.
+- **Log requirements added:** `[ChannelManager] legacy preload RPC channel=...`, `[ChannelManager] legacy switch RPC channel=...`
 
 | **Depends on** | PR-5 |
 

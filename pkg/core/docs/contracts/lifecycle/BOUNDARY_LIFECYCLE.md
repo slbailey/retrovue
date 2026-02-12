@@ -24,7 +24,7 @@ These invariants govern the Protocol interface between Core and AIR. Protocol ow
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
-| INV-BOUNDARY-DECLARED-001 | SwitchToLive MUST include `target_boundary_time_ms` parameter; Core declares intent, AIR executes at that time |
+| INV-BOUNDARY-DECLARED-001 | legacy switch RPC MUST include `target_boundary_time_ms` parameter; Core declares intent, AIR executes at that time |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | When `target_boundary_time_ms` is provided, AIR MUST execute the switch at that wall-clock time +/- 1 frame; internal readiness is AIR's responsibility. **Protocol declares; AIR obeys.** |
 | INV-LEADTIME-MEASUREMENT-001 | Prefeed lead time MUST be evaluated using the issuance timestamp supplied by Core (`issued_at_time_ms`), not AIR receipt time. Transport jitter MUST NOT affect feasibility determination. |
 | INV-CONTROL-NO-POLL-001 | Core MUST NOT poll AIR for switch readiness; NOT_READY indicates protocol error (prefeed too late), not a condition to retry. Tick-based reissuance is forbidden. |
@@ -66,9 +66,9 @@ These invariants govern how Core issues boundary commands. AIR receives commands
 
 | Rule ID | One-Line Definition |
 |---------|---------------------|
-| INV-SWITCH-ISSUANCE-DEADLINE-001 | SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. |
-| INV-SWITCH-ISSUANCE-TERMINAL-001 | Exception during SwitchToLive issuance MUST transition boundary to FAILED_TERMINAL state. No retry, no re-arm. |
-| INV-SWITCH-ISSUANCE-ONESHOT-001 | SwitchToLive MUST be issued exactly once per boundary. Duplicate attempts are suppressed; duplicate into FAILED_TERMINAL is fatal. |
+| INV-SWITCH-ISSUANCE-DEADLINE-001 | legacy switch RPC issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. |
+| INV-SWITCH-ISSUANCE-TERMINAL-001 | Exception during legacy switch RPC issuance MUST transition boundary to FAILED_TERMINAL state. No retry, no re-arm. |
+| INV-SWITCH-ISSUANCE-ONESHOT-001 | legacy switch RPC MUST be issued exactly once per boundary. Duplicate attempts are suppressed; duplicate into FAILED_TERMINAL is fatal. |
 
 ---
 
@@ -76,7 +76,7 @@ These invariants govern how Core issues boundary commands. AIR receives commands
 
 **Owner:** Core (ChannelManager)
 
-This state machine describes Core's internal boundary tracking. AIR does not know or care about these states. AIR receives `SwitchToLive` commands with deadlines; AIR executes.
+This state machine describes Core's internal boundary tracking. AIR does not know or care about these states. AIR receives `legacy switch RPC` commands with deadlines; AIR executes.
 
 ```
 NONE -> PLANNED -> PRELOAD_ISSUED -> SWITCH_SCHEDULED -> SWITCH_ISSUED -> LIVE

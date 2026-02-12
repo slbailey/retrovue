@@ -347,7 +347,6 @@ class ProgramDirector:
         self._horizon_execution_stores: dict[str, Any] = {}
         self._horizon_resolved_stores: dict[str, Any] = {}
         self._channel_config_provider: Optional[Any] = None
-        self._producer_factory: Optional[Callable[..., Any]] = None
         self._health_check_stop: Optional[threading.Event] = None
         self._health_check_thread: Optional[Thread] = None
         # P11D-009: boundaries are feasible at planning time; 1s tick cadence is sufficient
@@ -458,43 +457,6 @@ class ProgramDirector:
             )
             self._channel_config_provider = InlineChannelConfigProvider([test1_config])
 
-        def _create_air_producer(
-            channel_id: str,
-            mode: str,
-            config: dict[str, Any],
-            channel_config: Optional[ChannelConfig] = None,
-        ) -> Optional[Any]:
-            if mode != "normal":
-                return None
-            # Derive block_duration_ms from channel config grid_minutes.
-            # BlockPlanProducer requires this for JIP calculation and feed-ahead.
-            grid_minutes = 30
-            if channel_config and channel_config.schedule_config:
-                grid_minutes = channel_config.schedule_config.get("grid_minutes", 30)
-            block_duration_ms = grid_minutes * 60 * 1000
-            # Look up the schedule_service that was assigned to the ChannelManager
-            # for this channel (set in _get_or_create_manager).
-            svc = None
-            clk = self._embedded_clock
-            with self._managers_lock:
-                mgr = self._managers.get(channel_id)
-                if mgr is not None:
-                    svc = getattr(mgr, "schedule_service", None)
-                    clk = getattr(mgr, "clock", clk)
-            # Pass the ExecutionWindowStore when available (shadow/authoritative).
-            # BlockPlanProducer reads pre-composed execution entries from the
-            # store — same data path as burn_in.py's horizon mode.
-            exec_store = self._horizon_execution_stores.get(channel_id)
-            return BlockPlanProducer(
-                channel_id=channel_id,
-                configuration={**config, "block_duration_ms": block_duration_ms},
-                channel_config=channel_config,
-                schedule_service=svc,
-                clock=clk,
-                execution_store=exec_store,
-            )
-
-        self._producer_factory = _create_air_producer
         self._health_check_stop = threading.Event()
 
     def _ensure_phase3_service(

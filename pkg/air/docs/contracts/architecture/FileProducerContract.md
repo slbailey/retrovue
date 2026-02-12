@@ -1,3 +1,11 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # File Producer Contract
 
 _Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase 6A Overview](../phases/Phase6A-Overview.md) · [Phase6A-2 FileBackedProducer](../phases/Phase6A-2-FileBackedProducer.md) · [Renderer Contract](RendererContract.md)_
@@ -27,9 +35,9 @@ Define the observable guarantees for the **File Producer** — one kind of execu
 - **Stop()** stops production and is idempotent; blocks until complete or within bounded time.
 - On teardown (channel stop or segment boundary), resources are released; no orphan processes (e.g. ffmpeg).
 
-**Segment params:** From LoadPreview: `asset_path`, `start_offset_ms` (media-relative), `hard_stop_time_ms` (wall-clock epoch ms). Producer must honor start offset (seek at or before start_offset_ms) and must stop **at or before** hard_stop_time_ms. Engine may enforce hard stop by duration limit and/or wall-clock supervision.
+**Segment params:** From legacy preload RPC: `asset_path`, `start_offset_ms` (media-relative), `hard_stop_time_ms` (wall-clock epoch ms). Producer must honor start offset (seek at or before start_offset_ms) and must stop **at or before** hard_stop_time_ms. Engine may enforce hard stop by duration limit and/or wall-clock supervision.
 
-**End PTS / hard stop as safety clamp:** The end boundary (e.g. derived from `hard_stop_time_ms`) is a **maximum output boundary**—a **guardrail**, not a trigger. It is **not** used to decide when to switch producers; it exists solely to prevent output beyond the agreed boundary (clock skew, late commands, content bleed). The producer MUST NOT emit frames beyond this boundary. If the producer reaches the boundary and Core has not yet issued the next command, the engine clamps output and satisfies always-valid-output (e.g. black/silence). This is **failsafe containment**, not a scheduling action. Transitions remain only via explicit Core commands (e.g. SwitchToLive).
+**End PTS / hard stop as safety clamp:** The end boundary (e.g. derived from `hard_stop_time_ms`) is a **maximum output boundary**—a **guardrail**, not a trigger. It is **not** used to decide when to switch producers; it exists solely to prevent output beyond the agreed boundary (clock skew, late commands, content bleed). The producer MUST NOT emit frames beyond this boundary. If the producer reaches the boundary and Core has not yet issued the next command, the engine clamps output and satisfies always-valid-output (e.g. black/silence). This is **failsafe containment**, not a scheduling action. Transitions remain only via explicit Core commands (e.g. legacy switch RPC).
 
 ---
 
@@ -38,7 +46,7 @@ Define the observable guarantees for the **File Producer** — one kind of execu
 **Guarantee:** Invalid or unreadable asset yields defined error.
 
 **Observable behavior:**
-- Invalid path or unreadable file: LoadPreviewResponse.success=false (or equivalent); producer does not enter running state; no crash.
+- Invalid path or unreadable file: legacy preload RPCResponse.success=false (or equivalent); producer does not enter running state; no crash.
 
 **Deferred:** Fallback to synthetic frames (PROD-030) — optional post-6A; 6A.2 may require only defined error.
 
@@ -79,7 +87,7 @@ The following guarantees are **not required for Phase 6A** but are **retained** 
 
 **Observable behavior (future):** `frame[i].pts < frame[i+1].pts`; DTS ≤ PTS; duration approximately `1.0 / target_fps`.
 
-**Why deferred:** Enforced when frame pipeline and continuity (e.g. SwitchToLive PTS) are required.
+**Why deferred:** Enforced when frame pipeline and continuity (e.g. legacy switch RPC PTS) are required.
 
 ---
 

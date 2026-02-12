@@ -42,6 +42,7 @@ except ImportError:
     compute_jip_position = None  # type: ignore[assignment]
 
 from retrovue.runtime.channel_manager import BlockPlanProducer
+from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 
 
 # =============================================================================
@@ -87,15 +88,59 @@ def _require_compute_jip() -> None:
         )
 
 
-def _make_producer(block_duration_ms: int = DEFAULT_BLOCK_DURATION_MS) -> BlockPlanProducer:
+def _make_producer() -> BlockPlanProducer:
     """Create a bare BlockPlanProducer (no session, no AIR)."""
     return BlockPlanProducer(
         channel_id="jip-test",
-        configuration={"block_duration_ms": block_duration_ms},
         channel_config=None,   # uses MOCK_CHANNEL_CONFIG
         schedule_service=None,
         clock=None,
     )
+
+
+def _sb_from_plan(
+    plan: list[dict[str, Any]],
+    block_index: int,
+    start_ms: int,
+    channel_id: str = "jip-test",
+) -> ScheduledBlock:
+    """Create a ScheduledBlock from a plan entry at block_index.
+
+    Uses the entry's duration_ms for the block duration.
+    """
+    if not plan:
+        return ScheduledBlock(
+            block_id=f"BLOCK-{channel_id}-{block_index}",
+            start_utc_ms=start_ms,
+            end_utc_ms=start_ms + DEFAULT_BLOCK_DURATION_MS,
+            segments=(
+                ScheduledSegment("episode", "assets/SampleA.mp4", 0, DEFAULT_BLOCK_DURATION_MS),
+            ),
+        )
+    entry = plan[block_index % len(plan)]
+    dur = entry.get("duration_ms", DEFAULT_BLOCK_DURATION_MS)
+    return ScheduledBlock(
+        block_id=f"BLOCK-{channel_id}-{block_index}",
+        start_utc_ms=start_ms,
+        end_utc_ms=start_ms + dur,
+        segments=(
+            ScheduledSegment(
+                segment_type=entry.get("segment_type", "episode"),
+                asset_uri=entry.get("asset_path", "assets/SampleA.mp4"),
+                asset_start_offset_ms=entry.get("asset_start_offset_ms", 0),
+                segment_duration_ms=dur,
+            ),
+        ),
+    )
+
+
+def _generate_next(
+    producer: BlockPlanProducer,
+    plan: list[dict[str, Any]],
+) -> Any:
+    """Generate next block from plan using producer cursor state."""
+    sb = _sb_from_plan(plan, producer._block_index, producer._next_block_start_ms)
+    return producer._generate_next_block(sb)
 
 
 def _generate_with_jip(
@@ -110,15 +155,16 @@ def _generate_with_jip(
     the real start() call site where join_utc_ms is passed.
     """
     now_ms = producer._next_block_start_ms + jip_offset_ms
+    sb = _sb_from_plan(plan, producer._block_index, producer._next_block_start_ms)
     try:
         return producer._generate_next_block(
-            plan, jip_offset_ms=jip_offset_ms, now_utc_ms=now_ms,
+            sb, jip_offset_ms=jip_offset_ms, now_utc_ms=now_ms,
         )
     except TypeError:
         pytest.fail(
             "TODO: _generate_next_block() does not yet accept the "
             "jip_offset_ms/now_utc_ms keyword arguments.  "
-            "Add: def _generate_next_block(self, playout_plan, "
+            "Add: def _generate_next_block(self, scheduled, "
             "jip_offset_ms=0, now_utc_ms=0) -> BlockPlan"
         )
 
@@ -312,14 +358,14 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
 
     def test_first_block_offset_second_block_clean(self):
         """block_a.offset == jip_offset, block_b.offset == 0."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         # Simulate JIP at entry 0, offset 3000
         producer._block_index = 0
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=3_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
 
         # block_a: plan entry 0 (A.mp4), entry offset 0 + jip 3000 = 3000
         assert block_a.segments[0]["asset_start_offset_ms"] == 3_000, (
@@ -335,7 +381,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
 
     def test_first_block_duration_immutable(self):
         """INV-JIP-FIRST-BLOCK-001: first block is partial [now, fence_end)."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         producer._block_index = 0
@@ -356,13 +402,13 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
 
     def test_second_block_full_duration(self):
         """block_b uses full entry duration (no reduction)."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         producer._block_index = 0
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=3_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
 
         assert block_b.duration_ms == 10_000, (
             f"INV-JIP-BP-005: block_b should have full duration 10000, "
@@ -371,7 +417,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
 
     def test_entry_with_base_offset_adds_jip(self):
         """JIP offset adds to the entry's own asset_start_offset_ms."""
-        producer = _make_producer(block_duration_ms=15_000)
+        producer = _make_producer()
         plan = OFFSET_PLAN  # entry 0: asset_start_offset_ms=60000, duration=15000
 
         producer._block_index = 0
@@ -395,7 +441,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
 
     def test_zero_offset_produces_full_block(self):
         """JIP offset 0 means no modification — full block, original offset."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         producer._block_index = 0
@@ -407,13 +453,13 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
 
     def test_presentation_time_contiguous(self):
         """block_b.start_utc_ms == block_a.end_utc_ms (no gap)."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         producer._block_index = 0
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=4_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
 
         # INV-JIP-FIRST-BLOCK-001: block_a starts at now (grid_start + jip).
         assert block_a.start_utc_ms == 4_000
@@ -441,7 +487,7 @@ class TestJipCursorStateAfterSeed:
         """
         JIP at entry 1 → seed B(partial), C(full) → cursor at entry 0.
         """
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN  # [A, B, C]
 
         # JIP says: entry 1 (B.mp4), offset 5000
@@ -450,7 +496,7 @@ class TestJipCursorStateAfterSeed:
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=5_000)
         producer._advance_cursor(block_a)
 
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
         producer._advance_cursor(block_b)
 
         # After seeding entries 1 and 2, next should be entry 0 (wrap).
@@ -458,21 +504,21 @@ class TestJipCursorStateAfterSeed:
         # _next_block_start_ms via wall-clock position.
 
         # Verify the next generated block IS entry 0 (A.mp4)
-        block_c = producer._generate_next_block(plan)
+        block_c = _generate_next(producer, plan)
         assert block_c.segments[0]["asset_uri"] == "assets/A.mp4", (
             f"Next block should be A.mp4, got {block_c.segments[0]['asset_uri']}"
         )
 
     def test_next_block_start_ms_contiguous(self):
         """_next_block_start_ms == block_b.end_utc_ms."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         producer._block_index = 0
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=3_000)
         producer._advance_cursor(block_a)
 
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
         producer._advance_cursor(block_b)
 
         assert producer._next_block_start_ms == block_b.end_utc_ms, (
@@ -481,7 +527,7 @@ class TestJipCursorStateAfterSeed:
         )
 
         # The next generated block starts where block_b ended
-        block_c = producer._generate_next_block(plan)
+        block_c = _generate_next(producer, plan)
         assert block_c.start_utc_ms == block_b.end_utc_ms
 
     def test_full_sequence_no_gaps(self):
@@ -489,7 +535,7 @@ class TestJipCursorStateAfterSeed:
         Generate 5 blocks from JIP point — verify contiguous timeline
         and correct round-robin cycling.
         """
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN  # [A, B, C]
 
         # JIP at entry 2 (C.mp4), offset 7000
@@ -502,7 +548,7 @@ class TestJipCursorStateAfterSeed:
         producer._advance_cursor(block)
 
         for _ in range(4):
-            block = producer._generate_next_block(plan)
+            block = _generate_next(producer, plan)
             blocks.append(block)
             producer._advance_cursor(block)
 
@@ -537,7 +583,7 @@ class TestJipCursorStateAfterSeed:
 
     def test_variable_duration_cursor(self):
         """Cursor is correct with heterogeneous entry durations."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = VARIABLE_PLAN  # [Ep1=25s, Filler=5s, Ep2=20s]
 
         # JIP at entry 0 (Ep1), offset 10_000
@@ -553,7 +599,7 @@ class TestJipCursorStateAfterSeed:
         assert block_a.segments[0]["segment_duration_ms"] == 15_000
         assert block_a.segments[0]["asset_uri"] == "assets/Ep1.mp4"
 
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
         producer._advance_cursor(block_b)
 
         # block_b: Filler, full 5000
@@ -561,7 +607,7 @@ class TestJipCursorStateAfterSeed:
         assert block_b.segments[0]["asset_uri"] == "assets/Filler.mp4"
 
         # Next should be Ep2
-        block_c = producer._generate_next_block(plan)
+        block_c = _generate_next(producer, plan)
         assert block_c.segments[0]["asset_uri"] == "assets/Ep2.mp4"
         assert block_c.duration_ms == 20_000
 
@@ -615,7 +661,7 @@ class TestJipNoPollingOrTimerRetry:
         sleep_calls = []
         monkeypatch.setattr(time, "sleep", lambda s: sleep_calls.append(s))
 
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         producer._block_index = 0
         _generate_with_jip(producer, UNIFORM_PLAN, jip_offset_ms=5_000)
 
@@ -631,7 +677,7 @@ class TestJipNoPollingOrTimerRetry:
 
 class TestBurnInTripwirePlaylistNotSet:
     """
-    Contract constraint C2: JIP operates on playout_plan (list[dict]).
+    Contract constraint C2: JIP operates on ScheduledBlock (typed object).
     BlockPlanProducer must never read or require manager._playlist.
 
     The burn-in path enforces that _playlist is None on the manager.
@@ -642,23 +688,23 @@ class TestBurnInTripwirePlaylistNotSet:
         producer = _make_producer()
         assert not hasattr(producer, "_playlist"), (
             "BlockPlanProducer must not have a _playlist attribute. "
-            "JIP operates on playout_plan (list[dict]) only."
+            "JIP operates on ScheduledBlock objects only."
         )
 
-    def test_jip_works_without_playlist(self):
+    def test_jip_works_with_scheduled_block(self):
         """
-        JIP block generation succeeds with only a playout_plan list.
+        JIP block generation succeeds with only a ScheduledBlock.
         No Playlist object, no manager._playlist, no schedule-manager
         dependency.
         """
-        producer = _make_producer(block_duration_ms=10_000)
-        plan = UNIFORM_PLAN  # plain list[dict], no Playlist wrapper
+        producer = _make_producer()
+        plan = UNIFORM_PLAN  # used to build ScheduledBlocks
 
         producer._block_index = 1
         producer._next_block_start_ms = 10_000
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=2_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
 
         # Succeeds without any Playlist or _playlist
         assert block_a.segments[0]["asset_uri"] == "assets/B.mp4"
@@ -681,9 +727,8 @@ class TestJipSteadyStateFeedingUnchanged:
         _on_block_complete after JIP seed generates the correct next block
         using the standard path (no JIP offset leaking into steady-state).
         """
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN  # [A, B, C]
-        producer._playout_plan = plan
         producer._started = True
 
         # Simulate JIP seed: entry 1, offset 5000
@@ -691,12 +736,12 @@ class TestJipSteadyStateFeedingUnchanged:
         producer._next_block_start_ms = 10_000
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=5_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
         producer._advance_cursor(block_b)
 
         # At this point: _block_index should be 3
         # Simulate what _on_block_complete does: generate next block
-        next_block = producer._generate_next_block(producer._playout_plan)
+        next_block = _generate_next(producer, plan)
 
         # Should be entry 3 % 3 = 0 → A.mp4, full duration, no JIP offset
         assert next_block.segments[0]["asset_uri"] == "assets/A.mp4"
@@ -708,14 +753,14 @@ class TestJipSteadyStateFeedingUnchanged:
 
     def test_pending_block_slot_not_affected_by_jip(self):
         """JIP seed does not leave anything in _pending_block."""
-        producer = _make_producer(block_duration_ms=10_000)
+        producer = _make_producer()
         plan = UNIFORM_PLAN
 
         # Simulate JIP seeding
         producer._block_index = 0
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=2_000)
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan)
+        block_b = _generate_next(producer, plan)
         producer._advance_cursor(block_b)
 
         assert producer._pending_block is None, (
@@ -782,7 +827,7 @@ class TestBlockAlignmentUnderJip:
     def test_jip_block_end_aligned(self):
         """Block A (JIP): end sits on grid boundary; start is at now."""
         block_dur = 10_000
-        producer = _make_producer(block_duration_ms=block_dur)
+        producer = _make_producer()
         producer._block_index = 0
         producer._next_block_start_ms = block_dur  # = 10_000, aligned
 
@@ -800,14 +845,14 @@ class TestBlockAlignmentUnderJip:
     def test_block_b_aligned_after_jip_block_a(self):
         """Block B inherits block A's end; both must be aligned."""
         block_dur = 10_000
-        producer = _make_producer(block_duration_ms=block_dur)
+        producer = _make_producer()
         producer._block_index = 0
         producer._next_block_start_ms = block_dur
 
         block_a = _generate_with_jip(producer, UNIFORM_PLAN, jip_offset_ms=3_000)
         producer._advance_cursor(block_a)
 
-        block_b = producer._generate_next_block(UNIFORM_PLAN)
+        block_b = _generate_next(producer, UNIFORM_PLAN)
 
         assert block_b.start_utc_ms == block_a.end_utc_ms, (
             f"Contiguity: block_b.start={block_b.start_utc_ms} "
@@ -826,14 +871,14 @@ class TestBlockAlignmentUnderJip:
         block generation succeeds and all subsequent blocks are aligned.
         """
         block_dur = 1_800_000  # 30 minutes
-        producer = _make_producer(block_duration_ms=block_dur)
 
         # Plan entries must carry duration_ms matching the block size
-        # (canonical _generate_next_block uses entry duration_ms).
         plan_30m = [
             {"asset_path": "assets/A.mp4", "duration_ms": block_dur},
             {"asset_path": "assets/B.mp4", "duration_ms": block_dur},
         ]
+
+        producer = _make_producer()
 
         # Simulate: cycle origin at 00:00 UTC, block starts at 19:00
         # _next_block_start_ms = 19 * 2 = 38 half-hours from midnight
@@ -862,7 +907,7 @@ class TestBlockAlignmentUnderJip:
 
         # Block B: contiguous and aligned
         producer._advance_cursor(block_a)
-        block_b = producer._generate_next_block(plan_30m)
+        block_b = _generate_next(producer, plan_30m)
 
         assert block_b.start_utc_ms == block_a.end_utc_ms
         assert block_b.start_utc_ms % block_dur == 0, (

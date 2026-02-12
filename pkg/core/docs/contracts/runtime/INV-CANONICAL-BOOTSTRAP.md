@@ -12,9 +12,9 @@
 When a channel is configured with `blockplan_only=True` in its
 `ChannelConfig`, **only** the BlockPlanProducer + PlayoutSession
 bootstrap path is permitted.  Any attempt to invoke the legacy
-Phase8AirProducer / LoadPreview / SwitchToLive / playlist-tick path
-MUST fail immediately with a `RuntimeError` containing the prefix
-`INV-CANONICAL-BOOT`.
+per-segment / playlist-driven path MUST fail immediately with a
+`RuntimeError` containing the prefix `INV-CANONICAL-BOOT`. See
+[Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md) for removed semantics.
 
 This guard ensures that the canonical entrypoints (`verify_first_on_air`,
 `burn_in`) use exclusively the BlockPlan path, preventing accidental
@@ -56,16 +56,16 @@ ChannelConfig(
 > raises `RuntimeError`.
 
 **Rationale:** Loading a Playlist sets `_playlist`, which causes
-`_build_producer_for_mode` to select Phase8AirProducer.  Blocking
-the entry point prevents the entire legacy chain from activating.
+`_build_producer_for_mode` to select the legacy per-segment producer.
+Blocking the entry point prevents the entire legacy chain from activating.
 
 ---
 
-### INV-CANONICAL-BOOT-002: Phase8AirProducer Selection Rejected
+### INV-CANONICAL-BOOT-002: Legacy Producer Selection Rejected
 
 > `_build_producer_for_mode()` raises `RuntimeError` instead of
-> returning `Phase8AirProducer` when `blockplan_only=True` and
-> `_playlist is not None`.
+> returning the legacy per-segment producer when `blockplan_only=True`
+> and `_playlist is not None`.
 
 **Rationale:** Defense-in-depth.  Even if `_playlist` is set by
 means other than `load_playlist()`, the factory cannot produce a
@@ -80,7 +80,7 @@ legacy producer.
 
 **Rationale:** This method is the legacy join-in-progress path
 that resolves Playlist segments, builds a playout plan, and starts
-Phase8AirProducer.  It must never execute for blockplan-only channels.
+the legacy per-segment producer.  It must never execute for blockplan-only channels.
 
 ---
 
@@ -89,8 +89,8 @@ Phase8AirProducer.  It must never execute for blockplan-only channels.
 > `_tick_playlist()` raises `RuntimeError` on a `blockplan_only=True`
 > channel.
 
-**Rationale:** The playlist tick loop drives LoadPreview / SwitchToLive
-segment transitions.  It must never execute for blockplan-only channels.
+**Rationale:** The playlist tick loop drives per-segment RPC transitions.
+It must never execute for blockplan-only channels.
 
 ---
 
@@ -109,14 +109,14 @@ must remain functional.
 
 ### C1: No Legacy Code Deletion
 
-The guard does NOT delete Phase8AirProducer, `_tick_playlist`,
+The guard does NOT delete the legacy producer, `_tick_playlist`,
 `load_playlist`, or any other legacy code.  It only prevents
 invocation on channels that opt in via `blockplan_only=True`.
 
 ### C2: Scope Limited to Configured Channels
 
 Channels without `blockplan_only=True` are completely unaffected.
-Existing tests that use Phase8AirProducer or Playlist-driven paths
+Existing tests that use the legacy producer or Playlist-driven paths
 continue to work.
 
 ---

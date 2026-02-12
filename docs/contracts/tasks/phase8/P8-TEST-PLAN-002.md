@@ -24,7 +24,7 @@ If content is longer than planned frame_count, segment end time governs (schedul
 Test Cases:
 
 1. Test long content truncated:
-   - Setup: LoadPreview with frame_count=300; content has 350 frames
+   - Setup: legacy preload RPC with frame_count=300; content has 350 frames
    - Action: Play until planned count reached
    - Expected: Only 300 frames delivered; 50 frames not played
 

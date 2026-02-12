@@ -25,9 +25,10 @@ Major layers:
 
 3. Runtime / ChannelManager
 
-   - ChannelManager owns live ffmpeg for that Channel.
-   - First viewer in: build playout plan and launch ffmpeg.
-   - Last viewer out: tear down ffmpeg, but the Channel timeline keeps advancing logically.
+   - **Runtime** (playout) means **BlockPlan** execution only: Core produces a BlockPlan; AIR (or the playout engine) executes it. There is no other valid playout path.
+   - ChannelManager owns live playout for that Channel.
+   - First viewer in: build BlockPlan and start playout.
+   - Last viewer out: tear down playout, but the Channel timeline keeps advancing logically.
 
 4. Operator surface
 

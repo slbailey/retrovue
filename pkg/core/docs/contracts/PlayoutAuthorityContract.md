@@ -37,8 +37,8 @@ descriptive message referencing `INV-PLAYOUT-AUTHORITY`.
 
 ### INV-PLAYOUT-AUTHORITY
 Only `BlockPlanProducer` may be constructed for live channels.  The
-legacy `Phase8AirProducer` (LoadPreview/SwitchToLive) is retained for
-reference but blocked from execution.
+legacy per-segment producer path is retained for reference but blocked
+from execution. See [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).
 
 ### INV-ONE-ENCODER-PER-SESSION
 AIR creates exactly one `EncoderPipeline` per playout session.  The
@@ -91,8 +91,10 @@ INV-PLAYOUT-AUTHORITY: Channel <id> session started |
 
 | Component | Status | Guardrail |
 |-----------|--------|-----------|
-| `Phase8AirProducer` | Retained, blocked | `start()` raises `RuntimeError` |
-| `LoadPreview` / `SwitchToLive` | Retained in gRPC | Not invoked by BlockPlan path |
+| Legacy per-segment producer | Retained, blocked | `start()` raises `RuntimeError` |
+| Legacy per-segment RPCs (gRPC) | Retained in proto | Not invoked by BlockPlan path |
+
+*Removed semantics (per-segment producer, RPC names, playlist path): [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).*
 | `NormalProducer` | Stub, unused | No guardrail needed |
 | `EmergencyProducer` | Stub, unused | No guardrail needed |
 | `GuideProducer` | Stub, unused | No guardrail needed |

@@ -9,7 +9,7 @@ _Related: [Playout Engine Contract](../semantics/PlayoutEngineContract.md) · [P
 
 ## Purpose
 
-Define enforceable guarantees for session control: state transitions, preview/live slot management, and (when in scope) latency and fault telemetry. This contract specifies **what** the control plane guarantees, not how it is implemented. **Segment-based control** is canonical: preview is loaded via LoadPreview (segment payload); SwitchToLive is control-only. **Engine** owns preview/live slots and switch timing; producers are passive.
+Define enforceable guarantees for session control: state transitions, preview/live slot management, and (when in scope) latency and fault telemetry. This contract specifies **what** the control plane guarantees, not how it is implemented. **Segment-based control** is canonical: preview is loaded via legacy preload RPC (segment payload); legacy switch RPC is control-only. **Engine** owns preview/live slots and switch timing; producers are passive.
 
 ---
 
@@ -24,7 +24,7 @@ Define enforceable guarantees for session control: state transitions, preview/li
 **Observable behavior:**
 - Legal commands move channel through documented states (e.g. initialized → preview loaded → live → stopped).
 - Illegal transitions are rejected (state unchanged).
-- States align with Phase 6A: e.g. after StartChannel → initialized; after LoadPreview → preview loaded; after SwitchToLive → live running; after StopChannel → stopped.
+- States align with Phase 6A: e.g. after StartChannel → initialized; after legacy preload RPC → preview loaded; after legacy switch RPC → live running; after StopChannel → stopped.
 
 **Deferred (Applies Phase 7+):** Metric `playout_control_state_transition_total{from,to}` and `playout_control_illegal_transition_total{from,to}`; validated when full telemetry is in scope. Legal transition matrix (Idle → Playing → Paused → Stopped, etc.) may be refined when full loop/Renderer exists.
 
@@ -61,8 +61,8 @@ Define enforceable guarantees for session control: state transitions, preview/li
 **Observable behavior:**
 - **StartChannel** on already-started channel: idempotent success (no state change; same result as first start).
 - **StopChannel** on unknown or already-stopped channel: idempotent success.
-- **LoadPreview:** Replaces preview; duplicate same segment not required to be no-op.
-- **SwitchToLive:** No segment payload; “no preview loaded” → error; otherwise switch or no-op per engine semantics.
+- **legacy preload RPC:** Replaces preview; duplicate same segment not required to be no-op.
+- **legacy switch RPC:** No segment payload; “no preview loaded” → error; otherwise switch or no-op per engine semantics.
 
 **Deferred (Applies Phase 7+):** Dedup window `(channel_id, command_id)` and metric “no additional transition increment” when full telemetry is required.
 
@@ -80,14 +80,14 @@ Define enforceable guarantees for session control: state transitions, preview/li
 
 ### CTL-005: Preview/Live Slot Management
 
-**Guarantee:** Preview and live slots are managed for segment-based execution. Engine owns slots; producers are passive (Start/Stop only). Segment-based control: LoadPreview (asset_path, start_offset_ms, hard_stop_time_ms) loads **preview**; SwitchToLive promotes preview → live and clears/recycles previous live.
+**Guarantee:** Preview and live slots are managed for segment-based execution. Engine owns slots; producers are passive (Start/Stop only). Segment-based control: legacy preload RPC (asset_path, start_offset_ms, hard_stop_time_ms) loads **preview**; legacy switch RPC promotes preview → live and clears/recycles previous live.
 
 **Phase applicability:** 6A.1+
 
 **Observable behavior:**
 - Preview asset (segment) can be loaded while live continues (or while no live).
-- LoadPreview installs segment into **preview** slot; live unchanged until SwitchToLive.
-- SwitchToLive promotes preview to live atomically; old live content stops (or is recycled); preview slot cleared or ready for next LoadPreview.
+- legacy preload RPC installs segment into **preview** slot; live unchanged until legacy switch RPC.
+- legacy switch RPC promotes preview to live atomically; old live content stops (or is recycled); preview slot cleared or ready for next legacy preload RPC.
 - **All content transitions are Core-commanded.** Producers do not “self-switch” or manage switch timing; engine never switches buses autonomously except when entering dead-man failsafe (live producer underrun → BlackFrameProducer). Engine owns switch timing only in response to Core commands or internal failsafe.
 
 ---
@@ -96,7 +96,7 @@ Define enforceable guarantees for session control: state transitions, preview/li
 
 **Guarantee:** Switching from preview to live is **seamless** when output path (Renderer/TS) exists.
 
-**Phase applicability:** Deferred (Applies Phase 7+). Phase 6A validates correct order (LoadPreview → SwitchToLive) and slot semantics, not output continuity.
+**Phase applicability:** Deferred (Applies Phase 7+). Phase 6A validates correct order (legacy preload RPC → legacy switch RPC) and slot semantics, not output continuity.
 
 **Intent (preserved):**
 - Switch occurs at frame boundary.

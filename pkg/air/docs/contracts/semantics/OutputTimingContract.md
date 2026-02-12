@@ -74,7 +74,7 @@ OutputTiming **MUST NOT**:
 
 ### 5.3 Timing Anchor
 
-When output begins (or on SwitchToLive):
+When output begins (or on legacy switch RPC):
 
 - The timing anchor **MUST NOT** be reused across output pacing epochs
 - The first emitted packet establishes the timing anchor
@@ -101,14 +101,14 @@ This rule is enforced continuously for the lifetime of the playout epoch.
 
 ---
 
-## 6. SwitchToLive Semantics
+## 6. legacy switch RPC Semantics
 
-On **SwitchToLive**:
+On **legacy switch RPC**:
 
 - OutputTiming resets its internal timing anchor
 - OutputTiming does not modify output PTS
 - OutputTiming does not signal discontinuity to clients
-- SwitchToLive defines a **new output pacing epoch**, not a new media timeline.
+- legacy switch RPC defines a **new output pacing epoch**, not a new media timeline.
 
 ---
 

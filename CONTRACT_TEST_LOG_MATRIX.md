@@ -1,6 +1,6 @@
 # Contract Test Log Matrix
 
-**Scope:** Phase 6A + Phase 8 switching semantics  
+**Scope:** Phase 6A + Phase 8 switching semantics. **Retired path:** Legacy segment RPCs and playlist-driven path are removed; see [Phase8DecommissionContract](docs/contracts/architecture/Phase8DecommissionContract.md). Entries below that refer to legacy RPCs are retained for test traceability only.  
 **Purpose:** Map canonical rules to test coverage, assertions, and log evidence.  
 **Traceability:** CANONICAL_RULE_LEDGER.md · ObservabilityParityLaw.md · PlayoutEngineContract.md Part 2.5
 
@@ -21,13 +21,13 @@
 | canonical_id | contract/law location | test file path | test asserts | log evidence asserted | status |
 |--------------|----------------------|----------------|--------------|------------------------|--------|
 | LAW-001 | `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §1 Clock; `pkg/core/docs/contracts/resources/MasterClockContract.md` | `pkg/air/tests/contracts/MasterClock/MasterClockContractTests.cpp` · `pkg/core/tests/contracts/test_masterclock_contract.py` | MasterClock is sole time source; components consume via interface; no direct time.time()/datetime.now() for scheduling | (none) | exists |
-| LAW-002 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; FileProducerContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` (Phase6A2_HardStopEnforced — SKIP per Phase 8.6) | Producer stops at or before hard_stop_time_ms; no output past boundary | (none) | partial (skipped) |
-| LAW-003 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; Phase6A-Overview | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` | StartChannel alone → no decode; LoadPreview precedes SwitchToLive; execution begins only after LoadPreview + SwitchToLive | (none) | exists |
-| LAW-006 | `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §5 Switching; OutputContinuityContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` BC_006_FramePtsRemainMonotonic; BC_007_DualProducerSwitchingSeamlessness | PTS strictly increasing; no gaps/regression during switch; pts_contiguous in SwitchToLiveResponse | (none) | exists |
-| LAW-OBS-001 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §1 | NONE | Every intent (StartChannel, LoadPreview, SwitchToLive, etc.) MUST be observable in Air logs | AIR-*-RECEIVED events for each RPC | **missing** |
+| LAW-002 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; FileProducerContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` (Phase6A2_HardStopEnforced — SKIP per Phase 8.6) | Producer stops at or before hard_stop_time_ms; no output past boundary | (none) | partial (skipped) |
+| LAW-003 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; Phase6A-Overview | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` | StartChannel alone → no decode; legacy preload RPC precedes legacy switch RPC; execution begins only after legacy preload RPC + legacy switch RPC | (none) | exists |
+| LAW-006 | `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §5 Switching; OutputContinuityContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` BC_006_FramePtsRemainMonotonic; BC_007_DualProducerSwitchingSeamlessness | PTS strictly increasing; no gaps/regression during switch; pts_contiguous in legacy switch RPCResponse | (none) | exists |
+| LAW-OBS-001 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §1 | NONE | Every intent (StartChannel, legacy preload RPC, legacy switch RPC, etc.) MUST be observable in Air logs | AIR-*-RECEIVED events for each RPC | **missing** |
 | LAW-OBS-002 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §2 | NONE | correlation_id MUST appear in both Core and Air logs for each call | correlation_id in CORE-INTENT-ISSUED, AIR-*-RECEIVED, AIR-*-RESPONSE | **missing** |
 | LAW-OBS-003 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §3 | NONE | Every Air response MUST be logged with correlation_id, success, result_code | AIR-*-RESPONSE with correlation_id, success, result_code, completion_time_ms | **missing** |
-| LAW-OBS-004 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §4 | NONE | Receipt, effective, completion time for LoadPreview and SwitchToLive | receipt_time_ms, effective_time_ms, completion_time_ms in appropriate events | **missing** |
+| LAW-OBS-004 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §4 | NONE | Receipt, effective, completion time for legacy preload RPC and legacy switch RPC | receipt_time_ms, effective_time_ms, completion_time_ms in appropriate events | **missing** |
 | LAW-OBS-005 | `pkg/air/docs/contracts/laws/ObservabilityParityLaw.md` §5 | NONE | Hard-stop clamp MUST produce explicit logs (started, active, ended) | AIR-CLAMP-STARTED, AIR-CLAMP-ACTIVE, AIR-CLAMP-ENDED with channel_id, asset_path, boundary_ms | **missing** |
 
 ---
@@ -36,14 +36,14 @@
 
 | canonical_id | contract/law location | test file path | test asserts | log evidence asserted | status |
 |--------------|----------------------|----------------|--------------|------------------------|--------|
-| AIR-001 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §Service Definition; proto | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_ServerAcceptsFourRPCs | Build links proto; StartChannel, LoadPreview, SwitchToLive, StopChannel accept requests; plan_handle not interpreted | (none) | exists |
+| AIR-001 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §Service Definition; proto | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_ServerAcceptsFourRPCs | Build links proto; StartChannel, legacy preload RPC, legacy switch RPC, StopChannel accept requests; plan_handle not interpreted | (none) | exists |
 | AIR-002 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §Idempotency; PE-START-002, PE-STOP-002 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_StartChannelIdempotentSuccess, Phase6A0_StopChannelIdempotentSuccess; BC_003_ControlOperationsAreIdempotent | StartChannel twice → both success; StopChannel on unknown/stopped → success | (none) | exists |
-| AIR-003 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; PE-CTL-001 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_LoadPreviewBeforeStartChannel_Error | LoadPreview without StartChannel → success=false | (none) | exists |
-| AIR-004 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §SwitchToLive; PE-CTL-002 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_SwitchToLiveWithNoPreview_Error | SwitchToLive without LoadPreview → success=false | (none) | exists |
-| AIR-005 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; §SwitchToLive; ProducerBusContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A1_LoadPreviewInstallsIntoPreviewSlot_LiveUnchanged, Phase6A1_SwitchToLivePromotesPreview_StopsOldLive_ClearsPreview; BC_007 | LoadPreview → preview slot; live unchanged until SwitchToLive; SwitchToLive promotes preview, stops old live, clears preview | (none) | exists |
+| AIR-003 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; PE-CTL-001 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_legacy preload RPCBeforeStartChannel_Error | legacy preload RPC without StartChannel → success=false | (none) | exists |
+| AIR-004 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy switch RPC; PE-CTL-002 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A0_legacy switch RPCWithNoPreview_Error | legacy switch RPC without legacy preload RPC → success=false | (none) | exists |
+| AIR-005 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC; ProducerBusContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A1_legacy preload RPCInstallsIntoPreviewSlot_LiveUnchanged, Phase6A1_legacy switch RPCPromotesPreview_StopsOldLive_ClearsPreview; BC_007 | legacy preload RPC → preview slot; live unchanged until legacy switch RPC; legacy switch RPC promotes preview, stops old live, clears preview | (none) | exists |
 | AIR-006 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; ProducerBusContract | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A1_*; `pkg/air/tests/contracts/PlayoutControl/PlayoutControlContractTests.cpp` | Engine owns slots; producers passive; no self-switch | (none) | exists |
 | AIR-007 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §StopChannel; PE-STOP-001 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` BC_005_ChannelStopReleasesResources; Phase6A1_StopReleasesProducer_ObservableStoppedState | No frames after StopChannel; resources released; producer stopped | (none) | exists |
-| AIR-008 | `pkg/air/docs/contracts/semantics/FileProducerContract.md` | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A2_SegmentParamsPassedToFileBackedProducer, Phase6A2_InvalidPath_LoadPreviewFails; `pkg/air/tests/contracts/file_producer/FileProducerContractTests.cpp` | Producer receives start_offset_ms, hard_stop_time_ms; invalid path → success=false | (none) | exists |
+| AIR-008 | `pkg/air/docs/contracts/semantics/FileProducerContract.md` | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A2_SegmentParamsPassedToFileBackedProducer, Phase6A2_InvalidPath_legacy preload RPCFails; `pkg/air/tests/contracts/file_producer/FileProducerContractTests.cpp` | Producer receives start_offset_ms, hard_stop_time_ms; invalid path → success=false | (none) | exists |
 | AIR-009 | `pkg/air/docs/contracts/coordination/ProducerBusContract.md` | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` Phase6A3_*, Phase6A3_SwitchBetweenFileBackedAndProgrammatic | Alternation FileBacked ↔ Programmatic; ProgrammaticProducer no ffmpeg | (none) | exists |
 
 ---
@@ -52,11 +52,11 @@
 
 | canonical_id | contract/law location | test file path | test asserts | log evidence asserted | status |
 |--------------|----------------------|----------------|--------------|------------------------|--------|
-| INV-P8-SWITCH-ARMED | `pkg/air/docs/contracts/semantics/Phase8-Invariants-Compiled.md` §4; PlayoutEngine.cpp | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` INV_P8_SWITCH_ARMED_LoadPreviewRejectedWhileSwitchArmed | LoadPreview while switch armed → RESULT_CODE_REJECTED_BUSY; switch eventually completes | (none) | exists |
+| INV-P8-SWITCH-ARMED | `pkg/air/docs/contracts/semantics/Phase8-Invariants-Compiled.md` §4; PlayoutEngine.cpp | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` INV_P8_SWITCH_ARMED_legacy preload RPCRejectedWhileSwitchArmed | legacy preload RPC while switch armed → RESULT_CODE_REJECTED_BUSY; switch eventually completes | (none) | exists |
 | INV-P8-EOF-SWITCH | `pkg/air/docs/contracts/semantics/Phase8-Invariants-Compiled.md` §4 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` INV_P8_EOF_SWITCH_SwitchCompletesWhenLiveReachesEOF | Live producer EOF → switch completes (no indefinite stall) | (none) | exists |
 | INV-P8-AUDIO-GATE | `pkg/air/docs/contracts/semantics/Phase8-Invariants-Compiled.md` §3, §4 | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` INV_P8_AUDIO_GATE_ReadinessTripsAfterShadowDisabled | Readiness trips within bounded time after switch armed; audio gating does not block indefinitely | (none) | exists |
 | INV_001 (fallback) | BlackFrameProducerContract; DeterministicHarness | `pkg/air/tests/contracts/DeterministicHarness/DeterministicHarnessContractTests.cpp` INV_001_*, INV_001b_* | Fallback ONLY on producer exhaustion; planned transitions NEVER trigger fallback | (none) | exists |
-| INV_002 | BlackFrameProducerContract | `pkg/air/tests/contracts/DeterministicHarness/DeterministicHarnessContractTests.cpp` INV_002_* | Fallback persists until explicit LoadPreview + SwitchToLive | (none) | exists |
+| INV_002 | BlackFrameProducerContract | `pkg/air/tests/contracts/DeterministicHarness/DeterministicHarnessContractTests.cpp` INV_002_* | Fallback persists until explicit legacy preload RPC + legacy switch RPC | (none) | exists |
 
 ---
 
@@ -78,8 +78,8 @@
 | rule / event set | contract/law location | test file path | test asserts | log evidence asserted | status |
 |------------------|----------------------|----------------|--------------|------------------------|--------|
 | StartChannel log events | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` Part 2.5 | NONE | AIR-STARTCHANNEL-RECEIVED, AIR-STARTCHANNEL-RESPONSE with required fields | channel_id, correlation_id, receipt_time_ms, result_code, completion_time_ms | **missing** |
-| LoadPreview log events | PlayoutEngineContract Part 2.5 | NONE | AIR-LOADPREVIEW-RECEIVED, AIR-LOADPREVIEW-EFFECTIVE, AIR-LOADPREVIEW-RESPONSE | channel_id, correlation_id, asset_path, start_offset_ms, hard_stop_time_ms, receipt_time_ms, effective_time_ms, completion_time_ms, result_code | **missing** |
-| SwitchToLive log events | PlayoutEngineContract Part 2.5 | NONE | AIR-SWITCHTOLIVE-RECEIVED, AIR-SWITCHTOLIVE-EFFECTIVE, AIR-SWITCHTOLIVE-RESPONSE | channel_id, correlation_id, receipt_time_ms, effective_time_ms, completion_time_ms, result_code | **missing** |
+| legacy preload RPC log events | PlayoutEngineContract Part 2.5 | NONE | AIR-LOADPREVIEW-RECEIVED, AIR-LOADPREVIEW-EFFECTIVE, AIR-LOADPREVIEW-RESPONSE | channel_id, correlation_id, asset_path, start_offset_ms, hard_stop_time_ms, receipt_time_ms, effective_time_ms, completion_time_ms, result_code | **missing** |
+| legacy switch RPC log events | PlayoutEngineContract Part 2.5 | NONE | AIR-SWITCHTOLIVE-RECEIVED, AIR-SWITCHTOLIVE-EFFECTIVE, AIR-SWITCHTOLIVE-RESPONSE | channel_id, correlation_id, receipt_time_ms, effective_time_ms, completion_time_ms, result_code | **missing** |
 | Producer clamp log events | PlayoutEngineContract Part 2.5; LAW-OBS-005 | NONE | AIR-CLAMP-STARTED, AIR-CLAMP-ACTIVE, AIR-CLAMP-ENDED | channel_id, asset_path, boundary_time, correlation_id, segment_correlation_id, next_correlation_id | **missing** |
 | Black/silence fallback | PlayoutEngineContract Part 2.5 | NONE | AIR-FALLBACK-ENTERED, AIR-FALLBACK-EXITED | channel_id, reason, asset_path | **missing** |
 | Mux/sink attach/detach | PlayoutEngineContract Part 2.5 | NONE | AIR-ATTACHSTREAM-*, AIR-DETACHSTREAM-* | channel_id, correlation_id, endpoint, receipt_time_ms, result_code, completion_time_ms | **missing** |
@@ -91,7 +91,7 @@
 
 | canonical_id | contract/law location | test file path | test asserts | log evidence asserted | status |
 |--------------|----------------------|----------------|--------------|------------------------|--------|
-| OBS-001 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; §SwitchToLive | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` LT_005_*, LT_006_*, Phase6A0_*, Phase83_* | LoadPreviewResponse.shadow_decode_started; SwitchToLiveResponse.pts_contiguous (when implemented) | (gRPC response fields, not logs) | partial |
+| OBS-001 | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC | `pkg/air/tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp` LT_005_*, LT_006_*, Phase6A0_*, Phase83_* | legacy preload RPCResponse.shadow_decode_started; legacy switch RPCResponse.pts_contiguous (when implemented) | (gRPC response fields, not logs) | partial |
 
 ---
 

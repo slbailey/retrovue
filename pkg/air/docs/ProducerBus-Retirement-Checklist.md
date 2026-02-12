@@ -19,7 +19,7 @@ When ProducerBus is deleted, these documents have no implementation to govern.
 | BlackFrameProducerContract | `docs/contracts/coordination/BlackFrameProducerContract.md` | Dead-man failsafe, INV-PAD-EXACT-COUNT structural padding |
 | PlayoutControlContract (architecture) | `docs/contracts/architecture/PlayoutControlContract.md` | CTL-001 through CTL-004: state machine for bus switching |
 | PlayoutControlContract (coordination) | `docs/contracts/coordination/PlayoutControlContract.md` | Same (duplicate) |
-| Phase8-3-PreviewSwitchToLive | `docs/contracts/coordination/Phase8-3-PreviewSwitchToLive.md` | INV-P8-SWITCH-001/002, write barriers, shadow decode, audio gate |
+| LegacyPreviewSwitchModel (Retired) | `pkg/air/docs/contracts/coordination/LegacyPreviewSwitchModel.md` | INV-P8-SWITCH-001/002, write barriers, shadow decode, audio gate |
 | OutputSwitchingContract | `docs/contracts/coordination/OutputSwitchingContract.md` | Output bus switching during producer transitions |
 | Phase8-2-SegmentControl | `docs/contracts/coordination/Phase8-2-SegmentControl.md` | Segment commit, timeline ownership, EOF handling |
 | Phase8-8-FrameLifecycleAndPlayoutCompletion | `docs/contracts/coordination/Phase8-8-FrameLifecycleAndPlayoutCompletion.md` | Frame lifecycle through ProducerBus path |
@@ -47,7 +47,7 @@ When ProducerBus is deleted, these documents have no implementation to govern.
 
 | Test file | Coverage area | BlockPlan equivalent |
 |-----------|---------------|---------------------|
-| `PlayoutEngine/PlayoutEngineContractTests.cpp` | StartChannel/LoadPreview/SwitchToLive lifecycle, Phase 6A.0/6A.1/6A.2/6A.3, BC-001 through BC-007 | `BlockPlan/ContinuousOutputContractTests.cpp` covers session lifecycle; gRPC entry-point coverage via INV-BLOCKPLAN-QUARANTINE guards |
+| `PlayoutEngine/PlayoutEngineContractTests.cpp` | StartChannel/legacy preload RPC/legacy switch RPC lifecycle, Phase 6A.0/6A.1/6A.2/6A.3, BC-001 through BC-007 | `BlockPlan/ContinuousOutputContractTests.cpp` covers session lifecycle; gRPC entry-point coverage via INV-BLOCKPLAN-QUARANTINE guards |
 | `OutputSwitching/OutputSwitchingContractTests.cpp` | Preview-to-live atomic switching, OS-001 through OS-006 | `BlockPlan/TakeAtCommitContractTests.cpp` covers TAKE-based A/B switching |
 | `Phase815FileProducerTests.cpp` | FileProducer hard stop, EOF behavior on ProducerBus | `BlockPlan/PlaybackTraceContractTests.cpp` covers TickProducer EOF and real-media playback |
 | `Phase84PersistentMpegTsMuxTests.cpp` | Persistent mux across bus switches | Session-scoped encoder in PipelineManager (tested in ContinuousOutputContractTests) |
@@ -130,8 +130,8 @@ These components have **no test coverage from BlockPlan tests**.  Before deletio
 | Handler | Status | Action required |
 |---------|--------|-----------------|
 | `StartChannel` | Guarded by INV-BLOCKPLAN-QUARANTINE | Delete handler; remove from proto |
-| `LoadPreview` | Guarded by INV-BLOCKPLAN-QUARANTINE | Delete handler; remove from proto |
-| `SwitchToLive` | Guarded by INV-BLOCKPLAN-QUARANTINE | Delete handler; remove from proto |
+| `legacy preload RPC` | Guarded by INV-BLOCKPLAN-QUARANTINE | Delete handler; remove from proto |
+| `legacy switch RPC` | Guarded by INV-BLOCKPLAN-QUARANTINE | Delete handler; remove from proto |
 | `UpdatePlan` | Legacy only | Delete handler; remove from proto |
 | `StopChannel` | Legacy only | Delete handler; remove from proto |
 | `AttachStream` / `DetachStream` | Legacy only | Delete handler; remove from proto |
@@ -155,7 +155,7 @@ ProducerBus and all legacy components listed above can be safely deleted when **
 ### 4.1 No remaining callers
 
 - [ ] Core's `PLAYOUT_AUTHORITY` is permanently `"blockplan"` (no fallback to legacy path)
-- [ ] No gRPC client (Core, manual, or test) calls `StartChannel`, `LoadPreview`, or `SwitchToLive`
+- [ ] No gRPC client (Core, manual, or test) calls `StartChannel`, `legacy preload RPC`, or `legacy switch RPC`
 - [ ] `playout.proto` RPCs for the legacy path are removed or marked `reserved`
 - [ ] INV-BLOCKPLAN-QUARANTINE guards have never fired in production (confirm via logs/metrics)
 

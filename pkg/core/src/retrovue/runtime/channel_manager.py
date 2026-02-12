@@ -37,6 +37,7 @@ from fastapi.responses import StreamingResponse
 from uvicorn import Config, Server
 
 from .clock import MasterClock
+from .schedule_types import ScheduledBlock, ScheduledSegment
 from .producer.base import Producer, ProducerMode, ProducerStatus, ContentSegment, ProducerState
 from .channel_stream import ChannelStream, FakeTsSource, SocketTsSource, generate_ts_stream
 from .config import (
@@ -106,6 +107,17 @@ class ScheduleService(Protocol):
         """
         ...
 
+    def get_block_at(self, channel_id: str, utc_ms: int) -> "ScheduledBlock | None":
+        """Return the fully constructed block covering the given wall-clock time.
+
+        READ-ONLY: This is a pure query over pre-built horizon data.
+        It MUST NOT trigger schedule generation, pipeline execution, or grid rebuild.
+        It MAY perform idempotent day resolution (INV-P5-002) in legacy mode.
+
+        Returns ScheduledBlock or None (planning failure).
+        """
+        ...
+
 
 class ProgramDirector(Protocol):
     """Global policy/mode provider."""
@@ -170,6 +182,12 @@ def compute_jip_position(
 ) -> tuple[int, int]:
     """
     Compute Join-In-Progress position within a cyclic playout plan.
+
+    .. deprecated::
+        Legacy utility from pre-INV-EXEC-NO-STRUCTURE-001 era. JIP is now
+        computed within BlockPlanProducer._generate_next_block() using
+        ScheduledBlock timing from the schedule service. This function
+        remains only for backward-compatible tests. Do not use in new code.
 
     INV-JIP-BP-002: returned offset is in [0, entry_duration).
     INV-JIP-BP-003: deterministic for identical inputs.
@@ -820,36 +838,33 @@ class ChannelManager:
         # Get authoritative station time.
         station_time = self.clock.now_utc()
 
-        playout_plan = self._get_playout_plan()
-
-        # INV-JIP-BP-001: Compute JIP once, at the 0→1 viewer transition.
+        # INV-EXEC-NO-BOUNDARY-001: No grid math here.
+        # INV-EXEC-NO-STRUCTURE-001: Block timing from schedule service.
         now_utc_ms = int(station_time.timestamp() * 1000)
-        cycle_origin_utc_ms = self.channel_config.schedule_config.get(
-            "cycle_origin_utc_ms", 0,
-        ) if self.channel_config else 0
-        block_duration_ms = self.active_producer._block_duration_ms
+        current_block = self.schedule_service.get_block_at(self.channel_id, now_utc_ms)
+        if not current_block:
+            self.runtime_state.producer_status = "error"
+            self.active_producer = None
+            raise NoScheduleDataError(
+                f"No block for channel {self.channel_id} at {now_utc_ms}"
+            )
 
-        jip_entry_index, jip_offset_ms = compute_jip_position(
-            playout_plan, block_duration_ms, cycle_origin_utc_ms, now_utc_ms,
-        )
-        block_start_utc_ms = (now_utc_ms // block_duration_ms) * block_duration_ms
+        # INV-EXEC-OFFSET-001: offset within block is allowed
+        jip_offset_ms = now_utc_ms - current_block.start_utc_ms
+        block_start_utc_ms = current_block.start_utc_ms
         self._logger.info(
             "INV-JIP-BP-BOOT: channel_id=%s station_now=%d "
             "block_start=%d block_dur=%d "
-            "jip_offset=%d (join - block_start = %d) "
-            "active_index=%d",
+            "jip_offset=%d",
             self.channel_id, now_utc_ms,
-            block_start_utc_ms, block_duration_ms,
-            jip_offset_ms, now_utc_ms - block_start_utc_ms,
-            jip_entry_index,
+            block_start_utc_ms, current_block.duration_ms,
+            jip_offset_ms,
         )
 
         # Ask the Producer to start with JIP parameters.
         started_ok = self.active_producer.start(
-            playout_plan, station_time,
-            jip_entry_index=jip_entry_index,
+            station_time,
             jip_offset_ms=jip_offset_ms,
-            cycle_origin_utc_ms=cycle_origin_utc_ms,
         )
         if not started_ok:
             self.runtime_state.producer_status = "error"
@@ -1094,7 +1109,7 @@ class ChannelManager:
         )
         return BlockPlanProducer(
             channel_id=self.channel_id,
-            configuration={"block_duration_ms": 30_000},
+            configuration={},
             channel_config=self._get_channel_config(),
             schedule_service=self.schedule_service,
             clock=self.clock,
@@ -1450,9 +1465,6 @@ class BlockPlanProducer(Producer):
     - Concurrent viewer_join/leave are serialized
     """
 
-    # Block duration in milliseconds (configurable via configuration)
-    DEFAULT_BLOCK_DURATION_MS = 30_000  # 30 seconds
-
     # Credit-based flow control constants (INV-FEED-CREDIT-*)
     AIR_QUEUE_DEPTH = 2                # AIR block queue: one executing, one pending
     ERROR_BACKOFF_BASE_TICKS = 4       # ~1s at 3.75 Hz
@@ -1461,17 +1473,15 @@ class BlockPlanProducer(Producer):
     def __init__(
         self,
         channel_id: str,
-        configuration: dict[str, Any],
+        configuration: dict[str, Any] | None = None,
         channel_config: ChannelConfig | None = None,
         schedule_service: ScheduleService | None = None,
         clock: MasterClock | None = None,
-        execution_store: Any | None = None,
     ):
-        super().__init__(channel_id, ProducerMode.NORMAL, configuration)
+        super().__init__(channel_id, ProducerMode.NORMAL, configuration or {})
         self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
         self.schedule_service = schedule_service
         self.clock = clock
-        self._execution_store = execution_store
 
         # PlayoutSession instance (created on start, destroyed on stop)
         self._session: "PlayoutSession | None" = None
@@ -1497,10 +1507,7 @@ class BlockPlanProducer(Producer):
         # Block generation state
         self._block_index = 0
         self._next_block_start_ms = 0
-        self._cycle_origin_utc_ms = 0
-        self._block_duration_ms = configuration.get(
-            "block_duration_ms", self.DEFAULT_BLOCK_DURATION_MS
-        )
+        # _cycle_origin_utc_ms removed: INV-EXEC-NO-STRUCTURE-001
 
         # INV-FEED-QUEUE-002: Pending block slot for QUEUE_FULL retry
         self._pending_block: "BlockPlan | None" = None
@@ -1510,13 +1517,14 @@ class BlockPlanProducer(Producer):
         # Max end_utc_ms of all blocks delivered to AIR (seed + feed)
         self._max_delivered_end_utc_ms: int = 0
         # Feed-ahead horizon: maintain this many ms of runway (configurable)
-        self._feed_ahead_horizon_ms: int = configuration.get(
+        cfg = configuration or {}
+        self._feed_ahead_horizon_ms: int = cfg.get(
             "feed_ahead_horizon_ms", 20_000
         )
         # Preload budget: how far before a block's start_utc_ms it must arrive
         # at AIR to guarantee preload completes on time. Based on observed
         # p95/p99 decode-open-seek latency + margin.
-        self._preload_budget_ms: int = configuration.get(
+        self._preload_budget_ms: int = cfg.get(
             "preload_budget_ms", 10_000
         )
         # Tick throttle counter (on_paced_tick runs at 30 Hz, we evaluate at ~4 Hz)
@@ -1536,9 +1544,6 @@ class BlockPlanProducer(Producer):
         self._next_block_first_due_utc_ms: int = 0
         # As-run annotations (in-process; future AsRunLogger integration)
         self._asrun_annotations: list[_AsRunAnnotation] = []
-
-        # Retained playout plan for block cycling (set at start, reused on feed)
-        self._playout_plan: list[dict[str, Any]] = []
 
         # UDS socket for TS output
         self._socket_path: Path | None = None
@@ -1566,12 +1571,9 @@ class BlockPlanProducer(Producer):
 
     def start(
         self,
-        playout_plan: list[dict[str, Any]],
         start_at_station_time: datetime,
         *,
-        jip_entry_index: int = 0,
         jip_offset_ms: int = 0,
-        cycle_origin_utc_ms: int = 0,
     ) -> bool:
         """
         Start BlockPlan execution.
@@ -1580,9 +1582,8 @@ class BlockPlanProducer(Producer):
         Creates PlayoutSession, seeds initial 2 blocks, and begins execution.
 
         INV-VIEWER-LIFECYCLE-001: AIR starts exactly once per first-viewer event.
-        INV-JIP-BP-001: JIP is computed once per session, at the 0→1 transition.
+        INV-EXEC-NO-STRUCTURE-001: Block timing from schedule service via ScheduledBlock.
         INV-JIP-BP-005/006: jip_offset_ms applied only to block_a.
-        INV-JIP-BP-007: Cursor set to jip_entry_index before seeding.
         """
         with self._lock:
             if self._started:
@@ -1602,24 +1603,6 @@ class BlockPlanProducer(Producer):
             try:
                 # Import here to avoid circular imports
                 from .playout_session import PlayoutSession, BlockPlan
-
-                # When an ExecutionWindowStore is available, use it as the
-                # playout plan source (same data path as burn_in.py --horizon).
-                # Each execution entry becomes a plan entry with pre-composed
-                # segments, block_id, start_utc_ms, end_utc_ms, duration_ms.
-                if self._execution_store is not None:
-                    all_entries = self._execution_store.get_all_entries()
-                    if all_entries:
-                        playout_plan = [{
-                            "segments": e.segments,
-                            "duration_ms": e.end_utc_ms - e.start_utc_ms,
-                            "start_utc_ms": e.start_utc_ms,
-                            "end_utc_ms": e.end_utc_ms,
-                            "block_id": e.block_id,
-                        } for e in all_entries]
-
-                # Retain playout plan for block cycling
-                self._playout_plan = playout_plan or []
 
                 # Setup socket path
                 self._socket_path = Path(f"/tmp/retrovue/air/{self.channel_id}.sock")
@@ -1670,31 +1653,43 @@ class BlockPlanProducer(Producer):
                 if not self._session.start(join_utc_ms=join_utc_ms):
                     raise RuntimeError("PlayoutSession.start() failed")
 
-                # INV-JIP-BP-007: Set cursor to JIP entry before seeding
-                self._block_index = jip_entry_index
-                self._cycle_origin_utc_ms = cycle_origin_utc_ms
-
-                # INV-JIP-WALLCLOCK-001: Block start = floor(join to :00/:30).
-                # Blocks are always wall-clock aligned and exactly
-                # _block_duration_ms long.  join_utc_ms only determines the
-                # offset INTO the block, never the block's start or duration.
-                block_dur = self._block_duration_ms
-                self._next_block_start_ms = (join_utc_ms // block_dur) * block_dur
+                # INV-EXEC-NO-STRUCTURE-001: Block timing from schedule service
+                current_entry = self._resolve_plan_for_block_at(join_utc_ms)
+                if not current_entry:
+                    raise RuntimeError("No block data from schedule service")
+                self._next_block_start_ms = current_entry.start_utc_ms
                 self._in_flight_block_ids.clear()
 
                 # Generate and seed initial 2 blocks
                 # INV-JIP-BP-005/006: Only block_a carries JIP offset
                 block_a = self._generate_next_block(
-                    playout_plan, jip_offset_ms=jip_offset_ms,
+                    current_entry, jip_offset_ms=jip_offset_ms,
                     now_utc_ms=join_utc_ms,
                 )
                 self._advance_cursor(block_a)
-                block_b = self._generate_next_block(playout_plan)
+
+                next_entry = self._resolve_plan_for_block()
+                if not next_entry:
+                    raise RuntimeError("No next block data from schedule service")
+                block_b = self._generate_next_block(next_entry)
                 self._advance_cursor(block_b)
 
                 if not self._session.seed(block_a, block_b,
                                          join_utc_ms=join_utc_ms):
                     raise RuntimeError("PlayoutSession.seed() failed")
+
+                # INV-EXEC-NO-STRUCTURE-001: Canary proof — every session start
+                # emits one unambiguous line proving timing came from schedule.
+                self._logger.info(
+                    "INV-EXEC-NO-STRUCTURE-001: USING_SCHEDULED_BLOCK | "
+                    "block_a=%s start=%d end=%d dur=%d segs=%d jip_offset=%d | "
+                    "block_b=%s start=%d end=%d dur=%d segs=%d jip_offset=0",
+                    block_a.block_id, block_a.start_utc_ms, block_a.end_utc_ms,
+                    block_a.end_utc_ms - block_a.start_utc_ms, len(block_a.segments),
+                    jip_offset_ms,
+                    block_b.block_id, block_b.start_utc_ms, block_b.end_utc_ms,
+                    block_b.end_utc_ms - block_b.start_utc_ms, len(block_b.segments),
+                )
 
                 # INV-WALLCLOCK-FENCE-002: Track seeded blocks as active
                 self._in_flight_block_ids.add(block_a.block_id)
@@ -1724,19 +1719,15 @@ class BlockPlanProducer(Producer):
                 # =============================================================
                 # ARCHITECTURAL TELEMETRY: One-time per-session declaration
                 # =============================================================
-                # Emitted exactly once per session so logs unambiguously show
-                # which playout path, encoder scope, and execution model is
-                # active.  Not emitted per-block or per-frame.
-                # =============================================================
                 self._logger.info(
                     "INV-PLAYOUT-AUTHORITY: Channel %s session started | "
                     "playout_path=blockplan | "
                     "encoder_scope=session | "
                     "execution_model=serial_block | "
-                    "block_duration_ms=%d | "
+                    "block_a_duration_ms=%d | "
                     "authority=%s",
                     self.channel_id,
-                    self._block_duration_ms,
+                    block_a.end_utc_ms - block_a.start_utc_ms,
                     PLAYOUT_AUTHORITY,
                 )
                 return True
@@ -1818,7 +1809,6 @@ class BlockPlanProducer(Producer):
         # Reset block generation state for next start
         self._block_index = 0
         self._next_block_start_ms = 0
-        self._cycle_origin_utc_ms = 0
 
         # INV-CM-RESTART-SAFETY: Reset session state flags
         self._session_ended = False
@@ -1838,180 +1828,105 @@ class BlockPlanProducer(Producer):
         self._next_block_first_due_utc_ms = 0
         self._asrun_annotations.clear()
 
-    def _resolve_plan_for_block(self) -> list[dict[str, Any]]:
-        """Query execution store or schedule service for the next block's content.
+    def _resolve_plan_for_block(self) -> ScheduledBlock | None:
+        """INV-EXEC-NO-STRUCTURE-001: Request fully constructed block from schedule service.
 
-        When an ExecutionWindowStore is available (horizon mode), reads
-        pre-composed entries with nested segments — the same format
-        burn_in.py uses.  Falls back to schedule service query, then
-        to boot-time plan.
+        Pure read — does not trigger schedule generation.
         """
-        if self._execution_store is not None and self._next_block_start_ms > 0:
-            entry = self._execution_store.get_entry_at(
-                self._next_block_start_ms, locked_only=True,
+        if self.schedule_service is None:
+            self._logger.error(
+                "INV-BLOCKPLAN-HORIZON-MISS: No schedule_service configured for channel=%s",
+                self.channel_id,
             )
-            if entry is not None:
-                return [{
-                    "segments": entry.segments,
-                    "duration_ms": entry.end_utc_ms - entry.start_utc_ms,
-                    "start_utc_ms": entry.start_utc_ms,
-                    "end_utc_ms": entry.end_utc_ms,
-                    "block_id": entry.block_id,
-                }]
-        if self.schedule_service and self._next_block_start_ms > 0:
-            block_start_dt = datetime.fromtimestamp(
-                self._next_block_start_ms / 1000, tz=timezone.utc
+            return None
+        return self.schedule_service.get_block_at(self.channel_id, self._next_block_start_ms)
+
+    def _resolve_plan_for_block_at(self, utc_ms: int) -> ScheduledBlock | None:
+        """INV-EXEC-NO-STRUCTURE-001: Request block at arbitrary time."""
+        if self.schedule_service is None:
+            self._logger.error(
+                "INV-BLOCKPLAN-HORIZON-MISS: No schedule_service configured for channel=%s",
+                self.channel_id,
             )
-            fresh = self.schedule_service.get_playout_plan_now(
-                self.channel_id, block_start_dt
-            )
-            if fresh:
-                return fresh
-        return self._playout_plan
+            return None
+        return self.schedule_service.get_block_at(self.channel_id, utc_ms)
 
     def _generate_next_block(
         self,
-        playout_plan: list[dict[str, Any]],
+        scheduled: ScheduledBlock,
         *,
         jip_offset_ms: int = 0,
         now_utc_ms: int = 0,
     ) -> "BlockPlan":
-        """
-        Generate the next BlockPlan from current cursor position.
+        """Generate BlockPlan from a ScheduledBlock provided by the schedule service.
 
-        Does NOT advance the cursor — call _advance_cursor() after
-        successful feed (INV-FEED-QUEUE-001).
-
-        Two modes:
-        1. **Execution entry mode** (horizon): playout_plan entry has
-           "segments" key with pre-composed segment list from
-           ExecutionWindowStore.  Segments are passed through to BlockPlan
-           directly, matching burn_in.py's _compose_block_horizon.
-        2. **Flat entry mode** (legacy/Phase3): entry has "asset_path"
-           and optional "start_pts".  A single segment is constructed.
-
-        INV-JIP-FIRST-BLOCK-001: When jip_offset_ms > 0, start_utc_ms is set to
-        now_utc_ms (derived from MasterClock), producing a partial block covering
-        [now, fence_end).  Subsequent blocks are full grid.
-        INV-JIP-SEGMENTSUM-001: sum(segment_duration_ms) == end_utc_ms - start_utc_ms
-        for all blocks, including the JIP first block.
+        INV-EXEC-NO-STRUCTURE-001: Block timing comes from scheduled.start_utc_ms/end_utc_ms.
+        INV-EXEC-OFFSET-001: JIP offset computed as now - block.start (offset within block).
+        INV-EXEC-NO-BOUNDARY-001: No grid alignment math here.
         """
         from .playout_session import BlockPlan
 
-        block_index = self._block_index
-        grid_start_ms = self._next_block_start_ms
+        start_ms = scheduled.start_utc_ms
+        end_ms = scheduled.end_utc_ms
+        block_id = scheduled.block_id
 
-        # Resolve which plan entry covers this block
-        entry: dict[str, Any] = {}
-        if playout_plan:
-            # Execution entry mode: find by start_utc_ms match
-            if "segments" in playout_plan[0]:
-                for e in playout_plan:
-                    if e.get("start_utc_ms") == grid_start_ms:
-                        entry = e
-                        break
-                if not entry and playout_plan:
-                    entry = playout_plan[0]
-            else:
-                # Flat entry mode: cycle by wall-clock position
-                plan_idx, _ = compute_jip_position(
-                    playout_plan, self._block_duration_ms,
-                    self._cycle_origin_utc_ms, grid_start_ms,
-                )
-                entry = playout_plan[plan_idx]
-
-        block_dur_ms = entry.get("duration_ms", self._block_duration_ms)
-        fence_end_ms = grid_start_ms + block_dur_ms
-        block_id = entry.get("block_id", f"BLOCK-{self.channel_id}-{block_index}")
-
-        # INV-JIP-FIRST-BLOCK-001: partial first block
+        # INV-EXEC-OFFSET-001: JIP adjusts start forward (offset within block)
         if jip_offset_ms > 0 and now_utc_ms > 0:
-            # Derive both from the same delta — don't let them drift independently
-            raw_offset = now_utc_ms - grid_start_ms
-            jip_offset_ms = max(0, min(raw_offset, block_dur_ms))
-            start_ms = grid_start_ms + jip_offset_ms
-        else:
-            start_ms = grid_start_ms
+            raw_offset = now_utc_ms - start_ms
+            jip_offset_ms = max(0, min(raw_offset, scheduled.duration_ms))
+            start_ms = start_ms + jip_offset_ms
 
-        end_ms = fence_end_ms
         effective_dur = end_ms - start_ms
 
-        # ----- Execution entry mode: pre-composed segments -----
-        if "segments" in entry:
-            plan_segments = [dict(s) for s in entry["segments"]]
+        # Convert ScheduledSegment tuple to segment dicts for BlockPlan/AIR
+        plan_segments: list[dict[str, Any]] = [
+            {
+                "segment_index": i,
+                "segment_type": seg.segment_type,
+                "asset_uri": seg.asset_uri,
+                "asset_start_offset_ms": seg.asset_start_offset_ms,
+                "segment_duration_ms": seg.segment_duration_ms,
+            }
+            for i, seg in enumerate(scheduled.segments)
+        ]
 
-            if jip_offset_ms > 0:
-                plan_segments = _apply_jip_to_segments(
-                    plan_segments, jip_offset_ms, effective_dur,
-                )
-
-            # Re-index contiguously
+        if jip_offset_ms > 0:
+            plan_segments = _apply_jip_to_segments(plan_segments, jip_offset_ms, effective_dur)
             for i, seg in enumerate(plan_segments):
                 seg["segment_index"] = i
-
-            block = BlockPlan(
-                block_id=block_id,
-                channel_id=self.channel_config.channel_id_int,
-                start_utc_ms=start_ms,
-                end_utc_ms=end_ms,
-                segments=plan_segments,
-            )
-
-            seg_summary = " ".join(
-                f'{s.get("segment_type", "?")}={s.get("segment_duration_ms", 0)}ms'
-                for s in plan_segments
-            )
-            self._logger.info(
-                "BlockPlan generated (execution): block_id=%s start=%d end=%d "
-                "dur=%d segs=%d [%s] jip_offset=%d",
-                block_id, start_ms, end_ms, effective_dur,
-                len(plan_segments), seg_summary, jip_offset_ms,
-            )
-            return block
-
-        # ----- Flat entry mode: construct single segment -----
-        asset_path = entry.get("asset_path", "assets/SampleA.mp4")
-
-        if jip_offset_ms > 0:
-            # Seek once: base + jip
-            seek_ms = entry.get("asset_start_offset_ms", 0) + jip_offset_ms
-        else:
-            seek_ms = entry.get("asset_start_offset_ms", entry.get("start_pts", 0))
-
-        content_dur = effective_dur   # AIR handles EOF via CONTRACT-SEG-003/004
-        pad_dur = 0                   # no elapsed-time pad
-
-        segments_list: list[dict[str, Any]] = [{
-            "segment_index": 0,
-            "asset_uri": asset_path,
-            "asset_start_offset_ms": seek_ms,
-            "segment_duration_ms": content_dur,
-        }]
-
-        # INV-JIP-SEGMENTSUM-001
-        assert sum(s["segment_duration_ms"] for s in segments_list) == effective_dur
-
-        if jip_offset_ms > 0:
-            self._logger.info(
-                "JIP_FIRST_BLOCK: now_ms=%d fence_end_ms=%d effective_dur_ms=%d "
-                "seek_ms=%d content_dur_ms=%d pad_ms=%d segment_sum=%d",
-                start_ms, end_ms, effective_dur,
-                seek_ms, content_dur, pad_dur, content_dur + pad_dur,
-            )
 
         block = BlockPlan(
             block_id=block_id,
             channel_id=self.channel_config.channel_id_int,
             start_utc_ms=start_ms,
             end_utc_ms=end_ms,
-            segments=segments_list,
+            segments=plan_segments,
         )
 
+        # INV-EXEC-NO-STRUCTURE-001: Immutability enforcement
+        # Non-JIP: outbound (start, end) must equal scheduled (start, end)
+        # JIP: outbound start == scheduled_start + jip_offset, outbound end == scheduled_end
+        assert block.end_utc_ms == scheduled.end_utc_ms, (
+            f"INV-EXEC-NO-STRUCTURE-001 VIOLATION: outbound end_utc_ms={block.end_utc_ms} "
+            f"!= scheduled end_utc_ms={scheduled.end_utc_ms}"
+        )
+        if jip_offset_ms > 0:
+            assert block.start_utc_ms == scheduled.start_utc_ms + jip_offset_ms, (
+                f"INV-EXEC-NO-STRUCTURE-001 VIOLATION: outbound start_utc_ms={block.start_utc_ms} "
+                f"!= scheduled start + jip ({scheduled.start_utc_ms + jip_offset_ms})"
+            )
+        else:
+            assert block.start_utc_ms == scheduled.start_utc_ms, (
+                f"INV-EXEC-NO-STRUCTURE-001 VIOLATION: outbound start_utc_ms={block.start_utc_ms} "
+                f"!= scheduled start_utc_ms={scheduled.start_utc_ms}"
+            )
+
+        # INV-EXEC-NO-STRUCTURE-001 proof
         self._logger.info(
-            "BlockPlan generated: block_id=%s start=%d end=%d dur=%d "
-            "asset=%s seek=%d seg_dur=%d jip_offset=%d",
-            block_id, start_ms, end_ms, effective_dur,
-            asset_path, seek_ms, content_dur, jip_offset_ms,
+            "INV-EXEC-NO-STRUCTURE-001: block=%s dur=%d start=%d end=%d "
+            "segs=%d jip_offset=%d (timing from schedule service)",
+            block.block_id, effective_dur, start_ms, end_ms,
+            len(plan_segments), jip_offset_ms,
         )
 
         return block
@@ -2157,8 +2072,15 @@ class BlockPlanProducer(Producer):
             if self._pending_block is not None:
                 block = self._pending_block
             else:
-                plan = self._resolve_plan_for_block()
-                block = self._generate_next_block(plan)
+                scheduled = self._resolve_plan_for_block()
+                if scheduled is None:
+                    self._logger.warning(
+                        "INV-BLOCKPLAN-HORIZON-MISS: No block at %d for channel=%s — "
+                        "planning gap. AIR will pad (PADDED_GAP). Retry next tick.",
+                        self._next_block_start_ms, self.channel_id,
+                    )
+                    return  # Skip tick; retry next tick
+                block = self._generate_next_block(scheduled)
 
             # Compute per-block deadline
             ready_by_utc_ms = block.start_utc_ms - self._preload_budget_ms

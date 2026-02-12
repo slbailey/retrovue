@@ -8,6 +8,8 @@ _Related: [Runtime: Schedule service](schedule_service.md) • [Runtime: Program
 
 ChannelManager is responsible for executing scheduled content playback on the air. It receives ScheduledSegments from ScheduleService and plays them according to the precise timing specified.
 
+**Runtime = BlockPlan.** The only valid playout path is BlockPlan; Core produces a BlockPlan and the playout engine executes it. There is no other runtime path.
+
 **Lifecycle (post–PD/CM collapse):** ChannelManagers have **no autonomous lifecycle**. They exist only while in ProgramDirector's active registry. ProgramDirector is the sole authority for creation, health ticking, fanout attachment, and teardown. ChannelManagers never self-terminate or assume daemon semantics. Code: `pkg/core/src/retrovue/runtime/channel_manager.py` (no separate daemon module).
 
 ## Time and Rollover Behavior
@@ -219,6 +221,14 @@ ChannelManager is how a RetroVue channel actually goes on-air.
 **First viewer starts Producer, last viewer stops Producer** - this fanout rule is enforced by ChannelManager.
 
 ChannelManager operates on Channel entities using UUID identifiers for external operations and logs.
+
+## Runtime invariants
+
+| Invariant | Description |
+| --------- | ----------- |
+| [INV-EXEC-STRUCTURE-IMMUTABLE-001](../contracts/runtime/INV-EXEC-STRUCTURE-IMMUTABLE-001.md) | Execution treats `ScheduledBlock.start_utc_ms` and `end_utc_ms` as authoritative and SHALL NOT modify them. |
+
+See also: [PlayoutAuthorityContract](../contracts/PlayoutAuthorityContract.md), [BOUNDARY_LIFECYCLE](../contracts/lifecycle/BOUNDARY_LIFECYCLE.md), [INV-CANONICAL-BOOTSTRAP](../contracts/runtime/INV-CANONICAL-BOOTSTRAP.md).
 
 ## Cross-References
 

@@ -16,8 +16,8 @@ Phase 8 defines **timeline semantics** and **clock-driven segment switching** fo
 
 - **Content Time (CT)** as the single, monotonic timeline owned by the TimelineController (AIR).
 - **Wall-clock correspondence:** when and how segment boundaries align to real time.
-- **Segment lifecycle:** LoadPreview (preview buffer fill) and SwitchToLive (cut at boundary), with write barriers and shadow/preview coordination.
-- **Core–AIR boundary:** Core computes *when* boundaries occur and issues LoadPreview/SwitchToLive; AIR executes *at* the declared boundary time.
+- **Segment lifecycle:** legacy preload RPC (preview buffer fill) and legacy switch RPC (cut at boundary), with write barriers and shadow/preview coordination.
+- **Core–AIR boundary:** Core computes *when* boundaries occur and issues legacy preload RPC/legacy switch RPC; AIR executes *at* the declared boundary time.
 
 Phase 8 is the foundation for “schedule advances because time advanced, not EOF.” Later phases (11, 12) refine *who* holds authority over timing and lifecycle; Phase 8 defines *what* timeline and switch semantics are.
 
@@ -26,7 +26,7 @@ Phase 8 is the foundation for “schedule advances because time advanced, not EO
 Without Phase 8 discipline, you get:
 
 - **Timeline corruption:** Multiple writers to CT; gaps or regressions; producers gating on wall clock.
-- **Switch chaos:** Preview and live buffers undefined; LoadPreview while switch armed; no write barrier.
+- **Switch chaos:** Preview and live buffers undefined; legacy preload RPC while switch armed; no write barrier.
 - **Authority ambiguity:** Core and AIR disagree on when a boundary occurs; poll/retry instead of declarative boundary.
 
 Phase 8 eliminates these by: single CT authority, producer time-blindness, mapping-pending-before-preview-fills, write barrier on live before new segment, and switch execution at declared boundary.
@@ -47,10 +47,10 @@ A contiguous span of content (one asset or filler) with a start and end. Boundar
 **Boundary:**  
 Scheduled instant (wall time) at which playout switches from current (live) segment to the next. Core computes boundaries from schedule; AIR executes the switch at the declared time.
 
-**LoadPreview:**  
+**legacy preload RPC:**  
 Core→AIR command to load the successor segment into the preview buffer. Must complete with sufficient lead time (MIN_PREFEED_LEAD_TIME) before the boundary so the switch can execute on time.
 
-**SwitchToLive:**  
+**legacy switch RPC:**  
 Core→AIR command to cut from current live segment to the preview segment at the boundary. Issued at or just before the boundary; AIR executes at the declared boundary time (deadline-authoritative).
 
 **Shadow / Preview:**  
@@ -63,7 +63,7 @@ Mechanism that prevents writes to the output after the live segment is committed
 The moment the first frame of the successor is admitted; that segment “commits” and owns CT; the old segment receives RequestStop. INV-P8-SEGMENT-COMMIT, INV-P8-SEGMENT-COMMIT-EDGE.
 
 **Switch Armed:**  
-State when SwitchToLive has been issued and the cut is pending. INV-P8-SWITCH-ARMED: no LoadPreview while switch armed; FATAL if reset reached while armed.
+State when legacy switch RPC has been issued and the cut is pending. INV-P8-SWITCH-ARMED: no legacy preload RPC while switch armed; FATAL if reset reached while armed.
 
 ---
 
@@ -74,7 +74,7 @@ State when SwitchToLive has been issued and the cut is pending. INV-P8-SWITCH-AR
 | CT assignment        | TimelineController (AIR) | Single writer; monotonic; no gaps (INV-P8-001, INV-P8-002, INV-P8-003). |
 | Epoch                | AIR          | Set at session start; immutable until session end (LAW-CLOCK §2, INV-P8-005). |
 | Segment boundaries   | Core         | Core computes from schedule; passes boundary time to AIR (target_boundary_time_ms). |
-| LoadPreview / SwitchToLive | Core | Core issues; AIR executes at declared time (LAW-SWITCHING, INV-BOUNDARY-DECLARED-001). |
+| legacy preload RPC / legacy switch RPC | Core | Core issues; AIR executes at declared time (LAW-SWITCHING, INV-BOUNDARY-DECLARED-001). |
 | Switch execution     | AIR          | AIR executes cut at boundary; clock authority (LAW-AUTHORITY-HIERARCHY refines this in Phase 11). |
 | Producer progress    | AIR (FileProducer, etc.) | Producers are time-blind (INV-P8-006); they do not read CT to gate; frame-indexed execution. |
 
@@ -85,8 +85,8 @@ Producers do not read or compute CT for drop/delay/gate decisions; they are “t
 ## 4. Core–AIR Boundary (Phase 8)
 
 - **Core** holds the schedule and clock. It computes the current segment end time (boundary), requests the next segment from the schedule service, and at the right times:
-  - Sends **LoadPreview** (asset, start_frame, frame_count, etc.) so AIR can fill the preview buffer.
-  - Sends **SwitchToLive** with **target_boundary_time_utc** (or target_boundary_time_ms) so AIR executes the cut at that instant.
+  - Sends **legacy preload RPC** (asset, start_frame, frame_count, etc.) so AIR can fill the preview buffer.
+  - Sends **legacy switch RPC** with **target_boundary_time_utc** (or target_boundary_time_ms) so AIR executes the cut at that instant.
 - **AIR** maintains CT, preview/live buffers, and write barriers. It executes the switch at the declared boundary time (deadline-authoritative). It does not decide *when* the boundary is; it executes *at* the time Core declares.
 
 **The scheduled segment end time is authoritative for timeline advancement, regardless of content availability.** Schedule, CT, boundary evaluation, and (when it occurs) decoder EOF are all aligned to that authority; content deficit before scheduled end is handled by fill (see §5.4).
@@ -128,7 +128,7 @@ Canonical definitions and enforcement status are in **CANONICAL_RULE_LEDGER**. T
 | INV-P8-AUDIO-GATE | Audio gated only while shadow (and while mapping pending) |
 | INV-P8-SEGMENT-COMMIT | First frame admitted → segment commits, owns CT; old segment RequestStop |
 | INV-P8-SEGMENT-COMMIT-EDGE | Generation counter per commit for multi-switch edge detection |
-| INV-P8-SWITCH-ARMED | No LoadPreview while switch armed; FATAL if reset reached while armed |
+| INV-P8-SWITCH-ARMED | No legacy preload RPC while switch armed; FATAL if reset reached while armed |
 | INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live waits until preview shadow ready |
 | INV-P8-EOF-SWITCH | Live EOF → switch completes immediately (no buffer depth wait) |
 | INV-P8-PREVIEW-EOF | Preview EOF with frames → complete with lower thresholds |
@@ -165,12 +165,12 @@ Broadcast-grade timing invariants (INV-BOUNDARY-TOLERANCE-001, INV-BOUNDARY-DECL
 ## 6. Relationship to Later Phases
 
 - **Phase 11 (Broadcast-Grade Timing & Authority Hierarchy):**  
-  Establishes LAW-AUTHORITY-HIERARCHY (“clock authority supersedes frame completion”). Refines *when* Core issues LoadPreview/SwitchToLive (deadline-scheduled, not cadence-detected), adds boundary lifecycle state machine in Core (Phase 11F), and adds declarative target_boundary_time in protocol. Phase 8 remains the semantics of CT, write barriers, and switch coordination; Phase 11 adds authority and lifecycle rules.
+  Establishes LAW-AUTHORITY-HIERARCHY (“clock authority supersedes frame completion”). Refines *when* Core issues legacy preload RPC/legacy switch RPC (deadline-scheduled, not cadence-detected), adds boundary lifecycle state machine in Core (Phase 11F), and adds declarative target_boundary_time in protocol. Phase 8 remains the semantics of CT, write barriers, and switch coordination; Phase 11 adds authority and lifecycle rules.
 
 - **Phase 12 (Live Session Authority & Teardown):**  
   Defines *who* may tear down a channel and when (teardown deferred until boundary state stable). Viewer count is advisory during transient states. Phase 8’s “playout starts with viewers, stops when zero viewers” is preserved; Phase 12 adds the rule that teardown must not occur mid-switch (transient state).
 
-Phase 8 does not define boundary state enums, teardown deferral, or startup convergence; those are Phase 11F and Phase 12. Code and docs that say “Phase 8” in the context of timeline, segment, switch, LoadPreview, SwitchToLive, or CT/epoch refer to this contract.
+Phase 8 does not define boundary state enums, teardown deferral, or startup convergence; those are Phase 11F and Phase 12. Code and docs that say “Phase 8” in the context of timeline, segment, switch, legacy preload RPC, legacy switch RPC, or CT/epoch refer to this contract.
 
 ---
 

@@ -88,8 +88,8 @@ if self._teardown_pending:
 
 **Intent-absorbing:** No new scheduling intent may be generated in FAILED_TERMINAL state:
 - No new boundaries planned
-- No LoadPreview issued
-- No SwitchToLive scheduled
+- No legacy preload RPC issued
+- No legacy switch RPC scheduled
 - No timer callbacks registered
 
 **Allowed in FAILED_TERMINAL:**

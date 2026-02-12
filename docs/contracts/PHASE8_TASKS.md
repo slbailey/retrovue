@@ -150,7 +150,7 @@ Each task must produce observable proof of correctness:
 
 | Task ID | Observable Proof |
 |---------|------------------|
-| P8-PLAN-001 | `_planned_frame_count` set from LoadPreview |
+| P8-PLAN-001 | `_planned_frame_count` set from legacy preload RPC |
 | P8-PLAN-002 | Log: `EARLY_EOF planned={p} delivered={d} deficit={p-d}` |
 | P8-PLAN-003 | No frames from old segment after boundary |
 | P8-EOF-001 | Log: `DECODER_EOF segment={id} ct={ct}` |

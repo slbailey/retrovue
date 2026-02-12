@@ -1,3 +1,11 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 6A — Air Execution Contracts
 
 **This contract has been refactored into focused sub-documents under `pkg/air/docs/archive/phases/` (historical).**

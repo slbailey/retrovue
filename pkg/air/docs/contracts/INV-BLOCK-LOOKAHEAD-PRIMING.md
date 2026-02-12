@@ -32,7 +32,7 @@ session.  They do not apply to:
 
 - **Session boot** (the very first block, governed by
   INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT).
-- **Legacy Phase8AirProducer paths** (not part of BlockPlan).
+- **Legacy per-segment producer paths** (not part of BlockPlan; see Phase8DecommissionContract).
 - **Segment transitions within a block** (governed by TickProducer's
   CT-threshold logic; no priming required).
 

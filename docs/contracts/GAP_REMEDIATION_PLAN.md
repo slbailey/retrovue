@@ -106,7 +106,7 @@ Based on Canonical Rule Ledger (Test/Log columns) and GAP_REPORT analysis.
 | **AIR-005** (GAP) | shadow_decode_started not asserted | **ADD LOG** | PlayoutEngine | Optional response field. Add log when shadow decode starts for observability. |
 | **AIR-007** (GAP) | "No orphan ffmpeg" not tested | **ADD BOTH** | PlayoutEngine | Orphan processes consume resources and may hold file locks. Test + log process list. |
 | **AIR-009** (GAP) | ProgrammaticProducer tests missing | **DEFER** | ProducerBus | ProgrammaticProducer is test harness, not production path. Lower priority. |
-| **AIR-010** (GAP) | LoadPreview timestamp < boundary not tested | **ADD BOTH** | Core | Late LoadPreview causes gap at switch. Test validates timing + log call timestamps. |
+| **AIR-010** (GAP) | legacy preload RPC timestamp < boundary not tested | **ADD BOTH** | Core | Late legacy preload RPC causes gap at switch. Test validates timing + log call timestamps. |
 | **AIR-011** (GAP) | Phase 6 tests inspect TS bytes | **DEFER** | Test harness | Test methodology rule. Enforce via code review, not runtime. |
 | **AIR-012** (GAP) | Sink lifecycle not in canonical doc | **ADD TEST** | MpegTSOutputSink | Already covered by INV-LIFECYCLE-IDEMPOTENT-001. Consolidate. |
 | **AIR-013** (GAP/Conflict) | Timing clock conflict | **DEFER** | OutputTiming | Conflict must be resolved first. OutputTimingContract is authoritative. |
@@ -114,7 +114,7 @@ Based on Canonical Rule Ledger (Test/Log columns) and GAP_REPORT analysis.
 | **AIR-015** (GAP) | Sink error handling not canonical | **ADD BOTH** | MpegTSOutputSink | Covered by proposed invariants. Need tests + logs. |
 | **AIR-016** (GAP) | Orchestration loop metrics missing | **DEFER** | ProgramOutput | Orchestration loop model superseded by Phase 10 flow control. Metrics may be obsolete. |
 | **CORE-002** (GAP) | Segment immutability not tested | **ADD TEST** | ChannelManager | Mutable segment causes race conditions. Test validates immutability after issue. |
-| **CORE-003** (GAP) | Prefeed timing not tested | **ADD TEST** | ChannelManager | Late prefeed causes gap. Test validates LoadPreview before deadline. |
+| **CORE-003** (GAP) | Prefeed timing not tested | **ADD TEST** | ChannelManager | Late prefeed causes gap. Test validates legacy preload RPC before deadline. |
 | **CORE-004** (GAP) | Mock plan structure not tested | **DEFER** | Core | Test infrastructure, not production rule. Lower priority. |
 | **CORE-005** (GAP) | duration_ms authority not tested | **ADD TEST** | Core (Asset) | Duration recomputation causes scheduling errors. Test validates immutability. |
 | **CORE-006** (GAP) | Resolver boundary logic not tested | **ADD TEST** | ScheduleManager | Wrong active item at boundary causes wrong content. Test validates filler_start_ms logic. |

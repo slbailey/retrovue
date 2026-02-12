@@ -40,6 +40,8 @@ from retrovue.runtime.schedule_types import (
     ProgramRefType,
     ResolvedScheduleDay,
     ResolvedScheduleStore,
+    ScheduledBlock,
+    ScheduledSegment,
     ScheduleSlot,
     SequenceStateStore,
 )
@@ -434,6 +436,75 @@ class Phase3ScheduleService:
                 break  # Only return the currently active segment
 
         return playout_segments
+
+    def _ensure_day_resolved(self, channel_id: str, at_dt: datetime) -> None:
+        """Ensure the programming day containing at_dt is resolved.
+
+        Idempotent. INV-P5-002/INV-P5-005: Gated by horizon authority mode.
+        This calls resolve_schedule_day() (one-time) — NOT extend_execution_day().
+        """
+        with self._lock:
+            slots = self._schedules.get(channel_id, [])
+        if not slots:
+            return
+
+        now = at_dt
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        programming_day_date = self._get_programming_day_date(now)
+        if not self._resolved_store.exists(channel_id, programming_day_date):
+            if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
+                msg = (
+                    f"POLICY_VIOLATION: Programming day {programming_day_date} "
+                    f"not resolved for channel {channel_id}. "
+                    f"Authoritative mode prohibits consumer-triggered resolution."
+                )
+                self._logger.error(msg)
+                raise NoScheduleDataError(msg)
+            self._logger.info(
+                "Auto-resolving programming day %s for channel %s "
+                "(horizon_mode=%s)",
+                programming_day_date, channel_id, self._horizon_mode.value,
+            )
+            self._manager.resolve_schedule_day(
+                channel_id=channel_id,
+                programming_day_date=programming_day_date,
+                slots=slots,
+                resolution_time=now,
+            )
+
+    def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
+        """Return a ScheduledBlock covering utc_ms from ScheduleManager.
+
+        Uses get_program_at() which returns ProgramBlock with grid-aligned
+        block_start/block_end and segments. Grid math lives here in the
+        schedule layer, where it belongs.
+        """
+        at_dt = datetime.fromtimestamp(utc_ms / 1000.0, tz=timezone.utc)
+        self._ensure_day_resolved(channel_id, at_dt)
+
+        block = self._manager.get_program_at(channel_id, at_dt)
+        if not block or not block.segments:
+            return None
+
+        start_utc_ms = int(block.block_start.timestamp() * 1000)
+        end_utc_ms = int(block.block_end.timestamp() * 1000)
+
+        return ScheduledBlock(
+            block_id=f"BLOCK-{channel_id}-{start_utc_ms}",
+            start_utc_ms=start_utc_ms,
+            end_utc_ms=end_utc_ms,
+            segments=tuple(
+                ScheduledSegment(
+                    segment_type=seg.segment_type,
+                    asset_uri=seg.file_path or "",
+                    asset_start_offset_ms=int(seg.seek_offset_seconds * 1000),
+                    segment_duration_ms=int((seg.end_utc - seg.start_utc).total_seconds() * 1000),
+                )
+                for seg in block.segments
+            ),
+        )
 
     def get_epg_events(
         self,

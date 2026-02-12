@@ -1,6 +1,14 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8 — Python–Air Stream & TS Pipeline (Overview)
 
-_Related: [Phase Model](../PHASE_MODEL.md) · [Phase 6A Overview](../../archive/phases/Phase6A-Overview.md) · [Phase8-0 Transport](Phase8-0-Transport.md) · [Phase8-1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase8-4 Persistent MPEG-TS Mux](Phase8-4-PersistentMpegTsMux.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [Phase8-6 Real MPEG-TS E2E](Phase8-6-RealMpegTsE2E.md) · [Phase8-7 Immediate Teardown](Phase8-7-ImmediateTeardown.md) · [Phase8-8 Frame Lifecycle and Playout Completion](Phase8-8-FrameLifecycleAndPlayoutCompletion.md) · [Phase8-9 Audio and Video Unified Producer](Phase8-9-AudioVideoUnifiedProducer.md)_
+_Related: [Phase Model](../PHASE_MODEL.md) · [Phase 6A Overview](../../archive/phases/Phase6A-Overview.md) · [Phase8-0 Transport](Phase8-0-Transport.md) · [Phase8-1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [LegacyPreviewSwitchModel (Retired model)](LegacyPreviewSwitchModel.md) · [Phase8-4 Persistent MPEG-TS Mux](Phase8-4-PersistentMpegTsMux.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [Phase8-6 Real MPEG-TS E2E](Phase8-6-RealMpegTsE2E.md) · [Phase8-7 Immediate Teardown](Phase8-7-ImmediateTeardown.md) · [Phase8-8 Frame Lifecycle and Playout Completion](Phase8-8-FrameLifecycleAndPlayoutCompletion.md) · [Phase8-9 Audio and Video Unified Producer](Phase8-9-AudioVideoUnifiedProducer.md)_
 
 **Principle:** Prove the pipeline from Air byte output to HTTP viewer—first as raw plumbing, then with real MPEG-TS, then with segment control and switching. No media assumptions until 8.1; no switching until 8.3.
 
@@ -15,7 +23,7 @@ Phase 8 connects **Air** (C++ playout engine) to **Python** (ProgramDirector / H
 ## Scope and dependencies
 
 - **Requires:** Phase 6A (control surface, producers, segment params, preview/live slots) and Phase 7 (E2E tune-in, probe, boundaries) where applicable.
-- **In scope (8.0–8.9):** Stream FD handoff, opaque bytes over HTTP (8.0); Air-owned ffmpeg TS output (8.1); start_offset_ms / hard_stop_time_ms driving ffmpeg (8.2); seamless SwitchToLive in the TS path (8.3); persistent TS mux (8.4); multiple readers and last-viewer teardown (8.5); real MPEG-TS only on stream, E2E VLC-playable (8.6); immediate teardown on viewer count 0 (8.7); frame lifecycle and playout completion (8.8); unified audio/video producer (8.9).
+- **In scope (8.0–8.9):** Stream FD handoff, opaque bytes over HTTP (8.0); Air-owned ffmpeg TS output (8.1); start_offset_ms / hard_stop_time_ms driving ffmpeg (8.2); seamless legacy switch RPC in the TS path (8.3); persistent TS mux (8.4); multiple readers and last-viewer teardown (8.5); real MPEG-TS only on stream, E2E VLC-playable (8.6); immediate teardown on viewer count 0 (8.7); frame lifecycle and playout completion (8.8); unified audio/video producer (8.9).
 - **Explicitly out of scope until after 8.5:** Performance tuning, multi-channel scale, metrics on the stream path.
 
 ## Cross-phase invariants
@@ -36,7 +44,7 @@ The exact RPC shape is in **`protos/playout.proto`**: **AttachStream** and **Det
 | 8.0     | Transport contract (no media)  | No               | Raw bytes Air → Python → HTTP 200; clean shut   |
 | 8.1     | Air owns MPEG-TS               | Yes (one file)   | Valid TS to HTTP; VLC plays                     |
 | 8.2     | Segment control → ffmpeg       | Yes (seek/stop)  | Join-in-progress; hard stops; no drift (1 block)|
-| 8.3     | Preview / SwitchToLive (TS)    | Yes (switch)     | No discontinuity / PID reset / timestamp jump   |
+| 8.3     | Preview / legacy switch RPC (TS)    | Yes (switch)     | No discontinuity / PID reset / timestamp jump   |
 | 8.4     | Persistent MPEG-TS mux (single producer) | Yes              | One mux per channel; stable PIDs/continuity/PTS; no restarts |
 | 8.5     | Fan-out & teardown             | Yes              | N viewers; last disconnect → Air stops; no leak |
 | 8.6     | Real MPEG-TS E2E (no fake mux) | Yes              | Stream = real TS only; VLC plays E2E            |
