@@ -341,6 +341,13 @@ void PipelineManager::Run() {
   auto socket_sink = std::make_unique<output::SocketSink>(
       sink_fd, "pipeline-sink", kSinkBufferCapacity);
 
+  // INV-AUDIO-BOOTSTRAP-GATE-001: Hold TS emission until audio bootstrap.
+  // encoder->open() writes TS header (PAT/PMT) through the AVIO callback,
+  // which enqueues into SocketSink.  Without the gate, these bytes reach
+  // the socket before audio is ready, causing Core to see FIRST_RECV_DATA
+  // and start serving a stream with no audio.
+  socket_sink->HoldEmission();
+
   // Slow-consumer detach → clean session stop.
   // output_detached is checked in the tick loop condition for immediate exit
   // without waiting for the next boundary check or spamming write errors.
@@ -519,14 +526,25 @@ void PipelineManager::Run() {
   // Subsequent blocks are primed by ProducerPreloader::Worker, but block A
   // is loaded synchronously and must be primed here to avoid FENCE_AUDIO_PAD
   // at tick 0.  PrimeFirstTick is safe: it only decodes, no timing dependency.
-  if (AsTickProducer(live_.get())->GetState() == ITickProducer::State::kReady &&
-      AsTickProducer(live_.get())->HasDecoder()) {
-    auto prime_result =
-        static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
-    if (!prime_result.met_threshold) {
-      std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001: block A prime shortfall"
-                << " wanted_ms=" << kMinAudioPrimeMs
-                << " got_ms=" << prime_result.actual_depth_ms << std::endl;
+  {
+    bool state_ready = AsTickProducer(live_.get())->GetState() == ITickProducer::State::kReady;
+    bool has_decoder = AsTickProducer(live_.get())->HasDecoder();
+    std::cout << "[PipelineManager] PRIME_CHECK: state_ready=" << state_ready
+              << " has_decoder=" << has_decoder << std::endl;
+    if (state_ready && has_decoder) {
+      auto prime_result =
+          static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
+      std::cout << "[PipelineManager] PRIME_RESULT: met=" << prime_result.met_threshold
+                << " depth_ms=" << prime_result.actual_depth_ms
+                << " audio_buf_depth=" << audio_buffer_->DepthMs() << std::endl;
+      if (!prime_result.met_threshold) {
+        std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001: block A prime shortfall"
+                  << " wanted_ms=" << kMinAudioPrimeMs
+                  << " got_ms=" << prime_result.actual_depth_ms << std::endl;
+      }
+    } else {
+      std::cout << "[PipelineManager] PRIME_SKIPPED: no decoder on live block"
+                << std::endl;
     }
   }
 
@@ -655,6 +673,7 @@ void PipelineManager::Run() {
                 << " bootstrap_cap=" << kBootstrapCapFrames
                 << std::endl;
 
+      int gate_poll_count = 0;
       while (depth_ms < kMinAudioPrimeMs) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - gate_start).count();
@@ -662,12 +681,27 @@ void PipelineManager::Run() {
           std::cerr << "[PipelineManager] INV-AUDIO-PRIME-002: gate timeout"
                     << " depth_ms=" << depth_ms
                     << " required=" << kMinAudioPrimeMs
-                    << " elapsed_ms=" << elapsed << std::endl;
+                    << " elapsed_ms=" << elapsed
+                    << " pushed=" << audio_buffer_->TotalSamplesPushed()
+                    << " popped=" << audio_buffer_->TotalSamplesPopped()
+                    << " video_depth=" << video_buffer_->DepthFrames()
+                    << std::endl;
           break;
         }
         if (ctx_->stop_requested.load(std::memory_order_acquire)) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         depth_ms = audio_buffer_->DepthMs();
+        gate_poll_count++;
+        // Log every 100ms during gate wait
+        if (gate_poll_count % 100 == 0) {
+          std::cout << "[PipelineManager] GATE_POLL elapsed_ms=" << elapsed
+                    << " audio_depth_ms=" << depth_ms
+                    << " pushed=" << audio_buffer_->TotalSamplesPushed()
+                    << " popped=" << audio_buffer_->TotalSamplesPopped()
+                    << " video_depth=" << video_buffer_->DepthFrames()
+                    << " fill_phase=" << static_cast<int>(video_buffer_->GetFillPhase())
+                    << std::endl;
+        }
       }
 
       // Restore steady-state fill policy.
@@ -684,6 +718,13 @@ void PipelineManager::Run() {
                 << std::endl;
     }
   }
+
+  // INV-AUDIO-BOOTSTRAP-GATE-001: Audio depth satisfied (or no producer) —
+  // allow TS emission to socket.  Placed after the audio gate and outside
+  // the state-ready conditional so it fires unconditionally.
+  socket_sink->OpenEmissionGate();
+  std::cout << "[PipelineManager] INV-AUDIO-BOOTSTRAP-GATE-001: emission gate opened"
+            << " audio_depth_ms=" << audio_buffer_->DepthMs() << std::endl;
 
   // ========================================================================
   // 5b. START OUTPUT CLOCK (monotonic epoch) — after audio depth gate.
