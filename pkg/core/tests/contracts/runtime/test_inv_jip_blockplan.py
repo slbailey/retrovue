@@ -12,7 +12,7 @@ bootstrap path:
     INV-JIP-BP-003  Deterministic mapping for identical inputs
     INV-JIP-BP-004  Continuous sequence (no rewind, no skip)
     INV-JIP-BP-005  First seed carries offset, second seed starts clean
-    INV-JIP-BP-006  Block duration always full; segment duration reduced by offset
+    INV-JIP-FIRST-BLOCK-001  JIP first block is partial [now, fence_end)
     INV-JIP-BP-007  Cursor consistency after seeding
     INV-JIP-BP-008  Steady-state feeding unchanged after JIP seed
 
@@ -104,18 +104,22 @@ def _generate_with_jip(
     jip_offset_ms: int,
 ) -> Any:
     """
-    Call _generate_next_block with jip_offset_ms.
+    Call _generate_next_block with jip_offset_ms and now_utc_ms.
 
-    Fails clearly if the parameter hasn't been added yet.
+    now_utc_ms is derived from grid_start + jip_offset_ms, matching
+    the real start() call site where join_utc_ms is passed.
     """
+    now_ms = producer._next_block_start_ms + jip_offset_ms
     try:
-        return producer._generate_next_block(plan, jip_offset_ms=jip_offset_ms)
+        return producer._generate_next_block(
+            plan, jip_offset_ms=jip_offset_ms, now_utc_ms=now_ms,
+        )
     except TypeError:
         pytest.fail(
             "TODO: _generate_next_block() does not yet accept the "
-            "jip_offset_ms keyword argument.  "
+            "jip_offset_ms/now_utc_ms keyword arguments.  "
             "Add: def _generate_next_block(self, playout_plan, "
-            "jip_offset_ms=0) -> BlockPlan"
+            "jip_offset_ms=0, now_utc_ms=0) -> BlockPlan"
         )
 
 
@@ -299,8 +303,8 @@ class TestJipDeterministicMapping:
 class TestJipAppliesOffsetOnlyToFirstSeededBlock:
     """
     INV-JIP-BP-005: First seeded block carries JIP offset; second starts clean.
-    INV-JIP-BP-006 / INV-JIP-WALLCLOCK-001: Block duration is always full
-    (wall-clock invariant); only segment_duration_ms is reduced by JIP offset.
+    INV-JIP-FIRST-BLOCK-001: When jip_offset_ms > 0, the first block is a
+    partial block covering [now, fence_end). Subsequent blocks are full grid.
 
     Tests operate on _generate_next_block directly, simulating the seeding
     sequence that start() performs.
@@ -330,23 +334,23 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
         )
 
     def test_first_block_duration_immutable(self):
-        """INV-JIP-BP-006: block duration always full; segment reduced by JIP offset."""
+        """INV-JIP-FIRST-BLOCK-001: first block is partial [now, fence_end)."""
         producer = _make_producer(block_duration_ms=10_000)
         plan = UNIFORM_PLAN
 
         producer._block_index = 0
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=3_000)
 
-        # Block container is always full duration (wall-clock invariant).
-        assert block_a.duration_ms == 10_000, (
-            f"INV-JIP-WALLCLOCK-001: block_a duration should be 10000 (full), "
+        # INV-JIP-FIRST-BLOCK-001: partial block covering remaining time.
+        assert block_a.duration_ms == 7_000, (
+            f"INV-JIP-FIRST-BLOCK-001: block_a duration should be 7000 (partial), "
             f"got {block_a.duration_ms}"
         )
-        assert block_a.end_utc_ms - block_a.start_utc_ms == 10_000
+        assert block_a.end_utc_ms - block_a.start_utc_ms == 7_000
 
-        # Segment duration is the remaining content after JIP seek.
+        # Segment duration equals the partial block duration.
         assert block_a.segments[0]["segment_duration_ms"] == 7_000, (
-            f"INV-JIP-BP-006: segment_duration_ms should be 7000, "
+            f"INV-JIP-SEGMENTSUM-001: segment_duration_ms should be 7000, "
             f"got {block_a.segments[0]['segment_duration_ms']}"
         )
 
@@ -378,14 +382,14 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
             f"INV-JIP-BP-005: entry offset 60000 + JIP 5000 = 65000, "
             f"got {block_a.segments[0]['asset_start_offset_ms']}"
         )
-        # Block duration is always full (wall-clock invariant).
-        assert block_a.duration_ms == 15_000, (
-            f"INV-JIP-WALLCLOCK-001: block duration should be 15000 (full), "
+        # INV-JIP-FIRST-BLOCK-001: partial block covering remaining time.
+        assert block_a.duration_ms == 10_000, (
+            f"INV-JIP-FIRST-BLOCK-001: block duration should be 10000 (partial), "
             f"got {block_a.duration_ms}"
         )
-        # Segment duration is reduced by JIP offset.
+        # Segment duration equals the partial block duration.
         assert block_a.segments[0]["segment_duration_ms"] == 10_000, (
-            f"INV-JIP-BP-006: segment 15000 - 5000 = 10000, "
+            f"INV-JIP-SEGMENTSUM-001: segment 15000 - 5000 = 10000, "
             f"got {block_a.segments[0]['segment_duration_ms']}"
         )
 
@@ -411,10 +415,10 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
         producer._advance_cursor(block_a)
         block_b = producer._generate_next_block(plan)
 
-        # INV-JIP-WALLCLOCK-001: block_a is full duration, not shortened.
-        assert block_a.start_utc_ms == 0
+        # INV-JIP-FIRST-BLOCK-001: block_a starts at now (grid_start + jip).
+        assert block_a.start_utc_ms == 4_000
         assert block_a.end_utc_ms == 10_000, (
-            f"INV-JIP-WALLCLOCK-001: block_a end should be 10000 (full), "
+            f"INV-JIP-FIRST-BLOCK-001: block_a end should be 10000 (fence_end), "
             f"got {block_a.end_utc_ms}"
         )
         assert block_b.start_utc_ms == 10_000, (
@@ -518,14 +522,17 @@ class TestJipCursorStateAfterSeed:
             f"got {actual_assets}"
         )
 
-        # INV-JIP-WALLCLOCK-001: ALL blocks are full duration.
-        # JIP only reduces segment_duration_ms within block_a.
-        for b in blocks:
+        # INV-JIP-FIRST-BLOCK-001: first block is partial, rest are full.
+        assert blocks[0].duration_ms == 3_000, (
+            f"INV-JIP-FIRST-BLOCK-001: block 0 duration should be "
+            f"3000 (partial), got {blocks[0].duration_ms}"
+        )
+        for b in blocks[1:]:
             assert b.duration_ms == 10_000, (
-                f"INV-JIP-WALLCLOCK-001: block {b.block_id} duration should be "
+                f"block {b.block_id} duration should be "
                 f"10000 (full), got {b.duration_ms}"
             )
-        # First block's segment is partial (3000ms remaining after JIP seek)
+        # First block's segment matches partial duration
         assert blocks[0].segments[0]["segment_duration_ms"] == 3_000
 
     def test_variable_duration_cursor(self):
@@ -538,10 +545,9 @@ class TestJipCursorStateAfterSeed:
         block_a = _generate_with_jip(producer, plan, jip_offset_ms=10_000)
         producer._advance_cursor(block_a)
 
-        # INV-JIP-WALLCLOCK-001: block_a is full entry duration.
-        # Segment duration is the remaining content after JIP seek.
-        assert block_a.duration_ms == 25_000, (
-            f"INV-JIP-WALLCLOCK-001: block_a duration should be 25000 (full), "
+        # INV-JIP-FIRST-BLOCK-001: block_a is partial (25000 - 10000 = 15000).
+        assert block_a.duration_ms == 15_000, (
+            f"INV-JIP-FIRST-BLOCK-001: block_a duration should be 15000 (partial), "
             f"got {block_a.duration_ms}"
         )
         assert block_a.segments[0]["segment_duration_ms"] == 15_000
@@ -759,8 +765,9 @@ class TestJipEdgeCases:
 
 class TestBlockAlignmentUnderJip:
     """
-    INV-BLOCK-ALIGNMENT-001: block.start_utc_ms must be aligned to grid
-    boundaries, regardless of JIP offset.
+    INV-BLOCK-ALIGNMENT-001 + INV-JIP-FIRST-BLOCK-001: The JIP first block
+    starts at now (not grid-aligned), but its end_utc_ms sits on the grid
+    fence.  This guarantees all subsequent blocks start grid-aligned.
 
     Regression: burn_in.py shortened block_dur_ms by jip_offset_ms,
     making end_utc_ms misaligned.  The misaligned end cascaded to the
@@ -768,13 +775,12 @@ class TestBlockAlignmentUnderJip:
         "BURN_IN: start not aligned to 30-min boundary (offset=1702903)"
     on block B even though block A's start was correctly aligned.
 
-    Fix: block duration is NEVER reduced (INV-JIP-WALLCLOCK-001); pad
-    absorbs the JIP gap.  Alignment is checked on start_utc_ms for ALL
-    blocks, before segment composition.
+    Fix: end_utc_ms always equals fence_end (grid_start + block_dur),
+    so subsequent blocks inherit aligned starts.
     """
 
-    def test_jip_block_start_and_end_aligned(self):
-        """Block A (JIP): both start and end sit on grid boundaries."""
+    def test_jip_block_end_aligned(self):
+        """Block A (JIP): end sits on grid boundary; start is at now."""
         block_dur = 10_000
         producer = _make_producer(block_duration_ms=block_dur)
         producer._block_index = 0
@@ -782,15 +788,14 @@ class TestBlockAlignmentUnderJip:
 
         block_a = _generate_with_jip(producer, UNIFORM_PLAN, jip_offset_ms=3_000)
 
-        assert block_a.start_utc_ms % block_dur == 0, (
-            f"INV-BLOCK-ALIGNMENT-001: block_a.start_utc_ms="
-            f"{block_a.start_utc_ms} not aligned to {block_dur}ms"
-        )
+        # INV-JIP-FIRST-BLOCK-001: start is at now, not grid-aligned
+        assert block_a.start_utc_ms == block_dur + 3_000
+        # end is at fence (grid-aligned)
         assert block_a.end_utc_ms % block_dur == 0, (
             f"INV-BLOCK-ALIGNMENT-001: block_a.end_utc_ms="
             f"{block_a.end_utc_ms} not aligned to {block_dur}ms"
         )
-        assert block_a.duration_ms == block_dur
+        assert block_a.duration_ms == 7_000
 
     def test_block_b_aligned_after_jip_block_a(self):
         """Block B inherits block A's end; both must be aligned."""
@@ -840,17 +845,16 @@ class TestBlockAlignmentUnderJip:
         jip_ms = 60_000
         block_a = _generate_with_jip(producer, plan_30m, jip_offset_ms=jip_ms)
 
-        # Block A: aligned start, full duration, aligned end
-        assert block_a.start_utc_ms == aligned_start
-        assert block_a.start_utc_ms % block_dur == 0
-        assert block_a.duration_ms == block_dur, (
-            f"INV-JIP-WALLCLOCK-001: duration should be {block_dur}, "
+        # INV-JIP-FIRST-BLOCK-001: Block A is partial [now, fence_end).
+        assert block_a.start_utc_ms == aligned_start + jip_ms
+        assert block_a.duration_ms == block_dur - jip_ms, (
+            f"INV-JIP-FIRST-BLOCK-001: duration should be {block_dur - jip_ms}, "
             f"got {block_a.duration_ms}"
         )
+        # end_utc_ms is at the grid fence (aligned)
         assert block_a.end_utc_ms % block_dur == 0
 
-        # Segment duration is reduced by JIP (content starts later),
-        # but block container is full.
+        # Segment duration matches the partial block duration.
         seg_dur = block_a.segments[0]["segment_duration_ms"]
         assert seg_dur == block_dur - jip_ms, (
             f"Segment should be {block_dur - jip_ms}, got {seg_dur}"

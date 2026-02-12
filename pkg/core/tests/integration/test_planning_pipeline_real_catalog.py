@@ -32,7 +32,7 @@ from retrovue.runtime.planning_pipeline import (
     run_planning_pipeline,
 )
 from retrovue.runtime.schedule_types import (
-    Phase3Config,
+    ScheduleManagerConfig,
     ProgramRef,
     ProgramRefType,
 )
@@ -74,7 +74,7 @@ def transmission_log(asset_library):
     catalog = JsonFileProgramCatalog(PROGRAMS_DIR)
     catalog.load_all()
 
-    config = Phase3Config(
+    config = ScheduleManagerConfig(
         grid_minutes=GRID_BLOCK_MINUTES,
         program_catalog=catalog,
         sequence_store=InMemorySequenceStore(),

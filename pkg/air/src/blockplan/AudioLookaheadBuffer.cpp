@@ -7,7 +7,17 @@
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <iostream>
+
+namespace {
+int64_t boot_mono_ms() {
+  static auto t0 = std::chrono::steady_clock::now();
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count();
+}
+}  // namespace
 
 namespace retrovue::blockplan {
 
@@ -28,7 +38,13 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
                                 uint64_t expected_generation) {
   if (frame.nb_samples <= 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
-  if (expected_generation != 0 && expected_generation != generation_) return;
+  if (expected_generation != 0 && expected_generation != generation_) {
+    std::cout << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
+              << "ms nb_samples=" << frame.nb_samples
+              << " expected_gen=" << expected_generation
+              << " current_gen=" << generation_ << std::endl;
+    return;
+  }
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
@@ -39,7 +55,13 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
                                 uint64_t expected_generation) {
   if (frame.nb_samples <= 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
-  if (expected_generation != 0 && expected_generation != generation_) return;
+  if (expected_generation != 0 && expected_generation != generation_) {
+    std::cout << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
+              << "ms nb_samples=" << frame.nb_samples
+              << " expected_gen=" << expected_generation
+              << " current_gen=" << generation_ << std::endl;
+    return;
+  }
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
@@ -156,6 +178,9 @@ bool AudioLookaheadBuffer::IsPrimed() const {
 
 void AudioLookaheadBuffer::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
+  int old_depth_ms = (sample_rate_ > 0)
+      ? static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_)
+      : 0;
   generation_++;  // Invalidate any in-flight Push from old fill thread
   frames_.clear();
   partial_ = buffer::AudioFrame{};
@@ -166,6 +191,9 @@ void AudioLookaheadBuffer::Reset() {
   total_samples_popped_ = 0;
   underflow_count_ = 0;
   primed_ = false;
+  std::cout << "[AudioBuffer] RESET T+" << boot_mono_ms()
+            << "ms old_depth_ms=" << old_depth_ms
+            << " new_gen=" << generation_ << std::endl;
 }
 
 uint64_t AudioLookaheadBuffer::CurrentGeneration() const {

@@ -8,18 +8,23 @@ consumes pre-built data and never requests planning.
 Phase 1: In-memory, no persistence, no eviction.
 
 See: docs/domains/HorizonManager_v0.1.md §6 (Data Flow)
+     docs/contracts/ScheduleHorizonManagementContract_v0.1.md §4 (Lock Windows)
 """
 
 from __future__ import annotations
 
+import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
 # ---------------------------------------------------------------------------
 # Entry type (mirrors TransmissionLogEntry without import dependency)
 # ---------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ExecutionEntry:
@@ -34,6 +39,7 @@ class ExecutionEntry:
     start_utc_ms: int
     end_utc_ms: int
     segments: list[dict[str, Any]]
+    is_locked: bool = True
 
 
 @dataclass
@@ -121,3 +127,60 @@ class ExecutionWindowStore:
         """Return a shallow copy of all entries, sorted by start_utc_ms."""
         with self._lock:
             return list(self._entries)
+
+    def get_entry_at(
+        self,
+        utc_ms: int,
+        *,
+        locked_only: bool = True,
+    ) -> ExecutionEntry | None:
+        """Return the entry whose time range contains *utc_ms*.
+
+        An entry matches when ``start_utc_ms <= utc_ms < end_utc_ms``.
+
+        Args:
+            utc_ms: Wall-clock instant to look up (epoch milliseconds).
+            locked_only: When True (the default), only return entries with
+                ``is_locked=True``.  Unlocked entries are treated as if
+                they do not exist, and a POLICY_VIOLATION is logged.
+                This enforces ScheduleHorizonManagement §4: automation
+                must not consume data from the flexible future.
+                Defaults to True — callers must explicitly opt out.
+        """
+        with self._lock:
+            for entry in self._entries:
+                if entry.start_utc_ms <= utc_ms < entry.end_utc_ms:
+                    if locked_only and not entry.is_locked:
+                        logger.warning(
+                            "POLICY_VIOLATION: Execution entry %s "
+                            "(start=%d end=%d) exists but is NOT locked. "
+                            "Returning None in authoritative mode.",
+                            entry.block_id,
+                            entry.start_utc_ms,
+                            entry.end_utc_ms,
+                        )
+                        return None
+                    return entry
+            return None
+
+    def mark_locked(self, block_id: str) -> bool:
+        """Mark a single entry as locked (execution-eligible).
+
+        Returns True if the entry was found and locked.
+        """
+        with self._lock:
+            for entry in self._entries:
+                if entry.block_id == block_id:
+                    entry.is_locked = True
+                    return True
+            return False
+
+    def lock_all(self) -> int:
+        """Mark all entries as locked.  Returns count of newly locked entries."""
+        count = 0
+        with self._lock:
+            for entry in self._entries:
+                if not entry.is_locked:
+                    entry.is_locked = True
+                    count += 1
+        return count

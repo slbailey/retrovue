@@ -27,12 +27,12 @@ from retrovue.runtime.schedule_types import (
     SequenceState,
     ResolvedScheduleDay,
     EPGEvent,
-    Phase3Config,
+    ScheduleManagerConfig,
     ProgramCatalog,
     SequenceStateStore,
     ResolvedScheduleStore,
 )
-from retrovue.runtime.schedule_manager import Phase3ScheduleManager
+from retrovue.runtime.schedule_manager import ScheduleManager
 
 
 # =============================================================================
@@ -153,9 +153,9 @@ def phase4_config(
     fixture_catalog: FixtureProgramCatalog,
     sequence_store: InMemorySequenceStore,
     resolved_store: InMemoryResolvedStore,
-) -> Phase3Config:
+) -> ScheduleManagerConfig:
     """Create Phase 4 test configuration."""
-    return Phase3Config(
+    return ScheduleManagerConfig(
         grid_minutes=30,
         program_catalog=fixture_catalog,
         sequence_store=sequence_store,
@@ -167,9 +167,9 @@ def phase4_config(
 
 
 @pytest.fixture
-def schedule_manager(phase4_config: Phase3Config) -> Phase3ScheduleManager:
+def schedule_manager(phase4_config: ScheduleManagerConfig) -> ScheduleManager:
     """Create Phase 3 ScheduleManager with Phase 4 fixtures."""
-    return Phase3ScheduleManager(phase4_config)
+    return ScheduleManager(phase4_config)
 
 
 @pytest.fixture
@@ -207,7 +207,7 @@ class TestEPGGridAlignment:
 
     def test_P4_T001_epg_shows_grid_aligned_times_only(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
     ):
         """P4-T001: EPG shows grid-aligned times only."""
@@ -249,7 +249,7 @@ class TestEPGGridAlignment:
 
     def test_P4_T002_epg_does_not_expose_filler(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P4-T002: EPG does not expose filler."""
         slots = [
@@ -298,7 +298,7 @@ class TestEpisodeContinuity:
 
     def test_P4_T003_sequential_episodes_progress_correctly(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P4-T003: Sequential episodes progress correctly."""
         slots = generate_24_hour_slots()[:6]  # First 6 slots (3 hours)
@@ -322,7 +322,7 @@ class TestEpisodeContinuity:
 
     def test_P4_T004_episode_identity_matches_epg(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P4-T004: Episode identity matches EPG."""
         slots = [
@@ -372,9 +372,9 @@ class TestFillerInsertion:
 
     def test_P4_T005_filler_appears_after_episode_end(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
-        phase4_config: Phase3Config,
+        phase4_config: ScheduleManagerConfig,
     ):
         """P4-T005: Filler appears after episode end."""
         # S01E01: 1501.653s (25:01.653)
@@ -419,7 +419,7 @@ class TestFillerInsertion:
 
     def test_P4_T006_filler_duration_correct(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
     ):
         """P4-T006: Filler duration correct."""
@@ -453,7 +453,7 @@ class TestFillerInsertion:
 
     def test_P4_T007_no_filler_when_episode_fills_slot(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         fixture_catalog: FixtureProgramCatalog,
         sequence_store: InMemorySequenceStore,
         resolved_store: InMemoryResolvedStore,
@@ -476,7 +476,7 @@ class TestFillerInsertion:
         }
 
         catalog = FixtureProgramCatalog(mock_data)
-        config = Phase3Config(
+        config = ScheduleManagerConfig(
             grid_minutes=30,
             program_catalog=catalog,
             sequence_store=sequence_store,
@@ -484,7 +484,7 @@ class TestFillerInsertion:
             filler_path=catalog.filler_path,
             programming_day_start_hour=6,
         )
-        manager = Phase3ScheduleManager(config)
+        manager = ScheduleManager(config)
 
         slots = [ScheduleSlot(
             slot_time=time(6, 0),
@@ -515,7 +515,7 @@ class TestSeekOffset:
 
     def test_P4_T008_mid_episode_join_correct_offset(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P4-T008: Mid-episode join correct offset.
 
@@ -558,9 +558,9 @@ class TestSeekOffset:
 
     def test_P4_T009_join_during_filler(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
-        phase4_config: Phase3Config,
+        phase4_config: ScheduleManagerConfig,
     ):
         """P4-T009: Join during filler.
 
@@ -612,7 +612,7 @@ class TestSeekOffset:
 
     def test_P4_T010_join_at_exact_slot_boundary(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P4-T010: Join at exact slot boundary."""
         slots = [
@@ -655,7 +655,7 @@ class TestLoopingBehavior:
 
     def test_P4_T011_sequential_loop_after_last_episode(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         sequence_store: InMemorySequenceStore,
     ):
         """P4-T011: Sequential loop after last episode."""
@@ -693,7 +693,7 @@ class TestLoopingBehavior:
 
     def test_P4_T012_24_hour_continuous_loop(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
     ):
         """P4-T012: 24-hour continuous loop."""
         slots = generate_24_hour_slots()  # 48 slots
@@ -727,7 +727,7 @@ class TestLoopingBehavior:
         # First resolution
         store1 = InMemorySequenceStore()
         resolved_store1 = InMemoryResolvedStore()
-        config1 = Phase3Config(
+        config1 = ScheduleManagerConfig(
             grid_minutes=30,
             program_catalog=fixture_catalog,
             sequence_store=store1,
@@ -735,7 +735,7 @@ class TestLoopingBehavior:
             filler_path=fixture_catalog.filler_path,
             programming_day_start_hour=6,
         )
-        manager1 = Phase3ScheduleManager(config1)
+        manager1 = ScheduleManager(config1)
 
         resolved1 = manager1.resolve_schedule_day(
             channel_id="cheers-24-7",
@@ -747,7 +747,7 @@ class TestLoopingBehavior:
         # Second resolution (fresh state)
         store2 = InMemorySequenceStore()
         resolved_store2 = InMemoryResolvedStore()
-        config2 = Phase3Config(
+        config2 = ScheduleManagerConfig(
             grid_minutes=30,
             program_catalog=fixture_catalog,
             sequence_store=store2,
@@ -755,7 +755,7 @@ class TestLoopingBehavior:
             filler_path=fixture_catalog.filler_path,
             programming_day_start_hour=6,
         )
-        manager2 = Phase3ScheduleManager(config2)
+        manager2 = ScheduleManager(config2)
 
         resolved2 = manager2.resolve_schedule_day(
             channel_id="cheers-24-7",
@@ -780,7 +780,7 @@ class TestIntegration:
 
     def test_P4_T014_the_litmus_test(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
     ):
         """
@@ -850,7 +850,7 @@ class TestIntegration:
 
     def test_P4_T015_full_day_validation(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
         resolved_store: InMemoryResolvedStore,
     ):
@@ -953,7 +953,7 @@ class TestMinimumGridOccupancy:
 
     def test_P4_T016_minimum_blocks_content_shorter_than_grid(
         self,
-        schedule_manager: Phase3ScheduleManager,
+        schedule_manager: ScheduleManager,
         cheers_program: Program,
     ):
         """P4-T016: Minimum blocks for content shorter than grid.
@@ -1042,7 +1042,7 @@ class TestMinimumGridOccupancy:
         }
 
         catalog = FixtureProgramCatalog(mock_data)
-        config = Phase3Config(
+        config = ScheduleManagerConfig(
             grid_minutes=15,  # 15-minute grid
             program_catalog=catalog,
             sequence_store=sequence_store,
@@ -1050,7 +1050,7 @@ class TestMinimumGridOccupancy:
             filler_path=catalog.filler_path,
             programming_day_start_hour=6,
         )
-        manager = Phase3ScheduleManager(config)
+        manager = ScheduleManager(config)
 
         slots = [ScheduleSlot(
             slot_time=time(6, 0),
@@ -1129,7 +1129,7 @@ class TestMinimumGridOccupancy:
         }
 
         catalog = FixtureProgramCatalog(mock_data)
-        config = Phase3Config(
+        config = ScheduleManagerConfig(
             grid_minutes=30,
             program_catalog=catalog,
             sequence_store=sequence_store,
@@ -1137,7 +1137,7 @@ class TestMinimumGridOccupancy:
             filler_path=catalog.filler_path,
             programming_day_start_hour=6,
         )
-        manager = Phase3ScheduleManager(config)
+        manager = ScheduleManager(config)
 
         slots = [ScheduleSlot(
             slot_time=time(6, 0),
@@ -1213,7 +1213,7 @@ class TestMinimumGridOccupancy:
             catalog = FixtureProgramCatalog(mock_data)
             store = InMemorySequenceStore()
             resolved = InMemoryResolvedStore()
-            config = Phase3Config(
+            config = ScheduleManagerConfig(
                 grid_minutes=grid_minutes,
                 program_catalog=catalog,
                 sequence_store=store,
@@ -1221,7 +1221,7 @@ class TestMinimumGridOccupancy:
                 filler_path=catalog.filler_path,
                 programming_day_start_hour=6,
             )
-            manager = Phase3ScheduleManager(config)
+            manager = ScheduleManager(config)
 
             slots = [ScheduleSlot(
                 slot_time=time(6, 0),

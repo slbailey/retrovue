@@ -30,9 +30,9 @@ from retrovue.runtime.schedule_types import (
     SequenceState,
     ResolvedScheduleDay,
     EPGEvent,
-    Phase3Config,
+    ScheduleManagerConfig,
 )
-from retrovue.runtime.schedule_manager import Phase3ScheduleManager
+from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.phase3_schedule_service import (
     Phase3ScheduleService,
     InMemorySequenceStore,

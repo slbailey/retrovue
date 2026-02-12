@@ -14,7 +14,7 @@ import pytest
 from retrovue.runtime.schedule_types import (
     EPGEvent,
     Episode,
-    Phase3Config,
+    ScheduleManagerConfig,
     Program,
     ProgramRef,
     ProgramRefType,
@@ -93,8 +93,8 @@ def _make_config(
     programs: list[Program] | None = None,
     grid_minutes: int = 30,
     start_hour: int = 6,
-) -> Phase3Config:
-    return Phase3Config(
+) -> ScheduleManagerConfig:
+    return ScheduleManagerConfig(
         grid_minutes=grid_minutes,
         program_catalog=SimpleCatalog(programs or [CHEERS_PROGRAM]),
         sequence_store=InMemorySequenceStore(),

@@ -133,7 +133,7 @@ class ProgramBlock:
 ## Interface
 
 ```python
-class ScheduleManager(Protocol):
+class ScheduleQueryService(Protocol):
     def get_program_at(self, channel_id: str, at_time: datetime) -> ProgramBlock:
         """
         Get the program block containing the specified time.

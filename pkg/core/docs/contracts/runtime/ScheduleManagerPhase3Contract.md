@@ -717,7 +717,7 @@ If EPG resolution is re-run for the same day:
 The public interface remains unchanged from Phase 2:
 
 ```python
-class ScheduleManager(Protocol):
+class ScheduleQueryService(Protocol):
     def get_program_at(self, channel_id: str, at_time: datetime) -> ProgramBlock:
         """Get the program block containing the specified time."""
         ...

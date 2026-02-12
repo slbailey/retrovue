@@ -1,14 +1,17 @@
 """
 Phase 3 Schedule Service
 
-Adapter that bridges Phase3ScheduleManager to the runtime ScheduleService protocol.
-Enables production runtime to use Phase 3 dynamic content selection.
+Adapter that bridges ScheduleManager to the runtime ScheduleService protocol.
+Enables production runtime to use dynamic content selection.
 
 Implements:
 - INV-P5-001: Config-Driven Activation - schedule_source: "phase3" enables this service
 - INV-P5-002: Auto-Resolution - programming day resolved on first access
+  ** DEPRECATED in authoritative horizon mode.  See INV-P5-005. **
 - INV-P5-003: Playout Plan Transformation - ProgramBlock → list[dict] correctly
 - INV-P5-004: EPG Endpoint Independence - EPG works without active viewers
+- INV-P5-005: Horizon Authority Guard - in authoritative mode, auto-resolve is
+  prohibited; missing data is a planning failure logged as POLICY_VIOLATION.
 """
 
 from __future__ import annotations
@@ -22,10 +25,15 @@ from pathlib import Path
 from typing import Any
 
 from retrovue.runtime.clock import MasterClock
-from retrovue.runtime.schedule_manager import Phase3ScheduleManager
+from retrovue.runtime.horizon_config import (
+    HorizonAuthorityMode,
+    NoScheduleDataError,
+    get_horizon_authority_mode,
+)
+from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.schedule_types import (
     Episode,
-    Phase3Config,
+    ScheduleManagerConfig,
     Program,
     ProgramCatalog,
     ProgramRef,
@@ -190,12 +198,12 @@ class Phase3ScheduleConfig:
 
 class Phase3ScheduleService:
     """
-    Adapts Phase3ScheduleManager to the ScheduleService protocol.
+    Adapts ScheduleManager to the ScheduleService protocol.
 
     This service:
     1. Loads schedule slots from JSON files
     2. Loads programs from a catalog directory
-    3. Uses Phase3ScheduleManager for resolution and playout
+    3. Delegates to ScheduleManager for resolution and playout
     4. Provides EPG events independently of viewers
 
     Implements INV-P5-001 through INV-P5-004.
@@ -210,6 +218,7 @@ class Phase3ScheduleService:
         filler_duration_seconds: float = 0.0,
         grid_minutes: int = 30,
         programming_day_start_hour: int = 6,
+        horizon_mode: HorizonAuthorityMode | None = None,
     ) -> None:
         self._clock = clock
         self._programs_dir = programs_dir
@@ -218,6 +227,7 @@ class Phase3ScheduleService:
         self._filler_duration_seconds = filler_duration_seconds
         self._grid_minutes = grid_minutes
         self._programming_day_start_hour = programming_day_start_hour
+        self._horizon_mode = horizon_mode or get_horizon_authority_mode()
 
         # Create stores
         self._sequence_store = InMemorySequenceStore()
@@ -226,8 +236,8 @@ class Phase3ScheduleService:
         # Create program catalog
         self._program_catalog = JsonFileProgramCatalog(programs_dir)
 
-        # Create Phase3ScheduleManager
-        config = Phase3Config(
+        # Create ScheduleManager
+        config = ScheduleManagerConfig(
             grid_minutes=grid_minutes,
             program_catalog=self._program_catalog,
             sequence_store=self._sequence_store,
@@ -236,7 +246,7 @@ class Phase3ScheduleService:
             filler_duration_seconds=filler_duration_seconds,
             programming_day_start_hour=programming_day_start_hour,
         )
-        self._manager = Phase3ScheduleManager(config)
+        self._manager = ScheduleManager(config)
 
         # Loaded channel schedules: channel_id -> list[ScheduleSlot]
         self._schedules: dict[str, list[ScheduleSlot]] = {}
@@ -322,13 +332,25 @@ class Phase3ScheduleService:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        # INV-P5-002: Auto-resolve programming day if needed
+        # INV-P5-002 / INV-P5-005: Resolve programming day, gated by mode.
         programming_day_date = self._get_programming_day_date(now)
         if not self._resolved_store.exists(channel_id, programming_day_date):
+            if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
+                msg = (
+                    f"POLICY_VIOLATION: Programming day {programming_day_date} "
+                    f"not resolved for channel {channel_id}. "
+                    f"Authoritative mode prohibits consumer-triggered resolution. "
+                    f"This is a HorizonManager planning failure."
+                )
+                self._logger.error(msg)
+                raise NoScheduleDataError(msg)
+            # Legacy / shadow: auto-resolve (INV-P5-002)
             self._logger.info(
-                "Auto-resolving programming day %s for channel %s",
+                "Auto-resolving programming day %s for channel %s "
+                "(horizon_mode=%s)",
                 programming_day_date,
                 channel_id,
+                self._horizon_mode.value,
             )
             self._manager.resolve_schedule_day(
                 channel_id=channel_id,
@@ -341,16 +363,24 @@ class Phase3ScheduleService:
         # crossings find content immediately (same pattern as get_epg_events).
         next_day_date = programming_day_date + timedelta(days=1)
         if not self._resolved_store.exists(channel_id, next_day_date):
-            self._logger.info(
-                "Day-prime: resolving next programming day %s for channel %s",
-                next_day_date, channel_id,
-            )
-            self._manager.resolve_schedule_day(
-                channel_id=channel_id,
-                programming_day_date=next_day_date,
-                slots=slots,
-                resolution_time=now,
-            )
+            if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
+                self._logger.info(
+                    "Authoritative mode: skipping day-prime for %s "
+                    "(HorizonManager responsible)",
+                    next_day_date,
+                )
+            else:
+                self._logger.info(
+                    "Day-prime: resolving next programming day %s for "
+                    "channel %s (horizon_mode=%s)",
+                    next_day_date, channel_id, self._horizon_mode.value,
+                )
+                self._manager.resolve_schedule_day(
+                    channel_id=channel_id,
+                    programming_day_date=next_day_date,
+                    slots=slots,
+                    resolution_time=now,
+                )
 
         # Get program block from manager
         block = self._manager.get_program_at(channel_id, now)
@@ -430,21 +460,33 @@ class Phase3ScheduleService:
         if end.tzinfo is None:
             end = end.replace(tzinfo=timezone.utc)
 
-        # Auto-resolve any needed programming days in the range
+        # Resolve needed programming days — gated by horizon authority mode.
         current = start
         while current < end:
             programming_day_date = self._get_programming_day_date(current)
             if not self._resolved_store.exists(channel_id, programming_day_date):
-                self._logger.info(
-                    "Auto-resolving programming day %s for EPG query",
-                    programming_day_date,
-                )
-                self._manager.resolve_schedule_day(
-                    channel_id=channel_id,
-                    programming_day_date=programming_day_date,
-                    slots=slots,
-                    resolution_time=current,
-                )
+                if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
+                    msg = (
+                        f"POLICY_VIOLATION: Programming day {programming_day_date} "
+                        f"not resolved for EPG query on channel {channel_id}. "
+                        f"Authoritative mode prohibits consumer-triggered resolution. "
+                        f"This is a HorizonManager planning failure."
+                    )
+                    self._logger.error(msg)
+                    raise NoScheduleDataError(msg)
+                else:
+                    self._logger.info(
+                        "Auto-resolving programming day %s for EPG query "
+                        "(horizon_mode=%s)",
+                        programming_day_date,
+                        self._horizon_mode.value,
+                    )
+                    self._manager.resolve_schedule_day(
+                        channel_id=channel_id,
+                        programming_day_date=programming_day_date,
+                        slots=slots,
+                        resolution_time=current,
+                    )
             current += timedelta(days=1)
 
         # Get EPG events from manager
