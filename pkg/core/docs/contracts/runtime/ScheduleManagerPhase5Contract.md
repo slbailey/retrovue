@@ -7,7 +7,7 @@
 ## Overview
 
 Phase 5 wires Phase 3 ScheduleManager into the production runtime. When a channel
-is configured with `schedule_source: "phase3"`, the runtime uses Phase3ScheduleService
+is configured with `schedule_source: "phase3"`, the runtime uses ScheduleManagerBackedScheduleService
 to resolve schedules dynamically and provide EPG data.
 
 **Goal:** `retrovue start` plays Cheers with correct EPG, no CLI flags needed.
@@ -30,7 +30,7 @@ config/channels.json
             │
             └─► ProgramDirector._get_schedule_service_for_channel()
                     │
-                    └─► Phase3ScheduleService
+                    └─► ScheduleManagerBackedScheduleService
                             │
                             ├─► JsonFileProgramCatalog (config/programs/*.json)
                             ├─► InMemorySequenceStore
@@ -50,10 +50,10 @@ config/channels.json
             │
             ├─► ProgramDirector._init_horizon_managers()
             │       │
-            │       ├─► Phase3ScheduleService (for adapters)
+            │       ├─► ScheduleManagerBackedScheduleService (for adapters)
             │       ├─► ExecutionWindowStore (populated by HorizonManager)
-            │       ├─► _Phase3ScheduleExtender → ScheduleExtender protocol
-            │       ├─► _Phase3ExecutionExtender → ExecutionExtender protocol
+            │       ├─► _EpgHorizonExtender → ScheduleExtender protocol
+            │       ├─► _ExecutionHorizonExtender → ExecutionExtender protocol
             │       │
             │       └─► HorizonManager (background thread)
             │               ├─► evaluate_once() → readiness gate
@@ -79,7 +79,7 @@ channels using legacy schedule sources.
 
 **Enforcement:**
 - `ProgramDirector._get_schedule_service_for_channel()` checks `schedule_source`
-- Returns `Phase3ScheduleService` for "phase3", default service otherwise
+- Returns `ScheduleManagerBackedScheduleService` for "phase3", default service otherwise
 
 ### INV-P5-002: Auto-Resolution [DEPRECATED]
 
@@ -100,7 +100,7 @@ EPG and execution horizons ahead of wall-clock time.  See INV-P5-005.
 **Active in:** `RETROVUE_HORIZON_AUTHORITY=legacy` only.
 
 **Enforcement (legacy mode):**
-- `Phase3ScheduleService.get_playout_plan_now()` checks if day is resolved
+- `ScheduleManagerBackedScheduleService.get_playout_plan_now()` checks if day is resolved
 - If not resolved, calls `ScheduleManager.resolve_schedule_day()`
 - Same logic in `get_epg_events()` for EPG queries
 - In `authoritative` mode: raises `NoScheduleDataError` (planning failure)
@@ -153,14 +153,14 @@ in non-legacy modes.  Aligns with:
 - ScheduleManagerPlanningAuthority §2 (all planning ahead of real time)
 
 **Enforcement:**
-- `Phase3ScheduleService`: In `authoritative` mode, `get_playout_plan_now()`
+- `ScheduleManagerBackedScheduleService`: In `authoritative` mode, `get_playout_plan_now()`
   and `get_epg_events()` raise `NoScheduleDataError` if data is missing.
   No silent empty returns. Missing data is an explicit planning failure.
 - `HorizonBackedScheduleService`: Read-only consumer of
   `ExecutionWindowStore` (playout) and `ResolvedScheduleStore` (EPG).
   Never calls planning pipeline or schedule resolution.
 - `ProgramDirector`: Routes Phase3 channels to `HorizonBackedScheduleService`
-  in authoritative mode; `Phase3ScheduleService` in legacy/shadow modes.
+  in authoritative mode; `ScheduleManagerBackedScheduleService` in legacy/shadow modes.
 - `ExecutionWindowStore.get_entry_at()`: Defaults to `locked_only=True`.
   Unlocked entries are invisible to consumers. POLICY_VIOLATION logged.
 - `NoScheduleDataError`: Defined in `horizon_config.py`. Propagates
@@ -262,7 +262,7 @@ Returns EPG events for a channel.
 
 ## Components
 
-### Phase3ScheduleService
+### ScheduleManagerBackedScheduleService
 
 Adapter bridging ScheduleManager to ScheduleService protocol.
 

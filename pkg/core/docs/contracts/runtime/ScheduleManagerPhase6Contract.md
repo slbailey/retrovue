@@ -71,7 +71,7 @@ Core (Python)                          AIR (C++)
 ProgramDirector                        PlayoutEngine
     │                                      │
     ▼                                      ▼
-Phase3ScheduleService                  LoadPreview(asset, start_offset_ms)
+ScheduleManagerBackedScheduleService                  LoadPreview(asset, start_offset_ms)
     │                                      │
     ├─► get_playout_plan_now()             ▼
     │       │                          FileProducer
@@ -109,7 +109,7 @@ else:
 - Clock skew or schedule drift (clamp to 0, never negative)
 
 **Enforcement:**
-- `Phase3ScheduleService.get_playout_plan_now()` calculates offset
+- `ScheduleManagerBackedScheduleService.get_playout_plan_now()` calculates offset
 - Offset passed in playout plan as `start_pts` field
 - If `now < segment.start_utc`, offset MUST be 0
 
@@ -516,7 +516,7 @@ def _segment_end_time_from_plan(self, segment: dict, fallback_start: datetime) -
 **Enforcement:**
 - `ChannelManager` MUST call `_segment_end_time_from_plan()` instead of calculating
   from duration
-- Playout plan MUST include `end_time_utc` field (provided by Phase3ScheduleService)
+- Playout plan MUST include `end_time_utc` field (provided by ScheduleManagerBackedScheduleService)
 - Unit tests verify transition timing matches grid boundary, not join_time + duration
 
 **Test Specification (P6-T028):** Mid-segment join at time T with segment ending
@@ -528,7 +528,7 @@ Specifically: `_segment_end_time_utc == B`, not `T + segment.duration_seconds`.
 ### 1. Core Calculates Offset
 
 ```python
-# In Phase3ScheduleService.get_playout_plan_now()
+# In ScheduleManagerBackedScheduleService.get_playout_plan_now()
 now = datetime.now(timezone.utc)
 elapsed = (now - segment.start_utc).total_seconds()
 total_seek = segment.seek_offset_seconds + elapsed

@@ -19,7 +19,7 @@ from retrovue.runtime.schedule_types import (
     ProgramRef,
     ProgramRefType,
 )
-from retrovue.runtime.phase3_schedule_service import (
+from retrovue.runtime.schedule_manager_service import (
     InMemoryResolvedStore,
     InMemorySequenceStore,
 )

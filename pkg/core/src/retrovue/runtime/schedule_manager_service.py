@@ -1,5 +1,5 @@
 """
-Phase 3 Schedule Service
+Schedule Manager Service
 
 Adapter that bridges ScheduleManager to the runtime ScheduleService protocol.
 Enables production runtime to use dynamic content selection.
@@ -184,13 +184,13 @@ class JsonFileProgramCatalog(ProgramCatalog):
 
 
 # ----------------------------------------------------------------------
-# Phase 3 Schedule Service
+# Schedule Manager Service
 # ----------------------------------------------------------------------
 
 
 @dataclass
-class Phase3ScheduleConfig:
-    """Configuration for Phase3ScheduleService."""
+class ScheduleSlotDefaults:
+    """Configuration for ScheduleManagerBackedScheduleService."""
 
     grid_minutes: int = 30
     programming_day_start_hour: int = 6
@@ -198,7 +198,7 @@ class Phase3ScheduleConfig:
     filler_duration_seconds: float = 0.0
 
 
-class Phase3ScheduleService:
+class ScheduleManagerBackedScheduleService:
     """
     Adapts ScheduleManager to the ScheduleService protocol.
 

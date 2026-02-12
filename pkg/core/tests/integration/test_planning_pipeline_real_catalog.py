@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from retrovue.catalog.static_asset_library import StaticAssetLibrary
-from retrovue.runtime.phase3_schedule_service import (
+from retrovue.runtime.schedule_manager_service import (
     InMemoryResolvedStore,
     InMemorySequenceStore,
     JsonFileProgramCatalog,
