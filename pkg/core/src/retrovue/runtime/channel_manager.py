@@ -185,6 +185,44 @@ class ProgramDirector(Protocol):
 # ----------------------------------------------------------------------
 
 
+def _apply_jip_to_segments(
+    segments: list[dict[str, Any]],
+    jip_offset_ms: int,
+    block_dur_ms: int,
+) -> list[dict[str, Any]]:
+    """Apply JIP offset to pre-composed segments.
+
+    Walks segments from the start, skipping fully elapsed ones and trimming
+    the partially elapsed one.  Extends (or appends) a trailing pad so the
+    result sums to exactly block_dur_ms.
+    """
+    result: list[dict[str, Any]] = []
+    remaining = jip_offset_ms
+    for seg in segments:
+        seg = dict(seg)
+        dur = seg["segment_duration_ms"]
+        if remaining >= dur:
+            remaining -= dur
+            continue  # fully elapsed — skip
+        if remaining > 0:
+            if seg.get("asset_uri"):
+                seg["asset_start_offset_ms"] = (
+                    seg.get("asset_start_offset_ms", 0) + remaining
+                )
+            seg["segment_duration_ms"] -= remaining
+            remaining = 0
+        result.append(seg)
+    # Extend pad to fill block
+    placed = sum(s["segment_duration_ms"] for s in result)
+    gap = block_dur_ms - placed
+    if gap > 0:
+        if result and result[-1].get("segment_type") == "pad":
+            result[-1]["segment_duration_ms"] += gap
+        else:
+            result.append({"segment_type": "pad", "segment_duration_ms": gap})
+    return result
+
+
 def compute_jip_position(
     playout_plan: list[dict[str, Any]],
     block_duration_ms: int,
@@ -3347,11 +3385,13 @@ class BlockPlanProducer(Producer):
         channel_config: ChannelConfig | None = None,
         schedule_service: ScheduleService | None = None,
         clock: MasterClock | None = None,
+        execution_store: Any | None = None,
     ):
         super().__init__(channel_id, ProducerMode.NORMAL, configuration)
         self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
         self.schedule_service = schedule_service
         self.clock = clock
+        self._execution_store = execution_store
 
         # PlayoutSession instance (created on start, destroyed on stop)
         self._session: "PlayoutSession | None" = None
@@ -3485,6 +3525,21 @@ class BlockPlanProducer(Producer):
                 # Import here to avoid circular imports
                 from .playout_session import PlayoutSession, BlockPlan
 
+                # When an ExecutionWindowStore is available, use it as the
+                # playout plan source (same data path as burn_in.py --horizon).
+                # Each execution entry becomes a plan entry with pre-composed
+                # segments, block_id, start_utc_ms, end_utc_ms, duration_ms.
+                if self._execution_store is not None:
+                    all_entries = self._execution_store.get_all_entries()
+                    if all_entries:
+                        playout_plan = [{
+                            "segments": e.segments,
+                            "duration_ms": e.end_utc_ms - e.start_utc_ms,
+                            "start_utc_ms": e.start_utc_ms,
+                            "end_utc_ms": e.end_utc_ms,
+                            "block_id": e.block_id,
+                        } for e in all_entries]
+
                 # Retain playout plan for block cycling
                 self._playout_plan = playout_plan or []
 
@@ -3553,6 +3608,7 @@ class BlockPlanProducer(Producer):
                 # INV-JIP-BP-005/006: Only block_a carries JIP offset
                 block_a = self._generate_next_block(
                     playout_plan, jip_offset_ms=jip_offset_ms,
+                    now_utc_ms=join_utc_ms,
                 )
                 self._advance_cursor(block_a)
                 block_b = self._generate_next_block(playout_plan)
@@ -3705,10 +3761,25 @@ class BlockPlanProducer(Producer):
         self._asrun_annotations.clear()
 
     def _resolve_plan_for_block(self) -> list[dict[str, Any]]:
-        """Query schedule service for the next block's content.
+        """Query execution store or schedule service for the next block's content.
 
-        Falls back to boot-time plan if schedule service unavailable.
+        When an ExecutionWindowStore is available (horizon mode), reads
+        pre-composed entries with nested segments — the same format
+        burn_in.py uses.  Falls back to schedule service query, then
+        to boot-time plan.
         """
+        if self._execution_store is not None and self._next_block_start_ms > 0:
+            entry = self._execution_store.get_entry_at(
+                self._next_block_start_ms, locked_only=True,
+            )
+            if entry is not None:
+                return [{
+                    "segments": entry.segments,
+                    "duration_ms": entry.end_utc_ms - entry.start_utc_ms,
+                    "start_utc_ms": entry.start_utc_ms,
+                    "end_utc_ms": entry.end_utc_ms,
+                    "block_id": entry.block_id,
+                }]
         if self.schedule_service and self._next_block_start_ms > 0:
             block_start_dt = datetime.fromtimestamp(
                 self._next_block_start_ms / 1000, tz=timezone.utc
@@ -3725,6 +3796,7 @@ class BlockPlanProducer(Producer):
         playout_plan: list[dict[str, Any]],
         *,
         jip_offset_ms: int = 0,
+        now_utc_ms: int = 0,
     ) -> "BlockPlan":
         """
         Generate the next BlockPlan from current cursor position.
@@ -3732,77 +3804,136 @@ class BlockPlanProducer(Producer):
         Does NOT advance the cursor — call _advance_cursor() after
         successful feed (INV-FEED-QUEUE-001).
 
-        Cycles through playout_plan entries round-robin, respecting per-entry
-        asset_start_offset_ms for mid-asset seek support.
+        Two modes:
+        1. **Execution entry mode** (horizon): playout_plan entry has
+           "segments" key with pre-composed segment list from
+           ExecutionWindowStore.  Segments are passed through to BlockPlan
+           directly, matching burn_in.py's _compose_block_horizon.
+        2. **Flat entry mode** (legacy/Phase3): entry has "asset_path"
+           and optional "start_pts".  A single segment is constructed.
 
-        INV-JIP-WALLCLOCK-001: Block duration is always _block_duration_ms.
-        When jip_offset_ms > 0 (first block only), asset_start_offset_ms is
-        increased by jip_offset_ms (seek into content) and segment_duration_ms
-        is reduced to (block_dur - jip_offset).  The block container
-        (start_utc_ms, end_utc_ms) is NEVER shortened.
+        INV-JIP-FIRST-BLOCK-001: When jip_offset_ms > 0, start_utc_ms is set to
+        now_utc_ms (derived from MasterClock), producing a partial block covering
+        [now, fence_end).  Subsequent blocks are full grid.
+        INV-JIP-SEGMENTSUM-001: sum(segment_duration_ms) == end_utc_ms - start_utc_ms
+        for all blocks, including the JIP first block.
         """
         from .playout_session import BlockPlan
 
         block_index = self._block_index
-        start_ms = self._next_block_start_ms
+        grid_start_ms = self._next_block_start_ms
 
-        # LAW-DOWNWARD-CONCRETIZATION: Playlist entry is determined by
-        # wall-clock position, not ordinal block count.  compute_jip_position()
-        # walks the cycle to find which entry is active at start_ms, handling
-        # both uniform and variable-duration plans.
+        # Resolve which plan entry covers this block
+        entry: dict[str, Any] = {}
         if playout_plan:
-            plan_idx, _ = compute_jip_position(
-                playout_plan, self._block_duration_ms,
-                self._cycle_origin_utc_ms, start_ms,
-            )
-            entry = playout_plan[plan_idx]
-            asset_path = entry.get("asset_path", "assets/SampleA.mp4")
-            asset_offset_ms = entry.get("asset_start_offset_ms", entry.get("start_pts", 0))
-        else:
-            entry = {}
-            asset_path = "assets/SampleA.mp4"
-            asset_offset_ms = 0
+            # Execution entry mode: find by start_utc_ms match
+            if "segments" in playout_plan[0]:
+                for e in playout_plan:
+                    if e.get("start_utc_ms") == grid_start_ms:
+                        entry = e
+                        break
+                if not entry and playout_plan:
+                    entry = playout_plan[0]
+            else:
+                # Flat entry mode: cycle by wall-clock position
+                plan_idx, _ = compute_jip_position(
+                    playout_plan, self._block_duration_ms,
+                    self._cycle_origin_utc_ms, grid_start_ms,
+                )
+                entry = playout_plan[plan_idx]
 
-        # Per-entry duration_ms overrides the configured block_duration_ms
-        # when present — allows playlist segments to define their own length.
         block_dur_ms = entry.get("duration_ms", self._block_duration_ms)
+        fence_end_ms = grid_start_ms + block_dur_ms
+        block_id = entry.get("block_id", f"BLOCK-{self.channel_id}-{block_index}")
 
-        # INV-JIP-WALLCLOCK-001: Block duration is NEVER reduced.
-        # JIP offset only advances the asset seek position; the block
-        # container is always [block_start, block_start + block_dur_ms).
-        # Segment duration = remaining content from the seek point to
-        # block end.  The fence in AIR corroborates: it fires after
-        # (block_end - session_epoch) worth of frames.
-        segment_dur_ms = block_dur_ms
+        # INV-JIP-FIRST-BLOCK-001: partial first block
+        if jip_offset_ms > 0 and now_utc_ms > 0:
+            # Derive both from the same delta — don't let them drift independently
+            raw_offset = now_utc_ms - grid_start_ms
+            jip_offset_ms = max(0, min(raw_offset, block_dur_ms))
+            start_ms = grid_start_ms + jip_offset_ms
+        else:
+            start_ms = grid_start_ms
+
+        end_ms = fence_end_ms
+        effective_dur = end_ms - start_ms
+
+        # ----- Execution entry mode: pre-composed segments -----
+        if "segments" in entry:
+            plan_segments = [dict(s) for s in entry["segments"]]
+
+            if jip_offset_ms > 0:
+                plan_segments = _apply_jip_to_segments(
+                    plan_segments, jip_offset_ms, effective_dur,
+                )
+
+            # Re-index contiguously
+            for i, seg in enumerate(plan_segments):
+                seg["segment_index"] = i
+
+            block = BlockPlan(
+                block_id=block_id,
+                channel_id=self.channel_config.channel_id_int,
+                start_utc_ms=start_ms,
+                end_utc_ms=end_ms,
+                segments=plan_segments,
+            )
+
+            seg_summary = " ".join(
+                f'{s.get("segment_type", "?")}={s.get("segment_duration_ms", 0)}ms'
+                for s in plan_segments
+            )
+            self._logger.info(
+                "BlockPlan generated (execution): block_id=%s start=%d end=%d "
+                "dur=%d segs=%d [%s] jip_offset=%d",
+                block_id, start_ms, end_ms, effective_dur,
+                len(plan_segments), seg_summary, jip_offset_ms,
+            )
+            return block
+
+        # ----- Flat entry mode: construct single segment -----
+        asset_path = entry.get("asset_path", "assets/SampleA.mp4")
+
         if jip_offset_ms > 0:
-            asset_offset_ms += jip_offset_ms
-            segment_dur_ms = block_dur_ms - jip_offset_ms
+            # Seek once: base + jip
+            seek_ms = entry.get("asset_start_offset_ms", 0) + jip_offset_ms
+        else:
+            seek_ms = entry.get("asset_start_offset_ms", entry.get("start_pts", 0))
 
-        end_ms = start_ms + block_dur_ms
+        content_dur = effective_dur   # AIR handles EOF via CONTRACT-SEG-003/004
+        pad_dur = 0                   # no elapsed-time pad
 
-        block_id = f"BLOCK-{self.channel_id}-{block_index}"
+        segments_list: list[dict[str, Any]] = [{
+            "segment_index": 0,
+            "asset_uri": asset_path,
+            "asset_start_offset_ms": seek_ms,
+            "segment_duration_ms": content_dur,
+        }]
+
+        # INV-JIP-SEGMENTSUM-001
+        assert sum(s["segment_duration_ms"] for s in segments_list) == effective_dur
+
+        if jip_offset_ms > 0:
+            self._logger.info(
+                "JIP_FIRST_BLOCK: now_ms=%d fence_end_ms=%d effective_dur_ms=%d "
+                "seek_ms=%d content_dur_ms=%d pad_ms=%d segment_sum=%d",
+                start_ms, end_ms, effective_dur,
+                seek_ms, content_dur, pad_dur, content_dur + pad_dur,
+            )
 
         block = BlockPlan(
             block_id=block_id,
             channel_id=self.channel_config.channel_id_int,
             start_utc_ms=start_ms,
             end_utc_ms=end_ms,
-            segments=[{
-                "segment_index": 0,
-                "asset_uri": asset_path,
-                "asset_start_offset_ms": asset_offset_ms,
-                "segment_duration_ms": segment_dur_ms,
-            }],
+            segments=segments_list,
         )
 
-        # INV-JIP-WALLCLOCK-001 diagnostics: prove wall-clock alignment.
         self._logger.info(
             "BlockPlan generated: block_id=%s start=%d end=%d dur=%d "
-            "asset=%s seek=%d seg_dur=%d jip_offset=%d "
-            "aligned=%s",
-            block_id, start_ms, end_ms, end_ms - start_ms,
-            asset_path, asset_offset_ms, segment_dur_ms, jip_offset_ms,
-            start_ms % block_dur_ms == 0,
+            "asset=%s seek=%d seg_dur=%d jip_offset=%d",
+            block_id, start_ms, end_ms, effective_dur,
+            asset_path, seek_ms, content_dur, jip_offset_ms,
         )
 
         return block

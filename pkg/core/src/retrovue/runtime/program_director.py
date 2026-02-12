@@ -57,6 +57,7 @@ from retrovue.runtime.config import (
     MOCK_CHANNEL_CONFIG,
 )
 from retrovue.runtime.phase3_schedule_service import Phase3ScheduleService
+from retrovue.runtime.horizon_config import HorizonAuthorityMode, get_horizon_authority_mode
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -120,6 +121,134 @@ class ChannelManagerProvider(Protocol):
     def stop_channel(self, channel_id: str) -> None:
         """Stop channel when last viewer disconnects (channel enters STOPPED; health/reconnect does nothing)."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Horizon adapters — bridge Phase3ScheduleService to HorizonManager protocols
+# ---------------------------------------------------------------------------
+
+
+class _Phase3ScheduleExtender:
+    """Adapts Phase3ScheduleService for HorizonManager's ScheduleExtender protocol.
+
+    Checks the resolved store for existence and calls
+    Phase3ScheduleManager.resolve_schedule_day() to extend EPG.
+    """
+
+    def __init__(self, schedule_service: Phase3ScheduleService, channel_id: str):
+        self._service = schedule_service
+        self._channel_id = channel_id
+
+    def epg_day_exists(self, broadcast_date) -> bool:
+        return self._service._resolved_store.exists(self._channel_id, broadcast_date)
+
+    def extend_epg_day(self, broadcast_date) -> None:
+        slots = self._service._schedules.get(self._channel_id, [])
+        if not slots:
+            return
+        resolution_time = datetime(
+            broadcast_date.year, broadcast_date.month, broadcast_date.day,
+            5, 0, 0, tzinfo=timezone.utc,
+        )
+        self._service._manager.resolve_schedule_day(
+            channel_id=self._channel_id,
+            programming_day_date=broadcast_date,
+            slots=slots,
+            resolution_time=resolution_time,
+        )
+
+
+class _Phase3ExecutionExtender:
+    """Adapts Phase3ScheduleService for HorizonManager's ExecutionExtender protocol.
+
+    Generates ExecutionEntry objects from resolved schedule data
+    without requiring the full planning pipeline infrastructure.
+    Ensures the broadcast date is resolved first, then builds
+    execution entries from Phase3ScheduleManager's program blocks.
+    """
+
+    def __init__(self, schedule_service: Phase3ScheduleService, channel_id: str):
+        self._service = schedule_service
+        self._channel_id = channel_id
+        self._logger = logging.getLogger(__name__)
+
+    def extend_execution_day(self, broadcast_date):
+        from retrovue.runtime.execution_window_store import (
+            ExecutionDayResult,
+            ExecutionEntry,
+        )
+
+        # Ensure day is resolved
+        if not self._service._resolved_store.exists(self._channel_id, broadcast_date):
+            slots = self._service._schedules.get(self._channel_id, [])
+            if slots:
+                resolution_time = datetime(
+                    broadcast_date.year, broadcast_date.month, broadcast_date.day,
+                    5, 0, 0, tzinfo=timezone.utc,
+                )
+                self._service._manager.resolve_schedule_day(
+                    channel_id=self._channel_id,
+                    programming_day_date=broadcast_date,
+                    slots=slots,
+                    resolution_time=resolution_time,
+                )
+
+        # Build execution entries from resolved program blocks
+        grid_minutes = self._service._grid_minutes
+        day_start_hour = self._service._programming_day_start_hour
+
+        day_start = datetime(
+            broadcast_date.year, broadcast_date.month, broadcast_date.day,
+            day_start_hour, 0, 0, tzinfo=timezone.utc,
+        )
+        day_end = day_start + timedelta(days=1)
+
+        entries = []
+        block_idx = 0
+        current = day_start
+        while current < day_end:
+            block = self._service._manager.get_program_at(self._channel_id, current)
+            start_ms = int(current.timestamp() * 1000)
+            end_ms = start_ms + grid_minutes * 60 * 1000
+
+            block_dur_ms = grid_minutes * 60 * 1000
+            segments = []
+            if block and block.segments:
+                for seg in block.segments:
+                    segments.append({
+                        "asset_uri": seg.file_path,
+                        "asset_start_offset_ms": int(seg.seek_offset_seconds * 1000),
+                        "segment_duration_ms": int(seg.duration_seconds * 1000),
+                        "segment_type": "episode",
+                    })
+
+            # Pad to fill block — this is a planning decision, not AIR's job.
+            # AIR must receive a gap-free segment list that sums to block_dur_ms.
+            content_ms = sum(s["segment_duration_ms"] for s in segments)
+            pad_ms = block_dur_ms - content_ms
+            if pad_ms > 0:
+                segments.append({
+                    "segment_duration_ms": pad_ms,
+                    "segment_type": "pad",
+                })
+
+            entries.append(ExecutionEntry(
+                block_id=f"{self._channel_id}-{broadcast_date.isoformat()}-b{block_idx:04d}",
+                block_index=block_idx,
+                start_utc_ms=start_ms,
+                end_utc_ms=end_ms,
+                segments=segments,
+            ))
+
+            current += timedelta(minutes=grid_minutes)
+            block_idx += 1
+
+        end_ms = entries[-1].end_utc_ms if entries else 0
+        self._logger.info(
+            "Phase3ExecutionExtender: Generated %d entries for %s (end_utc_ms=%d)",
+            len(entries), broadcast_date.isoformat(), end_ms,
+        )
+        return ExecutionDayResult(end_utc_ms=end_ms, entries=entries)
 
 
 class ProgramDirector:
@@ -208,8 +337,14 @@ class ProgramDirector:
         self._managers: dict[str, Any] = {}
         self._managers_lock = threading.Lock()
         self._schedule_service: Optional[Any] = None
+        # Horizon authority mode
+        self._horizon_mode = get_horizon_authority_mode()
         # Phase 5: Per-channel schedule services for Phase 3 mode
         self._phase3_schedule_services: dict[str, Phase3ScheduleService] = {}
+        # Horizon management (shadow + authoritative modes)
+        self._horizon_managers: dict[str, Any] = {}
+        self._horizon_execution_stores: dict[str, Any] = {}
+        self._horizon_resolved_stores: dict[str, Any] = {}
         self._phase8_program_director: Optional[Any] = None
         self._channel_config_provider: Optional[Any] = None
         self._producer_factory: Optional[Callable[..., Any]] = None
@@ -273,6 +408,7 @@ class ProgramDirector:
         # ChannelManager and schedule services expect clock.now_utc() (datetime); use concrete MasterClock
         self._embedded_clock = MasterClock()
         from retrovue.runtime.channel_manager import (
+            BlockPlanProducer,
             ChannelManager,
             MockAlternatingScheduleService,
             MockGridScheduleService,
@@ -322,49 +458,248 @@ class ProgramDirector:
         ) -> Optional[Any]:
             if mode != "normal":
                 return None
-            return Phase8AirProducer(channel_id, config, channel_config=channel_config)
+            # Derive block_duration_ms from channel config grid_minutes.
+            # BlockPlanProducer requires this for JIP calculation and feed-ahead.
+            grid_minutes = 30
+            if channel_config and channel_config.schedule_config:
+                grid_minutes = channel_config.schedule_config.get("grid_minutes", 30)
+            block_duration_ms = grid_minutes * 60 * 1000
+            # Look up the schedule_service that was assigned to the ChannelManager
+            # for this channel (set in _get_or_create_manager).
+            svc = None
+            clk = self._embedded_clock
+            with self._managers_lock:
+                mgr = self._managers.get(channel_id)
+                if mgr is not None:
+                    svc = getattr(mgr, "schedule_service", None)
+                    clk = getattr(mgr, "clock", clk)
+            # Pass the ExecutionWindowStore when available (shadow/authoritative).
+            # BlockPlanProducer reads pre-composed execution entries from the
+            # store — same data path as burn_in.py's horizon mode.
+            exec_store = self._horizon_execution_stores.get(channel_id)
+            return BlockPlanProducer(
+                channel_id=channel_id,
+                configuration={**config, "block_duration_ms": block_duration_ms},
+                channel_config=channel_config,
+                schedule_service=svc,
+                clock=clk,
+                execution_store=exec_store,
+            )
 
         self._producer_factory = _create_air_producer
         self._health_check_stop = threading.Event()
 
+    def _ensure_phase3_service(
+        self, channel_id: str, channel_config: ChannelConfig,
+    ) -> Phase3ScheduleService:
+        """Get or create the Phase3ScheduleService for a channel.
+
+        Always returns the Phase3ScheduleService (not the horizon-backed one).
+        Used by both the normal schedule-service routing and by
+        _init_horizon_managers() which needs the underlying service
+        regardless of horizon mode.
+        """
+        if channel_id not in self._phase3_schedule_services:
+            schedule_config = channel_config.schedule_config
+            programs_dir = Path(schedule_config.get("programs_dir", "/opt/retrovue/config/programs"))
+            schedules_dir = Path(schedule_config.get("schedules_dir", "/opt/retrovue/config/schedules"))
+            filler_path = schedule_config.get("filler_path", "/opt/retrovue/assets/filler.mp4")
+            filler_duration = schedule_config.get("filler_duration_seconds", 3650.0)
+            grid_minutes = schedule_config.get("grid_minutes", 30)
+
+            self._logger.info(
+                "[channel %s] Creating Phase3ScheduleService "
+                "(schedule_source=%s, horizon_mode=%s)",
+                channel_id,
+                channel_config.schedule_source,
+                self._horizon_mode.value,
+            )
+
+            service = Phase3ScheduleService(
+                clock=self._embedded_clock,
+                programs_dir=programs_dir,
+                schedules_dir=schedules_dir,
+                filler_path=filler_path,
+                filler_duration_seconds=filler_duration,
+                grid_minutes=grid_minutes,
+                horizon_mode=self._horizon_mode,
+            )
+            self._phase3_schedule_services[channel_id] = service
+
+        return self._phase3_schedule_services[channel_id]
+
     def _get_schedule_service_for_channel(self, channel_id: str, channel_config: ChannelConfig) -> Any:
         """
-        Get appropriate schedule service based on channel config.
+        Get appropriate schedule service based on channel config and horizon mode.
 
         INV-P5-001: Config-Driven Activation - schedule_source: "phase3" enables Phase 3 mode.
+        INV-P5-005: In shadow/authoritative mode, returns HorizonBackedScheduleService.
+        Phase3ScheduleService is only used by HorizonManager adapters, never by consumers.
         """
         schedule_source = channel_config.schedule_source
 
         if schedule_source == "phase3":
-            # Phase 5: Use Phase3ScheduleService for this channel
-            if channel_id not in self._phase3_schedule_services:
-                schedule_config = channel_config.schedule_config
-                programs_dir = Path(schedule_config.get("programs_dir", "/opt/retrovue/config/programs"))
-                schedules_dir = Path(schedule_config.get("schedules_dir", "/opt/retrovue/config/schedules"))
-                filler_path = schedule_config.get("filler_path", "/opt/retrovue/assets/filler.mp4")
-                filler_duration = schedule_config.get("filler_duration_seconds", 3650.0)
-                grid_minutes = schedule_config.get("grid_minutes", 30)
+            # Shadow / authoritative → HorizonBackedScheduleService (read-only).
+            # Phase3ScheduleService is only used internally by HorizonManager's
+            # adapters to drive resolution.  Consumers never call it directly.
+            if self._horizon_mode in (
+                HorizonAuthorityMode.AUTHORITATIVE,
+                HorizonAuthorityMode.SHADOW,
+            ):
+                return self._get_horizon_backed_service(channel_id, channel_config)
 
-                self._logger.info(
-                    "[channel %s] Creating Phase3ScheduleService (schedule_source=%s)",
-                    channel_id,
-                    schedule_source,
-                )
-
-                service = Phase3ScheduleService(
-                    clock=self._embedded_clock,
-                    programs_dir=programs_dir,
-                    schedules_dir=schedules_dir,
-                    filler_path=filler_path,
-                    filler_duration_seconds=filler_duration,
-                    grid_minutes=grid_minutes,
-                )
-                self._phase3_schedule_services[channel_id] = service
-
-            return self._phase3_schedule_services[channel_id]
+            # Legacy only → Phase3ScheduleService (auto-resolve on access)
+            return self._ensure_phase3_service(channel_id, channel_config)
 
         # Default: use the existing schedule service (Phase 8 or mock)
         return self._schedule_service
+
+    def _get_horizon_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
+        """Create or return a HorizonBackedScheduleService for shadow/authoritative mode."""
+        from retrovue.runtime.horizon_backed_schedule_service import HorizonBackedScheduleService
+
+        # Return cached if exists
+        key = f"_hbs_{channel_id}"
+        cached = getattr(self, key, None)
+        if cached is not None:
+            return cached
+
+        schedule_config = channel_config.schedule_config
+        grid_minutes = schedule_config.get("grid_minutes", 30)
+        execution_store = self._horizon_execution_stores.get(channel_id)
+        resolved_store = self._horizon_resolved_stores.get(channel_id)
+
+        if execution_store is None:
+            self._logger.warning(
+                "[channel %s] No execution store in authoritative mode. "
+                "HorizonManager may not be initialized yet.",
+                channel_id,
+            )
+
+        service = HorizonBackedScheduleService(
+            execution_store=execution_store,
+            resolved_store=resolved_store,
+            grid_block_minutes=grid_minutes,
+            channel_id=channel_id,
+        )
+        setattr(self, key, service)
+        return service
+
+    def _init_horizon_managers(self) -> None:
+        """Create and start HorizonManagers for Phase3 channels (shadow/authoritative).
+
+        Called from start() when horizon mode is not LEGACY.  For each
+        Phase3 channel:
+        1. Creates Phase3ScheduleService and loads the schedule
+        2. Creates ExecutionWindowStore
+        3. Creates ScheduleExtender / ExecutionExtender adapters
+        4. Creates HorizonManager and runs evaluate_once() (readiness gate)
+        5. Locks all initial entries and starts the background thread
+        """
+        if self._channel_config_provider is None:
+            return
+
+        if not hasattr(self._channel_config_provider, "list_channel_ids"):
+            self._logger.warning(
+                "Channel config provider does not support list_channel_ids; "
+                "cannot initialize horizon managers",
+            )
+            return
+
+        from retrovue.runtime.execution_window_store import ExecutionWindowStore
+        from retrovue.runtime.horizon_manager import HorizonManager
+
+        for channel_id in self._channel_config_provider.list_channel_ids():
+            config = self._channel_config_provider.get_channel_config(channel_id)
+            if config is None or config.schedule_source != "phase3":
+                continue
+
+            self._logger.info(
+                "[channel %s] Initializing HorizonManager (mode=%s)",
+                channel_id,
+                self._horizon_mode.value,
+            )
+
+            # Ensure Phase3ScheduleService exists (always needed for adapters)
+            phase3_service = self._ensure_phase3_service(channel_id, config)
+            phase3_service.load_schedule(channel_id)
+
+            # Create stores
+            execution_store = ExecutionWindowStore()
+            self._horizon_execution_stores[channel_id] = execution_store
+            self._horizon_resolved_stores[channel_id] = phase3_service._resolved_store
+
+            # Create adapters
+            schedule_extender = _Phase3ScheduleExtender(phase3_service, channel_id)
+            execution_extender = _Phase3ExecutionExtender(phase3_service, channel_id)
+
+            # Create HorizonManager
+            schedule_config = config.schedule_config
+            horizon_mgr = HorizonManager(
+                schedule_manager=schedule_extender,
+                planning_pipeline=execution_extender,
+                master_clock=self._embedded_clock,
+                min_epg_days=schedule_config.get("min_epg_days", 3),
+                min_execution_hours=schedule_config.get("min_execution_hours", 6),
+                evaluation_interval_seconds=schedule_config.get(
+                    "horizon_eval_interval_seconds", 30,
+                ),
+                programming_day_start_hour=schedule_config.get(
+                    "programming_day_start_hour", 6,
+                ),
+                execution_store=execution_store,
+            )
+
+            # Readiness gate: synchronous initial evaluation
+            horizon_mgr.evaluate_once()
+            report = horizon_mgr.get_health_report()
+            self._logger.info(
+                "[channel %s] HorizonManager readiness gate: "
+                "healthy=%s epg=%.1fh exec=%.1fh store_entries=%d",
+                channel_id,
+                report.is_healthy,
+                report.epg_depth_hours,
+                report.execution_depth_hours,
+                report.store_entry_count,
+            )
+
+            if not report.is_healthy:
+                if self._horizon_mode == HorizonAuthorityMode.AUTHORITATIVE:
+                    raise RuntimeError(
+                        f"[channel {channel_id}] HorizonManager readiness gate "
+                        f"FAILED in authoritative mode. "
+                        f"epg={report.epg_depth_hours:.1f}h "
+                        f"exec={report.execution_depth_hours:.1f}h "
+                        f"(min_epg={report.min_epg_days}d "
+                        f"min_exec={report.min_execution_hours}h). "
+                        f"Cannot start with insufficient horizon depth.",
+                    )
+                else:
+                    self._logger.warning(
+                        "[channel %s] HorizonManager readiness gate: "
+                        "UNHEALTHY at startup (shadow mode, continuing). "
+                        "epg=%.1fh exec=%.1fh",
+                        channel_id,
+                        report.epg_depth_hours,
+                        report.execution_depth_hours,
+                    )
+
+            # Lock all initial entries for execution
+            locked = execution_store.lock_all()
+            if locked:
+                self._logger.info(
+                    "[channel %s] Locked %d execution entries", channel_id, locked,
+                )
+
+            # Start background evaluation thread
+            horizon_mgr.start()
+            self._horizon_managers[channel_id] = horizon_mgr
+
+        self._logger.info(
+            "HorizonManagers initialized: %d channels (mode=%s)",
+            len(self._horizon_managers),
+            self._horizon_mode.value,
+        )
 
     def _get_or_create_manager(self, channel_id: str) -> Any:
         """Get or create ChannelManager for a channel (embedded mode). PD is sole authority for creation."""
@@ -591,9 +926,12 @@ class ProgramDirector:
     # Lifecycle -------------------------------------------------------------
     def start(self) -> None:
         """Start the pacing loop, health-check loop (embedded), and HTTP server."""
-        # Embedded mode: load schedules and start health-check thread
+        # Embedded mode: load schedules, init horizon managers, start health-check
         if self._channel_manager_provider is None:
             self.load_all_schedules()
+            # Horizon management: create/start HorizonManagers before HTTP server
+            if self._horizon_mode != HorizonAuthorityMode.LEGACY:
+                self._init_horizon_managers()
             if self._health_check_stop is not None:
                 self._health_check_stop.clear()
                 self._health_check_thread = Thread(
@@ -602,6 +940,7 @@ class ProgramDirector:
                     daemon=True,
                 )
                 self._health_check_thread.start()
+
         # Start pacing loop
         if self._pace_thread and self._pace_thread.is_alive():
             self._logger.debug("ProgramDirector.start() called but pace thread already running")
@@ -617,7 +956,7 @@ class ProgramDirector:
             self._pace_thread = thread
             thread.start()
             self._logger.debug("ProgramDirector pace thread started")
-        
+
         # Start HTTP server
         if self._server_thread and self._server_thread.is_alive():
             self._logger.debug("ProgramDirector HTTP server already running")
@@ -630,7 +969,7 @@ class ProgramDirector:
                     self._server.run()
                 finally:
                     self._logger.info("ProgramDirector HTTP server stopped")
-            
+
             server_thread = Thread(target=_run_server, name="program-director-http", daemon=True)
             self._server_thread = server_thread
             server_thread.start()
@@ -687,7 +1026,20 @@ class ProgramDirector:
                             self._logger.warning("Error stopping producer %s: %s", channel_id, e)
                         manager.active_producer = None
                 self._managers.clear()
-        
+
+            # Stop all HorizonManagers
+            for channel_id, hm in list(self._horizon_managers.items()):
+                try:
+                    hm.stop()
+                    self._logger.info(
+                        "[channel %s] HorizonManager stopped", channel_id,
+                    )
+                except Exception as e:
+                    self._logger.warning(
+                        "Error stopping HorizonManager for %s: %s", channel_id, e,
+                    )
+            self._horizon_managers.clear()
+
         self._logger.debug("ProgramDirector stopped")
 
     def get_system_health(self) -> SystemHealth:
@@ -1001,14 +1353,9 @@ class ProgramDirector:
             except Exception as e:
                 self._logger.debug("tune_out on cleanup: %s", e)
             if to_stop:
-                # P12-CORE-006 INV-VIEWER-COUNT-ADVISORY-001: Route through _request_teardown (immediate vs deferred)
-                if manager._request_teardown(reason="viewer_inactive"):
-                    self.stop_channel(channel_id)
-                else:
-                    self._logger.info(
-                        "Teardown deferred for channel %s (transient boundary state)",
-                        channel_id,
-                    )
+                # Per-session lifecycle: socket is one-shot; must fully tear down so next
+                # viewer gets fresh AttachStream and new socket. Always stop channel.
+                self.stop_channel(channel_id)
                 to_stop.stop()
 
         async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
@@ -1117,8 +1464,11 @@ class ProgramDirector:
             # INV-IO-DRAIN-REALTIME: Use async generator to yield to event loop
             # This ensures non-blocking streaming and regular flush opportunities.
             async def generate_stream():
+                _first_chunk_logged = False
                 try:
                     async for chunk in generate_ts_stream_async(client_queue):
+                        if not _first_chunk_logged:
+                            _first_chunk_logged = True
                         yield chunk
                 except GeneratorExit:
                     pass
@@ -1171,6 +1521,52 @@ class ProgramDirector:
                 return segment
             except Exception as e:
                 self._logger.exception("get_current_segment failed")
+                return Response(
+                    content=str(e),
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        @self.fastapi_app.get("/debug/horizon/{channel_id}")
+        async def get_horizon_health(channel_id: str) -> Any:
+            """Horizon health report for a channel.
+
+            Returns HorizonManager health snapshot including EPG depth,
+            execution depth, compliance status, and store entry count.
+            Available in shadow and authoritative modes only.
+            """
+            if self._horizon_mode == HorizonAuthorityMode.LEGACY:
+                return Response(
+                    content="Horizon management not active (mode=legacy)",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+
+            hm = self._horizon_managers.get(channel_id)
+            if hm is None:
+                return Response(
+                    content=f"No HorizonManager for channel: {channel_id}",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+
+            try:
+                report = hm.get_health_report()
+                return {
+                    "channel_id": channel_id,
+                    "horizon_mode": self._horizon_mode.value,
+                    "is_healthy": report.is_healthy,
+                    "epg_depth_hours": report.epg_depth_hours,
+                    "epg_compliant": report.epg_compliant,
+                    "epg_farthest_date": report.epg_farthest_date,
+                    "execution_depth_hours": report.execution_depth_hours,
+                    "execution_compliant": report.execution_compliant,
+                    "execution_window_end_utc_ms": report.execution_window_end_utc_ms,
+                    "min_epg_days": report.min_epg_days,
+                    "min_execution_hours": report.min_execution_hours,
+                    "evaluation_interval_seconds": report.evaluation_interval_seconds,
+                    "last_evaluation_utc_ms": report.last_evaluation_utc_ms,
+                    "store_entry_count": report.store_entry_count,
+                }
+            except Exception as e:
+                self._logger.exception("get_horizon_health failed for %s", channel_id)
                 return Response(
                     content=str(e),
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
