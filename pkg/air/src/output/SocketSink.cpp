@@ -179,6 +179,15 @@ bool SocketSink::WaitAndConsumeBytes(const uint8_t* data, size_t len,
   return true;
 }
 
+void SocketSink::HoldEmission() {
+  emission_gate_open_.store(false, std::memory_order_release);
+}
+
+void SocketSink::OpenEmissionGate() {
+  emission_gate_open_.store(true, std::memory_order_release);
+  queue_cv_.notify_all();  // wake writer if parked
+}
+
 void SocketSink::WriterThreadLoop() {
   constexpr int kPollTimeoutMs = 100;  // Check for stop every 100ms
 
@@ -189,7 +198,8 @@ void SocketSink::WriterThreadLoop() {
     {
       std::unique_lock<std::mutex> lock(queue_mutex_);
       queue_cv_.wait_for(lock, std::chrono::milliseconds(kPollTimeoutMs), [this] {
-        return !packet_queue_.empty() || writer_stop_.load(std::memory_order_acquire);
+        return (!packet_queue_.empty() && emission_gate_open_.load(std::memory_order_acquire))
+            || writer_stop_.load(std::memory_order_acquire);
       });
 
       if (writer_stop_.load(std::memory_order_acquire)) break;

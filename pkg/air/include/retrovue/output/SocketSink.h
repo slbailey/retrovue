@@ -133,6 +133,14 @@ class SocketSink {
   size_t GetBufferCapacity() const { return buffer_capacity_; }
   bool IsThrottling() const { return throttling_.load(std::memory_order_acquire); }
 
+  // =========================================================================
+  // INV-AUDIO-BOOTSTRAP-GATE-001: Emission gate.
+  // When held, data is accepted into the buffer but not sent to the socket.
+  // Call OpenEmissionGate() after audio depth gate is satisfied.
+  // =========================================================================
+  void HoldEmission();
+  void OpenEmissionGate();
+
  private:
   void WriterThreadLoop();
   void DetachSlowConsumer(const std::string& reason);
@@ -180,6 +188,9 @@ class SocketSink {
   bool detach_on_overflow_{true};  // Legacy behavior by default
   static constexpr double kHighWaterRatio = 0.80;  // 80% of capacity
   static constexpr double kLowWaterRatio = 0.50;   // 50% of capacity
+
+  // INV-AUDIO-BOOTSTRAP-GATE-001: default open for backward compatibility.
+  std::atomic<bool> emission_gate_open_{true};
 };
 
 }  // namespace retrovue::output
