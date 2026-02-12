@@ -23,6 +23,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any, Callable, Protocol
 
+
 _logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -378,6 +379,7 @@ class ChannelStream:
         _max_inter_recv_gap_ns: int = 0
         _count_gaps_over_threshold: int = 0
         _local_first_recv_done = False
+        _local_first_fanout_done = False
 
         while not self._stop_event.is_set():
             # Connect if needed (initial connection only - no reconnect after streaming starts)
@@ -501,6 +503,8 @@ class ChannelStream:
                     # fills → kernel back-pressures AIR's send() → SocketSink
                     # fills → WaitAndConsumeBytes blocks the tick thread.
                     client_queue.put(chunk, timeout=0.1)
+                    if not _local_first_fanout_done:
+                        _local_first_fanout_done = True
                 except Full:
                     slow_clients.append(client_id)
                 except Exception:
