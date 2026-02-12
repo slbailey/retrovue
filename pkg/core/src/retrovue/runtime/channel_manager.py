@@ -4260,4 +4260,3 @@ class BlockPlanProducer(Producer):
         """Queue containing accepted AIR socket (for _get_or_create_fanout_buffer)."""
         return self._reader_socket_queue
 
-
