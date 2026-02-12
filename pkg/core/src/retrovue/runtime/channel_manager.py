@@ -54,7 +54,7 @@ import os
 import threading
 
 # =============================================================================
-# PLAYOUT AUTHORITY: BlockPlan only (Phase8DecommissionContract)
+# PLAYOUT AUTHORITY: BlockPlan only
 # =============================================================================
 # The only runtime playout path is BlockPlanProducer + PlayoutSession.
 # =============================================================================
@@ -430,7 +430,7 @@ class ChannelManager:
         # INV-VIEWER-LIFECYCLE: Thread-safe viewer count transitions
         self._viewer_lock: threading.Lock = threading.Lock()
 
-        # BlockPlan only (Phase8DecommissionContract)
+        # BlockPlan only
         self._blockplan_mode: bool = True
         self._pending_fatal: BaseException | None = None
 
@@ -1078,7 +1078,7 @@ class ChannelManager:
         self._teardown_reason = None
 
     def _build_producer_for_mode(self, mode: str) -> Producer | None:
-        """Build the Producer for the given mode. Phase8DecommissionContract: BlockPlanProducer only."""
+        """Build the Producer for the given mode. BlockPlanProducer only."""
         if not self._blockplan_mode:
             self._logger.error(
                 "Channel %s: _blockplan_mode is False. Only BlockPlanProducer is permitted.",
@@ -1400,199 +1400,6 @@ class MockAlternatingScheduleService:
             "metadata": {"phase": "mock_ab", "segment_seconds": self.segment_seconds},
         }
         return [segment]
-
-
-# ----------------------------------------------------------------------
-# Phase 8 Implementations
-# ----------------------------------------------------------------------
-
-
-def _resolve_mock_asset_path() -> Path:
-    """Resolve path to assets/samplecontent.mp4 (Phase 8 mock schedule)."""
-    # Try repo assets path, then cwd-relative, then path from this file up to repo root
-    _here = Path(__file__).resolve()
-    repo_root = _here.parents[5]  # runtime -> retrovue -> src -> core -> pkg -> repo
-    for candidate in [
-        Path("/opt/retrovue/assets/samplecontent.mp4"),
-        repo_root / "assets" / "samplecontent.mp4",
-        Path.cwd() / "assets" / "samplecontent.mp4",
-        Path.cwd() / "samplecontent.mp4",
-    ]:
-        if candidate.exists():
-            return candidate
-    # Return repo default even if missing so startup succeeds; playout will fail with a clear error
-    return Path("/opt/retrovue/assets/samplecontent.mp4")
-
-
-class Phase8MockScheduleService:
-    """ScheduleService for Phase 8 when no --schedule-dir is provided.
-
-    Provides a single channel "mock" with one item: assets/samplecontent.mp4,
-    always active (long duration from epoch). Used so Phase 8 runs without
-    requiring a schedule directory.
-    """
-
-    MOCK_CHANNEL_ID = "mock"
-
-    def __init__(self, clock: MasterClock):
-        self.clock = clock
-        asset_path = _resolve_mock_asset_path()
-        # One item: from epoch, 1 year duration so always "now"
-        self._schedule = [
-            {
-                "id": "mock-segment",
-                "asset_path": str(asset_path),
-                "start_time_utc": "1970-01-01T00:00:00Z",
-                "duration_seconds": 365 * 24 * 3600,
-                "metadata": {},
-            }
-        ]
-        self._loaded_channels: set[str] = set()
-        self._lock = threading.Lock()
-
-    def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
-        """Accept only the mock channel; no disk I/O."""
-        if channel_id != self.MOCK_CHANNEL_ID:
-            return (False, "Schedule file not found (mock schedule: use channel 'mock')")
-        with self._lock:
-            self._loaded_channels.add(channel_id)
-        return (True, None)
-
-    def get_playout_plan_now(
-        self,
-        channel_id: str,
-        at_station_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """Return single segment for mock channel (same structure as Phase8ScheduleService)."""
-        with self._lock:
-            if channel_id != self.MOCK_CHANNEL_ID or channel_id not in self._loaded_channels:
-                return []
-        item = self._schedule[0]
-        segment = {
-            "asset_id": item.get("id", ""),
-            "asset_path": item.get("asset_path", ""),
-            "start_time": item.get("start_time_utc"),
-            "duration_seconds": item.get("duration_seconds", 0),
-            "metadata": item.get("metadata", {}),
-        }
-        return [segment]
-
-
-class Phase8ScheduleService:
-    """ScheduleService implementation that reads from schedule.json files.
-    
-    Implements the ScheduleService protocol required by runtime ChannelManager.
-    This is an internal implementation detail.
-    """
-
-    def __init__(self, schedule_dir: Path, clock: MasterClock):
-        self.schedule_dir = schedule_dir
-        self.clock = clock
-        self._schedules: dict[str, list[dict[str, Any]]] = {}
-        self._lock = threading.Lock()
-
-    def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
-        """Load schedule.json for a channel.
-        
-        Returns:
-            (success, error_message) tuple.
-        """
-        schedule_file = self.schedule_dir / f"{channel_id}.json"
-        if not schedule_file.exists():
-            return (False, "Schedule file not found")
-
-        try:
-            with open(schedule_file, "r") as f:
-                data = json.load(f)
-
-            with self._lock:
-                self._schedules[channel_id] = data.get("schedule", [])
-            return (True, None)
-        except json.JSONDecodeError as e:
-            error_msg = f"Malformed JSON in schedule for {channel_id}: {e}"
-            print(error_msg, file=sys.stderr)
-            with self._lock:
-                self._schedules[channel_id] = []
-            return (False, error_msg)
-        except (KeyError, ValueError) as e:
-            error_msg = f"Invalid schedule data for {channel_id}: {e}"
-            print(error_msg, file=sys.stderr)
-            with self._lock:
-                self._schedules[channel_id] = []
-            return (False, error_msg)
-
-    def get_playout_plan_now(
-        self,
-        channel_id: str,
-        at_station_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """Return the resolved segment sequence that should be airing 'right now' on this channel.
-        
-        Per ChannelManagerContract.md (Phase 8):
-        - Selects active ScheduleItem based on current time
-        - Returns playout plan with single asset for Phase 8
-        """
-        with self._lock:
-            schedule = self._schedules.get(channel_id, [])
-
-        # Select active ScheduleItem
-        # Ensure at_station_time is timezone-aware (UTC)
-        now = at_station_time
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        active_items = []
-        for item in schedule:
-            start_str = item.get("start_time_utc")
-            duration = item.get("duration_seconds", 0)
-
-            if not start_str or duration is None:
-                continue
-
-            try:
-                # Parse ISO 8601 UTC timestamp
-                start_time_str = start_str.replace("Z", "+00:00")
-                start_time = datetime.fromisoformat(start_time_str)
-                if start_time.tzinfo is None:
-                    start_time = start_time.replace(tzinfo=timezone.utc)
-
-                # Calculate end_time = start_time + duration_seconds
-                end_time = start_time + timedelta(seconds=duration)
-
-                # Active if: start_time_utc ≤ now < start_time_utc + duration_seconds
-                if start_time <= now < end_time:
-                    active_items.append((item, start_time))
-            except (ValueError, TypeError):
-                continue
-
-        if not active_items:
-            return []  # No active item
-
-        # Select earliest start_time_utc
-        active_items.sort(key=lambda x: x[1])
-        active_item = active_items[0][0]
-
-        # Phase 8: Return single-segment playout plan
-        # Map ScheduleItem to playout plan segment
-        segment = {
-            "asset_id": active_item.get("id", ""),
-            "asset_path": active_item.get("asset_path", ""),
-            "start_time": active_item.get("start_time_utc"),
-            "duration_seconds": active_item.get("duration_seconds", 0),
-            "metadata": active_item.get("metadata", {}),
-        }
-        return [segment]
-
-
-class Phase8ProgramDirector:
-    """ProgramDirector implementation (always returns 'normal' mode).
-    
-    Implements the ProgramDirector protocol required by runtime ChannelManager.
-    This is an internal implementation detail.
-    """
-
-    def get_channel_mode(self, channel_id: str) -> str:
-        """Return the required mode for this channel (always 'normal' in Phase 8)."""
-        return "normal"
 
 
 # =============================================================================

@@ -120,7 +120,7 @@ class ChannelConfig:
     channel_id_int: int       # AIR gRPC ID (1, 2, 3...)
     name: str
     program_format: ProgramFormat
-    schedule_source: str      # blockplan only, e.g. "phase3" (Phase8 Decommission Contract)
+    schedule_source: str      # blockplan only, e.g. "phase3"
     schedule_config: dict[str, Any] = field(default_factory=dict)
     blockplan_only: bool = False  # When True, only BlockPlanProducer is permitted
 
@@ -128,20 +128,18 @@ class ChannelConfig:
     def from_dict(cls, data: dict[str, Any]) -> ChannelConfig:
         """Deserialize from dict (e.g. loaded from JSON).
 
-        Phase8 Decommission Contract: schedule_source is required and must be
-        a blockplan schedule source (e.g. "phase3"). No default; invalid values raise.
+        schedule_source is required and must be a blockplan schedule source (e.g. "phase3").
+        No default; invalid values raise.
         """
         program_format_data = data.get("program_format", {})
         schedule_source = data.get("schedule_source")
         if schedule_source is None:
             raise ValueError(
-                "Phase8DecommissionContract: schedule_source is required; "
-                "mock/playlist schedule services are not available."
+                "schedule_source is required; mock/playlist schedule services are not available."
             )
         if schedule_source not in valid_schedule_sources():
             raise ValueError(
-                f"Phase8DecommissionContract: schedule_source must be one of "
-                f"{valid_schedule_sources()}, got {schedule_source!r}"
+                f"schedule_source must be one of {valid_schedule_sources()}, got {schedule_source!r}"
             )
         config = cls(
             channel_id=data["channel_id"],
@@ -156,8 +154,7 @@ class ChannelConfig:
         return config
 
 
-# Phase8 Decommission Contract: only blockplan schedule source is valid.
-# See docs/contracts/architecture/Phase8DecommissionContract.md
+# Only blockplan schedule source is valid.
 BLOCKPLAN_SCHEDULE_SOURCE = "phase3"
 
 
@@ -170,13 +167,12 @@ def assert_schedule_source_valid(config: ChannelConfig) -> None:
     """
     Raise ValueError if config.schedule_source is not a valid blockplan schedule source.
 
-    Phase8 Decommission Contract: no channel config may use schedule_source
-    other than the blockplan one (e.g. "phase3"). Call this at config load or use.
+    No channel config may use schedule_source other than the blockplan one (e.g. "phase3").
+    Call this at config load or use.
     """
     if config.schedule_source not in valid_schedule_sources():
         raise ValueError(
-            f"Phase8DecommissionContract: schedule_source must be one of "
-            f"{valid_schedule_sources()}, got {config.schedule_source!r}"
+            f"schedule_source must be one of {valid_schedule_sources()}, got {config.schedule_source!r}"
         )
 
 

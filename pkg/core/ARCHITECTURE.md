@@ -9,7 +9,7 @@
 
 **retrovue is the station. Everything else is internal.**
 
-The system process is `retrovue`. There is no public or user-visible concept of "Air" or "Phase8ProgramDirector". These remain as internal implementation details only.
+The system process is `retrovue`. There is no public or user-visible concept of "Air" or the internal ProgramDirector implementation. These remain as internal implementation details only.
 
 - **RetroVue** is the product name
 - **retrovue** is the running process
