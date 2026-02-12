@@ -145,8 +145,7 @@ RPCs:
 - StartChannel
 - StopChannel
 - UpdatePlan
-- LoadPreview
-- SwitchToLive
+- Legacy segment RPCs (retired; see Phase8DecommissionContract)
 - AttachStream
 - DetachStream
 - GetVersion

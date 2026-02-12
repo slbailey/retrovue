@@ -35,7 +35,7 @@ Air intentionally does NOT:
 These concerns are owned by Core.  
 Air enforces only runtime execution correctness.
 
-**Core → Air boundary:** Core passes asset identity (GUID), resolved playout-ready descriptors (producer type, offsets, constraints), and explicit control commands (LoadPreview, SwitchToLive, UpdatePlan). Core does **not** pass file paths or execution instructions; Air maps descriptors to concrete producer implementations and owns *how* media is materialized, not *what* or *when*.
+**Core → Air boundary:** Core passes asset identity (GUID), resolved playout-ready descriptors (producer type, offsets, constraints), and explicit control commands (legacy preload RPC, legacy switch RPC, UpdatePlan). Core does **not** pass file paths or execution instructions; Air maps descriptors to concrete producer implementations and owns *how* media is materialized, not *what* or *when*.
 
 ---
 
@@ -81,7 +81,7 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Input bus:** PlayoutControl owns two ProducerBuses (preview, live). LoadPreview loads the preview bus; SwitchToLive promotes preview → live. The live bus’s producer feeds FrameRingBuffer. See [ProducerBusContract](contracts/architecture/ProducerBusContract.md).
+**Input bus:** PlayoutControl owns two ProducerBuses (preview, live). legacy preload RPC loads the preview bus; legacy switch RPC promotes preview → live. The live bus’s producer feeds FrameRingBuffer. See [ProducerBusContract](contracts/architecture/ProducerBusContract.md).
 
 ---
 
@@ -98,8 +98,8 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 | StopChannel | StopChannelRequest | StopChannelResponse | Graceful shutdown of active session. |
 | UpdatePlan | UpdatePlanRequest | UpdatePlanResponse | Swap active plan for session without stopping. |
 | GetVersion | ApiVersionRequest | ApiVersion | API version string. |
-| LoadPreview | LoadPreviewRequest | LoadPreviewResponse | Load asset into preview bus; shadow decode. |
-| SwitchToLive | SwitchToLiveRequest | SwitchToLiveResponse | Promote preview bus to live atomically; PTS continuity. |
+| legacy preload RPC | legacy preload RPCRequest | legacy preload RPCResponse | Load asset into preview bus; shadow decode. |
+| legacy switch RPC | legacy switch RPCRequest | legacy switch RPCResponse | Promote preview bus to live atomically; PTS continuity. |
 | AttachStream | AttachStreamRequest | AttachStreamResponse | Attach OutputSink (e.g. MpegTSOutputSink) to OutputBus for byte output. |
 | DetachStream | DetachStreamRequest | DetachStreamResponse | Detach OutputSink from OutputBus. |
 
@@ -116,7 +116,7 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 | **PlayoutEngine** | `runtime/PlayoutEngine.h` | Root execution unit. Single playout session at a time. Owns runtime graph (producer → buffer → ProgramOutput → OutputBus → OutputSink), clock, and engine-level state. Provides AttachOutputSink/DetachOutputSink, ConnectRendererToOutputBus methods. Does *not* own channel lifecycle or schedules. |
 | **PlayoutInterface** | `runtime/PlayoutInterface.h` | Thin adapter: gRPC layer → PlayoutEngine. Delegates all ops to engine. Provides AttachOutputSink/DetachOutputSink, GetOutputBus, ConnectRendererToOutputBus wrappers. |
 | **PlayoutControl** | `runtime/PlayoutControl.h` | Enforces valid sequencing of runtime ops (PTS, buffer priming, decode/render order). Uses **RuntimePhase** (kIdle, kBuffering, kReady, kPlaying, kPaused, kStopping, kError). Governs OutputBus attach/detach transitions via CanAttachSink/CanDetachSink. Tracks sink attachment state. Does *not* represent channel lifecycle or scheduling. |
-| **ProducerBus** | `runtime/ProducerBus.h` | Input path: two buses (preview, live). Each bus holds an IProducer (e.g. FileProducer). Live bus’s producer feeds FrameRingBuffer. Core directs LoadPreview (preview bus) and SwitchToLive (promote preview → live). See [ProducerBusContract](contracts/architecture/ProducerBusContract.md). BlackFrameProducer fallback when live runs out: [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md). |
+| **ProducerBus** | `runtime/ProducerBus.h` | Input path: two buses (preview, live). Each bus holds an IProducer (e.g. FileProducer). Live bus’s producer feeds FrameRingBuffer. Core directs legacy preload RPC (preview bus) and legacy switch RPC (promote preview → live). See [ProducerBusContract](contracts/architecture/ProducerBusContract.md). BlackFrameProducer fallback when live runs out: [BlackFrameProducerContract](contracts/architecture/BlackFrameProducerContract.md). |
 | **TimingLoop** | `runtime/TimingLoop.h` | Tick loop, backpressure events, timing/coordination with MasterClock. |
 
 **PlayoutInstance** (internal struct in `PlayoutEngine.cpp`): Holds one instance's runtime: `channel_id` (external), `plan_handle`, `program_format` (ProgramFormat struct parsed from JSON), ring_buffer, live_producer, preview_producer, program_output, timing_loop, PlayoutControl (control), OutputBus. One instance per active “channel” slot; Air enforces at most one active instance. ProgramFormat defines canonical program signal (video: width, height, frame_rate; audio: sample_rate, channels); fixed for lifetime of instance; independent of encoding/transport. See [PlayoutInstanceAndProgramFormatContract](contracts/architecture/PlayoutInstanceAndProgramFormatContract.md).
@@ -176,11 +176,11 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 - **FileProducer** / **ProgrammaticProducer** implement **IProducer**; push into **FrameRingBuffer**.
 - **ProgramOutput** reads **FrameRingBuffer**; routes frames to **OutputBus** when connected (via `SetOutputBus()`), else uses legacy side_sink_ callbacks. Supports both modes during transition.
 - **OutputBus** routes frames to currently attached **OutputSink** (e.g. MpegTSOutputSink). Frames are in **ProgramFormat** (established at StartChannel). Attachment/detachment validated by PlayoutControl. OutputBus does not own transport, threads, or encoding.
-- **MpegTSOutputSink** implements **IOutputSink**; consumes frames from OutputBus via ConsumeVideo/ConsumeAudio (frames in ProgramFormat); adapts ProgramFormat to encoding (must fail fast if format unsupported); enqueues to internal queues; MuxLoop thread drains queues and encodes via EncoderPipeline; writes TS packets to file descriptor (UDS/TCP). Created by PlayoutControlImpl on SwitchToLive when stream attached.
+- **MpegTSOutputSink** implements **IOutputSink**; consumes frames from OutputBus via ConsumeVideo/ConsumeAudio (frames in ProgramFormat); adapts ProgramFormat to encoding (must fail fast if format unsupported); enqueues to internal queues; MuxLoop thread drains queues and encodes via EncoderPipeline; writes TS packets to file descriptor (UDS/TCP). Created by PlayoutControlImpl on legacy switch RPC when stream attached.
 - **MasterClock** and **MetricsExporter** are shared into PlayoutEngine and passed into session components.
 - **One-session rule:** `PlayoutEngine::StartChannel` returns error if a session already exists for a *different* channel_id; idempotent for same channel_id.
 - **OutputBus invariant:** At most one OutputSink attached per OutputBus (enforced by PlayoutControl). OutputBus does not perform attach/detach autonomously; all operations validated by PlayoutControl.
-- **PlayoutControlImpl** creates MpegTSOutputSink on SwitchToLive (if AttachStream was called); attaches to OutputBus via PlayoutInterface; connects program output to OutputBus to start frame flow.
+- **PlayoutControlImpl** creates MpegTSOutputSink on legacy switch RPC (if AttachStream was called); attaches to OutputBus via PlayoutInterface; connects program output to OutputBus to start frame flow.
 
 ---
 

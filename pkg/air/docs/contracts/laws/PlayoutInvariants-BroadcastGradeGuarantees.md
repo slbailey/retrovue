@@ -88,7 +88,7 @@ _Related: [Phase 8 Invariants Compiled](../phases/Phase8-Invariants-Compiled.md)
 - **No gaps:** The output stream has no missing frames or packets at the switch boundary. Continuity counters and PTS/DTS advance without discontinuity (or any discontinuity is explicit and spec-compliant).
 - **No PTS regression:** PTS/DTS never decrease across the switch. The segment mapping (INV-P8-SWITCH-002) ensures the first preview frame locks CT and MT together; subsequent frames continue from that point. TimelineController guarantees monotonic CT (INV-P8-002).
 - **No silence during switches:** The switch is seamless at the frame boundary. Preview is primed (shadow decode, then buffer fill) before promotion; the first frame from the new segment follows the last frame from the old segment without inserting silence or black beyond at most one acceptable frame if specified.
-- Switching is Core-commanded (SwitchToLive). Air does not switch autonomously except dead-man fallback (live underrun → BlackFrameProducer). Write barrier applies only to the producer being phased out; the producer required for switch readiness must be allowed to write until readiness is achieved.
+- Switching is Core-commanded (legacy switch RPC). Air does not switch autonomously except dead-man fallback (live underrun → BlackFrameProducer). Write barrier applies only to the producer being phased out; the producer required for switch readiness must be allowed to write until readiness is achieved.
 
 ---
 

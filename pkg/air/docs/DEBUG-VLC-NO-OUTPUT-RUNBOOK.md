@@ -18,7 +18,7 @@ All instrumentation is **DBG-only** and reversible. Log tags: `[DBG-BUS]`, `[DBG
 1. **Start HTTP listener** (your existing setup that accepts UDS and serves MPEG-TS over HTTP).
 2. **Start Air engine** (retrovue_air or your launcher).
 3. **Attach stream** (gRPC `AttachStream`).
-4. **SwitchToLive** (gRPC `SwitchToLive`; may retry on NOT_READY).
+4. **legacy switch RPC** (gRPC `legacy switch RPC`; may retry on NOT_READY).
 5. **Open stream in VLC** (GET the HTTP URL).
 6. **Watch logs** — collect 10–15 seconds of `[DBG-*]` lines.
 
@@ -59,7 +59,7 @@ RETROVUE_DBG_BOOTSTRAP_WRITE=1 ./retrovue_air ...
 | `[DBG-OUTPUT]` | bytes=… packets=… ms_since_last_write=… | 1/sec (MuxLoop heartbeat) |
 | `[DBG-PACING]` | RETROVUE_NO_PCR_PACING=1: pacing DISABLED | Once at startup |
 | `[DBG-BOOTSTRAP]` | Magic string repeat (n bytes) fd=… | 1/sec when enabled and WAITING_FOR_VIDEO |
-| `[DBG-SWITCH]` | auto_completed=… bus_connected=… sink_attached=… | On SwitchToLive completion |
+| `[DBG-SWITCH]` | auto_completed=… bus_connected=… sink_attached=… | On legacy switch RPC completion |
 | `[DBG-PO]` | SetOutputBus channel=… bus=yes/no | On SetOutputBus |
 | `[DBG-BUS]` | sink attached / sink detached | On AttachSink / DetachSink |
 

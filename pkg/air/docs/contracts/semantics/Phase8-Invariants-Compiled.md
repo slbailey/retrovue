@@ -1,8 +1,16 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8 Invariants — Compiled Reference
 
 **Authoritative definition of broadcast-grade laws** (clock authority, CT monotonicity, output liveness, audio format, seamless switching) **lives in [PlayoutInvariants-BroadcastGradeGuarantees.md](../laws/PlayoutInvariants-BroadcastGradeGuarantees.md).** This document compiles Phase 8 refinements only.
 
-Compiled from: Core `ScheduleManagerPhase8Contract.md`, AIR `Phase8-3-PreviewSwitchToLive.md`, and code comments. For full statements see source docs.
+Compiled from: Core `ScheduleManagerPhase8Contract.md`, AIR `LegacyPreviewSwitchModel.md` (Retired), and code comments. For full statements see source docs.
 
 ## Document Role
 
@@ -47,7 +55,7 @@ This document is a **Coordination Contract**, refining higher-level laws. It doe
 
 | ID | Name |
 |----|------|
-| INV-P8-SWITCH-ARMED | No LoadPreview while switch armed; FATAL if reset code reached while armed |
+| INV-P8-SWITCH-ARMED | No legacy preload RPC while switch armed; FATAL if reset code reached while armed |
 | INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live MUST wait until preview shadow decode ready; prevents timeline starvation deadlock |
 | INV-P8-EOF-SWITCH | Live producer EOF → switch completes immediately (do not block on buffer depth) |
 | INV-P8-PREVIEW-EOF | Preview EOF with frames → complete with lower thresholds (e.g. ≥1 video, ≥1 audio) |
@@ -65,7 +73,7 @@ This document is a **Coordination Contract**, refining higher-level laws. It doe
 ## 5. Source locations
 
 - **Core:** `pkg/core/docs/contracts/runtime/ScheduleManagerPhase8Contract.md` (§8, §14–15, Appendix A)
-- **AIR 8.3:** `pkg/air/docs/contracts/phases/Phase8-3-PreviewSwitchToLive.md`
+- **AIR 8.3 (Retired):** `pkg/air/docs/contracts/coordination/LegacyPreviewSwitchModel.md`
 - **Code:** PlayoutEngine.cpp, FileProducer.cpp, TimelineController.cpp, EncoderPipeline.cpp, MpegTSOutputSink.cpp, channel_manager.py
 
 Canonical contract documents take precedence over this compiled list.

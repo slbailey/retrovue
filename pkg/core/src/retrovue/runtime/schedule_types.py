@@ -513,3 +513,41 @@ class ScheduleManagerConfig:
     filler_path: str                           # Path to filler content
     filler_duration_seconds: float = 0.0       # Duration of filler file
     programming_day_start_hour: int = 6        # Broadcast day start
+
+
+# =============================================================================
+# INV-EXEC-NO-STRUCTURE-001: Typed block objects for execution layer
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class ScheduledSegment:
+    """One segment within a ScheduledBlock. Immutable.
+
+    Produced by the schedule/planning layer.
+    Consumed (read-only) by the execution layer.
+    """
+    segment_type: str           # "content", "filler", "padding", "episode", "pad"
+    asset_uri: str              # File path for playback
+    asset_start_offset_ms: int  # Seek offset into file
+    segment_duration_ms: int    # Duration of this segment
+
+
+@dataclass(frozen=True)
+class ScheduledBlock:
+    """A fully constructed block from the schedule layer. Immutable.
+
+    Execution consumes this object. Execution NEVER constructs it.
+    All timing comes from the schedule/planning layer.
+
+    INV-EXEC-NO-STRUCTURE-001: Execution SHALL NOT define block duration.
+    INV-EXEC-NO-BOUNDARY-001: Execution MAY NOT compute block boundaries.
+    """
+    block_id: str
+    start_utc_ms: int
+    end_utc_ms: int
+    segments: tuple[ScheduledSegment, ...]  # tuple for true immutability
+
+    @property
+    def duration_ms(self) -> int:
+        return self.end_utc_ms - self.start_utc_ms

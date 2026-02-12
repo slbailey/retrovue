@@ -25,7 +25,7 @@ This is not accidental. It emerges from two constraints:
 
 2. **Complexity at boundaries compounds.** The more micro-coordination required at segment boundaries, the more failure modes exist. Professional systems minimize boundary-crossing coordination by batching decisions into larger units (blocks, hours, dayparts).
 
-RetroVue has drifted toward micro-coordination: per-segment LoadPreview, per-transition SwitchToLive, boundary feasibility gating at session start. This maximizes control-plane chatter and creates fragile coupling between Core's scheduling logic and AIR's execution timing.
+RetroVue has drifted toward micro-coordination: per-segment legacy preload RPC, per-transition legacy switch RPC, boundary feasibility gating at session start. This maximizes control-plane chatter and creates fragile coupling between Core's scheduling logic and AIR's execution timing.
 
 ### 1.2 What Classes of Failures This Eliminates
 
@@ -36,7 +36,7 @@ Recent incidents revealed systematic fragility:
 | **Black screen on viewer join near boundary** | Session creation gated on first boundary feasibility | Phase 12 startup convergence (skip infeasible) |
 | **Stuck sessions on transition failure** | Single transition failure blocks all subsequent | Terminal state absorbs session |
 | **Race conditions at segment boundaries** | Core and AIR disagreeing on "now" | Deadline-authoritative switching |
-| **Complexity explosion in scheduler** | Per-segment LoadPreview/SwitchToLive choreography | Boundary state machine |
+| **Complexity explosion in scheduler** | Per-segment legacy preload RPC/legacy switch RPC choreography | Boundary state machine |
 
 These mitigations work, but they address symptoms. The root cause is architectural: **the system asks too many questions during execution**.
 
@@ -286,8 +286,8 @@ Broadcast-grade correctness requires the third option. A brief viewer interrupti
 
 | Current Model | BlockPlan Model | Complexity Removed |
 |--------------|-----------------|-------------------|
-| Per-segment LoadPreview RPC | Block contains all segments | LoadPreview choreography |
-| Per-transition SwitchToLive RPC | AIR executes autonomously | SwitchToLive choreography |
+| Per-segment legacy preload RPC RPC | Block contains all segments | legacy preload RPC choreography |
+| Per-transition legacy switch RPC RPC | AIR executes autonomously | legacy switch RPC choreography |
 | Boundary state machine (PLANNED → PRELOAD_ISSUED → SWITCH_SCHEDULED → SWITCH_ISSUED → LIVE) | Block fence (binary: before/after) | 6-state machine |
 | Startup convergence (skip infeasible boundaries) | No boundaries to evaluate at startup | Convergence logic |
 | Teardown deferral (transient state protection) | Simpler: executing block or not | Transient state tracking |
@@ -332,8 +332,8 @@ Rationale: These techniques introduce non-determinism and potential A/V sync iss
 ### 8.3 No Per-Segment RPC Choreography
 
 Core does not:
-- Send LoadPreview for each segment
-- Send SwitchToLive for each segment
+- Send legacy preload RPC for each segment
+- Send legacy switch RPC for each segment
 - Track segment-level state within a block
 - Receive segment-level acknowledgments
 
@@ -363,7 +363,7 @@ Phase 8 defines CT, epoch, segment lifecycle, write barriers, and switch semanti
 | Epoch immutability | INV-P8-005 | INV-P8-005 (unchanged) |
 | Segment boundaries | Core-computed, per-segment | Block-internal, AIR-computed |
 | Write barriers | Per-segment coordination | Per-segment within block (AIR-internal) |
-| LoadPreview/SwitchToLive | Core → AIR per segment | Block-internal (no RPC) |
+| legacy preload RPC/legacy switch RPC | Core → AIR per segment | Block-internal (no RPC) |
 
 Phase 8 invariants remain valid; their enforcement scope narrows to within-block execution.
 
@@ -406,7 +406,7 @@ The phases established essential semantics (CT authority, epoch immutability, te
 
 ### 10.3 Rollout Strategy
 
-- Can this coexist with the current LoadPreview/SwitchToLive model during migration?
+- Can this coexist with the current legacy preload RPC/legacy switch RPC model during migration?
 - Should this be opt-in per channel or system-wide?
 - What is the testing strategy for block-level execution?
 

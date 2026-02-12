@@ -1,3 +1,11 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8.9 — Audio and Video Streams from Single FileProducer
 
 _Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-6 Real MPEG-TS E2E](Phase8-6-RealMpegTsE2E.md) · [Phase8-7 Immediate Teardown](Phase8-7-ImmediateTeardown.md) · [Phase8-8 Frame Lifecycle and Playout Completion](Phase8-8-FrameLifecycleAndPlayoutCompletion.md)_

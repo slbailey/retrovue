@@ -29,7 +29,7 @@
 | [Phase8-1-AirOwnsMpegTs](Phase8-1-AirOwnsMpegTs.md) | Air owns MPEG-TS output. |
 | [Phase8-1-5-FileProducerInternalRefactor](Phase8-1-5-FileProducerInternalRefactor.md) | FileProducer internal refactor. |
 | [Phase8-2-SegmentControl](Phase8-2-SegmentControl.md) | Segment control (seek/stop). |
-| [Phase8-3-PreviewSwitchToLive](Phase8-3-PreviewSwitchToLive.md) | Preview / SwitchToLive. |
+| [LegacyPreviewSwitchModel (Retired model)](LegacyPreviewSwitchModel.md) | Legacy preview/switch model; superseded by BlockPlan. |
 | [Phase8-4-PersistentMpegTsMux](Phase8-4-PersistentMpegTsMux.md) | Persistent mux, PIDs. |
 | [Phase8-5-FanoutTeardown](Phase8-5-FanoutTeardown.md) | Fan-out and teardown. |
 | [Phase8-6-RealMpegTsE2E](Phase8-6-RealMpegTsE2E.md) | Real MPEG-TS E2E. |

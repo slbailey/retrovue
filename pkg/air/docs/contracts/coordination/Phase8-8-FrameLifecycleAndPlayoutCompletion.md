@@ -1,8 +1,16 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8.8 — Frame Lifecycle and Playout Completion
 
 _Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [Phase8-6 Real MPEG-TS E2E](Phase8-6-RealMpegTsE2E.md) · [Phase8-7 Immediate Teardown](Phase8-7-ImmediateTeardown.md)_
 
-**Principle:** Producer exhaustion (EOF) MUST NOT imply playout completion. Teardown MUST NOT occur until all scheduled frames have been rendered at their wall-clock time. The renderer / clock owns playout completion; EOF from the demuxer does not. **Clock-driven segment switching** (LoadPreview → SwitchToLive at scheduled boundaries) is the primary mechanism; EOF is a secondary condition that does not drive teardown.
+**Principle:** Producer exhaustion (EOF) MUST NOT imply playout completion. Teardown MUST NOT occur until all scheduled frames have been rendered at their wall-clock time. The renderer / clock owns playout completion; EOF from the demuxer does not. **Clock-driven segment switching** (legacy preload RPC → legacy switch RPC at scheduled boundaries) is the primary mechanism; EOF is a secondary condition that does not drive teardown.
 
 ---
 
@@ -39,7 +47,7 @@ The following terms are used in this contract. Terminology is **provisional** an
 | **Frame production** | The activity of the producer emitting frames into the buffer. |
 | **Frame buffering** | Frames held between production and presentation (e.g. ring buffer). |
 | **Frame presentation** | The act of outputting a frame at its scheduled time (e.g. writing to mux/stream at the correct PTS). |
-| **Clock-driven switching** | Segment switching based on scheduled time boundaries (not EOF). `LoadPreview` prepares next asset; `SwitchToLive` activates it at the segment boundary. |
+| **Clock-driven switching** | Segment switching based on scheduled time boundaries (not EOF). `legacy preload RPC` prepares next asset; `legacy switch RPC` activates it at the segment boundary. |
 | **Teardown eligibility** | The condition under which the channel may be torn down: either (a) viewer count has dropped to zero (Phase 8.7), or (b) playout has completed and viewer count is still ≥ 1 (this phase). |
 
 ---
@@ -49,10 +57,10 @@ The following terms are used in this contract. Terminology is **provisional** an
 ### Step-by-step description
 
 1. **Clock-driven segment switching**  
-   Segment boundaries are determined by scheduled time, not EOF. Before the segment boundary (preload deadline), `LoadPreview` is called to prepare the next asset: it creates a preview producer but **does not start it**. At the scheduled segment boundary, `SwitchToLive` is called: it starts the preview producer, stops the old live producer, and atomically swaps preview → live. The encoder and TS mux persist across switches (created once per channel start, never closed/reopened).
+   Segment boundaries are determined by scheduled time, not EOF. Before the segment boundary (preload deadline), `legacy preload RPC` is called to prepare the next asset: it creates a preview producer but **does not start it**. At the scheduled segment boundary, `legacy switch RPC` is called: it starts the preview producer, stops the old live producer, and atomically swaps preview → live. The encoder and TS mux persist across switches (created once per channel start, never closed/reopened).
 
 2. **File demux**  
-   The live producer (e.g. file demuxer) reads the container and emits decoded frames. Demuxing may run **faster than real time**. EOF occurs when the file has been fully read; at that moment, frames may still be in the buffer and not yet presented. **EOF does not trigger switching**; clock-driven `SwitchToLive` at the segment boundary handles transitions.
+   The live producer (e.g. file demuxer) reads the container and emits decoded frames. Demuxing may run **faster than real time**. EOF occurs when the file has been fully read; at that moment, frames may still be in the buffer and not yet presented. **EOF does not trigger switching**; clock-driven `legacy switch RPC` at the segment boundary handles transitions.
 
 3. **Frame buffering**  
    Frames produced by the live producer are placed into a buffer (e.g. frame ring buffer) between the producer and the renderer. The buffer decouples production rate from presentation rate. The same buffer is used across segment switches; only the producer feeding it changes.
@@ -126,11 +134,11 @@ No component may infer teardown or “stream over” based solely on EOF or empt
 
 7. **Phase 8.7 rules still apply.** If viewer count drops to zero, teardown is immediate. Phase 8.8 applies only while viewer count ≥ 1. When viewer count = 0, the pipeline MUST tear down without waiting for playout completion or producer EOF.
 
-### Clock-driven switching (LoadPreview / SwitchToLive)
+### Clock-driven switching (legacy preload RPC / legacy switch RPC)
 
-8. **LoadPreview prepares but does not activate.** `LoadPreview` creates the preview producer but **MUST NOT** start it. The preview producer remains idle until `SwitchToLive` is called. This ensures LoadPreview only prepares the next asset; clock-driven SwitchToLive triggers the actual switch.
+8. **legacy preload RPC prepares but does not activate.** `legacy preload RPC` creates the preview producer but **MUST NOT** start it. The preview producer remains idle until `legacy switch RPC` is called. This ensures legacy preload RPC only prepares the next asset; clock-driven legacy switch RPC triggers the actual switch.
 
-9. **SwitchToLive activates and swaps.** `SwitchToLive` starts the preview producer (if not already started), stops the old live producer, and atomically swaps preview → live. The encoder and TS mux MUST remain alive across switches (created once per channel start, never closed/reopened during SwitchToLive). PTS continuity is maintained; no PAT/PMT reset, no discontinuity flags.
+9. **legacy switch RPC activates and swaps.** `legacy switch RPC` starts the preview producer (if not already started), stops the old live producer, and atomically swaps preview → live. The encoder and TS mux MUST remain alive across switches (created once per channel start, never closed/reopened during legacy switch RPC). PTS continuity is maintained; no PAT/PMT reset, no discontinuity flags.
 
 10. **Encoder/mux persistence.** The encoder pipeline (EncoderPipeline) and TS mux (AVFormatContext, AVIO) are created once per channel start and persist across all segment switches. They are closed only when the channel is torn down (viewer count 0 or playout completion). This ensures broadcast-grade continuity: no pause, no time reset, no mid-stream jump.
 
@@ -144,15 +152,15 @@ No component may infer teardown or “stream over” based solely on EOF or empt
 
 ### Unit tests
 
-- **LoadPreview does not start preview producer:** Call `LoadPreview` and assert that the preview producer is created but not started (no frames written to buffer). Assert that `SwitchToLive` starts the preview producer before swapping to live.
-- **SwitchToLive starts preview before swap:** Call `LoadPreview` then `SwitchToLive` and assert that the preview producer is started before it becomes the live producer. Assert atomic swap (preview → live, preview cleared).
-- **Encoder persists across switches:** Perform multiple LoadPreview/SwitchToLive cycles and assert that the encoder pipeline is not closed/reopened between switches. Assert PTS continuity (monotonic increase, no reset).
+- **legacy preload RPC does not start preview producer:** Call `legacy preload RPC` and assert that the preview producer is created but not started (no frames written to buffer). Assert that `legacy switch RPC` starts the preview producer before swapping to live.
+- **legacy switch RPC starts preview before swap:** Call `legacy preload RPC` then `legacy switch RPC` and assert that the preview producer is started before it becomes the live producer. Assert atomic swap (preview → live, preview cleared).
+- **Encoder persists across switches:** Perform multiple legacy preload RPC/legacy switch RPC cycles and assert that the encoder pipeline is not closed/reopened between switches. Assert PTS continuity (monotonic increase, no reset).
 - **EOF before render complete:** Simulate producer EOF while the buffer still contains frames (or the render path has not yet presented the last frame). Assert that teardown is NOT triggered, that writing continues, and that playout completion is only signaled after the last frame is presented. Assert that no “stream over” or “channel stop” is inferred from EOF alone.
 - **Completion only after last frame:** With a known frame count and simulated real-time render clock, assert that playout completion is signaled only when the last frame has been presented at its scheduled time, not when the producer reports EOF.
 
 ### Integration tests
 
-- **Clock-driven switching:** Run a schedule with multiple segments (e.g. SampleA 10s → SampleB 10s → SampleA). Assert that `LoadPreview` is called before each segment boundary (preload deadline) and that `SwitchToLive` is called exactly at each segment boundary. Assert that the preview producer is not started until `SwitchToLive`.
+- **Clock-driven switching:** Run a schedule with multiple segments (e.g. SampleA 10s → SampleB 10s → SampleA). Assert that `legacy preload RPC` is called before each segment boundary (preload deadline) and that `legacy switch RPC` is called exactly at each segment boundary. Assert that the preview producer is not started until `legacy switch RPC`.
 - **Encoder persistence across switches:** Perform multiple segment switches and assert that the encoder pipeline (EncoderPipeline) is not closed/reopened. Assert that AVFormatContext, AVIO, and PTS counters persist across switches. Assert no PAT/PMT injection, no discontinuity flags, same PCR timeline.
 - **Producer finishes early, stream continues:** Run a file-based producer that reaches EOF quickly (demux faster than real time). Assert that the TS stream continues until the last frame has been rendered and written; assert no premature stop, no reconnect attempts, and no restarts. Assert that teardown occurs only after the completion signal from the render path (or after viewer count → 0).
 - **Buffer drains at real-time rate:** With producer EOF and frames remaining in the buffer, assert that output (e.g. MPEG-TS bytes) continues at the expected real-time rate until the last frame is output; assert no burst then stop, and no EOF-based teardown.
@@ -161,7 +169,7 @@ No component may infer teardown or “stream over” based solely on EOF or empt
 
 - **Broadcast-grade switching:** Loop SampleA (10s) → SampleB (10s) → SampleA → SampleB. Observe in VLC: no pause, no time reset, no mid-stream jump, audio continuous. Encoder and TS mux stay alive across switches.
 - **No reconnects:** Playing a single file to completion (one viewer) MUST NOT produce “attempting reconnect” or equivalent; the stream MUST continue smoothly until the last frame.
-- **No restarts:** The producer/encoder MUST NOT be restarted or re-created solely because of EOF; one logical playout from start to completion. The encoder pipeline MUST NOT be closed/reopened during SwitchToLive.
+- **No restarts:** The producer/encoder MUST NOT be restarted or re-created solely because of EOF; one logical playout from start to completion. The encoder pipeline MUST NOT be closed/reopened during legacy switch RPC.
 - **Smooth playback:** VLC (or equivalent) plays from start to last frame without visible truncation, restart, or discontinuity attributable to EOF-based teardown.
 - **Phase 8.6 VLC playback remains correct:** All Phase 8.6 E2E expectations (real MPEG-TS, VLC-playable) still hold.
 - **Phase 8.7 teardown semantics still hold:** Last viewer disconnect still causes immediate teardown; no background activity after teardown; baseline resource invariants hold.
@@ -179,14 +187,14 @@ No component may infer teardown or “stream over” based solely on EOF or empt
 
 ## Exit Criteria
 
-1. **Clock-driven switching works correctly.** `LoadPreview` creates preview producer but does not start it. `SwitchToLive` starts preview producer before swapping to live. Switching occurs at scheduled segment boundaries, not EOF.
+1. **Clock-driven switching works correctly.** `legacy preload RPC` creates preview producer but does not start it. `legacy switch RPC` starts preview producer before swapping to live. Switching occurs at scheduled segment boundaries, not EOF.
 2. **Encoder/mux persistence.** Encoder pipeline (EncoderPipeline) and TS mux (AVFormatContext, AVIO) are created once per channel start and persist across all segment switches. They are closed only on channel teardown. PTS continuity is maintained (monotonic increase, no reset).
 3. **EOF does not cause teardown.** When viewer count ≥ 1, producer EOF alone MUST NOT cause teardown, stop writing, or channel shutdown.
 4. **Stream remains stable until last frame is rendered.** The TS stream MUST continue until the last scheduled frame has been presented; no premature stop, reconnect loops, or restarts due to EOF.
 5. **Broadcast-grade switching.** E2E test: Loop SampleA (10s) → SampleB (10s) → SampleA → SampleB. VLC shows: no pause, no time reset, no mid-stream jump, audio continuous.
 6. **Phase 8.6 VLC playback remains correct.** E2E with VLC and real MPEG-TS still passes; no regression.
 7. **Phase 8.7 teardown semantics still hold.** Immediate teardown on viewer count 1 → 0; no background activity after teardown; no UDS reconnect attempts; baseline resource invariants.
-8. **Unit, integration, and E2E tests** for LoadPreview/SwitchToLive lifecycle, encoder persistence, EOF-before-render-complete, and producer-finishes-early scenarios pass as specified above.
+8. **Unit, integration, and E2E tests** for legacy preload RPC/legacy switch RPC lifecycle, encoder persistence, EOF-before-render-complete, and producer-finishes-early scenarios pass as specified above.
 
 ---
 
@@ -202,4 +210,4 @@ When the runtime uses the **ffmpeg fallback** (e.g. Phase 0), the playout proces
 - **DO NOT** modify implementation in this phase; this document is a **behavioral contract only**.
 - **DO NOT** introduce new abstractions or APIs; define only correct behavior for the existing pipeline.
 
-This document is intended to block incorrect future changes: any change that allows EOF to trigger teardown, or that ties teardown to producer exhaustion instead of renderer completion (when viewers ≥ 1), violates this contract. Additionally, any change that starts the preview producer in `LoadPreview` (instead of waiting for `SwitchToLive`), or that closes/reopens the encoder pipeline during `SwitchToLive` (instead of keeping it alive across switches), violates this contract.
+This document is intended to block incorrect future changes: any change that allows EOF to trigger teardown, or that ties teardown to producer exhaustion instead of renderer completion (when viewers ≥ 1), violates this contract. Additionally, any change that starts the preview producer in `legacy preload RPC` (instead of waiting for `legacy switch RPC`), or that closes/reopens the encoder pipeline during `legacy switch RPC` (instead of keeping it alive across switches), violates this contract.

@@ -33,10 +33,10 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both (Core produces; Air enforces) |
 | **phase_applicability** | 4, 5, 6A, 6A.1, 6A.2, 6A.3, 7+ |
 | **sources** | ARCH-air-Phase6AOverview-004, ARCH-air-Phase6A1-004, ARCH-air-Phase6A2-001, ARCH-air-Phase6A2-003, ARCH-air-Phase6A3-003, ARCH-core-Phase4Pipeline-001, ARCH-core-Phase4Pipeline-003 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; `pkg/air/docs/contracts/semantics/FileProducerContract.md`; `pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md` |
+| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; `pkg/air/docs/contracts/semantics/FileProducerContract.md`; `pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md` |
 | **required_tests** | Assert no output after hard_stop_time_ms; producer stopped by hard_stop; FileProducer hard-stop tests |
 | **required_log_events_fields** | (none specified) |
-| **codified_status** | **yes** — PlayoutEngineContract LoadPreview; Phase4/Phase5 archived |
+| **codified_status** | **yes** — PlayoutEngineContract legacy preload RPC; Phase4/Phase5 archived |
 
 ---
 
@@ -45,12 +45,12 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | LAW-003 |
-| **normative_text** | Media execution MUST be driven by LoadPreview (segment payload) then SwitchToLive (at boundary). Air MUST NOT interpret schedules or plans. StartChannel initializes channel state but MUST NOT imply media playback; execution begins only after LoadPreview + SwitchToLive. |
+| **normative_text** | Media execution MUST be driven by legacy preload RPC (segment payload) then legacy switch RPC (at boundary). Air MUST NOT interpret schedules or plans. StartChannel initializes channel state but MUST NOT imply media playback; execution begins only after legacy preload RPC + legacy switch RPC. |
 | **scope** | both |
 | **phase_applicability** | 6, 6A, 6A.0 |
 | **sources** | ARCH-air-Phase6AOverview-001, ARCH-air-Phase6AOverview-002, ARCH-air-Phase6A0-003 |
 | **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; `pkg/air/docs/archive/phases/Phase6A-Overview.md` |
-| **required_tests** | StartChannel alone produces no decode/output; LoadPreview precedes SwitchToLive |
+| **required_tests** | StartChannel alone produces no decode/output; legacy preload RPC precedes legacy switch RPC |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract THINK vs ACT; Phase6A Overview |
 
@@ -98,7 +98,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **phase_applicability** | 6, 7+ |
 | **sources** | ARCH-air-Phase6-002, ARCH-main-MpegTSDomain-SINK011, ARCH-main-MpegTSTiming-T006 |
 | **where_it_belongs** | `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §5 Switching; `pkg/air/docs/contracts/semantics/OutputContinuityContract.md` |
-| **required_tests** | Record output PTS; verify strictly increasing; SwitchToLiveResponse.pts_contiguous; test_sink_frame_order |
+| **required_tests** | Record output PTS; verify strictly increasing; legacy switch RPCResponse.pts_contiguous; test_sink_frame_order |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutInvariants §5 Switching; INV-P8-002 |
 
@@ -127,7 +127,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | AIR-001 |
-| **normative_text** | Air MUST compile and link against `protos/playout.proto` generated code. Air MUST expose PlayoutControl with StartChannel, LoadPreview, SwitchToLive, StopChannel. Air MUST NOT interpret `plan_handle` in Phase 6A; accepted only for proto compatibility. |
+| **normative_text** | Air MUST compile and link against `protos/playout.proto` generated code. Air MUST expose PlayoutControl with StartChannel, legacy preload RPC, legacy switch RPC, StopChannel. Air MUST NOT interpret `plan_handle` in Phase 6A; accepted only for proto compatibility. |
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-001, ARCH-air-Phase6A0-002, ARCH-air-Phase6A0-008 |
@@ -154,50 +154,50 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 
 ---
 
-### AIR-003: LoadPreview Before StartChannel → Error
+### AIR-003: legacy preload RPC Before StartChannel → Error
 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | AIR-003 |
-| **normative_text** | LoadPreview before StartChannel for that channel MUST return error (`success=false`). |
+| **normative_text** | legacy preload RPC before StartChannel for that channel MUST return error (`success=false`). |
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-005 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; PE-CTL-001 |
-| **required_tests** | Call LoadPreview without StartChannel; assert success=false |
+| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; PE-CTL-001 |
+| **required_tests** | Call legacy preload RPC without StartChannel; assert success=false |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract PE-CTL-001 |
 
 ---
 
-### AIR-004: SwitchToLive With No Preview → Error
+### AIR-004: legacy switch RPC With No Preview → Error
 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | AIR-004 |
-| **normative_text** | SwitchToLive with no preview loaded for that channel MUST return error (`success=false`). |
+| **normative_text** | legacy switch RPC with no preview loaded for that channel MUST return error (`success=false`). |
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-006 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §SwitchToLive; PE-CTL-002 |
-| **required_tests** | Call SwitchToLive without LoadPreview; assert success=false |
+| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy switch RPC; PE-CTL-002 |
+| **required_tests** | Call legacy switch RPC without legacy preload RPC; assert success=false |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract PE-CTL-002 |
 
 ---
 
-### AIR-005: LoadPreview → Preview Only; SwitchToLive → Promote
+### AIR-005: legacy preload RPC → Preview Only; legacy switch RPC → Promote
 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | AIR-005 |
-| **normative_text** | LoadPreview MUST load asset into preview slot; MUST NOT go live. LoadPreview MUST install into preview slot; live MUST remain unchanged until SwitchToLive. SwitchToLive MUST promote preview to live exactly when commanded; MUST be seamless with no gap. Old live MUST be stopped; preview slot cleared or ready for next. |
+| **normative_text** | legacy preload RPC MUST load asset into preview slot; MUST NOT go live. legacy preload RPC MUST install into preview slot; live MUST remain unchanged until legacy switch RPC. legacy switch RPC MUST promote preview to live exactly when commanded; MUST be seamless with no gap. Old live MUST be stopped; preview slot cleared or ready for next. |
 | **scope** | air |
 | **phase_applicability** | 6, 6A, 6A.1 |
 | **sources** | ARCH-air-Phase6-001, ARCH-air-Phase6-002, ARCH-air-Phase6A1-005, ARCH-air-Phase6A1-006 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; §SwitchToLive; `pkg/air/docs/contracts/coordination/ProducerBusContract.md` |
-| **required_tests** | LoadPreviewResponse.shadow_decode_started; SwitchToLiveResponse.pts_contiguous; preview updated, live unchanged; old live stopped |
-| **required_log_events_fields** | LoadPreviewResponse.shadow_decode_started, SwitchToLiveResponse.pts_contiguous |
+| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC; `pkg/air/docs/contracts/coordination/ProducerBusContract.md` |
+| **required_tests** | legacy preload RPCResponse.shadow_decode_started; legacy switch RPCResponse.pts_contiguous; preview updated, live unchanged; old live stopped |
+| **required_log_events_fields** | legacy preload RPCResponse.shadow_decode_started, legacy switch RPCResponse.pts_contiguous |
 | **codified_status** | **yes** — PlayoutEngineContract; Phase6A-1 |
 
 ---
@@ -244,7 +244,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **phase_applicability** | 6A.2 |
 | **sources** | ARCH-air-Phase6A2-001, ARCH-air-Phase6A2-002, ARCH-air-Phase6A2-004 |
 | **where_it_belongs** | `pkg/air/docs/contracts/semantics/FileProducerContract.md` |
-| **required_tests** | Output respects start and stop; seek within tolerance; LoadPreviewResponse.success=false for invalid path |
+| **required_tests** | Output respects start and stop; seek within tolerance; legacy preload RPCResponse.success=false for invalid path |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — FileProducerContract; PROD-010, PROD-010b |
 
@@ -271,12 +271,12 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | AIR-010 |
-| **normative_text** | LoadPreview for next segment MUST be received before current segment ends. SwitchToLive at boundary. |
+| **normative_text** | legacy preload RPC for next segment MUST be received before current segment ends. legacy switch RPC at boundary. |
 | **scope** | both (Core issues; Air receives) |
 | **phase_applicability** | 6 |
 | **sources** | ARCH-air-Phase6-007 |
 | **where_it_belongs** | `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`; Core owns prefeed; Air receives |
-| **required_tests** | LoadPreview call timestamp < boundary; SwitchToLive at boundary |
+| **required_tests** | legacy preload RPC call timestamp < boundary; legacy switch RPC at boundary |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — Core Phase5; Air receives, does not enforce ordering |
 
@@ -389,10 +389,10 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both (Core produces; Air consumes) |
 | **phase_applicability** | 4 |
 | **sources** | ARCH-core-Phase4Pipeline-002 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md`; `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` LoadPreview |
+| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md`; `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` legacy preload RPC |
 | **required_tests** | Assert start_offset_ms in segment is media position; not wall time |
 | **required_log_events_fields** | (none) |
-| **codified_status** | **yes** — Phase4; PlayoutEngineContract LoadPreview |
+| **codified_status** | **yes** — Phase4; PlayoutEngineContract legacy preload RPC |
 
 ---
 
@@ -401,7 +401,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | CORE-002 |
-| **normative_text** | Every invocation MUST create new segment/request; MUST NOT mutate shared state. PlayoutSegment MUST be immutable once issued to Air; changes MUST require new segment and new LoadPreview. |
+| **normative_text** | Every invocation MUST create new segment/request; MUST NOT mutate shared state. PlayoutSegment MUST be immutable once issued to Air; changes MUST require new segment and new legacy preload RPC. |
 | **scope** | core |
 | **phase_applicability** | 4, 5 |
 | **sources** | ARCH-core-Phase4Pipeline-004, ARCH-core-Phase5CM-003 |
@@ -417,12 +417,12 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | CORE-003 |
-| **normative_text** | ChannelManager MUST issue LoadPreview for next segment no later than `hard_stop_time_ms - prefeed_window_ms`. ChannelManager MUST issue SwitchToLive at the boundary (after LoadPreview for that segment). ChannelManager MUST NOT wait for Air to ask for next segment; CM MUST drive the timeline. ChannelManager MUST NOT issue duplicate LoadPreview for the same next segment when re-evaluating multiple times before boundary. |
+| **normative_text** | ChannelManager MUST issue legacy preload RPC for next segment no later than `hard_stop_time_ms - prefeed_window_ms`. ChannelManager MUST issue legacy switch RPC at the boundary (after legacy preload RPC for that segment). ChannelManager MUST NOT wait for Air to ask for next segment; CM MUST drive the timeline. ChannelManager MUST NOT issue duplicate legacy preload RPC for the same next segment when re-evaluating multiple times before boundary. |
 | **scope** | core |
 | **phase_applicability** | 5 |
 | **sources** | ARCH-core-Phase5CM-001, ARCH-core-Phase5CM-002, ARCH-core-Phase5CM-004, ARCH-core-Phase5CM-005 |
 | **where_it_belongs** | `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`; `pkg/core/docs/contracts/resources/ChannelManagerContract.md` |
-| **required_tests** | LoadPreview timestamp <= hard_stop_time_ms - prefeed_window_ms; SwitchToLive at boundary; at most one LoadPreview per next segment |
+| **required_tests** | legacy preload RPC timestamp <= hard_stop_time_ms - prefeed_window_ms; legacy switch RPC at boundary; at most one legacy preload RPC per next segment |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — Phase5 archived; ChannelManagerContract has HTTP/startup; prefeed semantics not fully codified |
 
@@ -499,13 +499,13 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | Field | Value |
 |-------|-------|
 | **canonical_id** | OBS-001 |
-| **normative_text** | LoadPreviewResponse SHOULD include `shadow_decode_started` when applicable. SwitchToLiveResponse SHOULD include `pts_contiguous` when implemented. |
+| **normative_text** | legacy preload RPCResponse SHOULD include `shadow_decode_started` when applicable. legacy switch RPCResponse SHOULD include `pts_contiguous` when implemented. |
 | **scope** | air |
 | **phase_applicability** | 6, 6A |
 | **sources** | ARCH-air-Phase6-004, ARCH-air-Phase6-005 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §LoadPreview; §SwitchToLive |
-| **required_tests** | Assert LoadPreviewResponse.shadow_decode_started; SwitchToLiveResponse.pts_contiguous |
-| **required_log_events_fields** | LoadPreviewResponse.shadow_decode_started, SwitchToLiveResponse.pts_contiguous |
+| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC |
+| **required_tests** | Assert legacy preload RPCResponse.shadow_decode_started; legacy switch RPCResponse.pts_contiguous |
+| **required_log_events_fields** | legacy preload RPCResponse.shadow_decode_started, legacy switch RPCResponse.pts_contiguous |
 | **codified_status** | **yes** — PlayoutEngineContract defines response fields |
 
 ---

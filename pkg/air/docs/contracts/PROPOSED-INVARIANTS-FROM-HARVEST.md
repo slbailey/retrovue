@@ -454,7 +454,7 @@ Each proposed invariant follows the canonical format:
   - AIR: MUST validate and reject if violated
 
 **Enforcement:**
-- Validation: Check asset canonical flag in LoadPreview
+- Validation: Check asset canonical flag in legacy preload RPC
 - Rejection: Return error if non-canonical
 
 **Violation log:**

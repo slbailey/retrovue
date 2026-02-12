@@ -36,16 +36,16 @@ Lightweight HTTP endpoint (`/metrics`) serving telemetry data to Prometheus/Graf
 Authoritative timing source; lives in the Python runtime. Ensures channels remain synchronized. Air enforces deadlines (e.g. `hard_stop_time_ms`) but does not compute schedule time.
 
 **PlayoutControl**  
-gRPC service defined in `protos/playout.proto` for channel lifecycle and segment-based execution. Canonical calls: `LoadPreview` (asset_path, start_offset_ms, hard_stop_time_ms), `SwitchToLive` (control-only, no payload).
+gRPC service defined in `protos/playout.proto` for channel lifecycle and segment-based execution. Canonical calls: `legacy preload RPC` (asset_path, start_offset_ms, hard_stop_time_ms), `legacy switch RPC` (control-only, no payload).
 
 **PlayoutSegment**  
-Executable instruction computed by ChannelManager: asset_path, start_offset_ms (media-relative), hard_stop_time_ms (wall-clock, authoritative). Sent to Air via `LoadPreview`; Air does not understand schedules or plans.
+Executable instruction computed by ChannelManager: asset_path, start_offset_ms (media-relative), hard_stop_time_ms (wall-clock, authoritative). Sent to Air via `legacy preload RPC`; Air does not understand schedules or plans.
 
 **Playout plan**  
 Opaque handle (optional path) referencing scheduled media; may be supplied by ChannelManager via `StartChannel`/`UpdatePlan`. Segment-based control is canonical.
 
 **ProducerBus (input bus)**  
-Input path in Air: two buses, **preview** and **live**. Each holds an IProducer (e.g. FileProducer). The **live** bus’s producer feeds the FrameRingBuffer → ProgramOutput → OutputBus → OutputSink. Core directs LoadPreview (load next segment on preview bus) and SwitchToLive (promote preview → live). See [ProducerBusContract](../contracts/architecture/ProducerBusContract.md).
+Input path in Air: two buses, **preview** and **live**. Each holds an IProducer (e.g. FileProducer). The **live** bus’s producer feeds the FrameRingBuffer → ProgramOutput → OutputBus → OutputSink. Core directs legacy preload RPC (load next segment on preview bus) and legacy switch RPC (promote preview → live). See [ProducerBusContract](../contracts/architecture/ProducerBusContract.md).
 
 **BlackFrameProducer**  
 Fallback producer that outputs valid black video (program format) and no audio. When the active content producer runs out of frames and Core has not yet supplied the next segment, Air immediately switches to BlackFrameProducer so the sink always receives valid output. See [BlackFrameProducerContract](../contracts/architecture/BlackFrameProducerContract.md).

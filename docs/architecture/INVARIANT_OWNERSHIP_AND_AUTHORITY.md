@@ -78,7 +78,7 @@ Core owns all decisions about *whether* a session exists. Core is the authority 
 The Protocol defines how Core commands AIR and how AIR reports status. Protocol rules govern the *interface*, not the internal behavior of either party.
 
 **Protocol owns:**
-- Command semantics (StartChannel, StopChannel, LoadPreview, SwitchToLive)
+- Command semantics (StartChannel, StopChannel, legacy preload RPC, legacy switch RPC)
 - Deadline parameters (target_boundary_time_ms, issued_at_time_ms)
 - Response codes (OK, NOT_READY, PROTOCOL_VIOLATION)
 - Lead-time requirements (MIN_PREFEED_LEAD_TIME)
@@ -293,7 +293,7 @@ Some invariants legitimately span domains. These must be explicitly declared as 
 
 **Protocol:** Declares that `target_boundary_time_ms` is the authoritative deadline.
 
-**Core:** Issues SwitchToLive with deadline parameter, ensures lead-time feasibility.
+**Core:** Issues legacy switch RPC with deadline parameter, ensures lead-time feasibility.
 
 **AIR:** Executes switch at declared deadline ± 1 frame, uses safety rails if not ready.
 

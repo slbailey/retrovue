@@ -1,6 +1,14 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8.4 — Persistent MPEG-TS Mux (Single Producer)
 
-_Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [OutputBus & OutputSink Contract](OutputBusAndOutputSinkContract.md) (jitter protection)_
+_Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase8-1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase8-2 Segment Control](Phase8-2-SegmentControl.md) · [LegacyPreviewSwitchModel (Retired model)](LegacyPreviewSwitchModel.md) · [Phase8-5 Fan-out & Teardown](Phase8-5-FanoutTeardown.md) · [OutputBus & OutputSink Contract](OutputBusAndOutputSinkContract.md) (jitter protection)_
 
 **Principle:** Establish a real, persistent MPEG-TS mux per channel per active stream session that converts decoded frames into a continuous, spec-compliant TS byte stream. This phase makes TS continuity real for the first time.
 
@@ -26,7 +34,7 @@ This phase makes the byte stream real — everything before this was scaffolding
 
 **Within a session:**
 
-- Mux is created once (when TS output starts, e.g. on first SwitchToLive with attached stream).
+- Mux is created once (when TS output starts, e.g. on first legacy switch RPC with attached stream).
 - Mux persists across all segment boundaries (no restart on segment change).
 - Stream endpoint/FD is fixed (the FD supplied at AttachStream is used for the whole session).
 
@@ -58,7 +66,7 @@ This avoids conflict when adding replace_existing or teardown: the invariant app
 - Emit PAT/PMT per frame or per PES packet.
 - Support fan-out, or stop on viewer disconnect.
 - Put PID map or continuity counters in the producer.
-- **Destroy or recreate the TS mux** as part of SwitchToLive or LoadPreview.
+- **Destroy or recreate the TS mux** as part of legacy switch RPC or legacy preload RPC.
 
 ### Python
 
@@ -114,7 +122,7 @@ Manual VLC playability is allowed as a sanity check, but **automated TS parsing 
 Once 8.4 exists:
 
 - 8.3 contract becomes **enforceable**.
-- Preview/SwitchToLive: switch **frame source** only; mux (and thus PIDs, continuity, PCR/PTS) is unchanged.
+- Preview/legacy switch RPC: switch **frame source** only; mux (and thus PIDs, continuity, PCR/PTS) is unchanged.
 - You can assert: no black frames, no audio pops, no timestamp jumps, because the mux is persistent within the session and the tests above are in place.
 
 Right now 8.3 is correct but unobservable. **8.4 makes it observable.**

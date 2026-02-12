@@ -173,7 +173,7 @@ session driven by BlockPlanProducer.  They do not apply to:
   consistent with INV-BOUNDARY-PTS-001 at `output_frame_index = 0`.
 - **Session teardown**: The final partial block before shutdown is
   excluded.
-- **Legacy Phase8AirProducer paths**: Not covered by this contract.
+- **Legacy per-segment producer paths**: Not covered by this contract. See [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).
 
 ---
 

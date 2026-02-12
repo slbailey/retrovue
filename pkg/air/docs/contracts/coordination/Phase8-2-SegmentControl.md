@@ -1,6 +1,14 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # Phase 8.2 — Segment Control → Frame-Accurate Start & Stop (LIBAV)
 
-_Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase 8.1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase 8.1.5 FileProducer Internal Refactor](Phase8-1-5-FileProducerInternalRefactor.md) · [Phase8-3 Preview/SwitchToLive](Phase8-3-PreviewSwitchToLive.md) · [Phase 6A Overview](../../archive/phases/Phase6A-Overview.md)_
+_Related: [Phase Model](../PHASE_MODEL.md) · [Phase 8 Overview](Phase8-Overview.md) · [Phase 8.1 Air Owns MPEG-TS](Phase8-1-AirOwnsMpegTs.md) · [Phase 8.1.5 FileProducer Internal Refactor](Phase8-1-5-FileProducerInternalRefactor.md) · [LegacyPreviewSwitchModel (Retired model)](LegacyPreviewSwitchModel.md) · [Phase 6A Overview](../../archive/phases/Phase6A-Overview.md)_
 
 **Principle:** Connect the existing segment logic (Phases 3–6) to frame-level emission control inside FileProducer. Join-in-progress and hard stops are enforced at the decoded-frame level; no switching yet. No ffmpeg executable; libav is the engine.
 
@@ -46,11 +54,11 @@ When a segment becomes live, Air records `segment_start_wallclock_ms = MasterClo
 Air passes **start_offset_ms** and **hard_stop_time_ms** into **FileProducerConfig**. FileProducer enforces segment boundaries during decode/emission. No container seek, no keyframe-only seek, no CLI behavior.
 
 - **Stops writing TS** at the hard stop; closes or drains the stream cleanly.
-- **No switching yet:** one segment per channel at a time; at boundary, a new LoadPreview/Producer instance can be used, but 8.2 does not require seamless SwitchToLive in the TS (that is 8.3).
+- **No switching yet:** one segment per channel at a time; at boundary, a new legacy preload RPC/Producer instance can be used, but 8.2 does not require seamless legacy switch RPC in the TS (that is 8.3).
 
 ### Python
 
-- **Unchanged:** still creates transport, passes write end to Air, serves `GET /channels/{id}.ts` as opaque bytes. Segment choice and parameters are decided by Python/Phase 4 and sent via LoadPreview (or equivalent) to Air.
+- **Unchanged:** still creates transport, passes write end to Air, serves `GET /channels/{id}.ts` as opaque bytes. Segment choice and parameters are decided by Python/Phase 4 and sent via legacy preload RPC (or equivalent) to Air.
 
 ## Execution
 
@@ -82,7 +90,7 @@ This is where the system separates itself from “ffmpeg-based” playout: guara
 
 ## Explicitly out of scope (8.2)
 
-- No preview/live switching; no seamless SwitchToLive in the TS path (8.3).
+- No preview/live switching; no seamless legacy switch RPC in the TS path (8.3).
 - No fan-out or last-viewer teardown semantics (8.5)—single viewer sufficient for 8.2.
 - No VLC requirement for 8.2 (manual observation OK); strict PTS/frame-count assertions in tests define correctness.
 

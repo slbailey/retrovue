@@ -69,7 +69,7 @@ It sets clear rules for lifecycle transitions and teardown.
   </dd>
   <dt><b>Scheduling Intent</b></dt>
   <dd>
-    Any operation that (a) allocates resources for future boundary work, (b) sends control-plane RPCs to AIR, (c) registers timers for boundary lifecycle operations, or (d) would require a boundary state transition to complete. Examples: LoadPreview, SwitchToLive, segment planning.
+    Any operation that (a) allocates resources for future boundary work, (b) sends control-plane RPCs to AIR, (c) registers timers for boundary lifecycle operations, or (d) would require a boundary state transition to complete. Examples: legacy preload RPC, legacy switch RPC, segment planning.
   </dd>
   <dt><b>Session Creation</b></dt>
   <dd>
@@ -77,7 +77,7 @@ It sets clear rules for lifecycle transitions and teardown.
   </dd>
   <dt><b>Boundary Commitment</b></dt>
   <dd>
-    Registering a future boundary for transition execution (arming LoadPreview and SwitchToLive). Subject to feasibility constraints. A boundary that is not committed is not attempted.
+    Registering a future boundary for transition execution (arming legacy preload RPC and legacy switch RPC). Subject to feasibility constraints. A boundary that is not committed is not attempted.
   </dd>
   <dt><b>Startup Convergence</b></dt>
   <dd>
@@ -136,10 +136,10 @@ Viewer count controls session start/end, but never interrupts an in-progress bou
 | **State**         | **Description**                                      |
 |-------------------|------------------------------------------------------|
 | `NONE`            | No boundary planned; channel idle                    |
-| `PLANNED`         | Boundary computed; `LoadPreview` scheduled           |
-| `PRELOAD_ISSUED`  | `LoadPreview` sent to AIR                            |
+| `PLANNED`         | Boundary computed; `legacy preload RPC` scheduled           |
+| `PRELOAD_ISSUED`  | `legacy preload RPC` sent to AIR                            |
 | `SWITCH_SCHEDULED`| Switch timer set, waiting for deadline               |
-| `SWITCH_ISSUED`   | `SwitchToLive` sent to AIR                           |
+| `SWITCH_ISSUED`   | `legacy switch RPC` sent to AIR                           |
 | `LIVE`            | AIR confirms switch; output flowing                  |
 | `FAILED_TERMINAL` | Unrecoverable failure; session is dead               |
 
@@ -246,7 +246,7 @@ Here, nothing in flight—destruction is safe.
 ### 6.3 `INV-TEARDOWN-NO-NEW-WORK-001`
 
 - **Definition:**
-  With `_teardown_pending`, Core must not schedule new boundary work: _no new_ `LoadPreview`, `SwitchToLive`, or segment planning.
+  With `_teardown_pending`, Core must not schedule new boundary work: _no new_ `legacy preload RPC`, `legacy switch RPC`, or segment planning.
 - **Rationale:**
   New work would prolong transient, defeating teardown deferral.
 - **Relationship:**
@@ -275,7 +275,7 @@ Here, nothing in flight—destruction is safe.
   Once `_boundary_state == FAILED_TERMINAL`, Core MUST NOT generate new **scheduling intent**.
 - **Scheduling intent** is any operation that:
   1. Allocates resources for future boundary work (e.g., preview buffers)
-  2. Sends control-plane RPCs to AIR (e.g., LoadPreview, SwitchToLive)
+  2. Sends control-plane RPCs to AIR (e.g., legacy preload RPC, legacy switch RPC)
   3. Registers timers for boundary lifecycle operations
   4. Would require a boundary state transition to complete
 - **Explicitly allowed in `FAILED_TERMINAL`:**
@@ -294,7 +294,7 @@ Here, nothing in flight—destruction is safe.
 - **Definition:**
   Upon transition to `FAILED_TERMINAL`, all pending transient operation timers MUST be cancelled immediately. This includes:
   - Switch issuance timers (`_switch_handle`)
-  - LoadPreview scheduling timers
+  - legacy preload RPC scheduling timers
   - Any deadline-scheduled boundary callbacks
 - **Enforcement:**
   `_transition_boundary_state()` MUST cancel all transient timers when `new_state == FAILED_TERMINAL`.
@@ -327,8 +327,8 @@ Here, nothing in flight—destruction is safe.
 - **Boundary skip criteria:**
   A boundary is skipped during startup convergence if `boundary_time < now + MIN_PREFEED_LEAD_TIME` at the time of evaluation.
 - **Skipped boundary semantics:**
-  - No LoadPreview is issued for the skipped boundary
-  - No SwitchToLive is scheduled for the skipped boundary
+  - No legacy preload RPC is issued for the skipped boundary
+  - No legacy switch RPC is scheduled for the skipped boundary
   - Current segment continues playing past the boundary time
   - The skip is logged as `STARTUP_BOUNDARY_SKIPPED` (not a violation)
   - The next boundary is evaluated for feasibility
@@ -425,7 +425,7 @@ These are distinct lifecycle events with different requirements:
 | Event | What It Does | Gating Requirement |
 |-------|--------------|-------------------|
 | **Session Creation** | Launch AIR, attach output, begin playback at current offset | Resources available, schedule exists |
-| **Boundary Commitment** | Arm LoadPreview and SwitchToLive for a future boundary | Lead time feasibility |
+| **Boundary Commitment** | Arm legacy preload RPC and legacy switch RPC for a future boundary | Lead time feasibility |
 
 Session creation MUST NOT be gated on boundary commitment feasibility.
 
@@ -488,8 +488,8 @@ on evaluate_next_boundary():
 
 When a boundary is skipped during startup convergence:
 
-1. **No LoadPreview is issued** for that boundary
-2. **No SwitchToLive is scheduled** for that boundary
+1. **No legacy preload RPC is issued** for that boundary
+2. **No legacy switch RPC is scheduled** for that boundary
 3. **Current segment continues playing** past the boundary time
 4. **At the boundary time**, Core evaluates the *next* boundary
 5. **The skipped boundary is logged** as `STARTUP_BOUNDARY_SKIPPED`, not counted as a violation
@@ -525,7 +525,7 @@ Optional AIR-side best practices (not required, but valuable):
 - AIR may explicitly report when output is _reliably_ flowing
 - Core can use this to set `LIVE` with greater confidence
 
-_Without this: Core can only infer `LIVE` after SwitchToLive completes._
+_Without this: Core can only infer `LIVE` after legacy switch RPC completes._
 
 ### 9.2 Drain Command
 

@@ -14,7 +14,7 @@ _Related: [ProducerBus (Input Bus) Contract](ProducerBusContract.md) · [FilePro
 
 Define the observable guarantees for **BlackFrameProducer** — an **internal failsafe** producer that outputs valid black video (program format) and no audio. It is used when the **live** bus’s content producer runs out of frames and Core has not yet issued the next control command. Air switches output to BlackFrameProducer **immediately** so the sink **always** receives valid output; no gaps, freezes, or invalid data. See [ProducerBusContract](ProducerBusContract.md) for the input path (preview + live buses) and the always-valid-output invariant.
 
-**BlackFrameProducer is not content and not scheduled.** It is a **dead-man fallback** for output continuity. Core does not send segments to it, schedule it, or control it; Air selects it only when the live producer underruns. Air remains in this state indefinitely until Core explicitly reasserts control (e.g. LoadPreview + SwitchToLive). Entry into BlackFrameProducer may occur without any gRPC interaction and does not imply an error condition; it is a protective continuity state.
+**BlackFrameProducer is not content and not scheduled.** It is a **dead-man fallback** for output continuity. Core does not send segments to it, schedule it, or control it; Air selects it only when the live producer underruns. Air remains in this state indefinitely until Core explicitly reasserts control (e.g. legacy preload RPC + legacy switch RPC). Entry into BlackFrameProducer may occur without any gRPC interaction and does not imply an error condition; it is a protective continuity state.
 
 ---
 
@@ -34,13 +34,13 @@ It does **not** take segment parameters from Core (asset_path, start_offset_ms, 
 - The **live** bus’s producer (e.g. FileProducer) runs out of frames (EOF, buffer empty, or Core has not yet issued the next control command).
 - Air **immediately** enters **failsafe mode** and switches the output path to BlackFrameProducer (black frames, no audio).
 - This is **dead-man behavior**: Air protects output continuity; it does **not** make a scheduling or "what comes next" decision.
-- The sink continues to receive valid video (black) and no audio until Core explicitly reasserts control (e.g. LoadPreview + SwitchToLive). Air remains in failsafe indefinitely until then.
+- The sink continues to receive valid video (black) and no audio until Core explicitly reasserts control (e.g. legacy preload RPC + legacy switch RPC). Air remains in failsafe indefinitely until then.
 
 ### 2.3 When It Is Not Used
 
 - BlackFrameProducer is **not** used when the live producer has frames available.
 - It is **not** loaded on the preview or live bus as a segment; it is an **internal** fallback path, not a scheduled asset.
-- It does **not** participate in LoadPreview or SwitchToLive as content; the engine switches to it internally on underrun only.
+- It does **not** participate in legacy preload RPC or legacy switch RPC as content; the engine switches to it internally on underrun only.
 
 ---
 
@@ -67,7 +67,7 @@ It does **not** take segment parameters from Core (asset_path, start_offset_ms, 
 
 - Detect when the live producer has run out of frames (no more frames available for the current segment).
 - **Immediately** switch output to BlackFrameProducer when such an underrun occurs (dead-man failsafe).
-- Switch back from BlackFrameProducer to the live bus **only** when Core has explicitly reasserted control (e.g. LoadPreview, SwitchToLive, UpdatePlan) and the live producer has frames ready.
+- Switch back from BlackFrameProducer to the live bus **only** when Core has explicitly reasserted control (e.g. legacy preload RPC, legacy switch RPC, UpdatePlan) and the live producer has frames ready.
 - Ensure the sink never receives a gap, freeze, or invalid data; BlackFrameProducer is the **failsafe** guarantee when content is temporarily unavailable—not a scheduling or sequencing decision.
 
 ---

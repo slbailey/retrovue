@@ -48,7 +48,7 @@ Cross-repo index of markdown documentation under `docs/`, `pkg/air/docs/`, and `
 | air | pkg/air/docs/contracts/coordination/Phase8-0-Transport.md | 8.0 | transport | yes | med | AttachStream, DetachStream; UDS. |
 | air | pkg/air/docs/contracts/coordination/Phase8-1-AirOwnsMpegTs.md | 8.1 | TS | yes | med | Air-owned ffmpeg TS output. |
 | air | pkg/air/docs/contracts/coordination/Phase8-2-SegmentControl.md | 8.2 | segment | yes | high | start_offset_ms, hard_stop_time_ms. |
-| air | pkg/air/docs/contracts/coordination/Phase8-3-PreviewSwitchToLive.md | 8.3 | switching | yes | high | Shadow decode, PTS continuity; INV-P8-SWITCH-*. |
+| air | pkg/air/docs/contracts/coordination/LegacyPreviewSwitchModel.md | 8.3 (Retired) | switching | yes | high | Legacy preview/switch; superseded by BlockPlan. Shadow decode, PTS continuity; INV-P8-SWITCH-*. |
 | air | pkg/air/docs/contracts/coordination/Phase8-4-PersistentMpegTsMux.md | 8.4 | TS, mux | yes | med | One mux per channel; stable PIDs. |
 | air | pkg/air/docs/contracts/coordination/Phase8-5-FanoutTeardown.md | 8.5 | teardown | yes | med | N viewers; last disconnect. |
 | air | pkg/air/docs/contracts/coordination/Phase8-6-RealMpegTsE2E.md | 8.6 | TS, E2E | yes | med | Real TS only; VLC-playable. |
@@ -110,7 +110,7 @@ Cross-repo index of markdown documentation under `docs/`, `pkg/air/docs/`, and `
 | core | pkg/core/docs/archive/phases/Phase2.5-AssetMetadataContract.md | 2.5 | asset | no | med | Metadata boundary. |
 | core | pkg/core/docs/archive/phases/Phase3-ActiveItemResolverContract.md | 3 | scheduling | no | high | Active schedule item resolver. |
 | core | pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md | 4 | playout pipeline | no | high | PlayoutSegment, gRPC mapping; hard_stop_time. |
-| core | pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md | 5 | channel manager | no | high | Prefeed, LoadPreview/SwitchToLive ordering. |
+| core | pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md | 5 | channel manager | no | high | Prefeed, legacy preload RPC/legacy switch RPC ordering. |
 | core | pkg/core/docs/archive/phases/Phase7-E2EAcceptanceContract.md | 7 | E2E | no | high | E2E mock channel acceptance. |
 | core | pkg/core/docs/archive/contracts/DestructiveOperationConfirmation.md | — | ops | no | med | Superseded by _ops/. |
 | core | pkg/core/docs/archive/architecture/Directories.md | — | architecture | no | low | Historical. |

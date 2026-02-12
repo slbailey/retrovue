@@ -28,7 +28,7 @@ Without clock-authoritative timing and lifecycle discipline, you get:
   - ➔ Grid boundaries missed by >1 frame; viewers see content drift
 
 - **Poll/retry cascades**
-  - Core retries SwitchToLive until "ready"; each retry shortens lead time
+  - Core retries legacy switch RPC until "ready"; each retry shortens lead time
   - ➔ Negative lead time, PROTOCOL_VIOLATION, or retry into terminal failure
 
 - **Authority contradiction**
@@ -65,7 +65,7 @@ It establishes LAW-AUTHORITY-HIERARCHY and implements it through 11A–11F (audi
   </dd>
   <dt><b>Prefeed</b></dt>
   <dd>
-    Core sends LoadPreview to AIR so successor segment is ready before the boundary. Lead time must be ≥ MIN_PREFEED_LEAD_TIME_MS (e.g. 5000 ms).
+    Core sends legacy preload RPC to AIR so successor segment is ready before the boundary. Lead time must be ≥ MIN_PREFEED_LEAD_TIME_MS (e.g. 5000 ms).
   </dd>
   <dt><b>Deadline-Authoritative Switch</b></dt>
   <dd>
@@ -77,7 +77,7 @@ It establishes LAW-AUTHORITY-HIERARCHY and implements it through 11A–11F (audi
   </dd>
   <dt><b>One-Shot Issuance</b></dt>
   <dd>
-    SwitchToLive is issued exactly once per boundary. Duplicate attempts are suppressed; state machine enforces exactly-once semantics.
+    legacy switch RPC is issued exactly once per boundary. Duplicate attempts are suppressed; state machine enforces exactly-once semantics.
   </dd>
 </dl>
 
@@ -151,9 +151,9 @@ Phase 11 was implemented in six sub-phases. Execution order: 11A, 11B, 11C in pa
 |-----------|----------|------------------|------------------|
 | **11A** | Audio sample continuity | None | No audio drops under backpressure; throttle instead of drop |
 | **11B** | Boundary timing observability | None | switch_completion_time_ms, metrics, violation logs |
-| **11C** | Declarative boundary protocol | None | target_boundary_time_ms in SwitchToLiveRequest; Core populates, AIR parses |
+| **11C** | Declarative boundary protocol | None | target_boundary_time_ms in legacy switch RPCRequest; Core populates, AIR parses |
 | **11D** | Deadline-authoritative switching | 11C | AIR switches at deadline; Core no retry; feasibility at planning time |
-| **11E** | Prefeed timing contract | 11D | MIN_PREFEED_LEAD_TIME_MS; LoadPreview at boundary − lead time; violation logging |
+| **11E** | Prefeed timing contract | 11D | MIN_PREFEED_LEAD_TIME_MS; legacy preload RPC at boundary − lead time; violation logging |
 | **11F** | Boundary lifecycle state machine | 11E | BoundaryState enum; one-shot issuance; terminal exception → FAILED_TERMINAL; plan-boundary match |
 
 ---
@@ -165,10 +165,10 @@ Phase 11 was implemented in six sub-phases. Execution order: 11A, 11B, 11C in pa
 | **State**           | **Description**                                      |
 |---------------------|------------------------------------------------------|
 | `NONE`              | No boundary planned; channel idle                    |
-| `PLANNED`           | Boundary computed; LoadPreview scheduled             |
-| `PRELOAD_ISSUED`    | LoadPreview sent to AIR                              |
+| `PLANNED`           | Boundary computed; legacy preload RPC scheduled             |
+| `PRELOAD_ISSUED`    | legacy preload RPC sent to AIR                              |
 | `SWITCH_SCHEDULED`  | Switch timer set, waiting for deadline                |
-| `SWITCH_ISSUED`    | SwitchToLive sent to AIR                             |
+| `SWITCH_ISSUED`    | legacy switch RPC sent to AIR                             |
 | `LIVE`              | AIR confirms switch; output flowing                   |
 | `FAILED_TERMINAL`   | Unrecoverable failure; no further operations         |
 
@@ -186,7 +186,7 @@ Transitions are unidirectional and constrained by `_ALLOWED_BOUNDARY_TRANSITIONS
 
 ### 5.3 One-Shot and Terminal Semantics
 
-- **One-shot:** At most one SwitchToLive issuance per boundary. Guard prevents duplicate issuance; tick early-returns for SWITCH_ISSUED / LIVE / FAILED_TERMINAL.
+- **One-shot:** At most one legacy switch RPC issuance per boundary. Guard prevents duplicate issuance; tick early-returns for SWITCH_ISSUED / LIVE / FAILED_TERMINAL.
 - **Terminal exception:** Any exception during switch issuance → boundary set to FAILED_TERMINAL; no retry.
 - **Plan-boundary match:** target_boundary_ms at issuance must match plan-derived boundary; mismatch → FAILED_TERMINAL.
 
@@ -198,7 +198,7 @@ Transitions are unidirectional and constrained by `_ALLOWED_BOUNDARY_TRANSITIONS
 
 | **Invariant** | **Definition** |
 |---------------|----------------|
-| **INV-BOUNDARY-DECLARED-001** | SwitchToLive carries target_boundary_time_ms (proto + Core population). |
+| **INV-BOUNDARY-DECLARED-001** | legacy switch RPC carries target_boundary_time_ms (proto + Core population). |
 | **INV-BOUNDARY-TOLERANCE-001** | Grid transitions within 1 frame of boundary (observability + enforcement in 11B/11D). |
 | **INV-SWITCH-DEADLINE-AUTHORITATIVE-001** | AIR executes switch at declared time regardless of readiness; safety rails if not ready. |
 | **INV-SWITCH-ISSUANCE-DEADLINE-001** | Switch issuance is deadline-scheduled, not cadence-detected; no poll/retry. |
@@ -218,7 +218,7 @@ Transitions are unidirectional and constrained by `_ALLOWED_BOUNDARY_TRANSITIONS
 | **Invariant** | **Definition** |
 |---------------|----------------|
 | **INV-BOUNDARY-LIFECYCLE-001** | Boundary state transitions are unidirectional; illegal transition → FAILED_TERMINAL. |
-| **INV-SWITCH-ISSUANCE-ONESHOT-001** | SwitchToLive issued exactly once per boundary; duplicates suppressed or fatal. |
+| **INV-SWITCH-ISSUANCE-ONESHOT-001** | legacy switch RPC issued exactly once per boundary; duplicates suppressed or fatal. |
 | **INV-SWITCH-ISSUANCE-TERMINAL-001** | Exception during switch issuance → FAILED_TERMINAL; no retry. |
 
 ### 6.4 Audio (Phase 11A)
@@ -249,7 +249,7 @@ FAILED_TERMINAL is an _absorbing_ boundary state. Entry reasons include:
 
 ### 7.3 No Retry After Terminal
 
-Core must not retry SwitchToLive for the same boundary after FAILED_TERMINAL. Tick must not re-arm issuance for that boundary. New boundary requires new plan and new state progression.
+Core must not retry legacy switch RPC for the same boundary after FAILED_TERMINAL. Tick must not re-arm issuance for that boundary. New boundary requires new plan and new state progression.
 
 ### 7.4 Why Poll/Retry Is Forbidden
 
@@ -275,7 +275,7 @@ AIR may return PROTOCOL_VIOLATION (e.g. insufficient lead time) instead of NOT_R
 
 ### 8.3 Response and Observability
 
-- SwitchToLiveResponse includes switch_completion_time_ms (11B).
+- legacy switch RPCResponse includes switch_completion_time_ms (11B).
 - Violations (e.g. >1 frame late) logged and reflected in metrics (switch_boundary_delta_ms, switch_boundary_violations_total).
 
 ---
@@ -300,7 +300,7 @@ _Phase 11 defined and implemented clock-authoritative, broadcast-grade timing:_
 - **Declarative protocol:** target_bmaoundary_time_ms flows Core → AIR; switch execution at that time.
 - **No poll/retry:** Issuance deadline-scheduled; one-shot per boundary; exception → FAILED_TERMINAL.
 - **Boundary lifecycle:** Unidirectional state machine (11F); illegal or duplicate transitions → FAILED_TERMINAL.
-- **Prefeed contract:** LoadPreview at boundary − MIN_PREFEED_LEAD_TIME_MS; violation logged, not retried.
+- **Prefeed contract:** legacy preload RPC at boundary − MIN_PREFEED_LEAD_TIME_MS; violation logged, not retried.
 
 The _key insight_:  
 Treating frame completion as authority caused late switches and retry cascades. Phase 11 subordinates frame rules to clock and enforces exactly-once, deadline-scheduled issuance with terminal failure semantics. Phase 12 then builds on this by defining when teardown is allowed relative to boundary state (stable vs transient).

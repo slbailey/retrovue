@@ -1,3 +1,11 @@
+# ⚠️ RETIRED — Superseded by BlockPlan Architecture
+
+**See:** [Phase8DecommissionContract.md](../../../../docs/contracts/architecture/Phase8DecommissionContract.md)
+
+This document describes legacy playlist/Phase8 execution and is no longer active.
+
+---
+
 # File Producer Contract
 
 _Related: [Playout Engine Contract](PlayoutEngineContract.md) · [Phase 6A Overview](../phases/Phase6A-Overview.md) · [Phase6A-2 FileBackedProducer](../phases/Phase6A-2-FileBackedProducer.md) · [Renderer Contract](RendererContract.md)_

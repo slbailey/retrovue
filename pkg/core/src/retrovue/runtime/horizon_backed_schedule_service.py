@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from retrovue.runtime.execution_window_store import ExecutionWindowStore
+from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,35 @@ class HorizonBackedScheduleService:
             current += timedelta(days=1)
 
         return events
+
+    def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
+        """Return a ScheduledBlock covering utc_ms from ExecutionWindowStore.
+
+        Pure read — does not trigger schedule generation.
+        """
+        entry = self._execution_store.get_entry_at(utc_ms, locked_only=True)
+        if entry is None:
+            logger.warning(
+                "POLICY_VIOLATION: No locked execution entry for "
+                "channel=%s at utc_ms=%d. "
+                "This is a horizon maintenance failure.",
+                channel_id, utc_ms,
+            )
+            return None
+        return ScheduledBlock(
+            block_id=entry.block_id,
+            start_utc_ms=entry.start_utc_ms,
+            end_utc_ms=entry.end_utc_ms,
+            segments=tuple(
+                ScheduledSegment(
+                    segment_type=s.get("segment_type", "episode"),
+                    asset_uri=s.get("asset_uri", ""),
+                    asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
+                    segment_duration_ms=s.get("segment_duration_ms", 0),
+                )
+                for s in entry.segments
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Internal

@@ -81,7 +81,7 @@ The 2026-02-01 audit identified a contradiction between clock-based rules (LAW-C
 | Rule ID | Description | Phase |
 |---------|-------------|-------|
 | INV-BOUNDARY-TOLERANCE-001 | Grid transitions within 1 frame of boundary | 11B, 11D |
-| INV-BOUNDARY-DECLARED-001 | SwitchToLive carries `target_boundary_time_ms` | 11C |
+| INV-BOUNDARY-DECLARED-001 | legacy switch RPC carries `target_boundary_time_ms` | 11C |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | No audio drops under backpressure | 11A |
 | INV-SCHED-PLAN-BEFORE-EXEC-001 | Scheduling feasibility at planning time, not runtime | 11D |
 | INV-STARTUP-BOUNDARY-FEASIBILITY-001 | First boundary must satisfy startup latency constraint | 11D |

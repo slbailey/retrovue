@@ -45,7 +45,7 @@ Phase 11 is a **separate execution track** from Phase 1. Task tracking and check
 
 ## Phase 11B Checklist (Boundary Timing Observability) — Code complete 2026-02-01
 
-- [x] P11B-001: switch_completion_time_ms in SwitchToLiveResponse
+- [x] P11B-001: switch_completion_time_ms in legacy switch RPCResponse
 - [x] P11B-002: INV-BOUNDARY-TOLERANCE-001 violation/success logging
 - [x] P11B-003: retrovue_switch_boundary_delta_ms histogram
 - [x] P11B-004: retrovue_switch_boundary_violations_total counter
@@ -56,7 +56,7 @@ Phase 11 is a **separate execution track** from Phase 1. Task tracking and check
 
 ## Phase 11C Checklist (Declarative Boundary Protocol) — Complete 2026-02-01
 
-- [x] P11C-001: target_boundary_time_ms in SwitchToLiveRequest (proto)
+- [x] P11C-001: target_boundary_time_ms in legacy switch RPCRequest (proto)
 - [x] P11C-002: Proto stubs regenerated (C++ and Python)
 - [x] P11C-003: PlayoutEngine parse/log/store target_boundary_time_ms
 - [x] P11C-004: Core ChannelManager populates target_boundary_time_ms
@@ -70,8 +70,8 @@ Phase 11 is a **separate execution track** from Phase 1. Task tracking and check
 - [x] P11D-002: AIR execute switch at deadline regardless of readiness
 - [x] P11D-003: AIR safety rails if not ready at deadline
 - [x] P11D-004: AIR PROTOCOL_VIOLATION for insufficient lead time
-- [x] P11D-005: Core remove SwitchToLive retry loop
-- [x] P11D-006: Core LoadPreview with sufficient lead time
+- [x] P11D-005: Core remove legacy switch RPC retry loop
+- [x] P11D-006: Core legacy preload RPC with sufficient lead time
 - [x] P11D-007: Contract test switch within 1 frame of boundary
 - [x] P11D-008: Contract test late prefeed → PROTOCOL_VIOLATION
 - [x] P11D-009: Core planning-time feasibility (INV-SCHED-PLAN-BEFORE-EXEC-001)
@@ -84,8 +84,8 @@ Phase 11 is a **separate execution track** from Phase 1. Task tracking and check
 ## Phase 11E Checklist (Prefeed Timing Contract) — Closed 2026-02-02
 
 - [x] P11E-001: MIN_PREFEED_LEAD_TIME_MS constant (env RETROVUE_MIN_PREFEED_LEAD_TIME_MS)
-- [x] P11E-002: Core issue LoadPreview at boundary_time - MIN_PREFEED_LEAD_TIME_MS
-- [x] P11E-003: Core log violation if LoadPreview/SwitchToLive issued with &lt;MIN
+- [x] P11E-002: Core issue legacy preload RPC at boundary_time - MIN_PREFEED_LEAD_TIME_MS
+- [x] P11E-003: Core log violation if legacy preload RPC/legacy switch RPC issued with &lt;MIN
 - [x] P11E-004: Core metrics prefeed_lead_time_ms, switch_lead_time_ms, violations
 - [x] P11E-005: Contract test prefeed/switch lead time
 

@@ -181,7 +181,7 @@ Derives from: INV-P9-BOOT-LIVENESS (adds specific deadline to "bounded time")
 ### G9-003: No Deadlock on Switch
 
 **Given:** Preview producer reaches shadow decode ready
-**When:** SwitchToLive is invoked
+**When:** legacy switch RPC is invoked
 **Then:** Output routing completes within 500ms (not 10s timeout)
 
 ### G9-004: Output Transition Occurs

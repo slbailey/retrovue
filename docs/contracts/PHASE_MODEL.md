@@ -21,7 +21,7 @@ This page defines the phase taxonomy used across Air (C++ playout engine) contra
 
 ## Summary
 
-- **Phase 6A** = Correctness, control, lifecycle (segment-based LoadPreview + SwitchToLive; no TS/Renderer).
+- **Phase 6A** = Correctness, control, lifecycle (segment-based legacy preload RPC + legacy switch RPC; no TS/Renderer).
 - **Phase 7** = Media output, TS, Renderer, continuity.
 - **Phase 8** = Performance SLAs, scale, monitoring.
 - **Phase 9** = Advanced features (ABR, redundancy, etc.).

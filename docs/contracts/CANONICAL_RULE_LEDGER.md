@@ -59,7 +59,7 @@ Some contracts are refinements or aliases of laws. This section documents these 
 | INV-FRAME-001 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — frame-indexed boundaries for execution, not for delaying clock-scheduled transitions |
 | INV-FRAME-003 | LAW-AUTHORITY-HIERARCHY | **Subordinate** — CT derivation within segment; frame completion does not gate switch execution |
 | INV-SWITCH-ISSUANCE-TERMINAL-001 | INV-SWITCH-ISSUANCE-DEADLINE-001, LAW-AUTHORITY-HIERARCHY | **Enforces** — exception during switch issuance is terminal; boundary transitions to FAILED_TERMINAL |
-| INV-SWITCH-ISSUANCE-ONESHOT-001 | INV-SWITCH-ISSUANCE-DEADLINE-001, INV-CONTROL-NO-POLL-001 | **Enforces** — SwitchToLive is issued exactly once per boundary; duplicates are suppressed or fatal |
+| INV-SWITCH-ISSUANCE-ONESHOT-001 | INV-SWITCH-ISSUANCE-DEADLINE-001, INV-CONTROL-NO-POLL-001 | **Enforces** — legacy switch RPC is issued exactly once per boundary; duplicates are suppressed or fatal |
 | INV-BOUNDARY-LIFECYCLE-001 | LAW-AUTHORITY-HIERARCHY, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — boundary state transitions are unidirectional; illegal transitions force FAILED_TERMINAL |
 | INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | INV-BOUNDARY-DECLARED-001, INV-SCHED-PLAN-BEFORE-EXEC-001 | **Enforces** — target_boundary_ms must equal plan-derived boundary, not `now + X` |
 | INV-TEARDOWN-STABLE-STATE-001 | LAW-AUTHORITY-HIERARCHY, INV-BOUNDARY-LIFECYCLE-001 | **Enforces** — teardown deferred until boundary state is stable; transient states block immediate teardown |
@@ -391,7 +391,7 @@ Write barriers, switch orchestration, readiness, backpressure.
 | INV-P8-AUDIO-GATE | Audio gated only while shadow (and while mapping pending) |
 | INV-P8-SEGMENT-COMMIT | First frame admitted → segment commits, owns CT; old segment RequestStop |
 | INV-P8-SEGMENT-COMMIT-EDGE | Generation counter per commit for multi-switch edge detection |
-| INV-P8-SWITCH-ARMED | No LoadPreview while switch armed; FATAL if reset reached while armed |
+| INV-P8-SWITCH-ARMED | No legacy preload RPC while switch armed; FATAL if reset reached while armed |
 | INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live waits until preview shadow ready |
 | INV-P8-EOF-SWITCH | Live EOF → switch completes immediately (no buffer depth wait) |
 | INV-P8-PREVIEW-EOF | Preview EOF with frames → complete with lower thresholds |
@@ -429,22 +429,22 @@ These invariants were added to address observed violations of broadcast-grade ti
 | Rule ID | One-Line Definition |
 |---------|---------------------|
 | INV-BOUNDARY-TOLERANCE-001 | Grid boundary transitions MUST complete within one video frame duration (33.33ms at 30fps) of the absolute scheduled boundary time |
-| INV-BOUNDARY-DECLARED-001 | SwitchToLive MUST include `target_boundary_time_ms` parameter; Core declares intent, AIR executes at that time |
+| INV-BOUNDARY-DECLARED-001 | legacy switch RPC MUST include `target_boundary_time_ms` parameter; Core declares intent, AIR executes at that time |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | Audio sample continuity MUST be preserved; audio samples MUST NOT be dropped due to queue backpressure; overflow triggers producer throttling |
 | INV-SCHED-PLAN-BEFORE-EXEC-001 | Scheduling feasibility MUST be determined once, at planning time. Only boundaries that are already feasible by construction may enter execution. Runtime MUST NOT discover, repair, delay, or re-evaluate boundary feasibility. |
 | INV-STARTUP-BOUNDARY-FEASIBILITY-001 | The first scheduled boundary MUST satisfy `boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME`. This is a constraint on schedule content, not on planning_time. |
-| INV-SWITCH-ISSUANCE-DEADLINE-001 | SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. |
+| INV-SWITCH-ISSUANCE-DEADLINE-001 | legacy switch RPC issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. |
 | INV-LEADTIME-MEASUREMENT-001 | Prefeed lead time MUST be evaluated using the issuance timestamp supplied by Core (`issued_at_time_ms`), not AIR receipt time. Transport jitter MUST NOT affect feasibility determination. |
 | INV-CONTROL-NO-POLL-001 | Core MUST NOT poll AIR for switch readiness; NOT_READY indicates protocol error (prefeed too late), not a condition to retry. Tick-based reissuance is forbidden. |
 | INV-SWITCH-DEADLINE-AUTHORITATIVE-001 | When `target_boundary_time_ms` is provided, AIR MUST execute the switch at that wall-clock time ± 1 frame; internal readiness is AIR's responsibility |
-| INV-SWITCH-ISSUANCE-TERMINAL-001 | Exception during SwitchToLive issuance MUST transition boundary to FAILED_TERMINAL state. No retry, no re-arm. |
-| INV-SWITCH-ISSUANCE-ONESHOT-001 | SwitchToLive MUST be issued exactly once per boundary. Duplicate attempts are suppressed; duplicate into FAILED_TERMINAL is fatal. |
+| INV-SWITCH-ISSUANCE-TERMINAL-001 | Exception during legacy switch RPC issuance MUST transition boundary to FAILED_TERMINAL state. No retry, no re-arm. |
+| INV-SWITCH-ISSUANCE-ONESHOT-001 | legacy switch RPC MUST be issued exactly once per boundary. Duplicate attempts are suppressed; duplicate into FAILED_TERMINAL is fatal. |
 | INV-BOUNDARY-LIFECYCLE-001 | Boundary state transitions MUST be unidirectional (NONE→PLANNED→...→LIVE or →FAILED_TERMINAL). Illegal transitions force FAILED_TERMINAL. |
 | INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 | target_boundary_ms sent to AIR MUST equal the boundary computed from the active playout plan, NOT a derived `now + X` value. |
 
 #### INV-STARTUP-BOUNDARY-FEASIBILITY-001 (Full Definition)
 
-At channel startup, a non-zero interval elapses between schedule planning (station_utc) and the moment Core can issue execution-time commands (LoadPreview, SwitchToLive). This interval includes AIR process spawn, ChannelManager initialization, gRPC channel establishment, and protocol handshake.
+At channel startup, a non-zero interval elapses between schedule planning (station_utc) and the moment Core can issue execution-time commands (legacy preload RPC, legacy switch RPC). This interval includes AIR process spawn, ChannelManager initialization, gRPC channel establishment, and protocol handshake.
 
 The schedule or playout plan MUST supply a first boundary whose scheduled time satisfies:
 
@@ -488,7 +488,7 @@ Schedules must be constructed such that the first boundary of any startable segm
 
 #### INV-SWITCH-ISSUANCE-DEADLINE-001 (Full Definition)
 
-If switch execution is deadline-authoritative (INV-SWITCH-DEADLINE-AUTHORITATIVE-001), then switch issuance must also be deadline-scheduled. The timing of SwitchToLive issuance MUST NOT depend on runtime loop frequency, tick cadence, or scheduling jitter.
+If switch execution is deadline-authoritative (INV-SWITCH-DEADLINE-AUTHORITATIVE-001), then switch issuance must also be deadline-scheduled. The timing of legacy switch RPC issuance MUST NOT depend on runtime loop frequency, tick cadence, or scheduling jitter.
 
 **Definition of "deadline-scheduled":** The issuance is registered once with the event loop as a timed callback or task at plan time; it is not discovered later by periodic checks.
 
@@ -498,7 +498,7 @@ Core MUST compute a single, deterministic issuance time for each boundary:
 issue_at = boundary_time - MIN_PREFEED_LEAD_TIME
 ```
 
-SwitchToLive MUST be issued no later than `issue_at`; issuing earlier is permitted. Late issuance (after `issue_at`) is a violation and MUST be treated as fatal. The issuance MUST NOT be triggered by cadence-based polling that detects `now >= issue_at`.
+legacy switch RPC MUST be issued no later than `issue_at`; issuing earlier is permitted. Late issuance (after `issue_at`) is a violation and MUST be treated as fatal. The issuance MUST NOT be triggered by cadence-based polling that detects `now >= issue_at`.
 
 **Derivation:**
 
@@ -567,7 +567,7 @@ def _schedule_switch_issuance(self, boundary_time: datetime) -> None:
 
 **Operational Implication:**
 
-Switch issuance is a scheduled event, not a detected condition. Core computes `issue_at` once when the boundary is planned, registers a timed callback with the event loop to fire at that time, and issues SwitchToLive when the callback executes. No tick loop, health check, or cadence-based mechanism participates in issuance timing.
+Switch issuance is a scheduled event, not a detected condition. Core computes `issue_at` once when the boundary is planned, registers a timed callback with the event loop to fire at that time, and issues legacy switch RPC when the callback executes. No tick loop, health check, or cadence-based mechanism participates in issuance timing.
 
 #### INV-LEADTIME-MEASUREMENT-001 (Full Definition)
 
@@ -575,7 +575,7 @@ Prefeed lead time MUST be evaluated using the issuance timestamp supplied by Cor
 
 **Protocol Requirement:**
 
-SwitchToLiveRequest MUST include `issued_at_time_ms` (epoch milliseconds, station/master clock basis). Core populates this field with the wall-clock time at the moment SwitchToLive is issued. If `issued_at_time_ms` is absent or zero, receipt-time evaluation applies for backward compatibility only; this mode is deprecated and MUST NOT be relied upon by Core.
+legacy switch RPCRequest MUST include `issued_at_time_ms` (epoch milliseconds, station/master clock basis). Core populates this field with the wall-clock time at the moment legacy switch RPC is issued. If `issued_at_time_ms` is absent or zero, receipt-time evaluation applies for backward compatibility only; this mode is deprecated and MUST NOT be relied upon by Core.
 
 **Feasibility Evaluation:**
 
@@ -613,7 +613,7 @@ If `skew_ms > 250`, AIR MUST log `PROTOCOL_CLOCK_SKEW` warning. This indicates c
 
 **Rationale:**
 
-If Core issues SwitchToLive at exactly `boundary_time - MIN_PREFEED_LEAD_TIME`, and AIR evaluates using receipt time, any non-zero RPC latency causes `lead_time_AIR < MIN_PREFEED`, guaranteeing rejection. The only stable measurement basis is the issuance timestamp, which Core controls and includes in the request.
+If Core issues legacy switch RPC at exactly `boundary_time - MIN_PREFEED_LEAD_TIME`, and AIR evaluates using receipt time, any non-zero RPC latency causes `lead_time_AIR < MIN_PREFEED`, guaranteeing rejection. The only stable measurement basis is the issuance timestamp, which Core controls and includes in the request.
 
 **Non-Goals (Explicitly Forbidden):**
 
@@ -630,7 +630,7 @@ If Core issues SwitchToLive at exactly `boundary_time - MIN_PREFEED_LEAD_TIME`, 
 
 #### INV-SWITCH-ISSUANCE-TERMINAL-001 (Full Definition)
 
-Exception during SwitchToLive issuance MUST transition the boundary to FAILED_TERMINAL state. No retry, no re-arm, no tick-based reissuance.
+Exception during legacy switch RPC issuance MUST transition the boundary to FAILED_TERMINAL state. No retry, no re-arm, no tick-based reissuance.
 
 **Trigger:**
 Any exception in `_on_switch_issue_deadline()` or `_issue_switch_to_live()`.
@@ -652,10 +652,10 @@ INV-SWITCH-ISSUANCE-TERMINAL-001 FATAL: Switch issuance failed for boundary %s: 
 
 #### INV-SWITCH-ISSUANCE-ONESHOT-001 (Full Definition)
 
-SwitchToLive MUST be issued exactly once per boundary. Duplicate issuance attempts are suppressed. Duplicate into FAILED_TERMINAL is treated as a control-flow bug (FATAL).
+legacy switch RPC MUST be issued exactly once per boundary. Duplicate issuance attempts are suppressed. Duplicate into FAILED_TERMINAL is treated as a control-flow bug (FATAL).
 
 **Trigger:**
-Any attempt to issue SwitchToLive when boundary state ≥ SWITCH_ISSUED.
+Any attempt to issue legacy switch RPC when boundary state ≥ SWITCH_ISSUED.
 
 **Behavior:**
 - If state is `SWITCH_ISSUED` or `LIVE`: suppress, log warning
@@ -713,7 +713,7 @@ Any state ───────────────────────�
 The `target_boundary_ms` sent to AIR MUST equal the boundary computed from the active playout plan (segment boundary, block boundary), NOT a derived `now + X` value.
 
 **Trigger:**
-When constructing SwitchToLiveRequest.
+When constructing legacy switch RPCRequest.
 
 **Enforcement:**
 ```python
@@ -976,7 +976,7 @@ This section documents the phased implementation of invariants added by the 2026
 
 | Task ID | Description | Owner | Blocked By |
 |---------|-------------|-------|------------|
-| P11B-001 | Add `switch_completion_time_ms` to SwitchToLive response | AIR | — |
+| P11B-001 | Add `switch_completion_time_ms` to legacy switch RPC response | AIR | — |
 | P11B-002 | Log `INV-BOUNDARY-TOLERANCE-001 VIOLATION` when switch >1 frame late | AIR | P11B-001 |
 | P11B-003 | Add metric: `switch_boundary_delta_ms` histogram | AIR | P11B-001 |
 | P11B-004 | Add metric: `switch_boundary_violations_total` counter | AIR | P11B-002 |
@@ -1004,7 +1004,7 @@ This section documents the phased implementation of invariants added by the 2026
 
 | Task ID | Description | Owner | Blocked By |
 |---------|-------------|-------|------------|
-| P11C-001 | Add `target_boundary_time_ms` field to SwitchToLiveRequest proto | Proto | — |
+| P11C-001 | Add `target_boundary_time_ms` field to legacy switch RPCRequest proto | Proto | — |
 | P11C-002 | Regenerate proto stubs (Python + C++) | Build | P11C-001 |
 | P11C-003 | AIR: Parse and log `target_boundary_time_ms` (no enforcement yet) | AIR | P11C-002 |
 | P11C-004 | Core: Populate `target_boundary_time_ms` from schedule | Core | P11C-002 |
@@ -1012,7 +1012,7 @@ This section documents the phased implementation of invariants added by the 2026
 
 **Exit Criteria:**
 - Proto includes `target_boundary_time_ms`
-- Core sends boundary time in every SwitchToLive
+- Core sends boundary time in every legacy switch RPC
 - AIR logs receipt of boundary time
 - No enforcement changes; protocol readiness only
 
@@ -1041,18 +1041,18 @@ This section documents the phased implementation of invariants added by the 2026
 | P11D-002 | AIR: Execute switch at deadline even if readiness not achieved | AIR | P11D-001 |
 | P11D-003 | AIR: If not ready at deadline, use safety rails (pad/silence) and log violation | AIR | P11D-002 |
 | P11D-004 | AIR: Deprecate NOT_READY response; replace with PROTOCOL_VIOLATION if prefeed late | AIR | P11D-002 |
-| P11D-005 | Core: Remove SwitchToLive retry loop; treat NOT_READY as fatal | Core | P11D-004 |
+| P11D-005 | Core: Remove legacy switch RPC retry loop; treat NOT_READY as fatal | Core | P11D-004 |
 | P11D-009 | Core: Enforce planning-time feasibility (INV-SCHED-PLAN-BEFORE-EXEC-001) | Core | P11D-005 |
 | P11D-010 | Core: Enforce startup boundary feasibility (INV-STARTUP-BOUNDARY-FEASIBILITY-001) | Core | P11D-009 |
 | P11D-011 | Core: Deadline-scheduled switch issuance (INV-SWITCH-ISSUANCE-DEADLINE-001) | Core | P11D-010 |
-| P11D-006 | Core: Ensure LoadPreview issued with sufficient lead time | Core | P11D-005, P11D-009, P11D-010, P11D-011 |
+| P11D-006 | Core: Ensure legacy preload RPC issued with sufficient lead time | Core | P11D-005, P11D-009, P11D-010, P11D-011 |
 | P11D-007 | Contract test: switch executes within 1 frame of declared boundary | Test | P11D-002 |
 | P11D-008 | Contract test: late prefeed results in PROTOCOL_VIOLATION, not retry | Test | P11D-004 |
 | P11D-012 | Core + AIR: Delta logging for lead-time / clock skew (INV-LEADTIME-MEASUREMENT-001 observability) | Core + AIR | P11D-011 |
 
 **Exit Criteria:**
 - All switches execute within 1 frame of declared boundary time
-- No poll/retry pattern in Core for SwitchToLive
+- No poll/retry pattern in Core for legacy switch RPC
 - Prefeed timing violations are logged as protocol errors
 - 10-minute multi-switch test passes with 0 boundary violations
 
@@ -1075,13 +1075,13 @@ This section documents the phased implementation of invariants added by the 2026
 | Task ID | Description | Owner | Blocked By |
 |---------|-------------|-------|------------|
 | P11E-001 | Define `MIN_PREFEED_LEAD_TIME_MS` constant (e.g., 5000ms) | Core | — |
-| P11E-002 | Core: Issue LoadPreview at `boundary_time - MIN_PREFEED_LEAD_TIME_MS` | Core | P11E-001 |
-| P11E-003 | Core: Log violation if LoadPreview issued with <MIN_PREFEED_LEAD_TIME_MS | Core | P11E-002 |
+| P11E-002 | Core: Issue legacy preload RPC at `boundary_time - MIN_PREFEED_LEAD_TIME_MS` | Core | P11E-001 |
+| P11E-003 | Core: Log violation if legacy preload RPC issued with <MIN_PREFEED_LEAD_TIME_MS | Core | P11E-002 |
 | P11E-004 | Core: Add metric `prefeed_lead_time_ms` histogram | Core | P11E-002 |
-| P11E-005 | Contract test: all LoadPreview calls have ≥MIN_PREFEED_LEAD_TIME_MS | Test | P11E-003 |
+| P11E-005 | Contract test: all legacy preload RPC calls have ≥MIN_PREFEED_LEAD_TIME_MS | Test | P11E-003 |
 
 **Exit Criteria:**
-- All LoadPreview calls issued with ≥5 seconds lead time
+- All legacy preload RPC calls issued with ≥5 seconds lead time
 - Late prefeed is logged as Core scheduling error
 - No scheduling scenarios where prefeed cannot meet lead time
 
@@ -1342,11 +1342,11 @@ Phase 11E (Prefeed Contract)      ◄──────────────�
 | 2026-02-02 | Systems Contract Authority | Phase 12 Creation | Created Phase 12: Live Session Authority & Teardown Semantics. Added 5 invariants: INV-TEARDOWN-STABLE-STATE-001 (teardown deferred in transient states), INV-TEARDOWN-GRACE-TIMEOUT-001 (bounded deferral), INV-TEARDOWN-NO-NEW-WORK-001 (no new work when pending), INV-VIEWER-COUNT-ADVISORY-001 (viewer count advisory during transitions), INV-LIVE-SESSION-AUTHORITY-001 (liveness only in LIVE state). Incident-derived: Core tore down channel during SWITCH_ISSUED causing AIR encoder deadlock and audio queue overflow. 7 implementation tasks (P12-CORE-001–007), 6 test tasks (P12-TEST-001–006). |
 | 2026-02-02 | Systems Contract Authority | P11F-007–P11F-009 completion | P11F-007: test_channel_manager_boundary_lifecycle.py (allowed/illegal/terminal-absorbing/LIVE non-absorbing). P11F-008: test_channel_manager_oneshot.py (duplicate suppression, tick guard, exactly-once). P11F-009: test_channel_manager_terminal.py (exception→FAILED_TERMINAL, no re-arm, tick cannot retry, diagnostics). 71 runtime tests pass. Phase 11F complete. |
 | 2026-02-02 | Systems Contract Authority | P11F-003–P11F-006 completion | P11F-003: try/except Exception in switch issuance → FAILED_TERMINAL; no retry. P11F-004: _guard_switch_issuance; tick early-return for SWITCH_ISSUED/LIVE/FAILED_TERMINAL. P11F-005: optional event_loop; call_later path when set; Timer fallback. P11F-006: _plan_boundary_ms set/cleared/validated; mismatch → FAILED_TERMINAL. 32 runtime tests passed. |
-| 2026-02-02 | Systems Contract Authority | P11F-002 completion | P11F-002 done: BoundaryState enum and _ALLOWED_BOUNDARY_TRANSITIONS; _transition_boundary_state(); all boundary transitions wired (PLANNED→PRELOAD_ISSUED→SWITCH_SCHEDULED→SWITCH_ISSUED→LIVE→PLANNED/NONE). Switch timer moved to after LoadPreview. Illegal transition → FAILED_TERMINAL tested. Unblocks P11F-003, P11F-004, P11F-005, P11F-006. |
+| 2026-02-02 | Systems Contract Authority | P11F-002 completion | P11F-002 done: BoundaryState enum and _ALLOWED_BOUNDARY_TRANSITIONS; _transition_boundary_state(); all boundary transitions wired (PLANNED→PRELOAD_ISSUED→SWITCH_SCHEDULED→SWITCH_ISSUED→LIVE→PLANNED/NONE). Switch timer moved to after legacy preload RPC. Illegal transition → FAILED_TERMINAL tested. Unblocks P11F-003, P11F-004, P11F-005, P11F-006. |
 | 2026-02-02 | Systems Contract Authority | P11F-001 completion | P11F-001 done: typo `_MIN_PREFEED_LEAD_TIME_MS` → `MIN_PREFEED_LEAD_TIME_MS` verified absent; `channel_manager_launch.py` uses `MIN_PREFEED_LEAD_TIME_MS` only. Tests: test_prefeed_timing, test_clock_driven_switch (9 passed). Unblocks P11F-002. |
 | 2026-02-02 | Systems Contract Authority | Boundary Lifecycle Hardening | Added Phase 11F: INV-SWITCH-ISSUANCE-TERMINAL-001 (exception → FAILED_TERMINAL), INV-SWITCH-ISSUANCE-ONESHOT-001 (one-shot issuance), INV-BOUNDARY-LIFECYCLE-001 (state machine), INV-BOUNDARY-DECLARED-MATCHES-PLAN-001 (plan validation). Tightened INV-CONTROL-NO-POLL-001 to forbid tick-based reissuance. Fixed `_MIN_PREFEED_LEAD_TIME_MS` typo. Incident-derived: retry cascade caused negative lead-time violations. |
 | 2026-02-02 | Systems Contract Authority | Lead-Time Measurement Basis | Added INV-LEADTIME-MEASUREMENT-001: Prefeed lead time evaluated using issuance timestamp (`issued_at_time_ms`), not AIR receipt time. Receipt-time evaluation makes threshold issuance mathematically impossible under non-zero RPC latency. Proto extended with `issued_at_time_ms` field. |
-| 2026-02-02 | Systems Contract Authority | Switch Issuance Deadline | Added INV-SWITCH-ISSUANCE-DEADLINE-001: SwitchToLive issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. Derives from LAW-AUTHORITY-HIERARCHY and INV-SWITCH-DEADLINE-AUTHORITATIVE-001. |
+| 2026-02-02 | Systems Contract Authority | Switch Issuance Deadline | Added INV-SWITCH-ISSUANCE-DEADLINE-001: legacy switch RPC issuance MUST be deadline-scheduled and issued no later than `boundary_time - MIN_PREFEED_LEAD_TIME`. Cadence-based detection, tick loops, and jitter padding are forbidden. Derives from LAW-AUTHORITY-HIERARCHY and INV-SWITCH-DEADLINE-AUTHORITATIVE-001. |
 | 2026-02-02 | Systems Contract Authority | Startup Feasibility | Added INV-STARTUP-BOUNDARY-FEASIBILITY-001: First scheduled boundary must satisfy `boundary_time >= station_utc + startup_latency + MIN_PREFEED_LEAD_TIME`. Startup latency is a schedule content constraint, not a planning_time offset. Derives from INV-SCHED-PLAN-BEFORE-EXEC-001 and LAW-AUTHORITY-HIERARCHY. Runtime has no legal recovery mechanism for startup infeasibility. |
 | 2026-02-02 | Systems Contract Authority | Scheduling Feasibility | Added INV-SCHED-PLAN-BEFORE-EXEC-001: Scheduling feasibility MUST be determined at planning time. Boundaries that cannot satisfy lead-time constraints MUST be rejected during planning, not discovered at runtime. Supports INV-CONTROL-NO-POLL-001 and INV-BOUNDARY-DECLARED-001. Scheduling errors are planning errors. |
 | 2026-02-01 | Systems Contract Authority | Authority Hierarchy | **CRITICAL AMENDMENT:** Added LAW-AUTHORITY-HIERARCHY establishing "clock supersedes frame completion for switch execution." Resolved contradiction between clock-based rules (LAW-CLOCK, LAW-SWITCHING) and frame-based rules (LAW-FRAME-EXECUTION, INV-FRAME-001, INV-FRAME-003). Downgraded frame rules from "authority" to "execution precision." Added Authority Model diagram. |

@@ -51,7 +51,7 @@ When a switch is issued:
 
 Any bus eligible to become the Output source **must already have decoded frames available** at switch time.
 
-- Preview Bus must be running and have frames buffered before `SwitchToLive` is called.
+- Preview Bus must be running and have frames buffered before `legacy switch RPC` is called.
 - Decoder initialization, seeking, and initial decode happen **before** the switch, not during.
 - The switch is instantaneous because frames are already waiting.
 
@@ -92,7 +92,7 @@ The following are **contract violations** and must not occur:
 | **Output stalls during switch** | Output Bus stops emitting frames while switching sources. |
 | **Output restarts during switch** | Output Bus or downstream encoding pipeline is reinitialized. |
 | **Duplicate frames emitted** | Same frame emitted twice due to switch logic. |
-| **Decoder initialization at switch time** | Any decoder setup occurs as a result of `SwitchToLive`. |
+| **Decoder initialization at switch time** | Any decoder setup occurs as a result of `legacy switch RPC`. |
 | **Encoded stream switching** | Switching occurs at the TS/mux level rather than decoded frame level. |
 | **Buffer interleaving** | Frames from Live and Preview appear interleaved in Output. |
 
@@ -102,17 +102,17 @@ The following are **contract violations** and must not occur:
 
 _This section describes one compliant implementation. Alternate implementations are permitted provided all invariants in Sections 3 and 4 are satisfied._
 
-### 5.1 LoadPreview
+### 5.1 legacy preload RPC
 
-When Core calls `LoadPreview`:
+When Core calls `legacy preload RPC`:
 
 1. Create Preview Bus with its own dedicated ring buffer.
 2. Create and start Preview producer (decoder begins filling buffer).
 3. Preview runs in parallel with Live — no interference.
 
-### 5.2 SwitchToLive
+### 5.2 legacy switch RPC
 
-When Core calls `SwitchToLive`:
+When Core calls `legacy switch RPC`:
 
 1. Stop or detach Live producer from Output (implementation-defined lifecycle).
 2. Redirect Output Bus to consume from Preview's buffer.
@@ -141,7 +141,7 @@ The switch is instantaneous because:
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 
-On SwitchToLive: Output Bus redirects from Live Buffer to Preview Buffer.
+On legacy switch RPC: Output Bus redirects from Live Buffer to Preview Buffer.
 Preview Buffer becomes the new Live Buffer.
 ```
 

@@ -41,7 +41,7 @@
 | INV-P8-AUDIO-GATE | Audio gated only while shadow (and while mapping pending) |
 | INV-P8-SEGMENT-COMMIT | First frame admitted -> segment commits, owns CT; old segment RequestStop |
 | INV-P8-SEGMENT-COMMIT-EDGE | Generation counter per commit for multi-switch edge detection |
-| INV-P8-SWITCH-ARMED | No LoadPreview while switch armed; FATAL if reset reached while armed |
+| INV-P8-SWITCH-ARMED | No legacy preload RPC while switch armed; FATAL if reset reached while armed |
 | INV-P8-WRITE-BARRIER-DEFERRED | Write barrier on live waits until preview shadow ready |
 | INV-P8-EOF-SWITCH | Live EOF -> switch completes immediately (no buffer depth wait) |
 | INV-P8-PREVIEW-EOF | Preview EOF with frames -> complete with lower thresholds |

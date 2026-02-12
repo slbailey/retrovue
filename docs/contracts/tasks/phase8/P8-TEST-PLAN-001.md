@@ -24,7 +24,7 @@ If actual content is shorter than planned frame_count, content deficit fill appl
 Test Cases:
 
 1. Test early EOF detected:
-   - Setup: LoadPreview with frame_count=300; content has 250 frames
+   - Setup: legacy preload RPC with frame_count=300; content has 250 frames
    - Action: Play until decoder EOF
    - Expected: Early EOF detected at frame 250
 
@@ -44,12 +44,12 @@ Test Cases:
    - Expected: `_content_deficit_active = true`
 
 5. Test exact match (no early EOF):
-   - Setup: LoadPreview with frame_count=300; content has exactly 300 frames
+   - Setup: legacy preload RPC with frame_count=300; content has exactly 300 frames
    - Action: Play until decoder EOF
    - Expected: No EARLY_EOF; normal EOF handling
 
 6. Test planned frame count stored:
-   - Setup: LoadPreview with frame_count=300
+   - Setup: legacy preload RPC with frame_count=300
    - Action: Check FileProducer state
    - Expected: `_planned_frame_count = 300`
 

@@ -134,7 +134,7 @@ Canonical definitions and enforcement status are in **CANONICAL_RULE_LEDGER**. T
 ## 5. Relationship to Later Phases
 
 - **Phase 8 (Timeline Semantics):**  
-  Builds on Phase 1 liveness and content-before-pad. Phase 8 defines CT, write barriers, LoadPreview/SwitchToLive, and segment commit. Phase 1 ensures that when Phase 8 runs, output never goes black or silent and tune-in is always decodable.
+  Builds on Phase 1 liveness and content-before-pad. Phase 8 defines CT, write barriers, legacy preload RPC/legacy switch RPC, and segment commit. Phase 1 ensures that when Phase 8 runs, output never goes black or silent and tune-in is always decodable.
 
 - **Phase 11 (Broadcast-Grade Timing & Authority Hierarchy):**  
   Cites Phase 1 as prerequisite. Phase 11 adds clock authority, boundary lifecycle, and deadline enforcement; Phase 1 remains the guarantee that output is always liveness- and decodability-compliant.
