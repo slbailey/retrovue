@@ -27,7 +27,7 @@ from typing import Any
 from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.horizon_config import (
     HorizonAuthorityMode,
-    NoScheduleDataError,
+    HorizonNoScheduleDataError,
     get_horizon_authority_mode,
 )
 from retrovue.runtime.schedule_manager import ScheduleManager
@@ -345,7 +345,7 @@ class ScheduleManagerBackedScheduleService:
                     f"This is a HorizonManager planning failure."
                 )
                 self._logger.error(msg)
-                raise NoScheduleDataError(msg)
+                raise HorizonNoScheduleDataError(msg)
             # Legacy / shadow: auto-resolve (INV-P5-002)
             self._logger.info(
                 "Auto-resolving programming day %s for channel %s "
@@ -461,7 +461,7 @@ class ScheduleManagerBackedScheduleService:
                     f"Authoritative mode prohibits consumer-triggered resolution."
                 )
                 self._logger.error(msg)
-                raise NoScheduleDataError(msg)
+                raise HorizonNoScheduleDataError(msg)
             self._logger.info(
                 "Auto-resolving programming day %s for channel %s "
                 "(horizon_mode=%s)",
@@ -544,7 +544,7 @@ class ScheduleManagerBackedScheduleService:
                         f"This is a HorizonManager planning failure."
                     )
                     self._logger.error(msg)
-                    raise NoScheduleDataError(msg)
+                    raise HorizonNoScheduleDataError(msg)
                 else:
                     self._logger.info(
                         "Auto-resolving programming day %s for EPG query "
