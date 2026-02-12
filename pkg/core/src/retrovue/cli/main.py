@@ -122,7 +122,6 @@ def start_alias(
         from retrovue.cli.commands.program_director import start as pd_start
         pd_start(
             config_file=config_file,
-            schedule_dir=None,
             port=port,
             mock_schedule_grid=False,
             program_asset=None,

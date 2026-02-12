@@ -1549,16 +1549,14 @@ class BlockPlanProducer(Producer):
         self._reader_socket_queue: queue.Queue[socket.socket] = queue.Queue()
         self._accept_thread: threading.Thread | None = None
 
-        # Program format for encoding (extracted from ChannelConfig.program_format)
+        # Program format for encoding (extracted from ChannelConfig.program_format).
+        # Must match AIR's ProgramFormat::FromJson: frame_rate is a string (e.g. "30/1").
         pf = self.channel_config.program_format
         self._program_format = {
             "video": {
                 "width": pf.video_width,
                 "height": pf.video_height,
-                "frame_rate": {
-                    "num": pf.frame_rate_num,
-                    "den": pf.frame_rate_den,
-                },
+                "frame_rate": pf.frame_rate,
             },
             "audio": {
                 "sample_rate": pf.audio_sample_rate,
