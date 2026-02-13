@@ -269,34 +269,16 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
   for (const auto& af : primed_frame_->audio) {
     audio_samples += af.nb_samples;
   }
-
   int depth_ms = static_cast<int>(
       (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
   if (depth_ms >= min_audio_prime_ms) return {true, depth_ms};
 
-  // Helper: drain ALL pending audio from the decoder into primed_frame_.
-  // Fix B — ReadAndDecodeFrame queues audio internally while spinning for
-  // video packets.  TryGetFrame only extracts kMaxAudioFramesPerVideoFrame=2.
-  // During priming we want every available sample.
-  auto drain_pending_audio = [&]() {
-    if (!decoder_ok_ || !decoder_) return;
-    buffer::AudioFrame extra;
-    while (decoder_->GetPendingAudioFrame(extra)) {
-      audio_samples += extra.nb_samples;
-      primed_frame_->audio.push_back(std::move(extra));
-    }
-    depth_ms = static_cast<int>(
-        (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
-  };
+  // Move primed frame into local accumulation deque.
+  std::deque<FrameData> primed_frames;
+  primed_frames.push_back(std::move(*primed_frame_));
+  primed_frame_.reset();
 
-  // Fix A — consecutive-nullopt-gated loop.
-  // null_run counts consecutive nullopts; reset on successful decode.
-  // A segment transition may produce 2-3 transient nullopts (decoder
-  // close/open/first-frame-fail) which is fine.  10 consecutive means
-  // content is genuinely exhausted or the decoder is stuck.
-  //
-  // Fix C — wallclock safety timeout.
-  // Prevents indefinite hang on broken containers or slow I/O.
+  // Decode additional frames until audio depth meets threshold.
   constexpr int kMaxNullRun = 10;
   constexpr int kMaxTotalDecodes = 60;
   constexpr int kMaxPrimeWallclockMs = 2000;
@@ -304,8 +286,9 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
   int null_run = 0;
   int total_decodes = 0;
 
-  while (total_decodes < kMaxTotalDecodes) {
-    // Fix C: wallclock timeout check.
+  while (depth_ms < min_audio_prime_ms &&
+         total_decodes < kMaxTotalDecodes) {
+    // Wallclock timeout check.
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - prime_start).count();
     if (elapsed_ms >= kMaxPrimeWallclockMs) {
@@ -319,36 +302,29 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
 
     total_decodes++;
 
-    // Temporarily clear primed_frame_ so TryGetFrame doesn't return it,
-    // then restore it after.
-    auto held = std::move(primed_frame_);
-    primed_frame_.reset();
-    auto fd = TryGetFrame();
-    primed_frame_ = std::move(held);
-
+    auto fd = DecodeNextFrameRaw();
     if (!fd) {
       null_run++;
-      // Fix B: even on nullopt, drain any audio that ReadAndDecodeFrame
-      // queued internally (audio packets decoded while spinning for video).
-      drain_pending_audio();
-      if (depth_ms >= min_audio_prime_ms) break;
-      if (null_run >= kMaxNullRun) break;  // content exhausted or stuck
+      if (null_run >= kMaxNullRun) break;
       continue;
     }
-    null_run = 0;  // reset on successful decode
+    null_run = 0;
 
-    // Move audio into primed_frame_; keep video in buffered.
-    for (auto& af : fd->audio) {
+    // Accumulate audio depth from this frame.
+    for (const auto& af : fd->audio) {
       audio_samples += af.nb_samples;
-      primed_frame_->audio.push_back(std::move(af));
     }
-    fd->audio.clear();
-    buffered_frames_.push_back(std::move(*fd));
+    depth_ms = static_cast<int>(
+        (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
 
-    // Fix B: drain any additional audio beyond the 2-per-video-frame cap.
-    drain_pending_audio();
+    primed_frames.push_back(std::move(*fd));
+  }
 
-    if (depth_ms >= min_audio_prime_ms) break;
+  // Restore: first frame → primed_frame_, rest → buffered_frames_.
+  primed_frame_ = std::move(primed_frames.front());
+  primed_frames.pop_front();
+  for (auto& f : primed_frames) {
+    buffered_frames_.push_back(std::move(f));
   }
 
   bool met = depth_ms >= min_audio_prime_ms;
@@ -360,7 +336,6 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
             << " total_decodes=" << total_decodes
             << " null_run=" << null_run
             << " buffered_video=" << buffered_frames_.size()
-            << " audio_frames=" << primed_frame_->audio.size()
             << std::endl;
 
   return {met, depth_ms};
@@ -389,7 +364,20 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     return frame;
   }
 
-  // If current segment is PAD, generate pad frame (no decode needed)
+  // Decode-only path: handles both real decode and PAD generation.
+  return DecodeNextFrameRaw();
+}
+
+// =============================================================================
+// DecodeNextFrameRaw — decode-only frame advancement (no delivery state)
+// =============================================================================
+
+std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
+  if (state_ != State::kReady) {
+    return std::nullopt;
+  }
+
+  // PAD segment: generate synthetic frame (no decoder needed).
   if (has_pad_segments_ &&
       current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
       validated_.plan.segments[current_segment_index_].segment_type == SegmentType::kPad) {
@@ -397,19 +385,13 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   }
 
   if (!decoder_ok_) {
-    // INV-SEAM-SEG-006: Permanent exhaustion — return nullopt until
-    // PipelineManager performs the segment swap (pointer rotation).
     block_ct_ms_ += input_frame_duration_ms_;
     return std::nullopt;
   }
 
-  // Decode frame
   buffer::Frame video_frame;
   if (!decoder_->DecodeFrameToBuffer(video_frame)) {
     if (decoder_->IsEOF()) {
-      // INV-SEAM-SEG-006: EOF means segment content exhausted.
-      // Set decoder_ok_ = false permanently.  No segment advancement here.
-      // PipelineManager's eager overlap mechanism handles the transition.
       std::cout << "[TickProducer] SEGMENT_EOF"
                 << " segment_index=" << current_segment_index_
                 << " asset_uri=" << current_asset_uri_
@@ -419,12 +401,10 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       decoder_ok_ = false;
       return std::nullopt;
     }
-    // Transient decode error (not EOF) — return nullopt for this tick.
     block_ct_ms_ += input_frame_duration_ms_;
     return std::nullopt;
   }
 
-  // Extract audio (up to 2 frames)
   std::vector<buffer::AudioFrame> audio_frames;
   buffer::AudioFrame audio_frame;
   int audio_count = 0;
@@ -434,38 +414,25 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     audio_count++;
   }
 
-  // Anchor block_ct_ms_ and next_frame_offset_ms_ to decoded PTS.
-  // This prevents rounding error from accumulating across frames.
-  // PTS is in microseconds from stream start; convert to milliseconds.
   int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
-
-  // INV-PTS-ANCHOR-RESET: Capture PTS origin on first decode of each segment.
-  // Using (decoded_pts_ms - seg_first_pts_ms_) as relative offset ensures
-  // the first frame maps to seg_start_ct exactly, regardless of the asset's
-  // absolute PTS epoch.  This prevents the PTS anchoring formula from
-  // overwriting the snapped block_ct_ms_ after AdvanceToNextSegment().
   if (seg_first_pts_ms_ < 0) {
     seg_first_pts_ms_ = decoded_pts_ms;
   }
 
-  // Derive block CT from actual decoded position within current segment
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
 
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-
-  // Advance: +1 frame estimate for NEXT-frame boundary/underrun checks.
-  // Single-frame rounding (max 0.3ms), never accumulated.
   block_ct_ms_ = ct_before + input_frame_duration_ms_;
   next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
 
   return FrameData{
       std::move(video_frame),
       std::move(audio_frames),
-      current_asset_uri_,   // P3.2
-      ct_before             // P3.2
+      current_asset_uri_,
+      ct_before
   };
 }
 
