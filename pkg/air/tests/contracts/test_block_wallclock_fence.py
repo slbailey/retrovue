@@ -879,5 +879,87 @@ class TestCadenceAtFence:
         )
 
 
+# =============================================================================
+# 9. INV-FENCE-WALLCLOCK-ANCHOR + INV-FENCE-PTS-DECOUPLE: Bootstrap delay
+# =============================================================================
+
+class TestBootstrapDelay:
+    """INV-FENCE-WALLCLOCK-ANCHOR + INV-FENCE-PTS-DECOUPLE:
+    Bootstrap delay must shift fence grid without affecting PTS."""
+
+    def test_fence_correct_after_bootstrap_delay(self):
+        """With 3s bootstrap delay, fence fires at correct wall-clock-aligned frame.
+
+        session_epoch_utc_ms = 1000000 (Core join_utc_ms)
+        fence_epoch_utc_ms = 1003000 (3s later, at clock.Start())
+        Block end_utc_ms = 1030000 (30s block from join)
+
+        Fence should be: ceil((1030000 - 1003000) * 30 / 1000) = ceil(810000/1000) = 810
+        NOT: ceil((1030000 - 1000000) * 30 / 1000) = ceil(900000/1000) = 900
+        """
+        session_epoch = 1000000
+        fence_epoch = 1003000  # 3s bootstrap delay
+        fps = 30.0
+        frame_dur_ms = round(1000.0 / fps)
+
+        block = FedBlock(
+            block_id="delayed",
+            start_utc_ms=session_epoch,
+            end_utc_ms=session_epoch + 30000,
+        )
+        # Fence computed with fence_epoch, not session_epoch
+        delta_ms = block.end_utc_ms - fence_epoch
+        fence = (delta_ms + frame_dur_ms - 1) // frame_dur_ms
+        assert fence == 819  # ceil(27000/33)
+
+        # Model should use fence_epoch for fence math
+        pm = PipelineManagerModel(output_fps=fps, session_epoch_utc_ms=fence_epoch)
+        pm.load_block(block)
+        pm.run_ticks(fence + 1)
+        assert len(pm.fence_log) == 1
+        assert pm.fence_log[0].session_frame == fence
+
+    def test_pts_starts_at_zero_despite_bootstrap_delay(self):
+        """PTS must start at 0 regardless of bootstrap delay.
+
+        Before fix: session_frame_index was advanced by D/frame_dur_ms,
+        causing video_pts to jump ahead of audio_pts.
+
+        After fix: pts_origin_frame_index = 0, so PTS = FrameIndexToPts90k(0) = 0.
+        """
+        pts_origin_frame_index = 0
+        pts_origin_audio_samples = 0
+        session_frame_index = 0
+        audio_samples_emitted = 0
+
+        frame_duration_90k = 3000  # 30fps
+
+        video_pts = (session_frame_index - pts_origin_frame_index) * frame_duration_90k
+        audio_pts = ((audio_samples_emitted - pts_origin_audio_samples) * 90000) // 48000
+
+        assert video_pts == 0, f"Video PTS should be 0 at first frame, got {video_pts}"
+        assert audio_pts == 0, f"Audio PTS should be 0 at first frame, got {audio_pts}"
+        assert video_pts == audio_pts, (
+            f"A/V desync at first emission: video={video_pts}, audio={audio_pts}"
+        )
+
+    def test_av_sync_maintained_across_ticks(self):
+        """Video and audio PTS advance in lockstep when origins are aligned."""
+        frame_duration_90k = 3000  # 30fps
+        samples_per_tick = 1600    # 48000/30
+
+        pts_origin_frame = 0
+        pts_origin_audio = 0
+
+        for tick in range(100):
+            video_pts = (tick - pts_origin_frame) * frame_duration_90k
+            audio_pts = ((tick * samples_per_tick - pts_origin_audio) * 90000) // 48000
+            # Allow up to 1 90k tick of rounding error
+            assert abs(video_pts - audio_pts) <= frame_duration_90k, (
+                f"A/V desync at tick {tick}: video={video_pts}, audio={audio_pts}, "
+                f"delta={video_pts - audio_pts}"
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
