@@ -54,6 +54,10 @@ class PipelineManager : public IPlayoutExecutionEngine {
     // Called when a block completes its allocated frame count.
     std::function<void(const FedBlock&, int64_t)> on_block_completed;
 
+    // Called when a block is popped from the queue and begins execution/preload.
+    // Signals queue slot consumption — Core uses this as the preferred credit signal.
+    std::function<void(const FedBlock&)> on_block_started;
+
     // Called when the session ends (stop requested, error, etc.).
     std::function<void(const std::string&)> on_session_ended;
 
@@ -138,14 +142,23 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // INV-BLOCK-WALLFENCE-001: Rational-timebase authoritative block fence.
   // block_fence_frame_ = ceil(delta_ms * fps_num / (fps_den * 1000))
-  // where delta_ms = block.end_utc_ms - session_epoch_utc_ms_.
+  // where delta_ms = block.end_utc_ms - fence_epoch_utc_ms_.
   // The fence tick is the first session frame owned by the NEXT block.
   // TAKE selects B's buffers when session_frame_index >= block_fence_frame_.
   // INT64_MAX = no block loaded.
   int64_t block_fence_frame_ = INT64_MAX;
-  // UTC epoch (ms since Unix epoch) recorded at session start.  Used to map
-  // FedBlock::end_utc_ms to a session frame index.
+
+  // INV-JIP-ANCHOR-001: Core-authoritative epoch.  Set once from
+  // ctx_->join_utc_ms (or system_clock fallback).  NEVER mutated after
+  // initial capture.  Used for logging/diagnostics only.
   int64_t session_epoch_utc_ms_ = 0;
+
+  // INV-FENCE-WALLCLOCK-ANCHOR: Fence-specific epoch.  Set to
+  // system_clock::now() at clock.Start() (after bootstrap completes).
+  // Used ONLY by compute_fence_frame.  Decoupled from session_epoch_utc_ms_
+  // so fence math tracks actual emission start without mutating the
+  // Core-authoritative epoch.
+  int64_t fence_epoch_utc_ms_ = 0;
 
   // INV-FRAME-BUDGET-002: Remaining output frames for the current block.
   // Initialized to (block_fence_frame_ - session_frame_index) — derived

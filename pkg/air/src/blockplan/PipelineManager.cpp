@@ -530,6 +530,12 @@ void PipelineManager::Run() {
   video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
       video_target_depth, video_low_water);
 
+  // Initialize fence_epoch_utc_ms_ to the same value as session_epoch_utc_ms_.
+  // It will be re-anchored to system_clock::now() at clock.Start().
+  // This initial value is needed so that compute_fence_frame works correctly
+  // for the first block loaded BEFORE clock.Start().
+  fence_epoch_utc_ms_ = session_epoch_utc_ms_;
+
   // ========================================================================
   // 5. TRY LOADING FIRST BLOCK (before main loop)
   // ========================================================================
@@ -585,6 +591,17 @@ void PipelineManager::Run() {
 
   int64_t session_frame_index = 0;
 
+  // INV-FENCE-PTS-DECOUPLE: PTS origin offsets.
+  // Set when the emission gate opens (first tick starts at frame 0).
+  // PTS is computed relative to these origins so that bootstrap delay D
+  // (which advances fence_epoch_utc_ms_ forward) doesn't create a PTS
+  // jump that desynchronizes video from audio.
+  //   video_pts_90k = FrameIndexToPts90k(session_frame_index - pts_origin_frame_index)
+  //   audio_pts_90k = SamplesToPts90k(audio_samples_emitted - pts_origin_audio_samples)
+  // At normal startup both origins are 0, so this is identity.
+  int64_t pts_origin_frame_index = 0;
+  int64_t pts_origin_audio_samples = 0;
+
   // INV-PAD-PRODUCER-007: Content-before-pad gate.
   // Do not emit pad until at least one real content frame has been committed.
   // This ensures the encoder's first IDR comes from real content.
@@ -597,7 +614,7 @@ void PipelineManager::Run() {
   const int64_t fence_fps_num = ctx_->fps_num;
   const int64_t fence_fps_den = ctx_->fps_den;
   auto compute_fence_frame = [this, fence_fps_num, fence_fps_den](const FedBlock& block) -> int64_t {
-    int64_t delta_ms = block.end_utc_ms - session_epoch_utc_ms_;
+    int64_t delta_ms = block.end_utc_ms - fence_epoch_utc_ms_;
     if (delta_ms <= 0) return 0;
     int64_t denominator = fence_fps_den * 1000;
     return (delta_ms * fence_fps_num + denominator - 1) / denominator;
@@ -746,31 +763,33 @@ void PipelineManager::Run() {
   // not born late.  The gate ensures the AudioLookaheadBuffer has enough
   // runway to survive initial consumption without underflow.
   //
-  // INV-FENCE-WALLCLOCK-ANCHOR: Re-anchor session_epoch_utc_ms_ to the
-  // actual tick-loop start time.  The original join_utc_ms was captured
-  // by Core BEFORE subprocess spawn, gRPC connect, encoder open, probe,
-  // prime, and audio gate — adding a fixed offset D (typically 2-3s).
-  // Re-anchoring to system_clock::now() at clock.Start() ensures fence
-  // frames fire at the correct wall-clock instants.
+  // INV-FENCE-WALLCLOCK-ANCHOR: Re-anchor fence epoch to actual tick-loop
+  // start time.  session_epoch_utc_ms_ (Core join_utc_ms) is NOT mutated —
+  // it remains the authoritative editorial epoch.
   //
-  // Why epoch re-anchor and NOT frame-index advancement:
-  // session_frame_index drives BOTH fence comparisons AND PTS computation.
-  // Advancing it creates an immediate A/V desync (video PTS jumps ahead
-  // of audio_samples_emitted=0).  Re-anchoring the epoch shifts the
-  // fence grid without affecting PTS, preserving A/V sync.
+  // fence_epoch_utc_ms_ absorbs the bootstrap delay D so that fence frames
+  // fire at the correct wall-clock instants.  PTS origins remain at 0,
+  // so PTS computation is unaffected (no A/V desync).
   // ========================================================================
   clock.Start();
   {
+    // INV-FENCE-WALLCLOCK-ANCHOR: Re-anchor fence epoch to actual tick-loop
+    // start time.  session_epoch_utc_ms_ (Core join_utc_ms) is NOT mutated —
+    // it remains the authoritative editorial epoch.
+    //
+    // fence_epoch_utc_ms_ absorbs the bootstrap delay D so that fence frames
+    // fire at the correct wall-clock instants.  PTS origins remain at 0,
+    // so PTS computation is unaffected (no A/V desync).
     int64_t join_epoch = session_epoch_utc_ms_;
-    session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+    fence_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    int64_t D_ms = session_epoch_utc_ms_ - join_epoch;
+    int64_t D_ms = fence_epoch_utc_ms_ - join_epoch;
     std::cout << "[PipelineManager] INV-FENCE-WALLCLOCK-ANCHOR:"
               << " join_utc_ms=" << join_epoch
-              << " clock_start_utc_ms=" << session_epoch_utc_ms_
+              << " fence_epoch_utc_ms=" << fence_epoch_utc_ms_
               << " D_ms=" << D_ms << std::endl;
 
-    // Recompute first block's fence with corrected epoch.
+    // Recompute first block's fence with corrected fence epoch.
     if (live_tp()->GetState() == ITickProducer::State::kReady) {
       block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
       remaining_block_frames_ = block_fence_frame_ - session_frame_index;
@@ -821,10 +840,13 @@ void PipelineManager::Run() {
     if (ctx_->stop_requested.load(std::memory_order_acquire) ||
         output_detached.load(std::memory_order_acquire)) break;
 
-    // Compute PTS (unchanged from P3.0)
-    int64_t video_pts_90k = clock.FrameIndexToPts90k(session_frame_index);
+    // INV-FENCE-PTS-DECOUPLE: PTS relative to emission origin.
+    // At normal startup origins are 0 → identity.
+    int64_t video_pts_90k = clock.FrameIndexToPts90k(
+        session_frame_index - pts_origin_frame_index);
     int64_t audio_pts_90k =
-        (audio_samples_emitted * 90000) / buffer::kHouseAudioSampleRate;
+        ((audio_samples_emitted - pts_origin_audio_samples) * 90000) /
+        buffer::kHouseAudioSampleRate;
 
     // ==================================================================
     // PRE-TAKE READINESS: Stash + preroll BEFORE source selection.
