@@ -746,44 +746,35 @@ void PipelineManager::Run() {
   // not born late.  The gate ensures the AudioLookaheadBuffer has enough
   // runway to survive initial consumption without underflow.
   //
-  // INV-FENCE-WALLCLOCK-ANCHOR: Convert bootstrap lateness into frame
-  // offset instead of mutating the Core-authoritative epoch.
-  // session_epoch_utc_ms_ is IMMUTABLE after initial capture — it is
-  // the wallclock anchor for all fence math.  Bootstrap delay is absorbed
-  // by advancing session_frame_index, preserving hard schedule fences.
+  // INV-FENCE-WALLCLOCK-ANCHOR: Re-anchor session_epoch_utc_ms_ to the
+  // actual tick-loop start time.  The original join_utc_ms was captured
+  // by Core BEFORE subprocess spawn, gRPC connect, encoder open, probe,
+  // prime, and audio gate — adding a fixed offset D (typically 2-3s).
+  // Re-anchoring to system_clock::now() at clock.Start() ensures fence
+  // frames fire at the correct wall-clock instants.
+  //
+  // Why epoch re-anchor and NOT frame-index advancement:
+  // session_frame_index drives BOTH fence comparisons AND PTS computation.
+  // Advancing it creates an immediate A/V desync (video PTS jumps ahead
+  // of audio_samples_emitted=0).  Re-anchoring the epoch shifts the
+  // fence grid without affecting PTS, preserving A/V sync.
   // ========================================================================
   clock.Start();
   {
-    int64_t now_utc_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-
-    int64_t bootstrap_late_ms = now_utc_ms - session_epoch_utc_ms_;
-
+    int64_t join_epoch = session_epoch_utc_ms_;
+    session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t D_ms = session_epoch_utc_ms_ - join_epoch;
     std::cout << "[PipelineManager] INV-FENCE-WALLCLOCK-ANCHOR:"
-              << " join_utc_ms=" << session_epoch_utc_ms_
-              << " clock_start_utc_ms=" << now_utc_ms
-              << " bootstrap_late_ms=" << bootstrap_late_ms
-              << std::endl;
+              << " join_utc_ms=" << join_epoch
+              << " clock_start_utc_ms=" << session_epoch_utc_ms_
+              << " D_ms=" << D_ms << std::endl;
 
-    if (bootstrap_late_ms > 0) {
-      // Convert lateness to frames using rational fps (same as fence math).
-      int64_t late_frames =
-          (bootstrap_late_ms * fence_fps_num) / (fence_fps_den * 1000);
-
-      session_frame_index += late_frames;
-
-      std::cout << "[PipelineManager] INV-FENCE-LATE-COMPENSATION:"
-                << " late_frames=" << late_frames
-                << " session_frame_index=" << session_frame_index
-                << std::endl;
-    }
-
+    // Recompute first block's fence with corrected epoch.
     if (live_tp()->GetState() == ITickProducer::State::kReady) {
       block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
       remaining_block_frames_ = block_fence_frame_ - session_frame_index;
-      if (remaining_block_frames_ < 0)
-        remaining_block_frames_ = 0;
+      if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
     }
   }
   // P3.3: Seam transition tracking
