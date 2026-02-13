@@ -52,12 +52,10 @@ void VideoLookaheadBuffer::StartFilling(
   // INV-BLOCK-PRIME-002: Consume primed frame synchronously (non-blocking).
   // This guarantees the buffer has at least one frame immediately after
   // StartFilling returns, enabling the fence-tick to pop without delay.
-  // INV-AUDIO-PRIME-001: When primed via PrimeFirstTick, the primed frame's
-  // audio vector contains accumulated audio from multiple decodes (covering
-  // the audio prime threshold).  All audio is pushed to AudioLookaheadBuffer
-  // here in one call — zero decode I/O on the tick thread.
-  // Buffered video frames from PrimeFirstTick are returned by TryGetFrame
-  // in the fill thread (they sit in TickProducer::buffered_frames_).
+  // INV-AUDIO-PRIME-001: The primed frame carries its own decoded audio
+  // (typically 1-2 frames).  Remaining primed audio is distributed across
+  // buffered_frames_, which the fill thread processes immediately (no I/O)
+  // after StartFilling spawns the thread.
   bool has_primed = producer_->HasPrimedFrame();
   std::cout << "[VideoBuffer] StartFilling: HasPrimedFrame=" << has_primed
             << " has_decoder=" << producer_->HasDecoder()

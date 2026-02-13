@@ -149,13 +149,13 @@ class TickProducer : public producers::IProducer,
   int64_t input_frame_duration_ms_ = 0;  // Content advance per decode (matches input cadence)
 
   // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
-  // When populated by PrimeFirstTick, audio vector may contain accumulated
-  // audio from multiple decodes (covering min_audio_prime_ms threshold).
+  // Audio vector contains only this frame's own decoded audio (0-2 frames).
+  // Subsequent frames' audio stays with their FrameData in buffered_frames_.
   std::optional<FrameData> primed_frame_;
 
-  // INV-AUDIO-PRIME-001: Buffered video frames from PrimeFirstTick audio
-  // priming.  TryGetFrame returns these (FIFO) after primed_frame_, before
-  // live decode.  Audio has been moved into primed_frame_.audio.
+  // INV-AUDIO-PRIME-001: Buffered frames from PrimeFirstTick audio priming.
+  // TryGetFrame returns these (FIFO) after primed_frame_, before live decode.
+  // Each frame retains its own decoded audio.
   std::deque<FrameData> buffered_frames_;
 
   // Planned PAD segment support — pre-allocated pad frames (black+silence).
@@ -166,6 +166,13 @@ class TickProducer : public producers::IProducer,
 
   void InitPadFrames();
   std::optional<FrameData> GeneratePadFrame();
+
+  // Decode-only frame advancement.  Advances the decoder exactly one frame,
+  // extracts pending audio, advances CT based on decoded PTS.
+  // Does NOT inspect or mutate primed_frame_ or buffered_frames_.
+  // Returns nullopt on EOF, decode failure, or decoder_ok_ == false.
+  // For PAD segments: returns GeneratePadFrame() (no decode needed).
+  std::optional<FrameData> DecodeNextFrameRaw();
 
   // REMOVED: AdvanceToNextSegment() — reactive segment advancement replaced by
   // eager overlap via SeamPreparer.  See INV-SEAM-SEG-001..006.

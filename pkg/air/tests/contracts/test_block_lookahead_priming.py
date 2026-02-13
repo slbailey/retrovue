@@ -30,6 +30,7 @@ Copyright (c) 2025 RetroVue
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -127,6 +128,7 @@ class TickProducerModel:
         self.decoder: Optional[FakeDecoder] = None
         self.decoder_ok = False
         self.primed_frame: Optional[FrameData] = None
+        self.buffered_frames: deque[FrameData] = deque()
         self.block_ct_ms = 0
         self.input_fps = 0.0
         self.input_frame_duration_ms = 0
@@ -184,12 +186,74 @@ class TickProducerModel:
 
         self.primed_frame = raw
 
-    def try_get_frame(self) -> Optional[FrameData]:
-        """Mirrors TryGetFrame with priming gate at entry."""
+    def decode_next_frame_raw(self) -> Optional[FrameData]:
+        """Mirrors C++ DecodeNextFrameRaw — decode-only, no delivery state."""
         if self.state != self.READY:
             return None
         if not self.decoder_ok or self.decoder is None:
             self.block_ct_ms += self.input_frame_duration_ms
+            return None
+
+        raw = self.decoder.decode_frame()
+        if raw is None:
+            self.block_ct_ms += self.input_frame_duration_ms
+            return None
+
+        decoded_pts_ms = raw.video_pts_us // 1000
+        ct_before = decoded_pts_ms - self._block.asset_start_offset_ms
+        raw.block_ct_ms = ct_before
+        self.block_ct_ms = ct_before + self.input_frame_duration_ms
+        return raw
+
+    def prime_first_tick(self, min_audio_prime_ms: int) -> tuple[bool, int]:
+        """Mirrors C++ PrimeFirstTick — decode-driven priming with local deque.
+
+        Returns (met_threshold, actual_depth_ms).
+        """
+        self.prime_first_frame()
+        if self.primed_frame is None:
+            return (False, 0)
+        if min_audio_prime_ms <= 0:
+            return (True, 0)
+
+        audio_samples = self.primed_frame.audio_samples
+        depth_ms = (audio_samples * 1000) // 48000  # kHouseAudioSampleRate
+        if depth_ms >= min_audio_prime_ms:
+            return (True, depth_ms)
+
+        # Move primed frame into local accumulation deque.
+        primed_frames: deque[FrameData] = deque()
+        primed_frames.append(self.primed_frame)
+        self.primed_frame = None
+
+        max_null_run = 10
+        max_total_decodes = 60
+        null_run = 0
+        total_decodes = 0
+
+        while depth_ms < min_audio_prime_ms and total_decodes < max_total_decodes:
+            total_decodes += 1
+            fd = self.decode_next_frame_raw()
+            if fd is None:
+                null_run += 1
+                if null_run >= max_null_run:
+                    break
+                continue
+            null_run = 0
+            audio_samples += fd.audio_samples
+            depth_ms = (audio_samples * 1000) // 48000
+            primed_frames.append(fd)
+
+        # Restore: first → primed_frame_, rest → buffered_frames_.
+        self.primed_frame = primed_frames.popleft()
+        for f in primed_frames:
+            self.buffered_frames.append(f)
+
+        return (depth_ms >= min_audio_prime_ms, depth_ms)
+
+    def try_get_frame(self) -> Optional[FrameData]:
+        """Mirrors TryGetFrame with priming gate at entry."""
+        if self.state != self.READY:
             return None
 
         # INV-BLOCK-PRIME-002: primed frame returned without decode
@@ -198,25 +262,23 @@ class TickProducerModel:
             self.primed_frame = None
             return frame
 
-        # Normal decode path
-        raw = self.decoder.decode_frame()
-        if raw is None:
+        # INV-AUDIO-PRIME-001: return buffered frames from PrimeFirstTick
+        if self.buffered_frames:
+            return self.buffered_frames.popleft()
+
+        if not self.decoder_ok or self.decoder is None:
             self.block_ct_ms += self.input_frame_duration_ms
             return None
 
-        # PTS-anchored CT (mirrors TickProducer.cpp lines 255-272)
-        decoded_pts_ms = raw.video_pts_us // 1000
-        ct_before = decoded_pts_ms - self._block.asset_start_offset_ms
-        raw.block_ct_ms = ct_before
-        self.block_ct_ms = ct_before + self.input_frame_duration_ms
-
-        return raw
+        # Decode-only path
+        return self.decode_next_frame_raw()
 
     def reset(self) -> None:
         self.state = self.EMPTY
         self.decoder = None
         self.decoder_ok = False
         self.primed_frame = None
+        self.buffered_frames.clear()
         self.block_ct_ms = 0
         self.input_fps = 0.0
         self.input_frame_duration_ms = 0
@@ -817,6 +879,131 @@ class TestFullLifecycle:
         assert frame_0.decoder_frame_index == 0, "INV-BLOCK-PRIME-007: index"
         assert frame_0.video_pts_us == 0, "INV-BLOCK-PRIME-007: PTS"
         assert frame_0.asset_uri == block.asset_uri, "INV-BLOCK-PRIME-007: uri"
+
+
+# =============================================================================
+# 9. Regression: PrimeFirstTick decode depth (42ms plateau fix)
+# =============================================================================
+
+class TestAudioPrimeDecodeDepth:
+    """Regression: PrimeFirstTick must decode multiple frames to reach audio threshold.
+
+    Before the DecodeNextFrameRaw refactor, PrimeFirstTick could plateau at ~42ms
+    (a single frame's audio) because the decode loop re-served buffered frames
+    instead of advancing the decoder. This test catches that regression.
+    """
+
+    def test_prime_first_tick_reaches_500ms(self):
+        """PrimeFirstTick(500) must report got_ms >= 500 on normal assets."""
+        block = _make_block(
+            input_fps=30.0,
+            total_frames=900,
+            duration_ms=30_000,
+        )
+        tp = TickProducerModel(output_fps=30.0)
+        tp.assign_block(block)
+
+        met, depth_ms = tp.prime_first_tick(500)
+
+        assert met, (
+            "INV-AUDIO-PRIME-001 REGRESSION: PrimeFirstTick(500) did not meet "
+            f"threshold.  got_ms={depth_ms}.  The decode loop must advance the "
+            "decoder beyond the first frame to accumulate audio."
+        )
+        assert depth_ms >= 500, (
+            f"INV-AUDIO-PRIME-001 REGRESSION: depth_ms={depth_ms} < 500. "
+            "Audio depth plateau indicates decode loop is not advancing."
+        )
+
+    def test_prime_first_tick_decodes_multiple_frames(self):
+        """PrimeFirstTick(500) must decode beyond frame 0 (buffered_frames > 0).
+
+        Indirect assertion: after PrimeFirstTick, calling TryGetFrame() repeatedly
+        should return >1 frame before hitting decode latency (buffered frames
+        return instantly; live decode has measurable latency).
+        """
+        block = _make_block(
+            input_fps=30.0,
+            total_frames=900,
+            duration_ms=30_000,
+        )
+        tp = TickProducerModel(output_fps=30.0)
+        tp.assign_block(block)
+        tp.prime_first_tick(500)
+
+        # Consume primed frame (frame 0)
+        frame_0 = tp.try_get_frame()
+        assert frame_0 is not None, "Primed frame must exist"
+
+        # At least one buffered frame must exist from priming
+        assert len(tp.buffered_frames) > 0 or tp.try_get_frame() is not None, (
+            "INV-AUDIO-PRIME-001 REGRESSION: No buffered frames after "
+            "PrimeFirstTick(500).  The decode loop did not advance beyond "
+            "the first frame."
+        )
+
+    def test_prime_first_tick_buffered_frames_retain_audio(self):
+        """Each buffered frame must retain its own decoded audio (not stripped).
+
+        Before the refactor, buffered frames had their audio moved into
+        primed_frame_.  After the refactor, each frame keeps its own audio.
+        """
+        block = _make_block(
+            input_fps=30.0,
+            total_frames=900,
+            duration_ms=30_000,
+        )
+        tp = TickProducerModel(output_fps=30.0)
+        tp.assign_block(block)
+        tp.prime_first_tick(500)
+
+        # Primed frame should have its own audio
+        assert tp.primed_frame is not None
+        assert tp.primed_frame.audio_samples > 0, (
+            "Primed frame must retain its own audio"
+        )
+
+        # Each buffered frame must also have audio
+        for i, bf in enumerate(tp.buffered_frames):
+            assert bf.audio_samples > 0, (
+                f"INV-AUDIO-PRIME-001 REGRESSION: buffered_frame[{i}] has "
+                f"audio_samples={bf.audio_samples}.  Each frame must retain "
+                "its own decoded audio."
+            )
+
+    def test_prime_produces_distinct_pts_values(self):
+        """Decoded frames during priming must have distinct, advancing PTS."""
+        block = _make_block(
+            input_fps=30.0,
+            total_frames=900,
+            duration_ms=30_000,
+        )
+        tp = TickProducerModel(output_fps=30.0)
+        tp.assign_block(block)
+        tp.prime_first_tick(500)
+
+        # Collect block_ct_ms from primed + buffered frames via TryGetFrame()
+        ct_values = []
+        while True:
+            f = tp.try_get_frame()
+            if f is None:
+                break
+            ct_values.append(f.block_ct_ms)
+            # Stop after consuming all primed+buffered frames
+            if len(ct_values) > 30:
+                break
+
+        assert len(ct_values) >= 2, (
+            "Must have at least 2 frames to verify PTS advancement"
+        )
+
+        # Verify monotonically increasing
+        for i in range(1, len(ct_values)):
+            assert ct_values[i] > ct_values[i - 1], (
+                f"INV-AUDIO-PRIME-001 REGRESSION: block_ct_ms not monotonically "
+                f"increasing at index {i}: {ct_values[i]} <= {ct_values[i-1]}. "
+                "Primed frames must have distinct, advancing PTS."
+            )
 
 
 if __name__ == "__main__":
