@@ -32,6 +32,7 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -93,10 +94,11 @@ static FedBlock MakeMultiSegmentBlock(
   return block;
 }
 
-static int64_t NowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-}
+using test_infra::kBootGuardMs;
+using test_infra::kBlockTimeOffsetMs;
+using test_infra::kStdBlockMs;
+using test_infra::kShortBlockMs;
+using test_infra::kSegBlockMs;
 
 // =============================================================================
 // Test Fixture
@@ -122,6 +124,7 @@ class SegmentContinuityContractTest : public ::testing::Test {
     ctx_->width = 640;
     ctx_->height = 480;
     ctx_->fps = 30.0;
+    test_ts_ = test_infra::MakeTestTimeSource();
   }
 
   void TearDown() override {
@@ -141,6 +144,8 @@ class SegmentContinuityContractTest : public ::testing::Test {
     }
     if (drain_thread_.joinable()) drain_thread_.join();
   }
+
+  int64_t NowMs() { return test_ts_->NowUtcMs(); }
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
@@ -167,7 +172,8 @@ class SegmentContinuityContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       summaries_.push_back(summary);
     };
-    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks));
+    return std::make_unique<PipelineManager>(
+        ctx_.get(), std::move(callbacks), test_ts_);
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
@@ -191,6 +197,7 @@ class SegmentContinuityContractTest : public ::testing::Test {
     return fingerprints_;
   }
 
+  std::shared_ptr<ITimeSource> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -220,12 +227,13 @@ class SegmentContinuityContractTest : public ::testing::Test {
 TEST_F(SegmentContinuityContractTest, T_SEG_001_SegmentSeamDoesNotKillSession) {
   auto now = NowMs();
 
-  // Block with 2 segments: episode (1s) + filler (1s). Both URIs unresolvable
+  // Block with 2 segments: episode (3s) + filler (3s). Both URIs unresolvable
   // → decoder fails → pad frames at the seam. Session must not die.
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
   FedBlock block = MakeMultiSegmentBlock(
-      "seg001", now, 2000,
-      "/nonexistent/episode.mp4", 1000,
-      "/nonexistent/filler.mp4", 1000);
+      "seg001", now + kBlockTimeOffsetMs, kSegBlockMs,
+      "/nonexistent/episode.mp4", kSegBlockMs / 2,
+      "/nonexistent/filler.mp4", kSegBlockMs / 2);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block);
@@ -234,8 +242,9 @@ TEST_F(SegmentContinuityContractTest, T_SEG_001_SegmentSeamDoesNotKillSession) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run through the entire block (2s) + post-fence pad.
-  std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+  // kBootGuardMs + duration + margin for post-fence pad.
+  std::this_thread::sleep_for(std::chrono::milliseconds(
+      kBootGuardMs + kSegBlockMs + 1000));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -297,7 +306,8 @@ TEST_F(SegmentContinuityContractTest, T_SEG_002_SegmentSeamAudioContinuity_NoSil
     }
   };
 
-  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks));
+  engine_ = std::make_unique<PipelineManager>(
+      ctx_.get(), std::move(callbacks), test_ts_);
   engine_->Start();
 
   ASSERT_TRUE(WaitForSessionEnded(6000))
@@ -492,9 +502,9 @@ TEST_F(SegmentContinuityContractTest, T_SEG_005_SegmentSeamMetricsIncrementOnFal
 TEST_F(SegmentContinuityContractTest, T_SEG_006_SegmentSeamAppliesToBlockToBlockTransition) {
   auto now = NowMs();
 
-  FedBlock block_a = MakeBlock("seg006a", now, 1000);
-  FedBlock block_b = MakeBlock("seg006b", now + 1000, 1000);
-  FedBlock block_c = MakeBlock("seg006c", now + 2000, 1000);
+  FedBlock block_a = MakeBlock("seg006a", now, kShortBlockMs);
+  FedBlock block_b = MakeBlock("seg006b", now + kShortBlockMs, kShortBlockMs);
+  FedBlock block_c = MakeBlock("seg006c", now + 2 * kShortBlockMs, kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -505,8 +515,9 @@ TEST_F(SegmentContinuityContractTest, T_SEG_006_SegmentSeamAppliesToBlockToBlock
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run through all 3 blocks (3s) + margin.
-  std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+  // Bootstrap + 3 blocks + margin.
+  std::this_thread::sleep_for(std::chrono::milliseconds(
+      kBootGuardMs + 3 * kShortBlockMs + 500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();

@@ -31,6 +31,7 @@
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/output/SocketSink.h"
+#include "time/SystemTimeSource.hpp"
 
 // Define RETROVUE_DEBUG_PAD_EMIT to enable per-tick pad frame logging.
 // Disabled by default — zero runtime cost when off.
@@ -64,9 +65,12 @@ static constexpr int kMinAudioPrimeMs = 500;
 
 PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
-    Callbacks callbacks)
+    Callbacks callbacks,
+    std::shared_ptr<ITimeSource> time_source)
     : ctx_(ctx),
       callbacks_(std::move(callbacks)),
+      time_source_(time_source ? std::move(time_source)
+                               : std::make_shared<SystemTimeSource>()),
       live_(std::make_unique<TickProducer>(ctx->width, ctx->height,
                                                     ctx->fps)),
       seam_preparer_(std::make_unique<SeamPreparer>()) {
@@ -124,6 +128,8 @@ void PipelineManager::CleanupDeferredFill() {
     deferred_fill_thread_.join();
   }
   deferred_producer_.reset();
+  deferred_video_buffer_.reset();
+  deferred_audio_buffer_.reset();
 }
 
 PipelineMetrics PipelineManager::SnapshotMetrics() const {
@@ -484,8 +490,7 @@ void PipelineManager::Run() {
               << session_epoch_utc_ms_ << " (Core-authoritative join_utc_ms)"
               << std::endl;
   } else {
-    session_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    session_epoch_utc_ms_ = time_source_->NowUtcMs();
     std::cout << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
               << session_epoch_utc_ms_ << " (local clock fallback, join_utc_ms=0)"
               << std::endl;
@@ -781,8 +786,7 @@ void PipelineManager::Run() {
     // fire at the correct wall-clock instants.  PTS origins remain at 0,
     // so PTS computation is unaffected (no A/V desync).
     int64_t join_epoch = session_epoch_utc_ms_;
-    fence_epoch_utc_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    fence_epoch_utc_ms_ = time_source_->NowUtcMs();
     int64_t D_ms = fence_epoch_utc_ms_ - join_epoch;
     std::cout << "[PipelineManager] INV-FENCE-WALLCLOCK-ANCHOR:"
               << " join_utc_ms=" << join_epoch
@@ -794,6 +798,8 @@ void PipelineManager::Run() {
       block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
       remaining_block_frames_ = block_fence_frame_ - session_frame_index;
       if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
+      // Re-sync next_seam_frame_ so TAKE fires at the updated fence.
+      UpdateNextSeamFrame();
     }
   }
   // P3.3: Seam transition tracking
@@ -1113,9 +1119,22 @@ void PipelineManager::Run() {
       // Step 1: Join PREVIOUS fence's deferred fill thread.
       CleanupDeferredFill();
 
-      // Step 2: Stop A's fill thread (non-blocking async stop).
-      auto detached = video_buffer_->StopFillingAsync(/*flush=*/true);
-      audio_buffer_->Reset();
+      // Step 1b: Guard against stale preview buffers.
+      // TryLoadLiveProducer may have consumed preview_ (moved to live_)
+      // but left preview_video_buffer_ with a running fill thread.
+      // Stop and clear them so the swap logic below sees a consistent state.
+      if (preview_video_buffer_ && !preview_) {
+        preview_video_buffer_->StopFilling(/*flush=*/true);
+        preview_video_buffer_.reset();
+        preview_audio_buffer_.reset();
+      }
+
+      // Step 2: Move outgoing buffers out — do not mutate in place.
+      // The fill thread may still be running; mutating the buffer while
+      // the fill thread writes to it is a data race.
+      auto outgoing_video_buffer = std::move(video_buffer_);
+      auto outgoing_audio_buffer = std::move(audio_buffer_);
+      auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
 
       // Step 3: Snapshot outgoing block and finalize accumulator.
       const FedBlock outgoing_block = live_tp()->GetBlock();
@@ -1190,10 +1209,20 @@ void PipelineManager::Run() {
             swapped = true;
           }
         }
-        // If swapped via fallback, start fill on existing A buffers.
+        // If swapped via fallback, create fresh A buffers and start fill.
+        // Outgoing buffers are moved out; do not reuse them.
         if (swapped) {
-          video_buffer_->StopFilling(/*flush=*/true);
-          audio_buffer_->Reset();
+          video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+              outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
+              outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
+          const auto& fbcfg = ctx_->buffer_config;
+          int fa_target = fbcfg.audio_target_depth_ms;
+          int fa_low = fbcfg.audio_low_water_ms > 0
+              ? fbcfg.audio_low_water_ms
+              : std::max(1, fa_target / 3);
+          audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+              fa_target, buffer::kHouseAudioSampleRate,
+              buffer::kHouseAudioChannels, fa_low);
           video_buffer_->StartFilling(
               AsTickProducer(live_.get()), audio_buffer_.get(),
               AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
@@ -1204,6 +1233,18 @@ void PipelineManager::Run() {
       if (!swapped) {
         // No B available — PADDED_GAP.
         live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+        // Fresh buffers — outgoing buffers will die with the deferred fill thread.
+        video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+        {
+          const auto& gbcfg = ctx_->buffer_config;
+          int ga_target = gbcfg.audio_target_depth_ms;
+          int ga_low = gbcfg.audio_low_water_ms > 0
+              ? gbcfg.audio_low_water_ms
+              : std::max(1, ga_target / 3);
+          audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+              ga_target, buffer::kHouseAudioSampleRate,
+              buffer::kHouseAudioChannels, ga_low);
+        }
         block_fence_frame_ = INT64_MAX;
         next_seam_frame_ = INT64_MAX;
         next_seam_type_ = SeamType::kNone;
@@ -1262,9 +1303,11 @@ void PipelineManager::Run() {
         TryKickoffBlockPreload(session_frame_index);
       }
 
-      // Step 6: Store deferred thread + producer for later cleanup.
+      // Step 6: Store deferred thread + producer + buffers for later cleanup.
       deferred_fill_thread_ = std::move(detached.thread);
       deferred_producer_ = std::move(outgoing_producer);
+      deferred_video_buffer_ = std::move(outgoing_video_buffer);
+      deferred_audio_buffer_ = std::move(outgoing_audio_buffer);
 
       // Step 7: Emit finalization logs.
       if (outgoing_summary) {
@@ -1300,8 +1343,7 @@ void PipelineManager::Run() {
       }
 
       {
-        int64_t now_utc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
+        int64_t now_utc_ms = time_source_->NowUtcMs();
         int64_t delta_ms = now_utc_ms - outgoing_block.end_utc_ms;
         std::cout << "[PipelineManager] INV-BLOCK-WALLFENCE-001: FENCE"
                   << " block=" << outgoing_block.block_id

@@ -39,6 +39,7 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -112,10 +113,9 @@ static FedBlock MakeMultiSegmentBlock(
   return block;
 }
 
-static int64_t NowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-}
+using test_infra::kBootGuardMs;
+using test_infra::kStdBlockMs;
+using test_infra::kShortBlockMs;
 
 // =============================================================================
 // Test Fixture
@@ -141,6 +141,7 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
     ctx_->width = 640;
     ctx_->height = 480;
     ctx_->fps = 30.0;
+    test_ts_ = test_infra::MakeTestTimeSource();
   }
 
   void TearDown() override {
@@ -160,6 +161,8 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
     }
     if (drain_thread_.joinable()) drain_thread_.join();
   }
+
+  int64_t NowMs() { return test_ts_->NowUtcMs(); }
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
@@ -187,7 +190,8 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       summaries_.push_back(summary);
     };
-    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks));
+    return std::make_unique<PipelineManager>(
+        ctx_.get(), std::move(callbacks), test_ts_);
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
@@ -228,6 +232,7 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
     }
   }
 
+  std::shared_ptr<ITimeSource> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -374,8 +379,8 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001c_ClockIsolation_AdversarialP
 
   auto now = NowMs();
 
-  FedBlock block_a = MakeBlock("seam001c-a", now, 1000);
-  FedBlock block_b = MakeBlock("seam001c-b", now + 1000, 1000);
+  FedBlock block_a = MakeBlock("seam001c-a", now, 5000);
+  FedBlock block_b = MakeBlock("seam001c-b", now + 5000, 5000);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -388,7 +393,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001c_ClockIsolation_AdversarialP
   });
   engine_->Start();
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+  std::this_thread::sleep_for(std::chrono::milliseconds(12000));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -409,8 +414,8 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001c_ClockIsolation_AdversarialP
       << "Adversarial preloader latency killed session";
 
   // Continuous output despite delay.
-  EXPECT_GT(m.continuous_frames_emitted_total, 60)
-      << "Output stalled during preloader delay — expected >60 frames for 2s";
+  EXPECT_GT(m.continuous_frames_emitted_total, 200)
+      << "Output stalled during preloader delay — expected >200 frames for 10s";
 }
 
 // =============================================================================
@@ -503,8 +508,8 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_002b_DecoderReadiness_OverlapWin
 
   auto now = NowMs();
 
-  FedBlock block_a = MakeBlock("seam002b-a", now, 2000, kPathA);
-  FedBlock block_b = MakeBlock("seam002b-b", now + 2000, 2000, kPathB);
+  FedBlock block_a = MakeBlock("seam002b-a", now, 5000, kPathA);
+  FedBlock block_b = MakeBlock("seam002b-b", now + 5000, 5000, kPathB);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -524,12 +529,17 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_002b_DecoderReadiness_OverlapWin
   auto m = engine_->SnapshotMetrics();
   engine_->Stop();
 
-  int64_t fence_tick;
-  {
-    std::lock_guard<std::mutex> lock(cb_mutex_);
-    ASSERT_GE(fence_frame_indices_.size(), 1u);
-    fence_tick = fence_frame_indices_[0];
+  // Derive fence_tick from fingerprints: first frame where active_block_id
+  // changes from block A.  The ct value from on_block_completed is
+  // ct_at_fence_ms (content time in milliseconds), not a frame index.
+  int64_t fence_tick = -1;
+  for (size_t i = 1; i < fps.size(); ++i) {
+    if (fps[i].active_block_id != "seam002b-a") {
+      fence_tick = static_cast<int64_t>(i);
+      break;
+    }
   }
+  ASSERT_GE(fence_tick, 0) << "Must find block transition in fingerprints";
 
   ASSERT_GT(fence_tick, 5)
       << "Block A must produce enough frames to verify overlap window";

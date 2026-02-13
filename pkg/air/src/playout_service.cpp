@@ -706,6 +706,14 @@ namespace retrovue
       // INV-JIP-ANCHOR-001: Propagate Core-authoritative join time to engine.
       blockplan_session_->join_utc_ms = request->join_utc_ms();
 
+      // Configurable queue depth: default 2 if not specified or 0.
+      {
+        int requested_depth = request->max_queue_depth();
+        blockplan_session_->max_queue_depth = (requested_depth >= 2) ? requested_depth : 2;
+        std::cout << "[StartBlockPlanSession] max_queue_depth="
+                  << blockplan_session_->max_queue_depth << std::endl;
+      }
+
       // Seed the block queue with both blocks
       {
         std::lock_guard<std::mutex> qlock(blockplan_session_->queue_mutex);
@@ -727,6 +735,9 @@ namespace retrovue
         blockplan::PipelineManager::Callbacks callbacks;
         callbacks.on_block_completed = [this](const blockplan::FedBlock& block, int64_t final_ct_ms) {
           EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
+        };
+        callbacks.on_block_started = [this](const blockplan::FedBlock& block) {
+          EmitBlockStarted(blockplan_session_.get(), block);
         };
         callbacks.on_session_ended = [this](const std::string& reason) {
           EmitSessionEnded(blockplan_session_.get(), reason);
@@ -787,8 +798,9 @@ namespace retrovue
       {
         std::lock_guard<std::mutex> qlock(blockplan_session_->queue_mutex);
 
-        // Check queue capacity (2-block window)
-        if (blockplan_session_->block_queue.size() >= 2) {
+        // Check queue capacity (configurable depth)
+        if (blockplan_session_->block_queue.size() >=
+            static_cast<size_t>(blockplan_session_->max_queue_depth)) {
           queue_full = true;
         } else {
           blockplan_session_->block_queue.push_back(ProtoToBlock(block));
@@ -941,6 +953,39 @@ namespace retrovue
 
       std::cout << "[EmitBlockCompleted] block_id=" << block.block_id
                 << ", blocks_executed=" << state->blocks_executed
+                << ", subscribers=" << state->event_subscribers.size()
+                << std::endl;
+
+      // Send to all subscribers (remove failed ones)
+      std::vector<grpc::ServerWriter<BlockEvent>*> failed;
+      for (auto* writer : state->event_subscribers) {
+        if (!writer->Write(event)) {
+          failed.push_back(writer);
+        }
+      }
+      for (auto* w : failed) {
+        state->event_subscribers.erase(
+            std::remove(state->event_subscribers.begin(),
+                        state->event_subscribers.end(), w),
+            state->event_subscribers.end());
+      }
+    }
+
+    void PlayoutControlImpl::EmitBlockStarted(
+        BlockPlanSessionState* state,
+        const BlockPlanBlock& block)
+    {
+      std::lock_guard<std::mutex> lock(state->event_mutex);
+
+      BlockEvent event;
+      event.set_channel_id(state->channel_id);
+
+      auto* started = event.mutable_block_started();
+      started->set_block_id(block.block_id);
+      started->set_block_start_utc_ms(block.start_utc_ms);
+      started->set_block_end_utc_ms(block.end_utc_ms);
+
+      std::cout << "[EmitBlockStarted] block_id=" << block.block_id
                 << ", subscribers=" << state->event_subscribers.size()
                 << std::endl;
 

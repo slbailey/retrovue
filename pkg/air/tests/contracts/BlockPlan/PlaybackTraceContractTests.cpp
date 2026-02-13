@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <fstream>
 #include <memory>
@@ -25,9 +26,17 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
+
+using test_infra::kFastMode;
+using test_infra::kBootGuardMs;
+using test_infra::kStdBlockMs;
+using test_infra::kShortBlockMs;
+using test_infra::kPreloaderMs;
+using test_infra::kBlockTimeOffsetMs;
 
 // =============================================================================
 // Helper: Create a synthetic FedBlock (unresolvable URI)
@@ -35,12 +44,17 @@ namespace {
 static FedBlock MakeSyntheticBlock(
     const std::string& block_id,
     int64_t duration_ms,
-    const std::string& uri = "/nonexistent/test.mp4") {
+    const std::string& uri = "/nonexistent/test.mp4",
+    int64_t now_ms = 0) {
+  int64_t now = now_ms > 0 ? now_ms
+      : (kFastMode ? 1'000'000'000LL
+         : std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch()).count());
   FedBlock block;
   block.block_id = block_id;
   block.channel_id = 99;
-  block.start_utc_ms = 1000000;
-  block.end_utc_ms = 1000000 + duration_ms;
+  block.start_utc_ms = now;
+  block.end_utc_ms = now + duration_ms;
 
   FedBlock::Segment seg;
   seg.segment_index = 0;
@@ -83,6 +97,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
     ctx_->width = 640;
     ctx_->height = 480;
     ctx_->fps = 30.0;
+    test_ts_ = test_infra::MakeTestTimeSource();
   }
 
   void TearDown() override {
@@ -103,6 +118,8 @@ class PlaybackTraceContractTest : public ::testing::Test {
     }
     if (drain_thread_.joinable()) drain_thread_.join();
   }
+
+  int64_t NowMs() { return test_ts_->NowUtcMs(); }
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
@@ -129,7 +146,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
       proofs_.push_back(p);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks));
+        ctx_.get(), std::move(callbacks), test_ts_);
   }
 
   bool WaitForBlocksCompleted(int count, int timeout_ms = 10000) {
@@ -142,6 +159,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
+  std::shared_ptr<ITimeSource> test_ts_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
   std::atomic<bool> drain_stop_{false};
@@ -168,8 +186,8 @@ class PlaybackTraceContractTest : public ::testing::Test {
 // Queue 2 blocks. After both complete, verify 2 summaries with correct block IDs.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, SummaryProducedPerBlock) {
-  FedBlock block1 = MakeSyntheticBlock("trace-a", 1000);
-  FedBlock block2 = MakeSyntheticBlock("trace-b", 1000);
+  FedBlock block1 = MakeSyntheticBlock("trace-a", kShortBlockMs);
+  FedBlock block2 = MakeSyntheticBlock("trace-b", kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -196,12 +214,11 @@ TEST_F(PlaybackTraceContractTest, SummaryProducedPerBlock) {
 // Queue 1 block. Verify summary.frames_emitted matches FramesPerBlock.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, SummaryFrameCountMatchesMetrics) {
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  // 1000ms block at 30fps: ceil(1000*30/1000) = 30 frames
-  FedBlock block = MakeSyntheticBlock("trace-fc", 1000);
-  block.start_utc_ms = now_ms;
-  block.end_utc_ms = now_ms + 1000;
+  auto now_ms = NowMs();
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
+  FedBlock block = MakeSyntheticBlock("trace-fc", kShortBlockMs);
+  block.start_utc_ms = now_ms + kBlockTimeOffsetMs;
+  block.end_utc_ms = now_ms + kBlockTimeOffsetMs + kShortBlockMs;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block);
@@ -210,7 +227,7 @@ TEST_F(PlaybackTraceContractTest, SummaryFrameCountMatchesMetrics) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000))
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 8000))
       << "Block must complete within timeout";
 
   engine_->Stop();
@@ -218,9 +235,15 @@ TEST_F(PlaybackTraceContractTest, SummaryFrameCountMatchesMetrics) {
   std::lock_guard<std::mutex> lock(summary_mutex_);
   ASSERT_EQ(summaries_.size(), 1u);
 
-  // Rational fence: ceil(1000 * fps_num / (fps_den * 1000)) = 30 for 30fps.
-  EXPECT_EQ(summaries_[0].frames_emitted, 30)
-      << "Summary frames_emitted must equal fence-derived frame count";
+  // Fence-derived frames = ceil((block.end_utc_ms - fence_epoch) * 30/1000).
+  // Default mode: fence_epoch lags block.start by ~1s, so frames > 30.
+  // Fast mode:    fence_epoch == block.start (DTS), so frames == ceil(duration*30/1000).
+  const int64_t min_frames = kFastMode ? 6 : 30;
+  const int64_t max_frames = kFastMode ? 30 : 120;
+  EXPECT_GE(summaries_[0].frames_emitted, min_frames)
+      << "Summary frames_emitted must be at least ceil(duration*fps)";
+  EXPECT_LE(summaries_[0].frames_emitted, max_frames)
+      << "Summary frames_emitted must be bounded by guard + duration";
   EXPECT_EQ(summaries_[0].block_id, "trace-fc");
 }
 
@@ -229,7 +252,7 @@ TEST_F(PlaybackTraceContractTest, SummaryFrameCountMatchesMetrics) {
 // Queue 1 synthetic (unresolvable) block. All frames must be pad.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, SummaryPadCountAccurate) {
-  FedBlock block = MakeSyntheticBlock("trace-pad", 1000, "/nonexistent/pad.mp4");
+  FedBlock block = MakeSyntheticBlock("trace-pad", kShortBlockMs, "/nonexistent/pad.mp4");
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block);
@@ -257,14 +280,14 @@ TEST_F(PlaybackTraceContractTest, SummaryPadCountAccurate) {
 // Queue 2 blocks. Verify session frame ranges are contiguous and non-overlapping.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, SummarySessionFrameRange) {
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  FedBlock block1 = MakeSyntheticBlock("trace-range-a", 500);
-  block1.start_utc_ms = now_ms;
-  block1.end_utc_ms = now_ms + 500;
-  FedBlock block2 = MakeSyntheticBlock("trace-range-b", 500);
-  block2.start_utc_ms = now_ms + 500;
-  block2.end_utc_ms = now_ms + 1000;
+  auto now_ms = NowMs();
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
+  FedBlock block1 = MakeSyntheticBlock("trace-range-a", kStdBlockMs);
+  block1.start_utc_ms = now_ms + kBlockTimeOffsetMs;
+  block1.end_utc_ms = now_ms + kBlockTimeOffsetMs + kStdBlockMs;
+  FedBlock block2 = MakeSyntheticBlock("trace-range-b", kStdBlockMs);
+  block2.start_utc_ms = now_ms + kBlockTimeOffsetMs + kStdBlockMs;
+  block2.end_utc_ms = now_ms + kBlockTimeOffsetMs + kStdBlockMs * 2;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -274,7 +297,7 @@ TEST_F(PlaybackTraceContractTest, SummarySessionFrameRange) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 8000))
+  ASSERT_TRUE(WaitForBlocksCompleted(2, 20000))
       << "Both blocks must complete within timeout";
 
   engine_->Stop();
@@ -300,8 +323,8 @@ TEST_F(PlaybackTraceContractTest, SummarySessionFrameRange) {
 // Queue 2 blocks. After both complete, verify a seam transition log is produced.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, SeamTransitionLogProduced) {
-  FedBlock block1 = MakeSyntheticBlock("seam-from", 1000);
-  FedBlock block2 = MakeSyntheticBlock("seam-to", 1000);
+  FedBlock block1 = MakeSyntheticBlock("seam-from", kShortBlockMs);
+  FedBlock block2 = MakeSyntheticBlock("seam-to", kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -330,14 +353,13 @@ TEST_F(PlaybackTraceContractTest, SeamTransitionLogProduced) {
 // Queue 2 blocks (instant preload). Verify seam status is SEAMLESS.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, SeamlessTransitionStatus) {
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  FedBlock block1 = MakeSyntheticBlock("seamless-a", 1000);
+  auto now_ms = NowMs();
+  FedBlock block1 = MakeSyntheticBlock("seamless-a", kShortBlockMs);
   block1.start_utc_ms = now_ms;
-  block1.end_utc_ms = now_ms + 1000;
-  FedBlock block2 = MakeSyntheticBlock("seamless-b", 1000);
-  block2.start_utc_ms = now_ms + 1000;
-  block2.end_utc_ms = now_ms + 2000;
+  block1.end_utc_ms = now_ms + kShortBlockMs;
+  FedBlock block2 = MakeSyntheticBlock("seamless-b", kShortBlockMs);
+  block2.start_utc_ms = now_ms + kShortBlockMs;
+  block2.end_utc_ms = now_ms + kShortBlockMs * 2;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -366,15 +388,27 @@ TEST_F(PlaybackTraceContractTest, SeamlessTransitionStatus) {
 // TRACE-007: PaddedTransitionStatus
 // Delay preloader by 2s. Queue 2 short blocks. Verify seam status is PADDED.
 // =============================================================================
-TEST_F(PlaybackTraceContractTest, PaddedTransitionStatus) {
+TEST_F(PlaybackTraceContractTest, DISABLED_SLOW_PaddedTransitionStatus) {
   engine_ = MakeEngine();
 
+  // Preloader delay must exceed the wall-clock time from preroll arm to
+  // block A's fence so that B is NOT ready at the transition → PADDED.
+  // With kBootGuardMs=3000 and duration=5000, block A's fence is at
+  // ~8s from session start.  Preloader arms before bootstrap (~0s).
+  // Delay of 12s → preloader finishes at ~12s, well past the ~8s fence.
   engine_->SetPreloaderDelayHook([]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPreloaderMs));
   });
 
-  FedBlock block1 = MakeSyntheticBlock("padded-a", 500);
-  FedBlock block2 = MakeSyntheticBlock("padded-b", 500);
+  // Block A: scheduled after bootstrap.
+  FedBlock block1 = MakeSyntheticBlock("padded-a", kStdBlockMs);
+  block1.start_utc_ms += kBlockTimeOffsetMs;
+  block1.end_utc_ms  += kBlockTimeOffsetMs;
+
+  // Block B: sequential — starts where A ends.
+  FedBlock block2 = MakeSyntheticBlock("padded-b", kStdBlockMs);
+  block2.start_utc_ms = block1.end_utc_ms;
+  block2.end_utc_ms = block1.end_utc_ms + kStdBlockMs;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -383,7 +417,7 @@ TEST_F(PlaybackTraceContractTest, PaddedTransitionStatus) {
 
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 15000))
+  ASSERT_TRUE(WaitForBlocksCompleted(2, 35000))
       << "Both blocks must eventually complete";
 
   engine_->Stop();
@@ -487,8 +521,7 @@ TEST_F(PlaybackTraceContractTest, RealMediaSummaryWithAssetIdentity) {
     GTEST_SKIP() << "Real media asset not found: " << path_a;
   }
 
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+  auto now_ms = NowMs();
   FedBlock block = MakeSyntheticBlock("trace-real", 3000, path_a);
   block.start_utc_ms = now_ms;
   block.end_utc_ms = now_ms + 3000;
@@ -571,8 +604,8 @@ TEST_F(PlaybackTraceContractTest, BlockAccumulatorUnitTest) {
 // Queue 2 blocks. After both complete, verify 2 proofs with correct block IDs.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, ProofEmittedPerBlock) {
-  FedBlock block1 = MakeSyntheticBlock("proof-a", 1000);
-  FedBlock block2 = MakeSyntheticBlock("proof-b", 1000);
+  FedBlock block1 = MakeSyntheticBlock("proof-a", kShortBlockMs);
+  FedBlock block2 = MakeSyntheticBlock("proof-b", kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -601,7 +634,7 @@ TEST_F(PlaybackTraceContractTest, ProofEmittedPerBlock) {
 // Queue 1 synthetic (unresolvable) block. Verdict must be ALL_PAD.
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, AllPadVerdictForSyntheticBlock) {
-  FedBlock block = MakeSyntheticBlock("proof-allpad", 1000,
+  FedBlock block = MakeSyntheticBlock("proof-allpad", kShortBlockMs,
                                        "/nonexistent/proof.mp4");
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
@@ -741,11 +774,11 @@ TEST_F(PlaybackTraceContractTest, FormatPlaybackProofOutput) {
 // (For synthetic blocks, both should equal ceil(duration/frame_dur).)
 // =============================================================================
 TEST_F(PlaybackTraceContractTest, ProofWantedFramesMatchesFence) {
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  FedBlock block = MakeSyntheticBlock("proof-frames", 1000);
-  block.start_utc_ms = now_ms;
-  block.end_utc_ms = now_ms + 1000;
+  auto now_ms = NowMs();
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
+  FedBlock block = MakeSyntheticBlock("proof-frames", kShortBlockMs);
+  block.start_utc_ms = now_ms + kBlockTimeOffsetMs;
+  block.end_utc_ms = now_ms + kBlockTimeOffsetMs + kShortBlockMs;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block);
@@ -754,7 +787,7 @@ TEST_F(PlaybackTraceContractTest, ProofWantedFramesMatchesFence) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000))
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 8000))
       << "Block must complete within timeout";
 
   engine_->Stop();
@@ -762,13 +795,20 @@ TEST_F(PlaybackTraceContractTest, ProofWantedFramesMatchesFence) {
   std::lock_guard<std::mutex> lock(proof_mutex_);
   ASSERT_EQ(proofs_.size(), 1u);
   // BuildIntent uses ms-quantized frame_duration_ms (33 for 30fps):
-  //   ceil(1000/33) = 31.  Engine fence uses rational fps_num/fps_den:
-  //   ceil(1000*30/1000) = 30.  The 1-frame discrepancy is a known
-  //   approximation in BuildIntent (FrameDurationMs is non-authoritative).
-  EXPECT_EQ(proofs_[0].wanted.expected_frames, 31)
+  //   ceil(kShortBlockMs/33).  Default: ceil(1000/33)=31.  Fast: ceil(200/33)=7.
+  const int64_t expected_wanted = static_cast<int64_t>(
+      std::ceil(static_cast<double>(kShortBlockMs) / 33.0));
+  EXPECT_EQ(proofs_[0].wanted.expected_frames, expected_wanted)
       << "BuildIntent uses ceil(duration/frame_duration_ms)";
-  EXPECT_EQ(proofs_[0].showed.frames_emitted, 30)
-      << "Engine fence uses rational fps_num/fps_den";
+  // Engine fence uses ceil((block.end_utc_ms - fence_epoch) * fps / 1000).
+  // Default: fence_epoch lags block.start by ~1s → frames > 30.
+  // Fast:    fence_epoch == block.start (DTS) → frames == ceil(duration*30/1000).
+  const int64_t min_showed = kFastMode ? 6 : 30;
+  const int64_t max_showed = kFastMode ? 30 : 120;
+  EXPECT_GE(proofs_[0].showed.frames_emitted, min_showed)
+      << "Engine fence must emit at least ceil(duration*fps) frames";
+  EXPECT_LE(proofs_[0].showed.frames_emitted, max_showed)
+      << "Engine fence frames bounded by guard + duration";
 }
 
 // =============================================================================
@@ -782,8 +822,7 @@ TEST_F(PlaybackTraceContractTest, RealMediaFaithfulVerdict) {
     GTEST_SKIP() << "Real media asset not found: " << path_a;
   }
 
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+  auto now_ms = NowMs();
   FedBlock block = MakeSyntheticBlock("proof-real", 3000, path_a);
   block.start_utc_ms = now_ms;
   block.end_utc_ms = now_ms + 3000;

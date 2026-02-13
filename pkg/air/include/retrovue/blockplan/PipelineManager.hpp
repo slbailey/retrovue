@@ -33,6 +33,7 @@
 #include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
+#include "time/ITimeSource.hpp"
 
 // Forward declarations
 namespace retrovue::playout_sinks::mpegts {
@@ -79,7 +80,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   };
 
   PipelineManager(BlockPlanSessionContext* ctx,
-                  Callbacks callbacks);
+                  Callbacks callbacks,
+                  std::shared_ptr<ITimeSource> time_source = nullptr);
   ~PipelineManager() override;
 
   // IPlayoutExecutionEngine
@@ -96,6 +98,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   void SetPreloaderDelayHook(std::function<void()> hook);
 
  private:
+  std::shared_ptr<ITimeSource> time_source_;
+
   void Run();
 
   // Dequeue next block from ctx_->block_queue and assign to live_.
@@ -181,6 +185,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // The old producer must stay alive until the old fill thread exits.
   std::thread deferred_fill_thread_;
   std::unique_ptr<producers::IProducer> deferred_producer_;
+  std::unique_ptr<VideoLookaheadBuffer> deferred_video_buffer_;
+  std::unique_ptr<AudioLookaheadBuffer> deferred_audio_buffer_;
   void CleanupDeferredFill();
 
   // --- VideoLookaheadBuffer: non-blocking video frame buffer ---

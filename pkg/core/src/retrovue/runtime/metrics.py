@@ -152,11 +152,24 @@ try:
         "retrovue_feed_credits_at_decision",
         "Available feed credits when _feed_ahead evaluates",
         ["channel_id"],
-        buckets=[0, 1, 2],
+        buckets=[0, 1, 2, 3],
     )
     feed_error_backoff_total = Counter(
         "retrovue_feed_error_backoff_total",
         "Count of error backoff activations (gRPC/transport failures)",
+        ["channel_id"],
+    )
+
+    # Runway controller telemetry
+    from prometheus_client import Gauge
+    feed_queue_depth_current = Gauge(
+        "retrovue_feed_queue_depth_current",
+        "Current number of blocks in AIR queue (estimated)",
+        ["channel_id"],
+    )
+    feed_credits_current = Gauge(
+        "retrovue_feed_credits_current",
+        "Current available feed credits",
         ["channel_id"],
     )
 except ImportError:
@@ -171,4 +184,6 @@ except ImportError:
     feed_ahead_late_decision_total = None
     feed_credits_at_decision = None
     feed_error_backoff_total = None
+    feed_queue_depth_current = None
+    feed_credits_current = None
 

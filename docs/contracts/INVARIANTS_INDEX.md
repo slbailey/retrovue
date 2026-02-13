@@ -274,6 +274,12 @@ Superseded rules from RULE_HARVEST and audit amendments.
 | RULE-CORE-RUNTIME-READONLY | Config tables immutable at runtime |
 | RULE-CORE-PLAYLOG-AUTHORITY | Only ScheduleService writes playlog |
 
+**Operational promise (Core + AIR):** [docs/contracts/core/RunwayMinContract_v0.1.md](./core/RunwayMinContract_v0.1.md)
+
+| Rule | Description |
+|------|-------------|
+| INV-RUNWAY-MIN-001 | When queue_depth >= 3, AIR must not enter PADDED_GAP due to "no next block" except when ScheduleService returns None (true planning gap) |
+
 ---
 
 ## Test Coverage Summary

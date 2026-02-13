@@ -51,10 +51,11 @@ service PlayoutControl {
   rpc DetachStream(DetachStreamRequest) returns (DetachStreamResponse);
 
   // ==========================================================================
-  // BlockPlan Mode: 2-block window feeder execution
+  // BlockPlan Mode: configurable-depth feeder execution
   // ==========================================================================
   // BlockPlan mode replaces segment-by-segment LoadPreview/SwitchToLive with
-  // a deterministic CT-driven executor that maintains a 2-block lookahead queue.
+  // a deterministic CT-driven executor that maintains a configurable lookahead
+  // queue (default depth 2, configurable via max_queue_depth).
   //
   // Flow:
   //   1. StartBlockPlanSession: Initialize and seed queue with 2 blocks
@@ -63,6 +64,7 @@ service PlayoutControl {
   //
   // The executor handles CT advancement, fence termination, and lookahead
   // exhaustion automatically. Core only needs to feed blocks just-in-time.
+  // BlockStarted events signal queue slot consumption for proactive feeding.
   // ==========================================================================
 
   // StartBlockPlanSession initializes BlockPlan mode and seeds the 2-block queue.
@@ -275,8 +277,9 @@ message StartBlockPlanSessionRequest {
   int32 channel_id = 1;
   BlockPlan block_a = 2;         // First block (executing)
   BlockPlan block_b = 3;         // Second block (pending)
-  int64 join_utc_ms = 4;         // Join time for mid-block join (0 = block_a.start)  // Program format for encoding (same as StartChannelRequest)
-  string program_format_json = 10;
+  int64 join_utc_ms = 4;         // Join time for mid-block join (0 = block_a.start)
+  string program_format_json = 10;  // Program format for encoding (same as StartChannelRequest)
+  int32 max_queue_depth = 11;    // Requested queue depth (0 = default 2)
 }
 
 message StartBlockPlanSessionResponse {
@@ -340,6 +343,7 @@ message BlockEvent {
   oneof event {
     BlockCompleted block_completed = 10;
     SessionEnded session_ended = 11;
+    BlockStarted block_started = 12;
   }
 }
 
@@ -352,6 +356,15 @@ message BlockCompleted {
   int64 block_end_utc_ms = 3;       // Block end time (fence)
   int64 final_ct_ms = 4;            // Actual CT at completion (may exceed fence slightly)
   int32 blocks_executed_total = 5;  // Running count of blocks executed this session
+}
+
+// BlockStarted is emitted when a block is popped from the queue and begins
+// execution (or preload).  Core uses this as the preferred credit signal:
+// a queue slot was consumed, so Core may feed the next block immediately.
+message BlockStarted {
+  string block_id = 1;              // ID of the started block
+  int64 block_start_utc_ms = 2;     // Block start time (for correlation)
+  int64 block_end_utc_ms = 3;       // Block end time (fence)
 }
 
 // SessionEnded is emitted when the BlockPlan session terminates.

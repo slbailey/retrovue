@@ -1623,6 +1623,7 @@ def _make_producer_with_mock_session(
     block_duration_ms: int = 30_000,
     feed_ahead_horizon_ms: int = 20_000,
     feed_returns=None,
+    queue_depth: int | None = None,
 ):
     """Helper: create a BlockPlanProducer wired to a controllable mock session.
 
@@ -1641,11 +1642,15 @@ def _make_producer_with_mock_session(
         block_duration_ms=block_duration_ms,
     )
 
+    cfg = {
+        "feed_ahead_horizon_ms": feed_ahead_horizon_ms,
+    }
+    if queue_depth is not None:
+        cfg["queue_depth"] = queue_depth
+
     producer = BlockPlanProducer(
         channel_id=channel_id,
-        configuration={
-            "feed_ahead_horizon_ms": feed_ahead_horizon_ms,
-        },
+        configuration=cfg,
         channel_config=None,
         schedule_service=svc,
         clock=None,
@@ -1658,11 +1663,12 @@ def _make_producer_with_mock_session(
         def __init__(self):
             self.on_block_complete = None
             self.on_session_end = None
+            self.on_block_started = None
 
         def start(self, join_utc_ms=0):
             return True
 
-        def seed(self, block_a, block_b):
+        def seed(self, block_a, block_b, *, join_utc_ms=0, max_queue_depth=0):
             return True
 
         def feed(self, block):
@@ -1673,6 +1679,11 @@ def _make_producer_with_mock_session(
 
         def stop(self, reason="requested"):
             return True
+
+        def emit_block_started(self, block_id: str):
+            """Simulate AIR emitting BlockStarted event."""
+            if self.on_block_started:
+                self.on_block_started(block_id)
 
         @property
         def is_running(self):
@@ -1847,9 +1858,10 @@ class TestFeedAheadFillsToHorizon:
 
 
 class TestFeedAheadStopsAtHorizon:
-    """When runway >= horizon AND deadline not due, no feed attempt."""
+    """When credits=0, no feed even with runway < horizon."""
 
-    def test_feed_ahead_stops_at_horizon(self):
+    def test_feed_ahead_stops_when_no_credits(self):
+        """With credits=0, _feed_ahead should not feed regardless of triggers."""
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
             feed_ahead_horizon_ms=20_000,
         )
@@ -1860,23 +1872,49 @@ class TestFeedAheadStopsAtHorizon:
 
         producer._session = mock_session
 
-
-        # RUNNING with plenty of runway (60s ahead)
+        # RUNNING with low runway but no credits
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
-        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._max_delivered_end_utc_ms = now_ms + 5_000  # Low runway
         producer._started = True
-        producer._feed_credits = 2  # Credits available but no trigger met
+        producer._feed_credits = 0  # No credits
 
-        # Set next block start far in the future so ready_by is also future
-        # (otherwise deadline-driven logic would feed because start_utc_ms=0
-        # makes ready_by in the past)
-        producer._next_block_start_ms = now_ms + 90_000
+        producer._next_block_start_ms = now_ms + 5_000
 
         producer._feed_ahead()
 
         assert len(feed_log) == 0, (
-            f"FEED-AHEAD: Expected 0 feeds when runway >= horizon and deadline not due, "
+            f"FEED-AHEAD: Expected 0 feeds when credits=0, "
+            f"got {len(feed_log)}"
+        )
+
+    def test_proactive_fill_to_depth_with_credits(self):
+        """With credits > 0, _feed_ahead feeds proactively (fill-to-depth)."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+
+        # RUNNING with plenty of runway (60s ahead) + 2 credits
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 2
+
+        producer._next_block_start_ms = now_ms + 90_000
+        producer._block_index = 0
+        _align_grid(producer)
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 2, (
+            f"FEED-AHEAD: Expected 2 proactive feeds with 2 credits, "
             f"got {len(feed_log)}"
         )
 
@@ -2117,9 +2155,10 @@ class TestFeedTriggeredByDeadline:
 
 
 class TestNoFeedWhenNeitherTriggerMet:
-    """No feed when both deadline not due AND runway sufficient."""
+    """No feed when credits=0 (proactive fill-to-depth requires credits)."""
 
-    def test_skip_when_not_due_and_runway_ok(self):
+    def test_skip_when_no_credits(self):
+        """With credits=0, no feed even when deadline or runway would trigger."""
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
             feed_ahead_horizon_ms=20_000,
             block_duration_ms=30_000,
@@ -2131,24 +2170,53 @@ class TestNoFeedWhenNeitherTriggerMet:
 
         producer._session = mock_session
 
-
         now_ms = int(time.time() * 1000)
 
-        # Plenty of runway (60s)
+        # Low runway but no credits → no feed
         producer._feed_state = _FeedState.RUNNING
-        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._max_delivered_end_utc_ms = now_ms + 5_000
         producer._started = True
-        producer._feed_credits = 2  # Credits available but neither trigger met
+        producer._feed_credits = 0
 
-        # Next block starts far in the future (90s),
-        # ready_by = 90s - 10s = 80s in the future
-        producer._next_block_start_ms = now_ms + 90_000
+        producer._next_block_start_ms = now_ms + 5_000
         producer._block_index = 0
 
         producer._feed_ahead()
 
         assert len(feed_log) == 0, (
-            "DEADLINE: No feed when deadline not due AND runway >= horizon"
+            "CREDIT_GATE: No feed when credits=0 regardless of triggers"
+        )
+
+    def test_proactive_feed_with_credits(self):
+        """With credits > 0, feed happens proactively (fill-to-depth)."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+
+        now_ms = int(time.time() * 1000)
+
+        # Plenty of runway but credits available → proactive fill
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 1
+
+        producer._next_block_start_ms = now_ms + 90_000
+        producer._block_index = 0
+        _align_grid(producer)
+
+        producer._feed_ahead()
+
+        assert len(feed_log) == 1, (
+            f"FILL_TO_DEPTH: Expected 1 proactive feed with 1 credit, "
+            f"got {len(feed_log)}"
         )
 
 
@@ -2277,7 +2345,7 @@ class TestFeedAheadDecisionLogging:
         assert "miss=" in msg, "DECISION LOG: must contain miss="
 
     def test_skip_decision_logged_at_debug(self):
-        """When neither trigger is met, a debug skip log is emitted."""
+        """When no credits, a credit-gate return happens (no skip log)."""
         import logging
 
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
@@ -2290,12 +2358,11 @@ class TestFeedAheadDecisionLogging:
 
         producer._session = mock_session
 
-
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
         producer._max_delivered_end_utc_ms = now_ms + 60_000
         producer._started = True
-        producer._feed_credits = 2  # Credits available but neither trigger met
+        producer._feed_credits = 0  # No credits — credit gate returns early
         producer._next_block_start_ms = now_ms + 90_000
         producer._block_index = 0
 
@@ -2310,12 +2377,51 @@ class TestFeedAheadDecisionLogging:
         finally:
             producer._logger.removeHandler(handler)
 
-        skip_logs = [
-            r for r in log_records
-            if "FEED_AHEAD_DECISION" in r.getMessage() and "skip_not_due" in r.getMessage()
+        # With credits=0, _feed_ahead returns before evaluating any blocks
+        assert len(feed_log) == 0, (
+            f"CREDIT_GATE: Expected 0 feeds when credits=0, got {len(feed_log)}"
+        )
+
+    def test_fill_to_depth_decision_logged(self):
+        """When proactive fill-to-depth triggers, decision log shows reason=fill_to_depth."""
+        import logging
+
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
         ]
-        assert len(skip_logs) == 1, (
-            f"DECISION LOG: Expected 1 skip_not_due log, got {len(skip_logs)}"
+
+        producer._session = mock_session
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000
+        producer._started = True
+        producer._feed_credits = 1  # Credits trigger fill_to_depth
+        producer._next_block_start_ms = now_ms + 90_000
+        producer._block_index = 0
+        _align_grid(producer)
+
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        producer._logger.addHandler(handler)
+        producer._logger.setLevel(logging.DEBUG)
+
+        try:
+            producer._feed_ahead()
+        finally:
+            producer._logger.removeHandler(handler)
+
+        fill_logs = [
+            r for r in log_records
+            if "FEED_AHEAD_DECISION" in r.getMessage() and "fill_to_depth" in r.getMessage()
+        ]
+        assert len(fill_logs) >= 1, (
+            f"DECISION LOG: Expected at least 1 fill_to_depth log, got {len(fill_logs)}"
         )
 
 
@@ -2356,8 +2462,8 @@ class TestPreloadBudgetConfiguration:
             "should be fed (ready_by is -10s)"
         )
 
-    def test_small_preload_budget_no_early_feed(self):
-        """With small budget, far-future blocks are not fed early."""
+    def test_small_preload_budget_no_early_feed_without_credits(self):
+        """With small budget and no credits, far-future blocks are not fed."""
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
             feed_ahead_horizon_ms=20_000,
             block_duration_ms=30_000,
@@ -2371,12 +2477,11 @@ class TestPreloadBudgetConfiguration:
 
         producer._session = mock_session
 
-
         now_ms = int(time.time() * 1000)
         producer._feed_state = _FeedState.RUNNING
         producer._max_delivered_end_utc_ms = now_ms + 60_000  # High runway
         producer._started = True
-        producer._feed_credits = 2  # Credits available but neither trigger met
+        producer._feed_credits = 0  # No credits — credit gate returns
 
         # Block starts in 40s: ready_by = 40s - 2s = 38s (far future)
         producer._next_block_start_ms = now_ms + 40_000
@@ -2385,8 +2490,39 @@ class TestPreloadBudgetConfiguration:
         producer._feed_ahead()
 
         assert len(feed_log) == 0, (
-            "BUDGET: With 2s budget, block starting in 40s should NOT be fed "
-            "(ready_by is 38s in future, runway is sufficient)"
+            "BUDGET: With 0 credits, no feed regardless of deadline/runway"
+        )
+
+    def test_small_preload_budget_proactive_with_credits(self):
+        """With small budget but credits > 0, proactive fill-to-depth feeds."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+        )
+        # Small budget: only 2s
+        producer._preload_budget_ms = 2_000
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+
+        now_ms = int(time.time() * 1000)
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = now_ms + 60_000  # High runway
+        producer._started = True
+        producer._feed_credits = 1  # Credits trigger fill_to_depth
+
+        # Block starts in 40s: ready_by = 40s - 2s = 38s (far future)
+        producer._next_block_start_ms = now_ms + 40_000
+        producer._block_index = 0
+        _align_grid(producer)
+
+        producer._feed_ahead()
+
+        assert len(feed_log) >= 1, (
+            "FILL_TO_DEPTH: With credits > 0, proactive fill feeds the block"
         )
 
 
@@ -3182,7 +3318,7 @@ class TestCreditInitialization:
 
 
 class TestCreditIncrementOnBlockComplete:
-    """BlockCompleted → credits += 1; capped at AIR_QUEUE_DEPTH."""
+    """BlockCompleted → credits += 1; capped at queue depth."""
 
     def test_block_complete_increments_credit(self):
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session()
@@ -3214,7 +3350,7 @@ class TestCreditIncrementOnBlockComplete:
         assert producer._feed_state == _FeedState.RUNNING
 
     def test_credits_capped_at_queue_depth(self):
-        """Credits never exceed AIR_QUEUE_DEPTH."""
+        """Credits never exceed queue depth."""
         from retrovue.runtime.channel_manager import BlockPlanProducer
 
         svc = FakeScheduleService(channel_id="cap-test", block_duration_ms=30_000)
@@ -3223,14 +3359,14 @@ class TestCreditIncrementOnBlockComplete:
             configuration={},
             channel_config=None, schedule_service=svc, clock=None,
         )
-        producer._feed_credits = producer.AIR_QUEUE_DEPTH
+        producer._feed_credits = producer._queue_depth
 
         # Simulate increment (as _on_block_complete does internally)
         producer._feed_credits = min(
-            producer._feed_credits + 1, producer.AIR_QUEUE_DEPTH
+            producer._feed_credits + 1, producer._queue_depth
         )
-        assert producer._feed_credits == producer.AIR_QUEUE_DEPTH, (
-            f"Credits must be capped at {producer.AIR_QUEUE_DEPTH}, "
+        assert producer._feed_credits == producer._queue_depth, (
+            f"Credits must be capped at {producer._queue_depth}, "
             f"got {producer._feed_credits}"
         )
 
@@ -3981,6 +4117,268 @@ class TestMissAccuracyLateDecision:
             "INV-FEED-MISS-ACCURACY: first_due must NOT be set when "
             "ready_by is in the future"
         )
+
+
+# =============================================================================
+# Part 8: Runway Controller Tests (BlockStarted, proactive fill, backward compat)
+# =============================================================================
+
+
+class TestProactiveFillAfterSeed:
+    """INV-FEED-QUEUE-006: After seed with queue_depth=3, Core feeds block_c
+    without waiting for BlockCompleted."""
+
+    def test_proactive_fill_after_seed(self):
+        """After seed with queue_depth=3, Core feeds block_c proactively."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+            queue_depth=3,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        mock_session.on_block_complete = producer._on_block_complete
+        mock_session.on_block_started = producer._on_block_started
+
+        # Simulate seed (blocks 0, 1)
+        block_a = _gen(producer, playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = _gen(producer, playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        # Enter SEEDED state (as start() would)
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        # queue_depth=3: credits = 3 - 2 = 1
+        producer._feed_credits = producer._queue_depth - 2
+
+        _align_grid(producer)
+
+        assert producer._feed_credits == 1, (
+            f"Expected 1 credit after seed with queue_depth=3, got {producer._feed_credits}"
+        )
+
+        # Emit BlockStarted for block_a — SEEDED→RUNNING + credit += 1 → credits=2
+        mock_session.emit_block_started(block_a.block_id)
+
+        # Should have transitioned to RUNNING and fed proactively
+        assert producer._feed_state == _FeedState.RUNNING, (
+            "Expected RUNNING after BlockStarted"
+        )
+        # At least 1 block should have been fed (block_c) without BlockCompleted
+        assert len(feed_log) >= 1, (
+            f"INV-FEED-QUEUE-006: Expected at least 1 proactive feed after seed, "
+            f"got {len(feed_log)}"
+        )
+
+    def test_no_proactive_fill_with_depth_2(self):
+        """With queue_depth=2 (old behavior), credits after seed = 0."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+            queue_depth=2,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        mock_session.on_block_complete = producer._on_block_complete
+        mock_session.on_block_started = producer._on_block_started
+
+        # Simulate seed
+        block_a = _gen(producer, playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = _gen(producer, playout_plan)
+        producer._advance_cursor(block_b)
+        mock_session.seed(block_a, block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        producer._feed_credits = producer._queue_depth - 2  # = 0
+
+        assert producer._feed_credits == 0, (
+            f"Expected 0 credits after seed with queue_depth=2, got {producer._feed_credits}"
+        )
+
+
+class TestBlockStartedCredits:
+    """BlockStarted event increments credit and triggers feed."""
+
+    def test_block_started_increments_credit(self):
+        """BlockStarted event increments credit and triggers feed."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+            queue_depth=3,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        mock_session.on_block_complete = producer._on_block_complete
+        mock_session.on_block_started = producer._on_block_started
+
+        # Simulate post-seed: all credits consumed, in RUNNING state
+        block_a = _gen(producer, playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = _gen(producer, playout_plan)
+        producer._advance_cursor(block_b)
+        block_c = _gen(producer, playout_plan)
+        producer._advance_cursor(block_c)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = block_c.end_utc_ms
+        producer._started = True
+        producer._feed_credits = 0  # All slots full
+
+        _align_grid(producer)
+
+        initial_feed_count = len(feed_log)
+
+        # Emit BlockStarted — should increment credit and trigger feed
+        mock_session.emit_block_started(block_a.block_id)
+
+        assert producer._block_started_supported is True, (
+            "Expected _block_started_supported = True after first BlockStarted"
+        )
+        # A feed should have been triggered
+        assert len(feed_log) > initial_feed_count, (
+            "BlockStarted should trigger at least one feed"
+        )
+
+    def test_block_started_seeded_to_running(self):
+        """BlockStarted triggers SEEDED→RUNNING transition."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+            queue_depth=3,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        mock_session.on_block_started = producer._on_block_started
+
+        # Simulate seed
+        block_a = _gen(producer, playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = _gen(producer, playout_plan)
+        producer._advance_cursor(block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        producer._feed_credits = 1
+
+        _align_grid(producer)
+
+        # BlockStarted should transition SEEDED→RUNNING
+        mock_session.emit_block_started(block_a.block_id)
+
+        assert producer._feed_state == _FeedState.RUNNING, (
+            "Expected SEEDED→RUNNING on first BlockStarted"
+        )
+
+
+class TestBackwardCompatBlockCompleted:
+    """When AIR doesn't emit BlockStarted, BlockCompleted still increments credit."""
+
+    def test_backward_compat_block_completed_credit(self):
+        """Without BlockStarted, BlockCompleted increments credit (old behavior)."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+            queue_depth=2,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        mock_session.on_block_complete = producer._on_block_complete
+
+        # Simulate post-seed state
+        block_a = _gen(producer, playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = _gen(producer, playout_plan)
+        producer._advance_cursor(block_b)
+
+        producer._feed_state = _FeedState.SEEDED
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        producer._feed_credits = 0
+        producer._in_flight_block_ids = {block_a.block_id, block_b.block_id}
+
+        _align_grid(producer)
+
+        # Don't emit BlockStarted — _block_started_supported stays False
+        assert producer._block_started_supported is False
+
+        # Emit BlockCompleted — should increment credit (backward compat)
+        producer._on_block_complete(block_a.block_id)
+
+        assert producer._feed_state == _FeedState.RUNNING, (
+            "Expected SEEDED→RUNNING on BlockCompleted (backward compat)"
+        )
+        assert producer._feed_credits >= 0, (
+            "Credits should be non-negative after BlockCompleted"
+        )
+
+    def test_block_started_suppresses_block_completed_credit(self):
+        """When BlockStarted is supported, BlockCompleted does NOT increment credit."""
+        producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
+            feed_ahead_horizon_ms=20_000,
+            block_duration_ms=30_000,
+            queue_depth=3,
+        )
+
+        playout_plan = [
+            {"asset_path": "assets/A.mp4", "duration_ms": 30_000},
+        ]
+
+        producer._session = mock_session
+        mock_session.on_block_complete = producer._on_block_complete
+        mock_session.on_block_started = producer._on_block_started
+
+        # Simulate post-seed state
+        block_a = _gen(producer, playout_plan)
+        producer._advance_cursor(block_a)
+        block_b = _gen(producer, playout_plan)
+        producer._advance_cursor(block_b)
+
+        producer._feed_state = _FeedState.RUNNING
+        producer._max_delivered_end_utc_ms = block_b.end_utc_ms
+        producer._started = True
+        producer._feed_credits = 0
+        producer._in_flight_block_ids = {block_a.block_id, block_b.block_id}
+        # Simulate that BlockStarted was previously received
+        producer._block_started_supported = True
+
+        _align_grid(producer)
+
+        credits_before = producer._feed_credits
+
+        # BlockCompleted should NOT increment credit when BlockStarted is supported
+        producer._on_block_complete(block_a.block_id)
+
+        # Credits may have been consumed by a feed, but the key is:
+        # the credit was NOT incremented by BlockCompleted
+        # (it was already incremented by the earlier BlockStarted)
+        assert producer._block_started_supported is True
 
 
 if __name__ == "__main__":

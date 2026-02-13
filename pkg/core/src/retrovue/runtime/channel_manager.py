@@ -81,6 +81,8 @@ from .metrics import (
     feed_ahead_late_decision_total,
     feed_credits_at_decision,
     feed_error_backoff_total,
+    feed_queue_depth_current,
+    feed_credits_current,
 )
 
 from .playout_session import FeedResult
@@ -1466,7 +1468,7 @@ class BlockPlanProducer(Producer):
     """
 
     # Credit-based flow control constants (INV-FEED-CREDIT-*)
-    AIR_QUEUE_DEPTH = 2                # AIR block queue: one executing, one pending
+    DEFAULT_QUEUE_DEPTH = 3            # Default AIR queue depth (A executing, B pending, C queued)
     ERROR_BACKOFF_BASE_TICKS = 4       # ~1s at 3.75 Hz
     ERROR_BACKOFF_MAX_TICKS = 112      # ~30s at 3.75 Hz
 
@@ -1516,8 +1518,12 @@ class BlockPlanProducer(Producer):
         self._feed_state: _FeedState = _FeedState.CREATED
         # Max end_utc_ms of all blocks delivered to AIR (seed + feed)
         self._max_delivered_end_utc_ms: int = 0
-        # Feed-ahead horizon: maintain this many ms of runway (configurable)
+        # Configurable queue depth (default 3, minimum 2)
         cfg = configuration or {}
+        self._queue_depth: int = max(2, cfg.get("queue_depth", self.DEFAULT_QUEUE_DEPTH))
+        # Backward compat: set True on first BlockStarted event
+        self._block_started_supported: bool = False
+        # Feed-ahead horizon: maintain this many ms of runway (configurable)
         self._feed_ahead_horizon_ms: int = cfg.get(
             "feed_ahead_horizon_ms", 20_000
         )
@@ -1646,6 +1652,7 @@ class BlockPlanProducer(Producer):
                     program_format=self._program_format,
                     on_block_complete=self._on_block_complete,
                     on_session_end=self._on_session_end,
+                    on_block_started=self._on_block_started,
                 )
 
                 # Start AIR subprocess
@@ -1675,7 +1682,8 @@ class BlockPlanProducer(Producer):
                 self._advance_cursor(block_b)
 
                 if not self._session.seed(block_a, block_b,
-                                         join_utc_ms=join_utc_ms):
+                                         join_utc_ms=join_utc_ms,
+                                         max_queue_depth=self._queue_depth):
                     raise RuntimeError("PlayoutSession.seed() failed")
 
                 # INV-EXEC-NO-STRUCTURE-001: Canary proof — every session start
@@ -1696,12 +1704,12 @@ class BlockPlanProducer(Producer):
                 self._in_flight_block_ids.add(block_b.block_id)
 
                 # Feed-ahead controller: enter SEEDED state.
-                # Do NOT feed block_c immediately — AIR's queue is full after seed.
-                # _feed_ahead() will fill the queue proactively after the first
-                # BlockCompleted (SEEDED→RUNNING transition).
+                # After seed, 2 blocks are in AIR's queue. If queue_depth > 2,
+                # we have (queue_depth - 2) credits to proactively fill extra slots.
+                # The first _feed_ahead() call (on BlockStarted or tick) will fill them.
                 self._feed_state = _FeedState.SEEDED
                 self._max_delivered_end_utc_ms = block_b.end_utc_ms
-                self._feed_credits = 0  # Queue full after seed(A, B)
+                self._feed_credits = self._queue_depth - 2  # Extra slots beyond seed
                 self._consecutive_feed_errors = 0
                 self._error_backoff_remaining = 0
                 self._feed_tick_counter = 0
@@ -1820,6 +1828,7 @@ class BlockPlanProducer(Producer):
         self._feed_state = _FeedState.CREATED
         self._max_delivered_end_utc_ms = 0
         self._feed_credits = 0
+        self._block_started_supported = False
         self._consecutive_feed_errors = 0
         self._error_backoff_remaining = 0
         self._feed_tick_counter = 0
@@ -2041,6 +2050,14 @@ class BlockPlanProducer(Producer):
         if self._session_ended or not self._started or not self._session:
             return
 
+        # Runway controller telemetry
+        if feed_credits_current is not None:
+            feed_credits_current.labels(channel_id=self.channel_id).set(self._feed_credits)
+        if feed_queue_depth_current is not None:
+            feed_queue_depth_current.labels(channel_id=self.channel_id).set(
+                self._queue_depth - self._feed_credits
+            )
+
         now_utc_ms = int(time.time() * 1000)
 
         # Pre-evaluate next block deadline BEFORE the credit gate.
@@ -2067,7 +2084,7 @@ class BlockPlanProducer(Producer):
         if self._feed_credits <= 0:
             return
 
-        for _ in range(min(self._feed_credits, self.AIR_QUEUE_DEPTH)):
+        for _ in range(min(self._feed_credits, self._queue_depth)):
             # INV-FEED-QUEUE-003: Retry pending before generating new
             if self._pending_block is not None:
                 block = self._pending_block
@@ -2087,9 +2104,11 @@ class BlockPlanProducer(Producer):
             runway_ms = self._compute_runway_ms()
             deadline_due = now_utc_ms >= ready_by_utc_ms
             runway_low = runway_ms < self._feed_ahead_horizon_ms
+            # Proactive fill-to-depth: always feed if we have credits
+            fill_to_depth = self._feed_credits > 0
 
-            if not deadline_due and not runway_low:
-                # Neither trigger met — nothing to feed yet
+            if not deadline_due and not runway_low and not fill_to_depth:
+                # No trigger met — nothing to feed yet
                 self._logger.debug(
                     "FEED_AHEAD_DECISION now=%d block=%s start=%d "
                     "ready_by=%d reason=skip_not_due runway=%dms",
@@ -2103,8 +2122,10 @@ class BlockPlanProducer(Producer):
                 reason = "deadline+runway"
             elif deadline_due:
                 reason = "deadline"
-            else:
+            elif runway_low:
                 reason = "runway"
+            else:
+                reason = "fill_to_depth"
 
             # MISS POLICY: detect and record, but do NOT alter control flow.
             # AIR handles the gap via PADDED_GAP (black+silence).
@@ -2231,6 +2252,35 @@ class BlockPlanProducer(Producer):
         with self._lock:
             return list(self._asrun_annotations)
 
+    def _on_block_started(self, block_id: str):
+        """
+        Callback when a block starts (popped from AIR queue).
+
+        BlockStarted = queue slot consumed → credit += 1.
+        This is the preferred credit signal; BlockCompleted is fallback.
+        Also triggers SEEDED→RUNNING transition (earlier than BlockCompleted).
+        """
+        with self._lock:
+            if self._session_ended or not self._started:
+                return
+
+            # Mark that AIR supports BlockStarted events
+            self._block_started_supported = True
+
+            # BlockStarted = queue slot consumed → credit += 1
+            self._feed_credits = min(self._feed_credits + 1, self._queue_depth)
+
+            # State transition: SEEDED → RUNNING on first BlockStarted
+            if self._feed_state == _FeedState.SEEDED:
+                self._feed_state = _FeedState.RUNNING
+                self._logger.info(
+                    "FEED-AHEAD: SEEDED->RUNNING on BlockStarted(%s) "
+                    "runway=%dms",
+                    block_id, self._compute_runway_ms(),
+                )
+
+            self._feed_ahead()
+
     def _on_block_complete(self, block_id: str):
         """
         Callback when a block completes - feed next block.
@@ -2278,6 +2328,7 @@ class BlockPlanProducer(Producer):
             )
 
             # State transition: SEEDED → RUNNING on first BlockCompleted
+            # (fallback if BlockStarted wasn't received first)
             if self._feed_state == _FeedState.SEEDED:
                 self._feed_state = _FeedState.RUNNING
                 self._logger.info(
@@ -2288,8 +2339,10 @@ class BlockPlanProducer(Producer):
                     self._feed_ahead_horizon_ms,
                 )
 
-            # A BlockCompleted means a queue slot freed — increment credit
-            self._feed_credits = min(self._feed_credits + 1, self.AIR_QUEUE_DEPTH)
+            # Backward compat: if AIR doesn't emit BlockStarted, credit on BlockCompleted
+            if not self._block_started_supported:
+                self._feed_credits = min(self._feed_credits + 1, self._queue_depth)
+
             # AIR is responsive: clear error state
             self._consecutive_feed_errors = 0
             self._error_backoff_remaining = 0
