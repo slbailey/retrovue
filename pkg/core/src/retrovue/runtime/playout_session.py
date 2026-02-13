@@ -197,6 +197,7 @@ class PlayoutSession:
         air_binary_path: Optional[Path] = None,
         on_block_complete: Optional[Callable[[str], None]] = None,
         on_session_end: Optional[Callable[[str], None]] = None,
+        on_block_started: Optional[Callable[[str], None]] = None,
     ):
         """
         Initialize PlayoutSession.
@@ -209,6 +210,7 @@ class PlayoutSession:
             air_binary_path: Path to retrovue_air binary (auto-detected if None)
             on_block_complete: Callback when a block completes (receives block_id)
             on_session_end: Callback when session ends (receives reason)
+            on_block_started: Callback when a block starts (receives block_id)
         """
         self.channel_id = channel_id
         self.channel_id_int = channel_id_int
@@ -217,6 +219,7 @@ class PlayoutSession:
         self.air_binary_path = air_binary_path or self._find_air_binary()
         self.on_block_complete = on_block_complete
         self.on_session_end = on_session_end
+        self.on_block_started = on_block_started
 
         self._state = SessionState()
         self._lock = threading.Lock()
@@ -383,6 +386,21 @@ class PlayoutSession:
                                     f"on_block_complete callback error: {e}"
                                 )
 
+                    elif event.HasField("block_started"):
+                        started = event.block_started
+                        logger.info(
+                            f"[PlayoutSession:{self.channel_id}] BlockStarted: "
+                            f"block_id={started.block_id}"
+                        )
+                        if self.on_block_started:
+                            try:
+                                self.on_block_started(started.block_id)
+                            except Exception as e:
+                                logger.error(
+                                    f"[PlayoutSession:{self.channel_id}] "
+                                    f"on_block_started callback error: {e}"
+                                )
+
                     elif event.HasField("session_ended"):
                         ended = event.session_ended
                         logger.info(
@@ -419,7 +437,7 @@ class PlayoutSession:
         logger.debug(f"[PlayoutSession:{self.channel_id}] Event subscription started")
 
     def seed(self, block_a: BlockPlan, block_b: BlockPlan, *,
-             join_utc_ms: int = 0) -> bool:
+             join_utc_ms: int = 0, max_queue_depth: int = 0) -> bool:
         """
         Seed the executor with 2 initial blocks.
 
@@ -475,6 +493,7 @@ class PlayoutSession:
                     block_b=block_b.to_proto(),
                     join_utc_ms=join_utc_ms,
                     program_format_json=json.dumps(self.program_format),
+                    max_queue_depth=max_queue_depth,
                 )
 
                 response = self._stub.StartBlockPlanSession(request, timeout=10.0)

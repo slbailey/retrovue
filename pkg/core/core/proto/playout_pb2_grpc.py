@@ -171,10 +171,11 @@ class PlayoutControlServicer(object):
 
     def StartBlockPlanSession(self, request, context):
         """==========================================================================
-        BlockPlan Mode: 2-block window feeder execution
+        BlockPlan Mode: configurable-depth feeder execution
         ==========================================================================
         BlockPlan mode replaces segment-by-segment LoadPreview/SwitchToLive with
-        a deterministic CT-driven executor that maintains a 2-block lookahead queue.
+        a deterministic CT-driven executor that maintains a configurable lookahead
+        queue (default depth 2, configurable via max_queue_depth).
 
         Flow:
         1. StartBlockPlanSession: Initialize and seed queue with 2 blocks
@@ -183,6 +184,7 @@ class PlayoutControlServicer(object):
 
         The executor handles CT advancement, fence termination, and lookahead
         exhaustion automatically. Core only needs to feed blocks just-in-time.
+        BlockStarted events signal queue slot consumption for proactive feeding.
         ==========================================================================
 
         StartBlockPlanSession initializes BlockPlan mode and seeds the 2-block queue.

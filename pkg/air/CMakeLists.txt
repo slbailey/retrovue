@@ -169,6 +169,7 @@ set(AIR_CORE_SOURCES
   src/blockplan/ProducerPreloader.cpp
   src/blockplan/SeamPreparer.cpp
   src/blockplan/PipelineManager.cpp
+  src/time/SystemTimeSource.cpp
   # AudioLookaheadBuffer: broadcast-grade audio buffering (INV-AUDIO-LOOKAHEAD-001)
   src/blockplan/AudioLookaheadBuffer.cpp
   # VideoLookaheadBuffer: non-blocking video buffering (INV-VIDEO-LOOKAHEAD-001)
@@ -356,11 +357,25 @@ target_include_directories(blockplan_contract_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/support
 )
+
+# Optional: build with -DRETROVUE_FAST_TEST=1 for short-duration deterministic tests.
+if(RETROVUE_FAST_TEST)
+  target_compile_definitions(blockplan_contract_tests PRIVATE RETROVUE_FAST_TEST)
+endif()
 
 add_test(
   NAME BlockPlanContracts
   COMMAND blockplan_contract_tests
+)
+
+# ---- BlockPlan Slow Contract Tests ----
+# Runs the DISABLED_SLOW_* tests from the same binary.
+# These are long-running real-media or multi-swap tests moved out of the fast suite.
+add_test(
+  NAME BlockPlanSlowContracts
+  COMMAND blockplan_contract_tests --gtest_also_run_disabled_tests --gtest_filter=*SLOW_*
 )
 
 # ---- AudioLookaheadBuffer Contract Tests (INV-AUDIO-LOOKAHEAD-001) ----

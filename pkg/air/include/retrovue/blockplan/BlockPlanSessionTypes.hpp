@@ -129,16 +129,17 @@ struct BlockPlanSessionContext {
   // system_clock::now(), eliminating startup-delay JIP drift.
   int64_t join_utc_ms = 0;
 
-  // Dev-mode fence fallback policy: if true, fence path will attempt synchronous
-  // block load from queue when preload is not ready (blocks on probe+open+seek).
-  // Default false: preload miss enters PADDED_GAP (black+silence until ready).
-  bool fence_fallback_sync = false;
+  // DEPRECATED (INV-FENCE-FALLBACK-SYNC-001): fence sync fallback is now
+  // unconditional — PipelineManager always drains the queue at fence when
+  // preload missed.  This field is retained for ABI compatibility but ignored.
+  bool fence_fallback_sync = true;
 
   std::atomic<bool> stop_requested{false};
 
-  // Block queue (2-block window)
+  // Block queue (configurable depth, default 2)
+  int max_queue_depth = 2;
   std::mutex queue_mutex;
-  std::vector<FedBlock> block_queue;    // Index 0 = executing, 1 = pending
+  std::vector<FedBlock> block_queue;    // Index 0 = executing, 1+ = pending
   std::condition_variable queue_cv;     // Notify when block added
 
   // Written by engine, read by gRPC layer

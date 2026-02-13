@@ -30,6 +30,7 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -58,10 +59,10 @@ static FedBlock MakeBlock(const std::string& block_id,
   return block;
 }
 
-static int64_t NowMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-}
+using test_infra::kBootGuardMs;
+using test_infra::kBlockTimeOffsetMs;
+using test_infra::kStdBlockMs;
+using test_infra::kShortBlockMs;
 
 // =============================================================================
 // Test Fixture
@@ -87,6 +88,7 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
     ctx_->width = 640;
     ctx_->height = 480;
     ctx_->fps = 30.0;
+    test_ts_ = test_infra::MakeTestTimeSource();
   }
 
   void TearDown() override {
@@ -106,6 +108,8 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
     }
     if (drain_thread_.joinable()) drain_thread_.join();
   }
+
+  int64_t NowMs() { return test_ts_->NowUtcMs(); }
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
@@ -137,7 +141,8 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       proofs_.push_back(proof);
     };
-    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks));
+    return std::make_unique<PipelineManager>(
+        ctx_.get(), std::move(callbacks), test_ts_);
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
@@ -161,6 +166,7 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
     return fingerprints_;
   }
 
+  std::shared_ptr<ITimeSource> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -194,8 +200,8 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
 TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_001_BlockTransferOccursOnlyAtFence) {
   auto now = NowMs();
 
-  FedBlock block_a = MakeBlock("blk001a", now, 1000);
-  FedBlock block_b = MakeBlock("blk001b", now + 1000, 1000);
+  FedBlock block_a = MakeBlock("blk001a", now, kStdBlockMs);
+  FedBlock block_b = MakeBlock("blk001b", now + kStdBlockMs, kStdBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -205,23 +211,26 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_001_BlockTransferOccursOnlyAtF
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000))
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 10000))
       << "Block A must complete at its fence";
 
   // Let B run for a bit, then stop.
   std::this_thread::sleep_for(std::chrono::milliseconds(1500));
   engine_->Stop();
 
-  // Retrieve the fence tick from on_block_completed.
-  int64_t a_fence_tick;
-  {
-    std::lock_guard<std::mutex> lock(cb_mutex_);
-    ASSERT_GE(completed_fence_frames_.size(), 1u);
-    a_fence_tick = completed_fence_frames_[0];
-  }
-  ASSERT_GT(a_fence_tick, 0);
-
   auto fps = SnapshotFingerprints();
+
+  // Derive fence tick from fingerprints: first frame where active_block_id
+  // changes from block A.  The ct value from on_block_completed is
+  // ct_at_fence_ms (content time in milliseconds), not a frame index.
+  int64_t a_fence_tick = -1;
+  for (size_t i = 1; i < fps.size(); ++i) {
+    if (fps[i].active_block_id != "blk001a") {
+      a_fence_tick = static_cast<int64_t>(i);
+      break;
+    }
+  }
+  ASSERT_GT(a_fence_tick, 0) << "Must find block transition in fingerprints";
   ASSERT_GT(fps.size(), static_cast<size_t>(a_fence_tick))
       << "Must have fingerprints past the fence tick";
 
@@ -260,7 +269,8 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_001_BlockTransferOccursOnlyAtF
 TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_002_BlockLifecycleEventsAreEmitted) {
   auto now = NowMs();
 
-  FedBlock block = MakeBlock("blk002", now, 1000);
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
+  FedBlock block = MakeBlock("blk002", now + kBlockTimeOffsetMs, kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block);
@@ -269,7 +279,7 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_002_BlockLifecycleEventsAreEmi
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000))
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 8000))
       << "Block must complete at fence";
 
   // Let post-fence pad run briefly, then stop.
@@ -322,7 +332,8 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_002_BlockLifecycleEventsAreEmi
 TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_003_BlockCompletionIsRecordedAtFence) {
   auto now = NowMs();
 
-  FedBlock block = MakeBlock("blk003", now, 1000);
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
+  FedBlock block = MakeBlock("blk003", now + kBlockTimeOffsetMs, kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block);
@@ -331,7 +342,7 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_003_BlockCompletionIsRecordedA
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 5000));
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 8000));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   engine_->Stop();
@@ -378,8 +389,8 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_003_BlockCompletionIsRecordedA
 TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_004_BlockToBlockTransitionSatisfiesSegmentContinuity) {
   auto now = NowMs();
 
-  FedBlock block_a = MakeBlock("blk004a", now, 1000);
-  FedBlock block_b = MakeBlock("blk004b", now + 1000, 1000);
+  FedBlock block_a = MakeBlock("blk004a", now, kShortBlockMs);
+  FedBlock block_b = MakeBlock("blk004b", now + kShortBlockMs, kShortBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -439,7 +450,8 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_005_MissingNextBlockPadsInstea
   auto now = NowMs();
 
   // Only block A in queue. At fence, no B → PADDED_GAP.
-  FedBlock block_a = MakeBlock("blk005", now, 1000);
+  // Schedule after bootstrap so fence fires at the correct wall-clock instant.
+  FedBlock block_a = MakeBlock("blk005", now + kBlockTimeOffsetMs, kStdBlockMs);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -448,8 +460,9 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_005_MissingNextBlockPadsInstea
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run through block A (1s) + 1s of post-fence pad.
-  std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+  // kBootGuardMs + duration + margin for post-fence pad.
+  std::this_thread::sleep_for(std::chrono::milliseconds(
+      kBootGuardMs + kStdBlockMs + 500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();

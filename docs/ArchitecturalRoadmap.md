@@ -2,7 +2,7 @@
 
 # 📘 RetroVue Architectural Roadmap v1.0
 
-**Status:** Updated (as of Q2 2024)  
+**Status:** Updated (Feb 2025)  
 **Scope:** Core Runtime • Horizon • Execution Integration  
 **Intent:** Accurately reflect present architectural maturity and remaining milestones  
 **Note:** Checked against main branch, including pkg/core and integration with AIR
@@ -11,7 +11,7 @@
 
 ---
 
-## 0️⃣ Achievements and Current System State (Checked Q2 2024)
+## 0️⃣ Achievements and Current System State (Checked Feb 2025)
 
 ### ✔️ Planning (COMPLETE)
 - **Planning Pipeline** (`Directive → Locked TransmissionLog`): Implemented and verifiable. **[VERIFIED]**
@@ -21,6 +21,7 @@
 - **TransmissionLog wall-clock alignment:** Confirmed via block plans and active validation harness.
 
 ### ✔️ Horizon (MOSTLY COMPLETE)
+- **Why “mostly”:** Extension is day-based only; a block-based extension API is not implemented (see Known Gaps).
 - **Horizon authority:** HorizonManager is sole planning trigger; consumers read only. Consumer-triggered planning is prohibited; missing data raises `HorizonNoScheduleDataError`. (`horizon_config.py` — no LEGACY/SHADOW/AUTHORITATIVE modes.)
 - **`HorizonManager` exists:** Extends by day (`extend_epg_day`, `extend_execution_day`). No block-based extension API.
 - **Horizon-backed schedule service:** All runtime queries served from horizon store.
@@ -32,11 +33,15 @@
 - **Fence-based block timing:** Active and tested in 24-hour burn-in.
 - **Hard-stop (wall-clock) discipline:** All playout plans respect TransmissionLog stop points.
 
-### 🚧 Known Gaps (AS OF Q2 2024)
+### ✔️ As-Run Reconciliation (CONTRACT DELIVERED)
+- **AsRunReconciliationContract v0.1** and reconciler: Plan-vs-actual comparison (TransmissionLog vs AsRunLog); INV-ASRUN-001..005; structured report with classification. **[VERIFIED: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`, `asrun_reconciler.py`, `test_asrun_reconciliation_contract.py`.]**
+- Optional integration (reconciler invoked on execution path or AsRunLogger exporting AsRunLog) not yet wired.
+
+### 🚧 Known Gaps (AS OF FEB 2025)
 - **Core seam contract:** `docs/contracts/core/TransmissionLogSeamContract_v0.1.md` exists; INV-TL-SEAM-001..004 enforced in `lock_for_execution`. AIR frame-level INV-SEAM-* invariants live in `pkg/air/docs/contracts/`.
 - **Horizon extension:** Day-based (`extend_epg_day`, `extend_execution_day`). Block-based API not implemented.
 - **Deterministic filler policy:** Deterministic on identical inputs; pool partitioning (bumper/promo/ad) is planned but not yet shipped.
-- **As-run logging:** `AsRunLogger` exists; full reconciliation to TransmissionLog being finalized.
+- **As-run logging:** `AsRunLogger` exists. **As-run reconciliation:** `docs/contracts/core/AsRunReconciliationContract_v0.1.md` and reconciler (`asrun_reconciler.py`, `asrun_types.py`) implemented; contract tests in `test_asrun_reconciliation_contract.py`. Optional integration (e.g. post-execution reconciliation run or AsRunLogger exporting AsRunLog) not yet wired.
 - **Burn-in proof harness:** Exists as `tools/burn_in.py` (args: `--horizon`, `--pipeline`, `--schedule`, `--dump`). Not run in CI.
 
 ---
@@ -80,9 +85,10 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 ### 2.1 **Remove Consumer Auto-Resolution Path** _(DELIVERED)_
 - Missing schedule/execution data raises `HorizonNoScheduleDataError`; no consumer-triggered auto-resolve. (`ScheduleManagerBackedScheduleService`, `HorizonBackedScheduleService`.)
 
-### 2.2 **As-Run Log Integration** _(PARTIAL/NEARLY COMPLETE)_
+### 2.2 **As-Run Log Integration** _(RECONCILIATION DELIVERED)_
 - `AsRunLogger` exists (`pkg/core/src/retrovue/runtime/asrun_logger.py`); logs actual block/segment times and transitions.
-- **Remaining TODO:** Automated reconciliation to TransmissionLog on all execution unless error.
+- **As-run reconciliation (DELIVERED):** `docs/contracts/core/AsRunReconciliationContract_v0.1.md`; INV-ASRUN-001..005; `asrun_types.py`, `asrun_reconciler.py`; contract tests in `test_asrun_reconciliation_contract.py`. Deterministic plan-vs-actual comparison with structured report (no auto-correct).
+- **Optional follow-up:** Wire reconciler into execution path (e.g. post-playout reconciliation run or AsRunLogger exporting AsRunLog) — not required for contract closure.
 
 ### 2.3 **Execution Failure Escalation Path** _(DELIVERED)_
 - All execution errors (missing block, corrupt segment, asset issues, AIR underrun) classified as planning vs. runtime.
@@ -92,7 +98,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 
 ## 🚀 Phase 3 — Feature Expansion Layer
 
-**_(Work may begin after 2.2 As-Run reconciliation is fully satisfied; others READY)_**
+**_(Work may begin now that 2.2 As-Run reconciliation contract and reconciler are delivered; optional execution-path integration may follow in parallel.)_**
 
 ### 3.1 **Multi-Zone Authoring Enhancements** _(NOT STARTED)_
 - Awaiting contract and spec refinement.
@@ -121,7 +127,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 ---
 
 **Summary:**  
-_The baseline (Phase 1), seam/horizon authority, and burn-in validation are all live and tested. As-Run logging reconciliation (2.2) is the only significant open contract; all else in roadmap represents next-growth and is not started. This document is maintained in sync with main pkg/core and integration requirements for AIR._
+_The baseline (Phase 1), seam/horizon authority, and burn-in validation are all live and tested. As-Run reconciliation (2.2) is delivered (contract + reconciler + contract tests). Optional integration of the reconciler into the execution path remains. Phase 3 (multi-zone, traffic, HLS) is not started. This document is maintained in sync with main pkg/core and integration requirements for AIR._
 
 ---
 
@@ -139,7 +145,8 @@ Spot-check against the repo (main, pkg/core and tools):
 | **Horizon:** Day-based extension | ✅ Verified: `extend_epg_day`, `extend_execution_day`; no block-based API. |
 | **Horizon:** Authority model | ✅ Verified: HorizonManager sole trigger; consumer reads only; `HorizonNoScheduleDataError` for missing data. |
 | **Burn-in:** tools/burn_in.py | ✅ Verified: harness exists; not run in CI. |
-| **As-Run:** AsRunLogger | ✅ Verified: `AsRunLogger` in `asrun_logger.py`; reconciliation contract not yet formalized. |
+| **As-Run:** AsRunLogger | ✅ Verified: `AsRunLogger` in `asrun_logger.py`. |
+| **As-Run reconciliation:** Contract + reconciler | ✅ Verified: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`; `asrun_types.py`, `asrun_reconciler.py`; `reconcile_transmission_log()`; contract tests in `test_asrun_reconciliation_contract.py`. |
 | **Phase 3:** Multi-zone, Traffic, HLS not started | ✅ Verified: no campaign/inventory or HLS implementation in tree. |
 
 

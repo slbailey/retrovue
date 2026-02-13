@@ -162,6 +162,9 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
   void EmitBlockCompleted(BlockPlanSessionState* state, const BlockPlanBlock& block,
                           int64_t final_ct_ms);
 
+  // Emit BlockStarted event to all subscribers
+  void EmitBlockStarted(BlockPlanSessionState* state, const BlockPlanBlock& block);
+
   // Emit SessionEnded event to all subscribers
   void EmitSessionEnded(BlockPlanSessionState* state, const std::string& reason);
 

@@ -27,9 +27,13 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/ProducerPreloader.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
+
+using test_infra::kStdBlockMs;
+using test_infra::kShortBlockMs;
 
 // =============================================================================
 // Helper: Create a synthetic FedBlock (unresolvable URI)
@@ -37,12 +41,16 @@ namespace {
 static FedBlock MakeSyntheticBlock(
     const std::string& block_id,
     int64_t duration_ms,
-    const std::string& uri = "/nonexistent/test.mp4") {
+    const std::string& uri = "/nonexistent/test.mp4",
+    int64_t now_ms = 0) {
+  int64_t now = now_ms > 0 ? now_ms
+      : std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
   FedBlock block;
   block.block_id = block_id;
   block.channel_id = 99;
-  block.start_utc_ms = 1000000;
-  block.end_utc_ms = 1000000 + duration_ms;
+  block.start_utc_ms = now;
+  block.end_utc_ms = now + duration_ms;
 
   FedBlock::Segment seg;
   seg.segment_index = 0;
@@ -85,6 +93,7 @@ class SeamProofContractTest : public ::testing::Test {
     ctx_->width = 640;
     ctx_->height = 480;
     ctx_->fps = 30.0;
+    test_ts_ = test_infra::MakeTestTimeSource();
   }
 
   void TearDown() override {
@@ -106,6 +115,8 @@ class SeamProofContractTest : public ::testing::Test {
     if (drain_thread_.joinable()) drain_thread_.join();
   }
 
+  int64_t NowMs() { return test_ts_->NowUtcMs(); }
+
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
@@ -124,7 +135,7 @@ class SeamProofContractTest : public ::testing::Test {
       fingerprints_.push_back(fp);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks));
+        ctx_.get(), std::move(callbacks), test_ts_);
   }
 
   bool WaitForBlocksCompleted(int count, int timeout_ms = 10000) {
@@ -143,6 +154,7 @@ class SeamProofContractTest : public ::testing::Test {
         [this] { return session_ended_count_ > 0; });
   }
 
+  std::shared_ptr<ITimeSource> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -168,14 +180,13 @@ class SeamProofContractTest : public ::testing::Test {
 // =============================================================================
 TEST_F(SeamProofContractTest, PreloadSuccessZeroFencePad) {
   // Wall-anchored timestamps so fence fires at the correct future time.
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  FedBlock block1 = MakeSyntheticBlock("sp001-a", 1000);
+  auto now_ms = NowMs();
+  FedBlock block1 = MakeSyntheticBlock("sp001-a", kShortBlockMs, "/nonexistent/test.mp4", now_ms);
   block1.start_utc_ms = now_ms;
-  block1.end_utc_ms = now_ms + 1000;
-  FedBlock block2 = MakeSyntheticBlock("sp001-b", 1000);
-  block2.start_utc_ms = now_ms + 1000;
-  block2.end_utc_ms = now_ms + 2000;
+  block1.end_utc_ms = now_ms + kShortBlockMs;
+  FedBlock block2 = MakeSyntheticBlock("sp001-b", kShortBlockMs, "/nonexistent/test.mp4", now_ms);
+  block2.start_utc_ms = now_ms + kShortBlockMs;
+  block2.end_utc_ms = now_ms + 2 * kShortBlockMs;
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -213,12 +224,11 @@ TEST_F(SeamProofContractTest, PreloadDelayerCausesFencePad) {
   });
 
   // Wall-anchored timestamps so fence fires at the correct future time.
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  FedBlock block1 = MakeSyntheticBlock("sp002-a", 500);
+  auto now_ms = NowMs();
+  FedBlock block1 = MakeSyntheticBlock("sp002-a", 500, "/nonexistent/test.mp4", now_ms);
   block1.start_utc_ms = now_ms;
   block1.end_utc_ms = now_ms + 500;
-  FedBlock block2 = MakeSyntheticBlock("sp002-b", 500);
+  FedBlock block2 = MakeSyntheticBlock("sp002-b", 500, "/nonexistent/test.mp4", now_ms);
   block2.start_utc_ms = now_ms + 500;
   block2.end_utc_ms = now_ms + 1000;
   {
@@ -323,7 +333,7 @@ TEST_F(SeamProofContractTest, FrameDataCarriesMetadata) {
 // Collect fingerprints. Build boundary report. Assert: pad_frames_in_window == 0,
 // first frame of B has correct asset_uri and block_ct_ms == 0.
 // =============================================================================
-TEST_F(SeamProofContractTest, RealMediaBoundarySeamless) {
+TEST_F(SeamProofContractTest, DISABLED_SLOW_RealMediaBoundarySeamless) {
   const std::string path_a = "/opt/retrovue/assets/SampleA.mp4";
   const std::string path_b = "/opt/retrovue/assets/SampleB.mp4";
 
@@ -338,16 +348,14 @@ TEST_F(SeamProofContractTest, RealMediaBoundarySeamless) {
   ctx_->fps_num = 30000;
   ctx_->fps_den = 1001;
 
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
-  // 2s blocks: 60 frames each at 29.97fps. Short enough to avoid decode-race
-  // at the tail (decoder has ample buffer headroom over 60 frames).
-  FedBlock block_a = MakeSyntheticBlock("sp005-a", 2000, path_a);
+  auto now_ms = NowMs();
+  // Standard-duration blocks. Long enough to survive bootstrap.
+  FedBlock block_a = MakeSyntheticBlock("sp005-a", kStdBlockMs, path_a, now_ms);
   block_a.start_utc_ms = now_ms;
-  block_a.end_utc_ms = now_ms + 2000;
-  FedBlock block_b = MakeSyntheticBlock("sp005-b", 2000, path_b);
-  block_b.start_utc_ms = now_ms + 2000;
-  block_b.end_utc_ms = now_ms + 4000;
+  block_a.end_utc_ms = now_ms + kStdBlockMs;
+  FedBlock block_b = MakeSyntheticBlock("sp005-b", kStdBlockMs, path_b, now_ms);
+  block_b.start_utc_ms = now_ms + kStdBlockMs;
+  block_b.end_utc_ms = now_ms + 2 * kStdBlockMs;
   // No seek offset: start block B from position 0 in the asset.
   // A mid-asset seek (e.g. 12000ms) can cause audio underflow at the block
   // tail because audio packet boundaries don't align with the seek point,
@@ -368,7 +376,7 @@ TEST_F(SeamProofContractTest, RealMediaBoundarySeamless) {
   // production-level gap (hold-last should emit silence audio), not a seam
   // proof defect.  The boundary report only needs block A completion +
   // enough block B fingerprints to verify the seam.
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 15000))
+  ASSERT_TRUE(WaitForBlocksCompleted(1, 25000))
       << "Block A must complete at the first fence";
 
   // Let block B emit enough frames for the boundary window (5 frames).
@@ -383,14 +391,17 @@ TEST_F(SeamProofContractTest, RealMediaBoundarySeamless) {
     fps = fingerprints_;
   }
 
-  int64_t fence_idx;
-  {
-    std::lock_guard<std::mutex> lock(cb_mutex_);
-    ASSERT_GE(fence_frame_indices_.size(), 1u);
-    // fence_frame_index is the session_frame_index at block A completion.
-    // The next frame (fence_idx + 1) is the first of block B.
-    fence_idx = fence_frame_indices_[0] + 1;
+  // Derive fence_idx from fingerprints: first frame where active_block_id
+  // is from block B.  The ct value from on_block_completed is ct_at_fence_ms
+  // (content time in milliseconds), not a frame index.
+  int64_t fence_idx = -1;
+  for (size_t i = 1; i < fps.size(); ++i) {
+    if (fps[i].active_block_id == "sp005-b") {
+      fence_idx = static_cast<int64_t>(i);
+      break;
+    }
   }
+  ASSERT_GE(fence_idx, 0) << "Must find block B in fingerprints";
 
   auto report = BuildBoundaryReport(fps, fence_idx, "sp005-a", "sp005-b");
   PrintBoundaryReport(std::cout, report);

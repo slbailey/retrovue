@@ -27,9 +27,14 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
+
+using test_infra::kStdBlockMs;
+using test_infra::kShortBlockMs;
+using test_infra::kLongBlockMs;
 
 // =============================================================================
 // Helpers
@@ -90,6 +95,7 @@ class TakeAtCommitContractTest : public ::testing::Test {
     ctx_->width = 640;
     ctx_->height = 480;
     ctx_->fps = 30.0;
+    test_ts_ = test_infra::MakeTestTimeSource();
   }
 
   void TearDown() override {
@@ -111,6 +117,8 @@ class TakeAtCommitContractTest : public ::testing::Test {
     if (drain_thread_.joinable()) drain_thread_.join();
   }
 
+  int64_t NowMs() { return test_ts_->NowUtcMs(); }
+
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
@@ -129,7 +137,7 @@ class TakeAtCommitContractTest : public ::testing::Test {
       fingerprints_.push_back(fp);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks));
+        ctx_.get(), std::move(callbacks), test_ts_);
   }
 
   bool WaitForBlocksCompleted(int count, int timeout_ms = 15000) {
@@ -151,6 +159,7 @@ class TakeAtCommitContractTest : public ::testing::Test {
         [this] { return !fence_frame_indices_.empty(); });
   }
 
+  std::shared_ptr<ITimeSource> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -188,17 +197,15 @@ TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  // Block A: 1 second, block B: 1 second.
-  // Use wall-clock-anchored UTC times.  session_epoch_utc_ms is captured
-  // at session start, so we set block times relative to "now".
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+  // Block A: standard duration, block B: long (not waited on).
+  // Use time source for wall-clock-anchored UTC times.
+  auto now_ms = NowMs();
 
-  // Block B has a long duration (10s) — we do NOT wait for it to complete.
+  // Block B has a long duration — we do NOT wait for it to complete.
   // We only need a few B frames past the fence to verify the TAKE invariant.
   // Waiting for B to finish would hit audio underflow (fill thread < real-time).
-  FedBlock block_a = MakeBlock("take-A", now_ms, 1000, kPathA);
-  FedBlock block_b = MakeBlock("take-B", now_ms + 1000, 10000, kPathB);
+  FedBlock block_a = MakeBlock("take-A", now_ms, kStdBlockMs, kPathA);
+  FedBlock block_b = MakeBlock("take-B", now_ms + kStdBlockMs, kLongBlockMs, kPathB);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -223,14 +230,17 @@ TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
     fps = fingerprints_;
   }
 
-  // Determine fence_tick from block completion callback.
-  // on_block_completed fires with session_frame_index at the fence.
-  int64_t fence_tick;
-  {
-    std::lock_guard<std::mutex> lock(cb_mutex_);
-    ASSERT_GE(fence_frame_indices_.size(), 1u);
-    fence_tick = fence_frame_indices_[0];
+  // Derive fence_tick from fingerprints: first frame where active_block_id
+  // changes from block A.  The ct value from on_block_completed is
+  // ct_at_fence_ms (content time in milliseconds), not a frame index.
+  int64_t fence_tick = -1;
+  for (size_t i = 1; i < fps.size(); ++i) {
+    if (fps[i].active_block_id != "take-A") {
+      fence_tick = static_cast<int64_t>(i);
+      break;
+    }
   }
+  ASSERT_GE(fence_tick, 0) << "Must find block transition in fingerprints";
 
   std::cout << "=== TAKE-AT-COMMIT TEST ===" << std::endl;
   std::cout << "fence_tick=" << fence_tick
@@ -326,13 +336,12 @@ TEST_F(TakeAtCommitContractTest, NoAFramesAfterFenceSweep) {
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+  auto now_ms = NowMs();
 
   // Use different asset offsets so CRC32 fingerprints differ.
   // Block B has long duration — we only need a few B frames past fence.
-  FedBlock block_a = MakeBlock("sweep-A", now_ms, 1000, kPathA, 0);
-  FedBlock block_b = MakeBlock("sweep-B", now_ms + 1000, 10000, kPathB, 5000);
+  FedBlock block_a = MakeBlock("sweep-A", now_ms, kShortBlockMs, kPathA, 0);
+  FedBlock block_b = MakeBlock("sweep-B", now_ms + kShortBlockMs, kLongBlockMs, kPathB, 5000);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block_a);
@@ -387,8 +396,7 @@ TEST_F(TakeAtCommitContractTest, CommitSourceFieldPopulated) {
     GTEST_SKIP() << "Real media asset not found: " << kPathA;
   }
 
-  auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+  auto now_ms = NowMs();
 
   FedBlock block_a = MakeBlock("pop-A", now_ms, 2000, kPathA);
   {
