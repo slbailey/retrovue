@@ -139,7 +139,17 @@ ACTUAL   DUR      STATUS     TYPE     EVENT_ID                            NOTES
 
 ---
 
-## 5. Sidecar JSONL Specification
+## 5. Segment-Level Frame References
+
+Segment-level frame references are **asset-relative**:
+- `asset_start_frame` — Frame index within the source asset at segment start.
+- `asset_end_frame` — Frame index within the source asset at segment end (inclusive).
+
+Block-relative frames (`swap_tick`, `fence_tick`, `frames_emitted`) are used only for fence accounting. Segment rows use asset-relative frames only.
+
+---
+
+## 6. Sidecar JSONL Specification
 
 Each line in the `.asrun.jsonl` sidecar MUST contain the following fields:
 
@@ -160,7 +170,7 @@ Planned metadata fields (e.g., `scheduled_duration_ms`, `planned_start_utc`) MAY
 
 ---
 
-## 6. Required Tests
+## 7. Required Tests
 
 - Append-only enforcement test
 - Event ID matching test

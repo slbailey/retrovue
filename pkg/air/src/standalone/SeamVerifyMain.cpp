@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
     fence_indices.push_back(final_ct_ms);  // actual content time at fence
     cv.notify_all();
   };
-  callbacks.on_session_ended = [&](const std::string& reason) {
+  callbacks.on_session_ended = [&](const std::string& reason, int64_t) {
     std::lock_guard<std::mutex> lock(mu);
     cv.notify_all();
   };

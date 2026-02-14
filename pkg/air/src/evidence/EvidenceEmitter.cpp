@@ -92,7 +92,6 @@ void EvidenceEmitter::EmitBlockStart(const BlockStartPayload& p) {
   std::ostringstream o;
   o << "{\"block_id\":\"" << JsonEscape(p.block_id) << "\""
     << ",\"swap_tick\":" << p.swap_tick
-    << ",\"fence_tick\":" << p.fence_tick
     << ",\"actual_start_utc_ms\":" << p.actual_start_utc_ms
     << ",\"primed_success\":" << (p.primed_success ? "true" : "false") << "}";
   EvidenceFromAir msg = MakeEnvelope("BLOCK_START", o.str());
@@ -121,8 +120,9 @@ void EvidenceEmitter::EmitSegmentStart(const SegmentStartPayload& p) {
     << ",\"event_id\":\"" << JsonEscape(p.event_id) << "\""
     << ",\"segment_index\":" << p.segment_index
     << ",\"actual_start_utc_ms\":" << p.actual_start_utc_ms
-    << ",\"actual_start_frame\":" << p.actual_start_frame
-    << ",\"scheduled_duration_ms\":" << p.scheduled_duration_ms << "}";
+    << ",\"asset_start_frame\":" << p.asset_start_frame
+    << ",\"scheduled_duration_ms\":" << p.scheduled_duration_ms
+    << ",\"join_in_progress\":" << (p.join_in_progress ? "true" : "false") << "}";
   EvidenceFromAir msg = MakeEnvelope("SEGMENT_START", o.str());
   auto status = spool_->Append(msg);
   if (status == AppendStatus::kSpoolFull) {
@@ -149,8 +149,8 @@ void EvidenceEmitter::EmitSegmentEnd(const SegmentEndPayload& p) {
     << ",\"event_id_ref\":\"" << JsonEscape(p.event_id_ref) << "\""
     << ",\"actual_start_utc_ms\":" << p.actual_start_utc_ms
     << ",\"actual_end_utc_ms\":" << p.actual_end_utc_ms
-    << ",\"actual_start_frame\":" << p.actual_start_frame
-    << ",\"actual_end_frame\":" << p.actual_end_frame
+    << ",\"asset_start_frame\":" << p.asset_start_frame
+    << ",\"asset_end_frame\":" << p.asset_end_frame
     << ",\"computed_duration_ms\":" << p.computed_duration_ms
     << ",\"computed_duration_frames\":" << p.computed_duration_frames
     << ",\"status\":\"" << JsonEscape(p.status) << "\""

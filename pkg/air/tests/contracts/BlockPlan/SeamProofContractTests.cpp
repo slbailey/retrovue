@@ -125,7 +125,7 @@ class SeamProofContractTest : public ::testing::Test {
       fence_frame_indices_.push_back(ct);
       blocks_completed_cv_.notify_all();
     };
-    callbacks.on_session_ended = [this](const std::string& reason) {
+    callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       session_ended_count_++;
       session_ended_cv_.notify_all();

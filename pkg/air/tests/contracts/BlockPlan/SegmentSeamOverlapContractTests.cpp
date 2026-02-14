@@ -323,7 +323,7 @@ class SegmentSeamOverlapContractTest : public ::testing::Test {
       completed_blocks_.push_back(block.block_id);
       blocks_completed_cv_.notify_all();
     };
-    callbacks.on_session_ended = [this](const std::string& reason) {
+    callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       session_ended_count_++;
       session_ended_reason_ = reason;

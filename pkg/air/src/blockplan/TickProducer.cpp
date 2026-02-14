@@ -198,6 +198,10 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << std::endl;
 }
 
+void TickProducer::SetLogicalSegmentIndex(int32_t index) {
+  logical_segment_index_ = index;
+}
+
 // =============================================================================
 // PrimeFirstFrame — INV-BLOCK-PRIME-001: decode first frame into held slot
 // Called by ProducerPreloader::Worker after AssignBlock.

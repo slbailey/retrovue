@@ -131,6 +131,19 @@ class VideoLookaheadBuffer {
   // Low-water mark in frames (configuration).
   int LowWaterFrames() const { return low_water_frames_; }
 
+  // INV-BUFFER-HYSTERESIS-001: Effective high-water mark (for diagnostics).
+  // Returns the current high-water threshold accounting for audio_boost_.
+  int HighWaterFrames() const {
+    return audio_boost_.load(std::memory_order_relaxed)
+        ? target_depth_frames_ * 4
+        : target_depth_frames_ * 2;
+  }
+
+  // INV-BUFFER-HYSTERESIS-001: Current fill state (for diagnostics).
+  bool IsSteadyFilling() const {
+    return steady_filling_.load(std::memory_order_relaxed);
+  }
+
   // True when primed AND current depth < low-water mark.
   bool IsBelowLowWater() const;
 
@@ -193,6 +206,12 @@ class VideoLookaheadBuffer {
   int target_depth_frames_;
   int low_water_frames_;
   std::atomic<bool> audio_boost_{false};
+
+  // INV-BUFFER-HYSTERESIS-001: Dual-threshold steady-state fill control.
+  // true  = fill thread is actively decoding (depth <= low water).
+  // false = fill thread is parked (depth >= high water).
+  // Eliminates single-frame oscillation at target boundary.
+  std::atomic<bool> steady_filling_{true};
 
   // INV-AUDIO-PREROLL-ISOLATION-001: Buffer context label for diagnostics.
   std::string buffer_label_{"UNKNOWN"};

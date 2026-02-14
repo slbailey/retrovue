@@ -8,6 +8,12 @@
 
 ---
 
+## Authority
+
+**Core is the sole writer of `.asrun` and `.asrun.jsonl` artifacts. AIR MUST NOT produce any as-run artifact files, including `.air.asrun` variants. AIR emits execution evidence only; durability is provided by evidence spooling (see [AirExecutionEvidenceSpoolContract_v0.1](../../../pkg/air/docs/contracts/AirExecutionEvidenceSpoolContract_v0.1.md)).**
+
+---
+
 ## 1. Purpose
 
 This contract specifies the required transformation of execution evidence emitted by AIR into persisted As-Run log artifacts.
@@ -185,6 +191,22 @@ For each line in `.asrun`, a corresponding `.asrun.jsonl` sidecar entry must be 
 - `reason`
 - `swap_tick` (for fence)
 - `fence_tick` (for fence)
+
+---
+
+### MAP-007 — Segment-Level Frame References Are Asset-Relative
+
+Segment-level frame references in evidence and as-run logs are **asset-relative**:
+
+- `asset_start_frame` — Frame index within the source asset at segment start (decoder at TAKE).
+- `asset_end_frame` — Frame index within the source asset at segment end (inclusive).
+
+Segments within the same block must be contiguous unless:
+- `join_in_progress == true` (JIP into block),
+- `truncated_by_fence == true`, or
+- `early_exhaustion == true`.
+
+**Block-relative frames** (e.g. `swap_tick`, `fence_tick`, `frames_emitted`) are used only for fence accounting and are not segment-level.
 
 ---
 

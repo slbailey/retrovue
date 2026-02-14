@@ -59,6 +59,15 @@ bool SeamPreparer::HasBlockResult() const {
   return block_result_ != nullptr;
 }
 
+std::optional<SeamResultIdentity> SeamPreparer::PeekSegmentResult() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!segment_result_) return std::nullopt;
+  SeamResultIdentity id;
+  id.parent_block_id = segment_result_->parent_block_id;
+  id.parent_segment_index = segment_result_->parent_segment_index;
+  return id;
+}
+
 std::unique_ptr<SeamResult> SeamPreparer::TakeSegmentResult() {
   std::lock_guard<std::mutex> lock(mutex_);
   return std::move(segment_result_);
@@ -193,6 +202,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
 
   auto source = std::make_unique<TickProducer>(req.width, req.height, req.fps);
   source->AssignBlock(req.block);
+  source->SetLogicalSegmentIndex(req.segment_index);
 
   // Checkpoint 3
   if (cancel_requested_.load(std::memory_order_acquire)) return;
@@ -253,6 +263,8 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   result->block_id = req.block.block_id;
   result->segment_index = req.segment_index;
   result->segment_type = seg_type;
+  result->parent_block_id = req.parent_block_id;
+  result->parent_segment_index = req.segment_index;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);

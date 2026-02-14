@@ -161,10 +161,11 @@ TEST(BufferConfigTest, VideoTargetDepthConfigurable) {
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= custom_depth; },
                        std::chrono::seconds(2)));
 
-  // Fill thread blocks at target depth — should not exceed by more than 1.
-  // (Could be at target exactly, or one extra if fill thread was mid-push.)
+  // INV-BUFFER-HYSTERESIS-001: Fill thread fills to high water (2× target),
+  // not target depth.  Should not exceed high water by more than 1.
+  int high_water = buf.HighWaterFrames();  // 2 × custom_depth = 16
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  EXPECT_LE(buf.DepthFrames(), custom_depth + 1);
+  EXPECT_LE(buf.DepthFrames(), high_water + 1);
 
   buf.StopFilling(true);
 }

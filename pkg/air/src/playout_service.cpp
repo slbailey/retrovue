@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -164,6 +165,8 @@ namespace retrovue
       block.channel_id = proto.channel_id();
       block.start_utc_ms = proto.start_utc_ms();
       block.end_utc_ms = proto.end_utc_ms();
+      block.broadcast_date = proto.broadcast_date();
+      block.broadcast_day_anchor_utc_ms = proto.broadcast_day_anchor_utc_ms();
 
       for (const auto& seg : proto.segments()) {
         BlockPlanBlock::Segment s;
@@ -821,6 +824,7 @@ namespace retrovue
       // ========================================================================
       {
         blockplan::PipelineManager::Callbacks callbacks;
+
         callbacks.on_block_completed = [this](const blockplan::FedBlock& block,
                                                int64_t final_ct_ms, int64_t frame_idx) {
           EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
@@ -828,37 +832,68 @@ namespace retrovue
             // Close the final segment of this block before emitting fence.
             auto& ls = blockplan_session_->live_segment;
             if (ls.segment_index >= 0) {
-              int64_t now_ms = evidence::EvidenceEmitter::NowUtcMs();
-              evidence::SegmentEndPayload se;
-              se.block_id = block.block_id;
-              se.event_id_ref = ls.event_id;
-              se.actual_start_utc_ms = ls.start_utc_ms;
-              se.actual_end_utc_ms = now_ms;
-              se.actual_start_frame = ls.start_frame;
-              se.actual_end_frame = frame_idx;
-              se.computed_duration_ms = now_ms - ls.start_utc_ms;
-              se.computed_duration_frames = frame_idx - ls.start_frame;
-              se.status = "AIRED";
-              em->EmitSegmentEnd(se);
+              int64_t seg_frames = frame_idx - ls.start_frame;
+              // Zero-frame terminals are illegal — skip emission if segment
+              // opened and closed on the same tick (no frames actually aired).
+              if (seg_frames > 0) {
+                int64_t now_ms = evidence::EvidenceEmitter::NowUtcMs();
+                evidence::SegmentEndPayload se;
+                se.block_id = block.block_id;
+                se.event_id_ref = ls.event_id;
+                se.actual_start_utc_ms = ls.start_utc_ms;
+                se.actual_end_utc_ms = now_ms;
+                se.asset_start_frame = ls.asset_start_frame;
+                se.asset_end_frame = ls.asset_start_frame + seg_frames - 1;  // inclusive end
+                se.computed_duration_ms = now_ms - ls.start_utc_ms;
+                se.computed_duration_frames = seg_frames;
+                se.status = "AIRED";
+                em->EmitSegmentEnd(se);
+              }
               ls.segment_index = -1;  // Clear — prevents duplicate close
             }
             evidence::BlockFencePayload p;
             p.block_id = block.block_id;
             p.actual_end_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
             p.ct_at_fence_ms = static_cast<uint64_t>(final_ct_ms);
+            // Timeline absolute ticks: swap_tick = when block was TAKEN, fence_tick = at fence.
+            // next_block.swap_tick MUST equal previous_block.fence_tick (never frames_emitted).
+            int64_t activation_frame = live_block_activation_.timeline_frame_index;
+            p.swap_tick = static_cast<uint64_t>(activation_frame);
+            p.fence_tick = static_cast<uint64_t>(live_block_activation_.block_fence_tick);
+            p.total_frames_emitted = static_cast<uint64_t>(
+                frame_idx > activation_frame ? frame_idx - activation_frame : 0);
+            int64_t expected = live_block_activation_.block_fence_tick - activation_frame;
+            p.truncated_by_fence = (static_cast<int64_t>(p.total_frames_emitted) < expected);
+            p.early_exhaustion = (final_ct_ms < 0);  // No content decoded
             em->EmitBlockFence(p);
           }
         };
-        callbacks.on_block_started = [this](const blockplan::FedBlock& block) {
+        callbacks.on_block_started = [this](const blockplan::FedBlock& block,
+                                            const blockplan::BlockActivationContext& ctx) {
+          // INV-EVIDENCE-SWAP-FENCE-MATCH: swap_tick(B) must equal fence_tick(A).
+          // live_block_activation_ still holds block A's context here (overwritten below).
+          if (live_block_activation_.block_fence_tick > 0 &&
+              ctx.timeline_frame_index != live_block_activation_.block_fence_tick) {
+            std::ostringstream oss;
+            oss << "[EVIDENCE] INV-EVIDENCE-SWAP-FENCE-MATCH VIOLATION"
+                << " block=" << block.block_id
+                << " swap_tick=" << ctx.timeline_frame_index
+                << " prev_fence_tick=" << live_block_activation_.block_fence_tick
+                << " drift=" << (ctx.timeline_frame_index - live_block_activation_.block_fence_tick);
+            Logger::Warn(oss.str());
+          }
+          live_block_activation_ = ctx;
           EmitBlockStarted(blockplan_session_.get(), block);
           if (auto em = blockplan_session_->evidence_emitter) {
             evidence::BlockStartPayload p;
             p.block_id = block.block_id;
-            p.actual_start_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
+            p.swap_tick = static_cast<uint64_t>(ctx.timeline_frame_index);
+            p.actual_start_utc_ms = ctx.utc_ms;
             em->EmitBlockStart(p);
           }
         };
-        callbacks.on_session_ended = [this](const std::string& reason) {
+        callbacks.on_session_ended = [this](const std::string& reason,
+                                             int64_t /*final_session_frame_index*/) {
           EmitSessionEnded(blockplan_session_.get(), reason);
           if (auto em = blockplan_session_->evidence_emitter) {
             evidence::ChannelTerminatedPayload p;
@@ -876,18 +911,24 @@ namespace retrovue
           int64_t now_ms = evidence::EvidenceEmitter::NowUtcMs();
 
           // Close outgoing segment with duration computed by AIR.
+          // Evidence uses asset-relative frames; block-relative math (ls.start_frame, frame_idx) unchanged.
           if (from_idx >= 0 && from_idx < static_cast<int32_t>(block.segments.size())) {
-            evidence::SegmentEndPayload se;
-            se.block_id = block.block_id;
-            se.event_id_ref = ls.event_id;
-            se.actual_start_utc_ms = ls.start_utc_ms;
-            se.actual_end_utc_ms = now_ms;
-            se.actual_start_frame = ls.start_frame;
-            se.actual_end_frame = frame_idx;
-            se.computed_duration_ms = now_ms - ls.start_utc_ms;
-            se.computed_duration_frames = frame_idx - ls.start_frame;
-            se.status = "AIRED";
-            em->EmitSegmentEnd(se);
+            int64_t seg_frames = frame_idx - ls.start_frame;
+            // Zero-frame terminals are illegal — skip emission if segment
+            // opened and closed on the same tick (no frames actually aired).
+            if (seg_frames > 0) {
+              evidence::SegmentEndPayload se;
+              se.block_id = block.block_id;
+              se.event_id_ref = ls.event_id;
+              se.actual_start_utc_ms = ls.start_utc_ms;
+              se.actual_end_utc_ms = now_ms;
+              se.asset_start_frame = ls.asset_start_frame;
+              se.asset_end_frame = ls.asset_start_frame + seg_frames - 1;  // inclusive end
+              se.computed_duration_ms = now_ms - ls.start_utc_ms;
+              se.computed_duration_frames = seg_frames;
+              se.status = "AIRED";
+              em->EmitSegmentEnd(se);
+            }
           }
 
           // Open incoming segment — capture start state for duration at close.
@@ -897,14 +938,29 @@ namespace retrovue
             ls.start_utc_ms = now_ms;
             ls.start_frame = frame_idx;
             ls.segment_index = to_idx;
+            // Asset-relative frame: decoder position within asset at TAKE.
+            ls.asset_start_frame = static_cast<int64_t>(std::round(
+                seg.asset_start_offset_ms * blockplan_session_->fps / 1000.0));
+
+            bool join_in_progress = false;
+            if (from_idx == -1 && to_idx == 0 && !block.segments.empty()) {
+              const int64_t offset_ms = block.segments[0].asset_start_offset_ms;
+              if (offset_ms > 0) {
+                join_in_progress = !blockplan_session_->first_segment_start_emitted;
+              }
+            }
+            if (from_idx == -1) {
+              blockplan_session_->first_segment_start_emitted = true;
+            }
 
             evidence::SegmentStartPayload ss;
             ss.block_id = block.block_id;
             ss.event_id = seg.event_id;
             ss.segment_index = to_idx;
             ss.actual_start_utc_ms = now_ms;
-            ss.actual_start_frame = frame_idx;
+            ss.asset_start_frame = ls.asset_start_frame;
             ss.scheduled_duration_ms = seg.segment_duration_ms;
+            ss.join_in_progress = join_in_progress;
             em->EmitSegmentStart(ss);
           }
         };

@@ -23,6 +23,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
+#include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/runtime/PlayoutInterface.h"
 #include "evidence/EvidenceEmitter.hpp"
 #include "evidence/EvidenceSpool.hpp"
@@ -167,10 +168,14 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
     struct LiveSegmentInfo {
       std::string event_id;
       int64_t start_utc_ms = 0;
-      int64_t start_frame = 0;
+      int64_t start_frame = 0;       // Block-relative (internal fence accounting)
+      int64_t asset_start_frame = 0; // Asset-relative (evidence output only)
       int32_t segment_index = -1;
     };
     LiveSegmentInfo live_segment;  // Currently-airing segment
+
+    // Only the first SEGMENT_START in session may carry join_in_progress=true.
+    bool first_segment_start_emitted = false;
   };
 
   // Convert proto BlockPlan to internal FedBlock type
@@ -188,6 +193,11 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
 
   std::mutex blockplan_mutex_;
   std::unique_ptr<BlockPlanSessionState> blockplan_session_;
+
+  // Evidence emission: activation context of the current live block.
+  // Stored at on_block_started, consumed at on_block_completed for fence evidence.
+  // Safe: blocks never overlap (single live block at a time).
+  blockplan::BlockActivationContext live_block_activation_{};
 };
 
 }  // namespace playout

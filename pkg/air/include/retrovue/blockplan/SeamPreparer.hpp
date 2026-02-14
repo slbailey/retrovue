@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -50,6 +51,15 @@ struct SeamResult {
   std::string block_id;      // For logging correlation
   int32_t segment_index = -1;
   SegmentType segment_type = SegmentType::kContent;  // Type of the prepared segment
+  // Identity: which parent block and segment index this result is for (for swap validation).
+  std::string parent_block_id;
+  int32_t parent_segment_index = -1;
+};
+
+// Lightweight identity for PeekSegmentResult (no ownership).
+struct SeamResultIdentity {
+  std::string parent_block_id;
+  int32_t parent_segment_index = -1;
 };
 
 // SeamPreparer — persistent worker thread for seam transitions.
@@ -74,6 +84,9 @@ class SeamPreparer {
   // Non-blocking result checks.
   bool HasSegmentResult() const;
   bool HasBlockResult() const;
+
+  // Peek segment result identity without consuming (for swap validation).
+  std::optional<SeamResultIdentity> PeekSegmentResult() const;
 
   // Move result out (ownership transfer).  Returns nullptr if no result.
   std::unique_ptr<SeamResult> TakeSegmentResult();

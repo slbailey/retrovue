@@ -172,13 +172,13 @@ TEST(VideoLookaheadBufferTest, BasicFillAndPop) {
 
   buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
 
-  // Wait for buffer to fill to target depth.
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
+  // Wait for buffer to fill to high water (2× target under hysteresis).
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= buf.HighWaterFrames(); },
                        std::chrono::milliseconds(500)));
 
   EXPECT_TRUE(buf.IsPrimed());
-  EXPECT_EQ(buf.DepthFrames(), 5);
-  EXPECT_GE(buf.TotalFramesPushed(), 5);
+  EXPECT_EQ(buf.DepthFrames(), buf.HighWaterFrames());
+  EXPECT_GE(buf.TotalFramesPushed(), buf.HighWaterFrames());
 
   // Pop one frame.
   VideoBufferFrame out;
@@ -238,54 +238,62 @@ TEST(VideoLookaheadBufferTest, ResetClearsEverything) {
 }
 
 // =============================================================================
-// VLB-004: Target depth enforcement
-// Fill thread should not exceed target_depth_frames.
+// VLB-004: High-water depth enforcement (INV-BUFFER-HYSTERESIS-001)
+// Fill thread should not exceed high_water_frames (2× target).
 // =============================================================================
 TEST(VideoLookaheadBufferTest, TargetDepthEnforcement) {
   VideoLookaheadBuffer buf(8);
   MockTickProducer mock(64, 48, 30.0, 1000);
   std::atomic<bool> stop{false};
 
+  int high_water = buf.HighWaterFrames();  // 2 × 8 = 16
+
   buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
 
-  // Wait for fill thread to stabilize.
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 8; },
+  // Wait for fill thread to reach high water.
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= high_water; },
                        std::chrono::milliseconds(500)));
 
-  // Buffer should not exceed target.
+  // Buffer should not exceed high water.
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  EXPECT_LE(buf.DepthFrames(), 8);
+  EXPECT_LE(buf.DepthFrames(), high_water);
 
   buf.StopFilling(false);
 }
 
 // =============================================================================
-// VLB-005: Fill thread refills after consumption
-// Pop frames and verify fill thread refills the gap.
+// VLB-005: Fill thread refills after consumption (INV-BUFFER-HYSTERESIS-001)
+// Pop frames and verify fill thread refills to high water.
 // =============================================================================
 TEST(VideoLookaheadBufferTest, FillThreadRefillsAfterPop) {
   VideoLookaheadBuffer buf(5);
   MockTickProducer mock(64, 48, 30.0, 1000);
   std::atomic<bool> stop{false};
 
+  int high_water = buf.HighWaterFrames();  // 2 × 5 = 10
+
   buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
 
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= high_water; },
                        std::chrono::milliseconds(500)));
 
-  // Pop 3 frames.
-  for (int i = 0; i < 3; i++) {
+  // Pop enough frames to drop below the low-water mark (target_depth_frames_).
+  // Hysteresis: the fill thread only wakes when depth <= low water (5),
+  // then fills to high water (10).
+  int target = buf.TargetDepthFrames();  // 5
+  int pop_count = high_water - target + 1;  // 10 - 5 + 1 = 6 → depth 4
+  for (int i = 0; i < pop_count; i++) {
     VideoBufferFrame out;
     ASSERT_TRUE(buf.TryPopFrame(out));
   }
 
-  EXPECT_EQ(buf.DepthFrames(), 2);
+  EXPECT_EQ(buf.DepthFrames(), high_water - pop_count);
 
-  // Wait for fill thread to refill.
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
+  // Wait for fill thread to refill to high water.
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= high_water; },
                        std::chrono::milliseconds(500)));
 
-  EXPECT_EQ(buf.DepthFrames(), 5);
+  EXPECT_EQ(buf.DepthFrames(), high_water);
 
   buf.StopFilling(false);
 }
