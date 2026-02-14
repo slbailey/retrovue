@@ -141,6 +141,11 @@ class VideoLookaheadBuffer {
   // or rises above HIGH_WATER (disable).
   void SetAudioBoost(bool enable);
 
+  // INV-AUDIO-PREROLL-ISOLATION-001: Buffer context label for log clarity.
+  // Set before StartFilling to identify LIVE vs PREVIEW vs SEGMENT_PREROLL.
+  void SetBufferLabel(const char* label) { buffer_label_ = label; }
+  const std::string& BufferLabel() const { return buffer_label_; }
+
   // --- Bootstrap Phase (INV-AUDIO-PRIME-003) ---
 
   // Fill-phase concept for session bootstrap.
@@ -156,7 +161,8 @@ class VideoLookaheadBuffer {
   // min_audio_ms: audio depth threshold that ends bootstrap parking.
   void EnterBootstrap(int bootstrap_target_frames,
                       int bootstrap_cap_frames,
-                      int min_audio_ms);
+                      int min_audio_ms,
+                      int64_t bootstrap_epoch_ms);
 
   // Exit bootstrap phase, restoring steady-state fill policy.
   void EndBootstrap();
@@ -188,11 +194,15 @@ class VideoLookaheadBuffer {
   int low_water_frames_;
   std::atomic<bool> audio_boost_{false};
 
+  // INV-AUDIO-PREROLL-ISOLATION-001: Buffer context label for diagnostics.
+  std::string buffer_label_{"UNKNOWN"};
+
   // INV-AUDIO-PRIME-003: Bootstrap fill phase state.
   std::atomic<int> fill_phase_{static_cast<int>(FillPhase::kSteady)};
   int bootstrap_target_frames_ = 0;
   int bootstrap_cap_frames_ = 60;
   int bootstrap_min_audio_ms_ = 500;
+  int64_t bootstrap_epoch_ms_ = 0;
 
   // INV-TICK-GUARANTEED-OUTPUT: Audio burst-fill threshold.
   // When audio_buffer_->DepthMs() < this, the fill thread proceeds past

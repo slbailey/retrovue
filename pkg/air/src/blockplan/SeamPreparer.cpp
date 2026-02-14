@@ -9,11 +9,15 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <sstream>
 
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
+#include "retrovue/util/Logger.hpp"
 
 namespace retrovue::blockplan {
+
+using retrovue::util::Logger;
 
 SeamPreparer::SeamPreparer() {
   worker_thread_ = std::thread(&SeamPreparer::WorkerLoop, this);
@@ -208,24 +212,39 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   // Suppress AUDIO_PRIME_WARN for PAD segments: PAD has no decoder and no
   // audio to prime — wanted_ms is meaningless and the warning is misleading.
   if (!prime_result.met_threshold && req.min_audio_prime_ms > 0 && !is_pad) {
-    std::cerr << "[SeamPreparer] AUDIO_PRIME_WARN:"
-              << " type=" << (req.type == SeamRequestType::kSegment ? "segment" : "block")
-              << " block=" << req.block.block_id
-              << " segment_index=" << req.segment_index
-              << " segment_type=" << SegmentTypeName(seg_type)
-              << " wanted_ms=" << req.min_audio_prime_ms
-              << " got_ms=" << prime_result.actual_depth_ms
-              << std::endl;
+    std::ostringstream oss;
+    oss << "[SeamPreparer] AUDIO_PRIME_WARN:"
+        << " type=" << (req.type == SeamRequestType::kSegment ? "segment" : "block")
+        << " block=" << req.block.block_id
+        << " segment_index=" << req.segment_index
+        << " segment_type=" << SegmentTypeName(seg_type)
+        << " wanted_ms=" << req.min_audio_prime_ms
+        << " got_ms=" << prime_result.actual_depth_ms;
+    Logger::Warn(oss.str());
   }
 
-  std::cout << "[SeamPreparer] PREP_COMPLETE"
-            << " type=" << (req.type == SeamRequestType::kSegment ? "segment" : "block")
-            << " block=" << req.block.block_id
-            << " segment_index=" << req.segment_index
-            << " segment_type=" << SegmentTypeName(seg_type)
-            << " decoder_used=" << (source->HasDecoder() ? "true" : "false")
-            << " audio_depth_ms=" << prime_result.actual_depth_ms
-            << std::endl;
+  if (is_pad) {
+    // PAD segments are synthetic — no decoder, no real audio/video.
+    // Emit a distinct log that cannot be confused with decoder activity.
+    std::ostringstream oss;
+    oss << "[PadSource] PREROLL"
+        << " block_id=" << req.block.block_id
+        << " segment_index=" << req.segment_index
+        << " seam_frame=" << req.seam_frame
+        << " audio_synthetic=Y"
+        << " video_synthetic=Y";
+    Logger::Info(oss.str());
+  } else {
+    std::ostringstream oss;
+    oss << "[SeamPreparer] PREP_COMPLETE"
+        << " type=" << (req.type == SeamRequestType::kSegment ? "segment" : "block")
+        << " block=" << req.block.block_id
+        << " segment_index=" << req.segment_index
+        << " segment_type=" << SegmentTypeName(seg_type)
+        << " decoder_used=" << (source->HasDecoder() ? "true" : "false")
+        << " audio_depth_ms=" << prime_result.actual_depth_ms;
+    Logger::Info(oss.str());
+  }
 
   auto result = std::make_unique<SeamResult>();
   result->producer = std::move(source);

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -30,6 +31,7 @@
 #include "retrovue/runtime/PlayoutEngine.h"
 #include "retrovue/runtime/ProgramFormat.h"
 #include "retrovue/telemetry/MetricsExporter.h"
+#include "retrovue/util/Logger.hpp"
 
 // Phase 8: Map C++ ResultCode enum to proto ResultCode enum
 namespace {
@@ -63,6 +65,8 @@ namespace retrovue
   namespace playout
   {
 
+    using retrovue::util::Logger;
+
     namespace
     {
       constexpr char kApiVersion[] = "1.0.0";
@@ -81,13 +85,14 @@ namespace retrovue
       [[noreturn]] void EnforceBlockPlanQuarantine(
           const char* rpc_name, int32_t channel_id) {
         legacy_path_attempted_total.fetch_add(1, std::memory_order_relaxed);
-        std::cerr << "[PlayoutControlImpl] INV-BLOCKPLAN-QUARANTINE: " << rpc_name
-                  << " called while BlockPlan session is active"
-                  << " (channel_id=" << channel_id << ")"
-                  << " legacy_path_attempted_total="
-                  << legacy_path_attempted_total.load(std::memory_order_relaxed)
-                  << " — aborting to prevent dual-path execution"
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PlayoutControlImpl] INV-BLOCKPLAN-QUARANTINE: " << rpc_name
+              << " called while BlockPlan session is active"
+              << " (channel_id=" << channel_id << ")"
+              << " legacy_path_attempted_total="
+              << legacy_path_attempted_total.load(std::memory_order_relaxed)
+              << " — aborting to prevent dual-path execution";
+          Logger::Error(oss.str()); }
         legacy_path_aborted_total.fetch_add(1, std::memory_order_relaxed);
         assert(false && "INV-BLOCKPLAN-QUARANTINE: legacy RPC during active BlockPlan session");
         std::abort();  // Release builds: assert is compiled out, abort is unconditional.
@@ -102,17 +107,19 @@ namespace retrovue
           control_surface_only_(control_surface_only),
           forensic_dump_dir_(forensic_dump_dir)
     {
-      std::cout << "[PlayoutControlImpl] Service initialized (API version: " << kApiVersion
-                << ", control_surface_only=" << control_surface_only_;
-      if (!forensic_dump_dir_.empty()) {
-        std::cout << ", forensic_dump_dir=" << forensic_dump_dir_;
-      }
-      std::cout << ")" << std::endl;
+      { std::ostringstream oss;
+        oss << "[PlayoutControlImpl] Service initialized (API version: " << kApiVersion
+            << ", control_surface_only=" << control_surface_only_;
+        if (!forensic_dump_dir_.empty()) {
+          oss << ", forensic_dump_dir=" << forensic_dump_dir_;
+        }
+        oss << ")";
+        Logger::Info(oss.str()); }
     }
 
     PlayoutControlImpl::~PlayoutControlImpl()
     {
-      std::cout << "[PlayoutControlImpl] Service shutting down" << std::endl;
+      Logger::Info("[PlayoutControlImpl] Service shutting down");
       std::lock_guard<std::mutex> lock(stream_mutex_);
       for (auto& [channel_id, state] : stream_states_)
       {
@@ -165,6 +172,7 @@ namespace retrovue
         s.asset_start_offset_ms = seg.asset_start_offset_ms();
         s.segment_duration_ms = seg.segment_duration_ms();
         s.segment_type = static_cast<blockplan::SegmentType>(seg.segment_type());
+        s.event_id = seg.event_id();
         block.segments.push_back(s);
       }
       return block;
@@ -194,9 +202,11 @@ namespace retrovue
         }
       }
 
-      std::cout << "[StartChannel] Request received: channel_id=" << channel_id
-                << ", plan_handle=" << plan_handle << ", port=" << port
-                << ", program_format_json=" << program_format_json << std::endl;
+      { std::ostringstream oss;
+        oss << "[StartChannel] Request received: channel_id=" << channel_id
+            << ", plan_handle=" << plan_handle << ", port=" << port
+            << ", program_format_json=" << program_format_json;
+        Logger::Info(oss.str()); }
 
       auto result = interface_->StartChannel(channel_id, plan_handle, port, uds_path, program_format_json);
 
@@ -213,7 +223,9 @@ namespace retrovue
         return grpc::Status(code, result.message);
       }
 
-      std::cout << "[StartChannel] Channel " << channel_id << " started successfully" << std::endl;
+      { std::ostringstream oss;
+        oss << "[StartChannel] Channel " << channel_id << " started successfully";
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -224,8 +236,10 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const std::string &plan_handle = request->plan_handle();
 
-      std::cout << "[UpdatePlan] Request received: channel_id=" << channel_id
-                << ", plan_handle=" << plan_handle << std::endl;
+      { std::ostringstream oss;
+        oss << "[UpdatePlan] Request received: channel_id=" << channel_id
+            << ", plan_handle=" << plan_handle;
+        Logger::Info(oss.str()); }
 
       auto result = interface_->UpdatePlan(channel_id, plan_handle);
 
@@ -240,7 +254,9 @@ namespace retrovue
         return grpc::Status(code, result.message);
       }
 
-      std::cout << "[UpdatePlan] Channel " << channel_id << " plan updated successfully" << std::endl;
+      { std::ostringstream oss;
+        oss << "[UpdatePlan] Channel " << channel_id << " plan updated successfully";
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -249,7 +265,9 @@ namespace retrovue
                                                  StopChannelResponse *response)
     {
       const int32_t channel_id = request->channel_id();
-      std::cout << "[StopChannel] Request received: channel_id=" << channel_id << std::endl;
+      { std::ostringstream oss;
+        oss << "[StopChannel] Request received: channel_id=" << channel_id;
+        Logger::Info(oss.str()); }
 
       // Phase 9.0: StopChannel implies detach (OutputBus::DetachSink is called by engine)
       {
@@ -270,7 +288,9 @@ namespace retrovue
         return grpc::Status(code, result.message);
       }
 
-      std::cout << "[StopChannel] Channel " << channel_id << " stopped successfully" << std::endl;
+      { std::ostringstream oss;
+        oss << "[StopChannel] Channel " << channel_id << " stopped successfully";
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -278,9 +298,11 @@ namespace retrovue
                                                 const ApiVersionRequest *request,
                                                 ApiVersion *response)
     {
-      std::cout << "[GetVersion] Request received" << std::endl;
+      Logger::Info("[GetVersion] Request received");
       response->set_version(kApiVersion);
-      std::cout << "[GetVersion] Returning version: " << kApiVersion << std::endl;
+      { std::ostringstream oss;
+        oss << "[GetVersion] Returning version: " << kApiVersion;
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -310,15 +332,19 @@ namespace retrovue
         response->set_success(false);
         response->set_message("INV-FRAME-003 violation: fps_denominator must be > 0");
         response->set_result_code(RESULT_CODE_PROTOCOL_VIOLATION);
-        std::cout << "[LoadPreview] Rejected: fps_denominator=" << fps_denominator << std::endl;
+        { std::ostringstream oss;
+          oss << "[LoadPreview] Rejected: fps_denominator=" << fps_denominator;
+          Logger::Info(oss.str()); }
         return grpc::Status::OK;
       }
 
-      std::cout << "[LoadPreview] Request received: channel_id=" << channel_id
-                << ", asset_path=" << asset_path
-                << ", start_frame=" << start_frame
-                << ", frame_count=" << frame_count
-                << ", fps=" << fps_numerator << "/" << fps_denominator << std::endl;
+      { std::ostringstream oss;
+        oss << "[LoadPreview] Request received: channel_id=" << channel_id
+            << ", asset_path=" << asset_path
+            << ", start_frame=" << start_frame
+            << ", frame_count=" << frame_count
+            << ", fps=" << fps_numerator << "/" << fps_denominator;
+        Logger::Info(oss.str()); }
 
       auto result = interface_->LoadPreview(channel_id, asset_path, start_frame, frame_count, fps_numerator, fps_denominator);
 
@@ -328,14 +354,18 @@ namespace retrovue
       response->set_result_code(MapResultCode(result.result_code));  // Phase 8: Typed result
 
       if (!result.success) {
-        std::cout << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message
-                  << " (result_code=" << static_cast<int>(result.result_code) << ")" << std::endl;
+        { std::ostringstream oss;
+          oss << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message
+              << " (result_code=" << static_cast<int>(result.result_code) << ")";
+          Logger::Info(oss.str()); }
         return grpc::Status::OK;
       }
 
-      std::cout << "[LoadPreview] Channel " << channel_id
-                << " preview loaded successfully (shadow_decode_started="
-                << std::boolalpha << result.shadow_decode_started << ")" << std::endl;
+      { std::ostringstream oss;
+        oss << "[LoadPreview] Channel " << channel_id
+            << " preview loaded successfully (shadow_decode_started="
+            << std::boolalpha << result.shadow_decode_started << ")";
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -356,7 +386,9 @@ namespace retrovue
         }
       }
 
-      std::cout << "[SwitchToLive] Request received: channel_id=" << channel_id << std::endl;
+      { std::ostringstream oss;
+        oss << "[SwitchToLive] Request received: channel_id=" << channel_id;
+        Logger::Info(oss.str()); }
 
       auto result = interface_->SwitchToLive(channel_id, target_boundary_time_ms, issued_at_time_ms);
 
@@ -373,8 +405,10 @@ namespace retrovue
       }
 
       if (!result.success) {
-        std::cout << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
-                  << static_cast<int>(result.result_code) << ")" << std::endl;
+        { std::ostringstream oss;
+          oss << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
+              << static_cast<int>(result.result_code) << ")";
+          Logger::Info(oss.str()); }
         return grpc::Status::OK;
       }
 
@@ -385,9 +419,11 @@ namespace retrovue
         TryAttachSinkForChannel(channel_id);
       }
 
-      std::cout << "[SwitchToLive] Channel " << channel_id
-                << " switch " << (result.success ? "succeeded" : "failed")
-                << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous << std::endl;
+      { std::ostringstream oss;
+        oss << "[SwitchToLive] Channel " << channel_id
+            << " switch " << (result.success ? "succeeded" : "failed")
+            << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous;
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -411,8 +447,12 @@ namespace retrovue
 
       auto program_format_opt = interface_->GetProgramFormat(channel_id);
       if (!program_format_opt) {
-        std::cerr << "[TryAttachSinkForChannel] Failed to get ProgramFormat for channel "
-                  << channel_id << std::endl;
+        // ProgramFormat is set by StartChannel; not yet available is normal
+        // during early attach attempts before the session is fully initialized.
+        { std::ostringstream oss;
+          oss << "[TryAttachSinkForChannel] ProgramFormat not yet available"
+              << " (channel=" << channel_id << ")";
+          Logger::Info(oss.str()); }
         return;
       }
 
@@ -442,14 +482,19 @@ namespace retrovue
 
       auto attach_result = interface_->AttachOutputSink(channel_id, std::move(sink));
       if (attach_result.success) {
-        std::cout << "[TryAttachSinkForChannel] MpegTSOutputSink attached for channel "
-                  << channel_id << std::endl;
+        { std::ostringstream oss;
+          oss << "[TryAttachSinkForChannel] MpegTSOutputSink attached for channel "
+              << channel_id;
+          Logger::Info(oss.str()); }
         interface_->ConnectRendererToOutputBus(channel_id);
-        std::cout << "[TryAttachSinkForChannel] INV-FINALIZE-LIVE: output wired for channel "
-                  << channel_id << std::endl;
+        { std::ostringstream oss;
+          oss << "[TryAttachSinkForChannel] INV-FINALIZE-LIVE: output wired for channel "
+              << channel_id;
+          Logger::Info(oss.str()); }
       } else {
-        std::cerr << "[TryAttachSinkForChannel] Failed to attach: " << attach_result.message
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[TryAttachSinkForChannel] Failed to attach: " << attach_result.message;
+          Logger::Error(oss.str()); }
       }
     }
 
@@ -469,7 +514,9 @@ namespace retrovue
         // Disconnect program output from OutputBus first
         interface_->DisconnectRendererFromOutputBus(channel_id);
         interface_->DetachOutputSink(channel_id);
-        std::cout << "[DetachStream] OutputSink detached for channel " << channel_id << std::endl;
+        { std::ostringstream oss;
+          oss << "[DetachStream] OutputSink detached for channel " << channel_id;
+          Logger::Info(oss.str()); }
       }
 
       // Stop HelloLoop thread if running
@@ -489,7 +536,9 @@ namespace retrovue
       }
 
       stream_states_.erase(it);
-      std::cout << "[DetachStream] Stream detached for channel " << channel_id << std::endl;
+      { std::ostringstream oss;
+        oss << "[DetachStream] Stream detached for channel " << channel_id;
+        Logger::Info(oss.str()); }
     }
 
     grpc::Status PlayoutControlImpl::AttachStream(grpc::ServerContext* context,
@@ -502,9 +551,11 @@ namespace retrovue
       const std::string endpoint = request->endpoint();
       const bool replace_existing = request->replace_existing();
 
-      std::cout << "[AttachStream] Request received: channel_id=" << channel_id
-                << ", transport=" << static_cast<int>(transport)
-                << ", endpoint=" << endpoint << std::endl;
+      { std::ostringstream oss;
+        oss << "[AttachStream] Request received: channel_id=" << channel_id
+            << ", transport=" << static_cast<int>(transport)
+            << ", endpoint=" << endpoint;
+        Logger::Info(oss.str()); }
 
 #if defined(__linux__) || defined(__APPLE__)
       if (transport != StreamTransport::STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET)
@@ -580,7 +631,9 @@ namespace retrovue
       response->set_message("Attached");
       response->set_negotiated_transport(StreamTransport::STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET);
       response->set_negotiated_endpoint(endpoint);
-      std::cout << "[AttachStream] Channel " << channel_id << " attached to " << endpoint << std::endl;
+      { std::ostringstream oss;
+        oss << "[AttachStream] Channel " << channel_id << " attached to " << endpoint;
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
 #else
       (void)endpoint;
@@ -598,7 +651,9 @@ namespace retrovue
       (void)context;
       const int32_t channel_id = request->channel_id();
       const bool force = request->force();
-      std::cout << "[DetachStream] Request received: channel_id=" << channel_id << ", force=" << force << std::endl;
+      { std::ostringstream oss;
+        oss << "[DetachStream] Request received: channel_id=" << channel_id << ", force=" << force;
+        Logger::Info(oss.str()); }
 
       std::lock_guard<std::mutex> lock(stream_mutex_);
       auto it = stream_states_.find(channel_id);
@@ -626,10 +681,11 @@ namespace retrovue
       (void)context;
       const int32_t channel_id = request->channel_id();
 
-      std::cout << "[StartBlockPlanSession] Request: channel_id=" << channel_id
-                << ", block_a=" << request->block_a().block_id()
-                << ", block_b=" << request->block_b().block_id()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[StartBlockPlanSession] Request: channel_id=" << channel_id
+            << ", block_a=" << request->block_a().block_id()
+            << ", block_b=" << request->block_b().block_id();
+        Logger::Info(oss.str()); }
 
       std::lock_guard<std::mutex> lock(blockplan_mutex_);
 
@@ -699,19 +755,50 @@ namespace retrovue
             blockplan_session_->fps = 30.0;  // Fallback
           }
         } else {
-          std::cerr << "[StartBlockPlanSession] Failed to parse program_format_json" << std::endl;
+          Logger::Error("[StartBlockPlanSession] Failed to parse program_format_json");
         }
       }
 
       // INV-JIP-ANCHOR-001: Propagate Core-authoritative join time to engine.
       blockplan_session_->join_utc_ms = request->join_utc_ms();
 
+      // Evidence pipeline: instantiate if evidence_endpoint is provided.
+      {
+        std::string evidence_endpoint = request->evidence_endpoint();
+        if (!evidence_endpoint.empty()) {
+          // Use channel_id_str for as-run paths (e.g. cheers-24-7); fallback to numeric for legacy.
+          std::string ch_str = request->channel_id_str().empty()
+                                  ? std::to_string(channel_id)
+                                  : request->channel_id_str();
+          auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch()).count();
+          std::string session_id = "PS-" + ch_str + "-" + std::to_string(now_ms);
+
+          auto spool = std::make_shared<evidence::EvidenceSpool>(ch_str, session_id);
+          auto client = std::make_shared<evidence::GrpcEvidenceClient>(
+              evidence_endpoint, ch_str, session_id, spool);
+          auto emitter = std::make_shared<evidence::EvidenceEmitter>(
+              ch_str, session_id, spool, client);
+
+          blockplan_session_->evidence_spool = spool;
+          blockplan_session_->evidence_client = client;
+          blockplan_session_->evidence_emitter = emitter;
+
+          { std::ostringstream oss;
+            oss << "[StartBlockPlanSession] Evidence pipeline enabled: endpoint="
+                << evidence_endpoint << " session_id=" << session_id;
+            Logger::Info(oss.str()); }
+        }
+      }
+
       // Configurable queue depth: default 2 if not specified or 0.
       {
         int requested_depth = request->max_queue_depth();
         blockplan_session_->max_queue_depth = (requested_depth >= 2) ? requested_depth : 2;
-        std::cout << "[StartBlockPlanSession] max_queue_depth="
-                  << blockplan_session_->max_queue_depth << std::endl;
+        { std::ostringstream oss;
+          oss << "[StartBlockPlanSession] max_queue_depth="
+              << blockplan_session_->max_queue_depth;
+          Logger::Info(oss.str()); }
       }
 
       // Seed the block queue with both blocks
@@ -721,26 +808,105 @@ namespace retrovue
         blockplan_session_->block_queue.push_back(ProtoToBlock(block_b));
       }
 
-      std::cout << "[StartBlockPlanSession] Session started for channel " << channel_id
-                << " with blocks: " << block_a.block_id() << ", " << block_b.block_id()
-                << ", fd=" << blockplan_session_->fd
-                << ", format=" << blockplan_session_->width << "x" << blockplan_session_->height
-                << "@" << blockplan_session_->fps << "fps"
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[StartBlockPlanSession] Session started for channel " << channel_id
+            << " with blocks: " << block_a.block_id() << ", " << block_b.block_id()
+            << ", fd=" << blockplan_session_->fd
+            << ", format=" << blockplan_session_->width << "x" << blockplan_session_->height
+            << "@" << blockplan_session_->fps << "fps";
+        Logger::Info(oss.str()); }
 
       // ========================================================================
       // ENGINE: ContinuousOutput via PipelineManager
       // ========================================================================
       {
         blockplan::PipelineManager::Callbacks callbacks;
-        callbacks.on_block_completed = [this](const blockplan::FedBlock& block, int64_t final_ct_ms) {
+        callbacks.on_block_completed = [this](const blockplan::FedBlock& block,
+                                               int64_t final_ct_ms, int64_t frame_idx) {
           EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
+          if (auto em = blockplan_session_->evidence_emitter) {
+            // Close the final segment of this block before emitting fence.
+            auto& ls = blockplan_session_->live_segment;
+            if (ls.segment_index >= 0) {
+              int64_t now_ms = evidence::EvidenceEmitter::NowUtcMs();
+              evidence::SegmentEndPayload se;
+              se.block_id = block.block_id;
+              se.event_id_ref = ls.event_id;
+              se.actual_start_utc_ms = ls.start_utc_ms;
+              se.actual_end_utc_ms = now_ms;
+              se.actual_start_frame = ls.start_frame;
+              se.actual_end_frame = frame_idx;
+              se.computed_duration_ms = now_ms - ls.start_utc_ms;
+              se.computed_duration_frames = frame_idx - ls.start_frame;
+              se.status = "AIRED";
+              em->EmitSegmentEnd(se);
+              ls.segment_index = -1;  // Clear — prevents duplicate close
+            }
+            evidence::BlockFencePayload p;
+            p.block_id = block.block_id;
+            p.actual_end_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
+            p.ct_at_fence_ms = static_cast<uint64_t>(final_ct_ms);
+            em->EmitBlockFence(p);
+          }
         };
         callbacks.on_block_started = [this](const blockplan::FedBlock& block) {
           EmitBlockStarted(blockplan_session_.get(), block);
+          if (auto em = blockplan_session_->evidence_emitter) {
+            evidence::BlockStartPayload p;
+            p.block_id = block.block_id;
+            p.actual_start_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
+            em->EmitBlockStart(p);
+          }
         };
         callbacks.on_session_ended = [this](const std::string& reason) {
           EmitSessionEnded(blockplan_session_.get(), reason);
+          if (auto em = blockplan_session_->evidence_emitter) {
+            evidence::ChannelTerminatedPayload p;
+            p.termination_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
+            p.reason = reason;
+            em->EmitChannelTerminated(p);
+          }
+        };
+        callbacks.on_segment_start = [this](int32_t from_idx, int32_t to_idx,
+                                             const blockplan::FedBlock& block,
+                                             int64_t frame_idx) {
+          auto em = blockplan_session_->evidence_emitter;
+          if (!em) return;
+          auto& ls = blockplan_session_->live_segment;
+          int64_t now_ms = evidence::EvidenceEmitter::NowUtcMs();
+
+          // Close outgoing segment with duration computed by AIR.
+          if (from_idx >= 0 && from_idx < static_cast<int32_t>(block.segments.size())) {
+            evidence::SegmentEndPayload se;
+            se.block_id = block.block_id;
+            se.event_id_ref = ls.event_id;
+            se.actual_start_utc_ms = ls.start_utc_ms;
+            se.actual_end_utc_ms = now_ms;
+            se.actual_start_frame = ls.start_frame;
+            se.actual_end_frame = frame_idx;
+            se.computed_duration_ms = now_ms - ls.start_utc_ms;
+            se.computed_duration_frames = frame_idx - ls.start_frame;
+            se.status = "AIRED";
+            em->EmitSegmentEnd(se);
+          }
+
+          // Open incoming segment — capture start state for duration at close.
+          if (to_idx >= 0 && to_idx < static_cast<int32_t>(block.segments.size())) {
+            const auto& seg = block.segments[to_idx];
+            ls.event_id = seg.event_id;
+            ls.start_utc_ms = now_ms;
+            ls.start_frame = frame_idx;
+            ls.segment_index = to_idx;
+
+            evidence::SegmentStartPayload ss;
+            ss.block_id = block.block_id;
+            ss.event_id = seg.event_id;
+            ss.segment_index = to_idx;
+            ss.actual_start_utc_ms = now_ms;
+            ss.actual_start_frame = frame_idx;
+            ss.scheduled_duration_ms = seg.segment_duration_ms;
+            em->EmitSegmentStart(ss);
+          }
         };
 
         blockplan_session_->engine = std::make_unique<blockplan::PipelineManager>(
@@ -773,9 +939,10 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const auto& block = request->block();
 
-      std::cout << "[FeedBlockPlan] Request: channel_id=" << channel_id
-                << ", block=" << block.block_id()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[FeedBlockPlan] Request: channel_id=" << channel_id
+            << ", block=" << block.block_id();
+        Logger::Info(oss.str()); }
 
       std::lock_guard<std::mutex> lock(blockplan_mutex_);
 
@@ -813,10 +980,11 @@ namespace retrovue
         blockplan_session_->queue_cv.notify_one();
       }
 
-      std::cout << "[FeedBlockPlan] Fed block " << block.block_id()
-                << " (total fed: " << blockplan_session_->blocks_fed << ")"
-                << (queue_full ? " [QUEUE_FULL]" : "")
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[FeedBlockPlan] Fed block " << block.block_id()
+            << " (total fed: " << blockplan_session_->blocks_fed << ")"
+            << (queue_full ? " [QUEUE_FULL]" : "");
+        Logger::Info(oss.str()); }
 
       response->set_success(!queue_full);
       response->set_message(queue_full ? "Queue full" : "Block fed");
@@ -834,9 +1002,10 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const std::string& reason = request->reason();
 
-      std::cout << "[StopBlockPlanSession] Request: channel_id=" << channel_id
-                << ", reason=" << reason
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[StopBlockPlanSession] Request: channel_id=" << channel_id
+            << ", reason=" << reason;
+        Logger::Info(oss.str()); }
 
       std::lock_guard<std::mutex> lock(blockplan_mutex_);
 
@@ -859,16 +1028,28 @@ namespace retrovue
         blockplan_session_->engine.reset();
       }
 
+      // Evidence: emit ChannelTerminated and tear down (emitter → client → spool).
+      if (auto em = blockplan_session_->evidence_emitter) {
+        evidence::ChannelTerminatedPayload p;
+        p.termination_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
+        p.reason = reason;
+        em->EmitChannelTerminated(p);
+      }
+      blockplan_session_->evidence_emitter.reset();
+      blockplan_session_->evidence_client.reset();
+      blockplan_session_->evidence_spool.reset();
+
       int64_t final_ct = blockplan_session_->final_ct_ms;
       int32_t blocks_executed = blockplan_session_->blocks_executed;
 
       blockplan_session_->active = false;
       blockplan_session_.reset();
 
-      std::cout << "[StopBlockPlanSession] Session stopped: reason=" << reason
-                << ", final_ct=" << final_ct
-                << ", blocks_executed=" << blocks_executed
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[StopBlockPlanSession] Session stopped: reason=" << reason
+            << ", final_ct=" << final_ct
+            << ", blocks_executed=" << blocks_executed;
+        Logger::Info(oss.str()); }
 
       response->set_success(true);
       response->set_message("Session stopped");
@@ -888,16 +1069,20 @@ namespace retrovue
     {
       const int32_t channel_id = request->channel_id();
 
-      std::cout << "[SubscribeBlockEvents] Subscriber connected for channel "
-                << channel_id << std::endl;
+      { std::ostringstream oss;
+        oss << "[SubscribeBlockEvents] Subscriber connected for channel "
+            << channel_id;
+        Logger::Info(oss.str()); }
 
       // Add subscriber to session
       {
         std::lock_guard<std::mutex> lock(blockplan_mutex_);
         if (!blockplan_session_ || !blockplan_session_->active ||
             blockplan_session_->channel_id != channel_id) {
-          std::cout << "[SubscribeBlockEvents] No active session for channel "
-                    << channel_id << std::endl;
+          { std::ostringstream oss;
+            oss << "[SubscribeBlockEvents] No active session for channel "
+                << channel_id;
+            Logger::Info(oss.str()); }
           return grpc::Status(grpc::StatusCode::NOT_FOUND,
                               "No active BlockPlan session for channel");
         }
@@ -929,8 +1114,10 @@ namespace retrovue
         }
       }
 
-      std::cout << "[SubscribeBlockEvents] Subscriber disconnected for channel "
-                << channel_id << std::endl;
+      { std::ostringstream oss;
+        oss << "[SubscribeBlockEvents] Subscriber disconnected for channel "
+            << channel_id;
+        Logger::Info(oss.str()); }
       return grpc::Status::OK;
     }
 
@@ -951,10 +1138,11 @@ namespace retrovue
       completed->set_final_ct_ms(final_ct_ms);
       completed->set_blocks_executed_total(state->blocks_executed);
 
-      std::cout << "[EmitBlockCompleted] block_id=" << block.block_id
-                << ", blocks_executed=" << state->blocks_executed
-                << ", subscribers=" << state->event_subscribers.size()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[EmitBlockCompleted] block_id=" << block.block_id
+            << ", blocks_executed=" << state->blocks_executed
+            << ", subscribers=" << state->event_subscribers.size();
+        Logger::Info(oss.str()); }
 
       // Send to all subscribers (remove failed ones)
       std::vector<grpc::ServerWriter<BlockEvent>*> failed;
@@ -985,9 +1173,10 @@ namespace retrovue
       started->set_block_start_utc_ms(block.start_utc_ms);
       started->set_block_end_utc_ms(block.end_utc_ms);
 
-      std::cout << "[EmitBlockStarted] block_id=" << block.block_id
-                << ", subscribers=" << state->event_subscribers.size()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[EmitBlockStarted] block_id=" << block.block_id
+            << ", subscribers=" << state->event_subscribers.size();
+        Logger::Info(oss.str()); }
 
       // Send to all subscribers (remove failed ones)
       std::vector<grpc::ServerWriter<BlockEvent>*> failed;
@@ -1018,10 +1207,11 @@ namespace retrovue
       ended->set_final_ct_ms(state->final_ct_ms);
       ended->set_blocks_executed_total(state->blocks_executed);
 
-      std::cout << "[EmitSessionEnded] reason=" << reason
-                << ", blocks_executed=" << state->blocks_executed
-                << ", subscribers=" << state->event_subscribers.size()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[EmitSessionEnded] reason=" << reason
+            << ", blocks_executed=" << state->blocks_executed
+            << ", subscribers=" << state->event_subscribers.size();
+        Logger::Info(oss.str()); }
 
       // Send to all subscribers
       for (auto* writer : state->event_subscribers) {
