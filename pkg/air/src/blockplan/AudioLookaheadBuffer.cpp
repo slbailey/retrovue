@@ -10,6 +10,9 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <sstream>
+
+#include "retrovue/util/Logger.hpp"
 
 namespace {
 int64_t boot_mono_ms() {
@@ -20,6 +23,7 @@ int64_t boot_mono_ms() {
 }  // namespace
 
 namespace retrovue::blockplan {
+using retrovue::util::Logger;
 
 AudioLookaheadBuffer::AudioLookaheadBuffer(int target_depth_ms,
                                            int sample_rate,
@@ -39,10 +43,12 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
   if (frame.nb_samples <= 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
   if (expected_generation != 0 && expected_generation != generation_) {
-    std::cout << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
-              << "ms nb_samples=" << frame.nb_samples
-              << " expected_gen=" << expected_generation
-              << " current_gen=" << generation_ << std::endl;
+    { std::ostringstream oss;
+      oss << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
+          << "ms nb_samples=" << frame.nb_samples
+          << " expected_gen=" << expected_generation
+          << " current_gen=" << generation_;
+      Logger::Warn(oss.str()); }
     return;
   }
   total_samples_pushed_ += frame.nb_samples;
@@ -56,10 +62,12 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
   if (frame.nb_samples <= 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
   if (expected_generation != 0 && expected_generation != generation_) {
-    std::cout << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
-              << "ms nb_samples=" << frame.nb_samples
-              << " expected_gen=" << expected_generation
-              << " current_gen=" << generation_ << std::endl;
+    { std::ostringstream oss;
+      oss << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
+          << "ms nb_samples=" << frame.nb_samples
+          << " expected_gen=" << expected_generation
+          << " current_gen=" << generation_;
+      Logger::Warn(oss.str()); }
     return;
   }
   total_samples_pushed_ += frame.nb_samples;
@@ -191,9 +199,11 @@ void AudioLookaheadBuffer::Reset() {
   total_samples_popped_ = 0;
   underflow_count_ = 0;
   primed_ = false;
-  std::cout << "[AudioBuffer] RESET T+" << boot_mono_ms()
-            << "ms old_depth_ms=" << old_depth_ms
-            << " new_gen=" << generation_ << std::endl;
+  { std::ostringstream oss;
+    oss << "[AudioBuffer] RESET T+" << boot_mono_ms()
+        << "ms old_depth_ms=" << old_depth_ms
+        << " new_gen=" << generation_;
+    Logger::Info(oss.str()); }
 }
 
 uint64_t AudioLookaheadBuffer::CurrentGeneration() const {

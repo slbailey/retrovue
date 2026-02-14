@@ -119,6 +119,44 @@ target_include_directories(playout_proto
     "${PROTO_GEN_DIR}"
 )
 
+# ---- Proto: execution_evidence_v1.proto (AIR → Core evidence stream) ----
+set(EVIDENCE_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/../../protos/execution_evidence_v1.proto")
+get_filename_component(EVIDENCE_PROTO "${EVIDENCE_PROTO}" ABSOLUTE)
+
+set(EVIDENCE_PB_CC "${PROTO_GEN_DIR}/execution_evidence_v1.pb.cc")
+set(EVIDENCE_PB_H  "${PROTO_GEN_DIR}/execution_evidence_v1.pb.h")
+set(EVIDENCE_GRPC_CC "${PROTO_GEN_DIR}/execution_evidence_v1.grpc.pb.cc")
+set(EVIDENCE_GRPC_H  "${PROTO_GEN_DIR}/execution_evidence_v1.grpc.pb.h")
+
+add_custom_command(
+  OUTPUT "${EVIDENCE_PB_CC}" "${EVIDENCE_PB_H}" "${EVIDENCE_GRPC_CC}" "${EVIDENCE_GRPC_H}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTO_GEN_DIR}"
+  COMMAND "$<TARGET_FILE:protobuf::protoc>"
+    --proto_path="${PROTO_IMPORT_DIR}"
+    --cpp_out="${PROTO_GEN_DIR}"
+    --grpc_out="${PROTO_GEN_DIR}"
+    --plugin=protoc-gen-grpc="${GRPC_PLUGIN_EXE}"
+    "${EVIDENCE_PROTO}"
+  DEPENDS "${EVIDENCE_PROTO}"
+  COMMENT "Generating C++ from ${EVIDENCE_PROTO}"
+)
+
+add_library(evidence_proto
+  "${EVIDENCE_PB_CC}"
+  "${EVIDENCE_GRPC_CC}"
+)
+
+target_link_libraries(evidence_proto
+  PUBLIC
+    protobuf::libprotobuf
+    gRPC::grpc++
+)
+
+target_include_directories(evidence_proto
+  PUBLIC
+    "${PROTO_GEN_DIR}"
+)
+
 # ---- BlockPlan shared infrastructure ----
 # Contract Reference: docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
 set(BLOCKPLAN_SOURCES
@@ -174,6 +212,13 @@ set(AIR_CORE_SOURCES
   src/blockplan/AudioLookaheadBuffer.cpp
   # VideoLookaheadBuffer: non-blocking video buffering (INV-VIDEO-LOOKAHEAD-001)
   src/blockplan/VideoLookaheadBuffer.cpp
+  # Evidence spool + emitter (AirExecutionEvidenceSpoolContract_v0.1)
+  src/evidence/EvidenceSpool.cpp
+  src/evidence/EvidenceEmitter.cpp
+  # Evidence gRPC client (ExecutionEvidenceGrpcInterfaceContract_v0.1)
+  src/evidence/GrpcEvidenceClient.cpp
+  # Thread-safe logger (prevents multi-thread log interleave)
+  src/util/Logger.cpp
 )
 
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
@@ -191,6 +236,7 @@ target_link_directories(retrovue_air_core PUBLIC "${FFMPEG_LIB_DIR}" "${X264_LIB
 target_link_libraries(retrovue_air_core
   PUBLIC
     playout_proto
+    evidence_proto
     retrovue_blockplan
     gRPC::grpc++
     ${LIBAV_LIBRARIES_STATIC}
@@ -344,6 +390,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ProgramBlockAuthorityContractTests.cpp
   tests/contracts/BlockPlan/SeamContinuityEngineContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
+  tests/blockplan/test_segment_aware_playback_proof.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
@@ -469,6 +516,29 @@ target_include_directories(buffer_config_tests
 add_test(
   NAME BufferConfigContracts
   COMMAND buffer_config_tests
+)
+
+# ---- Evidence Spool Contract Tests (AirExecutionEvidenceSpoolContract_v0.1) ----
+add_executable(evidence_spool_tests
+  tests/test_evidence_spool.cpp
+)
+
+target_link_libraries(evidence_spool_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(evidence_spool_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_test(
+  NAME EvidenceSpoolContracts
+  COMMAND evidence_spool_tests
 )
 
 # ---- Media Time Contract Tests (INV-AIR-MEDIA-TIME-001..005) ----

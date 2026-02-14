@@ -11,8 +11,10 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +33,7 @@
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/output/SocketSink.h"
+#include "retrovue/util/Logger.hpp"
 #include "time/SystemTimeSource.hpp"
 
 // Define RETROVUE_DEBUG_PAD_EMIT to enable per-tick pad frame logging.
@@ -54,6 +57,8 @@ extern "C" {
 
 namespace retrovue::blockplan {
 
+using retrovue::util::Logger;
+
 // INV-AUDIO-PRIME-001: Minimum audio buffer depth (ms) required from
 // TickProducer::PrimeFirstTick.  The preloader worker thread calls
 // PrimeFirstTick which accumulates audio into the primed frame's audio
@@ -62,6 +67,12 @@ namespace retrovue::blockplan {
 // 500ms provides headroom above LOW_WATER (333ms), preventing micro-underruns
 // during initial playback before the fill thread reaches steady state.
 static constexpr int kMinAudioPrimeMs = 500;
+
+// Task 2: Format fence_tick for logging — sentinel INT64_MAX prints as "UNARMED".
+static std::string FormatFenceTick(int64_t tick) {
+  if (tick == std::numeric_limits<int64_t>::max()) return "UNARMED";
+  return std::to_string(tick);
+}
 
 PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
@@ -102,23 +113,31 @@ void PipelineManager::Stop() {
   // no owned threads should remain joinable.  Hitting any of these means the
   // teardown in Run() (section 7) missed a join — a latent std::terminate bug.
   if (deferred_fill_thread_.joinable()) {
-    std::cerr << "[PipelineManager] BUG: deferred_fill_thread_ still joinable "
-              << "after Stop(). Joining to prevent std::terminate." << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] BUG: deferred_fill_thread_ still joinable "
+          << "after Stop(). Joining to prevent std::terminate.";
+      Logger::Error(oss.str()); }
     deferred_fill_thread_.join();
   }
   if (video_buffer_ && video_buffer_->IsFilling()) {
-    std::cerr << "[PipelineManager] BUG: video fill thread still running "
-              << "after Stop(). Stopping to prevent std::terminate." << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] BUG: video fill thread still running "
+          << "after Stop(). Stopping to prevent std::terminate.";
+      Logger::Error(oss.str()); }
     video_buffer_->StopFilling(/*flush=*/true);
   }
   if (preview_video_buffer_ && preview_video_buffer_->IsFilling()) {
-    std::cerr << "[PipelineManager] BUG: preview video fill thread still running "
-              << "after Stop(). Stopping to prevent std::terminate." << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] BUG: preview video fill thread still running "
+          << "after Stop(). Stopping to prevent std::terminate.";
+      Logger::Error(oss.str()); }
     preview_video_buffer_->StopFilling(/*flush=*/true);
   }
   if (segment_preview_video_buffer_ && segment_preview_video_buffer_->IsFilling()) {
-    std::cerr << "[PipelineManager] BUG: segment preview video fill thread still running "
-              << "after Stop(). Stopping to prevent std::terminate." << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] BUG: segment preview video fill thread still running "
+          << "after Stop(). Stopping to prevent std::terminate.";
+      Logger::Error(oss.str()); }
     segment_preview_video_buffer_->StopFilling(/*flush=*/true);
   }
 }
@@ -172,11 +191,6 @@ void PipelineManager::TryLoadLiveProducer() {
     ctx_->block_queue.erase(ctx_->block_queue.begin());
   }
 
-  // Notify Core that a queue slot was consumed (for credit-based feeding).
-  if (callbacks_.on_block_started) {
-    callbacks_.on_block_started(block);
-  }
-
   // AssignBlock is synchronous and may stall (probe + open + seek).
   // This is acceptable: it occurs only at block boundaries when no
   // content is playing.  The tick loop resumes on the next
@@ -209,24 +223,20 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
       if (tick >= 0 && block_fence_frame_ != INT64_MAX &&
           (block_fence_frame_ - tick) < 3000 &&
           (tick == block_fence_frame_ || tick % 900 == 0)) {
-        std::cout << "[PipelineManager] PREROLL_DIAG"
-                  << " tick=" << tick
-                  << " fence_tick=" << block_fence_frame_
-                  << " has_next_block=0"
-                  << " preview_exists=" << (preview_ != nullptr)
-                  << " seam_preparer_has_block=0"
-                  << " seam_preparer_running=" << seam_preparer_->IsRunning()
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] PREROLL_DIAG"
+              << " tick=" << tick
+              << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+              << " has_next_block=0"
+              << " preview_exists=" << (preview_ != nullptr)
+              << " seam_preparer_has_block=0"
+              << " seam_preparer_running=" << seam_preparer_->IsRunning();
+          Logger::Info(oss.str()); }
       }
       return;
     }
     block = ctx_->block_queue.front();
     ctx_->block_queue.erase(ctx_->block_queue.begin());
-  }
-
-  // Notify Core that a queue slot was consumed (for credit-based feeding).
-  if (callbacks_.on_block_started) {
-    callbacks_.on_block_started(block);
   }
 
   SeamRequest req;
@@ -240,12 +250,13 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
   req.parent_block_id = block.block_id;
   seam_preparer_->Submit(std::move(req));
 
-  std::cout << "[PipelineManager] PREROLL_ARMED"
-            << " tick=" << tick
-            << " fence_tick=" << block_fence_frame_
-            << " block=" << block.block_id
-            << " preview_exists=" << (preview_ != nullptr)
-            << std::endl;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] PREROLL_ARMED"
+        << " tick=" << tick
+        << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+        << " block=" << block.block_id
+        << " preview_exists=" << (preview_ != nullptr);
+    Logger::Info(oss.str()); }
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.next_preload_started_count++;
@@ -275,8 +286,10 @@ std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer() 
 // =============================================================================
 
 void PipelineManager::Run() {
-  std::cout << "[PipelineManager] Starting execution thread for channel "
-            << ctx_->channel_id << std::endl;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] Starting execution thread for channel "
+        << ctx_->channel_id;
+    Logger::Info(oss.str()); }
 
   // ========================================================================
   // 1. SESSION SETUP
@@ -310,8 +323,9 @@ void PipelineManager::Run() {
   // dup() the fd so SocketSink can take ownership without closing ctx_->fd.
   int sink_fd = dup(ctx_->fd);
   if (sink_fd < 0) {
-    std::cerr << "[PipelineManager] dup(fd) failed: " << strerror(errno)
-              << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] dup(fd) failed: " << strerror(errno);
+      Logger::Error(oss.str()); }
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
       callbacks_.on_session_ended("dup_failed");
@@ -322,7 +336,7 @@ void PipelineManager::Run() {
   // INV-SOCKET-NONBLOCK: SocketSink requires O_NONBLOCK.
   int flags = fcntl(sink_fd, F_GETFL, 0);
   if (flags < 0 || fcntl(sink_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-    std::cerr << "[PipelineManager] fcntl(O_NONBLOCK) failed" << std::endl;
+    Logger::Error("[PipelineManager] fcntl(O_NONBLOCK) failed");
     ::close(sink_fd);
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
@@ -338,17 +352,20 @@ void PipelineManager::Run() {
     const int requested_sndbuf = 32768;
     if (setsockopt(sink_fd, SOL_SOCKET, SO_SNDBUF,
                    &requested_sndbuf, sizeof(requested_sndbuf)) < 0) {
-      std::cerr << "[PipelineManager] WARNING: setsockopt(SO_SNDBUF="
-                << requested_sndbuf << ") failed: " << strerror(errno)
-                << " (continuing with default)" << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] WARNING: setsockopt(SO_SNDBUF="
+            << requested_sndbuf << ") failed: " << strerror(errno)
+            << " (continuing with default)";
+        Logger::Warn(oss.str()); }
     }
     int effective_sndbuf = 0;
     socklen_t elen = sizeof(effective_sndbuf);
     if (getsockopt(sink_fd, SOL_SOCKET, SO_SNDBUF,
                    &effective_sndbuf, &elen) == 0) {
-      std::cerr << "[PipelineManager] UDS SO_SNDBUF: requested="
-                << requested_sndbuf << " effective=" << effective_sndbuf
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] UDS SO_SNDBUF: requested="
+            << requested_sndbuf << " effective=" << effective_sndbuf;
+        Logger::Info(oss.str()); }
     }
   }
 #endif
@@ -373,7 +390,9 @@ void PipelineManager::Run() {
   std::atomic<bool> output_detached{false};
   socket_sink->SetDetachOnOverflow(true);
   socket_sink->SetDetachCallback([this, &output_detached](const std::string& reason) {
-    std::cerr << "[PipelineManager] SocketSink detach: " << reason << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] SocketSink detach: " << reason;
+      Logger::Error(oss.str()); }
     output_detached.store(true, std::memory_order_release);
     ctx_->stop_requested.store(true, std::memory_order_release);
   });
@@ -417,8 +436,7 @@ void PipelineManager::Run() {
 
   auto encoder_open_start = std::chrono::steady_clock::now();
   if (!session_encoder->open(enc_config, &write_ctx, write_callback)) {
-    std::cerr << "[PipelineManager] Failed to open session encoder"
-              << std::endl;
+    Logger::Error("[PipelineManager] Failed to open session encoder");
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
       callbacks_.on_session_ended("encoder_failed");
@@ -435,9 +453,11 @@ void PipelineManager::Run() {
     metrics_.encoder_open_ms = encoder_open_ms;
   }
 
-  std::cout << "[PipelineManager] Session encoder opened: "
-            << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps
-            << "fps, open_ms=" << encoder_open_ms << std::endl;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] Session encoder opened: "
+        << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps
+        << "fps, open_ms=" << encoder_open_ms;
+    Logger::Info(oss.str()); }
 
   // Disable EncoderPipeline's internal output timing gate.
   // Verified: GateOutputTiming() is purely a pacing sleep (media PTS vs wall
@@ -460,13 +480,15 @@ void PipelineManager::Run() {
   // ARCHITECTURAL TELEMETRY
   // ========================================================================
   constexpr auto kExecutionMode = PlayoutExecutionMode::kContinuousOutput;
-  std::cout << "[INV-PLAYOUT-AUTHORITY] channel_id=" << ctx_->channel_id
-            << " | playout_path=blockplan"
-            << " | encoder_scope=session"
-            << " | execution_model="
-            << PlayoutExecutionModeToString(kExecutionMode)
-            << " | format=" << ctx_->width << "x" << ctx_->height
-            << "@" << ctx_->fps << std::endl;
+  { std::ostringstream oss;
+    oss << "[INV-PLAYOUT-AUTHORITY] channel_id=" << ctx_->channel_id
+        << " | playout_path=blockplan"
+        << " | encoder_scope=session"
+        << " | execution_model="
+        << PlayoutExecutionModeToString(kExecutionMode)
+        << " | format=" << ctx_->width << "x" << ctx_->height
+        << "@" << ctx_->fps;
+    Logger::Info(oss.str()); }
 
   // ========================================================================
   // 3. CREATE OUTPUT CLOCK
@@ -486,14 +508,16 @@ void PipelineManager::Run() {
   // Fallback to system_clock::now() for legacy / test paths (join_utc_ms == 0).
   if (ctx_->join_utc_ms > 0) {
     session_epoch_utc_ms_ = ctx_->join_utc_ms;
-    std::cout << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
-              << session_epoch_utc_ms_ << " (Core-authoritative join_utc_ms)"
-              << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
+          << session_epoch_utc_ms_ << " (Core-authoritative join_utc_ms)";
+      Logger::Info(oss.str()); }
   } else {
     session_epoch_utc_ms_ = time_source_->NowUtcMs();
-    std::cout << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
-              << session_epoch_utc_ms_ << " (local clock fallback, join_utc_ms=0)"
-              << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] INV-JIP-ANCHOR-001: session_epoch_utc_ms="
+          << session_epoch_utc_ms_ << " (local clock fallback, join_utc_ms=0)";
+      Logger::Info(oss.str()); }
   }
 
   // ========================================================================
@@ -534,6 +558,7 @@ void PipelineManager::Run() {
       : std::max(1, video_target_depth / 3);
   video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
       video_target_depth, video_low_water);
+  video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
 
   // Initialize fence_epoch_utc_ms_ to the same value as session_epoch_utc_ms_.
   // It will be re-anchored to system_clock::now() at clock.Start().
@@ -553,22 +578,27 @@ void PipelineManager::Run() {
   {
     bool state_ready = AsTickProducer(live_.get())->GetState() == ITickProducer::State::kReady;
     bool has_decoder = AsTickProducer(live_.get())->HasDecoder();
-    std::cout << "[PipelineManager] PRIME_CHECK: state_ready=" << state_ready
-              << " has_decoder=" << has_decoder << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] PRIME_CHECK: state_ready=" << state_ready
+          << " has_decoder=" << has_decoder;
+      Logger::Info(oss.str()); }
     if (state_ready && has_decoder) {
       auto prime_result =
           static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
-      std::cout << "[PipelineManager] PRIME_RESULT: met=" << prime_result.met_threshold
-                << " depth_ms=" << prime_result.actual_depth_ms
-                << " audio_buf_depth=" << audio_buffer_->DepthMs() << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PRIME_RESULT: met=" << prime_result.met_threshold
+            << " depth_ms=" << prime_result.actual_depth_ms
+            << " audio_buf_depth=" << audio_buffer_->DepthMs();
+        Logger::Info(oss.str()); }
       if (!prime_result.met_threshold) {
-        std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001: block A prime shortfall"
-                  << " wanted_ms=" << kMinAudioPrimeMs
-                  << " got_ms=" << prime_result.actual_depth_ms << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] INV-AUDIO-PRIME-001: block A prime shortfall"
+              << " wanted_ms=" << kMinAudioPrimeMs
+              << " got_ms=" << prime_result.actual_depth_ms;
+          Logger::Warn(oss.str()); }
       }
     } else {
-      std::cout << "[PipelineManager] PRIME_SKIPPED: no decoder on live block"
-                << std::endl;
+      Logger::Info("[PipelineManager] PRIME_SKIPPED: no decoder on live block");
     }
   }
 
@@ -584,14 +614,16 @@ void PipelineManager::Run() {
   // Audit helper: emit BLOCK_START log for the current live block.
   auto emit_block_start = [&live_tp](const char* source) {
     const auto& blk = live_tp()->GetBlock();
-    std::cout << "[PipelineManager] BLOCK_START"
-              << " block=" << blk.block_id
-              << " asset=" << (live_tp()->HasDecoder() && !blk.segments.empty()
-                  ? blk.segments[0].asset_uri : "pad")
-              << " offset_ms=" << (!blk.segments.empty()
-                  ? blk.segments[0].asset_start_offset_ms : 0)
-              << " frames=" << live_tp()->FramesPerBlock()
-              << " source=" << source << std::endl;
+    std::ostringstream oss;
+    oss << "[PipelineManager] BLOCK_START"
+        << " block=" << blk.block_id
+        << " asset=" << (live_tp()->HasDecoder() && !blk.segments.empty()
+            ? blk.segments[0].asset_uri : "pad")
+        << " offset_ms=" << (!blk.segments.empty()
+            ? blk.segments[0].asset_start_offset_ms : 0)
+        << " frames=" << live_tp()->FramesPerBlock()
+        << " source=" << source;
+    Logger::Info(oss.str());
   };
 
   int64_t session_frame_index = 0;
@@ -652,6 +684,27 @@ void PipelineManager::Run() {
     ComputeSegmentSeamFrames();
     ArmSegmentPrep(session_frame_index);
 
+    // Block is now LIVE — notify subscribers.
+    if (callbacks_.on_block_started) {
+      callbacks_.on_block_started(live_parent_block_);
+    }
+
+    // Fire on_segment_start for the first segment of the block.
+    if (callbacks_.on_segment_start) {
+      callbacks_.on_segment_start(-1, 0, live_parent_block_, session_frame_index);
+    }
+
+    // Begin segment proof tracking for first segment.
+    if (!live_parent_block_.segments.empty()) {
+      const auto& seg0 = live_parent_block_.segments[0];
+      block_acc.BeginSegment(
+          0, seg0.asset_uri,
+          static_cast<int64_t>(std::ceil(
+              static_cast<double>(seg0.segment_duration_ms) /
+              static_cast<double>(clock.FrameDurationMs()))),
+          seg0.segment_type, seg0.event_id);
+    }
+
     // ====================================================================
     // INV-AUDIO-PRIME-002: Hard gate — do not start tick loop until
     // AudioLookaheadBuffer depth >= kMinAudioPrimeMs.
@@ -697,30 +750,38 @@ void PipelineManager::Run() {
           video_buffer_->TargetDepthFrames(),
           static_cast<int>(std::ceil(
               kMinAudioPrimeMs * input_fps / 1000.0)) + kMarginFrames);
-      video_buffer_->EnterBootstrap(
-          bootstrap_target, kBootstrapCapFrames, kMinAudioPrimeMs);
+      auto bootstrap_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
 
-      std::cout << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_start"
-                << " audio_depth_ms=" << depth_ms
-                << " video_depth=" << video_buffer_->DepthFrames()
-                << " steady_target=" << video_buffer_->TargetDepthFrames()
-                << " bootstrap_target=" << bootstrap_target
-                << " bootstrap_cap=" << kBootstrapCapFrames
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_start"
+            << " bootstrap_epoch_ms=" << bootstrap_epoch_ms
+            << " audio_depth_ms=" << depth_ms
+            << " video_depth=" << video_buffer_->DepthFrames()
+            << " steady_target=" << video_buffer_->TargetDepthFrames()
+            << " bootstrap_target=" << bootstrap_target
+            << " bootstrap_cap=" << kBootstrapCapFrames
+            << " have_last_decoded=" << (video_buffer_->IsPrimed() ? 1 : 0);
+        Logger::Info(oss.str()); }
+
+      video_buffer_->EnterBootstrap(
+          bootstrap_target, kBootstrapCapFrames, kMinAudioPrimeMs,
+          bootstrap_epoch_ms);
 
       int gate_poll_count = 0;
       while (depth_ms < kMinAudioPrimeMs) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - gate_start).count();
         if (elapsed >= kGateTimeoutMs) {
-          std::cerr << "[PipelineManager] INV-AUDIO-PRIME-002: gate timeout"
-                    << " depth_ms=" << depth_ms
-                    << " required=" << kMinAudioPrimeMs
-                    << " elapsed_ms=" << elapsed
-                    << " pushed=" << audio_buffer_->TotalSamplesPushed()
-                    << " popped=" << audio_buffer_->TotalSamplesPopped()
-                    << " video_depth=" << video_buffer_->DepthFrames()
-                    << std::endl;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] INV-AUDIO-PRIME-002: gate timeout"
+                << " depth_ms=" << depth_ms
+                << " required=" << kMinAudioPrimeMs
+                << " elapsed_ms=" << elapsed
+                << " pushed=" << audio_buffer_->TotalSamplesPushed()
+                << " popped=" << audio_buffer_->TotalSamplesPopped()
+                << " video_depth=" << video_buffer_->DepthFrames();
+            Logger::Warn(oss.str()); }
           break;
         }
         if (ctx_->stop_requested.load(std::memory_order_acquire)) break;
@@ -729,13 +790,14 @@ void PipelineManager::Run() {
         gate_poll_count++;
         // Log every 100ms during gate wait
         if (gate_poll_count % 100 == 0) {
-          std::cout << "[PipelineManager] GATE_POLL elapsed_ms=" << elapsed
-                    << " audio_depth_ms=" << depth_ms
-                    << " pushed=" << audio_buffer_->TotalSamplesPushed()
-                    << " popped=" << audio_buffer_->TotalSamplesPopped()
-                    << " video_depth=" << video_buffer_->DepthFrames()
-                    << " fill_phase=" << static_cast<int>(video_buffer_->GetFillPhase())
-                    << std::endl;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] GATE_POLL elapsed_ms=" << elapsed
+                << " audio_depth_ms=" << depth_ms
+                << " pushed=" << audio_buffer_->TotalSamplesPushed()
+                << " popped=" << audio_buffer_->TotalSamplesPopped()
+                << " video_depth=" << video_buffer_->DepthFrames()
+                << " fill_phase=" << static_cast<int>(video_buffer_->GetFillPhase());
+            Logger::Info(oss.str()); }
         }
       }
 
@@ -745,12 +807,14 @@ void PipelineManager::Run() {
       auto gate_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - gate_start).count();
 
-      std::cout << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_end"
-                << " audio_depth_ms=" << audio_buffer_->DepthMs()
-                << " video_depth=" << video_buffer_->DepthFrames()
-                << " steady_target=" << video_buffer_->TargetDepthFrames()
-                << " gate_ms=" << gate_elapsed
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_end"
+            << " bootstrap_epoch_ms=" << bootstrap_epoch_ms
+            << " audio_depth_ms=" << audio_buffer_->DepthMs()
+            << " video_depth=" << video_buffer_->DepthFrames()
+            << " steady_target=" << video_buffer_->TargetDepthFrames()
+            << " gate_ms=" << gate_elapsed;
+        Logger::Info(oss.str()); }
     }
   }
 
@@ -758,8 +822,10 @@ void PipelineManager::Run() {
   // allow TS emission to socket.  Placed after the audio gate and outside
   // the state-ready conditional so it fires unconditionally.
   socket_sink->OpenEmissionGate();
-  std::cout << "[PipelineManager] INV-AUDIO-BOOTSTRAP-GATE-001: emission gate opened"
-            << " audio_depth_ms=" << audio_buffer_->DepthMs() << std::endl;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] INV-AUDIO-BOOTSTRAP-GATE-001: emission gate opened"
+        << " audio_depth_ms=" << audio_buffer_->DepthMs();
+    Logger::Info(oss.str()); }
 
   // ========================================================================
   // 5b. START OUTPUT CLOCK (monotonic epoch) — after audio depth gate.
@@ -788,10 +854,12 @@ void PipelineManager::Run() {
     int64_t join_epoch = session_epoch_utc_ms_;
     fence_epoch_utc_ms_ = time_source_->NowUtcMs();
     int64_t D_ms = fence_epoch_utc_ms_ - join_epoch;
-    std::cout << "[PipelineManager] INV-FENCE-WALLCLOCK-ANCHOR:"
-              << " join_utc_ms=" << join_epoch
-              << " fence_epoch_utc_ms=" << fence_epoch_utc_ms_
-              << " D_ms=" << D_ms << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] INV-FENCE-WALLCLOCK-ANCHOR:"
+          << " join_utc_ms=" << join_epoch
+          << " fence_epoch_utc_ms=" << fence_epoch_utc_ms_
+          << " D_ms=" << D_ms;
+      Logger::Info(oss.str()); }
 
     // Recompute first block's fence with corrected fence epoch.
     if (live_tp()->GetState() == ITickProducer::State::kReady) {
@@ -872,18 +940,20 @@ void PipelineManager::Run() {
       auto seg_result = seam_preparer_->TakeSegmentResult();
       if (seg_result) {
         segment_preview_ = std::move(seg_result->producer);
-        std::cout << "[PipelineManager] SEGMENT_PREROLL_STATUS"
-                  << " block=" << seg_result->block_id
-                  << " segment_index=" << seg_result->segment_index
-                  << " segment_type=" << SegmentTypeName(seg_result->segment_type)
-                  << " audio_depth_ms=" << seg_result->audio_prime_depth_ms
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] SEGMENT_PREROLL_STATUS"
+              << " block=" << seg_result->block_id
+              << " segment_index=" << seg_result->segment_index
+              << " segment_type=" << SegmentTypeName(seg_result->segment_type)
+              << " audio_depth_ms=" << seg_result->audio_prime_depth_ms;
+          Logger::Info(oss.str()); }
       }
     }
     if (segment_preview_ && !segment_preview_video_buffer_ &&
         AsTickProducer(segment_preview_.get())->GetState() == ITickProducer::State::kReady) {
       segment_preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
           video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
+      segment_preview_video_buffer_->SetBufferLabel("SEGMENT_PREROLL_BUFFER");
       const auto& scfg = ctx_->buffer_config;
       int sa_target = scfg.audio_target_depth_ms;
       int sa_low = scfg.audio_low_water_ms > 0
@@ -893,33 +963,49 @@ void PipelineManager::Run() {
           sa_target, buffer::kHouseAudioSampleRate,
           buffer::kHouseAudioChannels, sa_low);
       auto* seg_tp = AsTickProducer(segment_preview_.get());
+      // INV-AUDIO-PREROLL-ISOLATION-001: Snapshot live audio before segment preroll.
+      int seg_live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
       segment_preview_video_buffer_->StartFilling(
           seg_tp, segment_preview_audio_buffer_.get(),
           seg_tp->GetInputFPS(), ctx_->fps,
           &ctx_->stop_requested);
-      std::cout << "[PipelineManager] SEGMENT_PREROLL_START"
-                << " tick=" << session_frame_index
-                << " next_seam_frame=" << next_seam_frame_
-                << " headroom=" << (next_seam_frame_ - session_frame_index)
-                << std::endl;
+      if (audio_buffer_ && seg_live_audio_before >= 0) {
+        int seg_live_audio_after = audio_buffer_->DepthMs();
+        if (seg_live_audio_after < seg_live_audio_before - 1) {
+          std::ostringstream oss;
+          oss << "[PipelineManager] INV-AUDIO-PREROLL-ISOLATION-001 VIOLATION:"
+              << " context=SEGMENT_PREROLL"
+              << " live_audio_before=" << seg_live_audio_before
+              << " live_audio_after=" << seg_live_audio_after;
+          Logger::Error(oss.str());
+        }
+      }
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEGMENT_PREROLL_START"
+            << " tick=" << session_frame_index
+            << " next_seam_frame=" << next_seam_frame_
+            << " headroom=" << (next_seam_frame_ - session_frame_index);
+        Logger::Info(oss.str()); }
     }
 
     if (!preview_ && seam_preparer_->HasBlockResult()) {
       preview_ = TryTakePreviewProducer();
       if (preview_) {
         const bool met = (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs);
-        std::cout << "[PipelineManager] PREROLL_STATUS"
-                  << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
-                  << " met_threshold=" << met
-                  << " depth_ms=" << preview_audio_prime_depth_ms_
-                  << " wanted_ms=" << kMinAudioPrimeMs
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] PREROLL_STATUS"
+              << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
+              << " met_threshold=" << met
+              << " depth_ms=" << preview_audio_prime_depth_ms_
+              << " wanted_ms=" << kMinAudioPrimeMs;
+          Logger::Info(oss.str()); }
       }
     }
     if (preview_ && !preview_video_buffer_ &&
         AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
       preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
           video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
+      preview_video_buffer_->SetBufferLabel("PREVIEW_AUDIO_BUFFER");
       const auto& pcfg = ctx_->buffer_config;
       int pa_target = pcfg.audio_target_depth_ms;
       int pa_low = pcfg.audio_low_water_ms > 0
@@ -929,16 +1015,31 @@ void PipelineManager::Run() {
           pa_target, buffer::kHouseAudioSampleRate,
           buffer::kHouseAudioChannels, pa_low);
       auto* preview_tp = AsTickProducer(preview_.get());
+      // INV-AUDIO-PREROLL-ISOLATION-001: Snapshot live audio depth before preview fill.
+      int live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
       preview_video_buffer_->StartFilling(
           preview_tp, preview_audio_buffer_.get(),
           preview_tp->GetInputFPS(), ctx_->fps,
           &ctx_->stop_requested);
-      std::cout << "[PipelineManager] PREROLL_START"
-                << " block=" << preview_tp->GetBlock().block_id
-                << " fence_tick=" << block_fence_frame_
-                << " tick=" << session_frame_index
-                << " headroom=" << (block_fence_frame_ - session_frame_index)
-                << std::endl;
+      // INV-AUDIO-PREROLL-ISOLATION-001: Verify live audio was not mutated by preview fill.
+      if (audio_buffer_ && live_audio_before >= 0) {
+        int live_audio_after = audio_buffer_->DepthMs();
+        if (live_audio_after < live_audio_before - 1) {  // 1ms tolerance for concurrent pop
+          std::ostringstream oss;
+          oss << "[PipelineManager] INV-AUDIO-PREROLL-ISOLATION-001 VIOLATION:"
+              << " live_audio_before=" << live_audio_before
+              << " live_audio_after=" << live_audio_after
+              << " delta=" << (live_audio_after - live_audio_before);
+          Logger::Error(oss.str());
+        }
+      }
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PREROLL_START"
+            << " block=" << preview_tp->GetBlock().block_id
+            << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+            << " tick=" << session_frame_index
+            << " headroom=" << (block_fence_frame_ - session_frame_index);
+        Logger::Info(oss.str()); }
     }
 
     // ==================================================================
@@ -969,12 +1070,13 @@ void PipelineManager::Run() {
     // Policy B: TAKE_READINESS — log audio headroom at the moment of TAKE.
     if (take_b && !take_rotated && preview_) {
       const bool met = (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs);
-      std::cout << "[PipelineManager] TAKE_READINESS"
-                << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
-                << " depth_ms_at_take=" << preview_audio_prime_depth_ms_
-                << " wanted_ms=" << kMinAudioPrimeMs
-                << " met_threshold=" << met
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] TAKE_READINESS"
+            << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
+            << " depth_ms_at_take=" << preview_audio_prime_depth_ms_
+            << " wanted_ms=" << kMinAudioPrimeMs
+            << " met_threshold=" << met;
+        Logger::Info(oss.str()); }
     }
 
     VideoLookaheadBuffer* v_src;
@@ -1005,13 +1107,14 @@ void PipelineManager::Run() {
     // falls through to pad — no correctness violation, but a missed
     // preroll that should be investigated.
     if (take_b && (!v_src || !v_src->IsPrimed()) && !take_rotated) {
-      std::cerr << "[PipelineManager] INV-PREROLL-READY-001: B NOT PRIMED at fence"
-                << " tick=" << session_frame_index
-                << " fence_tick=" << block_fence_frame_
-                << " preview_exists=" << (preview_ != nullptr)
-                << " preview_vbuf=" << (preview_video_buffer_ != nullptr)
-                << " seam_has_block=" << seam_preparer_->HasBlockResult()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-PREROLL-READY-001: B NOT PRIMED at fence"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+            << " preview_exists=" << (preview_ != nullptr)
+            << " preview_vbuf=" << (preview_video_buffer_ != nullptr)
+            << " seam_has_block=" << seam_preparer_->HasBlockResult();
+        Logger::Warn(oss.str()); }
     }
 
     // INV-VIDEO-LOOKAHEAD-001: Sample IsPrimed BEFORE TryPopFrame to prevent
@@ -1029,12 +1132,13 @@ void PipelineManager::Run() {
       // B not primed or empty at fence — PADDED_GAP.
     } else if (a_was_primed) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
-      std::cerr << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
-                << " frame=" << session_frame_index
-                << " buffer_depth=" << v_src->DepthFrames()
-                << " total_pushed=" << v_src->TotalFramesPushed()
-                << " total_popped=" << v_src->TotalFramesPopped()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
+            << " frame=" << session_frame_index
+            << " buffer_depth=" << v_src->DepthFrames()
+            << " total_pushed=" << v_src->TotalFramesPushed()
+            << " total_popped=" << v_src->TotalFramesPopped();
+        Logger::Error(oss.str()); }
       { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
       ctx_->stop_requested.store(true, std::memory_order_release);
       break;
@@ -1066,17 +1170,19 @@ void PipelineManager::Run() {
 
     // INV-PAD-PRODUCER: Log TAKE pad/content transitions (rate-limited).
     if (is_pad && !prev_was_pad) {
-      std::cout << "[PipelineManager] TAKE_PAD_ENTER"
-                << " tick=" << session_frame_index
-                << " slot=" << commit_slot
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] TAKE_PAD_ENTER"
+            << " tick=" << session_frame_index
+            << " slot=" << commit_slot;
+        Logger::Info(oss.str()); }
     } else if (!is_pad && prev_was_pad) {
-      std::cout << "[PipelineManager] TAKE_PAD_EXIT"
-                << " tick=" << session_frame_index
-                << " slot=" << commit_slot
-                << " block=" << (live_tp()->GetState() == ITickProducer::State::kReady
-                    ? live_tp()->GetBlock().block_id : "none")
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] TAKE_PAD_EXIT"
+            << " tick=" << session_frame_index
+            << " slot=" << commit_slot
+            << " block=" << (live_tp()->GetState() == ITickProducer::State::kReady
+                ? live_tp()->GetBlock().block_id : "none");
+        Logger::Info(oss.str()); }
     }
     prev_was_pad = is_pad;
 
@@ -1095,16 +1201,17 @@ void PipelineManager::Run() {
         block_id = live_tp()->GetBlock().block_id;
       }
       if (!is_pad) asset_uri = vbf.asset_uri;
-      std::cout << "[PipelineManager] TAKE_COMMIT"
-                << " tick=" << session_frame_index
-                << " fence_tick=" << block_fence_frame_
-                << " slot=" << commit_slot
-                << " is_pad=" << is_pad
-                << " block=" << (block_id.empty() ? "none" : block_id)
-                << " asset=" << (asset_uri.empty() ? (is_pad ? "pad" : "unknown") : asset_uri)
-                << " v_buf_depth=" << (v_src ? v_src->DepthFrames() : -1)
-                << " a_buf_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] TAKE_COMMIT"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+            << " slot=" << commit_slot
+            << " is_pad=" << is_pad
+            << " block=" << (block_id.empty() ? "none" : block_id)
+            << " asset=" << (asset_uri.empty() ? (is_pad ? "pad" : "unknown") : asset_uri)
+            << " v_buf_depth=" << (v_src ? v_src->DepthFrames() : -1)
+            << " a_buf_depth_ms=" << (a_src ? a_src->DepthMs() : -1);
+        Logger::Info(oss.str()); }
     }
 
     // ==================================================================
@@ -1145,7 +1252,8 @@ void PipelineManager::Run() {
         auto summary = block_acc.Finalize();
         ct_at_fence_ms = summary.last_block_ct_ms;
         auto proof = BuildPlaybackProof(
-            outgoing_block, summary, clock.FrameDurationMs());
+            outgoing_block, summary, clock.FrameDurationMs(),
+            block_acc.GetSegmentProofs());
         outgoing_summary = std::move(summary);
         outgoing_proof = std::move(proof);
       }
@@ -1158,6 +1266,7 @@ void PipelineManager::Run() {
       if (preview_video_buffer_) {
         // B buffers become the new A buffers.
         video_buffer_ = std::move(preview_video_buffer_);
+        video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
         audio_buffer_ = std::move(preview_audio_buffer_);
         live_ = std::move(preview_);
         swapped = true;
@@ -1193,15 +1302,12 @@ void PipelineManager::Run() {
             }
           }
           if (got_block) {
-            std::cout << "[PipelineManager] INV-FENCE-FALLBACK-SYNC-001"
-                      << " block_id=" << fallback_block.block_id
-                      << " reason=preview_not_ready"
-                      << " fence_frame=" << session_frame_index
-                      << std::endl;
-            // Notify Core that a queue slot was consumed (for credit-based feeding).
-            if (callbacks_.on_block_started) {
-              callbacks_.on_block_started(fallback_block);
-            }
+            { std::ostringstream oss;
+              oss << "[PipelineManager] INV-FENCE-FALLBACK-SYNC-001"
+                  << " block_id=" << fallback_block.block_id
+                  << " reason=preview_not_ready"
+                  << " fence_frame=" << session_frame_index;
+              Logger::Info(oss.str()); }
             auto fresh = std::make_unique<TickProducer>(
                 ctx_->width, ctx_->height, ctx_->fps);
             AsTickProducer(fresh.get())->AssignBlock(fallback_block);
@@ -1215,6 +1321,7 @@ void PipelineManager::Run() {
           video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
               outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
               outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
+          video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
           const auto& fbcfg = ctx_->buffer_config;
           int fa_target = fbcfg.audio_target_depth_ms;
           int fa_low = fbcfg.audio_low_water_ms > 0
@@ -1235,6 +1342,7 @@ void PipelineManager::Run() {
         live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
         // Fresh buffers — outgoing buffers will die with the deferred fill thread.
         video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+        video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
         {
           const auto& gbcfg = ctx_->buffer_config;
           int ga_target = gbcfg.audio_target_depth_ms;
@@ -1252,10 +1360,11 @@ void PipelineManager::Run() {
         { std::lock_guard<std::mutex> lock(metrics_mutex_);
           metrics_.fence_preload_miss_count++;
           metrics_.padded_gap_count++; }
-        std::cout << "[PipelineManager] PADDED_GAP_ENTER"
-                  << " fence_frame=" << session_frame_index
-                  << " outgoing=" << (outgoing_summary ? outgoing_summary->block_id : "none")
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] PADDED_GAP_ENTER"
+              << " fence_frame=" << session_frame_index
+              << " outgoing=" << (outgoing_summary ? outgoing_summary->block_id : "none");
+          Logger::Info(oss.str()); }
       }
 
       if (swapped) {
@@ -1278,24 +1387,48 @@ void PipelineManager::Run() {
         ComputeSegmentSeamFrames();
         ArmSegmentPrep(session_frame_index);
 
+        // Block is now LIVE — notify subscribers.
+        if (callbacks_.on_block_started) {
+          callbacks_.on_block_started(live_parent_block_);
+        }
+
+        // Fire on_segment_start for the first segment of the new block.
+        if (callbacks_.on_segment_start) {
+          callbacks_.on_segment_start(-1, 0, live_parent_block_, session_frame_index);
+        }
+
+        // Begin segment proof tracking for first segment.
+        if (!live_parent_block_.segments.empty()) {
+          const auto& seg0 = live_parent_block_.segments[0];
+          block_acc.BeginSegment(
+              0, seg0.asset_uri,
+              static_cast<int64_t>(std::ceil(
+                  static_cast<double>(seg0.segment_duration_ms) /
+                  static_cast<double>(clock.FrameDurationMs()))),
+              seg0.segment_type, seg0.event_id);
+        }
+
         int audio_depth = audio_buffer_->DepthMs();
         if (audio_depth < kMinAudioPrimeMs) {
-          std::cerr << "[PipelineManager] INV-AUDIO-PRIME-001 WARN: audio_depth_ms="
-                    << audio_depth << " required=" << kMinAudioPrimeMs
-                    << " at fence frame " << session_frame_index
-                    << " block=" << live_tp()->GetBlock().block_id
-                    << " — safety-net silence will cover" << std::endl;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] INV-AUDIO-PRIME-001 WARN: audio_depth_ms="
+                << audio_depth << " required=" << kMinAudioPrimeMs
+                << " at fence frame " << session_frame_index
+                << " block=" << live_tp()->GetBlock().block_id
+                << " — safety-net silence will cover";
+            Logger::Warn(oss.str()); }
         }
 
         // Policy B: track degraded TAKEs where audio prime was below threshold.
         // Uses preview_audio_prime_depth_ms_ captured at preloader TakeSource time.
         if (preview_audio_prime_depth_ms_ < kMinAudioPrimeMs) {
-          std::cerr << "[PipelineManager] DEGRADED_TAKE"
-                    << " block=" << live_tp()->GetBlock().block_id
-                    << " prime_depth_ms=" << preview_audio_prime_depth_ms_
-                    << " wanted_ms=" << kMinAudioPrimeMs
-                    << " audio_buf_depth_ms=" << audio_depth
-                    << std::endl;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] DEGRADED_TAKE"
+                << " block=" << live_tp()->GetBlock().block_id
+                << " prime_depth_ms=" << preview_audio_prime_depth_ms_
+                << " wanted_ms=" << kMinAudioPrimeMs
+                << " audio_buf_depth_ms=" << audio_depth;
+            Logger::Warn(oss.str()); }
           std::lock_guard<std::mutex> lock(metrics_mutex_);
           metrics_.degraded_take_count++;
         }
@@ -1311,13 +1444,13 @@ void PipelineManager::Run() {
 
       // Step 7: Emit finalization logs.
       if (outgoing_summary) {
-        std::cout << FormatPlaybackSummary(*outgoing_summary) << std::endl;
+        Logger::Info(FormatPlaybackSummary(*outgoing_summary));
         if (callbacks_.on_block_summary) {
           callbacks_.on_block_summary(*outgoing_summary);
         }
       }
       if (outgoing_proof) {
-        std::cout << FormatPlaybackProof(*outgoing_proof) << std::endl;
+        Logger::Info(FormatPlaybackProof(*outgoing_proof));
         if (callbacks_.on_playback_proof) {
           callbacks_.on_playback_proof(*outgoing_proof);
         }
@@ -1326,35 +1459,62 @@ void PipelineManager::Run() {
       if (outgoing_summary) {
         int64_t base_offset = !outgoing_block.segments.empty()
             ? outgoing_block.segments[0].asset_start_offset_ms : 0;
-        std::cout << "[PipelineManager] BLOCK_COMPLETE"
-                  << " block=" << outgoing_summary->block_id
-                  << " fence_frame=" << compute_fence_frame(outgoing_block)
-                  << " emitted=" << outgoing_summary->frames_emitted
-                  << " pad=" << outgoing_summary->pad_frames
-                  << " asset=" << (!outgoing_summary->asset_uris.empty()
-                      ? outgoing_summary->asset_uris[0] : "pad");
+        std::ostringstream oss;
+        oss << "[PipelineManager] BLOCK_COMPLETE"
+            << " block=" << outgoing_summary->block_id
+            << " fence_frame=" << compute_fence_frame(outgoing_block)
+            << " emitted=" << outgoing_summary->frames_emitted
+            << " pad=" << outgoing_summary->pad_frames
+            << " asset=" << (!outgoing_summary->asset_uris.empty()
+                ? outgoing_summary->asset_uris[0] : "pad");
         if (outgoing_summary->first_block_ct_ms >= 0) {
-          std::cout << " range_ms="
-                    << (base_offset + outgoing_summary->first_block_ct_ms)
-                    << "->"
-                    << (base_offset + outgoing_summary->last_block_ct_ms);
+          oss << " range_ms="
+              << (base_offset + outgoing_summary->first_block_ct_ms)
+              << "->"
+              << (base_offset + outgoing_summary->last_block_ct_ms);
         }
-        std::cout << std::endl;
+        Logger::Info(oss.str());
       }
 
       {
         int64_t now_utc_ms = time_source_->NowUtcMs();
         int64_t delta_ms = now_utc_ms - outgoing_block.end_utc_ms;
-        std::cout << "[PipelineManager] INV-BLOCK-WALLFENCE-001: FENCE"
-                  << " block=" << outgoing_block.block_id
-                  << " scheduled_end_ms=" << outgoing_block.end_utc_ms
-                  << " actual_ms=" << now_utc_ms
-                  << " delta_ms=" << delta_ms
-                  << " ct_at_fence_ms=" << ct_at_fence_ms
-                  << " fence_frame=" << compute_fence_frame(outgoing_block)
-                  << " session_frame=" << session_frame_index
-                  << " remaining_budget=" << remaining_block_frames_
-                  << std::endl;
+        std::ostringstream oss;
+        oss << "[PipelineManager] INV-BLOCK-WALLFENCE-001: FENCE"
+            << " block=" << outgoing_block.block_id
+            << " scheduled_end_ms=" << outgoing_block.end_utc_ms
+            << " actual_ms=" << now_utc_ms
+            << " delta_ms=" << delta_ms
+            << " ct_at_fence_ms=" << ct_at_fence_ms
+            << " fence_frame=" << compute_fence_frame(outgoing_block)
+            << " session_frame=" << session_frame_index
+            << " remaining_budget=" << remaining_block_frames_;
+        Logger::Info(oss.str());
+      }
+
+      // Task 4: Structured fence proof summary — single source of seam evidence.
+      {
+        int64_t fence_tick_val = compute_fence_frame(outgoing_block);
+        int64_t emitted = outgoing_summary ? outgoing_summary->frames_emitted : 0;
+        int64_t pad = outgoing_summary ? outgoing_summary->pad_frames : 0;
+        // truncated_by_fence: content was still available but fence ended the block.
+        // Signal: zero pad frames AND emitted < fence tick (content cut short).
+        bool truncated = (pad == 0 && emitted < fence_tick_val);
+        // early_exhaustion: content ran out before fence — had to pad.
+        bool exhausted = (pad > 0);
+        std::ostringstream oss;
+        oss << "[FENCE_PROOF]"
+            << " block_id=" << outgoing_block.block_id
+            << " swap_tick=" << session_frame_index
+            << " fence_tick=" << fence_tick_val
+            << " ticks_emitted=" << emitted
+            << " frames_emitted=" << emitted
+            << " audio_depth_at_fence=" << (outgoing_audio_buffer
+                ? outgoing_audio_buffer->DepthMs() : -1)
+            << " truncated_by_fence=" << (truncated ? "Y" : "N")
+            << " early_exhaustion=" << (exhausted ? "Y" : "N")
+            << " primed_success=" << (swapped ? "Y" : "N");
+        Logger::Info(oss.str());
       }
 
       prev_completed_block_id = outgoing_block.block_id;
@@ -1368,7 +1528,7 @@ void PipelineManager::Run() {
         seam.fence_frame = fence_session_frame;
         seam.pad_frames_at_fence = 0;
         seam.seamless = true;
-        std::cout << FormatSeamTransition(seam) << std::endl;
+        Logger::Info(FormatSeamTransition(seam));
         if (callbacks_.on_seam_transition) {
           callbacks_.on_seam_transition(seam);
         }
@@ -1377,7 +1537,7 @@ void PipelineManager::Run() {
       if (callbacks_.on_block_completed) {
         // ct_at_fence_ms is the actual content time (from decoded PTS),
         // not session_frame_index.  The proto field is final_ct_ms.
-        callbacks_.on_block_completed(outgoing_block, ct_at_fence_ms);
+        callbacks_.on_block_completed(outgoing_block, ct_at_fence_ms, session_frame_index);
       }
       {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -1391,19 +1551,20 @@ void PipelineManager::Run() {
       seam_proof_swapped = swapped;
       seam_proof_first_frame_logged = false;
 
-      std::cout << "[PipelineManager] SEAM_PROOF_FENCE"
-                << " tick=" << session_frame_index
-                << " fence_tick=" << seam_proof_fence_tick
-                << " outgoing=" << seam_proof_outgoing_id
-                << " incoming=" << (seam_proof_incoming_id.empty()
-                    ? "none" : seam_proof_incoming_id)
-                << " swapped=" << swapped
-                << " video_pts_90k=" << video_pts_90k
-                << " audio_pts_90k=" << audio_pts_90k
-                << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
-                << " video_buf_depth=" << video_buffer_->DepthFrames()
-                << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEAM_PROOF_FENCE"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << seam_proof_fence_tick
+            << " outgoing=" << seam_proof_outgoing_id
+            << " incoming=" << (seam_proof_incoming_id.empty()
+                ? "none" : seam_proof_incoming_id)
+            << " swapped=" << swapped
+            << " video_pts_90k=" << video_pts_90k
+            << " audio_pts_90k=" << audio_pts_90k
+            << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
+            << " video_buf_depth=" << video_buffer_->DepthFrames()
+            << " audio_buf_depth_ms=" << audio_buffer_->DepthMs();
+        Logger::Info(oss.str()); }
 
       // Reset take_rotated for next fence cycle.
       take_rotated = false;
@@ -1415,6 +1576,17 @@ void PipelineManager::Run() {
     // ==================================================================
     if (take_segment) {
       PerformSegmentSwap(session_frame_index);
+
+      // Begin segment proof tracking for the new segment.
+      if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
+        const auto& seg = live_parent_block_.segments[current_segment_index_];
+        block_acc.BeginSegment(
+            current_segment_index_, seg.asset_uri,
+            static_cast<int64_t>(std::ceil(
+                static_cast<double>(seg.segment_duration_ms) /
+                static_cast<double>(clock.FrameDurationMs()))),
+            seg.segment_type, seg.event_id);
+      }
     }
 
     if (is_pad) {
@@ -1422,12 +1594,13 @@ void PipelineManager::Run() {
       // Same encodeFrame path as content (single commitment path).
       // INV-PAD-PRODUCER-001: No per-tick allocation — pre-allocated frames.
 #ifdef RETROVUE_DEBUG_PAD_EMIT
-      std::cerr << "[PipelineManager] DBG-PAD-EMIT"
-                << " frame=" << session_frame_index
-                << " slot=" << take_source_char
-                << " y_crc32=0x" << std::hex << pad_producer_->VideoCRC32() << std::dec
-                << " video_pts_90k=" << video_pts_90k
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] DBG-PAD-EMIT"
+            << " frame=" << session_frame_index
+            << " slot=" << take_source_char
+            << " y_crc32=0x" << std::hex << pad_producer_->VideoCRC32() << std::dec
+            << " video_pts_90k=" << video_pts_90k;
+        Logger::Info(oss.str()); }
 #endif
       session_encoder->encodeFrame(pad_producer_->VideoFrame(), video_pts_90k);
 
@@ -1497,13 +1670,14 @@ void PipelineManager::Run() {
           // the session.  Inject silence to bridge the gap (e.g. segment
           // transition where filler decoder hasn't filled the audio buffer
           // yet).  Log diagnostic for observability.
-          std::cerr << "[PipelineManager] AUDIO_UNDERFLOW_SILENCE"
-                    << " frame=" << session_frame_index
-                    << " buffer_depth_ms=" << a_src->DepthMs()
-                    << " needed=" << samples_this_tick
-                    << " total_pushed=" << a_src->TotalSamplesPushed()
-                    << " total_popped=" << a_src->TotalSamplesPopped()
-                    << std::endl;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] AUDIO_UNDERFLOW_SILENCE"
+                << " frame=" << session_frame_index
+                << " buffer_depth_ms=" << a_src->DepthMs()
+                << " needed=" << samples_this_tick
+                << " total_pushed=" << a_src->TotalSamplesPushed()
+                << " total_popped=" << a_src->TotalSamplesPopped();
+            Logger::Warn(oss.str()); }
 
           static constexpr int kChannels = buffer::kHouseAudioChannels;
           static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
@@ -1554,12 +1728,13 @@ void PipelineManager::Run() {
         audio_ticks_emitted++;
         audio_frames_this_tick = 1;
 
-        std::cerr << "[PipelineManager] WARNING FENCE_AUDIO_PAD: audio not primed"
-                  << " tick=" << session_frame_index
-                  << " samples=" << samples_this_tick
-                  << " audio_pts_90k=" << audio_pts_90k
-                  << " video_pts_90k=" << video_pts_90k
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] WARNING FENCE_AUDIO_PAD: audio not primed"
+              << " tick=" << session_frame_index
+              << " samples=" << samples_this_tick
+              << " audio_pts_90k=" << audio_pts_90k
+              << " video_pts_90k=" << video_pts_90k;
+          Logger::Warn(oss.str()); }
         // OUT-SEG-005b: Fence pad silence = fallback tick.
         current_consecutive_fallback_ticks++;
       }
@@ -1609,23 +1784,24 @@ void PipelineManager::Run() {
         audio_source = "fence_pad";  // Fence silence (buffer not yet primed)
       }
 
-      std::cout << "[PipelineManager] SEAM_PROOF_TICK"
-                << " tick=" << session_frame_index
-                << " fence_tick=" << seam_proof_fence_tick
-                << " is_pad=" << is_pad
-                << " video_block=" << (video_source_block.empty()
-                    ? "none" : video_source_block)
-                << " video_asset=" << (is_pad ? "pad"
-                    : (vbf.asset_uri.empty() ? "unknown" : vbf.asset_uri))
-                << " video_decoded=" << (!is_pad && vbf.was_decoded)
-                << " video_ct_ms=" << (is_pad ? -1 : vbf.block_ct_ms)
-                << " video_pts_90k=" << video_pts_90k
-                << " audio_pts_90k=" << audio_pts_90k
-                << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
-                << " audio_source=" << audio_source
-                << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
-                << " video_buf_depth=" << video_buffer_->DepthFrames()
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEAM_PROOF_TICK"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << seam_proof_fence_tick
+            << " is_pad=" << is_pad
+            << " video_block=" << (video_source_block.empty()
+                ? "none" : video_source_block)
+            << " video_asset=" << (is_pad ? "pad"
+                : (vbf.asset_uri.empty() ? "unknown" : vbf.asset_uri))
+            << " video_decoded=" << (!is_pad && vbf.was_decoded)
+            << " video_ct_ms=" << (is_pad ? -1 : vbf.block_ct_ms)
+            << " video_pts_90k=" << video_pts_90k
+            << " audio_pts_90k=" << audio_pts_90k
+            << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
+            << " audio_source=" << audio_source
+            << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
+            << " video_buf_depth=" << video_buffer_->DepthFrames();
+        Logger::Info(oss.str()); }
     }
 
     // SEAM_PROOF_FIRST_FRAME: Log when first non-pad frame from the incoming
@@ -1635,18 +1811,19 @@ void PipelineManager::Run() {
         seam_proof_fence_tick >= 0) {
       seam_proof_first_frame_logged = true;
       int64_t activation_delay = session_frame_index - seam_proof_fence_tick;
-      std::cout << "[PipelineManager] SEAM_PROOF_FIRST_FRAME"
-                << " tick=" << session_frame_index
-                << " fence_tick=" << seam_proof_fence_tick
-                << " incoming=" << seam_proof_incoming_id
-                << " activation_delay_ticks=" << activation_delay
-                << " video_pts_90k=" << video_pts_90k
-                << " audio_pts_90k=" << audio_pts_90k
-                << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
-                << " video_asset=" << vbf.asset_uri
-                << " video_ct_ms=" << vbf.block_ct_ms
-                << " video_decoded=" << vbf.was_decoded
-                << std::endl;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEAM_PROOF_FIRST_FRAME"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << seam_proof_fence_tick
+            << " incoming=" << seam_proof_incoming_id
+            << " activation_delay_ticks=" << activation_delay
+            << " video_pts_90k=" << video_pts_90k
+            << " audio_pts_90k=" << audio_pts_90k
+            << " av_delta_90k=" << (video_pts_90k - audio_pts_90k)
+            << " video_asset=" << vbf.asset_uri
+            << " video_ct_ms=" << vbf.block_ct_ms
+            << " video_decoded=" << vbf.was_decoded;
+        Logger::Info(oss.str()); }
     }
 
     // HEARTBEAT: telemetry snapshot for performance regression detection.
@@ -1676,49 +1853,52 @@ void PipelineManager::Run() {
         }
       }
 
-      // Single consolidated log line.
-      std::cout << "[PipelineManager] HEARTBEAT"
-                << " frame=" << session_frame_index;
-      if (video_buffer_) {
-        std::cout << " video=" << video_buffer_->DepthFrames()
-                  << "/" << video_buffer_->TargetDepthFrames()
-                  << " refill=" << video_buffer_->RefillRateFps() << "fps"
-                  << " decode_p95=" << video_buffer_->DecodeLatencyP95Us() << "us";
-      }
-      if (audio_buffer_) {
-        int64_t a_pushed = audio_buffer_->TotalSamplesPushed();
-        int64_t a_popped = audio_buffer_->TotalSamplesPopped();
-        std::cout << " audio=" << audio_buffer_->DepthMs() << "ms"
-                  << "/" << audio_buffer_->TargetDepthMs() << "ms"
-                  << " a_pushed=" << a_pushed
-                  << " a_popped=" << a_popped;
-      }
-      {
-        std::lock_guard<std::mutex> lock(metrics_mutex_);
-        if (metrics_.audio_silence_injected > 0) {
-          std::cout << " silence_injected=" << metrics_.audio_silence_injected;
+      // Single consolidated log line — atomic write to prevent interleave.
+      { std::ostringstream oss;
+        oss << "[PipelineManager] HEARTBEAT"
+            << " frame=" << session_frame_index;
+        if (video_buffer_) {
+          oss << " video=" << video_buffer_->DepthFrames()
+              << "/" << video_buffer_->TargetDepthFrames()
+              << " refill=" << video_buffer_->RefillRateFps() << "fps"
+              << " decode_p95=" << video_buffer_->DecodeLatencyP95Us() << "us";
         }
-      }
-      if (socket_sink) {
-        std::cout << " sink=" << socket_sink->GetCurrentBufferSize()
-                  << "/" << socket_sink->GetBufferCapacity();
-      }
-      std::cout << std::endl;
+        if (audio_buffer_) {
+          int64_t a_pushed = audio_buffer_->TotalSamplesPushed();
+          int64_t a_popped = audio_buffer_->TotalSamplesPopped();
+          oss << " audio=" << audio_buffer_->DepthMs() << "ms"
+              << "/" << audio_buffer_->TargetDepthMs() << "ms"
+              << " a_pushed=" << a_pushed
+              << " a_popped=" << a_popped;
+        }
+        {
+          std::lock_guard<std::mutex> lock(metrics_mutex_);
+          if (metrics_.audio_silence_injected > 0) {
+            oss << " silence_injected=" << metrics_.audio_silence_injected;
+          }
+        }
+        if (socket_sink) {
+          oss << " sink=" << socket_sink->GetCurrentBufferSize()
+              << "/" << socket_sink->GetBufferCapacity();
+        }
+        Logger::Info(oss.str()); }
 
       // Low-water warnings (throttled to heartbeat interval).
       if (video_buffer_ && video_buffer_->IsBelowLowWater()) {
-        std::cerr << "[PipelineManager] LOW_WATER video="
-                  << video_buffer_->DepthFrames()
-                  << " threshold=" << video_buffer_->LowWaterFrames()
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] LOW_WATER video="
+              << video_buffer_->DepthFrames()
+              << " threshold=" << video_buffer_->LowWaterFrames();
+          Logger::Warn(oss.str()); }
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.video_low_water_events++;
       }
       if (audio_buffer_ && audio_buffer_->IsBelowLowWater()) {
-        std::cerr << "[PipelineManager] LOW_WATER audio="
-                  << audio_buffer_->DepthMs() << "ms"
-                  << " threshold=" << audio_buffer_->LowWaterMs() << "ms"
-                  << std::endl;
+        { std::ostringstream oss;
+          oss << "[PipelineManager] LOW_WATER audio="
+              << audio_buffer_->DepthMs() << "ms"
+              << " threshold=" << audio_buffer_->LowWaterMs() << "ms";
+          Logger::Warn(oss.str()); }
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.audio_low_water_events++;
       }
@@ -1801,7 +1981,7 @@ void PipelineManager::Run() {
           seam.fence_frame = fence_session_frame;
           seam.pad_frames_at_fence = fence_pad_counter;
           seam.seamless = (fence_pad_counter == 0);
-          std::cout << FormatSeamTransition(seam) << std::endl;
+          Logger::Info(FormatSeamTransition(seam));
           if (callbacks_.on_seam_transition) {
             callbacks_.on_seam_transition(seam);
           }
@@ -1824,11 +2004,33 @@ void PipelineManager::Run() {
         ComputeSegmentSeamFrames();
         ArmSegmentPrep(session_frame_index);
 
-        std::cout << "[PipelineManager] PADDED_GAP_EXIT"
-                  << " frame=" << session_frame_index
-                  << " gap_frames=" << fence_pad_counter
-                  << " block=" << live_tp()->GetBlock().block_id
-                  << std::endl;
+        // Block is now LIVE — notify subscribers.
+        if (callbacks_.on_block_started) {
+          callbacks_.on_block_started(live_parent_block_);
+        }
+
+        // Fire on_segment_start for the first segment of the new block.
+        if (callbacks_.on_segment_start) {
+          callbacks_.on_segment_start(-1, 0, live_parent_block_, session_frame_index);
+        }
+
+        // Begin segment proof tracking for first segment.
+        if (!live_parent_block_.segments.empty()) {
+          const auto& seg0 = live_parent_block_.segments[0];
+          block_acc.BeginSegment(
+              0, seg0.asset_uri,
+              static_cast<int64_t>(std::ceil(
+                  static_cast<double>(seg0.segment_duration_ms) /
+                  static_cast<double>(clock.FrameDurationMs()))),
+              seg0.segment_type, seg0.event_id);
+        }
+
+        { std::ostringstream oss;
+          oss << "[PipelineManager] PADDED_GAP_EXIT"
+              << " frame=" << session_frame_index
+              << " gap_frames=" << fence_pad_counter
+              << " block=" << live_tp()->GetBlock().block_id;
+          Logger::Info(oss.str()); }
         fence_pad_counter = 0;
 
         past_fence = false;
@@ -1909,8 +2111,10 @@ void PipelineManager::Run() {
 
   if (session_encoder) {
     session_encoder->close();
-    std::cout << "[PipelineManager] Session encoder closed: "
-              << write_ctx.bytes_written << " bytes written" << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] Session encoder closed: "
+          << write_ctx.bytes_written << " bytes written";
+      Logger::Info(oss.str()); }
   }
 
   // Close SocketSink AFTER encoder — encoder->close() flushes final packets
@@ -1918,11 +2122,13 @@ void PipelineManager::Run() {
   // signals the writer thread to drain remaining bytes and shut down.
   if (socket_sink) {
     socket_sink->Close();
-    std::cout << "[PipelineManager] SocketSink closed: delivered="
-              << socket_sink->GetBytesDelivered()
-              << " enqueued=" << socket_sink->GetBytesEnqueued()
-              << " errors=" << socket_sink->GetWriteErrors()
-              << " detached=" << socket_sink->IsDetached() << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] SocketSink closed: delivered="
+          << socket_sink->GetBytesDelivered()
+          << " enqueued=" << socket_sink->GetBytesEnqueued()
+          << " errors=" << socket_sink->GetWriteErrors()
+          << " detached=" << socket_sink->IsDetached();
+      Logger::Info(oss.str()); }
   }
 
   {
@@ -1954,9 +2160,11 @@ void PipelineManager::Run() {
     }
   }
 
-  std::cout << "[PipelineManager] Thread exiting: frames_emitted="
-            << session_frame_index
-            << ", reason=" << termination_reason << std::endl;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] Thread exiting: frames_emitted="
+        << session_frame_index
+        << ", reason=" << termination_reason;
+    Logger::Info(oss.str()); }
 
   if (callbacks_.on_session_ended && !session_ended_fired_) {
     session_ended_fired_ = true;
@@ -2074,14 +2282,16 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
   req.segment_index = next_seg;
   seam_preparer_->Submit(std::move(req));
 
-  std::cout << "[PipelineManager] SEGMENT_PREP_ARMED"
-            << " tick=" << session_frame_index
-            << " parent_block=" << live_parent_block_.block_id
-            << " next_segment=" << next_seg
-            << " segment_type=" << seg_type_name
-            << " seam_frame=" << (current_segment_index_ < static_cast<int32_t>(segment_seam_frames_.size())
-                ? segment_seam_frames_[current_segment_index_] : INT64_MAX)
-            << std::endl;
+  { std::ostringstream oss;
+    int64_t sf = (current_segment_index_ < static_cast<int32_t>(segment_seam_frames_.size()))
+        ? segment_seam_frames_[current_segment_index_] : std::numeric_limits<int64_t>::max();
+    oss << "[PipelineManager] SEGMENT_PREP_ARMED"
+        << " tick=" << session_frame_index
+        << " parent_block=" << live_parent_block_.block_id
+        << " next_segment=" << next_seg
+        << " segment_type=" << seg_type_name
+        << " seam_frame=" << FormatFenceTick(sf);
+    Logger::Info(oss.str()); }
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.segment_prep_armed_count++;
@@ -2127,6 +2337,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   bool swapped = false;
   if (segment_preview_video_buffer_) {
     video_buffer_ = std::move(segment_preview_video_buffer_);
+    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
     audio_buffer_ = std::move(segment_preview_audio_buffer_);
     live_ = std::move(segment_preview_);
     swapped = true;
@@ -2144,6 +2355,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
       video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
           video_buffer_ ? video_buffer_->TargetDepthFrames() : 15,
           video_buffer_ ? video_buffer_->LowWaterFrames() : 5);
+      video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
       const auto& bcfg = ctx_->buffer_config;
       int a_target = bcfg.audio_target_depth_ms;
       int a_low = bcfg.audio_low_water_ms > 0
@@ -2165,6 +2377,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     // INV-SEAM-SEG-007: Segment miss — PAD fallback (no audio underflow).
     live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
     video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
     const auto& bcfg = ctx_->buffer_config;
     int a_target = bcfg.audio_target_depth_ms;
     int a_low = bcfg.audio_low_water_ms > 0
@@ -2179,10 +2392,11 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
         &ctx_->stop_requested);
     swapped = true;
     prep_mode = "MISS";
-    std::cerr << "[PipelineManager] SEGMENT_SEAM_PAD_FALLBACK"
-              << " tick=" << session_frame_index
-              << " segment_index=" << current_segment_index_
-              << std::endl;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] SEGMENT_SEAM_PAD_FALLBACK"
+          << " tick=" << session_frame_index
+          << " segment_index=" << current_segment_index_;
+      Logger::Warn(oss.str()); }
     {
       std::lock_guard<std::mutex> lock(metrics_mutex_);
       metrics_.segment_seam_miss_count++;
@@ -2203,14 +2417,20 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   // Step 7: Arm next segment prep (call site #4).
   ArmSegmentPrep(session_frame_index);
 
+  // Step 7b: Fire on_segment_start for the segment transition.
+  if (callbacks_.on_segment_start) {
+    callbacks_.on_segment_start(from_seg, to_seg, live_parent_block_, session_frame_index);
+  }
+
   // Step 8: Log and metrics.
-  std::cout << "[PipelineManager] SEGMENT_SEAM_TAKE"
-            << " tick=" << session_frame_index
-            << " from_segment=" << from_seg << " (" << from_type << ")"
-            << " to_segment=" << to_seg << " (" << to_type << ")"
-            << " prep_mode=" << prep_mode
-            << " next_seam_frame=" << next_seam_frame_
-            << std::endl;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] SEGMENT_SEAM_TAKE"
+        << " tick=" << session_frame_index
+        << " from_segment=" << from_seg << " (" << from_type << ")"
+        << " to_segment=" << to_seg << " (" << to_type << ")"
+        << " prep_mode=" << prep_mode
+        << " next_seam_frame=" << FormatFenceTick(next_seam_frame_);
+    Logger::Info(oss.str()); }
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.segment_seam_count++;
