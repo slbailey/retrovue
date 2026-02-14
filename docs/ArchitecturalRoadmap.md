@@ -32,6 +32,7 @@
 - **AIR frame-count authority:** Enforced; integrated with core for playout segment emission.
 - **Fence-based block timing:** Active and tested in 24-hour burn-in.
 - **Hard-stop (wall-clock) discipline:** All playout plans respect TransmissionLog stop points.
+- **Runway Min (INV-RUNWAY-MIN-001):** When queue_depth ≥ 3, AIR must not enter PADDED_GAP due to "no next block" except when ScheduleService returns None (true planning gap). **[VERIFIED: `docs/contracts/core/RunwayMinContract_v0.1.md`; INVARIANTS_INDEX Cross-Domain.]**
 
 ### ✔️ As-Run Reconciliation (CONTRACT DELIVERED)
 - **AsRunReconciliationContract v0.1** and reconciler: Plan-vs-actual comparison (TransmissionLog vs AsRunLog); INV-ASRUN-001..005; structured report with classification. **[VERIFIED: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`, `asrun_reconciler.py`, `test_asrun_reconciliation_contract.py`.]**
@@ -42,7 +43,7 @@
 - **Horizon extension:** Day-based (`extend_epg_day`, `extend_execution_day`). Block-based API not implemented.
 - **Deterministic filler policy:** Deterministic on identical inputs; pool partitioning (bumper/promo/ad) is planned but not yet shipped.
 - **As-run logging:** `AsRunLogger` exists. **As-run reconciliation:** `docs/contracts/core/AsRunReconciliationContract_v0.1.md` and reconciler (`asrun_reconciler.py`, `asrun_types.py`) implemented; contract tests in `test_asrun_reconciliation_contract.py`. Optional integration (e.g. post-execution reconciliation run or AsRunLogger exporting AsRunLog) not yet wired.
-- **Burn-in proof harness:** Exists as `tools/burn_in.py` (args: `--horizon`, `--pipeline`, `--schedule`, `--dump`). Not run in CI.
+- **Burn-in proof harness:** Exists as `tools/burn_in.py` (args: `--horizon`, `--schedule`, `--dump`). Use `--horizon` for contract-aligned runs; `--pipeline` removed. Not run in CI.
 
 ---
 
@@ -69,7 +70,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 - **Missing:** Pool partitioning (bumper/promo/ad), tracked for next sprint.
 
 ### 1.4 **24-Hour Burn-In Validation Harness** _(DELIVERED)_
-- Harness: `tools/burn_in.py` with args `--horizon`, `--pipeline`, `--schedule`, `--dump`. Not invoked in CI.
+- Harness: `tools/burn_in.py` with args `--horizon`, `--schedule`, `--dump`. `--horizon` is the contract-aligned mode; `--pipeline` has been removed. Not invoked in CI.
 - All key invariants asserted:
   - Seam continuity
   - Horizon completeness
@@ -144,10 +145,12 @@ Spot-check against the repo (main, pkg/core and tools):
 | **Core seam contract:** TransmissionLogSeamContract_v0.1.md | ✅ Verified: `docs/contracts/core/TransmissionLogSeamContract_v0.1.md`; `transmission_log_validator.py`; contract tests in `test_transmission_log_seam_contract.py`. |
 | **Horizon:** Day-based extension | ✅ Verified: `extend_epg_day`, `extend_execution_day`; no block-based API. |
 | **Horizon:** Authority model | ✅ Verified: HorizonManager sole trigger; consumer reads only; `HorizonNoScheduleDataError` for missing data. |
-| **Burn-in:** tools/burn_in.py | ✅ Verified: harness exists; not run in CI. |
+| **Burn-in:** tools/burn_in.py | ✅ Verified: harness exists; `--horizon` primary, `--pipeline` removed; not run in CI. |
 | **As-Run:** AsRunLogger | ✅ Verified: `AsRunLogger` in `asrun_logger.py`. |
 | **As-Run reconciliation:** Contract + reconciler | ✅ Verified: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`; `asrun_types.py`, `asrun_reconciler.py`; `reconcile_transmission_log()`; contract tests in `test_asrun_reconciliation_contract.py`. |
+| **Runway Min (INV-RUNWAY-MIN-001)** | ✅ Verified: `docs/contracts/core/RunwayMinContract_v0.1.md`; operational promise (queue_depth ≥ 3 ⇒ no starvation PADDED_GAP except ScheduleService returns None). |
 | **Phase 3:** Multi-zone, Traffic, HLS not started | ✅ Verified: no campaign/inventory or HLS implementation in tree. |
 
+_Audit re-run: roadmap checked against current code (contracts, Core runtime, tools). Burn-in updated to reflect --pipeline removal._
 
 ---

@@ -124,6 +124,8 @@ struct Segment {
   int64_t segment_duration_ms;     // Allocated time for this segment
   SegmentType segment_type = SegmentType::kContent;  // Segment role
 
+  std::string event_id;  // Scheduled event_id from TransmissionLog
+
   // EXTENSION POINT: Segment metadata (Section 8.2.1)
   // INV-BLOCKPLAN-METADATA-IGNORED: AIR MUST NOT alter execution based on this
   std::optional<std::string> metadata_json;

@@ -247,11 +247,11 @@ def test_inv_tl_seam_004_zero_duration_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_lock_for_execution_validates_and_locks():
+def test_lock_for_execution_validates_and_locks(tmp_path):
     """lock_for_execution validates seams before marking execution-eligible."""
     log = _make_log_via_pipeline()
     lock_time = datetime(2025, 7, 15, 5, 30, 0)
-    locked = lock_for_execution(log, lock_time)
+    locked = lock_for_execution(log, lock_time, artifact_base_path=tmp_path)
     assert locked.is_locked is True
 
 
@@ -289,7 +289,7 @@ def test_lock_for_execution_missing_grid_block_minutes_raises():
     assert "grid_block_minutes" in str(exc_info.value).lower()
 
 
-def test_run_planning_pipeline_with_lock_produces_valid_locked_log():
+def test_run_planning_pipeline_with_lock_produces_valid_locked_log(tmp_path):
     """run_planning_pipeline with lock_time returns validated locked log."""
     directive = PlanningDirective(
         channel_id="ch1",
@@ -306,6 +306,8 @@ def test_run_planning_pipeline_with_lock_produces_valid_locked_log():
     config = _make_config()
     lib = _make_asset_library()
     lock_time = datetime(2025, 7, 15, 5, 30, 0)
-    log = run_planning_pipeline(run_req, config, lib, lock_time=lock_time)
+    log = run_planning_pipeline(
+        run_req, config, lib, lock_time=lock_time, artifact_base_path=tmp_path
+    )
     assert log.is_locked is True
     validate_transmission_log_seams(log, 30)

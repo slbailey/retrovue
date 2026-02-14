@@ -53,7 +53,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
  public:
   struct Callbacks {
     // Called when a block completes its allocated frame count.
-    std::function<void(const FedBlock&, int64_t)> on_block_completed;
+    // Parameters: block, final_ct_ms, session_frame_index at fence.
+    std::function<void(const FedBlock&, int64_t, int64_t)> on_block_completed;
 
     // Called when a block is popped from the queue and begins execution/preload.
     // Signals queue slot consumption — Core uses this as the preferred credit signal.
@@ -61,6 +62,13 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
     // Called when the session ends (stop requested, error, etc.).
     std::function<void(const std::string&)> on_session_ended;
+
+    // Called when a new segment becomes live within a block.
+    // from_segment_index: -1 on first segment of block (no predecessor).
+    // to_segment_index: index of the segment now live.
+    // block: the parent FedBlock (segments carry event_id).
+    // session_frame_index: frame index at the transition point.
+    std::function<void(int32_t, int32_t, const FedBlock&, int64_t)> on_segment_start;
 
     // P3.2: Per-frame fingerprint (optional — test/verify only).
     // Zero cost when not wired.

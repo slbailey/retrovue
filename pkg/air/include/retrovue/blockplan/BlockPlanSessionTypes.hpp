@@ -37,6 +37,7 @@ struct FedBlock {
     int64_t asset_start_offset_ms = 0;
     int64_t segment_duration_ms = 0;
     SegmentType segment_type = SegmentType::kContent;
+    std::string event_id;  // Scheduled event_id from TransmissionLog
   };
   std::vector<Segment> segments;
 };
@@ -57,6 +58,7 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
     s.asset_start_offset_ms = seg.asset_start_offset_ms;
     s.segment_duration_ms = seg.segment_duration_ms;
     s.segment_type = seg.segment_type;
+    s.event_id = seg.event_id;
     plan.segments.push_back(s);
   }
   return plan;

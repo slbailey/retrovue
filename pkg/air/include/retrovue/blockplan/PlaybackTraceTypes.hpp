@@ -1,8 +1,9 @@
 // Repository: Retrovue-playout
 // Component: Playback Trace Types
 // Purpose: Header-only types for P3.3 execution trace logging.
-//          Per-block playback summaries and seam transition records
-//          derived from actual execution, not scheduled intent.
+//          Per-block playback summaries, seam transition records,
+//          and segment-aware playback proofs derived from actual
+//          execution, not scheduled intent.
 // Contract Reference: PlayoutAuthorityContract.md (P3.3)
 // Copyright (c) 2025 RetroVue
 
@@ -16,6 +17,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "retrovue/blockplan/BlockPlanTypes.hpp"
 
 namespace retrovue::blockplan {
 
@@ -51,11 +54,83 @@ struct SeamTransitionLog {
 };
 
 // =============================================================================
+// PlaybackProofVerdict — verdict comparing intent to actual.
+// Placed before SegmentProofRecord / BlockAccumulator so both can reference it.
+// =============================================================================
+
+enum class PlaybackProofVerdict {
+  kFaithful,      // Correct asset(s), zero pad
+  kPartialPad,    // Correct asset(s), some pad frames
+  kAllPad,        // No real frames at all
+  kAssetMismatch, // Observed asset doesn't match expected
+};
+
+inline const char* PlaybackProofVerdictToString(PlaybackProofVerdict v) {
+  switch (v) {
+    case PlaybackProofVerdict::kFaithful:      return "FAITHFUL";
+    case PlaybackProofVerdict::kPartialPad:    return "PARTIAL_PAD";
+    case PlaybackProofVerdict::kAllPad:        return "ALL_PAD";
+    case PlaybackProofVerdict::kAssetMismatch: return "ASSET_MISMATCH";
+  }
+  return "UNKNOWN";
+}
+
+// =============================================================================
+// SegmentProofRecord — per-segment proof: expected vs actual execution
+// =============================================================================
+
+struct SegmentProofRecord {
+  // Expected (from BlockPlan segments at block load time)
+  int32_t segment_index = -1;
+  std::string expected_asset_uri;
+  int64_t expected_frame_count = 0;
+  SegmentType expected_type = SegmentType::kContent;
+  std::string event_id;
+
+  // Actual (accumulated during emission)
+  std::string actual_asset_uri;      // first observed URI (empty if all pad)
+  int64_t actual_frame_count = 0;
+  int64_t actual_pad_frames = 0;
+  int64_t actual_start_frame = -1;   // session frame index
+  int64_t actual_end_frame = -1;     // session frame index (inclusive)
+  int64_t first_ct_ms = -1;
+  int64_t last_ct_ms = -1;
+
+  // Verdict (computed at finalization)
+  PlaybackProofVerdict verdict = PlaybackProofVerdict::kFaithful;
+};
+
+// Determine per-segment verdict.
+inline PlaybackProofVerdict DetermineSegmentVerdict(
+    const SegmentProofRecord& rec) {
+  // All pad — decoder never produced a frame for this segment
+  if (rec.actual_frame_count > 0 &&
+      rec.actual_pad_frames == rec.actual_frame_count) {
+    return PlaybackProofVerdict::kAllPad;
+  }
+
+  // Asset mismatch — observed URI doesn't match expected
+  if (!rec.actual_asset_uri.empty() && !rec.expected_asset_uri.empty() &&
+      rec.actual_asset_uri != rec.expected_asset_uri) {
+    return PlaybackProofVerdict::kAssetMismatch;
+  }
+
+  // Some pad frames but correct asset
+  if (rec.actual_pad_frames > 0) {
+    return PlaybackProofVerdict::kPartialPad;
+  }
+
+  return PlaybackProofVerdict::kFaithful;
+}
+
+// =============================================================================
 // BlockAccumulator — per-block frame aggregation (engine-internal)
 // Lives in the Run() loop.  Reset when a new block becomes active.
+// Includes segment-level tracking for proof generation.
 // =============================================================================
 
 struct BlockAccumulator {
+  // --- Block-level tracking ---
   std::string block_id;
   std::set<std::string> asset_uri_set;
   std::vector<std::string> asset_uri_order;  // insertion order, unique
@@ -65,6 +140,26 @@ struct BlockAccumulator {
   int64_t pad_frames = 0;
   int64_t first_session_frame = -1;
   int64_t last_session_frame = -1;
+
+  // --- Segment-level tracking ---
+  struct SegmentAccState {
+    int32_t segment_index = -1;
+    std::string expected_asset_uri;
+    int64_t expected_frame_count = 0;
+    SegmentType expected_type = SegmentType::kContent;
+    std::string event_id;
+
+    std::string actual_asset_uri;
+    int64_t frame_count = 0;
+    int64_t pad_frames = 0;
+    int64_t start_frame = -1;
+    int64_t end_frame = -1;
+    int64_t first_ct_ms = -1;
+    int64_t last_ct_ms = -1;
+  };
+
+  SegmentAccState current_segment_;
+  std::vector<SegmentProofRecord> finalized_segments_;
 
   void Reset(const std::string& id) {
     block_id = id;
@@ -76,10 +171,47 @@ struct BlockAccumulator {
     pad_frames = 0;
     first_session_frame = -1;
     last_session_frame = -1;
+    current_segment_ = {};
+    finalized_segments_.clear();
+  }
+
+  // Begin tracking a new segment.  Auto-finalizes the previous segment.
+  void BeginSegment(int32_t index, const std::string& expected_uri,
+                    int64_t expected_frames, SegmentType type,
+                    const std::string& event_id) {
+    FinalizeCurrentSegment();
+    current_segment_ = {};
+    current_segment_.segment_index = index;
+    current_segment_.expected_asset_uri = expected_uri;
+    current_segment_.expected_frame_count = expected_frames;
+    current_segment_.expected_type = type;
+    current_segment_.event_id = event_id;
+  }
+
+  // Finalize the current segment and store its proof record.
+  void FinalizeCurrentSegment() {
+    if (current_segment_.segment_index < 0) return;
+    SegmentProofRecord rec;
+    rec.segment_index = current_segment_.segment_index;
+    rec.expected_asset_uri = current_segment_.expected_asset_uri;
+    rec.expected_frame_count = current_segment_.expected_frame_count;
+    rec.expected_type = current_segment_.expected_type;
+    rec.event_id = current_segment_.event_id;
+    rec.actual_asset_uri = current_segment_.actual_asset_uri;
+    rec.actual_frame_count = current_segment_.frame_count;
+    rec.actual_pad_frames = current_segment_.pad_frames;
+    rec.actual_start_frame = current_segment_.start_frame;
+    rec.actual_end_frame = current_segment_.end_frame;
+    rec.first_ct_ms = current_segment_.first_ct_ms;
+    rec.last_ct_ms = current_segment_.last_ct_ms;
+    rec.verdict = DetermineSegmentVerdict(rec);
+    finalized_segments_.push_back(std::move(rec));
+    current_segment_ = {};
   }
 
   void AccumulateFrame(int64_t session_idx, bool is_pad,
                        const std::string& uri, int64_t ct_ms) {
+    // Block-level tracking
     frames++;
     if (first_session_frame < 0) first_session_frame = session_idx;
     last_session_frame = session_idx;
@@ -99,9 +231,32 @@ struct BlockAccumulator {
         last_ct_ms = ct_ms;
       }
     }
+
+    // Segment-level tracking (O(1) per frame)
+    if (current_segment_.segment_index >= 0) {
+      current_segment_.frame_count++;
+      if (current_segment_.start_frame < 0)
+        current_segment_.start_frame = session_idx;
+      current_segment_.end_frame = session_idx;
+      if (is_pad) {
+        current_segment_.pad_frames++;
+      } else {
+        if (!uri.empty() && current_segment_.actual_asset_uri.empty()) {
+          current_segment_.actual_asset_uri = uri;
+        }
+        if (ct_ms >= 0) {
+          if (current_segment_.first_ct_ms < 0)
+            current_segment_.first_ct_ms = ct_ms;
+          current_segment_.last_ct_ms = ct_ms;
+        }
+      }
+    }
   }
 
-  BlockPlaybackSummary Finalize() const {
+  // Finalize block: finalize last segment, return block-level summary.
+  BlockPlaybackSummary Finalize() {
+    FinalizeCurrentSegment();
+
     BlockPlaybackSummary s;
     s.block_id = block_id;
     s.asset_uris = asset_uri_order;
@@ -112,6 +267,11 @@ struct BlockAccumulator {
     s.first_session_frame_index = first_session_frame;
     s.last_session_frame_index = last_session_frame;
     return s;
+  }
+
+  // Access finalized segment proofs (valid after Finalize()).
+  const std::vector<SegmentProofRecord>& GetSegmentProofs() const {
+    return finalized_segments_;
   }
 };
 
@@ -163,7 +323,7 @@ inline std::string FormatSeamTransition(const SeamTransitionLog& t) {
 }
 
 // =============================================================================
-// P3.3b: Playback Proof — wanted vs showed comparison
+// P3.3b: Playback Proof — wanted vs showed comparison (segment-aware)
 // =============================================================================
 
 // What Core told AIR to play (extracted from FedBlock at fence time).
@@ -175,29 +335,17 @@ struct BlockPlaybackIntent {
   int64_t expected_start_offset_ms = 0;           // first segment offset
 };
 
-// Verdict comparing intent to actual.
-enum class PlaybackProofVerdict {
-  kFaithful,      // Correct asset(s), zero pad
-  kPartialPad,    // Correct asset(s), some pad frames
-  kAllPad,        // No real frames at all
-  kAssetMismatch, // Observed asset doesn't match expected
-};
-
-inline const char* PlaybackProofVerdictToString(PlaybackProofVerdict v) {
-  switch (v) {
-    case PlaybackProofVerdict::kFaithful:      return "FAITHFUL";
-    case PlaybackProofVerdict::kPartialPad:    return "PARTIAL_PAD";
-    case PlaybackProofVerdict::kAllPad:        return "ALL_PAD";
-    case PlaybackProofVerdict::kAssetMismatch: return "ASSET_MISMATCH";
-  }
-  return "UNKNOWN";
-}
-
-// Full proof record: intent + actual + verdict.
+// Full proof record: intent + actual + segment proofs + verdict.
 struct BlockPlaybackProof {
   BlockPlaybackIntent wanted;
   BlockPlaybackSummary showed;
+  std::vector<SegmentProofRecord> segment_proofs;
   PlaybackProofVerdict verdict = PlaybackProofVerdict::kFaithful;
+
+  // Block-level integrity checks (valid when segment_proofs non-empty)
+  bool frame_budget_match = true;
+  bool no_gaps = true;
+  bool no_overlaps = true;
 };
 
 // Build intent from a FedBlock.  frame_duration_ms comes from the engine's
@@ -219,7 +367,8 @@ inline BlockPlaybackIntent BuildIntent(const FedBlock& block,
   return intent;
 }
 
-// Determine verdict by comparing intent to actual summary.
+// Determine verdict by comparing intent to actual summary (block-level).
+// Retained for backward compatibility and as fallback when no segment proofs.
 inline PlaybackProofVerdict DetermineVerdict(
     const BlockPlaybackIntent& wanted,
     const BlockPlaybackSummary& showed) {
@@ -249,22 +398,106 @@ inline PlaybackProofVerdict DetermineVerdict(
   return PlaybackProofVerdict::kFaithful;
 }
 
-// Build a complete proof record.
+// Block-level verdict derived from segment proofs.
+// Worst verdict across all segments wins.
+inline PlaybackProofVerdict DetermineBlockVerdictFromSegments(
+    const std::vector<SegmentProofRecord>& segment_proofs,
+    const BlockPlaybackSummary& showed) {
+  if (segment_proofs.empty()) {
+    // No segment data — degenerate case
+    if (showed.pad_frames == showed.frames_emitted)
+      return PlaybackProofVerdict::kAllPad;
+    return showed.pad_frames > 0
+        ? PlaybackProofVerdict::kPartialPad
+        : PlaybackProofVerdict::kFaithful;
+  }
+
+  PlaybackProofVerdict worst = PlaybackProofVerdict::kFaithful;
+  for (const auto& sp : segment_proofs) {
+    if (sp.verdict == PlaybackProofVerdict::kAssetMismatch) {
+      return PlaybackProofVerdict::kAssetMismatch;
+    }
+    if (sp.verdict == PlaybackProofVerdict::kAllPad &&
+        worst != PlaybackProofVerdict::kAssetMismatch) {
+      worst = PlaybackProofVerdict::kAllPad;
+    } else if (sp.verdict == PlaybackProofVerdict::kPartialPad &&
+               worst == PlaybackProofVerdict::kFaithful) {
+      worst = PlaybackProofVerdict::kPartialPad;
+    }
+  }
+  return worst;
+}
+
+// Build a complete proof record (segment-aware).
 inline BlockPlaybackProof BuildPlaybackProof(
     const FedBlock& block,
     const BlockPlaybackSummary& summary,
-    int64_t frame_duration_ms) {
+    int64_t frame_duration_ms,
+    const std::vector<SegmentProofRecord>& segment_proofs = {}) {
   BlockPlaybackProof proof;
   proof.wanted = BuildIntent(block, frame_duration_ms);
   proof.showed = summary;
-  proof.verdict = DetermineVerdict(proof.wanted, proof.showed);
+  proof.segment_proofs = segment_proofs;
+
+  if (!segment_proofs.empty()) {
+    proof.verdict = DetermineBlockVerdictFromSegments(segment_proofs, summary);
+
+    // Integrity: sum of segment frames == block frames
+    int64_t total_segment_frames = 0;
+    for (const auto& sp : segment_proofs) {
+      total_segment_frames += sp.actual_frame_count;
+    }
+    proof.frame_budget_match = (total_segment_frames == summary.frames_emitted);
+
+    // Gap/overlap detection: contiguous session frame ranges
+    for (size_t i = 1; i < segment_proofs.size(); ++i) {
+      const auto& prev = segment_proofs[i - 1];
+      const auto& curr = segment_proofs[i];
+      if (prev.actual_end_frame >= 0 && curr.actual_start_frame >= 0) {
+        if (curr.actual_start_frame > prev.actual_end_frame + 1) {
+          proof.no_gaps = false;
+        }
+        if (curr.actual_start_frame <= prev.actual_end_frame) {
+          proof.no_overlaps = false;
+        }
+      }
+    }
+  } else {
+    proof.verdict = DetermineVerdict(proof.wanted, proof.showed);
+  }
+
   return proof;
+}
+
+// Format segment proof as a human-readable log line.
+inline std::string FormatSegmentProof(const SegmentProofRecord& rec) {
+  std::ostringstream oss;
+  oss << "[SEGMENT_PROOF]"
+      << " segment_index=" << rec.segment_index
+      << " type=" << SegmentTypeName(rec.expected_type)
+      << " event_id=" << (rec.event_id.empty() ? "none" : rec.event_id)
+      << " expected_asset="
+      << (rec.expected_asset_uri.empty() ? "none" : rec.expected_asset_uri)
+      << " actual_asset="
+      << (rec.actual_asset_uri.empty() ? "none" : rec.actual_asset_uri)
+      << " expected_frames=" << rec.expected_frame_count
+      << " actual_frames=" << rec.actual_frame_count
+      << " pad=" << rec.actual_pad_frames
+      << " verdict=" << PlaybackProofVerdictToString(rec.verdict);
+  return oss.str();
 }
 
 // Format the proof as a human-readable comparison log.
 inline std::string FormatPlaybackProof(const BlockPlaybackProof& p) {
   std::ostringstream oss;
-  oss << "[CONTINUOUS-PLAYBACK-PROOF] block_id=" << p.wanted.block_id << "\n";
+
+  // Segment proofs first
+  for (const auto& sp : p.segment_proofs) {
+    oss << FormatSegmentProof(sp) << "\n";
+  }
+
+  // Block proof
+  oss << "[BLOCK_PROOF] block_id=" << p.wanted.block_id << "\n";
 
   // WANTED line
   oss << "  WANTED:";
@@ -279,6 +512,7 @@ inline std::string FormatPlaybackProof(const BlockPlaybackProof& p) {
   oss << " offset=" << p.wanted.expected_start_offset_ms << "ms"
       << " duration=" << p.wanted.expected_duration_ms << "ms"
       << " frames=" << p.wanted.expected_frames
+      << " segments=" << p.segment_proofs.size()
       << "\n";
 
   // SHOWED line
@@ -303,6 +537,11 @@ inline std::string FormatPlaybackProof(const BlockPlaybackProof& p) {
 
   // VERDICT line
   oss << "  VERDICT: " << PlaybackProofVerdictToString(p.verdict);
+  if (!p.segment_proofs.empty()) {
+    if (!p.frame_budget_match) oss << " FRAME_BUDGET_MISMATCH";
+    if (!p.no_gaps) oss << " GAPS_DETECTED";
+    if (!p.no_overlaps) oss << " OVERLAPS_DETECTED";
+  }
 
   return oss.str();
 }

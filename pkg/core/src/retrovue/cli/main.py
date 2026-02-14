@@ -106,6 +106,42 @@ router.register(
 )
 
 
+@app.command("plan-day")
+def plan_day_cmd(
+    channel: str = typer.Option(..., "--channel", help="Channel ID"),
+    date_str: str = typer.Option(..., "--date", help="Broadcast date (YYYY-MM-DD)"),
+):
+    """Run planning pipeline for one channel and one broadcast day. Writes transmission log artifact; no execution."""
+    from datetime import date
+
+    from retrovue.cli.plan_day import PlanDayError, UnknownChannelError, plan_day
+    from retrovue.planning.transmission_log_artifact_writer import (
+        TransmissionLogArtifactExistsError,
+    )
+    from retrovue.runtime.transmission_log_validator import TransmissionLogSeamError
+
+    try:
+        broadcast_date = date.fromisoformat(date_str)
+    except ValueError:
+        typer.echo(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.", err=True)
+        raise typer.Exit(1)
+
+    try:
+        plan_day(channel_id=channel, broadcast_date=broadcast_date)
+    except UnknownChannelError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except TransmissionLogArtifactExistsError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except TransmissionLogSeamError as e:
+        typer.echo(f"Error: Seam validation failed: {e}", err=True)
+        raise typer.Exit(1)
+    except PlanDayError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
 @app.command("start")
 def start_alias(
     channel_id: str = typer.Argument(None, help="Channel ID to start directly (e.g., cheers-24-7). If omitted, starts ProgramDirector."),

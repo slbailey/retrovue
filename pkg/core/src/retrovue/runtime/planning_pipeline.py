@@ -15,9 +15,12 @@ Contract authorities:
 
 from __future__ import annotations
 
+import hashlib
 import math
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 from retrovue.runtime.schedule_manager import ScheduleManager
@@ -776,10 +779,15 @@ def assemble_transmission_log(
         block_start_ms = int(utc_dt.timestamp() * 1000)
         block_end_ms = block_start_ms + fb.block_duration_ms
 
+        block_id = f"{channel_id}-{broadcast_date.isoformat()}-{block_idx:04d}"
         flat_segments = _interleave_segments(fb, block_start_ms)
 
+        # Assign stable event_id to each segment for evidence reconciliation.
+        for seg in flat_segments:
+            seg["event_id"] = f"{block_id}-S{seg['segment_index']:04d}"
+
         entries.append(TransmissionLogEntry(
-            block_id=f"{channel_id}-{broadcast_date.isoformat()}-{block_idx:04d}",
+            block_id=block_id,
             block_index=block_idx,
             start_utc_ms=block_start_ms,
             end_utc_ms=block_end_ms,
@@ -794,6 +802,7 @@ def assemble_transmission_log(
         metadata={
             "generation_time": generation_time.isoformat(),
             "grid_block_minutes": grid_block_minutes,
+            "programming_day_start_hour": programming_day_start_hour,
         },
     )
 
@@ -863,14 +872,12 @@ def to_block_plan(entry: TransmissionLogEntry, channel_id_int: int) -> dict[str,
 # =============================================================================
 
 
-def lock_for_execution(
-    log: TransmissionLog,
-    lock_time: datetime,
-) -> TransmissionLog:
-    """Mark the Transmission Log as execution-eligible and immutable.
+def lock_transmission_log(log: TransmissionLog, lock_time: datetime) -> TransmissionLog:
+    """Mark the Transmission Log as execution-eligible and immutable (lock only, no write).
 
-    This is a lifecycle state transition, not a data transform.
-    Validates seam invariants before marking execution-eligible.
+    Validates seam invariants. Returns a locked TransmissionLog with deterministic
+    transmission_log_id. Does NOT write artifacts; use TransmissionLogArtifactWriter
+    after this for artifact write (e.g. plan-day CLI).
     """
     from retrovue.runtime.transmission_log_validator import (
         TransmissionLogSeamError,
@@ -880,13 +887,16 @@ def lock_for_execution(
     grid_min = log.metadata.get("grid_block_minutes")
     if grid_min is None:
         raise TransmissionLogSeamError(
-            "lock_for_execution: grid_block_minutes missing from log.metadata; "
+            "lock_transmission_log: grid_block_minutes missing from log.metadata; "
             "cannot validate seam invariants"
         )
     validate_transmission_log_seams(log, int(grid_min))
 
     new_metadata = dict(log.metadata)
     new_metadata["locked_at"] = lock_time.isoformat()
+    # Deterministic ID for planning harness (no random UUIDs)
+    seed = f"{log.channel_id}:{log.broadcast_date.isoformat()}:{lock_time.isoformat()}"
+    new_metadata["transmission_log_id"] = hashlib.sha256(seed.encode()).hexdigest()[:32]
 
     return TransmissionLog(
         channel_id=log.channel_id,
@@ -895,6 +905,37 @@ def lock_for_execution(
         is_locked=True,
         metadata=new_metadata,
     )
+
+
+def lock_for_execution(
+    log: TransmissionLog,
+    lock_time: datetime,
+    timezone_display: str = "UTC",
+    artifact_base_path: Path | None = None,
+) -> TransmissionLog:
+    """Mark the Transmission Log as execution-eligible and immutable.
+
+    This is a lifecycle state transition, not a data transform.
+    Validates seam invariants before marking execution-eligible.
+    After lock, writes transmission log artifacts (.tlog + .tlog.jsonl).
+    """
+    locked = lock_transmission_log(log, lock_time)
+
+    from retrovue.planning.transmission_log_artifact_writer import (
+        TransmissionLogArtifactWriter,
+    )
+
+    base_path = artifact_base_path or Path("/opt/retrovue/data/logs/transmission")
+    writer = TransmissionLogArtifactWriter(base_path=base_path)
+    writer.write(
+        channel_id=locked.channel_id,
+        broadcast_date=locked.broadcast_date,
+        transmission_log=locked,
+        timezone_display=timezone_display,
+        generated_utc=lock_time,
+    )
+
+    return locked
 
 
 # =============================================================================
@@ -909,6 +950,7 @@ def run_planning_pipeline(
     lock_time: datetime | None = None,
     break_profile: SyntheticBreakProfile | None = None,
     break_fill_policy: BreakFillPolicy | None = None,
+    artifact_base_path: Path | None = None,
 ) -> TransmissionLog:
     """Execute pipeline: Directive → SchedulePlan → ScheduleDay → EPG →
     SegmentedBlocks → FilledBlocks → TransmissionLog (optionally locked).
@@ -942,7 +984,9 @@ def run_planning_pipeline(
         generation_time=run_request.resolution_time,
     )
     if lock_time is not None:
-        log = lock_for_execution(log, lock_time)
+        log = lock_for_execution(
+            log, lock_time, artifact_base_path=artifact_base_path
+        )
 
     return log
 

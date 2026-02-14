@@ -14,6 +14,7 @@ Uses:
 
 from __future__ import annotations
 
+import tempfile
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -99,7 +100,11 @@ def transmission_log(asset_library):
     )
 
     run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
-    return run_planning_pipeline(run_req, config, asset_library, lock_time=LOCK_TIME)
+    with tempfile.TemporaryDirectory() as tmp:
+        return run_planning_pipeline(
+            run_req, config, asset_library, lock_time=LOCK_TIME,
+            artifact_base_path=Path(tmp),
+        )
 
 
 # =============================================================================

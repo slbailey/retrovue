@@ -165,11 +165,18 @@ class _ExecutionHorizonExtender:
     without requiring the full planning pipeline infrastructure.
     Ensures the broadcast date is resolved first, then builds
     execution entries from ScheduleManager's program blocks.
+    Writes transmission log artifact (.tlog + .tlog.jsonl) when extending.
     """
 
-    def __init__(self, schedule_service: ScheduleManagerBackedScheduleService, channel_id: str):
+    def __init__(
+        self,
+        schedule_service: ScheduleManagerBackedScheduleService,
+        channel_id: str,
+        timezone_display: str = "UTC",
+    ):
         self._service = schedule_service
         self._channel_id = channel_id
+        self._timezone_display = timezone_display
         self._logger = logging.getLogger(__name__)
 
     def extend_execution_day(self, broadcast_date):
@@ -248,7 +255,63 @@ class _ExecutionHorizonExtender:
             "ExecutionHorizonExtender: Generated %d entries for %s (end_utc_ms=%d)",
             len(entries), broadcast_date.isoformat(), end_ms,
         )
+
+        # Write transmission log artifact (TL-ART-001: write-once; ignore if exists)
+        if entries:
+            self._write_transmission_log_artifact(broadcast_date, entries)
+
         return ExecutionDayResult(end_utc_ms=end_ms, entries=entries)
+
+    def _write_transmission_log_artifact(self, broadcast_date, entries):
+        """Build TransmissionLog from entries and write .tlog + .tlog.jsonl."""
+        from retrovue.planning.transmission_log_artifact_writer import (
+            TransmissionLogArtifactExistsError,
+            TransmissionLogArtifactWriter,
+        )
+        from retrovue.runtime.planning_pipeline import TransmissionLog, TransmissionLogEntry
+
+        grid_minutes = self._service._grid_minutes
+        tl_entries = [
+            TransmissionLogEntry(
+                block_id=e.block_id,
+                block_index=e.block_index,
+                start_utc_ms=e.start_utc_ms,
+                end_utc_ms=e.end_utc_ms,
+                segments=e.segments,
+            )
+            for e in entries
+        ]
+        lock_time = datetime(
+            broadcast_date.year, broadcast_date.month, broadcast_date.day,
+            5, 0, 0, tzinfo=timezone.utc,
+        )
+        transmission_log = TransmissionLog(
+            channel_id=self._channel_id,
+            broadcast_date=broadcast_date,
+            entries=tl_entries,
+            is_locked=True,
+            metadata={
+                "grid_block_minutes": grid_minutes,
+                "locked_at": lock_time.isoformat(),
+            },
+        )
+        writer = TransmissionLogArtifactWriter()
+        try:
+            path = writer.write(
+                channel_id=self._channel_id,
+                broadcast_date=broadcast_date,
+                transmission_log=transmission_log,
+                timezone_display=self._timezone_display,
+                generated_utc=lock_time,
+            )
+            self._logger.info(
+                "Transmission log artifact written: %s", path,
+            )
+        except TransmissionLogArtifactExistsError:
+            self._logger.debug(
+                "Transmission log artifact already exists for %s %s (TL-ART-001)",
+                self._channel_id, broadcast_date.isoformat(),
+            )
 
 
 class ProgramDirector:
@@ -382,6 +445,14 @@ class ProgramDirector:
         
         # Phase 0: System mode
         self._system_mode = SystemMode.NORMAL
+
+        # Evidence pipeline configuration
+        self._evidence_enabled = True
+        self._evidence_port = 50052
+        self._evidence_asrun_dir = "/opt/retrovue/data/logs/asrun"
+        self._evidence_ack_dir = "/opt/retrovue/data/logs/asrun/acks"
+        self._evidence_endpoint = f"127.0.0.1:{self._evidence_port}" if self._evidence_enabled else ""
+        self._evidence_server = None
         
         # Register HTTP endpoints
         self._register_endpoints()
@@ -591,12 +662,17 @@ class ProgramDirector:
             self._horizon_execution_stores[channel_id] = execution_store
             self._horizon_resolved_stores[channel_id] = phase3_service._resolved_store
 
+            schedule_config = config.schedule_config
+
             # Create adapters
             schedule_extender = _EpgHorizonExtender(phase3_service, channel_id)
-            execution_extender = _ExecutionHorizonExtender(phase3_service, channel_id)
+            execution_extender = _ExecutionHorizonExtender(
+                phase3_service,
+                channel_id,
+                timezone_display=schedule_config.get("timezone_display", "UTC"),
+            )
 
             # Create HorizonManager
-            schedule_config = config.schedule_config
             horizon_mgr = HorizonManager(
                 schedule_manager=schedule_extender,
                 planning_pipeline=execution_extender,
@@ -675,6 +751,7 @@ class ProgramDirector:
                     clock=self._embedded_clock,
                     schedule_service=schedule_service,
                     program_director=self,
+                    evidence_endpoint=self._evidence_endpoint,
                 )
                 manager.channel_config = channel_config
                 if self._mock_schedule_grid_mode:
@@ -879,6 +956,25 @@ class ProgramDirector:
                 )
                 self._health_check_thread.start()
 
+        # Start evidence gRPC server (if enabled)
+        if self._evidence_enabled and self._evidence_server is None:
+            try:
+                from retrovue.runtime import evidence_server
+                from retrovue.runtime.evidence_server import DurableAckStore
+                ack_store = DurableAckStore(ack_dir=self._evidence_ack_dir)
+                self._evidence_server = evidence_server.serve(
+                    port=self._evidence_port,
+                    block=False,
+                    ack_store=ack_store,
+                    asrun_dir=self._evidence_asrun_dir,
+                )
+                self._logger.info(
+                    "Evidence gRPC server started on port %d", self._evidence_port,
+                )
+            except Exception as e:
+                self._logger.warning("Failed to start evidence server: %s", e)
+                self._evidence_endpoint = ""
+
         # Start pacing loop
         if self._pace_thread and self._pace_thread.is_alive():
             self._logger.debug("ProgramDirector.start() called but pace thread already running")
@@ -922,7 +1018,16 @@ class ProgramDirector:
             Maximum seconds to wait for threads to exit before emitting a warning.
         """
         self._logger.debug("ProgramDirector.stop() requested")
-        
+
+        # Stop evidence server
+        if self._evidence_server is not None:
+            try:
+                self._evidence_server.stop(grace=2.0)
+                self._logger.info("Evidence gRPC server stopped")
+            except Exception as e:
+                self._logger.warning("Error stopping evidence server: %s", e)
+            self._evidence_server = None
+
         # Stop HTTP server
         self._stop_http_server()
         

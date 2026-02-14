@@ -152,6 +152,8 @@ class BlockPlan:
                 if seg_type == "filler":
                     kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_FILLER
                 # else: CONTENT (proto default 0)
+            if "event_id" in seg:
+                kwargs["event_id"] = seg["event_id"]
             pb.segments.append(playout_pb2.BlockSegment(**kwargs))
         return pb
 
@@ -198,6 +200,7 @@ class PlayoutSession:
         on_block_complete: Optional[Callable[[str], None]] = None,
         on_session_end: Optional[Callable[[str], None]] = None,
         on_block_started: Optional[Callable[[str], None]] = None,
+        evidence_endpoint: str = "",
     ):
         """
         Initialize PlayoutSession.
@@ -211,6 +214,7 @@ class PlayoutSession:
             on_block_complete: Callback when a block completes (receives block_id)
             on_session_end: Callback when session ends (receives reason)
             on_block_started: Callback when a block starts (receives block_id)
+            evidence_endpoint: host:port for evidence gRPC, empty = disabled
         """
         self.channel_id = channel_id
         self.channel_id_int = channel_id_int
@@ -220,6 +224,7 @@ class PlayoutSession:
         self.on_block_complete = on_block_complete
         self.on_session_end = on_session_end
         self.on_block_started = on_block_started
+        self._evidence_endpoint = evidence_endpoint
 
         self._state = SessionState()
         self._lock = threading.Lock()
@@ -494,6 +499,8 @@ class PlayoutSession:
                     join_utc_ms=join_utc_ms,
                     program_format_json=json.dumps(self.program_format),
                     max_queue_depth=max_queue_depth,
+                    evidence_endpoint=self._evidence_endpoint,
+                    channel_id_str=self.channel_id,
                 )
 
                 response = self._stub.StartBlockPlanSession(request, timeout=10.0)

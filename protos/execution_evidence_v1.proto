@@ -1,0 +1,95 @@
+// Repository: RetroVue
+// Component: Execution Evidence gRPC Interface (AIR → Core)
+// Contract: docs/contracts/coordination/ExecutionEvidenceGrpcInterfaceContract_v0.1.md
+// Copyright (c) 2026 RetroVue
+//
+// This is the canonical transport for execution evidence.
+// Bidirectional streaming: AIR sends evidence, Core sends ACKs.
+
+syntax = "proto3";
+
+package retrovue.evidence.v1;
+
+service ExecutionEvidenceService {
+  rpc EvidenceStream(stream EvidenceFromAir)
+      returns (stream EvidenceAckFromCore);
+}
+
+message EvidenceFromAir {
+  uint32 schema_version = 1;              // must be 1
+  string channel_id = 2;
+  string playout_session_id = 3;
+  uint64 sequence = 4;
+  string event_uuid = 5;
+  string emitted_utc = 6;                 // ISO8601 Z
+
+  oneof payload {
+    Hello hello = 10;
+    BlockStart block_start = 11;
+    SegmentEnd segment_end = 12;
+    BlockFence block_fence = 13;
+    ChannelTerminated channel_terminated = 14;
+    SegmentStart segment_start = 15;
+  }
+}
+
+message EvidenceAckFromCore {
+  string channel_id = 1;
+  string playout_session_id = 2;
+  uint64 acked_sequence = 3;
+  string error = 4; // optional
+}
+
+message Hello {
+  uint64 first_sequence_available = 1;
+  uint64 last_sequence_emitted = 2;
+}
+
+message BlockStart {
+  string block_id = 1;
+  uint64 swap_tick = 2;
+  uint64 fence_tick = 3;
+  int64 actual_start_utc_ms = 4;    // Epoch ms
+  bool primed_success = 5;
+}
+
+message SegmentStart {
+  string block_id = 1;
+  string event_id = 2;              // Scheduled event_id from TransmissionLog
+  int32 segment_index = 3;
+  int64 actual_start_utc_ms = 4;    // Epoch ms
+  int64 actual_start_frame = 5;     // Session frame index at segment start
+  int64 scheduled_duration_ms = 6;  // From block plan, for audit comparison
+}
+
+message SegmentEnd {
+  string block_id = 1;
+  string event_id_ref = 2;          // Same event_id as matching SegmentStart
+  int64 actual_start_utc_ms = 3;    // Epoch ms (captured at SegmentStart, echoed here)
+  int64 actual_end_utc_ms = 4;      // Epoch ms
+  int64 actual_start_frame = 5;     // Session frame index at segment start
+  int64 actual_end_frame = 6;       // Session frame index at segment end
+  int64 computed_duration_ms = 7;    // AIR-computed: wall-clock (end_ms - start_ms)
+  int64 computed_duration_frames = 8; // AIR-computed: deterministic (end_frame - start_frame)
+  string status = 9;                // AIRED, SKIPPED, TRUNCATED
+  string reason = 10;
+  uint64 fallback_frames_used = 11;
+}
+
+message BlockFence {
+  string block_id = 1;
+  uint64 swap_tick = 2;
+  uint64 fence_tick = 3;
+  int64 actual_end_utc_ms = 4;      // Epoch ms
+  uint64 ct_at_fence_ms = 5;
+  uint64 total_frames_emitted = 6;
+  bool truncated_by_fence = 7;
+  bool early_exhaustion = 8;
+  bool primed_success = 9;
+}
+
+message ChannelTerminated {
+  int64 termination_utc_ms = 1;     // Epoch ms
+  string reason = 2;
+  string detail = 3;
+}

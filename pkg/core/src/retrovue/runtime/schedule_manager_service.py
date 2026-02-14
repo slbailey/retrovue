@@ -304,6 +304,18 @@ class ScheduleManagerBackedScheduleService:
             self._logger.error(error_msg)
             return (False, error_msg)
 
+    def get_schedule_slots(self, channel_id: str) -> list[ScheduleSlot]:
+        """Return loaded schedule slots for the channel (chronological by slot_time).
+
+        Returns empty list if schedule not loaded or channel unknown.
+        Used by plan-day CLI to build PlanningDirective from same data as HorizonManager.
+        """
+        with self._lock:
+            slots = self._schedules.get(channel_id, [])
+        if not slots:
+            return []
+        return sorted(slots, key=lambda s: (s.slot_time.hour, s.slot_time.minute))
+
     def prime_schedule_day(
         self,
         channel_id: str,
