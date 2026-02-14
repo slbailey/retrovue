@@ -396,6 +396,7 @@ class ChannelManager:
         schedule_service: ScheduleService,
         program_director: ProgramDirector,
         event_loop: asyncio.AbstractEventLoop | None = None,
+        evidence_endpoint: str = "",
     ):
         """
         Initialize the ChannelManager for a specific channel.
@@ -406,12 +407,14 @@ class ChannelManager:
             schedule_service: ScheduleService for read-only access to current playout plan
             program_director: ProgramDirector for global policy/mode
             event_loop: Optional event loop for P11F-005; when set, switch issuance uses call_later instead of threading.Timer
+            evidence_endpoint: host:port for evidence gRPC, empty = disabled
         """
         self.channel_id = channel_id
         self.clock = clock
         self.schedule_service = schedule_service
         self.program_director = program_director
         self._loop: asyncio.AbstractEventLoop | None = event_loop
+        self._evidence_endpoint = evidence_endpoint
         # P11F-005: asyncio handle when using event loop (cancel on teardown)
         self._switch_handle: asyncio.TimerHandle | None = None
 
@@ -447,6 +450,11 @@ class ChannelManager:
         # When STOPPED, health/reconnect logic does nothing; ProgramDirector calls stop_channel on last viewer.
         self._channel_state: str = "RUNNING"  # "RUNNING" | "STOPPED"
 
+        # Linger: grace period before tearing down producer after last viewer leaves.
+        self.LINGER_SECONDS: int = 20
+        self._linger_handle: asyncio.TimerHandle | None = None
+        self._linger_deadline: float | None = None
+
         # INV-VIEWER-LIFECYCLE: Thread-safe viewer count transitions
         self._viewer_lock: threading.Lock = threading.Lock()
 
@@ -461,10 +469,12 @@ class ChannelManager:
         """
         Enter STOPPED state and stop the producer. No wait for EOF or segment completion.
         Called by ProgramDirector when the last viewer disconnects (StopChannel(channel_id)).
+        Explicit stop bypasses linger — teardown is immediate.
         """
         self._logger.info(
             "[teardown] stopping producer for channel %s (no wait for EOF)", self.channel_id
         )
+        self._cancel_linger()
         self._channel_state = "STOPPED"
         self._teardown_reason = None
         self._pending_fatal = None
@@ -722,6 +732,10 @@ class ChannelManager:
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
 
+            # Cancel linger if a viewer reconnects during the grace period.
+            if old_count == 0 and self.runtime_state.viewer_count == 1:
+                self._cancel_linger()
+
             # When first viewer joins after STOPPED, re-enter RUNNING so producer can start.
             if old_count == 0 and self.runtime_state.viewer_count == 1:
                 self._channel_state = "RUNNING"
@@ -800,16 +814,51 @@ class ChannelManager:
     def on_last_viewer(self) -> None:
         """
         Phase 0 contract: Called when the last viewer disconnects (viewer count goes 1 -> 0).
-        
-        Enters STOPPED state and stops the Producer. ProgramDirector typically calls
-        stop_channel(channel_id) first; this path ensures we still stop if tune_out is
-        invoked without an explicit StopChannel.
+
+        Starts a linger grace period instead of immediately stopping the producer.
+        If no viewer reconnects within LINGER_SECONDS, the producer is stopped.
         """
         if self.runtime_state.viewer_count != 0:
             return  # Not actually last viewer
-        self._channel_state = "STOPPED"
-        # Stop producer when no viewers remain
-        self._stop_producer_if_idle()
+        self._start_linger()
+
+    def _start_linger(self) -> None:
+        """Start linger grace period. Producer stays alive until timeout."""
+        if self._linger_handle is not None:
+            return  # already lingering
+        self._logger.info(
+            "[channel %s] LINGER_STARTED %ds", self.channel_id, self.LINGER_SECONDS
+        )
+        if self._loop is not None:
+            self._linger_deadline = self._loop.time() + self.LINGER_SECONDS
+            self._linger_handle = self._loop.call_later(
+                self.LINGER_SECONDS, self._linger_expire
+            )
+        else:
+            # No event loop — fall back to immediate teardown.
+            self._channel_state = "STOPPED"
+            self._stop_producer_if_idle()
+
+    def _linger_expire(self) -> None:
+        """Linger timer fired. Stop producer if still no viewers."""
+        self._linger_handle = None
+        self._linger_deadline = None
+        if self.runtime_state.viewer_count == 0:
+            self._logger.info(
+                "[channel %s] LINGER_EXPIRED stopping producer", self.channel_id
+            )
+            self._channel_state = "STOPPED"
+            self._stop_producer_if_idle()
+
+    def _cancel_linger(self) -> None:
+        """Cancel any pending linger timer."""
+        if self._linger_handle is not None:
+            self._linger_handle.cancel()
+            self._linger_handle = None
+            self._linger_deadline = None
+            self._logger.info(
+                "[channel %s] LINGER_CANCELLED viewer_reconnected", self.channel_id
+            )
 
     def _ensure_producer_running(self) -> None:
         """Enforce 'channel goes on-air' (BlockPlan path only)."""
@@ -969,8 +1018,9 @@ class ChannelManager:
         """Poll Producer health and update runtime_state. Includes segment supervisor loop for Phase 0."""
         # Phase 8.5/8.6: Channel with zero viewers must not have an active producer. Suppress all
         # restart logic (health, EOF handling, reconnect). Next viewer tune-in will start producer.
+        # Exception: during linger grace period, the producer stays alive awaiting a reconnect.
         viewer_count = len(self.viewer_sessions)
-        if viewer_count == 0:
+        if viewer_count == 0 and self._linger_handle is None:
             if self.active_producer is not None:
                 self._logger.info(
                     "Channel %s: zero viewers, stopping producer (no restarts)",
@@ -1115,6 +1165,7 @@ class ChannelManager:
             channel_config=self._get_channel_config(),
             schedule_service=self.schedule_service,
             clock=self.clock,
+            evidence_endpoint=self._evidence_endpoint,
         )
 
     def _get_channel_config(self) -> ChannelConfig:
@@ -1479,11 +1530,13 @@ class BlockPlanProducer(Producer):
         channel_config: ChannelConfig | None = None,
         schedule_service: ScheduleService | None = None,
         clock: MasterClock | None = None,
+        evidence_endpoint: str = "",
     ):
         super().__init__(channel_id, ProducerMode.NORMAL, configuration or {})
         self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
         self.schedule_service = schedule_service
         self.clock = clock
+        self._evidence_endpoint = evidence_endpoint
 
         # PlayoutSession instance (created on start, destroyed on stop)
         self._session: "PlayoutSession | None" = None
@@ -1653,6 +1706,7 @@ class BlockPlanProducer(Producer):
                     on_block_complete=self._on_block_complete,
                     on_session_end=self._on_session_end,
                     on_block_started=self._on_block_started,
+                    evidence_endpoint=self._evidence_endpoint,
                 )
 
                 # Start AIR subprocess

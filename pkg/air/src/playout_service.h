@@ -24,6 +24,9 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
 #include "retrovue/runtime/PlayoutInterface.h"
+#include "evidence/EvidenceEmitter.hpp"
+#include "evidence/EvidenceSpool.hpp"
+#include "evidence/GrpcEvidenceClient.hpp"
 
 namespace retrovue {
 namespace playout {
@@ -153,6 +156,21 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
     std::mutex event_mutex;
     std::vector<grpc::ServerWriter<BlockEvent>*> event_subscribers;
     std::string termination_reason;  // Set when session ends
+
+    // Evidence pipeline (null when evidence disabled)
+    std::shared_ptr<retrovue::evidence::EvidenceSpool> evidence_spool;
+    std::shared_ptr<retrovue::evidence::GrpcEvidenceClient> evidence_client;
+    std::shared_ptr<retrovue::evidence::EvidenceEmitter> evidence_emitter;
+
+    // Segment-level tracking for duration computation at SegmentEnd.
+    // AIR is the execution authority — duration is computed here, not in Core.
+    struct LiveSegmentInfo {
+      std::string event_id;
+      int64_t start_utc_ms = 0;
+      int64_t start_frame = 0;
+      int32_t segment_index = -1;
+    };
+    LiveSegmentInfo live_segment;  // Currently-airing segment
   };
 
   // Convert proto BlockPlan to internal FedBlock type

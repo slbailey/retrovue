@@ -123,7 +123,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
-    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
+    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
       blocks_completed_cv_.notify_all();
@@ -750,7 +750,7 @@ TEST_F(PlaybackTraceContractTest, FormatPlaybackProofOutput) {
 
   std::string output = FormatPlaybackProof(proof);
 
-  EXPECT_NE(output.find("[CONTINUOUS-PLAYBACK-PROOF]"), std::string::npos)
+  EXPECT_NE(output.find("[BLOCK_PROOF]"), std::string::npos)
       << "Must contain log prefix";
   EXPECT_NE(output.find("block_id=fmt-proof"), std::string::npos)
       << "Must contain block_id";

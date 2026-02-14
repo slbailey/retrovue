@@ -80,7 +80,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
-    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
+    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
     };
@@ -123,7 +123,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
 
   std::unique_ptr<PipelineManager> MakeEngineWithTrace() {
     PipelineManager::Callbacks callbacks;
-    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
+    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
     };
@@ -893,7 +893,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
   // Custom callbacks: stop at exactly kTargetFrames via stop_requested.
   int frame_count = 0;  // written only on engine thread (single writer)
   PipelineManager::Callbacks callbacks;
-  callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
+  callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     completed_blocks_.push_back(block.block_id);
   };
@@ -1133,7 +1133,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadSeam) {
 
   // Custom callbacks: inject B into the queue at A's fence, capture fps.
   PipelineManager::Callbacks callbacks;
-  callbacks.on_block_completed = [&](const FedBlock& block, int64_t ct) {
+  callbacks.on_block_completed = [&](const FedBlock& block, int64_t ct, int64_t) {
     if (!b_injected) {
       b_injected = true;
       // Inject B into the queue.  on_block_completed fires at line 966,
@@ -1420,7 +1420,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadSeam) {
   PipelineManager::Callbacks callbacks;
 
   // on_block_completed: mark fence seen but do NOT inject B.
-  callbacks.on_block_completed = [&](const FedBlock& block, int64_t ct) {
+  callbacks.on_block_completed = [&](const FedBlock& block, int64_t ct, int64_t) {
     if (!fence_seen) {
       fence_seen = true;
     }
@@ -1671,7 +1671,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_BudgetShortfall_ExactCount) {
   // Custom callbacks: stop after exactly kN frames.
   int frame_count = 0;
   PipelineManager::Callbacks callbacks;
-  callbacks.on_block_completed = [this](const FedBlock& blk, int64_t ct) {
+  callbacks.on_block_completed = [this](const FedBlock& blk, int64_t ct, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     completed_blocks_.push_back(blk.block_id);
   };

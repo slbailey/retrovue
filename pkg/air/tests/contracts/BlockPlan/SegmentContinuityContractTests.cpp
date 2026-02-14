@@ -149,7 +149,7 @@ class SegmentContinuityContractTest : public ::testing::Test {
 
   std::unique_ptr<PipelineManager> MakeEngine() {
     PipelineManager::Callbacks callbacks;
-    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct) {
+    callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
       blocks_completed_cv_.notify_all();

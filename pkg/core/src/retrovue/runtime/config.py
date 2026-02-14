@@ -250,6 +250,10 @@ class RuntimeConfig:
     channel_manager_port: int = 9000
     channels_config: str = "/opt/retrovue/config/channels.json"
     schedules_dir: str = "/opt/retrovue/config/schedules"
+    evidence_enabled: bool = True
+    evidence_port: int = 50052
+    evidence_asrun_dir: str = "/opt/retrovue/data/logs/asrun"
+    evidence_ack_dir: str = "/opt/retrovue/data/logs/asrun/acks"
 
     @classmethod
     def load(cls, path: str | None = None) -> "RuntimeConfig":

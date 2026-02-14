@@ -270,6 +270,7 @@ message BlockSegment {
   int64 asset_start_offset_ms = 3;   // Offset within asset where segment starts
   int64 segment_duration_ms = 4;     // Duration of this segment
   SegmentType segment_type = 5;      // Segment role (default CONTENT)
+  string event_id = 6;              // Stable scheduled event_id from TransmissionLog
 }
 
 // StartBlockPlanSessionRequest initializes BlockPlan mode with 2 seed blocks.
@@ -280,6 +281,8 @@ message StartBlockPlanSessionRequest {
   int64 join_utc_ms = 4;         // Join time for mid-block join (0 = block_a.start)
   string program_format_json = 10;  // Program format for encoding (same as StartChannelRequest)
   int32 max_queue_depth = 11;    // Requested queue depth (0 = default 2)
+  string evidence_endpoint = 20; // host:port for evidence gRPC, empty = disabled
+  string channel_id_str = 21;   // Human-readable channel id for evidence/as-run (e.g. cheers-24-7). If empty, AIR uses numeric channel_id.
 }
 
 message StartBlockPlanSessionResponse {

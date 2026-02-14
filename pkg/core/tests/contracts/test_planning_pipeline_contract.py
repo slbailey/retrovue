@@ -573,19 +573,19 @@ class TestStage6_HorizonLock:
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
-    def test_lock_sets_is_locked_and_metadata(self):
+    def test_lock_sets_is_locked_and_metadata(self, tmp_path):
         log = self._get_log()
         lock_time = datetime(2025, 7, 15, 5, 30, 0)
-        locked = lock_for_execution(log, lock_time)
+        locked = lock_for_execution(log, lock_time, artifact_base_path=tmp_path)
 
         assert locked.is_locked is True
         assert "locked_at" in locked.metadata
         assert locked.metadata["locked_at"] == lock_time.isoformat()
 
-    def test_data_content_unchanged(self):
+    def test_data_content_unchanged(self, tmp_path):
         log = self._get_log()
         lock_time = datetime(2025, 7, 15, 5, 30, 0)
-        locked = lock_for_execution(log, lock_time)
+        locked = lock_for_execution(log, lock_time, artifact_base_path=tmp_path)
 
         assert locked.channel_id == log.channel_id
         assert locked.broadcast_date == log.broadcast_date
@@ -600,7 +600,7 @@ class TestStage6_HorizonLock:
 
 class TestPipelineIntegration:
 
-    def test_30min_block_directive_to_locked_log(self):
+    def test_30min_block_directive_to_locked_log(self, tmp_path):
         """30-min block with ~22-min episode: directive → locked transmission log."""
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
         config = _make_config()
@@ -608,7 +608,9 @@ class TestPipelineIntegration:
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
         lock_time = datetime(2025, 7, 15, 5, 30, 0)
 
-        log = run_planning_pipeline(run_req, config, lib, lock_time=lock_time)
+        log = run_planning_pipeline(
+            run_req, config, lib, lock_time=lock_time, artifact_base_path=tmp_path
+        )
 
         assert isinstance(log, TransmissionLog)
         assert log.is_locked is True
@@ -671,14 +673,17 @@ class TestPipelineIntegration:
         # Default profile: 3 content segments for half-hour block
         assert episode_count == 3
 
-    def test_output_consumable_by_block_plan(self):
+    def test_output_consumable_by_block_plan(self, tmp_path):
         """Output format consumable by BlockPlanProducer."""
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
         config = _make_config()
         lib = _make_asset_library()
         run_req = PlanningRunRequest(directive, BROADCAST_DATE, RESOLUTION_TIME)
 
-        log = run_planning_pipeline(run_req, config, lib, lock_time=RESOLUTION_TIME)
+        log = run_planning_pipeline(
+            run_req, config, lib, lock_time=RESOLUTION_TIME,
+            artifact_base_path=tmp_path,
+        )
 
         for entry in log.entries:
             bp = to_block_plan(entry, channel_id_int=1)

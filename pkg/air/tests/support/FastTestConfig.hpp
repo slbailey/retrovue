@@ -57,7 +57,10 @@ inline constexpr int64_t kLongBlockMs   = kFastMode ? 1000 : 10000;
 inline constexpr int64_t kSegBlockMs    = kFastMode ? 600  : 6000;
 
 // Preloader delay (PaddedTransitionStatus test).
-inline constexpr int64_t kPreloaderMs   = kFastMode ? 200  : 12000;
+// Must exceed the audio-prime gate timeout (kGateTimeoutMs=2000) plus block A's
+// wall-clock tick-loop duration (~kStdBlockMs at real-time 30fps) so the preloader
+// is still sleeping when block A's fence fires.
+inline constexpr int64_t kPreloaderMs   = kFastMode ? 4000 : 12000;
 
 // Block-timestamp offset.  In real-time mode the fence epoch re-anchors to
 // wall-clock AFTER bootstrap (~2s), so block windows must be pushed forward by
