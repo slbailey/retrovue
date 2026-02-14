@@ -49,6 +49,13 @@ struct BlockPlaybackSummary;
 struct BlockPlaybackProof;
 struct SeamTransitionLog;
 
+// Context passed to on_block_started with channel-monotonic timeline info.
+struct BlockActivationContext {
+  int64_t timeline_frame_index;  // channel-monotonic tick at block activation
+  int64_t block_fence_tick;      // precomputed fence tick (channel-monotonic)
+  int64_t utc_ms;                // wall clock at activation
+};
+
 class PipelineManager : public IPlayoutExecutionEngine {
  public:
   struct Callbacks {
@@ -58,10 +65,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
     // Called when a block is popped from the queue and begins execution/preload.
     // Signals queue slot consumption — Core uses this as the preferred credit signal.
-    std::function<void(const FedBlock&)> on_block_started;
+    std::function<void(const FedBlock&, const BlockActivationContext&)> on_block_started;
 
     // Called when the session ends (stop requested, error, etc.).
-    std::function<void(const std::string&)> on_session_ended;
+    // Parameters: reason, final session_frame_index for offset accumulation.
+    std::function<void(const std::string&, int64_t)> on_session_ended;
 
     // Called when a new segment becomes live within a block.
     // from_segment_index: -1 on first segment of block (no predecessor).

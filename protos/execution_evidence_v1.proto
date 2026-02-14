@@ -58,8 +58,9 @@ message SegmentStart {
   string event_id = 2;              // Scheduled event_id from TransmissionLog
   int32 segment_index = 3;
   int64 actual_start_utc_ms = 4;    // Epoch ms
-  int64 actual_start_frame = 5;     // Session frame index at segment start
+  int64 asset_start_frame = 5;      // Asset-relative frame index at segment start (decoder at TAKE)
   int64 scheduled_duration_ms = 6;  // From block plan, for audit comparison
+  optional bool join_in_progress = 7;  // True only for first SEGMENT_START in session when JIP
 }
 
 message SegmentEnd {
@@ -67,8 +68,8 @@ message SegmentEnd {
   string event_id_ref = 2;          // Same event_id as matching SegmentStart
   int64 actual_start_utc_ms = 3;    // Epoch ms (captured at SegmentStart, echoed here)
   int64 actual_end_utc_ms = 4;      // Epoch ms
-  int64 actual_start_frame = 5;     // Session frame index at segment start
-  int64 actual_end_frame = 6;       // Session frame index at segment end
+  int64 asset_start_frame = 5;      // Asset-relative frame index at segment start
+  int64 asset_end_frame = 6;        // Asset-relative frame index at segment end (inclusive)
   int64 computed_duration_ms = 7;    // AIR-computed: wall-clock (end_ms - start_ms)
   int64 computed_duration_frames = 8; // AIR-computed: deterministic (end_frame - start_frame)
   string status = 9;                // AIRED, SKIPPED, TRUNCATED

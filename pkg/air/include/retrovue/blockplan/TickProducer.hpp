@@ -108,6 +108,10 @@ class TickProducer : public producers::IProducer,
   };
   PrimeResult PrimeFirstTick(int min_audio_prime_ms);
 
+  // Segment identity when this producer is built for a single-segment mini plan.
+  // Set by SeamPreparer so seam frame math uses the parent block's segment index.
+  void SetLogicalSegmentIndex(int32_t index);
+
   // --- IProducer ---
   bool start() override;
   void stop() override;
@@ -139,6 +143,7 @@ class TickProducer : public producers::IProducer,
   ValidatedBlockPlan validated_;
   std::vector<SegmentBoundary> boundaries_;
   int32_t current_segment_index_ = 0;
+  int32_t logical_segment_index_ = 0;  // Parent block segment index (SetLogicalSegmentIndex)
   int64_t block_ct_ms_ = 0;
 
   int width_;

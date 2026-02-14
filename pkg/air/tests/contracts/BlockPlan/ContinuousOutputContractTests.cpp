@@ -84,7 +84,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
     };
-    callbacks.on_session_ended = [this](const std::string& reason) {
+    callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       session_ended_count_++;
       session_ended_reason_ = reason;
@@ -127,7 +127,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
     };
-    callbacks.on_session_ended = [this](const std::string& reason) {
+    callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       session_ended_count_++;
       session_ended_reason_ = reason;
@@ -897,7 +897,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     completed_blocks_.push_back(block.block_id);
   };
-  callbacks.on_session_ended = [this](const std::string& reason) {
+  callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     session_ended_count_++;
     session_ended_reason_ = reason;
@@ -1145,7 +1145,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadSeam) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     completed_blocks_.push_back(block.block_id);
   };
-  callbacks.on_session_ended = [this](const std::string& reason) {
+  callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     session_ended_count_++;
     session_ended_reason_ = reason;
@@ -1428,7 +1428,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadSeam) {
     completed_blocks_.push_back(block.block_id);
   };
 
-  callbacks.on_session_ended = [this](const std::string& reason) {
+  callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     session_ended_count_++;
     session_ended_reason_ = reason;
@@ -1675,7 +1675,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_BudgetShortfall_ExactCount) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     completed_blocks_.push_back(blk.block_id);
   };
-  callbacks.on_session_ended = [this](const std::string& reason) {
+  callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     session_ended_count_++;
     session_ended_reason_ = reason;

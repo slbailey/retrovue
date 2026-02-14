@@ -30,6 +30,8 @@ struct FedBlock {
   int32_t channel_id = 0;
   int64_t start_utc_ms = 0;
   int64_t end_utc_ms = 0;
+  std::string broadcast_date;              // YYYY-MM-DD from schedule
+  int64_t broadcast_day_anchor_utc_ms = 0; // UTC ms at broadcast day start
 
   struct Segment {
     int32_t segment_index = 0;

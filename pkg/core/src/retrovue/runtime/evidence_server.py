@@ -247,6 +247,11 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         emitted_terminals: set[str] = set()
         # Track most recent segment_index from SEG_START so AIRED can echo it.
         last_segment_index: list[int] = [-1]
+        # Block start UTC ms for current block (set on block_start; used for SegmentStart warning).
+        last_block_start_utc_ms: list[int | None] = [None]
+        # Contiguity invariant: last asset_end_frame per block; join_in_progress per event_id.
+        last_asset_end_frame_by_block: dict[str, int] = {}
+        join_in_progress_by_event: dict[str, bool] = {}
         # Load the durable ack high-water mark so we can skip already-committed
         # events on replay (GRPC-EVID-003 cross-stream dedup).
         durable_ack_seq: int = 0
@@ -297,7 +302,8 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 if writer is not None and payload_name != "hello":
                     self._process_evidence(
                         writer, msg, payload_name, emitted_terminals,
-                        last_segment_index,
+                        last_segment_index, last_block_start_utc_ms,
+                        last_asset_end_frame_by_block, join_in_progress_by_event,
                     )
 
                 # Persist ack durably, then ACK the client.
@@ -323,6 +329,9 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         payload_name: str,
         emitted_terminals: set[str],
         last_segment_index: list[int],
+        last_block_start_utc_ms: list[int | None],
+        last_asset_end_frame_by_block: dict[str, int],
+        join_in_progress_by_event: dict[str, bool],
     ) -> None:
         """Map a single evidence message to .asrun + .jsonl and write durably.
 
@@ -336,9 +345,13 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
 
         if payload_name == "block_start":
             bs = msg.block_start
+            last_block_start_utc_ms[0] = bs.actual_start_utc_ms
             actual = writer.display_time(bs.actual_start_utc_ms)
+            notes = (
+                f"(block open) swap_tick={bs.swap_tick} fence_tick={bs.fence_tick}"
+            )
             asrun_line = _format_asrun_line(
-                actual, "00:00:00", "START", "BLOCK", bs.block_id, "(block open)"
+                actual, "00:00:00", "START", "BLOCK", bs.block_id, notes
             )
             jsonl_rec = {
                 "event_id": bs.block_id,
@@ -348,19 +361,32 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "actual_duration_ms": 0,
                 "status": "START",
                 "reason": None,
-                "swap_tick": None,
-                "fence_tick": None,
+                "swap_tick": bs.swap_tick,
+                "fence_tick": bs.fence_tick,
             }
             writer.write_and_flush(asrun_line, jsonl_rec)
 
         elif payload_name == "segment_start":
             ss = msg.segment_start
             last_segment_index[0] = ss.segment_index
+            if (
+                ss.asset_start_frame == 0
+                and last_block_start_utc_ms[0] is not None
+                and ss.actual_start_utc_ms != last_block_start_utc_ms[0]
+            ):
+                logger.warning(
+                    "SegmentStart asset_start_frame=0 but actual_start_utc_ms=%d "
+                    "is not at block start %d (event_id=%s block_id=%s); "
+                    "AIR may not have computed frame index",
+                    ss.actual_start_utc_ms,
+                    last_block_start_utc_ms[0],
+                    ss.event_id or ss.block_id,
+                    ss.block_id,
+                )
             actual = writer.display_time(ss.actual_start_utc_ms)
-            notes = (
-                f"segment_index={ss.segment_index} "
-                f"start_frame={ss.actual_start_frame}"
-            )
+            notes = f"segment_index={ss.segment_index} asset_start_frame={ss.asset_start_frame}"
+            if ss.join_in_progress:
+                notes += " join_in_progress=Y"
             asrun_line = _format_asrun_line(
                 actual, "00:00:00", "SEG_START", "PROGRAM",
                 ss.event_id or ss.block_id, notes
@@ -373,9 +399,12 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "actual_duration_ms": 0,
                 "status": "SEG_START",
                 "segment_index": ss.segment_index,
-                "actual_start_frame": ss.actual_start_frame,
+                "asset_start_frame": ss.asset_start_frame,
                 "scheduled_duration_ms": ss.scheduled_duration_ms,
             }
+            if ss.join_in_progress:
+                jsonl_rec["join_in_progress"] = True
+                join_in_progress_by_event[ss.event_id or ss.block_id] = True
             writer.write_and_flush(asrun_line, jsonl_rec)
 
         elif payload_name == "segment_end":
@@ -408,7 +437,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             notes = (
                 f"segment_index={seg_idx} "
                 f"ontime=Y fallback={se.fallback_frames_used} "
-                f"frames={frames}"
+                f"asset_start={se.asset_start_frame} asset_end={se.asset_end_frame} frames={frames}"
             )
             if se.reason:
                 notes += f" reason={se.reason}"
@@ -423,12 +452,24 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "actual_end_utc_ms": se.actual_end_utc_ms,
                 "actual_duration_ms": se.computed_duration_ms,
                 "computed_duration_frames": frames,
-                "actual_start_frame": se.actual_start_frame,
-                "actual_end_frame": se.actual_end_frame,
+                "asset_start_frame": se.asset_start_frame,
+                "asset_end_frame": se.asset_end_frame,
                 "status": status,
                 "reason": se.reason or None,
                 "fallback_frames_used": se.fallback_frames_used,
             }
+            # Contiguity invariant: warn if prev_asset_end_frame + 1 != current asset_start_frame
+            prev_end = last_asset_end_frame_by_block.get(se.block_id)
+            if prev_end is not None and status in ("AIRED", "TRUNCATED"):
+                jip = join_in_progress_by_event.pop(event_id, False)
+                if not jip and prev_end + 1 != se.asset_start_frame:
+                    logger.warning(
+                        "Segment contiguity: prev_asset_end_frame(%d) + 1 != "
+                        "asset_start_frame(%d) for event_id=%s block_id=%s",
+                        prev_end, se.asset_start_frame, event_id, se.block_id,
+                    )
+            last_asset_end_frame_by_block[se.block_id] = se.asset_end_frame
+
             writer.write_and_flush(asrun_line, jsonl_rec)
             emitted_terminals.add(event_id)
 
@@ -466,6 +507,8 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             asrun_line = _format_asrun_line(
                 actual, "00:00:00", "FENCE", "BLOCK", fence_id, notes
             )
+            last_asset_end_frame_by_block.pop(bf.block_id, None)  # Prevent unbounded growth
+
             jsonl_rec = {
                 "event_id": fence_id,
                 "block_id": bf.block_id,

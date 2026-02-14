@@ -53,7 +53,7 @@ TEST_F(ExecutionEngineGuardrailTest, ContinuousOutputSelectsContinuousEngine) {
   // Creating a PipelineManager must succeed
   PipelineManager::Callbacks callbacks;
   callbacks.on_block_completed = [](const FedBlock&, int64_t, int64_t) {};
-  callbacks.on_session_ended = [](const std::string&) {};
+  callbacks.on_session_ended = [](const std::string&, int64_t) {};
 
   auto engine = std::make_unique<PipelineManager>(
       ctx_.get(), std::move(callbacks));

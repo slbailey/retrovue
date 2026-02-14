@@ -45,7 +45,6 @@ TEST(EvidenceSpoolTest, AppendAndReplayFrom) {
     BlockStartPayload p1;
     p1.block_id = "block-1";
     p1.swap_tick = 100;
-    p1.fence_tick = 200;
     p1.actual_start_utc_ms = 1739448000000;
     p1.primed_success = true;
     emitter.EmitBlockStart(p1);

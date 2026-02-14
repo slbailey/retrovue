@@ -46,6 +46,7 @@ void VideoLookaheadBuffer::StartFilling(
   StopFilling(false);
 
   fill_stop_.store(false, std::memory_order_release);
+  steady_filling_.store(true, std::memory_order_relaxed);  // INV-BUFFER-HYSTERESIS-001: start filling
   producer_ = producer;
   audio_buffer_ = audio_buffer;
   stop_signal_ = stop_signal;
@@ -253,11 +254,20 @@ void VideoLookaheadBuffer::FillLoop() {
   while (!fill_stop_.load(std::memory_order_acquire) &&
          !(stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
 
-    // Wait for space in buffer.
-    // INV-AUDIO-BUFFER-POLICY-001: When audio_boost_ is set (audio below
-    // LOW_WATER), the effective target doubles so the fill thread decodes
-    // more frames — each decode also produces audio, refilling the audio
-    // buffer.  PipelineManager toggles audio_boost_ from the tick loop.
+    // INV-BUFFER-HYSTERESIS-001: Two-path depth control.
+    //
+    // FILLING path (steady_filling_ == true): The fill thread must decode
+    // as fast as possible to build headroom.  Acquiring mutex_ per-frame
+    // to evaluate the condvar predicate contends with TryPopFrame on every
+    // tick, throttling the fill thread to ~consumption rate and preventing
+    // depth from climbing.  Instead, read depth under a brief lock, check
+    // the high-water cap, and proceed without parking.
+    //
+    // PARKED path (steady_filling_ == false): Block on space_cv_ until a
+    // pop drops depth to low_water, or a boost/burst condition fires.
+    //
+    // Bootstrap phase always uses the condvar path (needs audio-gated
+    // parking logic).
     //
     // INV-AUDIO-PRIME-003: Bootstrap phase.
     // During BOOTSTRAP, the fill thread must not park solely because
@@ -270,60 +280,101 @@ void VideoLookaheadBuffer::FillLoop() {
     // video exceeds its normal target so audio can rebuild headroom.
     // Bounded by 4× video target to prevent unbounded growth.
     {
-      std::unique_lock<std::mutex> lock(mutex_);
-      space_cv_.wait(lock, [this] {
-        bool stopping = fill_stop_.load(std::memory_order_acquire) ||
-            (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
-        if (stopping) return true;
+      bool is_bootstrap = fill_phase_.load(std::memory_order_relaxed) ==
+          static_cast<int>(FillPhase::kBootstrap);
+      bool filling_now = steady_filling_.load(std::memory_order_relaxed);
+      bool skip_wait = false;
 
-        int depth = static_cast<int>(frames_.size());
+      if (!is_bootstrap && filling_now) {
+        // FILLING path: brief lock for depth check + high-water cap.
+        // No condvar park — decode at full speed.
+        int depth;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          depth = static_cast<int>(frames_.size());
+        }
+        int high_water = audio_boost_.load(std::memory_order_relaxed)
+            ? target_depth_frames_ * 4
+            : target_depth_frames_ * 2;
+        if (depth >= high_water) {
+          // Reached high water — transition to PARKED.
+          steady_filling_.store(false, std::memory_order_relaxed);
+          // Fall through to the condvar path below so we park properly.
+        } else {
+          // Below high water — skip condvar, proceed to decode.
+          skip_wait = true;
+        }
+      }
 
-        // INV-AUDIO-PRIME-003: Bootstrap phase — audio-gated parking.
+      if (!skip_wait) {
+        // PARKED path (or bootstrap): block on condvar.
+        {
+          std::unique_lock<std::mutex> lock(mutex_);
+          space_cv_.wait(lock, [this] {
+            bool stopping = fill_stop_.load(std::memory_order_acquire) ||
+                (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
+            if (stopping) return true;
+
+            int depth = static_cast<int>(frames_.size());
+
+            // INV-AUDIO-PRIME-003: Bootstrap phase — audio-gated parking.
+            if (fill_phase_.load(std::memory_order_relaxed) ==
+                static_cast<int>(FillPhase::kBootstrap)) {
+              // Hard cap: never exceed bootstrap_cap regardless of audio state.
+              if (depth >= bootstrap_cap_frames_) return false;
+              // Below bootstrap target: always decode.
+              if (depth < bootstrap_target_frames_) return true;
+              // At/above bootstrap target but below cap: decode only if audio
+              // hasn't reached the gate threshold yet.
+              if (audio_buffer_ && audio_buffer_->DepthMs() < bootstrap_min_audio_ms_)
+                return true;
+              return false;
+            }
+
+            // STEADY phase (PARKED): wait until low water or burst trigger.
+            if (depth <= target_depth_frames_) {
+              steady_filling_.store(true, std::memory_order_relaxed);
+              return true;
+            }
+
+            // Audio burst: proceed past high water when audio is critically low.
+            if (audio_buffer_ && audio_buffer_->DepthMs() < audio_burst_threshold_ms_) {
+              int burst_cap = target_depth_frames_ * 4;
+              return depth < burst_cap;
+            }
+            return false;
+          });
+        }
+        if (fill_stop_.load(std::memory_order_acquire) ||
+            (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
+          break;
+        }
+        // BOOTSTRAP TRACE: log fill decisions during bootstrap phase only
         if (fill_phase_.load(std::memory_order_relaxed) ==
             static_cast<int>(FillPhase::kBootstrap)) {
-          // Hard cap: never exceed bootstrap_cap regardless of audio state.
-          if (depth >= bootstrap_cap_frames_) return false;
-          // Below bootstrap target: always decode.
-          if (depth < bootstrap_target_frames_) return true;
-          // At/above bootstrap target but below cap: decode only if audio
-          // hasn't reached the gate threshold yet.
-          if (audio_buffer_ && audio_buffer_->DepthMs() < bootstrap_min_audio_ms_)
-            return true;
-          return false;
+          int d = static_cast<int>(frames_.size());
+          int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+          { std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] BOOTSTRAP_WAKE"
+                << " bootstrap_epoch_ms=" << bootstrap_epoch_ms_
+                << " video_depth=" << d
+                << " bootstrap_target=" << bootstrap_target_frames_
+                << " cap=" << bootstrap_cap_frames_
+                << " audio_depth_ms=" << a_ms
+                << " min_audio_ms=" << bootstrap_min_audio_ms_;
+            Logger::Info(oss.str()); }
         }
-
-        // STEADY phase: normal video-only throttle.
-        int effective_target = audio_boost_.load(std::memory_order_relaxed)
-            ? target_depth_frames_ * 2
-            : target_depth_frames_;
-        if (depth < effective_target) return true;
-
-        // Audio burst: proceed past video target when audio is critically low.
-        if (audio_buffer_ && audio_buffer_->DepthMs() < audio_burst_threshold_ms_) {
-          int burst_cap = target_depth_frames_ * 4;
-          return depth < burst_cap;
-        }
-        return false;
-      });
-      if (fill_stop_.load(std::memory_order_acquire) ||
-          (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
-        break;
       }
-      // BOOTSTRAP TRACE: log fill decisions during bootstrap phase only
-      if (fill_phase_.load(std::memory_order_relaxed) ==
-          static_cast<int>(FillPhase::kBootstrap)) {
-        int d = static_cast<int>(frames_.size());
-        int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
-        { std::ostringstream oss;
-          oss << "[FillLoop:" << buffer_label_ << "] BOOTSTRAP_WAKE"
-              << " bootstrap_epoch_ms=" << bootstrap_epoch_ms_
-              << " video_depth=" << d
-              << " bootstrap_target=" << bootstrap_target_frames_
-              << " cap=" << bootstrap_cap_frames_
-              << " audio_depth_ms=" << a_ms
-              << " min_audio_ms=" << bootstrap_min_audio_ms_;
-          Logger::Info(oss.str()); }
-      }
+    }
+
+    // INV-BUFFER-HYSTERESIS-001: Re-check stop after hysteresis decision.
+    // The FILLING fast path (skip_wait=true) bypasses the condvar block
+    // which contains its own fill_stop_ check.  Without this re-check,
+    // StopFillingAsync can null producer_ between the while-condition
+    // check and the TryGetFrame call below.
+    if (fill_stop_.load(std::memory_order_acquire) ||
+        (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
+      break;
     }
 
     // --- Cadence gate ---
@@ -480,6 +531,7 @@ bool VideoLookaheadBuffer::IsPrimed() const {
 
 void VideoLookaheadBuffer::Reset() {
   StopFilling(false);
+  steady_filling_.store(true, std::memory_order_relaxed);  // INV-BUFFER-HYSTERESIS-001
   std::lock_guard<std::mutex> lock(mutex_);
   frames_.clear();
   total_pushed_ = 0;

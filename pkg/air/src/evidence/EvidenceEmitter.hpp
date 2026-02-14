@@ -19,8 +19,7 @@ class GrpcEvidenceClient;
 // All timestamps are epoch ms integers — Core converts to ISO8601 when writing .asrun.
 struct BlockStartPayload {
   std::string block_id;
-  uint64_t swap_tick = 0;
-  uint64_t fence_tick = 0;
+  uint64_t swap_tick = 0;          // Timeline tick at TAKE/commit
   int64_t actual_start_utc_ms = 0;
   bool primed_success = false;
 };
@@ -30,8 +29,9 @@ struct SegmentStartPayload {
   std::string event_id;             // Scheduled event_id from TransmissionLog
   int32_t segment_index = 0;
   int64_t actual_start_utc_ms = 0;
-  int64_t actual_start_frame = 0;   // Session frame index
+  int64_t asset_start_frame = 0;    // Asset-relative frame index at segment start (decoder at TAKE)
   int64_t scheduled_duration_ms = 0;
+  bool join_in_progress = false;    // True only for first SEGMENT_START in session when JIP
 };
 
 struct SegmentEndPayload {
@@ -39,8 +39,8 @@ struct SegmentEndPayload {
   std::string event_id_ref;         // Same event_id as matching SegmentStart
   int64_t actual_start_utc_ms = 0;  // Captured at SegmentStart, echoed here
   int64_t actual_end_utc_ms = 0;
-  int64_t actual_start_frame = 0;
-  int64_t actual_end_frame = 0;
+  int64_t asset_start_frame = 0;    // Asset-relative frame index at segment start
+  int64_t asset_end_frame = 0;      // Asset-relative frame index at segment end (inclusive)
   int64_t computed_duration_ms = 0;  // Wall-clock: end_ms - start_ms
   int64_t computed_duration_frames = 0; // Deterministic: end_frame - start_frame
   std::string status;                // AIRED, SKIPPED, TRUNCATED

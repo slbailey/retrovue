@@ -571,6 +571,17 @@ add_test(
   COMMAND mediatime_contract_tests
 )
 
+# ---- Architectural Guardrail: No As-Run Artifacts from AIR ----
+# Core is the sole as-run authority. AIR emits evidence via EvidenceEmitter only.
+add_executable(no_asrun_guardrail_test
+  tests/contracts/BlockPlan/NoAsRunArtifactGuardrailTest.cpp
+)
+target_link_libraries(no_asrun_guardrail_test PRIVATE GTest::gtest GTest::gtest_main)
+target_include_directories(no_asrun_guardrail_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME NoAsRunArtifactGuardrail COMMAND no_asrun_guardrail_test)
+
 # ---- P3.2: Seam Verify Standalone Harness ----
 # Standalone binary for real-media boundary verification using PipelineManager.
 add_executable(retrovue_air_seam_verify

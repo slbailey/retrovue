@@ -252,6 +252,8 @@ message BlockPlan {
   int64 start_utc_ms = 3;        // Block start time (UTC milliseconds since epoch)
   int64 end_utc_ms = 4;          // Block end time (UTC milliseconds since epoch)
   repeated BlockSegment segments = 5;  // Segments within this block
+  string broadcast_date = 7;              // YYYY-MM-DD, schedule-owned
+  int64 broadcast_day_anchor_utc_ms = 8;  // UTC ms at broadcast day start (e.g. 06:00 local)
 }
 
 // SegmentType distinguishes planned segment roles.

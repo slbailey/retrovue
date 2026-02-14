@@ -160,8 +160,9 @@ proto::EvidenceFromAir GrpcEvidenceClient::ToProto(const EvidenceFromAir& m) {
     if (ExtractString(j, "event_id", &s_val)) ss->set_event_id(s_val);
     if (ExtractInt32(j, "segment_index", &i32_val)) ss->set_segment_index(i32_val);
     if (ExtractInt64(j, "actual_start_utc_ms", &i64_val)) ss->set_actual_start_utc_ms(i64_val);
-    if (ExtractInt64(j, "actual_start_frame", &i64_val)) ss->set_actual_start_frame(i64_val);
+    if (ExtractInt64(j, "asset_start_frame", &i64_val)) ss->set_asset_start_frame(i64_val);
     if (ExtractInt64(j, "scheduled_duration_ms", &i64_val)) ss->set_scheduled_duration_ms(i64_val);
+    if (ExtractBool(j, "join_in_progress", &b_val)) ss->set_join_in_progress(b_val);
 
   } else if (m.payload_type == "SEGMENT_END") {
     auto* se = p.mutable_segment_end();
@@ -169,8 +170,8 @@ proto::EvidenceFromAir GrpcEvidenceClient::ToProto(const EvidenceFromAir& m) {
     if (ExtractString(j, "event_id_ref", &s_val)) se->set_event_id_ref(s_val);
     if (ExtractInt64(j, "actual_start_utc_ms", &i64_val)) se->set_actual_start_utc_ms(i64_val);
     if (ExtractInt64(j, "actual_end_utc_ms", &i64_val)) se->set_actual_end_utc_ms(i64_val);
-    if (ExtractInt64(j, "actual_start_frame", &i64_val)) se->set_actual_start_frame(i64_val);
-    if (ExtractInt64(j, "actual_end_frame", &i64_val)) se->set_actual_end_frame(i64_val);
+    if (ExtractInt64(j, "asset_start_frame", &i64_val)) se->set_asset_start_frame(i64_val);
+    if (ExtractInt64(j, "asset_end_frame", &i64_val)) se->set_asset_end_frame(i64_val);
     if (ExtractInt64(j, "computed_duration_ms", &i64_val)) se->set_computed_duration_ms(i64_val);
     if (ExtractInt64(j, "computed_duration_frames", &i64_val)) se->set_computed_duration_frames(i64_val);
     if (ExtractString(j, "status", &s_val)) se->set_status(s_val);

@@ -328,7 +328,7 @@ void PipelineManager::Run() {
       Logger::Error(oss.str()); }
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
-      callbacks_.on_session_ended("dup_failed");
+      callbacks_.on_session_ended("dup_failed", 0);
     }
     return;
   }
@@ -340,7 +340,7 @@ void PipelineManager::Run() {
     ::close(sink_fd);
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
-      callbacks_.on_session_ended("nonblock_failed");
+      callbacks_.on_session_ended("nonblock_failed", 0);
     }
     return;
   }
@@ -439,7 +439,7 @@ void PipelineManager::Run() {
     Logger::Error("[PipelineManager] Failed to open session encoder");
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
-      callbacks_.on_session_ended("encoder_failed");
+      callbacks_.on_session_ended("encoder_failed", 0);
     }
     return;
   }
@@ -686,7 +686,11 @@ void PipelineManager::Run() {
 
     // Block is now LIVE — notify subscribers.
     if (callbacks_.on_block_started) {
-      callbacks_.on_block_started(live_parent_block_);
+      BlockActivationContext actx;
+      actx.timeline_frame_index = session_frame_index;
+      actx.block_fence_tick = block_fence_frame_;
+      actx.utc_ms = time_source_->NowUtcMs();
+      callbacks_.on_block_started(live_parent_block_, actx);
     }
 
     // Fire on_segment_start for the first segment of the block.
@@ -923,32 +927,28 @@ void PipelineManager::Run() {
         buffer::kHouseAudioSampleRate;
 
     // ==================================================================
-    // PRE-TAKE READINESS: Stash + preroll BEFORE source selection.
+    // PRE-TAKE READINESS: Peek only — never consume.
     //
-    // The preloader worker may have finished during the sleep.  We must
-    // capture the result and start B's fill thread NOW so the TAKE can
-    // select B on this tick.  If this ran at the tail, a preloader that
-    // finishes during the fence tick's sleep would be invisible to the
-    // TAKE, causing a needless pad frame.
-    //
-    // StartFilling is synchronous for the primed frame: it calls
-    // HasPrimedFrame() → TryGetFrame() → push, all non-blocking,
-    // so this adds no decode I/O to the tick-critical path.
+    // Only the seam commit path (PerformSegmentSwap) is allowed to call
+    // TakeSegmentResult(). This path may only PeekSegmentResult() to
+    // observe that the correct segment result is ready; consumption
+    // happens at seam time to avoid races (early consume → MISS at seam,
+    // or consuming a stale/wrong result).
     // ==================================================================
-    // INV-SEAM-SEG: Segment PRE-TAKE readiness — stash segment preview if ready.
-    if (!segment_preview_ && seam_preparer_->HasSegmentResult()) {
-      auto seg_result = seam_preparer_->TakeSegmentResult();
-      if (seg_result) {
-        segment_preview_ = std::move(seg_result->producer);
-        { std::ostringstream oss;
-          oss << "[PipelineManager] SEGMENT_PREROLL_STATUS"
-              << " block=" << seg_result->block_id
-              << " segment_index=" << seg_result->segment_index
-              << " segment_type=" << SegmentTypeName(seg_result->segment_type)
-              << " audio_depth_ms=" << seg_result->audio_prime_depth_ms;
-          Logger::Info(oss.str()); }
-      }
+    const int32_t next_segment_index = current_segment_index_ + 1;
+    auto seg_peek = seam_preparer_->PeekSegmentResult();
+    if (seg_peek && seg_peek->parent_block_id == live_parent_block_.block_id &&
+        seg_peek->parent_segment_index == next_segment_index) {
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEGMENT_PREROLL_READY"
+            << " block=" << live_parent_block_.block_id
+            << " segment_index=" << next_segment_index
+            << " tick=" << session_frame_index
+            << " next_seam_frame=" << next_seam_frame_;
+        Logger::Info(oss.str()); }
     }
+    // Segment preview is no longer populated here (only seam commit consumes).
+    // This block remains for any future path that might set segment_preview_.
     if (segment_preview_ && !segment_preview_video_buffer_ &&
         AsTickProducer(segment_preview_.get())->GetState() == ITickProducer::State::kReady) {
       segment_preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
@@ -1367,6 +1367,14 @@ void PipelineManager::Run() {
           Logger::Info(oss.str()); }
       }
 
+      // INV-EVIDENCE-ORDER-001: BLOCK_FENCE(A) must fire BEFORE BLOCK_START(B).
+      // Emit completion evidence for the outgoing block before activating the
+      // new one.  This guarantees the legal evidence order:
+      //   BLOCK_START(A) → ... → BLOCK_FENCE(A) → BLOCK_START(B)
+      if (callbacks_.on_block_completed) {
+        callbacks_.on_block_completed(outgoing_block, ct_at_fence_ms, session_frame_index);
+      }
+
       if (swapped) {
         block_fence_frame_ = compute_fence_frame(live_tp()->GetBlock());
         remaining_block_frames_ = block_fence_frame_ - session_frame_index;
@@ -1389,7 +1397,11 @@ void PipelineManager::Run() {
 
         // Block is now LIVE — notify subscribers.
         if (callbacks_.on_block_started) {
-          callbacks_.on_block_started(live_parent_block_);
+          BlockActivationContext actx;
+          actx.timeline_frame_index = session_frame_index;
+          actx.block_fence_tick = block_fence_frame_;
+          actx.utc_ms = time_source_->NowUtcMs();
+          callbacks_.on_block_started(live_parent_block_, actx);
         }
 
         // Fire on_segment_start for the first segment of the new block.
@@ -1534,11 +1546,7 @@ void PipelineManager::Run() {
         }
       }
 
-      if (callbacks_.on_block_completed) {
-        // ct_at_fence_ms is the actual content time (from decoded PTS),
-        // not session_frame_index.  The proto field is final_ct_ms.
-        callbacks_.on_block_completed(outgoing_block, ct_at_fence_ms, session_frame_index);
-      }
+      // NOTE: on_block_completed already fired above (INV-EVIDENCE-ORDER-001).
       {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.total_blocks_executed++;
@@ -1575,7 +1583,22 @@ void PipelineManager::Run() {
     // into live.  Only fires when take_segment is true (not a block seam).
     // ==================================================================
     if (take_segment) {
+      // SEGMENT_TAKE_COMMIT: log decision state BEFORE swap (a_src still valid).
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEGMENT_TAKE_COMMIT"
+            << " tick=" << session_frame_index
+            << " from_segment=" << current_segment_index_
+            << " is_pad=" << is_pad
+            << " audio_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
+            << " audio_gen=" << (a_src ? a_src->CurrentGeneration() : 0)
+            << " asset=" << (is_pad ? "pad" : (vbf.asset_uri.empty() ? "none" : vbf.asset_uri))
+            << " seg_preview_ready=" << (segment_preview_video_buffer_ != nullptr);
+        Logger::Info(oss.str()); }
+
       PerformSegmentSwap(session_frame_index);
+
+      // Update a_src after swap — old audio buffer may have been destroyed.
+      a_src = audio_buffer_.get();
 
       // Begin segment proof tracking for the new segment.
       if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
@@ -1829,6 +1852,24 @@ void PipelineManager::Run() {
     // HEARTBEAT: telemetry snapshot for performance regression detection.
     // ~3000 ticks ≈ 100s at 30fps.  Metrics are always available via
     // /metrics endpoint regardless of log frequency.
+    //
+    // Field meanings and healthy ranges:
+    //   frame         Session frame index (output ticks). No "healthy" value; informational.
+    //   video         current/target frame depth. Healthy: depth near target (e.g. 14/15);
+    //                 consistently below low-water (default 5) triggers LOW_WATER warnings.
+    //   refill        Decoder fill rate (fps): frames pushed into video buffer per second,
+    //                 session-long average. Healthy: >= output fps (e.g. >= 30 at 30fps output;
+    //                 with 23.976→30 cadence, >= ~24 is sufficient). Low = decode can't keep up.
+    //   decode_p95    95th percentile decode latency (microseconds) per frame. Healthy:
+    //                 well below frame interval (e.g. < ~33000 us at 30fps); high = slow decode.
+    //   audio         current/target audio buffer depth (ms). Healthy: depth near target
+    //                 (e.g. 456/1000); below low-water (default target/3) triggers LOW_WATER.
+    //   a_pushed      Total audio samples pushed (cumulative). Should track a_popped; large
+    //                 gap (pushed >> popped) = backpressure; (popped >> pushed) = underflow.
+    //   a_popped      Total audio samples popped (cumulative). See a_pushed.
+    //   sink          Bytes currently buffered / socket sink capacity (bytes). Healthy: low
+    //                 current (e.g. 0/32768) = consumer keeping up; near capacity = slow
+    //                 consumer, risk of detach-on-overflow.
     static constexpr int64_t kHeartbeatInterval = 3000;
     if (session_frame_index % kHeartbeatInterval == 0) {
       // Snapshot live metrics under metrics_mutex_.
@@ -1859,7 +1900,7 @@ void PipelineManager::Run() {
             << " frame=" << session_frame_index;
         if (video_buffer_) {
           oss << " video=" << video_buffer_->DepthFrames()
-              << "/" << video_buffer_->TargetDepthFrames()
+              << "/" << video_buffer_->HighWaterFrames()
               << " refill=" << video_buffer_->RefillRateFps() << "fps"
               << " decode_p95=" << video_buffer_->DecodeLatencyP95Us() << "us";
         }
@@ -1991,6 +2032,16 @@ void PipelineManager::Run() {
         // P3.3: Reset accumulator for new block
         block_acc.Reset(live_tp()->GetBlock().block_id);
         emit_block_start((had_preview && !preview_) ? "preview" : "queue");
+        // INV-VIDEO-LOOKAHEAD-001: Stop preview fill before starting live fill.
+        // TryLoadLiveProducer moved preview_ → live_, so the PREVIEW fill
+        // thread and the about-to-start LIVE fill thread share the same
+        // TickProducer.  Stop the PREVIEW fill first to prevent concurrent
+        // TryGetFrame on a non-thread-safe producer.
+        if (preview_video_buffer_ && preview_video_buffer_->IsFilling()) {
+          preview_video_buffer_->StopFilling(/*flush=*/true);
+        }
+        preview_video_buffer_.reset();
+        preview_audio_buffer_.reset();
         // INV-VIDEO-LOOKAHEAD-001: Start fill thread with loaded producer.
         video_buffer_->StartFilling(
             live_tp(), audio_buffer_.get(),
@@ -2006,7 +2057,11 @@ void PipelineManager::Run() {
 
         // Block is now LIVE — notify subscribers.
         if (callbacks_.on_block_started) {
-          callbacks_.on_block_started(live_parent_block_);
+          BlockActivationContext actx;
+          actx.timeline_frame_index = session_frame_index;
+          actx.block_fence_tick = block_fence_frame_;
+          actx.utc_ms = time_source_->NowUtcMs();
+          callbacks_.on_block_started(live_parent_block_, actx);
         }
 
         // Fire on_segment_start for the first segment of the new block.
@@ -2168,7 +2223,7 @@ void PipelineManager::Run() {
 
   if (callbacks_.on_session_ended && !session_ended_fired_) {
     session_ended_fired_ = true;
-    callbacks_.on_session_ended(termination_reason);
+    callbacks_.on_session_ended(termination_reason, session_frame_index);
   }
 }
 
@@ -2322,8 +2377,11 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   CleanupDeferredFill();
 
   // Step 2: Stop A's fill thread (async).
+  // Do NOT reset audio_buffer_ here — the old buffer is replaced in all
+  // three swap paths (PREROLLED, late-arrival, MISS).  Resetting bumps the
+  // generation counter and empties audio, which starves the incoming
+  // segment if it shares the tick with a fill-thread push window.
   auto detached = video_buffer_->StopFillingAsync(/*flush=*/true);
-  audio_buffer_->Reset();
 
   // Step 3: Save old live_ for deferred cleanup.
   auto outgoing_producer = std::move(live_);
@@ -2346,30 +2404,45 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     // from content/filler segments that required real decode work.
     prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
   } else if (seam_preparer_->HasSegmentResult()) {
-    auto result = seam_preparer_->TakeSegmentResult();
-    if (result && result->producer) {
-      live_ = std::move(result->producer);
-      // Create fresh buffers and start filling.
-      video_buffer_->StopFilling(/*flush=*/true);
-      audio_buffer_->Reset();
-      video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
-          video_buffer_ ? video_buffer_->TargetDepthFrames() : 15,
-          video_buffer_ ? video_buffer_->LowWaterFrames() : 5);
-      video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
-      const auto& bcfg = ctx_->buffer_config;
-      int a_target = bcfg.audio_target_depth_ms;
-      int a_low = bcfg.audio_low_water_ms > 0
-          ? bcfg.audio_low_water_ms
-          : std::max(1, a_target / 3);
-      audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
-          a_target, buffer::kHouseAudioSampleRate,
-          buffer::kHouseAudioChannels, a_low);
-      video_buffer_->StartFilling(
-          AsTickProducer(live_.get()), audio_buffer_.get(),
-          AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
-          &ctx_->stop_requested);
-      swapped = true;
-      prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
+    auto peek = seam_preparer_->PeekSegmentResult();
+    if (peek && peek->parent_block_id == live_parent_block_.block_id &&
+        peek->parent_segment_index == to_seg) {
+      auto result = seam_preparer_->TakeSegmentResult();
+      if (result && result->producer) {
+        live_ = std::move(result->producer);
+        // Create fresh buffers and start filling.
+        // Old video fill thread was already stopped in Step 2.
+        // Old audio buffer replaced below — no Reset needed.
+        video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+            video_buffer_ ? video_buffer_->TargetDepthFrames() : 15,
+            video_buffer_ ? video_buffer_->LowWaterFrames() : 5);
+        video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+        const auto& bcfg = ctx_->buffer_config;
+        int a_target = bcfg.audio_target_depth_ms;
+        int a_low = bcfg.audio_low_water_ms > 0
+            ? bcfg.audio_low_water_ms
+            : std::max(1, a_target / 3);
+        audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+            a_target, buffer::kHouseAudioSampleRate,
+            buffer::kHouseAudioChannels, a_low);
+        video_buffer_->StartFilling(
+            AsTickProducer(live_.get()), audio_buffer_.get(),
+            AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
+            &ctx_->stop_requested);
+        swapped = true;
+        prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
+      }
+    } else if (peek) {
+      // Identity mismatch: result was for a different block/segment. Do not consume.
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEGMENT_SEAM_PAD_FALLBACK reason=IDENTITY_MISMATCH"
+            << " expected_block=" << live_parent_block_.block_id
+            << " expected_segment=" << to_seg
+            << " result_block=" << peek->parent_block_id
+            << " result_segment=" << peek->parent_segment_index
+            << " tick=" << session_frame_index;
+        Logger::Warn(oss.str()); }
+      // Fall through to !swapped PAD fallback (do not TakeSegmentResult).
     }
   }
 
