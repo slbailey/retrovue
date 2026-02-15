@@ -198,6 +198,10 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
   // Stored at on_block_started, consumed at on_block_completed for fence evidence.
   // Safe: blocks never overlap (single live block at a time).
   blockplan::BlockActivationContext live_block_activation_{};
+
+  // INV-EVIDENCE-SWAP-FENCE-MATCH: fence_tick of the previous block.
+  // Used to assert timeline continuity: next START swap_tick == previous FENCE fence_tick.
+  int64_t previous_block_fence_tick_ = 0;
 };
 
 }  // namespace playout
