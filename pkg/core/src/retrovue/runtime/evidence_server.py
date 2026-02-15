@@ -373,7 +373,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 ss.segment_index == 0
                 and ss.asset_start_frame == 0
                 and last_block_start_utc_ms[0] is not None
-                and ss.actual_start_utc_ms != last_block_start_utc_ms[0]
+                and abs(ss.actual_start_utc_ms - last_block_start_utc_ms[0]) > 100
             ):
                 logger.warning(
                     "SegmentStart asset_start_frame=0 but actual_start_utc_ms=%d "
