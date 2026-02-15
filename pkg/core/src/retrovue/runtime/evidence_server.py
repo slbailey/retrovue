@@ -370,7 +370,8 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             ss = msg.segment_start
             last_segment_index[0] = ss.segment_index
             if (
-                ss.asset_start_frame == 0
+                ss.segment_index == 0
+                and ss.asset_start_frame == 0
                 and last_block_start_utc_ms[0] is not None
                 and ss.actual_start_utc_ms != last_block_start_utc_ms[0]
             ):

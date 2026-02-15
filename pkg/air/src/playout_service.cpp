@@ -830,8 +830,11 @@ namespace retrovue
           EmitBlockCompleted(blockplan_session_.get(), block, final_ct_ms);
           if (auto em = blockplan_session_->evidence_emitter) {
             // Close the final segment of this block before emitting fence.
+            // Guard: only close if the live segment belongs to *this* block.
+            // Prevents duplicate SEGMENT_END when the segment was already
+            // closed by on_segment_start or belongs to a different block (AR-ART-008).
             auto& ls = blockplan_session_->live_segment;
-            if (ls.segment_index >= 0) {
+            if (ls.segment_index >= 0 && ls.block_id == block.block_id) {
               int64_t seg_frames = frame_idx - ls.start_frame;
               // Zero-frame terminals are illegal — skip emission if segment
               // opened and closed on the same tick (no frames actually aired).
@@ -855,14 +858,15 @@ namespace retrovue
             p.block_id = block.block_id;
             p.actual_end_utc_ms = evidence::EvidenceEmitter::NowUtcMs();
             p.ct_at_fence_ms = static_cast<uint64_t>(final_ct_ms);
-            // Timeline absolute ticks: swap_tick = when block was TAKEN, fence_tick = at fence.
-            // next_block.swap_tick MUST equal previous_block.fence_tick (never frames_emitted).
+            // AR-ART-003: On FENCE line, swap_tick MUST equal fence_tick.
+            // Both report the fence boundary tick (channel-timeline absolute).
             int64_t activation_frame = live_block_activation_.timeline_frame_index;
-            p.swap_tick = static_cast<uint64_t>(activation_frame);
-            p.fence_tick = static_cast<uint64_t>(live_block_activation_.block_fence_tick);
+            int64_t fence_frame = live_block_activation_.block_fence_tick;
+            p.swap_tick = static_cast<uint64_t>(fence_frame);
+            p.fence_tick = static_cast<uint64_t>(fence_frame);
             p.total_frames_emitted = static_cast<uint64_t>(
                 frame_idx > activation_frame ? frame_idx - activation_frame : 0);
-            int64_t expected = live_block_activation_.block_fence_tick - activation_frame;
+            int64_t expected = fence_frame - activation_frame;
             p.truncated_by_fence = (static_cast<int64_t>(p.total_frames_emitted) < expected);
             p.early_exhaustion = (final_ct_ms < 0);  // No content decoded
             em->EmitBlockFence(p);
@@ -943,6 +947,7 @@ namespace retrovue
           // Open incoming segment — capture start state for duration at close.
           if (to_idx >= 0 && to_idx < static_cast<int32_t>(block.segments.size())) {
             const auto& seg = block.segments[to_idx];
+            ls.block_id = block.block_id;
             ls.event_id = seg.event_id;
             ls.start_utc_ms = now_ms;
             ls.start_frame = frame_idx;
