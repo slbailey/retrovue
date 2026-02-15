@@ -244,7 +244,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         seen_uuids: set[str] = set()
         # AR-ART-008: track event_ids that already received a terminal status
         # to prevent duplicate terminal emission within a stream.
-        emitted_terminals: set[str] = set()
+        emitted_terminals: set[tuple[str, int]] = set()
         # Track most recent segment_index from SEG_START so AIRED can echo it.
         last_segment_index: list[int] = [-1]
         # Block start UTC ms for current block (set on block_start; used for SegmentStart warning).
@@ -327,7 +327,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         writer: AsRunWriter,
         msg: pb2.EvidenceFromAir,
         payload_name: str,
-        emitted_terminals: set[str],
+        emitted_terminals: set[tuple[str, int]],
         last_segment_index: list[int],
         last_block_start_utc_ms: list[int | None],
         last_asset_end_frame_by_block: dict[str, int],
@@ -414,12 +414,15 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             status = se.status or "AIRED"
             frames = se.computed_duration_frames
 
-            # AR-ART-008: Suppress duplicate terminal event for same EVENT_ID.
-            if event_id in emitted_terminals:
+            # AR-ART-008: Suppress duplicate terminal event for same (EVENT_ID, segment_index).
+            # Multi-segment blocks may share the same event_id across segments;
+            # segment_index disambiguates legitimate per-segment terminals.
+            dedup_key = (event_id, last_segment_index[0])
+            if dedup_key in emitted_terminals:
                 logger.warning(
                     "AR-ART-008 guard: suppressing duplicate terminal %s "
-                    "for EVENT_ID %s",
-                    status, event_id,
+                    "for EVENT_ID %s segment_index=%d",
+                    status, event_id, last_segment_index[0],
                 )
                 return
 
@@ -472,7 +475,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             last_asset_end_frame_by_block[se.block_id] = se.asset_end_frame
 
             writer.write_and_flush(asrun_line, jsonl_rec)
-            emitted_terminals.add(event_id)
+            emitted_terminals.add(dedup_key)
 
         elif payload_name == "block_fence":
             bf = msg.block_fence
