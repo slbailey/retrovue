@@ -866,20 +866,28 @@ namespace retrovue
             p.truncated_by_fence = (static_cast<int64_t>(p.total_frames_emitted) < expected);
             p.early_exhaustion = (final_ct_ms < 0);  // No content decoded
             em->EmitBlockFence(p);
+            // Record fence_tick for continuity assertion on next block's START.
+            previous_block_fence_tick_ = live_block_activation_.block_fence_tick;
           }
         };
         callbacks.on_block_started = [this](const blockplan::FedBlock& block,
                                             const blockplan::BlockActivationContext& ctx) {
           // INV-EVIDENCE-SWAP-FENCE-MATCH: swap_tick(B) must equal fence_tick(A).
           // live_block_activation_ still holds block A's context here (overwritten below).
-          if (live_block_activation_.block_fence_tick > 0 &&
-              ctx.timeline_frame_index != live_block_activation_.block_fence_tick) {
+#ifndef NDEBUG
+          if (previous_block_fence_tick_ != 0) {
+            assert(ctx.timeline_frame_index == previous_block_fence_tick_ &&
+                   "Timeline discontinuity: START swap_tick must equal previous FENCE fence_tick");
+          }
+#endif
+          if (previous_block_fence_tick_ != 0 &&
+              ctx.timeline_frame_index != previous_block_fence_tick_) {
             std::ostringstream oss;
             oss << "[EVIDENCE] INV-EVIDENCE-SWAP-FENCE-MATCH VIOLATION"
                 << " block=" << block.block_id
                 << " swap_tick=" << ctx.timeline_frame_index
-                << " prev_fence_tick=" << live_block_activation_.block_fence_tick
-                << " drift=" << (ctx.timeline_frame_index - live_block_activation_.block_fence_tick);
+                << " prev_fence_tick=" << previous_block_fence_tick_
+                << " drift=" << (ctx.timeline_frame_index - previous_block_fence_tick_);
             Logger::Warn(oss.str());
           }
           live_block_activation_ = ctx;
@@ -887,7 +895,8 @@ namespace retrovue
           if (auto em = blockplan_session_->evidence_emitter) {
             evidence::BlockStartPayload p;
             p.block_id = block.block_id;
-            p.swap_tick = static_cast<uint64_t>(ctx.timeline_frame_index);
+            // swap_tick = timeline tick at TAKE — authoritative source is activation context.
+            p.swap_tick = static_cast<uint64_t>(live_block_activation_.timeline_frame_index);
             p.actual_start_utc_ms = ctx.utc_ms;
             em->EmitBlockStart(p);
           }
