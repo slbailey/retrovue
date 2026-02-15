@@ -166,6 +166,7 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
     // Segment-level tracking for duration computation at SegmentEnd.
     // AIR is the execution authority — duration is computed here, not in Core.
     struct LiveSegmentInfo {
+      std::string block_id;            // Owning block (for close guard)
       std::string event_id;
       int64_t start_utc_ms = 0;
       int64_t start_frame = 0;       // Block-relative (internal fence accounting)
