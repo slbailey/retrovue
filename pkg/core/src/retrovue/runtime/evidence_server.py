@@ -462,9 +462,16 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "reason": se.reason or None,
                 "fallback_frames_used": se.fallback_frames_used,
             }
-            # Contiguity invariant: warn if prev_asset_end_frame + 1 != current asset_start_frame
+            # Contiguity invariant: within the SAME segment_index, consecutive
+            # SEGMENT_END events should have contiguous asset frames. Across
+            # segment boundaries each segment is a separate asset starting at
+            # frame 0, so contiguity does not apply.
             prev_end = last_asset_end_frame_by_block.get(se.block_id)
-            if prev_end is not None and status in ("AIRED", "TRUNCATED"):
+            if (
+                prev_end is not None
+                and seg_idx == 0
+                and status in ("AIRED", "TRUNCATED")
+            ):
                 jip = join_in_progress_by_event.pop(event_id, False)
                 if not jip and prev_end + 1 != se.asset_start_frame:
                     logger.warning(
