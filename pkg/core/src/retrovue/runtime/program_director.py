@@ -64,6 +64,10 @@ try:
 except ImportError:  # pragma: no cover - settings optional
     RuntimeSettings = None  # type: ignore
 
+
+from retrovue.streaming.hls_writer import HLSManager, HLS_BASE_DIR
+from fastapi.responses import FileResponse
+
 class SystemMode(Enum):
     """System-wide operational modes"""
 
@@ -445,6 +449,9 @@ class ProgramDirector:
         
         # Phase 0: System mode
         self._system_mode = SystemMode.NORMAL
+
+        # HLS Manager
+        self._hls_manager = HLSManager()
 
         # Evidence pipeline configuration
         self._evidence_enabled = True
@@ -1075,6 +1082,9 @@ class ProgramDirector:
                 self._logger.debug("ProgramDirector pace thread joined successfully")
             self._pace_thread = None
         
+        # Stop all HLS writers
+        self._hls_manager.stop_all()
+
         # Stop all fanout buffers
         with self._fanout_lock:
             for channel_id, fanout in list(self._fanout_buffers.items()):
@@ -1845,6 +1855,105 @@ class ProgramDirector:
                     })
 
             return {"broadcast_day": broadcast_day, "entries": all_entries}
+
+
+        # --- HLS Endpoints ---
+
+        @self.fastapi_app.get("/hls/{channel_id}/live.m3u8")
+        async def hls_playlist(channel_id: str, request: Request) -> Response:
+            """Serve HLS playlist. Starts HLS writer on first request."""
+            writer = self._hls_manager.get_writer(channel_id)
+            if not writer.is_running():
+                try:
+                    if self._channel_manager_provider is not None:
+                        manager = self._channel_manager_provider.get_channel_manager(channel_id)
+                    else:
+                        manager = self._get_or_create_manager(channel_id)
+                except Exception as e:
+                    return Response(
+                        content=f"Channel not available: {e}",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+                # Tune in to trigger producer start
+                hls_session_id = f"hls-{channel_id}-{uuid.uuid4().hex[:8]}"
+                try:
+                    manager.tune_in(hls_session_id, {"channel_id": channel_id})
+                except Exception as e:
+                    self._logger.warning("HLS tune_in error: %s", e)
+                # Wait for fanout
+                fanout = None
+                for _ in range(20):
+                    fanout = self._get_or_create_fanout_buffer(channel_id, manager)
+                    if fanout:
+                        break
+                    await asyncio.sleep(1)
+                if not fanout:
+                    return Response(
+                        content="Stream not ready",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+                self._hls_manager.start_feeding(channel_id, fanout, hls_session_id)
+                # Wait for first playlist
+                for _ in range(30):
+                    if writer.playlist_path.exists():
+                        break
+                    await asyncio.sleep(0.5)
+
+            playlist = writer.playlist_path
+            if not playlist.exists():
+                return Response(
+                    content="Playlist not ready yet",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            return Response(
+                content=playlist.read_text(),
+                media_type="application/vnd.apple.mpegurl",
+                headers={
+                    "Cache-Control": "no-cache, no-store",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        @self.fastapi_app.get("/hls/{channel_id}/{segment}")
+        async def hls_segment(channel_id: str, segment: str) -> Response:
+            """Serve HLS .ts segments."""
+            seg_path = HLS_BASE_DIR / channel_id / segment
+            if not seg_path.exists() or ".." in segment:
+                return Response(content="Not found", status_code=404)
+            return FileResponse(
+                str(seg_path),
+                media_type="video/mp2t",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        @self.fastapi_app.get("/watch/{channel_id}", response_class=HTMLResponse)
+        async def watch_channel(channel_id: str) -> HTMLResponse:
+            """Serve the HLS web player page."""
+            import json as _json
+            html_path = Path("/opt/retrovue/pkg/core/templates/player/watch.html")
+            html = html_path.read_text()
+
+            channels_path = Path("/opt/retrovue/config/channels.json")
+            channel_name = channel_id
+            channel_buttons = ""
+            try:
+                with open(channels_path) as f:
+                    channels = _json.load(f)["channels"]
+                for ch in channels:
+                    if ch["channel_id"] == channel_id:
+                        channel_name = ch["name"]
+                    active = " active" if ch["channel_id"] == channel_id else ""
+                    channel_buttons += '<a href="/watch/' + ch["channel_id"] + '" class="' + active.strip() + '">' + ch["name"] + '</a>\n'
+            except Exception:
+                channel_buttons = '<a href="/watch/' + channel_id + '" class="active">' + channel_id + '</a>'
+
+            html = html.replace("{{CHANNEL_ID}}", channel_id)
+            html = html.replace("{{CHANNEL_NAME}}", channel_name)
+            html = html.replace("{{CHANNEL_BUTTONS}}", channel_buttons)
+            return HTMLResponse(content=html)
 
         @self.fastapi_app.get("/epg", response_class=HTMLResponse)
         async def epg_guide_html() -> HTMLResponse:

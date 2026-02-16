@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RetroVue — {{CHANNEL_NAME}}</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    font-family: 'Courier New', monospace;
+    color: #e0e0e0;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .tv-frame {
+    position: relative;
+    width: min(90vw, 960px);
+    aspect-ratio: 16/9;
+    border-radius: 24px;
+    background: #111;
+    box-shadow:
+      0 0 60px rgba(100,200,255,0.08),
+      inset 0 0 80px rgba(0,0,0,0.9),
+      0 4px 30px rgba(0,0,0,0.8);
+    border: 6px solid #222;
+    overflow: hidden;
+  }
+  video {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #000;
+  }
+  /* CRT scanlines */
+  .crt-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.12) 2px,
+      rgba(0,0,0,0.12) 4px
+    );
+    pointer-events: none;
+    z-index: 10;
+  }
+  /* Screen curvature */
+  .crt-curve {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.4) 100%);
+    pointer-events: none;
+    z-index: 11;
+  }
+  /* Channel badge */
+  .channel-badge {
+    position: absolute;
+    top: 16px;
+    right: 20px;
+    background: rgba(0,0,0,0.7);
+    color: #ffc107;
+    padding: 6px 14px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    z-index: 20;
+    text-shadow: 0 0 8px rgba(255,193,7,0.5);
+    opacity: 1;
+    transition: opacity 0.5s;
+  }
+  .channel-badge.fade { opacity: 0; }
+  /* Controls */
+  .controls {
+    margin-top: 20px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .controls a {
+    display: inline-block;
+    font-family: 'Courier New', monospace;
+    background: #1a237e;
+    color: #ffc107;
+    border: 1px solid #ffc107;
+    padding: 8px 16px;
+    text-decoration: none;
+    font-size: 0.8rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .controls a:hover, .controls a.active {
+    background: #ffc107;
+    color: #1a237e;
+  }
+  .status {
+    margin-top: 10px;
+    font-size: 0.7rem;
+    color: #666;
+  }
+  .status.error { color: #ff5252; }
+  .status.buffering { color: #ffc107; }
+</style>
+</head>
+<body>
+
+<div class="tv-frame" id="tvFrame">
+  <video id="video" autoplay muted></video>
+  <div class="crt-overlay"></div>
+  <div class="crt-curve"></div>
+  <div class="channel-badge" id="badge">{{CHANNEL_NAME}}</div>
+</div>
+
+<div class="controls" id="channelList">
+  {{CHANNEL_BUTTONS}}
+</div>
+
+<div class="status" id="status">Connecting...</div>
+
+<script>
+const channelId = '{{CHANNEL_ID}}';
+const hlsUrl = '/hls/' + channelId + '/live.m3u8';
+const video = document.getElementById('video');
+const statusEl = document.getElementById('status');
+const badge = document.getElementById('badge');
+
+// Fade badge after 5 seconds
+setTimeout(() => badge.classList.add('fade'), 5000);
+
+// Click to unmute
+video.addEventListener('click', () => {
+  video.muted = !video.muted;
+  statusEl.textContent = video.muted ? 'Click to unmute' : '🔊 Audio on';
+});
+
+function startHLS() {
+  if (Hls.isSupported()) {
+    const hls = new Hls({
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 5,
+      enableWorker: true,
+      lowLatencyMode: false,
+    });
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch(() => {});
+      statusEl.textContent = 'Click video to unmute';
+    });
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (data.fatal) {
+        statusEl.textContent = 'Stream error, retrying...';
+        statusEl.className = 'status error';
+        setTimeout(() => {
+          hls.destroy();
+          startHLS();
+        }, 3000);
+      }
+    });
+    hls.on(Hls.Events.FRAG_BUFFERED, () => {
+      statusEl.textContent = 'Click video to unmute';
+      statusEl.className = 'status';
+    });
+    hls.on(Hls.Events.BUFFER_STALLED, () => {
+      statusEl.textContent = 'Buffering...';
+      statusEl.className = 'status buffering';
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari native HLS
+    video.src = hlsUrl;
+    video.play().catch(() => {});
+    statusEl.textContent = 'Click video to unmute';
+  } else {
+    statusEl.textContent = 'HLS not supported in this browser';
+    statusEl.className = 'status error';
+  }
+}
+
+// Wait for playlist to appear, then start
+function waitAndStart(attempts) {
+  if (attempts <= 0) {
+    statusEl.textContent = 'Stream not available. Is the channel on air?';
+    statusEl.className = 'status error';
+    return;
+  }
+  fetch(hlsUrl).then(r => {
+    if (r.ok) {
+      startHLS();
+    } else {
+      statusEl.textContent = 'Waiting for stream... (' + attempts + ')';
+      statusEl.className = 'status buffering';
+      setTimeout(() => waitAndStart(attempts - 1), 2000);
+    }
+  }).catch(() => {
+    statusEl.textContent = 'Waiting for stream... (' + attempts + ')';
+    statusEl.className = 'status buffering';
+    setTimeout(() => waitAndStart(attempts - 1), 2000);
+  });
+}
+
+waitAndStart(30);
+</script>
+</body>
+</html>
