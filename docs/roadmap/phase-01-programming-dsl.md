@@ -51,5 +51,5 @@ Provide a human-friendly YAML DSL for describing channel programming grids, comp
 - [x] Traffic manager v1
 - [x] CLI commands (compile, validate, expand)
 - [x] Tests
-- [ ] Integration with ScheduleService
+- [x] Integration with ScheduleService
 - [ ] Review with Steve

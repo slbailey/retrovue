@@ -136,3 +136,35 @@ def expand_cmd(
     typer.echo(f"  Segments ({len(block.segments)}):")
     for seg in block.segments:
         typer.echo(f"    [{seg.segment_type}] uri={seg.asset_uri or '(black)'} offset={seg.asset_start_offset_ms}ms dur={seg.segment_duration_ms}ms")
+
+
+@app.command("rebuild")
+def rebuild_cmd(
+    date_str: str = typer.Argument(..., help="Broadcast date to rebuild (YYYY-MM-DD)"),
+    channel_id: str = typer.Option(None, "--channel", "-c", help="Channel ID (rebuilds all channels if omitted)"),
+) -> None:
+    """Force-recompile a locked broadcast day by deleting the cached row and recompiling."""
+    from datetime import date
+
+    try:
+        target_date = date.fromisoformat(date_str)
+    except ValueError:
+        typer.echo(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.", err=True)
+        raise typer.Exit(1)
+
+    from retrovue.domain.entities import CompiledProgramLog
+    from retrovue.infra.uow import session
+
+    with session() as db:
+        query = db.query(CompiledProgramLog).filter(
+            CompiledProgramLog.broadcast_day == target_date,
+        )
+        if channel_id:
+            query = query.filter(CompiledProgramLog.channel_id == channel_id)
+
+        deleted = query.delete(synchronize_session=False)
+
+    if deleted:
+        typer.echo(f"Deleted {deleted} cached schedule(s) for {date_str}. They will recompile on next access.")
+    else:
+        typer.echo(f"No cached schedules found for {date_str}.")

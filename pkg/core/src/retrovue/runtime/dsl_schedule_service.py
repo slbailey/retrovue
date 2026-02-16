@@ -27,6 +27,10 @@ from retrovue.runtime.traffic_manager import fill_ad_blocks
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
 from retrovue.infra.uow import session
 
+import hashlib
+import json as json_mod
+from datetime import date as date_type
+
 logger = logging.getLogger(__name__)
 
 # How many days ahead to compile on initial load
@@ -284,12 +288,54 @@ class DslScheduleService:
                 count += len(day_value.get("slots", []))
         return count
 
+    def _get_cached_schedule(self, channel_id: str, broadcast_day: str) -> dict | None:
+        """Check DB for a locked compiled schedule."""
+        from retrovue.domain.entities import CompiledProgramLog
+        try:
+            with session() as db:
+                row = db.query(CompiledProgramLog).filter(
+                    CompiledProgramLog.channel_id == channel_id,
+                    CompiledProgramLog.broadcast_day == date_type.fromisoformat(broadcast_day),
+                    CompiledProgramLog.locked == True,
+                ).first()
+                if row:
+                    return row.compiled_json
+        except Exception as e:
+            logger.warning("Failed to check compiled_program_log cache: %s", e)
+        return None
+
+    def _save_compiled_schedule(self, channel_id: str, broadcast_day: str, schedule: dict, dsl_hash: str) -> None:
+        """Persist a compiled schedule to the DB."""
+        from retrovue.domain.entities import CompiledProgramLog
+        try:
+            with session() as db:
+                row = CompiledProgramLog(
+                    channel_id=channel_id,
+                    broadcast_day=date_type.fromisoformat(broadcast_day),
+                    schedule_hash=dsl_hash,
+                    compiled_json=schedule,
+                    locked=True,
+                )
+                db.merge(row)
+        except Exception as e:
+            logger.warning("Failed to save compiled schedule to DB: %s", e)
+
+    @staticmethod
+    def _hash_dsl(dsl_text: str) -> str:
+        return hashlib.sha256(dsl_text.encode("utf-8")).hexdigest()
+
     def _compile_day(self, channel_id: str, broadcast_day: str) -> list[ScheduledBlock]:
         """Compile a single broadcast day into filled ScheduledBlocks.
         
+        DB-first: checks for a locked cached schedule before compiling.
         Uses deterministic sequential counters based on day offset from epoch,
         so episodes are consistent regardless of compilation order.
         """
+        # DB-first: check cache
+        cached = self._get_cached_schedule(channel_id, broadcast_day)
+        if cached is not None:
+            logger.info("Using cached schedule for %s/%s", channel_id, broadcast_day)
+            return self._hydrate_schedule(cached, channel_id, broadcast_day)
 
         dsl_text = Path(self._dsl_path).read_text()
         dsl = parse_dsl(dsl_text)
@@ -319,7 +365,35 @@ class DslScheduleService:
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
 
+        # Save to DB cache
+        dsl_hash = self._hash_dsl(dsl_text)
+        self._save_compiled_schedule(channel_id, broadcast_day, schedule, dsl_hash)
+
         # Expand each program block and fill ad breaks
+        return self._expand_schedule_to_blocks(schedule, resolver)
+
+    def _hydrate_schedule(self, schedule: dict, channel_id: str, broadcast_day: str) -> list[ScheduledBlock]:
+        """Hydrate a cached schedule dict into ScheduledBlocks."""
+        dsl_text = Path(self._dsl_path).read_text()
+        dsl = parse_dsl(dsl_text)
+        dsl["broadcast_day"] = broadcast_day
+
+        # Build resolver from catalog
+        with session() as db:
+            resolver = CatalogAssetResolver(db)
+
+        # Register pools
+        pools = dsl.get("pools", {})
+        if pools and hasattr(resolver, "register_pools"):
+            resolver.register_pools(pools)
+
+        # Resolve URIs
+        self._resolve_uris(resolver, schedule)
+
+        return self._expand_schedule_to_blocks(schedule, resolver)
+
+    def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
+        """Expand compiled program blocks into filled ScheduledBlocks."""
         blocks: list[ScheduledBlock] = []
         for block_def in schedule["program_blocks"]:
             asset_id = block_def["asset_id"]
