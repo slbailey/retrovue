@@ -6,10 +6,11 @@
 #ifndef RETROVUE_DECODE_FFMPEG_DECODER_H_
 #define RETROVUE_DECODE_FFMPEG_DECODER_H_
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <queue>
+#include <string>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 
@@ -127,6 +128,14 @@ class FFmpegDecoder {
   // Returns true if decoder is open and ready.
   bool IsOpen() const { return format_ctx_ != nullptr; }
 
+  // Set interrupt flags for FFmpeg I/O. When either is true, av_read_frame
+  // and other blocking calls abort promptly. Call before or after Open().
+  struct InterruptFlags {
+    std::atomic<bool>* fill_stop = nullptr;
+    std::atomic<bool>* session_stop = nullptr;
+  };
+  void SetInterruptFlags(const InterruptFlags& flags);
+
   // Returns true if end of file reached.
   bool IsEOF() const { return eof_reached_; }
 
@@ -190,6 +199,7 @@ class FFmpegDecoder {
   int video_stream_index_ = -1;
   int audio_stream_index_ = -1;
   bool eof_reached_ = false;
+  InterruptFlags interrupt_flags_;
   bool audio_eof_reached_ = false;
 
   // Skip pre-keyframe frames to avoid scaling artifacts

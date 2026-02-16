@@ -10,6 +10,7 @@
 #ifndef RETROVUE_BLOCKPLAN_ITICK_PRODUCER_HPP_
 #define RETROVUE_BLOCKPLAN_ITICK_PRODUCER_HPP_
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -53,6 +54,17 @@ class ITickProducer {
   // INV-SEAM-SEG: Return computed segment boundaries for the assigned block.
   // Empty if no block assigned or validation failed.
   virtual const std::vector<SegmentBoundary>& GetBoundaries() const = 0;
+
+  // Optional: Set interrupt flags for FFmpeg I/O. When either is true,
+  // av_read_frame and other blocking calls abort promptly.
+  // fill_stop: buffer's fill-stop signal (StopFilling/StopFillingAsync).
+  // session_stop: session stop signal (ctx_->stop_requested).
+  // Default no-op for producers that don't use FFmpeg.
+  struct InterruptFlags {
+    std::atomic<bool>* fill_stop = nullptr;
+    std::atomic<bool>* session_stop = nullptr;
+  };
+  virtual void SetInterruptFlags(const InterruptFlags&) {}
 };
 
 }  // namespace retrovue::blockplan

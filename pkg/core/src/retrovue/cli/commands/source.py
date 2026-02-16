@@ -1555,7 +1555,7 @@ def source_ingest(
     with session() as db:
         try:
             # Get the source first to validate it exists
-            source = source_get_by_id(source_id)
+            source = _resolve_source_by_id(db, source_id)
             if not source:
                 typer.echo(f"Error: Source '{source_id}' not found", err=True)
                 raise typer.Exit(1)
@@ -1584,9 +1584,53 @@ def source_ingest(
                 typer.echo("Configure path mappings and ensure local paths are accessible")
                 return
             
-            # Ingest orchestrator is legacy; this operation is not available
-            typer.echo("Ingest operation is not available: legacy orchestrator removed", err=True)
-            raise typer.Exit(1)
+            
+            # Import the ingest orchestrator
+            from ...usecases.ingest_orchestrator import ingest_collection_assets
+            
+            # Process each ingestible collection
+            total_summary = {"total": 0, "enriched": 0, "skipped": 0, "failed": 0}
+            
+            for collection in ingestible_collections:
+                if dry_run:
+                    typer.echo(f"Would ingest collection: {collection.name}")
+                else:
+                    typer.echo(f"Ingesting collection: {collection.name}...")
+                    try:
+                        summary = ingest_collection_assets(db, collection)
+                        # Aggregate summaries
+                        for key in total_summary:
+                            total_summary[key] += summary.get(key, 0)
+                        
+                        typer.echo(f"  Processed: {summary['total']} assets")
+                        typer.echo(f"  Enriched: {summary['enriched']} assets")
+                        typer.echo(f"  Skipped: {summary['skipped']} assets")
+                        typer.echo(f"  Failed: {summary['failed']} assets")
+                    except Exception as e:
+                        typer.echo(f"  Error ingesting collection '{collection.name}': {e}", err=True)
+                        continue
+            
+            if dry_run:
+                typer.echo(f"Would ingest {len(ingestible_collections)} collections")
+            else:
+                typer.echo("\nIngest complete:")
+                typer.echo(f"  Total assets processed: {total_summary['total']}")
+                typer.echo(f"  Successfully enriched: {total_summary['enriched']}")
+                typer.echo(f"  Skipped: {total_summary['skipped']}")
+                typer.echo(f"  Failed: {total_summary['failed']}")
+                
+                if json_output:
+                    import json
+                    result = {
+                        "source": {
+                            "id": str(source.id),
+                            "name": source.name,
+                            "type": source.type
+                        },
+                        "collections_ingested": len(ingestible_collections),
+                        "summary": total_summary
+                    }
+                    typer.echo(json.dumps(result, indent=2))
                     
         except Exception as e:
             typer.echo(f"Error ingesting from source: {e}", err=True)

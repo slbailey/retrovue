@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <iostream>
 #include <numeric>
@@ -50,6 +51,11 @@ void VideoLookaheadBuffer::StartFilling(
   producer_ = producer;
   audio_buffer_ = audio_buffer;
   stop_signal_ = stop_signal;
+  // Wire interrupt flags so FFmpeg I/O (av_read_frame etc.) aborts promptly on stop.
+  ITickProducer::InterruptFlags flags;
+  flags.fill_stop = &fill_stop_;
+  flags.session_stop = stop_signal;
+  producer_->SetInterruptFlags(flags);
   input_fps_ = input_fps;
   output_fps_ = output_fps;
   fill_start_time_ = std::chrono::steady_clock::now();
@@ -181,6 +187,13 @@ bool VideoLookaheadBuffer::IsFilling() const {
 // =============================================================================
 
 void VideoLookaheadBuffer::FillLoop() {
+  // Capture producer/audio/stop at thread start so StopFillingAsync can null
+  // members immediately. The fill thread uses only these locals — objects
+  // remain valid (owned by PipelineManager deferred_* until reaper joins).
+  ITickProducer* producer = producer_;
+  AudioLookaheadBuffer* audio_buffer = audio_buffer_;
+  std::atomic<bool>* stop_signal = stop_signal_;
+
   // Capture generation at thread start; any mismatch means fence happened.
   uint64_t my_gen;
   {
@@ -190,8 +203,8 @@ void VideoLookaheadBuffer::FillLoop() {
 
   // Capture audio generation for generation-gated audio pushes.
   uint64_t my_audio_gen = 0;
-  if (audio_buffer_) {
-    my_audio_gen = audio_buffer_->CurrentGeneration();
+  if (audio_buffer) {
+    my_audio_gen = audio_buffer->CurrentGeneration();
   }
 
   // --- Cadence setup (same logic as old PipelineManager::InitCadence) ---
@@ -211,7 +224,7 @@ void VideoLookaheadBuffer::FillLoop() {
   // One tick demands at most ceil(48000 / output_fps) samples.
   buffer::AudioFrame silence_template;
   int silence_samples_per_frame = 0;
-  if (audio_buffer_ && output_fps_ > 0.0) {
+  if (audio_buffer && output_fps_ > 0.0) {
     silence_samples_per_frame = static_cast<int>(
         std::ceil(static_cast<double>(buffer::kHouseAudioSampleRate) / output_fps_));
     silence_template.sample_rate = buffer::kHouseAudioSampleRate;
@@ -251,8 +264,14 @@ void VideoLookaheadBuffer::FillLoop() {
         << " have_last_decoded=" << have_last_decoded;
     Logger::Info(oss.str()); }
 
-  while (!fill_stop_.load(std::memory_order_acquire) &&
-         !(stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
+  const char* exit_reason = "unknown";
+  try {
+  if (!producer) {
+    exit_reason = "producer_null";
+  }
+  while (producer &&
+         !fill_stop_.load(std::memory_order_acquire) &&
+         !(stop_signal && stop_signal->load(std::memory_order_acquire))) {
 
     // INV-BUFFER-HYSTERESIS-001: Two-path depth control.
     //
@@ -310,9 +329,9 @@ void VideoLookaheadBuffer::FillLoop() {
         // PARKED path (or bootstrap): block on condvar.
         {
           std::unique_lock<std::mutex> lock(mutex_);
-          space_cv_.wait(lock, [this] {
+          space_cv_.wait(lock, [this, stop_signal, audio_buffer] {
             bool stopping = fill_stop_.load(std::memory_order_acquire) ||
-                (stop_signal_ && stop_signal_->load(std::memory_order_acquire));
+                (stop_signal && stop_signal->load(std::memory_order_acquire));
             if (stopping) return true;
 
             int depth = static_cast<int>(frames_.size());
@@ -326,7 +345,7 @@ void VideoLookaheadBuffer::FillLoop() {
               if (depth < bootstrap_target_frames_) return true;
               // At/above bootstrap target but below cap: decode only if audio
               // hasn't reached the gate threshold yet.
-              if (audio_buffer_ && audio_buffer_->DepthMs() < bootstrap_min_audio_ms_)
+              if (audio_buffer && audio_buffer->DepthMs() < bootstrap_min_audio_ms_)
                 return true;
               return false;
             }
@@ -338,7 +357,7 @@ void VideoLookaheadBuffer::FillLoop() {
             }
 
             // Audio burst: proceed past high water when audio is critically low.
-            if (audio_buffer_ && audio_buffer_->DepthMs() < audio_burst_threshold_ms_) {
+            if (audio_buffer && audio_buffer->DepthMs() < audio_burst_threshold_ms_) {
               int burst_cap = target_depth_frames_ * 4;
               return depth < burst_cap;
             }
@@ -346,14 +365,16 @@ void VideoLookaheadBuffer::FillLoop() {
           });
         }
         if (fill_stop_.load(std::memory_order_acquire) ||
-            (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
+            (stop_signal && stop_signal->load(std::memory_order_acquire))) {
+          exit_reason = fill_stop_.load(std::memory_order_acquire)
+              ? "fill_stop" : "session_stop";
           break;
         }
         // BOOTSTRAP TRACE: log fill decisions during bootstrap phase only
         if (fill_phase_.load(std::memory_order_relaxed) ==
             static_cast<int>(FillPhase::kBootstrap)) {
           int d = static_cast<int>(frames_.size());
-          int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+          int a_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
           { std::ostringstream oss;
             oss << "[FillLoop:" << buffer_label_ << "] BOOTSTRAP_WAKE"
                 << " bootstrap_epoch_ms=" << bootstrap_epoch_ms_
@@ -368,12 +389,10 @@ void VideoLookaheadBuffer::FillLoop() {
     }
 
     // INV-BUFFER-HYSTERESIS-001: Re-check stop after hysteresis decision.
-    // The FILLING fast path (skip_wait=true) bypasses the condvar block
-    // which contains its own fill_stop_ check.  Without this re-check,
-    // StopFillingAsync can null producer_ between the while-condition
-    // check and the TryGetFrame call below.
     if (fill_stop_.load(std::memory_order_acquire) ||
-        (stop_signal_ && stop_signal_->load(std::memory_order_acquire))) {
+        (stop_signal && stop_signal->load(std::memory_order_acquire))) {
+      exit_reason = fill_stop_.load(std::memory_order_acquire)
+          ? "fill_stop" : "session_stop";
       break;
     }
 
@@ -400,7 +419,7 @@ void VideoLookaheadBuffer::FillLoop() {
     // (pointer rotation).  No decoder lifecycle work happens on this thread.
     if (should_decode) {
       auto decode_start = std::chrono::steady_clock::now();
-      auto fd = producer_->TryGetFrame();
+      auto fd = producer->TryGetFrame();
       auto decode_end = std::chrono::steady_clock::now();
       if (fd) {
         content_gap = false;
@@ -423,12 +442,15 @@ void VideoLookaheadBuffer::FillLoop() {
         vf.was_decoded = true;
 
         // Bail out before pushing if stop was requested or generation changed.
-        if (fill_stop_.load(std::memory_order_acquire)) break;
+        if (fill_stop_.load(std::memory_order_acquire)) {
+          exit_reason = "fill_stop";
+          break;
+        }
 
         // Push decoded audio to AudioLookaheadBuffer (generation-gated).
-        if (audio_buffer_) {
+        if (audio_buffer) {
           for (auto& af : fd->audio) {
-            audio_buffer_->Push(std::move(af), my_audio_gen);
+            audio_buffer->Push(std::move(af), my_audio_gen);
           }
         }
       } else if (have_last_decoded) {
@@ -438,12 +460,13 @@ void VideoLookaheadBuffer::FillLoop() {
         vf.video = last_decoded;
         vf.was_decoded = false;
         // INV-HOLD-LAST-AUDIO: Push silence so audio buffer doesn't underflow.
-        if (audio_buffer_ && silence_samples_per_frame > 0) {
-          audio_buffer_->Push(silence_template, my_audio_gen);
+        if (audio_buffer && silence_samples_per_frame > 0) {
+          audio_buffer->Push(silence_template, my_audio_gen);
         }
       } else {
         // No frame ever decoded (decoder failure on first frame).
         // Exit fill loop; tick loop will remain in pad mode.
+        exit_reason = "first_frame_fail";
         break;
       }
     } else if (have_last_decoded) {
@@ -452,8 +475,8 @@ void VideoLookaheadBuffer::FillLoop() {
       vf.was_decoded = false;
       // Push silence on cadence-skip cycles when in a content gap
       // to prevent audio underflow on the block tail.
-      if (content_gap && audio_buffer_ && silence_samples_per_frame > 0) {
-        audio_buffer_->Push(silence_template, my_audio_gen);
+      if (content_gap && audio_buffer && silence_samples_per_frame > 0) {
+        audio_buffer->Push(silence_template, my_audio_gen);
       }
     } else {
       // No frame available yet — shouldn't happen (first tick always decodes
@@ -462,16 +485,41 @@ void VideoLookaheadBuffer::FillLoop() {
     }
 
     // Bail out before pushing if stop was requested or generation changed.
-    if (fill_stop_.load(std::memory_order_acquire)) break;
+    if (fill_stop_.load(std::memory_order_acquire)) {
+      exit_reason = "fill_stop";
+      break;
+    }
 
     // Push to buffer — generation gate prevents stale-frame bleed.
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (fill_generation_ != my_gen) break;  // Fence happened during decode
+      if (fill_generation_ != my_gen) {
+        exit_reason = "audio_gen_mismatch";
+        break;  // Fence happened during decode
+      }
       frames_.push_back(std::move(vf));
       total_pushed_++;
       primed_ = true;
     }
+  }
+  // Exited via while condition — determine reason
+  if (strcmp(exit_reason, "unknown") == 0) {
+    exit_reason = fill_stop_.load(std::memory_order_acquire)
+        ? "fill_stop"
+        : (stop_signal && stop_signal->load(std::memory_order_acquire)
+            ? "session_stop" : "loop_exit");
+  }
+  } catch (const std::exception& e) {
+    exit_reason = "exception";
+    { std::ostringstream oss;
+      oss << "[FillLoop:" << buffer_label_ << "] FILL_EXIT reason=exception"
+          << " what=" << e.what();
+      Logger::Error(oss.str()); }
+  }
+  if (strcmp(exit_reason, "exception") != 0) {
+    { std::ostringstream oss;
+      oss << "[FillLoop:" << buffer_label_ << "] FILL_EXIT reason=" << exit_reason;
+      Logger::Info(oss.str()); }
   }
 }
 

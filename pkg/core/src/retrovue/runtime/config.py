@@ -160,7 +160,7 @@ BLOCKPLAN_SCHEDULE_SOURCE = "phase3"
 
 def valid_schedule_sources() -> tuple[str, ...]:
     """Return the only allowed schedule_source values (blockplan-producing)."""
-    return (BLOCKPLAN_SCHEDULE_SOURCE,)
+    return (BLOCKPLAN_SCHEDULE_SOURCE, "dsl")
 
 
 def assert_schedule_source_valid(config: ChannelConfig) -> None:

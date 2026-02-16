@@ -15,11 +15,13 @@
 #ifndef RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_
 #define RETROVUE_BLOCKPLAN_PIPELINE_MANAGER_HPP_
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 
@@ -199,11 +201,32 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Deferred fill thread and producer from async stop at fence.
   // The old fill thread may still be decoding when B rotates into A.
   // The old producer must stay alive until the old fill thread exits.
+  // Threads are handed to the reaper for non-blocking join (never block tick loop).
   std::thread deferred_fill_thread_;
   std::unique_ptr<producers::IProducer> deferred_producer_;
   std::unique_ptr<VideoLookaheadBuffer> deferred_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> deferred_audio_buffer_;
-  void CleanupDeferredFill();
+  void CleanupDeferredFill();  // Non-blocking: hands off to reaper
+
+  // Reaper thread: joins deferred fill threads off the tick loop.
+  // ReapJob holds thread + owners so objects stay alive until join completes.
+  struct ReapJob {
+    int64_t job_id = 0;
+    std::string block_id;  // Diagnostic: block at handoff
+    std::thread thread;
+    std::unique_ptr<producers::IProducer> producer;
+    std::unique_ptr<VideoLookaheadBuffer> video_buffer;
+    std::unique_ptr<AudioLookaheadBuffer> audio_buffer;
+  };
+  std::atomic<int64_t> reap_job_id_{0};
+  std::thread reaper_thread_;
+  std::mutex reaper_mutex_;
+  std::condition_variable reaper_cv_;
+  std::queue<ReapJob> reaper_queue_;
+  std::atomic<bool> reaper_shutdown_{false};
+  void ReaperLoop();
+  void HandOffToReaper(ReapJob job);
+  static std::string GetBlockIdFromProducer(producers::IProducer* p);
 
   // --- VideoLookaheadBuffer: non-blocking video frame buffer ---
   // Decoded video frames are pushed by a background fill thread;

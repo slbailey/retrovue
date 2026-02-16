@@ -1,0 +1,29 @@
+channel: retro_prime
+broadcast_day: "1989-10-12"
+timezone: America/New_York
+notes:
+  vibe: "Water-cooler Thursday"
+
+templates:
+  weeknight_sitcom_block:
+    start: "20:00"
+    slots:
+      - title: "Cosby Show"
+        program: p.coz_s3
+        episode_selector:
+          collection: col.cozby_show_s3
+          mode: sequential
+      - title: "Cheers"
+        program: p.cheers_s6
+        episode_selector:
+          collection: col.cheers_s6
+          mode: random
+      - title: "Taxi"
+        program: p.taxi_s2
+        episode_selector:
+          collection: col.taxi_s2
+          mode: random
+
+schedule:
+  weeknights:
+    use: weeknight_sitcom_block

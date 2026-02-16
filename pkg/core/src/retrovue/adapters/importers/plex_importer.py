@@ -1498,9 +1498,17 @@ class PlexImporter(BaseImporter):
                                 best = (plex_norm, local_p, candidate)
                 if best is not None:
                     matched_prefix, local_p, chosen = best
-                    # Compute remainder using normalized forms to avoid slash/case issues
-                    chosen_norm = _norm(chosen)
-                    remainder = chosen_norm[len(matched_prefix) :]
+                    # Compute remainder preserving original case
+                    # Strip the matched prefix length from the original candidate
+                    chosen_stripped = chosen.replace("\\", "/")
+                    # Remove scheme prefixes to align with _norm length calculation
+                    for pref in ("file://", "smb://"):
+                        if chosen_stripped.lower().startswith(pref):
+                            chosen_stripped = chosen_stripped[len(pref):]
+                            break
+                    while chosen_stripped.startswith("/"):
+                        chosen_stripped = chosen_stripped[1:]
+                    remainder = chosen_stripped[len(matched_prefix):]
                     from pathlib import Path as _Path
 
                     # Return native OS path (do NOT convert to file://)
