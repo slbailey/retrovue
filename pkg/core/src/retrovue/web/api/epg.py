@@ -31,8 +31,26 @@ def _load_channels() -> list[dict[str, Any]]:
         return json.load(f)["channels"]
 
 
+def _count_slots_in_dsl(dsl: dict[str, Any]) -> int:
+    """Count total episode slots per broadcast day in a DSL schedule."""
+    count = 0
+    schedule = dsl.get("schedule", {})
+    for day_key, day_value in schedule.items():
+        if isinstance(day_value, list):
+            for block_def in day_value:
+                if isinstance(block_def, dict):
+                    count += len(block_def.get("slots", []))
+        elif isinstance(day_value, dict):
+            count += len(day_value.get("slots", []))
+    return count
+
+
 def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[str, Any]]:
-    """Compile a single channel's DSL for a broadcast day and return EPG entries."""
+    """Compile a single channel's DSL for a broadcast day and return EPG entries.
+    
+    Uses deterministic sequential counters based on the broadcast day offset
+    from a fixed epoch, so each day shows different episodes.
+    """
     dsl_path = channel_cfg["schedule_config"]["dsl_path"]
     dsl_text = Path(dsl_path).read_text()
     dsl = parse_dsl(dsl_text)
@@ -41,7 +59,26 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[s
     with session() as db:
         resolver = CatalogAssetResolver(db)
 
-    schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path)
+    # Calculate deterministic counter offset based on day number from epoch
+    # This ensures each day starts at the right episode regardless of
+    # which day the EPG is viewed
+    from datetime import date as date_type
+    epoch = date_type(2026, 1, 1)  # fixed epoch
+    target = date_type.fromisoformat(broadcast_day)
+    day_offset = (target - epoch).days
+
+    # Count slots per day to compute starting counter
+    slots_per_day = _count_slots_in_dsl(dsl)
+    starting_counter = day_offset * slots_per_day
+
+    # Pre-seed sequential counters for all pools
+    sequential_counters = {}
+    pools = dsl.get("pools", {})
+    for pool_id in pools:
+        sequential_counters[pool_id] = starting_counter
+
+    schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path,
+                                sequential_counters=sequential_counters)
 
     entries = []
     for block in schedule["program_blocks"]:
