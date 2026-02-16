@@ -37,21 +37,16 @@
     display: block;
     background: #000;
   }
-  /* CRT scanlines */
   .crt-overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
     background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,0,0,0.12) 2px,
-      rgba(0,0,0,0.12) 4px
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,0.12) 2px, rgba(0,0,0,0.12) 4px
     );
     pointer-events: none;
     z-index: 10;
   }
-  /* Screen curvature */
   .crt-curve {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -59,11 +54,9 @@
     pointer-events: none;
     z-index: 11;
   }
-  /* Channel badge */
   .channel-badge {
     position: absolute;
-    top: 16px;
-    right: 20px;
+    top: 16px; right: 20px;
     background: rgba(0,0,0,0.7);
     color: #ffc107;
     padding: 6px 14px;
@@ -79,7 +72,36 @@
     transition: opacity 0.5s;
   }
   .channel-badge.fade { opacity: 0; }
-  /* Controls */
+  /* Big unmute overlay */
+  .unmute-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+    cursor: pointer;
+    background: rgba(0,0,0,0.3);
+    transition: opacity 0.3s;
+  }
+  .unmute-overlay.hidden { opacity: 0; pointer-events: none; }
+  .unmute-btn {
+    background: rgba(0,0,0,0.8);
+    color: #ffc107;
+    border: 2px solid #ffc107;
+    border-radius: 50%;
+    width: 80px; height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.5rem;
+    text-shadow: 0 0 20px rgba(255,193,7,0.6);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
   .controls {
     margin-top: 20px;
     display: flex;
@@ -117,10 +139,13 @@
 <body>
 
 <div class="tv-frame" id="tvFrame">
-  <video id="video" autoplay muted></video>
+  <video id="video" autoplay muted playsinline></video>
   <div class="crt-overlay"></div>
   <div class="crt-curve"></div>
   <div class="channel-badge" id="badge">{{CHANNEL_NAME}}</div>
+  <div class="unmute-overlay" id="unmuteOverlay">
+    <div class="unmute-btn">🔊</div>
+  </div>
 </div>
 
 <div class="controls" id="channelList">
@@ -131,18 +156,18 @@
 
 <script>
 const channelId = '{{CHANNEL_ID}}';
-const hlsUrl = '/hls/' + channelId + '/live.m3u8';
+const hlsUrl = '/'+'hls/'+channelId+'/'+'live.m3u8';
 const video = document.getElementById('video');
 const statusEl = document.getElementById('status');
 const badge = document.getElementById('badge');
+const unmuteOverlay = document.getElementById('unmuteOverlay');
 
-// Fade badge after 5 seconds
 setTimeout(() => badge.classList.add('fade'), 5000);
 
-// Click to unmute
-video.addEventListener('click', () => {
-  video.muted = !video.muted;
-  statusEl.textContent = video.muted ? 'Click to unmute' : '🔊 Audio on';
+unmuteOverlay.addEventListener('click', () => {
+  video.muted = false;
+  unmuteOverlay.classList.add('hidden');
+  statusEl.textContent = '🔊 Audio on';
 });
 
 function startHLS() {
@@ -157,20 +182,19 @@ function startHLS() {
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       video.play().catch(() => {});
-      statusEl.textContent = 'Click video to unmute';
+      statusEl.textContent = '▲ Tap screen for sound';
     });
     hls.on(Hls.Events.ERROR, (event, data) => {
       if (data.fatal) {
         statusEl.textContent = 'Stream error, retrying...';
         statusEl.className = 'status error';
-        setTimeout(() => {
-          hls.destroy();
-          startHLS();
-        }, 3000);
+        setTimeout(() => { hls.destroy(); startHLS(); }, 3000);
       }
     });
     hls.on(Hls.Events.FRAG_BUFFERED, () => {
-      statusEl.textContent = 'Click video to unmute';
+      if (video.muted) {
+        statusEl.textContent = '▲ Tap screen for sound';
+      }
       statusEl.className = 'status';
     });
     hls.on(Hls.Events.BUFFER_STALLED, () => {
@@ -178,17 +202,15 @@ function startHLS() {
       statusEl.className = 'status buffering';
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    // Safari native HLS
     video.src = hlsUrl;
     video.play().catch(() => {});
-    statusEl.textContent = 'Click video to unmute';
+    statusEl.textContent = '▲ Tap screen for sound';
   } else {
     statusEl.textContent = 'HLS not supported in this browser';
     statusEl.className = 'status error';
   }
 }
 
-// Wait for playlist to appear, then start
 function waitAndStart(attempts) {
   if (attempts <= 0) {
     statusEl.textContent = 'Stream not available. Is the channel on air?';
@@ -196,15 +218,14 @@ function waitAndStart(attempts) {
     return;
   }
   fetch(hlsUrl).then(r => {
-    if (r.ok) {
-      startHLS();
-    } else {
-      statusEl.textContent = 'Waiting for stream... (' + attempts + ')';
+    if (r.ok) { startHLS(); }
+    else {
+      statusEl.textContent = 'Waiting for stream... ('+attempts+')';
       statusEl.className = 'status buffering';
       setTimeout(() => waitAndStart(attempts - 1), 2000);
     }
   }).catch(() => {
-    statusEl.textContent = 'Waiting for stream... (' + attempts + ')';
+    statusEl.textContent = 'Waiting for stream... ('+attempts+')';
     statusEl.className = 'status buffering';
     setTimeout(() => waitAndStart(attempts - 1), 2000);
   });
