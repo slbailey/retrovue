@@ -1787,7 +1787,25 @@ class ProgramDirector:
                     with session() as db:
                         resolver = CatalogAssetResolver(db)
 
-                    schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path)
+                    # Deterministic sequential counters based on day offset
+                    from datetime import date as _date_type
+                    _epoch = _date_type(2026, 1, 1)
+                    _target = _date_type.fromisoformat(broadcast_day)
+                    _day_offset = (_target - _epoch).days
+                    _slots = sum(
+                        len(b.get("slots", []))
+                        for v in dsl.get("schedule", {}).values()
+                        for b in (v if isinstance(v, list) else [v])
+                        if isinstance(b, dict)
+                    )
+                    _seq_counters = {
+                        pid: _day_offset * _slots
+                        for pid in dsl.get("pools", {})
+                    }
+                    schedule = compile_schedule(
+                        dsl, resolver=resolver, dsl_path=dsl_path,
+                        sequential_counters=_seq_counters,
+                    )
 
                     for block in schedule["program_blocks"]:
                         asset_id = block["asset_id"]

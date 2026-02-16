@@ -67,8 +67,6 @@ class DslScheduleService:
         # Track which broadcast days have been compiled (set of "YYYY-MM-DD")
         self._compiled_days: set[str] = set()
 
-        # Sequential episode counters — persist across days for true sequential playback
-        self._sequential_counters: dict[str, int] = {}
 
         # Recompile guard: prevent concurrent horizon extensions
         self._extending = False
@@ -272,8 +270,26 @@ class DslScheduleService:
             len(all_blocks), len(self._compiled_days), channel_id,
         )
 
+    @staticmethod
+    def _count_slots_in_dsl(dsl: dict) -> int:
+        """Count total episode slots per broadcast day."""
+        count = 0
+        schedule = dsl.get("schedule", {})
+        for day_key, day_value in schedule.items():
+            if isinstance(day_value, list):
+                for block_def in day_value:
+                    if isinstance(block_def, dict):
+                        count += len(block_def.get("slots", []))
+            elif isinstance(day_value, dict):
+                count += len(day_value.get("slots", []))
+        return count
+
     def _compile_day(self, channel_id: str, broadcast_day: str) -> list[ScheduledBlock]:
-        """Compile a single broadcast day into filled ScheduledBlocks."""
+        """Compile a single broadcast day into filled ScheduledBlocks.
+        
+        Uses deterministic sequential counters based on day offset from epoch,
+        so episodes are consistent regardless of compilation order.
+        """
 
         dsl_text = Path(self._dsl_path).read_text()
         dsl = parse_dsl(dsl_text)
@@ -283,9 +299,22 @@ class DslScheduleService:
         with session() as db:
             resolver = CatalogAssetResolver(db)
 
-        # Compile program schedule (pass sequential counters for cross-day continuity)
+        # Deterministic sequential counters based on day offset
+        from datetime import date as date_type
+        epoch = date_type(2026, 1, 1)
+        target = date_type.fromisoformat(broadcast_day)
+        day_offset = (target - epoch).days
+        slots_per_day = self._count_slots_in_dsl(dsl)
+        starting_counter = day_offset * slots_per_day
+
+        sequential_counters = {}
+        pools = dsl.get("pools", {})
+        for pool_id in pools:
+            sequential_counters[pool_id] = starting_counter
+
+        # Compile program schedule with deterministic counters
         schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
-                                     sequential_counters=self._sequential_counters)
+                                     sequential_counters=sequential_counters)
 
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
