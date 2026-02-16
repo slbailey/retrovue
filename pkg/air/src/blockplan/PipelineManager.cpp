@@ -96,6 +96,8 @@ void PipelineManager::Start() {
   if (started_) return;
   started_ = true;
   ctx_->stop_requested.store(false, std::memory_order_release);
+  reaper_shutdown_.store(false, std::memory_order_release);
+  reaper_thread_ = std::thread(&PipelineManager::ReaperLoop, this);
   thread_ = std::thread(&PipelineManager::Run, this);
 }
 
@@ -108,6 +110,23 @@ void PipelineManager::Stop() {
     thread_.join();
   }
   started_ = false;
+
+  // Shutdown reaper and drain any pending threads.
+  reaper_shutdown_.store(true, std::memory_order_release);
+  reaper_cv_.notify_all();
+  if (reaper_thread_.joinable()) {
+    reaper_thread_.join();
+  }
+  // Drain remaining queue (defensive: join any threads that were pushed
+  // but not yet processed).
+  {
+    std::lock_guard<std::mutex> lock(reaper_mutex_);
+    while (!reaper_queue_.empty()) {
+      ReapJob job = std::move(reaper_queue_.front());
+      reaper_queue_.pop();
+      if (job.thread.joinable()) job.thread.join();
+    }
+  }
 
   // Defensive thread-joinable audit: after Run() exits and thread_ is joined,
   // no owned threads should remain joinable.  Hitting any of these means the
@@ -124,31 +143,127 @@ void PipelineManager::Stop() {
       oss << "[PipelineManager] BUG: video fill thread still running "
           << "after Stop(). Stopping to prevent std::terminate.";
       Logger::Error(oss.str()); }
-    video_buffer_->StopFilling(/*flush=*/true);
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=stop_defensive_video tick=stop";
+        Logger::Info(oss.str()); }
+      video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=stop_defensive_video tick=stop dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
   }
   if (preview_video_buffer_ && preview_video_buffer_->IsFilling()) {
     { std::ostringstream oss;
       oss << "[PipelineManager] BUG: preview video fill thread still running "
           << "after Stop(). Stopping to prevent std::terminate.";
       Logger::Error(oss.str()); }
-    preview_video_buffer_->StopFilling(/*flush=*/true);
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=stop_defensive_preview tick=stop";
+        Logger::Info(oss.str()); }
+      preview_video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=stop_defensive_preview tick=stop dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
   }
   if (segment_preview_video_buffer_ && segment_preview_video_buffer_->IsFilling()) {
     { std::ostringstream oss;
       oss << "[PipelineManager] BUG: segment preview video fill thread still running "
           << "after Stop(). Stopping to prevent std::terminate.";
       Logger::Error(oss.str()); }
-    segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=stop_defensive_segment_preview tick=stop";
+        Logger::Info(oss.str()); }
+      segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=stop_defensive_segment_preview tick=stop dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
   }
 }
 
+std::string PipelineManager::GetBlockIdFromProducer(producers::IProducer* p) {
+  if (!p) return "none";
+  auto* tp = dynamic_cast<ITickProducer*>(p);
+  return tp ? tp->GetBlock().block_id : "?";
+}
+
 void PipelineManager::CleanupDeferredFill() {
-  if (deferred_fill_thread_.joinable()) {
-    deferred_fill_thread_.join();
+  // Never block tick loop: hand job to reaper. Owners stay in job until join.
+  if (!deferred_fill_thread_.joinable()) return;
+
+  ReapJob job;
+  job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
+  job.block_id = GetBlockIdFromProducer(deferred_producer_.get());
+  job.thread = std::move(deferred_fill_thread_);
+  job.producer = std::move(deferred_producer_);
+  job.video_buffer = std::move(deferred_video_buffer_);
+  job.audio_buffer = std::move(deferred_audio_buffer_);
+
+  HandOffToReaper(std::move(job));
+}
+
+void PipelineManager::HandOffToReaper(ReapJob job) {
+  if (!job.thread.joinable()) return;
+  { std::ostringstream oss;
+    oss << "[PipelineManager] REAP_ENQUEUE job_id=" << job.job_id
+        << " block_id=" << (job.block_id.empty() ? "none" : job.block_id);
+    Logger::Info(oss.str()); }
+  std::lock_guard<std::mutex> lock(reaper_mutex_);
+  reaper_queue_.push(std::move(job));
+  reaper_cv_.notify_one();
+}
+
+void PipelineManager::ReaperLoop() {
+  while (true) {
+    ReapJob job;
+    int queued_after_pop = 0;
+    {
+      std::unique_lock<std::mutex> lock(reaper_mutex_);
+      reaper_cv_.wait(lock, [this] {
+        return reaper_shutdown_.load(std::memory_order_acquire) ||
+               !reaper_queue_.empty();
+      });
+      if (reaper_shutdown_.load(std::memory_order_acquire) &&
+          reaper_queue_.empty()) {
+        return;
+      }
+      if (!reaper_queue_.empty()) {
+        job = std::move(reaper_queue_.front());
+        reaper_queue_.pop();
+        queued_after_pop = static_cast<int>(reaper_queue_.size());
+      }
+    }
+    if (job.thread.joinable()) {
+      { std::ostringstream oss;
+        oss << "[Reaper] REAP_JOIN_BEGIN job_id=" << job.job_id
+            << " block_id=" << (job.block_id.empty() ? "none" : job.block_id)
+            << " queued=" << queued_after_pop;
+        Logger::Info(oss.str()); }
+      auto t0 = std::chrono::steady_clock::now();
+      job.thread.join();
+      auto join_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[Reaper] REAP_JOIN_END job_id=" << job.job_id
+            << " join_ms=" << join_ms
+            << " queued=" << queued_after_pop;
+        Logger::Info(oss.str()); }
+    }
+    // job destructs here — producers/buffers destroyed AFTER join
   }
-  deferred_producer_.reset();
-  deferred_video_buffer_.reset();
-  deferred_audio_buffer_.reset();
 }
 
 PipelineMetrics PipelineManager::SnapshotMetrics() const {
@@ -939,13 +1054,7 @@ void PipelineManager::Run() {
     auto seg_peek = seam_preparer_->PeekSegmentResult();
     if (seg_peek && seg_peek->parent_block_id == live_parent_block_.block_id &&
         seg_peek->parent_segment_index == next_segment_index) {
-      { std::ostringstream oss;
-        oss << "[PipelineManager] SEGMENT_PREROLL_READY"
-            << " block=" << live_parent_block_.block_id
-            << " segment_index=" << next_segment_index
-            << " tick=" << session_frame_index
-            << " next_seam_frame=" << next_seam_frame_;
-        Logger::Info(oss.str()); }
+      // Next segment preroll ready; seam commit consumes at next_seam_frame_.
     }
     // Segment preview is no longer populated here (only seam commit consumes).
     // This block remains for any future path that might set segment_preview_.
@@ -1224,14 +1333,38 @@ void PipelineManager::Run() {
       take_rotated = true;
 
       // Step 1: Join PREVIOUS fence's deferred fill thread.
-      CleanupDeferredFill();
+      { auto t0 = std::chrono::steady_clock::now();
+        { std::ostringstream oss;
+          oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_BEGIN tick="
+              << session_frame_index << " context=block_take";
+          Logger::Info(oss.str()); }
+        CleanupDeferredFill();
+        auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        { std::ostringstream oss;
+          oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_END tick="
+              << session_frame_index << " context=block_take dt_ms=" << dt_ms;
+          Logger::Info(oss.str()); }
+      }
 
       // Step 1b: Guard against stale preview buffers.
       // TryLoadLiveProducer may have consumed preview_ (moved to live_)
       // but left preview_video_buffer_ with a running fill thread.
       // Stop and clear them so the swap logic below sees a consistent state.
       if (preview_video_buffer_ && !preview_) {
-        preview_video_buffer_->StopFilling(/*flush=*/true);
+        { auto t0 = std::chrono::steady_clock::now();
+          { std::ostringstream oss;
+            oss << "[PipelineManager] STOP_FILLING_BEGIN context=stale_preview_block_take tick="
+                << session_frame_index;
+            Logger::Info(oss.str()); }
+          preview_video_buffer_->StopFilling(/*flush=*/true);
+          auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - t0).count();
+          { std::ostringstream oss;
+            oss << "[PipelineManager] STOP_FILLING_END context=stale_preview_block_take tick="
+                << session_frame_index << " dt_ms=" << dt_ms;
+            Logger::Info(oss.str()); }
+        }
         preview_video_buffer_.reset();
         preview_audio_buffer_.reset();
       }
@@ -2038,7 +2171,19 @@ void PipelineManager::Run() {
         // TickProducer.  Stop the PREVIEW fill first to prevent concurrent
         // TryGetFrame on a non-thread-safe producer.
         if (preview_video_buffer_ && preview_video_buffer_->IsFilling()) {
-          preview_video_buffer_->StopFilling(/*flush=*/true);
+          { auto t0 = std::chrono::steady_clock::now();
+            { std::ostringstream oss;
+              oss << "[PipelineManager] STOP_FILLING_BEGIN context=padded_gap_exit tick="
+                  << session_frame_index;
+              Logger::Info(oss.str()); }
+            preview_video_buffer_->StopFilling(/*flush=*/true);
+            auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            { std::ostringstream oss;
+              oss << "[PipelineManager] STOP_FILLING_END context=padded_gap_exit tick="
+                  << session_frame_index << " dt_ms=" << dt_ms;
+              Logger::Info(oss.str()); }
+          }
         }
         preview_video_buffer_.reset();
         preview_audio_buffer_.reset();
@@ -2102,6 +2247,18 @@ void PipelineManager::Run() {
     if (have_prev_frame_time) {
       auto gap_us = std::chrono::duration_cast<std::chrono::microseconds>(
           wake_time - prev_frame_time).count();
+      double gap_ms = gap_us / 1000.0;
+      if (gap_ms > 50) {
+        const char* phase =
+            past_fence ? "past_fence"
+            : (take_b ? "block_take" : (take_segment ? "segment_take" : "tick"));
+        { std::ostringstream oss;
+          oss << "[PipelineManager] TICK_GAP gap_ms=" << gap_ms
+              << " tick=" << session_frame_index
+              << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+              << " phase=" << phase;
+          Logger::Info(oss.str()); }
+      }
       std::lock_guard<std::mutex> lock(metrics_mutex_);
       metrics_.sum_inter_frame_gap_us += gap_us;
       metrics_.frame_gap_count++;
@@ -2133,22 +2290,66 @@ void PipelineManager::Run() {
   }
 
   // Join any deferred fill thread from the last fence swap.
-  CleanupDeferredFill();
+  { auto t0 = std::chrono::steady_clock::now();
+    { std::ostringstream oss;
+      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_BEGIN tick=teardown context=teardown";
+      Logger::Info(oss.str()); }
+    CleanupDeferredFill();
+    auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    { std::ostringstream oss;
+      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_END tick=teardown context=teardown dt_ms="
+          << dt_ms;
+      Logger::Info(oss.str()); }
+  }
 
   // INV-VIDEO-LOOKAHEAD-001: Stop video fill thread before resetting producers.
   if (video_buffer_) {
-    video_buffer_->StopFilling(/*flush=*/true);
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=teardown_video tick=teardown";
+        Logger::Info(oss.str()); }
+      video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=teardown_video tick=teardown dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
   }
   // Stop B preroll buffers if still running.
   if (preview_video_buffer_) {
-    preview_video_buffer_->StopFilling(/*flush=*/true);
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=teardown_preview tick=teardown";
+        Logger::Info(oss.str()); }
+      preview_video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=teardown_preview tick=teardown dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
     preview_video_buffer_.reset();
   }
   preview_audio_buffer_.reset();
 
   // Stop segment preview buffers if still running.
   if (segment_preview_video_buffer_) {
-    segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=teardown_segment_preview tick=teardown";
+        Logger::Info(oss.str()); }
+      segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=teardown_segment_preview tick=teardown dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
     segment_preview_video_buffer_.reset();
   }
   segment_preview_audio_buffer_.reset();
@@ -2374,14 +2575,26 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   const bool incoming_is_pad = (to_seg_type == SegmentType::kPad);
 
   // Step 1: Join any deferred fill thread.
-  CleanupDeferredFill();
+  { auto t0 = std::chrono::steady_clock::now();
+    { std::ostringstream oss;
+      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_BEGIN tick="
+          << session_frame_index << " context=segment_swap";
+      Logger::Info(oss.str()); }
+    CleanupDeferredFill();
+    auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    { std::ostringstream oss;
+      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_END tick="
+          << session_frame_index << " context=segment_swap dt_ms=" << dt_ms;
+      Logger::Info(oss.str()); }
+  }
 
-  // Step 2: Stop A's fill thread (async).
-  // Do NOT reset audio_buffer_ here — the old buffer is replaced in all
-  // three swap paths (PREROLLED, late-arrival, MISS).  Resetting bumps the
-  // generation counter and empties audio, which starves the incoming
-  // segment if it shares the tick with a fill-thread push window.
-  auto detached = video_buffer_->StopFillingAsync(/*flush=*/true);
+  // Step 2: Move outgoing buffers out FIRST so we can stop and hand off.
+  // The fill thread uses producer/audio_buffer — both must stay alive until
+  // reaper joins. ReapJob holds owners; we hand off after the swap.
+  auto outgoing_video_buffer = std::move(video_buffer_);
+  auto outgoing_audio_buffer = std::move(audio_buffer_);
+  auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
 
   // Step 3: Save old live_ for deferred cleanup.
   auto outgoing_producer = std::move(live_);
@@ -2412,10 +2625,9 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
         live_ = std::move(result->producer);
         // Create fresh buffers and start filling.
         // Old video fill thread was already stopped in Step 2.
-        // Old audio buffer replaced below — no Reset needed.
         video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
-            video_buffer_ ? video_buffer_->TargetDepthFrames() : 15,
-            video_buffer_ ? video_buffer_->LowWaterFrames() : 5);
+            outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
+            outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
         video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
         const auto& bcfg = ctx_->buffer_config;
         int a_target = bcfg.audio_target_depth_ms;
@@ -2483,9 +2695,15 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   current_segment_index_++;
   UpdateNextSeamFrame();
 
-  // Step 6: Store deferred thread + producer.
-  deferred_fill_thread_ = std::move(detached.thread);
-  deferred_producer_ = std::move(outgoing_producer);
+  // Step 6: Hand off to reaper (owners stay in job until join).
+  ReapJob job;
+  job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
+  job.block_id = GetBlockIdFromProducer(outgoing_producer.get());
+  job.thread = std::move(detached.thread);
+  job.producer = std::move(outgoing_producer);
+  job.video_buffer = std::move(outgoing_video_buffer);
+  job.audio_buffer = std::move(outgoing_audio_buffer);
+  HandOffToReaper(std::move(job));
 
   // Step 7: Arm next segment prep (call site #4).
   ArmSegmentPrep(session_frame_index);

@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://retrovue.tv/schemas/program_schedule.v2.schema.json",
+  "title": "Retrovue Program Schedule",
+  "description": "Program schedule output from the Programming DSL compiler. Contains grid-aligned program blocks only — no breaks, commercials, or packaging. Version program-schedule.v2",
+  "type": "object",
+  "required": [
+    "version",
+    "channel_id",
+    "broadcast_day",
+    "timezone",
+    "source",
+    "program_blocks",
+    "hash"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "program-schedule.v2"
+    },
+    "channel_id": {
+      "type": "string",
+      "description": "Canonical channel identifier",
+      "pattern": "^[a-z0-9_\\.:-]+$"
+    },
+    "broadcast_day": {
+      "type": "string",
+      "format": "date",
+      "description": "Broadcast day (local calendar date)"
+    },
+    "timezone": {
+      "type": "string",
+      "description": "IANA timezone id (e.g. America/New_York)"
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "dsl_path",
+        "git_commit",
+        "compiler_version"
+      ],
+      "properties": {
+        "dsl_path": {
+          "type": "string"
+        },
+        "git_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$"
+        },
+        "compiler_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "program_blocks": {
+      "type": "array",
+      "description": "Ordered list of program blocks (grid-aligned content assignments)",
+      "items": {
+        "$ref": "#/$defs/program_block"
+      },
+      "minItems": 1
+    },
+    "hash": {
+      "type": "string",
+      "description": "sha256 hash for drift detection",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "notes": {
+      "type": "object",
+      "description": "Optional human notes",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "program_block": {
+      "type": "object",
+      "required": [
+        "title",
+        "asset_id",
+        "start_at",
+        "slot_duration_sec",
+        "episode_duration_sec"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Program title for EPG display"
+        },
+        "asset_id": {
+          "type": "string",
+          "description": "Resolved asset identifier from the catalog"
+        },
+        "start_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Grid-aligned absolute start timestamp with zone offset"
+        },
+        "slot_duration_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total grid slot duration in seconds"
+        },
+        "episode_duration_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Actual episode/movie runtime in seconds"
+        },
+        "collection": {
+          "type": "string",
+          "description": "Source collection ID"
+        },
+        "selector": {
+          "type": "object",
+          "description": "Episode/movie selector state for provenance",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

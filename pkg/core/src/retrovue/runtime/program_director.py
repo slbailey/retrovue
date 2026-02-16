@@ -583,10 +583,38 @@ class ProgramDirector:
         schedule_source = channel_config.schedule_source
         if schedule_source == "phase3":
             return self._get_horizon_backed_service(channel_id, channel_config)
+        if schedule_source == "dsl":
+            return self._get_dsl_service(channel_id, channel_config)
 
         raise ValueError(
             f"No schedule service for schedule_source={schedule_source!r}"
         )
+
+    def _get_dsl_service(self, channel_id: str, channel_config: "ChannelConfig") -> Any:
+        """Create or return a DslScheduleService for DSL-backed channels."""
+        key = f"_dsl_{channel_id}"
+        cached = getattr(self, key, None)
+        if cached is not None:
+            return cached
+
+        from retrovue.runtime.dsl_schedule_service import DslScheduleService
+
+        sc = channel_config.schedule_config or {}
+        dsl_path = sc.get("dsl_path", "")
+        filler_path = sc.get("filler_path", "/opt/retrovue/assets/filler.mp4")
+        filler_duration_ms = sc.get("filler_duration_ms", 3_650_000)
+
+        svc = DslScheduleService(
+            dsl_path=dsl_path,
+            filler_path=filler_path,
+            filler_duration_ms=filler_duration_ms,
+        )
+        ok, err = svc.load_schedule(channel_id)
+        if not ok:
+            raise ValueError(f"Failed to load DSL schedule for {channel_id}: {err}")
+
+        setattr(self, key, svc)
+        return svc
 
     def _get_horizon_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
         """Create or return a HorizonBackedScheduleService for phase3 channels."""
@@ -932,12 +960,17 @@ class ProgramDirector:
                 fanout = self._fanout_buffers.pop(channel_id, None)
             if fanout is not None:
                 self._logger.info("[teardown] stopping reader loop for channel %s", channel_id)
-                try:
-                    fanout.stop()
-                except Exception as e:
-                    self._logger.warning(
-                        "Error stopping channel stream for %s: %s", channel_id, e
-                    )
+                # INV-TEARDOWN-NONBLOCK: Run fanout.stop() in a background thread
+                # to avoid blocking the asyncio event loop (which starves other channels).
+                import threading as _td
+                def _bg_stop(f=fanout, cid=channel_id):
+                    try:
+                        f.stop()
+                    except Exception as e:
+                        self._logger.warning(
+                            "Error stopping channel stream for %s: %s", cid, e
+                        )
+                _td.Thread(target=_bg_stop, daemon=True).start()
 
     # Lifecycle -------------------------------------------------------------
     def start(self) -> None:
@@ -1402,10 +1435,19 @@ class ProgramDirector:
             except Exception as e:
                 self._logger.debug("tune_out on cleanup: %s", e)
             if to_stop:
-                # Per-session lifecycle: socket is one-shot; must fully tear down so next
-                # viewer gets fresh AttachStream and new socket. Always stop channel.
-                self.stop_channel(channel_id)
-                to_stop.stop()
+                # INV-TEARDOWN-NONBLOCK: Per-session lifecycle teardown must not block
+                # the asyncio event loop (which would starve other channels' streams).
+                import threading as _td
+                def _bg_teardown(cid=channel_id, f=to_stop):
+                    try:
+                        self.stop_channel(cid)
+                    except Exception as e:
+                        self._logger.warning("Error in bg stop_channel for %s: %s", cid, e)
+                    try:
+                        f.stop()
+                    except Exception as e:
+                        self._logger.warning("Error in bg fanout.stop for %s: %s", cid, e)
+                _td.Thread(target=_bg_teardown, daemon=True).start()
 
         async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
             """When client disconnects, ASGI receive() returns; run cleanup so viewer_count and teardown run (Phase 8.7)."""

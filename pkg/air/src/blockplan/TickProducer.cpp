@@ -202,6 +202,16 @@ void TickProducer::SetLogicalSegmentIndex(int32_t index) {
   logical_segment_index_ = index;
 }
 
+void TickProducer::SetInterruptFlags(const ITickProducer::InterruptFlags& flags) {
+  interrupt_flags_ = flags;
+  if (decoder_) {
+    decode::FFmpegDecoder::InterruptFlags dec_flags;
+    dec_flags.fill_stop = flags.fill_stop;
+    dec_flags.session_stop = flags.session_stop;
+    decoder_->SetInterruptFlags(dec_flags);
+  }
+}
+
 // =============================================================================
 // PrimeFirstFrame — INV-BLOCK-PRIME-001: decode first frame into held slot
 // Called by ProducerPreloader::Worker after AssignBlock.

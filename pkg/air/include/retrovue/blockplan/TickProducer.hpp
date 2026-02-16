@@ -89,6 +89,8 @@ class TickProducer : public producers::IProducer,
   bool HasPrimedFrame() const override;
   const std::vector<SegmentBoundary>& GetBoundaries() const override;
 
+  void SetInterruptFlags(const ITickProducer::InterruptFlags&) override;
+
   // INV-BLOCK-PRIME-001/006: Decode first frame into held slot.
   // Called by ProducerPreloader::Worker after AssignBlock completes.
   void PrimeFirstFrame();
@@ -134,6 +136,7 @@ class TickProducer : public producers::IProducer,
 
   // Decode state
   std::unique_ptr<decode::FFmpegDecoder> decoder_;
+  ITickProducer::InterruptFlags interrupt_flags_;
   std::string current_asset_uri_;
   int64_t next_frame_offset_ms_ = 0;
   realtime::RealAssetSource assets_;

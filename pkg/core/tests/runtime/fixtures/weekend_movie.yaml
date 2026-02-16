@@ -1,0 +1,24 @@
+channel: retro_movies
+broadcast_day: "1989-10-14"
+timezone: America/New_York
+template: premium_movie
+
+schedule:
+  saturday:
+    - start: "20:00"
+      movie_selector:
+        collections:
+          - col.movies.blockbusters_70s_90s
+          - col.movies.family_adventure
+        rating:
+          include: [PG, PG-13]
+        min_cooldown_days: 21
+        max_duration_sec: 7200
+    - start: "22:30"
+      movie_selector:
+        collections:
+          - col.movies.late_night_thrillers
+        rating:
+          include: [R]
+        min_cooldown_days: 45
+        max_duration_sec: 9000

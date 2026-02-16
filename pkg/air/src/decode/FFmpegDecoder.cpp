@@ -8,6 +8,26 @@
 #include <chrono>
 #include <iostream>
 
+namespace {
+
+// Opaque for interrupt callback — layout matches FFmpegDecoder::InterruptFlags.
+struct InterruptOpaque {
+  std::atomic<bool>* fill_stop = nullptr;
+  std::atomic<bool>* session_stop = nullptr;
+};
+
+// FFmpeg interrupt callback: return non-zero to abort I/O.
+int InterruptCallback(void* opaque) {
+  auto* flags = static_cast<InterruptOpaque*>(opaque);
+  if (flags->fill_stop && flags->fill_stop->load(std::memory_order_acquire))
+    return 1;
+  if (flags->session_stop && flags->session_stop->load(std::memory_order_acquire))
+    return 1;
+  return 0;
+}
+
+}  // namespace
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -51,6 +71,12 @@ bool FFmpegDecoder::Open() {
   if (!format_ctx_) {
     std::cerr << "[FFmpegDecoder] Failed to allocate format context" << std::endl;
     return false;
+  }
+
+  // Set interrupt callback so av_read_frame etc. abort promptly on stop.
+  if (interrupt_flags_.fill_stop || interrupt_flags_.session_stop) {
+    format_ctx_->interrupt_callback.callback = InterruptCallback;
+    format_ctx_->interrupt_callback.opaque = &interrupt_flags_;
   }
 
   // Open input file
@@ -125,6 +151,16 @@ bool FFmpegDecoder::Open() {
             << GetVideoHeight() << " @ " << GetVideoFPS() << " fps" << std::endl;
 
   return true;
+}
+
+void FFmpegDecoder::SetInterruptFlags(const InterruptFlags& flags) {
+  interrupt_flags_ = flags;
+  if (format_ctx_) {
+    format_ctx_->interrupt_callback.callback =
+        (flags.fill_stop || flags.session_stop) ? InterruptCallback : nullptr;
+    format_ctx_->interrupt_callback.opaque =
+        (flags.fill_stop || flags.session_stop) ? &interrupt_flags_ : nullptr;
+  }
 }
 
 bool FFmpegDecoder::DecodeNextFrame(buffer::FrameRingBuffer& output_buffer) {

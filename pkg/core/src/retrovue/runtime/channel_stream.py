@@ -48,6 +48,10 @@ _AUDIT_LOCK = threading.Lock()
 RECV_GAP_WARN_THRESHOLD_MS: int = 40  # Fixed threshold - do not "move the bar"
 RECV_GAP_WARN_COUNT: int = 10  # Minimum gaps before warning (prevents noise)
 
+# Fan-out: if a client cannot accept a chunk within this timeout, it is evicted.
+# Keeps backpressure bounded while tolerating brief network/CPU stalls.
+SLOW_CLIENT_PUT_TIMEOUT_S: float = 3.0
+
 
 class TsSource(Protocol):
     """Protocol for TS data source (UDS or fake for tests)."""
@@ -498,11 +502,11 @@ class ChannelStream:
             for client_id, client_queue in subscribers_snapshot:
                 try:
                     # Blocking put with timeout.  If the client can drain one
-                    # 1880-byte chunk within 100 ms it stays; otherwise it is
-                    # evicted.  While blocked, recv() stalls → UDS recv buffer
-                    # fills → kernel back-pressures AIR's send() → SocketSink
-                    # fills → WaitAndConsumeBytes blocks the tick thread.
-                    client_queue.put(chunk, timeout=0.1)
+                    # chunk within SLOW_CLIENT_PUT_TIMEOUT_S it stays; otherwise
+                    # it is evicted.  While blocked, recv() stalls → UDS recv
+                    # buffer fills → kernel back-pressures AIR's send() →
+                    # SocketSink fills → WaitAndConsumeBytes blocks the tick thread.
+                    client_queue.put(chunk, timeout=SLOW_CLIENT_PUT_TIMEOUT_S)
                     if not _local_first_fanout_done:
                         _local_first_fanout_done = True
                 except Full:
@@ -529,9 +533,10 @@ class ChannelStream:
                                 pass  # Client will timeout naturally
                         self._logger.warning(
                             "[channel %s] evicted slow client %s "
-                            "(queue full >100 ms)",
+                            "(queue full >%.1fs)",
                             self.channel_id,
                             client_id,
+                            SLOW_CLIENT_PUT_TIMEOUT_S,
                         )
 
         # AUDIT: Log recv-gap telemetry at session exit

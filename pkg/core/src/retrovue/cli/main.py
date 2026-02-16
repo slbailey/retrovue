@@ -26,6 +26,7 @@ from .commands import (
     runtime,
     source,
     zone,
+    programming,
 )
 from .router import get_router
 
@@ -103,6 +104,13 @@ router.register(
     zone.app,
     help_text="Zone (daypart) management operations",
     doc_path="zone.md",
+)
+
+router.register(
+    "programming",
+    programming.app,
+    help_text="Programming DSL compile and validate operations",
+    doc_path="programming.md",
 )
 
 
