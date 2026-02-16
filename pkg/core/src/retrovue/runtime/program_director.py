@@ -1339,6 +1339,7 @@ class ProgramDirector:
                 fanout = ChannelStream(
                     channel_id=channel_id,
                     ts_source_factory=ts_source_factory,
+                    hls_manager=self._hls_manager,
                 )
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
@@ -1386,7 +1387,7 @@ class ProgramDirector:
                         % channel_id
                     )
 
-                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory)
+                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_manager=self._hls_manager)
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
@@ -1397,7 +1398,7 @@ class ProgramDirector:
             if self._channel_stream_factory:
                 fanout = self._channel_stream_factory(channel_id, str(socket_path))
             else:
-                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path)
+                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_manager=self._hls_manager)
             self._fanout_buffers[channel_id] = fanout
             return fanout
 
@@ -1861,9 +1862,20 @@ class ProgramDirector:
 
         @self.fastapi_app.get("/hls/{channel_id}/live.m3u8")
         async def hls_playlist(channel_id: str, request: Request) -> Response:
-            """Serve HLS playlist. Starts HLS writer on first request."""
-            writer = self._hls_manager.get_writer(channel_id)
-            if not writer.is_running():
+            """Serve HLS playlist.
+
+            If a raw-TS viewer is already connected (ChannelStream running),
+            the segmenter is fed via tee in the reader loop — just ensure
+            the segmenter is started.
+
+            If no viewer exists, start the channel normally (tune_in triggers
+            FFmpeg).  The ChannelStream reader loop will tee to HLS.
+            """
+            seg = self._hls_manager.get_or_create(channel_id)
+            if not seg.is_running():
+                seg.start()
+
+                # Ensure the channel is running so ChannelStream feeds us
                 try:
                     if self._channel_manager_provider is not None:
                         manager = self._channel_manager_provider.get_channel_manager(channel_id)
@@ -1874,32 +1886,44 @@ class ProgramDirector:
                         content=f"Channel not available: {e}",
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     )
-                # Tune in to trigger producer start
+
+                # Tune in to trigger producer + ChannelStream start
                 hls_session_id = f"hls-{channel_id}-{uuid.uuid4().hex[:8]}"
                 try:
                     manager.tune_in(hls_session_id, {"channel_id": channel_id})
                 except Exception as e:
                     self._logger.warning("HLS tune_in error: %s", e)
-                # Wait for fanout
+
+                # Wait for fanout (which starts the reader loop that tees to HLS)
                 fanout = None
                 for _ in range(20):
                     fanout = self._get_or_create_fanout_buffer(channel_id, manager)
                     if fanout:
                         break
                     await asyncio.sleep(1)
-                if not fanout:
-                    return Response(
-                        content="Stream not ready",
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    )
-                self._hls_manager.start_feeding(channel_id, fanout, hls_session_id)
-                # Wait for first playlist
+                if fanout:
+                    # Subscribe a phantom viewer so the channel stays alive
+                    # even if no raw-TS clients are connected.
+                    # Must drain the queue to avoid eviction.
+                    hls_queue = fanout.subscribe(hls_session_id)
+                    import threading as _td
+                    def _drain_hls_phantom(q=hls_queue, s=seg):
+                        while s.is_running():
+                            try:
+                                chunk = q.get(timeout=2.0)
+                                if not chunk:
+                                    break
+                            except Exception:
+                                continue
+                    _td.Thread(target=_drain_hls_phantom, daemon=True, name=f"hls-phantom-{channel_id}").start()
+
+                # Wait for first playlist to appear
                 for _ in range(30):
-                    if writer.playlist_path.exists():
+                    if seg.playlist_path.exists():
                         break
                     await asyncio.sleep(0.5)
 
-            playlist = writer.playlist_path
+            playlist = seg.playlist_path
             if not playlist.exists():
                 return Response(
                     content="Playlist not ready yet",

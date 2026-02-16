@@ -270,6 +270,7 @@ class ChannelStream:
         channel_id: str,
         socket_path: str | Path | None = None,
         ts_source_factory: Callable[[], TsSource] | None = None,
+        hls_manager: Any | None = None,
     ):
         """
         Initialize ChannelStream for a channel.
@@ -278,10 +279,12 @@ class ChannelStream:
             channel_id: Channel identifier
             socket_path: UDS socket path (if None, uses ts_source_factory)
             ts_source_factory: Factory for creating TS source (for tests)
+            hls_manager: Optional HLSManager to tee TS data for HLS output
         """
         self.channel_id = channel_id
         self.socket_path = Path(socket_path) if socket_path else None
         self.ts_source_factory = ts_source_factory
+        self.hls_manager = hls_manager
 
         # Active subscribers (client_id -> queue)
         self.subscribers: dict[str, Queue[bytes]] = {}
@@ -491,6 +494,13 @@ class ChannelStream:
                     e,
                 )
                 break
+
+            # Tee to HLS segmenter (zero-copy, no extra FFmpeg process)
+            if self.hls_manager is not None:
+                try:
+                    self.hls_manager.feed(self.channel_id, chunk)
+                except Exception:
+                    pass  # HLS feed must never break the main stream
 
             # Fan-out to all subscribers with bounded-latency backpressure.
             # Snapshot under lock, then release so blocking put() doesn't

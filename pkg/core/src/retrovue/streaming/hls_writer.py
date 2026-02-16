@@ -1,15 +1,23 @@
 """
-HLS Writer - Converts MPEG-TS stream to HLS segments.
+HLS Writer — Pure Python MPEG-TS segmenter.
 
-Takes TS data from the existing ChannelStream fanout and remuxes to HLS
-via an FFmpeg subprocess. Writes segments to /tmp/retrovue-hls/{channel_id}/.
+Receives raw MPEG-TS bytes (from the existing single FFmpeg pipe:1 output),
+splits them into HLS segments by detecting keyframes, and maintains a
+rolling live.m3u8 playlist.  No additional FFmpeg process is spawned.
+
+Integration points:
+  1. ChannelStream reader loop calls hls_manager.feed(channel_id, chunk) on
+     every TS chunk — zero-copy tee to both HTTP viewers and HLS.
+  2. If no raw-TS viewer exists, the /hls/ endpoint starts the channel's
+     FFmpeg itself and pipes output exclusively to the segmenter.
 """
 
-import asyncio
+from __future__ import annotations
+
 import logging
 import os
 import shutil
-import subprocess
+import struct
 import threading
 import time
 from pathlib import Path
@@ -19,120 +27,402 @@ logger = logging.getLogger(__name__)
 
 HLS_BASE_DIR = Path("/tmp/retrovue-hls")
 
+# ---------------------------------------------------------------------------
+# MPEG-TS constants
+# ---------------------------------------------------------------------------
+TS_PACKET_SIZE = 188
+TS_SYNC_BYTE = 0x47
 
-class HLSWriter:
-    """Manages an FFmpeg process that remuxes piped MPEG-TS input to HLS output."""
+# H.264 NAL unit types that indicate an IDR (keyframe)
+_H264_IDR_NAL_TYPES = {5}  # IDR slice
+# Also treat SPS (7) as keyframe indicator — encoders emit SPS before IDR
+_H264_KEYFRAME_NAL_TYPES = _H264_IDR_NAL_TYPES | {7}
 
-    def __init__(self, channel_id: str):
+
+def _is_keyframe_packet(packet: bytes) -> bool:
+    """Detect whether an MPEG-TS packet contains the start of an H.264 keyframe.
+
+    We check:
+      1. Adaptation field has random_access_indicator set, OR
+      2. PES payload starts with an H.264 IDR or SPS NAL unit.
+
+    This is intentionally lenient — false positives just cause a slightly
+    early segment split, which is harmless.
+    """
+    if len(packet) < TS_PACKET_SIZE or packet[0] != TS_SYNC_BYTE:
+        return False
+
+    # Byte 1-2: flags
+    pusi = (packet[1] & 0x40) != 0  # payload_unit_start_indicator
+    # Byte 3: adaptation_field_control + continuity_counter
+    afc = (packet[3] >> 4) & 0x03
+
+    offset = 4  # start of adaptation field or payload
+
+    # --- Check adaptation field for random_access_indicator ---
+    has_adaptation = afc in (2, 3)
+    has_payload = afc in (1, 3)
+    rai = False
+
+    if has_adaptation:
+        af_len = packet[4]
+        if af_len > 0 and len(packet) > 5:
+            af_flags = packet[5]
+            rai = (af_flags & 0x40) != 0  # random_access_indicator
+        offset = 5 + af_len
+
+    if rai:
+        return True
+
+    # --- If PUSI, peek into PES for H.264 NAL types ---
+    if pusi and has_payload and offset < len(packet) - 10:
+        payload = packet[offset:]
+        # PES start code: 00 00 01
+        if payload[:3] == b'\x00\x00\x01':
+            # Skip PES header to get to ES data
+            pes_header_data_len = payload[8] if len(payload) > 8 else 0
+            es_start = 9 + pes_header_data_len
+            es = payload[es_start:]
+            # Look for H.264 start codes in first ~32 bytes of ES data
+            for i in range(min(len(es) - 4, 32)):
+                if es[i:i+3] == b'\x00\x00\x01' or es[i:i+4] == b'\x00\x00\x00\x01':
+                    nal_offset = i + 3 if es[i:i+3] == b'\x00\x00\x01' else i + 4
+                    if nal_offset < len(es):
+                        nal_type = es[nal_offset] & 0x1F
+                        if nal_type in _H264_KEYFRAME_NAL_TYPES:
+                            return True
+    return False
+
+
+class HLSSegmenter:
+    """Pure-Python MPEG-TS → HLS segmenter.
+
+    Call :meth:`feed` with raw TS bytes.  The segmenter accumulates packets,
+    detects keyframes, and writes segment files + playlist to disk.
+    """
+
+    def __init__(
+        self,
+        channel_id: str,
+        target_duration: float = 6.0,
+        max_segments: int = 5,
+    ):
         self.channel_id = channel_id
+        self.target_duration = target_duration
+        self.max_segments = max_segments
+
         self.output_dir = HLS_BASE_DIR / channel_id
-        self._proc: Optional[subprocess.Popen] = None
-        self._running = False
         self._lock = threading.Lock()
-        self._restart_count = 0
-        self._max_restarts = 10
-        self._feed_thread: Optional[threading.Thread] = None
+        self._running = False
+
+        # Current segment state
+        self._seg_index = 0
+        self._seg_buffer = bytearray()
+        self._seg_start_time: Optional[float] = None  # wall-clock when segment started
+        self._seg_pkt_count = 0
+
+        # Playlist bookkeeping: list of (filename, duration_seconds)
+        self._segments: list[tuple[str, float]] = []
+        self._media_sequence = 0
+
+        # Partial packet buffer (in case feed() gets non-188-aligned data)
+        self._leftover = bytearray()
+
+        # PCR-based timing
+        self._last_pcr: Optional[float] = None
+        self._seg_start_pcr: Optional[float] = None
 
     @property
     def playlist_path(self) -> Path:
         return self.output_dir / "live.m3u8"
 
     def is_running(self) -> bool:
-        return self._running and self._proc is not None and self._proc.poll() is None
+        return self._running
 
     def start(self) -> None:
-        """Start the HLS FFmpeg process. Feed data via write()."""
         with self._lock:
             if self._running:
                 return
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            self._start_ffmpeg()
+            # Clean stale files from previous runs
+            for f in self.output_dir.glob("*"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
             self._running = True
-            logger.info("[HLS %s] Writer started, output: %s", self.channel_id, self.output_dir)
+            self._seg_start_time = time.monotonic()
+            logger.info("[HLS %s] Segmenter started, output: %s", self.channel_id, self.output_dir)
 
-    def _start_ffmpeg(self) -> None:
-        """Launch the FFmpeg remux process."""
-        cmd = [
-            "ffmpeg",
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel", "warning",
-            "-fflags", "+genpts+discardcorrupt",
-            "-f", "mpegts",
-            "-i", "pipe:0",
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-f", "hls",
-            "-hls_time", "6",
-            "-hls_list_size", "5",
-            "-hls_flags", "delete_segments+append_list+omit_endlist",
-            "-hls_segment_filename", str(self.output_dir / "seg_%05d.ts"),
-            str(self.playlist_path),
-        ]
-        logger.info("[HLS %s] Starting FFmpeg: %s", self.channel_id, " ".join(cmd))
-        self._proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        # Monitor stderr in background
-        t = threading.Thread(target=self._drain_stderr, daemon=True)
-        t.start()
-
-    def _drain_stderr(self) -> None:
-        """Read FFmpeg stderr and log warnings/errors."""
-        proc = self._proc
-        if not proc or not proc.stderr:
-            return
-        try:
-            for line in proc.stderr:
-                msg = line.decode("utf-8", errors="replace").strip()
-                if msg:
-                    logger.warning("[HLS %s] FFmpeg: %s", self.channel_id, msg)
-        except Exception:
-            pass
-
-    def write(self, data: bytes) -> bool:
-        """Write TS data to FFmpeg stdin. Returns False if process died."""
+    def feed(self, data: bytes) -> None:
+        """Feed raw MPEG-TS bytes.  Thread-safe."""
         if not self._running:
-            return False
-        proc = self._proc
-        if proc is None or proc.poll() is not None:
-            # Process died, try restart
-            return self._try_restart_and_write(data)
-        try:
-            proc.stdin.write(data)
-            proc.stdin.flush()
-            return True
-        except (BrokenPipeError, OSError):
-            logger.warning("[HLS %s] Broken pipe, attempting restart", self.channel_id)
-            return self._try_restart_and_write(data)
+            return
 
-    def _try_restart_and_write(self, data: bytes) -> bool:
         with self._lock:
-            if self._restart_count >= self._max_restarts:
-                logger.error("[HLS %s] Max restarts reached, giving up", self.channel_id)
-                self._running = False
-                return False
-            self._restart_count += 1
-            logger.info("[HLS %s] Restarting FFmpeg (attempt %d)", self.channel_id, self._restart_count)
-            self._kill_proc()
-            self._start_ffmpeg()
-        try:
-            self._proc.stdin.write(data)
-            self._proc.stdin.flush()
-            return True
-        except Exception:
-            return False
+            buf = self._leftover + data
+            self._leftover = bytearray()
 
-    def _kill_proc(self) -> None:
-        proc = self._proc
-        if proc:
+            pos = 0
+            length = len(buf)
+
+            while pos + TS_PACKET_SIZE <= length:
+                # Re-sync if needed
+                if buf[pos] != TS_SYNC_BYTE:
+                    sync = buf.find(bytes([TS_SYNC_BYTE]), pos)
+                    if sync == -1:
+                        break
+                    pos = sync
+                    if pos + TS_PACKET_SIZE > length:
+                        break
+
+                packet = bytes(buf[pos:pos + TS_PACKET_SIZE])
+                pos += TS_PACKET_SIZE
+
+                # Extract PCR if present
+                pcr = self._extract_pcr(packet)
+                if pcr is not None:
+                    self._last_pcr = pcr
+                    if self._seg_start_pcr is None:
+                        self._seg_start_pcr = pcr
+
+                # Check for segment split: keyframe + enough duration
+                seg_duration = self._current_seg_duration()
+                if (
+                    seg_duration >= self.target_duration
+                    and _is_keyframe_packet(packet)
+                    and len(self._seg_buffer) > 0
+                ):
+                    self._finalize_segment(seg_duration)
+
+                self._seg_buffer.extend(packet)
+                self._seg_pkt_count += 1
+
+            # Save leftover bytes
+            if pos < length:
+                self._leftover = bytearray(buf[pos:])
+
+    def _extract_pcr(self, packet: bytes) -> Optional[float]:
+        """Extract PCR from adaptation field if present. Returns seconds."""
+        if len(packet) < TS_PACKET_SIZE:
+            return None
+        afc = (packet[3] >> 4) & 0x03
+        if afc not in (2, 3):
+            return None
+        af_len = packet[4]
+        if af_len < 7:  # Need at least 1 flags + 6 PCR bytes
+            return None
+        af_flags = packet[5]
+        if not (af_flags & 0x10):  # PCR_flag
+            return None
+        # PCR is 6 bytes at offset 6
+        pcr_bytes = packet[6:12]
+        pcr_base = (pcr_bytes[0] << 25) | (pcr_bytes[1] << 17) | (pcr_bytes[2] << 9) | (pcr_bytes[3] << 1) | (pcr_bytes[4] >> 7)
+        pcr_ext = ((pcr_bytes[4] & 0x01) << 8) | pcr_bytes[5]
+        pcr = pcr_base / 90000.0 + pcr_ext / 27000000.0
+        return pcr
+
+    def _current_seg_duration(self) -> float:
+        """Estimate current segment duration using PCR or wall-clock."""
+        if self._seg_start_pcr is not None and self._last_pcr is not None:
+            dur = self._last_pcr - self._seg_start_pcr
+            # Handle PCR wrap-around (33-bit base at 90kHz ≈ 26.5 hours)
+            if dur < 0:
+                dur += (1 << 33) / 90000.0
+            return dur
+        # Fallback: wall-clock
+        if self._seg_start_time is not None:
+            return time.monotonic() - self._seg_start_time
+        return 0.0
+
+    def _finalize_segment(self, duration: float) -> None:
+        """Write current buffer as a segment file and update playlist."""
+        seg_name = f"seg_{self._seg_index:05d}.ts"
+        seg_path = self.output_dir / seg_name
+
+        seg_path.write_bytes(self._seg_buffer)
+
+        self._segments.append((seg_name, duration))
+        self._seg_index += 1
+
+        logger.debug(
+            "[HLS %s] Segment %s written: %.2fs, %d bytes",
+            self.channel_id, seg_name, duration, len(self._seg_buffer),
+        )
+
+        # Purge old segments beyond max_segments
+        while len(self._segments) > self.max_segments:
+            old_name, _ = self._segments.pop(0)
+            self._media_sequence += 1
+            old_path = self.output_dir / old_name
             try:
-                proc.stdin.close()
+                old_path.unlink(missing_ok=True)
             except Exception:
                 pass
+
+        # Write playlist
+        self._write_playlist()
+
+        # Reset for next segment
+        self._seg_buffer = bytearray()
+        self._seg_pkt_count = 0
+        self._seg_start_time = time.monotonic()
+        self._seg_start_pcr = self._last_pcr
+
+    def _write_playlist(self) -> None:
+        """Write the live.m3u8 playlist file."""
+        if not self._segments:
+            return
+
+        max_dur = max(d for _, d in self._segments)
+
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            f"#EXT-X-TARGETDURATION:{int(max_dur) + 1}",
+            f"#EXT-X-MEDIA-SEQUENCE:{self._media_sequence}",
+        ]
+        for seg_name, dur in self._segments:
+            lines.append(f"#EXTINF:{dur:.3f},")
+            lines.append(seg_name)
+
+        playlist_content = "\n".join(lines) + "\n"
+
+        # Atomic write: write to temp, rename
+        tmp_path = self.playlist_path.with_suffix(".m3u8.tmp")
+        tmp_path.write_text(playlist_content)
+        tmp_path.rename(self.playlist_path)
+
+    def stop(self) -> None:
+        """Stop the segmenter and clean up."""
+        self._running = False
+        with self._lock:
+            # Write final segment if there's accumulated data
+            if len(self._seg_buffer) > 0:
+                duration = self._current_seg_duration()
+                if duration > 0.5:  # Only write if > 0.5s
+                    self._finalize_segment(duration)
+        # Clean up directory
+        try:
+            if self.output_dir.exists():
+                shutil.rmtree(self.output_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning("[HLS %s] Cleanup error: %s", self.channel_id, e)
+        logger.info("[HLS %s] Segmenter stopped", self.channel_id)
+
+
+class HLSManager:
+    """Manages per-channel HLS segmenters.
+
+    Two integration modes:
+
+    1. **Tee mode** (preferred): ChannelStream reader calls
+       ``hls_manager.feed(channel_id, chunk)`` on every TS chunk so the
+       same FFmpeg process serves both raw-TS viewers and HLS.
+
+    2. **Standalone mode**: When no raw-TS viewer is connected, the HLS
+       endpoint starts the channel's FFmpeg itself and pipes output
+       exclusively to the segmenter.  When a raw-TS viewer later
+       connects, the standalone FFmpeg is killed and tee mode takes over.
+    """
+
+    def __init__(self):
+        self._segmenters: dict[str, HLSSegmenter] = {}
+        self._lock = threading.Lock()
+        # Standalone FFmpeg processes (channel_id -> subprocess.Popen)
+        self._standalone_procs: dict[str, "subprocess.Popen"] = {}  # type: ignore[name-defined]
+        self._standalone_threads: dict[str, threading.Thread] = {}
+
+    def get_or_create(self, channel_id: str) -> HLSSegmenter:
+        """Get or create a segmenter for a channel."""
+        with self._lock:
+            if channel_id not in self._segmenters:
+                seg = HLSSegmenter(channel_id)
+                self._segmenters[channel_id] = seg
+            return self._segmenters[channel_id]
+
+    # Keep old name as alias for PD compatibility
+    def get_writer(self, channel_id: str) -> HLSSegmenter:
+        return self.get_or_create(channel_id)
+
+    def feed(self, channel_id: str, data: bytes) -> None:
+        """Feed TS data to a channel's segmenter (called from ChannelStream).
+
+        If no segmenter exists for this channel, this is a no-op (cheap).
+        """
+        with self._lock:
+            seg = self._segmenters.get(channel_id)
+        if seg and seg.is_running():
+            seg.feed(data)
+
+    def start_standalone(
+        self,
+        channel_id: str,
+        ffmpeg_cmd: list[str],
+    ) -> HLSSegmenter:
+        """Start a standalone FFmpeg→segmenter pipeline for HLS-only mode.
+
+        ``ffmpeg_cmd`` should be the result of ``build_cmd(...)`` which outputs
+        to ``pipe:1``.  We launch the process and read stdout into the segmenter.
+        """
+        import subprocess
+
+        seg = self.get_or_create(channel_id)
+        if not seg.is_running():
+            seg.start()
+
+        with self._lock:
+            if channel_id in self._standalone_procs:
+                proc = self._standalone_procs[channel_id]
+                if proc.poll() is None:
+                    return seg  # Already running
+
+        logger.info("[HLS %s] Starting standalone FFmpeg for HLS-only", channel_id)
+        proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+        )
+
+        def _reader():
+            try:
+                while proc.poll() is None:
+                    chunk = proc.stdout.read(TS_PACKET_SIZE * 7)
+                    if not chunk:
+                        break
+                    seg.feed(chunk)
+            except Exception as e:
+                logger.warning("[HLS %s] Standalone reader error: %s", channel_id, e)
+            finally:
+                logger.info("[HLS %s] Standalone FFmpeg exited (rc=%s)", channel_id, proc.returncode)
+
+        def _stderr_drain():
+            try:
+                for line in proc.stderr:
+                    msg = line.decode("utf-8", errors="replace").strip()
+                    if msg and ("error" in msg.lower() or "warning" in msg.lower()):
+                        logger.warning("[HLS %s] FFmpeg: %s", channel_id, msg)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_reader, name=f"hls-standalone-{channel_id}", daemon=True)
+        t.start()
+        threading.Thread(target=_stderr_drain, daemon=True).start()
+
+        with self._lock:
+            self._standalone_procs[channel_id] = proc
+            self._standalone_threads[channel_id] = t
+
+        return seg
+
+    def kill_standalone(self, channel_id: str) -> None:
+        """Kill a standalone FFmpeg if running (e.g. when tee mode takes over)."""
+        with self._lock:
+            proc = self._standalone_procs.pop(channel_id, None)
+            self._standalone_threads.pop(channel_id, None)
+        if proc and proc.poll() is None:
+            logger.info("[HLS %s] Killing standalone FFmpeg (tee mode taking over)", channel_id)
             try:
                 proc.terminate()
                 proc.wait(timeout=3)
@@ -141,101 +431,27 @@ class HLSWriter:
                     proc.kill()
                 except Exception:
                     pass
-        self._proc = None
-
-    def stop(self) -> None:
-        """Stop the HLS writer and clean up."""
-        self._running = False
-        with self._lock:
-            self._kill_proc()
-        # Clean up segments
-        try:
-            if self.output_dir.exists():
-                shutil.rmtree(self.output_dir, ignore_errors=True)
-        except Exception as e:
-            logger.warning("[HLS %s] Cleanup error: %s", self.channel_id, e)
-        logger.info("[HLS %s] Writer stopped", self.channel_id)
-
-
-class HLSManager:
-    """
-    Manages HLS writers for all channels.
-    
-    Integrates with ProgramDirector's fanout system to tap into existing
-    TS streams and remux them to HLS.
-    """
-
-    def __init__(self):
-        self._writers: dict[str, HLSWriter] = {}
-        self._feed_threads: dict[str, threading.Thread] = {}
-        self._lock = threading.Lock()
-
-    def get_writer(self, channel_id: str) -> HLSWriter:
-        """Get or create an HLS writer for a channel."""
-        with self._lock:
-            if channel_id not in self._writers:
-                writer = HLSWriter(channel_id)
-                self._writers[channel_id] = writer
-            return self._writers[channel_id]
-
-    def start_feeding(self, channel_id: str, fanout, session_id: str) -> HLSWriter:
-        """
-        Start feeding TS data from a fanout buffer subscription to the HLS writer.
-        
-        Args:
-            channel_id: Channel ID
-            fanout: ChannelStream fanout buffer
-            session_id: Session ID for the subscription
-        """
-        writer = self.get_writer(channel_id)
-        if not writer.is_running():
-            writer.start()
-
-        with self._lock:
-            if channel_id in self._feed_threads and self._feed_threads[channel_id].is_alive():
-                return writer
-
-        client_queue = fanout.subscribe(session_id)
-
-        def feed_loop():
-            logger.info("[HLS %s] Feed thread started", channel_id)
-            try:
-                while writer._running:
-                    try:
-                        chunk = client_queue.get(timeout=2.0)
-                        if chunk is None:
-                            break
-                        if not writer.write(chunk):
-                            break
-                    except Exception:
-                        # queue.Empty timeout - continue
-                        continue
-            except Exception as e:
-                logger.error("[HLS %s] Feed thread error: %s", channel_id, e)
-            finally:
-                logger.info("[HLS %s] Feed thread stopped", channel_id)
-                fanout.unsubscribe(session_id)
-
-        t = threading.Thread(target=feed_loop, name=f"hls-feed-{channel_id}", daemon=True)
-        t.start()
-        with self._lock:
-            self._feed_threads[channel_id] = t
-
-        return writer
 
     def stop_channel(self, channel_id: str) -> None:
-        """Stop HLS writer for a channel."""
+        """Stop segmenter and standalone process for a channel."""
+        self.kill_standalone(channel_id)
         with self._lock:
-            writer = self._writers.pop(channel_id, None)
-            self._feed_threads.pop(channel_id, None)
-        if writer:
-            writer.stop()
+            seg = self._segmenters.pop(channel_id, None)
+        if seg:
+            seg.stop()
 
     def stop_all(self) -> None:
-        """Stop all HLS writers."""
+        """Stop everything."""
         with self._lock:
-            writers = list(self._writers.values())
-            self._writers.clear()
-            self._feed_threads.clear()
-        for w in writers:
-            w.stop()
+            segmenters = list(self._segmenters.values())
+            procs = list(self._standalone_procs.values())
+            self._segmenters.clear()
+            self._standalone_procs.clear()
+            self._standalone_threads.clear()
+        for proc in procs:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        for seg in segmenters:
+            seg.stop()
