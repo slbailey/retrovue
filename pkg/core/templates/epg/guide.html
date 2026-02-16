@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RetroVue TV Guide</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --tvg-blue: #1a237e;
+    --tvg-yellow: #ffc107;
+    --tvg-time-bg: #263238;
+    --tvg-grid-bg: #0d1117;
+    --tvg-cell-bg: #1b2838;
+    --tvg-cell-border: #2d4059;
+    --tvg-text: #e0e0e0;
+    --tvg-highlight: #ff5252;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Courier New', monospace;
+    background: var(--tvg-grid-bg);
+    color: var(--tvg-text);
+    overflow: hidden;
+    height: 100vh;
+  }
+  /* CRT scanline overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.15) 2px,
+      rgba(0,0,0,0.15) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+  .header {
+    background: var(--tvg-blue);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 3px solid var(--tvg-yellow);
+  }
+  .header h1 {
+    font-size: 1.5rem;
+    color: var(--tvg-yellow);
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+  }
+  .header .date-nav {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .header button, .header input {
+    font-family: 'Courier New', monospace;
+    background: var(--tvg-time-bg);
+    color: var(--tvg-yellow);
+    border: 1px solid var(--tvg-yellow);
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .header button:hover { background: var(--tvg-yellow); color: var(--tvg-blue); }
+  .header input[type="date"] { width: 150px; }
+  .guide-container {
+    display: flex;
+    height: calc(100vh - 60px);
+    position: relative;
+  }
+  .channel-col {
+    min-width: 160px;
+    max-width: 160px;
+    background: var(--tvg-blue);
+    z-index: 10;
+    border-right: 2px solid var(--tvg-yellow);
+    overflow: hidden;
+  }
+  .channel-col .time-header-spacer {
+    height: 36px;
+    background: var(--tvg-time-bg);
+    border-bottom: 2px solid var(--tvg-yellow);
+  }
+  .channel-col .ch-name {
+    height: 80px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-weight: bold;
+    font-size: 0.85rem;
+    color: var(--tvg-yellow);
+    border-bottom: 1px solid rgba(255,193,7,0.3);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .grid-scroll {
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: auto;
+    position: relative;
+  }
+  .time-row {
+    display: flex;
+    height: 36px;
+    background: var(--tvg-time-bg);
+    border-bottom: 2px solid var(--tvg-yellow);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .time-slot {
+    min-width: 200px;
+    max-width: 200px;
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    color: var(--tvg-yellow);
+    border-right: 1px solid rgba(255,193,7,0.2);
+    white-space: nowrap;
+  }
+  .channel-row {
+    display: flex;
+    height: 80px;
+    border-bottom: 1px solid var(--tvg-cell-border);
+    position: relative;
+  }
+  .program-block {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    background: var(--tvg-cell-bg);
+    border: 1px solid var(--tvg-cell-border);
+    border-radius: 3px;
+    padding: 4px 8px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .program-block:hover {
+    background: #2a3f5f;
+    border-color: var(--tvg-yellow);
+    z-index: 2;
+  }
+  .program-block .title {
+    font-weight: bold;
+    font-size: 0.8rem;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .program-block .meta {
+    font-size: 0.7rem;
+    color: #90caf9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .program-block .time-range {
+    font-size: 0.65rem;
+    color: #666;
+  }
+  /* Color bands per show */
+  .program-block[data-show="Cheers"] { border-left: 3px solid #ff9800; }
+  .program-block[data-show="The Cosby Show"] { border-left: 3px solid #4caf50; }
+  .program-block[data-show="Barney Miller"] { border-left: 3px solid #2196f3; }
+  .program-block[data-show="Batman"] { border-left: 3px solid #9c27b0; }
+  /* Now-line */
+  .now-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--tvg-highlight);
+    z-index: 20;
+    pointer-events: none;
+  }
+  .now-line::before {
+    content: 'NOW';
+    position: absolute;
+    top: -18px;
+    left: -14px;
+    font-size: 0.6rem;
+    color: var(--tvg-highlight);
+    font-weight: bold;
+  }
+  /* Detail popup */
+  .detail-popup {
+    display: none;
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: #1a1a2e;
+    border: 2px solid var(--tvg-yellow);
+    padding: 24px;
+    border-radius: 8px;
+    z-index: 100;
+    min-width: 320px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+  }
+  .detail-popup.active { display: block; }
+  .detail-popup h2 { color: var(--tvg-yellow); margin-bottom: 12px; font-size: 1.2rem; }
+  .detail-popup p { margin: 4px 0; font-size: 0.9rem; }
+  .detail-popup .close-btn {
+    position: absolute; top: 8px; right: 12px;
+    cursor: pointer; color: var(--tvg-yellow); font-size: 1.2rem;
+  }
+  .overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 99;
+  }
+  .overlay.active { display: block; }
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(100vh - 60px);
+    font-size: 1.2rem;
+    color: var(--tvg-yellow);
+  }
+  .loading .spinner {
+    display: inline-block;
+    width: 24px; height: 24px;
+    border: 3px solid var(--tvg-yellow);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📺 RetroVue TV Guide</h1>
+  <div class="date-nav">
+    <button onclick="changeDay(-1)">◀ Prev</button>
+    <input type="date" id="datePicker" onchange="loadDate(this.value)">
+    <button onclick="changeDay(1)">Next ▶</button>
+    <button onclick="goToday()">Today</button>
+  </div>
+</div>
+
+<div id="loading" class="loading">
+  <span class="spinner"></span> Loading guide data...
+</div>
+
+<div id="guideWrap" class="guide-container" style="display:none;">
+  <div class="channel-col">
+    <div class="time-header-spacer"></div>
+    <div id="channelNames"></div>
+  </div>
+  <div class="grid-scroll" id="gridScroll">
+    <div class="time-row" id="timeRow"></div>
+    <div id="gridBody" style="position:relative;"></div>
+    <div class="now-line" id="nowLine"></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeDetail()"></div>
+<div class="detail-popup" id="detailPopup">
+  <span class="close-btn" onclick="closeDetail()">✕</span>
+  <h2 id="detailTitle"></h2>
+  <p id="detailEpisode"></p>
+  <p id="detailTime"></p>
+  <p id="detailDuration"></p>
+  <p id="detailChannel"></p>
+</div>
+
+<script>
+const PX_PER_MIN = 200 / 30; // 200px per 30-min slot
+let currentDate = null;
+let epgData = null;
+
+function today() {
+  const now = new Date();
+  // Use ET: if before 6am, previous day
+  const et = new Date(now.toLocaleString('en-US', {timeZone: 'America/New_York'}));
+  if (et.getHours() < 6) {
+    et.setDate(et.getDate() - 1);
+  }
+  return et.toISOString().slice(0, 10);
+}
+
+function goToday() {
+  loadDate(today());
+}
+
+function changeDay(delta) {
+  if (!currentDate) return;
+  const d = new Date(currentDate + 'T12:00:00');
+  d.setDate(d.getDate() + delta);
+  loadDate(d.toISOString().slice(0, 10));
+}
+
+async function loadDate(dateStr) {
+  currentDate = dateStr;
+  document.getElementById('datePicker').value = dateStr;
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('guideWrap').style.display = 'none';
+
+  try {
+    const resp = await fetch(`/api/epg?date=${dateStr}`);
+    epgData = await resp.json();
+    renderGuide(epgData);
+  } catch(e) {
+    console.error('EPG load failed:', e);
+    document.getElementById('loading').innerHTML = '<span style="color:#ff5252;">Failed to load guide data. Retrying...</span>';
+    setTimeout(() => loadDate(dateStr), 5000);
+  }
+}
+
+function renderGuide(data) {
+  const entries = data.entries.filter(e => !e.error);
+  if (!entries.length) {
+    document.getElementById('loading').innerHTML = '<span>No program data available.</span>';
+    return;
+  }
+
+  // Group by channel
+  const channels = {};
+  entries.forEach(e => {
+    if (!channels[e.channel_id]) channels[e.channel_id] = { name: e.channel_name, entries: [] };
+    channels[e.channel_id].entries.push(e);
+  });
+
+  // Find time range (full 24h broadcast day: 6am to 6am next day)
+  const dayStart = new Date(currentDate + 'T06:00:00');
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+
+  // Build time header
+  const timeRow = document.getElementById('timeRow');
+  timeRow.innerHTML = '';
+  const totalMinutes = 24 * 60;
+  const totalSlots = totalMinutes / 30;
+
+  for (let i = 0; i < totalSlots; i++) {
+    const slotTime = new Date(dayStart);
+    slotTime.setMinutes(slotTime.getMinutes() + i * 30);
+    const h = slotTime.getHours();
+    const m = slotTime.getMinutes();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const label = `${h12}:${m.toString().padStart(2,'0')} ${ampm}`;
+
+    const div = document.createElement('div');
+    div.className = 'time-slot';
+    div.textContent = label;
+    timeRow.appendChild(div);
+  }
+
+  // Channel names
+  const chNamesEl = document.getElementById('channelNames');
+  chNamesEl.innerHTML = '';
+  const chIds = Object.keys(channels).sort();
+
+  chIds.forEach(chId => {
+    const div = document.createElement('div');
+    div.className = 'ch-name';
+    div.textContent = channels[chId].name;
+    chNamesEl.appendChild(div);
+  });
+
+  // Grid body
+  const gridBody = document.getElementById('gridBody');
+  gridBody.innerHTML = '';
+  gridBody.style.width = (totalSlots * 200) + 'px';
+
+  const dayStartMs = dayStart.getTime();
+
+  chIds.forEach((chId, rowIdx) => {
+    const row = document.createElement('div');
+    row.className = 'channel-row';
+    row.style.width = (totalSlots * 200) + 'px';
+
+    channels[chId].entries.forEach(entry => {
+      const start = new Date(entry.start_time);
+      const end = new Date(entry.end_time);
+
+      // Skip if entirely outside our window
+      if (end <= dayStart || start >= dayEnd) return;
+
+      const clampStart = start < dayStart ? dayStart : start;
+      const clampEnd = end > dayEnd ? dayEnd : end;
+
+      const offsetMin = (clampStart - dayStartMs) / 60000;
+      const widthMin = (clampEnd - clampStart) / 60000;
+
+      const block = document.createElement('div');
+      block.className = 'program-block';
+      block.setAttribute('data-show', entry.title);
+      block.style.left = (offsetMin * PX_PER_MIN) + 'px';
+      block.style.width = Math.max(widthMin * PX_PER_MIN - 2, 30) + 'px';
+
+      const epStr = entry.season != null && entry.episode != null
+        ? `S${String(entry.season).padStart(2,'0')}E${String(entry.episode).padStart(2,'0')}`
+        : '';
+
+      block.innerHTML = `
+        <div class="title">${entry.title}</div>
+        <div class="meta">${epStr}${epStr ? ' · ' : ''}${entry.duration_minutes}min</div>
+      `;
+
+      block.onclick = () => showDetail(entry);
+      row.appendChild(block);
+    });
+
+    gridBody.appendChild(row);
+  });
+
+  // Now line
+  updateNowLine(dayStartMs, totalSlots * 200);
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('guideWrap').style.display = 'flex';
+
+  // Scroll to current time
+  scrollToNow(dayStartMs);
+}
+
+function updateNowLine(dayStartMs, totalWidth) {
+  const nowLine = document.getElementById('nowLine');
+  const now = new Date();
+  const offsetMin = (now.getTime() - dayStartMs) / 60000;
+  const px = offsetMin * PX_PER_MIN;
+
+  if (px < 0 || px > totalWidth) {
+    nowLine.style.display = 'none';
+  } else {
+    nowLine.style.display = 'block';
+    nowLine.style.left = px + 'px';
+  }
+}
+
+function scrollToNow(dayStartMs) {
+  const gridScroll = document.getElementById('gridScroll');
+  const now = new Date();
+  const offsetMin = (now.getTime() - dayStartMs) / 60000;
+  const px = offsetMin * PX_PER_MIN;
+  // Center on screen
+  gridScroll.scrollLeft = Math.max(0, px - gridScroll.clientWidth / 2);
+}
+
+function showDetail(entry) {
+  document.getElementById('detailTitle').textContent = entry.title;
+  const epStr = entry.season != null && entry.episode != null
+    ? `Season ${entry.season}, Episode ${entry.episode}`
+    : 'N/A';
+  document.getElementById('detailEpisode').textContent = epStr;
+
+  const startFmt = new Date(entry.start_time).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZone:'America/New_York'});
+  const endFmt = new Date(entry.end_time).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZone:'America/New_York'});
+  document.getElementById('detailTime').textContent = `${startFmt} — ${endFmt}`;
+  document.getElementById('detailDuration').textContent = `Duration: ${entry.duration_minutes} min (${entry.slot_minutes} min slot)`;
+  document.getElementById('detailChannel').textContent = `Channel: ${entry.channel_name}`;
+
+  document.getElementById('overlay').classList.add('active');
+  document.getElementById('detailPopup').classList.add('active');
+}
+
+function closeDetail() {
+  document.getElementById('overlay').classList.remove('active');
+  document.getElementById('detailPopup').classList.remove('active');
+}
+
+// Init
+goToday();
+
+// Auto-refresh every 5 minutes
+setInterval(() => {
+  if (currentDate === today()) {
+    loadDate(currentDate);
+  }
+}, 5 * 60 * 1000);
+
+// Update now line every 30s
+setInterval(() => {
+  if (epgData && currentDate) {
+    const dayStart = new Date(currentDate + 'T06:00:00');
+    updateNowLine(dayStart.getTime(), 48 * 200);
+  }
+}, 30000);
+</script>
+</body>
+</html>
