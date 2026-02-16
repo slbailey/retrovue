@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 revision = "e1a2b3c4d5e6"
-down_revision = "d26f5c803f70"
+down_revision = "20260126_zones"
 branch_labels = None
 depends_on = None
 
