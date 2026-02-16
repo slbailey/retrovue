@@ -743,7 +743,19 @@ class CollectionIngestService:
                 break
 
             # Persist values for verbose output
-            canonical_uri_val = canonical_uri_override or _get_uri(item) or canonical_key
+            # If the source provides a file path (e.g. plex_file_path label),
+            # use it as canonical_uri so the runtime can resolve via PathMappings
+            # without needing to call the source API at runtime.
+            source_file_path = _extract_label_value(
+                getattr(item, "raw_labels", None) if not isinstance(item, dict) else item.get("raw_labels"),
+                "plex_file_path",
+            )
+            canonical_uri_val = (
+                canonical_uri_override
+                or source_file_path
+                or _get_uri(item)
+                or canonical_key
+            )
             size_val = _get_size(item)
 
             confidence_val = _compute_confidence(item)

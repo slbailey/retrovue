@@ -360,26 +360,26 @@ class DslScheduleService:
         return blocks
 
     def _resolve_uris(self, resolver: CatalogAssetResolver, schedule: dict) -> None:
-        """Pre-resolve all plex:// URIs to local file paths."""
+        """Pre-resolve source file paths to local paths using PathMappings.
+
+        No external API calls — all data comes from the database.
+        Assets store source file paths in canonical_uri (set during ingest).
+        PathMappings translate source prefixes to local prefixes.
+        """
         from retrovue.domain.entities import Asset, Collection, PathMapping
-        from retrovue.adapters.registry import get_importer
 
         with session() as db:
-            # Get all collections with path mappings
-            collections = db.query(Collection).all()
-            sources = {}
-            path_mappings = {}
-
-            for col in collections:
+            # Load all path mappings keyed by collection
+            path_mappings: dict[str, list[tuple[str, str]]] = {}
+            for col in db.query(Collection).all():
                 col_uuid = str(col.uuid)
-                if col.source:
-                    sources[col_uuid] = col.source
                 pms = db.query(PathMapping).filter(
                     PathMapping.collection_uuid == col.uuid
                 ).all()
-                path_mappings[col_uuid] = [(pm.plex_path, pm.local_path) for pm in pms]
+                if pms:
+                    path_mappings[col_uuid] = [(pm.plex_path, pm.local_path) for pm in pms]
 
-            # For each asset in the schedule, resolve its URI
+            # Resolve each scheduled asset
             for block_def in schedule["program_blocks"]:
                 asset_id = block_def["asset_id"]
                 meta = resolver.lookup(asset_id)
@@ -388,43 +388,38 @@ class DslScheduleService:
                 if uri in self._uri_cache:
                     continue
 
-                if uri.startswith("plex://"):
-                    # Find which collection this asset belongs to
-                    asset = db.query(Asset).filter(Asset.uuid == asset_id).first()
-                    if asset:
-                        col_uuid = str(asset.collection_uuid)
-                        source = sources.get(col_uuid)
-                        pms = path_mappings.get(col_uuid, [])
+                # Normalise file:// prefix
+                source_path = uri.replace("file://", "") if uri.startswith("file://") else uri
 
-                        if source and pms:
-                            config = {k: v for k, v in (source.config or {}).items()
-                                      if k != "enrichers"}
-                            importer = get_importer(source.type, **config)
-                            rating_key = uri.replace("plex://", "")
-                            try:
-                                ep_meta = importer.client.get_episode_metadata(int(rating_key))
-                                file_path = None
-                                for media in (ep_meta or {}).get("Media", []):
-                                    for part in media.get("Part", []):
-                                        if part.get("file"):
-                                            file_path = part["file"]
-                                            break
-                                    if file_path:
-                                        break
-                                if file_path:
-                                    synth = {
-                                        "path_uri": uri,
-                                        "path": file_path,
-                                        "raw_labels": [f"plex_file_path:{file_path}"],
-                                    }
-                                    local = importer.resolve_local_uri(
-                                        synth, collection=asset.collection,
-                                        path_mappings=pms,
-                                    )
-                                    if local:
-                                        self._uri_cache[uri] = local
-                            except Exception as e:
-                                logger.warning(f"Failed to resolve {uri}: {e}")
+                # For plex:// URIs that weren't migrated yet, look up canonical_uri
+                if uri.startswith("plex://"):
+                    asset = db.query(Asset).filter(Asset.uuid == asset_id).first()
+                    if asset and asset.canonical_uri and not asset.canonical_uri.startswith("plex://"):
+                        source_path = asset.canonical_uri
+                    else:
+                        logger.warning(
+                            "Asset %s has no source file path in canonical_uri; "
+                            "re-ingest to populate. URI: %s", asset_id, uri
+                        )
+                        continue
+
+                # Apply PathMappings: longest-prefix match
+                asset_obj = db.query(Asset).filter(Asset.uuid == asset_id).first()
+                mapped = False
+                if asset_obj:
+                    col_uuid = str(asset_obj.collection_uuid)
+                    pms = path_mappings.get(col_uuid, [])
+                    # Sort by prefix length descending for longest match
+                    for plex_prefix, local_prefix in sorted(pms, key=lambda x: len(x[0]), reverse=True):
+                        if source_path.startswith(plex_prefix):
+                            local_path = local_prefix + source_path[len(plex_prefix):]
+                            self._uri_cache[uri] = local_path
+                            mapped = True
+                            break
+
+                if not mapped:
+                    # No mapping matched — use source_path as-is (may already be local)
+                    self._uri_cache[uri] = source_path
 
     def _resolve_uri(self, uri: str) -> str:
         """Resolve a single URI, returning local path or original URI."""

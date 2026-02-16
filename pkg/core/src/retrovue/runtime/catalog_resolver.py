@@ -160,12 +160,16 @@ class CatalogAssetResolver:
             col_name = col_name_map.get(col_uuid, "")
             source_name = col_source_map.get(col_uuid, "")
 
+            # Prefer canonical_uri (source file path) over uri (provider ref like plex://...)
+            # so the runtime resolver can map via PathMappings without calling the source API.
+            resolved_file_uri = asset.canonical_uri if asset.canonical_uri and not asset.canonical_uri.startswith("plex://") else asset.uri
+
             meta = AssetMetadata(
                 type="episode",
                 duration_sec=duration_sec,
                 tags=(),
                 rating=rating,
-                file_uri=asset.uri,
+                file_uri=resolved_file_uri,
                 chapter_markers_sec=chapter_secs if chapter_secs else None,
             )
 
