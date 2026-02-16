@@ -135,11 +135,9 @@ def resolve_asset_by_channel_id(channel_id: str, active_streams: dict | None = N
         logger.info(f"Found active stream for channel {channel_id}: {streams[channel_id]}")
         return streams[channel_id]
 
-    # Fallback to a default asset if no active stream
-    logger.warning(f"No active stream found for channel {channel_id}, using fallback")
-    return {
-        "path": "R:\\Media\\TV\\Cheers (1982) {imdb-tt0083399}\\Season 01\\Cheers (1982) - S01E03 - The Tortelli Tort [Bluray-720p][AAC 2.0][x264]-Bordure.mp4"
-    }
+    # No active stream — raise instead of returning a bogus path
+    logger.warning(f"No active stream found for channel {channel_id}")
+    raise FileNotFoundError(f"No active stream for channel {channel_id}")
 
 
 def set_active_stream(channel_id: str, asset_info: dict) -> None:
@@ -280,6 +278,10 @@ def run_server(port: int = 8000, active_streams: dict | None = None, debug: bool
     import pathlib
     templates_dir = pathlib.Path(__file__).parent.parent.parent.parent.parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
+
+
+
+
 
     @app.get("/debug/ts/{channel_id}")
     async def debug_ts_stream(channel_id: str):
