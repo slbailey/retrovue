@@ -240,6 +240,80 @@
     margin-right: 12px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .ch-name {
+    position: relative;
+  }
+  .ch-name .watch-btn {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 0.65rem;
+    background: #ff5252;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: none;
+    vertical-align: middle;
+    letter-spacing: 0;
+    text-transform: none;
+    border: none;
+    font-family: 'Courier New', monospace;
+  }
+  .ch-name .watch-btn:hover {
+    background: #ff8a80;
+  }
+  /* HLS Player Modal */
+  .player-modal {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  .player-modal.active { display: flex; }
+  .player-modal .player-wrap {
+    width: min(85vw, 860px);
+    aspect-ratio: 16/9;
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 4px solid #ffc107;
+    box-shadow: 0 0 40px rgba(255,193,7,0.15);
+  }
+  .player-modal video {
+    width: 100%; height: 100%;
+    background: #000;
+    display: block;
+  }
+  .player-modal .player-scanlines {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px);
+    pointer-events: none;
+  }
+  .player-modal .close-player {
+    margin-top: 16px;
+    font-family: 'Courier New', monospace;
+    background: #1a237e;
+    color: #ffc107;
+    border: 1px solid #ffc107;
+    padding: 8px 24px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    letter-spacing: 2px;
+  }
+  .player-modal .close-player:hover { background: #ffc107; color: #1a237e; }
+  .player-modal .player-ch-name {
+    color: #ffc107;
+    font-size: 1.1rem;
+    margin-bottom: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -371,7 +445,7 @@ function renderGuide(data) {
   chIds.forEach(chId => {
     const div = document.createElement('div');
     div.className = 'ch-name';
-    div.textContent = channels[chId].name;
+    div.innerHTML = channels[chId].name + ' <span class="watch-btn" onclick="openPlayer(\'' + chId + '\', \'' + channels[chId].name.replace(/'/g, "\\'") + '\')">▶ WATCH</span>';
     chNamesEl.appendChild(div);
   });
 
@@ -495,5 +569,66 @@ setInterval(() => {
   }
 }, 30000);
 </script>
+
+<div class="player-modal" id="playerModal">
+  <div class="player-ch-name" id="playerChName"></div>
+  <div class="player-wrap">
+    <video id="modalVideo" autoplay muted></video>
+    <div class="player-scanlines"></div>
+  </div>
+  <button class="close-player" onclick="closePlayer()">✕ CLOSE</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+let playerHls = null;
+
+function openPlayer(channelId, channelName) {
+  document.getElementById('playerChName').textContent = channelName;
+  document.getElementById('playerModal').classList.add('active');
+  const video = document.getElementById('modalVideo');
+  const url = '/hls/' + channelId + '/live.m3u8';
+
+  if (playerHls) { playerHls.destroy(); playerHls = null; }
+
+  function tryLoad(attempts) {
+    if (attempts <= 0) return;
+    fetch(url).then(r => {
+      if (r.ok) {
+        if (Hls.isSupported()) {
+          playerHls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 5 });
+          playerHls.loadSource(url);
+          playerHls.attachMedia(video);
+          playerHls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+          playerHls.on(Hls.Events.ERROR, (_, data) => {
+            if (data.fatal) { playerHls.destroy(); setTimeout(() => tryLoad(3), 2000); }
+          });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = url;
+          video.play().catch(() => {});
+        }
+      } else {
+        setTimeout(() => tryLoad(attempts - 1), 2000);
+      }
+    }).catch(() => setTimeout(() => tryLoad(attempts - 1), 2000));
+  }
+  tryLoad(30);
+
+  video.onclick = () => { video.muted = !video.muted; };
+}
+
+function closePlayer() {
+  document.getElementById('playerModal').classList.remove('active');
+  const video = document.getElementById('modalVideo');
+  video.pause();
+  video.src = '';
+  if (playerHls) { playerHls.destroy(); playerHls = null; }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closePlayer();
+});
+</script>
+
 </body>
 </html>
