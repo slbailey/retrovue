@@ -102,6 +102,7 @@ def select_episode(
     mode: str,
     resolver: AssetResolver,
     seed: int | None = None,
+    sequential_counters: dict[str, int] | None = None,
     **kwargs: Any,
 ) -> str:
     """Select an episode asset from a collection or pool."""
@@ -111,7 +112,11 @@ def select_episode(
         raise AssetResolutionError(f"Pool/collection {collection_id} has no episodes")
 
     if mode == "sequential":
-        idx = (seed or 0) % len(episode_ids)
+        if sequential_counters is not None:
+            idx = sequential_counters.get(collection_id, 0) % len(episode_ids)
+            sequential_counters[collection_id] = sequential_counters.get(collection_id, 0) + 1
+        else:
+            idx = (seed or 0) % len(episode_ids)
         return episode_ids[idx]
     elif mode == "random":
         rng = random.Random(seed)
@@ -261,6 +266,7 @@ def _compile_sitcom_block(
     resolver: AssetResolver,
     grid_minutes: int,
     seed: int | None = None,
+    sequential_counters: dict[str, int] | None = None,
 ) -> list[ProgramBlockOutput]:
     """Compile a sitcom/rerun block — program blocks only."""
     blocks: list[ProgramBlockOutput] = []
@@ -278,7 +284,7 @@ def _compile_sitcom_block(
             pool_id = ep_sel.get("pool") or ep_sel.get("collection", "")
             mode = ep_sel.get("mode", "sequential")
             ep_seed = ep_sel.get("seed", seed)
-            asset_id = select_episode(pool_id, mode, resolver, seed=ep_seed)
+            asset_id = select_episode(pool_id, mode, resolver, seed=ep_seed, sequential_counters=sequential_counters)
         else:
             asset_id = program_id
 
@@ -462,6 +468,7 @@ def compile_schedule(
     dsl_path: str = "unknown",
     git_commit: str = "0000000",
     seed: int | None = 42,
+    sequential_counters: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """
     Compile a DSL definition into a Program Schedule.
@@ -490,6 +497,10 @@ def compile_schedule(
     template = get_channel_template(expanded)
     grid_minutes = get_grid_minutes(template)
 
+    # Sequential counters persist across all blocks in this compilation
+    if sequential_counters is None:
+        sequential_counters = {}
+
     # Compile each schedule day into program blocks
     all_blocks: list[ProgramBlockOutput] = []
     schedule = expanded.get("schedule", {})
@@ -498,6 +509,7 @@ def compile_schedule(
         if isinstance(day_value, dict):
             blocks = _compile_sitcom_block(
                 day_value, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                sequential_counters=sequential_counters,
             )
             all_blocks.extend(blocks)
         elif isinstance(day_value, list):
@@ -510,6 +522,7 @@ def compile_schedule(
                     else:
                         blocks = _compile_sitcom_block(
                             block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                            sequential_counters=sequential_counters,
                         )
                     all_blocks.extend(blocks)
 

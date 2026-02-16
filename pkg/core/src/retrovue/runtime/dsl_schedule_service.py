@@ -67,6 +67,9 @@ class DslScheduleService:
         # Track which broadcast days have been compiled (set of "YYYY-MM-DD")
         self._compiled_days: set[str] = set()
 
+        # Sequential episode counters — persist across days for true sequential playback
+        self._sequential_counters: dict[str, int] = {}
+
         # Recompile guard: prevent concurrent horizon extensions
         self._extending = False
 
@@ -280,8 +283,9 @@ class DslScheduleService:
         with session() as db:
             resolver = CatalogAssetResolver(db)
 
-        # Compile program schedule
-        schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path)
+        # Compile program schedule (pass sequential counters for cross-day continuity)
+        schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
+                                     sequential_counters=self._sequential_counters)
 
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
