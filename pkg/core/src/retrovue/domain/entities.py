@@ -836,3 +836,36 @@ class Zone(Base):
 
     def __repr__(self) -> str:
         return f"<Zone(id={self.id}, plan_id={self.plan_id}, name='{self.name}', start={self.start_time}, end={self.end_time})>"
+
+
+class CompiledProgramLog(Base):
+    """Cached compiled schedule for a channel/broadcast-day pair.
+
+    DB-first: once a row exists with locked=True, the schedule is never
+    recompiled unless the row is explicitly deleted (e.g. via rebuild CLI).
+    """
+
+    __tablename__ = "compiled_program_log"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    channel_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    broadcast_day: Mapped[date] = mapped_column(Date, nullable=False)
+    schedule_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    compiled_json: Mapped[dict[str, Any]] = mapped_column(PG_JSONB, nullable=False)
+    locked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sa.text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("channel_id", "broadcast_day", name="uq_compiled_program_log_channel_day"),
+        Index("ix_compiled_program_log_channel_id", "channel_id"),
+        Index("ix_compiled_program_log_broadcast_day", "broadcast_day"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CompiledProgramLog(id={self.id}, channel_id={self.channel_id}, broadcast_day={self.broadcast_day}, locked={self.locked})>"

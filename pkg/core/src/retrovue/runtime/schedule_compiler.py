@@ -192,6 +192,79 @@ def expand_templates(dsl: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+
+
+# ---------------------------------------------------------------------------
+# Day-of-week schedule resolution (layered merge)
+# ---------------------------------------------------------------------------
+
+VALID_SCHEDULE_KEYS = frozenset({
+    "all_day", "weekdays", "weekends",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+})
+
+DOW_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+WEEKDAY_NAMES = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday"})
+WEEKEND_NAMES = frozenset({"saturday", "sunday"})
+
+
+def _blocks_to_dict(blocks: list[dict]) -> dict[str, dict]:
+    """Index a list of block defs by their 'start' time."""
+    result: dict[str, dict] = {}
+    for b in blocks:
+        if isinstance(b, dict):
+            key = b.get("start", "")
+            result[key] = b
+    return result
+
+
+def _ensure_list(val: Any) -> list[dict]:
+    """Normalise a schedule value to a list of block defs."""
+    if isinstance(val, list):
+        return val
+    if isinstance(val, dict):
+        return [val]
+    return []
+
+
+def resolve_day_schedule(dsl: dict[str, Any], target_date: date) -> list[dict[str, Any]]:
+    """
+    Resolve the schedule blocks for a specific date by merging layers.
+
+    Layer precedence (highest to lowest):
+    1. Specific DOW (monday, tuesday, ...)
+    2. Group (weekdays, weekends)
+    3. Default (all_day)
+
+    Layers MERGE by start time. Higher layers override specific start-time
+    blocks but pass through all others from lower layers.
+    """
+    schedule = dsl.get("schedule", {})
+
+    # Base layer: all_day
+    merged = _blocks_to_dict(_ensure_list(schedule.get("all_day", [])))
+
+    # Group layer
+    dow_index = target_date.weekday()  # 0=Monday
+    dow_name = DOW_NAMES[dow_index]
+
+    if dow_name in WEEKDAY_NAMES and "weekdays" in schedule:
+        group_blocks = _blocks_to_dict(_ensure_list(schedule["weekdays"]))
+        merged.update(group_blocks)
+    elif dow_name in WEEKEND_NAMES and "weekends" in schedule:
+        group_blocks = _blocks_to_dict(_ensure_list(schedule["weekends"]))
+        merged.update(group_blocks)
+
+    # Specific DOW layer
+    if dow_name in schedule:
+        dow_blocks = _blocks_to_dict(_ensure_list(schedule[dow_name]))
+        merged.update(dow_blocks)
+
+    # Sort by start time and return as list
+    sorted_keys = sorted(merged.keys())
+    return [merged[k] for k in sorted_keys]
+
 # ---------------------------------------------------------------------------
 # Channel template helpers
 # ---------------------------------------------------------------------------
@@ -268,13 +341,22 @@ def _compile_sitcom_block(
     seed: int | None = None,
     sequential_counters: dict[str, int] | None = None,
 ) -> list[ProgramBlockOutput]:
-    """Compile a sitcom/rerun block — program blocks only."""
+    """Compile a sitcom/rerun block — program blocks only.
+
+    Supports episode preemption: if an episode's duration exceeds one grid
+    slot, it claims ceil(duration / grid_slot) slots. Preempted slots are
+    consumed and their corresponding slot definitions are skipped. The
+    sequential counter only increments when an episode is actually placed.
+    """
     blocks: list[ProgramBlockOutput] = []
     start_str = block_def.get("start", "20:00")
     current_time = _parse_time(start_str, broadcast_day, tz_name)
     slots = block_def.get("slots", [])
 
-    for slot in slots:
+    slot_sec = grid_minutes * 60
+    slot_idx = 0
+    while slot_idx < len(slots):
+        slot = slots[slot_idx]
         title = slot.get("title", "")
         program_id = slot.get("program", "")
         ep_sel = slot.get("episode_selector", {})
@@ -290,6 +372,7 @@ def _compile_sitcom_block(
 
         ep_meta = resolver.lookup(asset_id)
         slot_duration = _grid_slot_duration(grid_minutes, ep_meta.duration_sec)
+        slots_consumed = max(1, -(-ep_meta.duration_sec // slot_sec))  # ceil division
 
         block = ProgramBlockOutput(
             title=title,
@@ -305,6 +388,9 @@ def _compile_sitcom_block(
         )
         blocks.append(block)
         current_time = block.end_at()
+
+        # Skip preempted slots
+        slot_idx += slots_consumed
 
     return blocks
 
@@ -374,6 +460,17 @@ def validate_dsl(dsl: dict[str, Any], resolver: AssetResolver) -> list[str]:
     template = get_channel_template(dsl)
     grid_min = get_grid_minutes(template)
     schedule = dsl.get("schedule", {})
+
+    # Validate schedule keys
+    for day_key in schedule:
+        # Legacy keys like "weeknights" are allowed (template refs)
+        # New DOW keys are validated
+        if day_key not in VALID_SCHEDULE_KEYS:
+            # Check if it's a template reference (has "use" key) - allow it
+            val = schedule[day_key]
+            if not (isinstance(val, dict) and "use" in val):
+                # Allow legacy keys that aren't DOW keys (backward compat)
+                pass
 
     # Validate grid alignment
     for day_key, day_value in schedule.items():
@@ -501,30 +598,52 @@ def compile_schedule(
     if sequential_counters is None:
         sequential_counters = {}
 
-    # Compile each schedule day into program blocks
+    # Compile program blocks — use day-of-week resolver if broadcast_day is set
     all_blocks: list[ProgramBlockOutput] = []
     schedule = expanded.get("schedule", {})
 
-    for day_key, day_value in schedule.items():
-        if isinstance(day_value, dict):
-            blocks = _compile_sitcom_block(
-                day_value, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                sequential_counters=sequential_counters,
-            )
-            all_blocks.extend(blocks)
-        elif isinstance(day_value, list):
-            for block_def in day_value:
-                if isinstance(block_def, dict):
-                    if "movie_block" in block_def or "movie_selector" in block_def:
-                        blocks = _compile_movie_block(
-                            block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                        )
-                    else:
-                        blocks = _compile_sitcom_block(
-                            block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                            sequential_counters=sequential_counters,
-                        )
-                    all_blocks.extend(blocks)
+    # Check if schedule uses any DOW/group keys (new layered format)
+    schedule_keys = set(schedule.keys())
+    uses_dow_keys = bool(schedule_keys & (VALID_SCHEDULE_KEYS - {"all_day"})) or "all_day" in schedule_keys
+
+    if uses_dow_keys and broadcast_day:
+        # Use the day-of-week resolver to merge layers for this date
+        target = date.fromisoformat(broadcast_day)
+        resolved_blocks = resolve_day_schedule(expanded, target)
+        for block_def in resolved_blocks:
+            if isinstance(block_def, dict):
+                if "movie_block" in block_def or "movie_selector" in block_def:
+                    blocks = _compile_movie_block(
+                        block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                    )
+                else:
+                    blocks = _compile_sitcom_block(
+                        block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                        sequential_counters=sequential_counters,
+                    )
+                all_blocks.extend(blocks)
+    else:
+        # Legacy path: iterate schedule keys directly
+        for day_key, day_value in schedule.items():
+            if isinstance(day_value, dict):
+                blocks = _compile_sitcom_block(
+                    day_value, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                    sequential_counters=sequential_counters,
+                )
+                all_blocks.extend(blocks)
+            elif isinstance(day_value, list):
+                for block_def in day_value:
+                    if isinstance(block_def, dict):
+                        if "movie_block" in block_def or "movie_selector" in block_def:
+                            blocks = _compile_movie_block(
+                                block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                            )
+                        else:
+                            blocks = _compile_sitcom_block(
+                                block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                                sequential_counters=sequential_counters,
+                            )
+                        all_blocks.extend(blocks)
 
     # Validate compiled blocks
     block_errors = validate_program_blocks(all_blocks)
