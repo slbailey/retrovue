@@ -38,7 +38,7 @@ from threading import Thread
 from typing import Any, Callable, Optional, Protocol
 
 from fastapi import FastAPI, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from uvicorn import Config, Server
 
 from retrovue.runtime.clock import MasterClock, RealTimeMasterClock
@@ -1746,6 +1746,93 @@ class ProgramDirector:
             """
             # Phase 0: No-op implementation
             return {"status": "ok", "message": "Emergency override endpoint (no-op in Phase 0)"}
+
+
+        @self.fastapi_app.get("/api/epg")
+        async def get_epg_all(
+            date: Optional[str] = None,
+            channel: Optional[str] = None,
+        ) -> Any:
+            """EPG endpoint for all channels compiled from DSL."""
+            import json as _json
+            from zoneinfo import ZoneInfo
+            from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
+            from retrovue.runtime.catalog_resolver import CatalogAssetResolver
+            from retrovue.infra.uow import session
+
+            if date is None:
+                now = datetime.now(ZoneInfo("America/New_York"))
+                if now.hour < 6:
+                    broadcast_day = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+                else:
+                    broadcast_day = now.strftime("%Y-%m-%d")
+            else:
+                broadcast_day = date
+
+            channels_path = Path("/opt/retrovue/config/channels.json")
+            with open(channels_path) as f:
+                channels = _json.load(f)["channels"]
+
+            if channel:
+                channels = [c for c in channels if c["channel_id"] == channel]
+
+            all_entries = []
+            for ch in channels:
+                try:
+                    dsl_path = ch["schedule_config"]["dsl_path"]
+                    dsl_text = Path(dsl_path).read_text()
+                    dsl = parse_dsl(dsl_text)
+                    dsl["broadcast_day"] = broadcast_day
+
+                    with session() as db:
+                        resolver = CatalogAssetResolver(db)
+
+                    schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path)
+
+                    for block in schedule["program_blocks"]:
+                        asset_id = block["asset_id"]
+                        series_title = block.get("title", "")
+                        season_number = None
+                        episode_number = None
+
+                        for cat_entry in resolver._catalog:
+                            if cat_entry.canonical_id == asset_id:
+                                series_title = cat_entry.series_title or series_title
+                                season_number = cat_entry.season
+                                episode_number = cat_entry.episode
+                                break
+
+                        start_dt = datetime.fromisoformat(block["start_at"])
+                        slot_sec = block["slot_duration_sec"]
+                        ep_sec = block["episode_duration_sec"]
+                        end_dt = start_dt + timedelta(seconds=slot_sec)
+
+                        all_entries.append({
+                            "channel_id": ch["channel_id"],
+                            "channel_name": ch["name"],
+                            "start_time": start_dt.isoformat(),
+                            "end_time": end_dt.isoformat(),
+                            "title": series_title,
+                            "season": season_number,
+                            "episode": episode_number,
+                            "duration_minutes": round(ep_sec / 60, 1),
+                            "slot_minutes": round(slot_sec / 60, 1),
+                        })
+                except Exception as e:
+                    self._logger.error("EPG compile error for %s: %s", ch["channel_id"], e, exc_info=True)
+                    all_entries.append({
+                        "channel_id": ch["channel_id"],
+                        "channel_name": ch["name"],
+                        "error": str(e),
+                    })
+
+            return {"broadcast_day": broadcast_day, "entries": all_entries}
+
+        @self.fastapi_app.get("/epg", response_class=HTMLResponse)
+        async def epg_guide_html() -> HTMLResponse:
+            """Serve the EPG HTML page."""
+            html_path = Path("/opt/retrovue/pkg/core/templates") / "epg" / "guide.html"
+            return HTMLResponse(content=html_path.read_text())
 
     def _start_http_server(self) -> None:
         """Start the HTTP server in a background thread."""

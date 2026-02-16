@@ -24,6 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from retrovue.streaming.ffmpeg_cmd import build_cmd
 from retrovue.streaming.mpegts_stream import MPEGTSStreamer
 from retrovue.web.api.scheduling import router as scheduling_router
+from retrovue.web.api.epg import router as epg_router
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +254,7 @@ def run_server(port: int = 8000, active_streams: dict | None = None, debug: bool
 
     # Include scheduling API routes
     app.include_router(scheduling_router)
+    app.include_router(epg_router)
 
     @app.middleware("http")
     async def streaming_headers(request: Request, call_next):
@@ -464,7 +466,14 @@ def run_server(port: int = 8000, active_streams: dict | None = None, debug: bool
         """
         return templates.TemplateResponse(
             "schedule/builder.html",
-            {"request": request, "title": "Schedule Builder"}
+            {"request": request, "title": "Schedule Builder"})
+
+    @app.get("/epg", response_class=HTMLResponse)
+    async def epg_guide(request: Request):
+        """EPG TV Guide viewer."""
+        return templates.TemplateResponse(
+            "epg/guide.html",
+            {"request": request, "title": "RetroVue TV Guide"}
         )
 
     uvicorn.run(app, host="0.0.0.0", port=port)
