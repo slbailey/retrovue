@@ -383,6 +383,69 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
 }
 
 // =============================================================================
+// ApplyFade — apply linear video+audio fade to a FrameData in-place
+// Contract Reference: docs/contracts/coordination/SegmentTransitionContract.md
+// INV-TRANSITION-004: Fade applied using segment-relative CT.
+// Video (YUV420P): Y *= alpha; U = 128 + (U-128)*alpha; V = 128 + (V-128)*alpha
+// Audio (S16 interleaved): each sample *= alpha
+// =============================================================================
+
+static void ApplyFade(FrameData& fd, double alpha) {
+  if (alpha <= 0.0) {
+    // Full black + silence
+    int y_size = fd.video.width * fd.video.height;
+    int uv_size = (fd.video.width / 2) * (fd.video.height / 2);
+    if (!fd.video.data.empty()) {
+      std::memset(fd.video.data.data(), 0, static_cast<size_t>(y_size));
+      std::memset(fd.video.data.data() + y_size, 128,
+                  static_cast<size_t>(2 * uv_size));
+    }
+    for (auto& af : fd.audio) {
+      std::memset(af.data.data(), 0, af.data.size());
+    }
+    return;
+  }
+
+  if (alpha >= 1.0) return;  // No change needed
+
+  // Video: YUV420P layout [Y][U][V]
+  if (!fd.video.data.empty() && fd.video.width > 0 && fd.video.height > 0) {
+    int y_size = fd.video.width * fd.video.height;
+    int uv_size = (fd.video.width / 2) * (fd.video.height / 2);
+    uint8_t* y_plane = fd.video.data.data();
+    uint8_t* u_plane = y_plane + y_size;
+    uint8_t* v_plane = u_plane + uv_size;
+
+    // Y plane: scale toward 0 (black)
+    for (int i = 0; i < y_size && i < static_cast<int>(fd.video.data.size()); ++i) {
+      y_plane[i] = static_cast<uint8_t>(y_plane[i] * alpha + 0.5);
+    }
+    // U plane: blend toward 128 (neutral chroma)
+    for (int i = 0; i < uv_size; ++i) {
+      int idx = y_size + i;
+      if (idx >= static_cast<int>(fd.video.data.size())) break;
+      u_plane[i] = static_cast<uint8_t>(128.0 + (u_plane[i] - 128.0) * alpha + 0.5);
+    }
+    // V plane: blend toward 128 (neutral chroma)
+    for (int i = 0; i < uv_size; ++i) {
+      int idx = y_size + uv_size + i;
+      if (idx >= static_cast<int>(fd.video.data.size())) break;
+      v_plane[i] = static_cast<uint8_t>(128.0 + (v_plane[i] - 128.0) * alpha + 0.5);
+    }
+  }
+
+  // Audio: S16 interleaved — scale each sample by alpha
+  for (auto& af : fd.audio) {
+    int num_samples = af.nb_samples * af.channels;
+    int16_t* samples = reinterpret_cast<int16_t*>(af.data.data());
+    int max_samples = static_cast<int>(af.data.size() / sizeof(int16_t));
+    for (int i = 0; i < num_samples && i < max_samples; ++i) {
+      samples[i] = static_cast<int16_t>(samples[i] * alpha);
+    }
+  }
+}
+
+// =============================================================================
 // DecodeNextFrameRaw — decode-only frame advancement (no delivery state)
 // =============================================================================
 
@@ -442,12 +505,51 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
   block_ct_ms_ = ct_before + input_frame_duration_ms_;
   next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
 
-  return FrameData{
+  FrameData result{
       std::move(video_frame),
       std::move(audio_frames),
       current_asset_uri_,
       ct_before
   };
+
+  // Apply segment transition fade (INV-TRANSITION-004: CT-based, not wall-clock).
+  // Only applies to second-class breakpoints tagged by Python Core.
+  if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
+      current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
+    const auto& seg = validated_.plan.segments[current_segment_index_];
+    const auto& boundary = boundaries_[current_segment_index_];
+
+    double alpha = 1.0;
+
+    // Transition in: fade from 0.0 → 1.0 over first transition_in_duration_ms
+    if (seg.transition_in == TransitionType::kFade && seg.transition_in_duration_ms > 0) {
+      int64_t seg_ct = ct_before - boundary.start_ct_ms;
+      int64_t fade_dur = static_cast<int64_t>(seg.transition_in_duration_ms);
+      if (seg_ct < fade_dur) {
+        double in_alpha = static_cast<double>(seg_ct) / static_cast<double>(fade_dur);
+        alpha = std::min(alpha, std::max(0.0, in_alpha));
+      }
+    }
+
+    // Transition out: fade from 1.0 → 0.0 over last transition_out_duration_ms
+    if (seg.transition_out == TransitionType::kFade && seg.transition_out_duration_ms > 0) {
+      int64_t seg_duration = boundary.end_ct_ms - boundary.start_ct_ms;
+      int64_t seg_ct = ct_before - boundary.start_ct_ms;
+      int64_t fade_dur = static_cast<int64_t>(seg.transition_out_duration_ms);
+      int64_t fade_start = seg_duration - fade_dur;
+      if (seg_ct >= fade_start) {
+        int64_t time_in_fade = seg_ct - fade_start;
+        double out_alpha = 1.0 - static_cast<double>(time_in_fade) / static_cast<double>(fade_dur);
+        alpha = std::min(alpha, std::max(0.0, out_alpha));
+      }
+    }
+
+    if (alpha < 1.0) {
+      ApplyFade(result, alpha);
+    }
+  }
+
+  return result;
 }
 
 // =============================================================================

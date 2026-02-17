@@ -154,6 +154,15 @@ class BlockPlan:
                 # else: CONTENT (proto default 0)
             if "event_id" in seg:
                 kwargs["event_id"] = seg["event_id"]
+            # Transition fields (INV-TRANSITION-001: SegmentTransitionContract.md)
+            t_in = seg.get("transition_in", "TRANSITION_NONE")
+            t_out = seg.get("transition_out", "TRANSITION_NONE")
+            if t_in == "TRANSITION_FADE":
+                kwargs["transition_in"] = playout_pb2.TRANSITION_FADE
+                kwargs["transition_in_duration_ms"] = seg.get("transition_in_duration_ms", 0)
+            if t_out == "TRANSITION_FADE":
+                kwargs["transition_out"] = playout_pb2.TRANSITION_FADE
+                kwargs["transition_out_duration_ms"] = seg.get("transition_out_duration_ms", 0)
             pb.segments.append(playout_pb2.BlockSegment(**kwargs))
         return pb
 

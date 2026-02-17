@@ -264,6 +264,14 @@ enum SegmentType {
   SEGMENT_TYPE_PAD = 2;
 }
 
+// TransitionType specifies the fade applied at a segment boundary.
+// TRANSITION_NONE: clean cut (first-class chapter-marker breakpoints).
+// TRANSITION_FADE: linear fade to/from black+silence (second-class computed breakpoints).
+enum TransitionType {
+  TRANSITION_NONE = 0;
+  TRANSITION_FADE = 1;
+}
+
 // BlockSegment represents a contiguous portion of an asset within a block.
 // PAD segments have no asset_uri (planned silence/black at block tail).
 message BlockSegment {
@@ -273,6 +281,13 @@ message BlockSegment {
   int64 segment_duration_ms = 4;     // Duration of this segment
   SegmentType segment_type = 5;      // Segment role (default CONTENT)
   string event_id = 6;              // Stable scheduled event_id from TransmissionLog
+  // Transition fields: applied at segment boundaries for second-class breakpoints.
+  // INV-TRANSITION-001: Only second-class (computed) breakpoints use TRANSITION_FADE.
+  // INV-TRANSITION-002: transition_in of content segment matches transition_out of preceding content.
+  TransitionType transition_in = 8;           // Fade type applied at segment start
+  uint32 transition_in_duration_ms = 9;       // Fade-in duration in milliseconds (0 if NONE)
+  TransitionType transition_out = 10;          // Fade type applied at segment end
+  uint32 transition_out_duration_ms = 11;     // Fade-out duration in milliseconds (0 if NONE)
 }
 
 // StartBlockPlanSessionRequest initializes BlockPlan mode with 2 seed blocks.

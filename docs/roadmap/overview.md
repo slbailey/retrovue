@@ -10,10 +10,10 @@ This roadmap tracks the "what" (contracts), validation (tests), and implementati
 ## Phases
 | Phase | Focus | Status | Detail |
 | --- | --- | --- | --- |
-| 01 | Programming DSL & compiler | Planned | [phase-01-programming-dsl.md](phase-01-programming-dsl.md) |
-| 02 | Ads, promos, and movie packaging | Planned | [phase-02-ads-packaging.md](phase-02-ads-packaging.md) |
-| 03 | Operator workflows & UI | Planned | [phase-03-operator-ui.md](phase-03-operator-ui.md) |
-| 04 | Runtime integration & telemetry | Planned | [phase-04-runtime-integration.md](phase-04-runtime-integration.md) |
+| 01 | Programming DSL & compiler | **Implemented** | [phase-01-programming-dsl.md](phase-01-programming-dsl.md) |
+| 02 | Ads, promos, and movie packaging | **In Flight** | [phase-02-ads-packaging.md](phase-02-ads-packaging.md) |
+| 03 | Operator workflows & UI | **In Flight** | [phase-03-operator-ui.md](phase-03-operator-ui.md) |
+| 04 | Runtime integration & telemetry | **Implemented** | [phase-04-runtime-integration.md](phase-04-runtime-integration.md) |
 
 ## Working Agreements
 1. **Contracts → Tests → Code**: we never ship code without an approved contract doc and corresponding tests.

@@ -531,6 +531,13 @@ class ScheduledSegment:
     asset_uri: str              # File path for playback
     asset_start_offset_ms: int  # Seek offset into file
     segment_duration_ms: int    # Duration of this segment
+    # Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
+    # Applied only to second-class breakpoints (computed interval division).
+    # First-class breakpoints (chapter markers) use TRANSITION_NONE (default).
+    transition_in: str = "TRANSITION_NONE"       # "TRANSITION_NONE" | "TRANSITION_FADE"
+    transition_in_duration_ms: int = 0           # Duration of fade-in in ms (0 if NONE)
+    transition_out: str = "TRANSITION_NONE"      # "TRANSITION_NONE" | "TRANSITION_FADE"
+    transition_out_duration_ms: int = 0          # Duration of fade-out in ms (0 if NONE)
 
 
 @dataclass(frozen=True)
