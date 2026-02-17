@@ -223,13 +223,27 @@ class HLSSegmenter:
         return pcr
 
     def _current_seg_duration(self) -> float:
-        """Estimate current segment duration using PCR or wall-clock."""
+        """Estimate current segment duration using PCR or wall-clock.
+
+        PCR discontinuities (e.g. when AIR switches content) cause the PCR
+        to jump backwards or forwards by a large amount.  When detected,
+        we reset the PCR baseline and fall back to wall-clock for the
+        current segment to avoid emitting absurd durations.
+        """
         if self._seg_start_pcr is not None and self._last_pcr is not None:
             dur = self._last_pcr - self._seg_start_pcr
-            # Handle PCR wrap-around (33-bit base at 90kHz ≈ 26.5 hours)
-            if dur < 0:
-                dur += (1 << 33) / 90000.0
-            return dur
+            # Detect PCR discontinuity: negative or implausibly large (>60s for a 6s target)
+            max_plausible = max(self.target_duration * 10, 120.0)
+            if dur < 0 or dur > max_plausible:
+                # PCR discontinuity — reset baseline, fall through to wall-clock
+                logger.debug(
+                    "[HLS %s] PCR discontinuity detected (dur=%.1fs), resetting to wall-clock",
+                    self.channel_id, dur,
+                )
+                self._seg_start_pcr = self._last_pcr
+                # Fall through to wall-clock
+            else:
+                return dur
         # Fallback: wall-clock
         if self._seg_start_time is not None:
             return time.monotonic() - self._seg_start_time

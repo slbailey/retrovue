@@ -452,6 +452,10 @@ class ProgramDirector:
 
         # HLS Manager
         self._hls_manager = HLSManager()
+        # HLS activity tracking: channel_id -> last fetch timestamp (time.monotonic)
+        self._hls_last_activity: dict[str, float] = {}
+        self._hls_phantom_sessions: dict[str, str] = {}  # channel_id -> hls_session_id
+        self._hls_activity_lock = threading.Lock()
 
         # Evidence pipeline configuration
         self._evidence_enabled = True
@@ -1870,7 +1874,18 @@ class ProgramDirector:
 
             If no viewer exists, start the channel normally (tune_in triggers
             FFmpeg).  The ChannelStream reader loop will tee to HLS.
+
+            HLS phantom viewer lifecycle: phantom tunes in when first HLS
+            client requests the playlist, and tunes out after no client has
+            fetched a playlist or segment for LINGER_SECONDS. This lets the
+            normal viewer_count -> 0 -> linger -> teardown lifecycle work.
             """
+            import time as _time
+
+            # Track activity for this channel
+            with self._hls_activity_lock:
+                self._hls_last_activity[channel_id] = _time.monotonic()
+
             seg = self._hls_manager.get_or_create(channel_id)
             if not seg.is_running():
                 seg.start()
@@ -1889,6 +1904,8 @@ class ProgramDirector:
 
                 # Tune in to trigger producer + ChannelStream start
                 hls_session_id = f"hls-{channel_id}-{uuid.uuid4().hex[:8]}"
+                with self._hls_activity_lock:
+                    self._hls_phantom_sessions[channel_id] = hls_session_id
                 try:
                     manager.tune_in(hls_session_id, {"channel_id": channel_id})
                 except Exception as e:
@@ -1902,19 +1919,57 @@ class ProgramDirector:
                         break
                     await asyncio.sleep(1)
                 if fanout:
-                    # Subscribe a phantom viewer so the channel stays alive
-                    # even if no raw-TS clients are connected.
-                    # Must drain the queue to avoid eviction.
                     hls_queue = fanout.subscribe(hls_session_id)
                     import threading as _td
-                    def _drain_hls_phantom(q=hls_queue, s=seg):
+
+                    # Drain thread: keeps fanout alive, but monitors HLS client activity.
+                    # When no client has fetched playlist/segments for LINGER_SECONDS,
+                    # the phantom disconnects — letting viewer_count hit 0 and linger begin.
+                    def _drain_hls_phantom(q=hls_queue, s=seg, mgr=manager, sid=hls_session_id, cid=channel_id):
+                        IDLE_CHECK_INTERVAL = 5.0  # seconds between idle checks
+                        # Use the channel manager's LINGER_SECONDS if available, else default 20s
+                        idle_timeout = getattr(mgr, 'LINGER_SECONDS', 20)
+                        self._logger.info(
+                            "[HLS-phantom %s] started, idle_timeout=%ds", cid, idle_timeout
+                        )
                         while s.is_running():
                             try:
-                                chunk = q.get(timeout=2.0)
+                                chunk = q.get(timeout=IDLE_CHECK_INTERVAL)
                                 if not chunk:
                                     break
                             except Exception:
-                                continue
+                                pass
+                            # Check if any HLS client is still active
+                            with self._hls_activity_lock:
+                                last = self._hls_last_activity.get(cid, 0)
+                            idle_seconds = _time.monotonic() - last
+                            if idle_seconds > idle_timeout:
+                                self._logger.info(
+                                    "[HLS-phantom %s] no client activity for %.0fs (timeout=%ds), disconnecting",
+                                    cid, idle_seconds, idle_timeout
+                                )
+                                break
+
+                        # Cleanup: tune out the phantom viewer
+                        self._logger.info("[HLS-phantom %s] tearing down phantom viewer %s", cid, sid)
+                        try:
+                            mgr.tune_out(sid)
+                        except Exception as e:
+                            self._logger.warning("[HLS-phantom %s] tune_out error: %s", cid, e)
+                        try:
+                            fanout.unsubscribe(sid)
+                        except Exception:
+                            pass
+                        # Stop the segmenter
+                        try:
+                            s.stop()
+                        except Exception:
+                            pass
+                        # Clean up tracking
+                        with self._hls_activity_lock:
+                            self._hls_phantom_sessions.pop(cid, None)
+                            self._hls_last_activity.pop(cid, None)
+
                     _td.Thread(target=_drain_hls_phantom, daemon=True, name=f"hls-phantom-{channel_id}").start()
 
                 # Wait for first playlist to appear
@@ -1941,6 +1996,11 @@ class ProgramDirector:
         @self.fastapi_app.get("/hls/{channel_id}/{segment}")
         async def hls_segment(channel_id: str, segment: str) -> Response:
             """Serve HLS .ts segments."""
+            import time as _time
+            # Track activity — client is still watching
+            with self._hls_activity_lock:
+                self._hls_last_activity[channel_id] = _time.monotonic()
+
             seg_path = HLS_BASE_DIR / channel_id / segment
             if not seg_path.exists() or ".." in segment:
                 return Response(content="Not found", status_code=404)

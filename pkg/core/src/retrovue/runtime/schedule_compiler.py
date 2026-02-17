@@ -210,11 +210,23 @@ WEEKEND_NAMES = frozenset({"saturday", "sunday"})
 
 
 def _blocks_to_dict(blocks: list[dict]) -> dict[str, dict]:
-    """Index a list of block defs by their 'start' time."""
+    """Index a list of block defs by their 'start' time.
+
+    Handles nested block types where start is inside a sub-key:
+        - block: { start: "06:00", ... }
+        - movie_marathon: { start: "09:00", ... }
+    """
     result: dict[str, dict] = {}
     for b in blocks:
         if isinstance(b, dict):
+            # Check for nested block types first
             key = b.get("start", "")
+            if not key:
+                for nested_key in ("block", "movie_marathon", "movie_block"):
+                    nested = b.get(nested_key)
+                    if isinstance(nested, dict):
+                        key = nested.get("start", "")
+                        break
             result[key] = b
     return result
 
@@ -309,6 +321,39 @@ def _grid_slot_duration(grid_minutes: int, episode_duration_sec: int) -> int:
 # ---------------------------------------------------------------------------
 # Time parsing
 # ---------------------------------------------------------------------------
+
+
+def _parse_duration(dur_str: str) -> timedelta:
+    """Parse a duration string like '24h', '3h', '90m', '3h30m', '2h 15m'.
+
+    Supports:
+        '24h'    -> 24 hours
+        '3h'     -> 3 hours
+        '90m'    -> 90 minutes
+        '3h30m'  -> 3 hours 30 minutes
+        '2h 15m' -> 2 hours 15 minutes
+    """
+    import re
+    dur_str = dur_str.strip().lower()
+    hours = 0
+    minutes = 0
+
+    h_match = re.search(r'(\d+)\s*h', dur_str)
+    m_match = re.search(r'(\d+)\s*m', dur_str)
+
+    if h_match:
+        hours = int(h_match.group(1))
+    if m_match:
+        minutes = int(m_match.group(1))
+
+    if not h_match and not m_match:
+        # Try plain number as hours
+        try:
+            hours = int(dur_str)
+        except ValueError:
+            raise ValueError(f"Cannot parse duration: {dur_str!r}")
+
+    return timedelta(hours=hours, minutes=minutes)
 
 
 def _parse_time(time_str: str, broadcast_day: str, tz_name: str) -> datetime:
@@ -570,6 +615,117 @@ def _compile_movie_marathon(
     return blocks
 
 
+
+def _compile_episode_block(
+    block_def: dict[str, Any],
+    broadcast_day: str,
+    tz_name: str,
+    resolver: AssetResolver,
+    grid_minutes: int,
+    seed: int | None = None,
+    sequential_counters: dict[str, int] | None = None,
+) -> list[ProgramBlockOutput]:
+    """Compile an episode block — fills a time range with episodes from a pool.
+
+    DSL shape:
+        - block:
+            start: "22:00"
+            end: "06:00"
+            title: "Tales from the Crypt"
+            pool: tales_from_the_crypt
+            mode: sequential
+
+    Multi-pool support:
+        - block:
+            start: "06:00"
+            end: "12:00"
+            title: "Morning Sitcoms"
+            pool: [cheers, cosby, barney]
+            mode: shuffle       # rotate across pools
+
+    When start == end (e.g. both "06:00"), fills a full 24h broadcast day.
+    """
+    bb = block_def.get("block", {})
+    start_str = bb.get("start") or block_def.get("start", "06:00")
+    end_str = bb.get("end", "")
+    duration_str = bb.get("duration", "")
+    title = bb.get("title", "")
+    mode = bb.get("mode", "sequential")
+    pool_spec = bb.get("pool", "")
+
+    # Normalise pool(s) to a list
+    if isinstance(pool_spec, str):
+        pools = [pool_spec]
+    else:
+        pools = list(pool_spec)
+
+    current_time = _parse_time(start_str, broadcast_day, tz_name)
+
+    # Resolve end time: duration takes priority over end
+    if duration_str:
+        end_time = current_time + _parse_duration(duration_str)
+    elif end_str:
+        end_time = _parse_time(end_str, broadcast_day, tz_name)
+        # If end <= start, it means overnight wrap (e.g. 22:00 -> 06:00)
+        if end_time <= current_time:
+            end_time = end_time + timedelta(hours=24)
+    else:
+        # No end or duration — default to full 24h
+        end_time = current_time + timedelta(hours=24)
+
+    slot_sec = grid_minutes * 60
+    blocks: list[ProgramBlockOutput] = []
+    pool_index = 0  # for round-robin across pools
+    rng = random.Random(seed or 42)
+
+    if sequential_counters is None:
+        sequential_counters = {}
+
+    max_iterations = 500  # safety valve
+
+    while current_time < end_time and max_iterations > 0:
+        max_iterations -= 1
+
+        # Pick pool: round-robin for shuffle, first pool for sequential/random
+        if mode == "shuffle" and len(pools) > 1:
+            pool_id = pools[pool_index % len(pools)]
+            pool_index += 1
+        elif mode == "random" and len(pools) > 1:
+            pool_id = rng.choice(pools)
+        else:
+            pool_id = pools[pool_index % len(pools)]
+            if mode == "sequential" and len(pools) > 1:
+                pool_index += 1
+
+        # Select episode
+        ep_seed = seed if mode != "random" else rng.randint(0, 2**31)
+        asset_id = select_episode(
+            pool_id, "sequential" if mode in ("sequential", "shuffle") else mode,
+            resolver, seed=ep_seed, sequential_counters=sequential_counters,
+        )
+
+        ep_meta = resolver.lookup(asset_id)
+        slot_duration = _grid_slot_duration(grid_minutes, ep_meta.duration_sec)
+        ep_title = title or ep_meta.title or pool_id
+
+        block = ProgramBlockOutput(
+            title=ep_title,
+            asset_id=asset_id,
+            start_at=current_time,
+            slot_duration_sec=slot_duration,
+            episode_duration_sec=ep_meta.duration_sec,
+            collection=pool_id,
+            selector={
+                "mode": mode,
+                "pool": pool_id,
+            },
+        )
+        blocks.append(block)
+        current_time = block.end_at()
+
+    return blocks
+
+
 def _select_movie_no_repeat(
     collections: list[str],
     resolver: AssetResolver,
@@ -786,7 +942,12 @@ def compile_schedule(
         resolved_blocks = resolve_day_schedule(expanded, target)
         for block_def in resolved_blocks:
             if isinstance(block_def, dict):
-                if "movie_marathon" in block_def:
+                if "block" in block_def:
+                    blocks = _compile_episode_block(
+                        block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                        sequential_counters=sequential_counters,
+                    )
+                elif "movie_marathon" in block_def:
                     blocks = _compile_movie_marathon(
                         block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
                         used_movie_ids=used_movie_ids,
@@ -813,7 +974,12 @@ def compile_schedule(
             elif isinstance(day_value, list):
                 for block_def in day_value:
                     if isinstance(block_def, dict):
-                        if "movie_marathon" in block_def:
+                        if "block" in block_def:
+                            blocks = _compile_episode_block(
+                                block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                                sequential_counters=sequential_counters,
+                            )
+                        elif "movie_marathon" in block_def:
                             blocks = _compile_movie_marathon(
                                 block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
                             )
