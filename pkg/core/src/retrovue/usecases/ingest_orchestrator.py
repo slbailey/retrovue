@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.importers.base import DiscoveredItem
 from ..domain.entities import Asset, Collection, Marker, PathMapping
+from .asset_path_resolver import AssetPathResolver
 from ..infra.metadata.persistence import persist_asset_metadata
 from ..shared.types import MarkerKind
 
@@ -162,59 +163,39 @@ def ingest_collection_assets(
                 editorial=editorial_data,
             )
 
-            # Resolve local file URI
+            # Resolve local file path via AssetPathResolver
             try:
-                # For plex:// URIs, we need to fetch the file path from Plex
-                # using the rating key, then apply path mappings
-                local_uri = None
-                if asset.uri.startswith("plex://"):
-                    rating_key = asset.uri.replace("plex://", "")
-                    try:
-                        rk_int = int(rating_key)
-                        meta = importer.client.get_episode_metadata(rk_int)
-                        file_path = None
-                        for media in (meta or {}).get("Media", []):
-                            for part in media.get("Part", []):
-                                if part.get("file"):
-                                    file_path = part["file"]
-                                    break
-                            if file_path:
-                                break
-                        if file_path:
-                            # Build a synthetic item with the plex file path for resolution
-                            synth_item = {"path_uri": asset.uri, "path": file_path, "raw_labels": [f"plex_file_path:{file_path}"]}
-                            local_uri = importer.resolve_local_uri(
-                                synth_item,
-                                collection=collection,
-                                path_mappings=path_mappings
-                            )
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch Plex metadata for {asset.uri}: {e}")
-                else:
-                    local_uri = importer.resolve_local_uri(
-                        discovered_item,
-                        collection=collection,
-                        path_mappings=path_mappings
+                collection_locations = (collection.config or {}).get("locations", [])
+                plex_client = getattr(importer, "client", None)
+                resolver = AssetPathResolver(
+                    path_mappings=path_mappings,
+                    plex_client=plex_client,
+                    collection_locations=collection_locations,
+                )
+                local_path = resolver.resolve(
+                    uri=asset.uri,
+                    canonical_uri=asset.canonical_uri,
+                )
+            
+                if not local_path:
+                    logger.warning(
+                        "Could not resolve local path for asset %s (uri=%s)",
+                        asset.uuid, asset.uri,
                     )
-
-                if not local_uri or local_uri.startswith("plex://"):
-                    logger.warning(f"Could not resolve local URI for asset {asset.uuid}")
                     summary["skipped"] += 1
-                    asset.state = "new"  # Revert state
+                    asset.state = "new"
                     continue
-
-                # Add resolved path to discovered_item
-                discovered_item.path_uri = local_uri
-
-                # Persist the resolved local path as canonical_uri for future enrichment
-                asset.canonical_uri = local_uri
+            
+                discovered_item.path_uri = local_path
+                asset.canonical_uri = local_path
                 db.flush()
-
+            
             except Exception as e:
-                logger.error(f"Error resolving local URI for asset {asset.uuid}: {e}")
+                logger.error("Error resolving path for asset %s: %s", asset.uuid, e)
                 summary["skipped"] += 1
-                asset.state = "new"  # Revert state
+                asset.state = "new"
                 continue
+
 
             # Run enrichers in sequence
             enriched_item = discovered_item
