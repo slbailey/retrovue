@@ -99,20 +99,30 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 
 ## 🚀 Phase 3 — Feature Expansion Layer
 
-**_(Work may begin now that 2.2 As-Run reconciliation contract and reconciler are delivered; optional execution-path integration may follow in parallel.)_**
+**_(Active — foundational features delivered, expansion in progress.)_**
 
 ### 3.1 **Multi-Zone Authoring Enhancements** _(NOT STARTED)_
 - Awaiting contract and spec refinement.
 - Day-of-week filtering, inheritance, zone overrides _not yet in tree_.
 
-### 3.2 **Traffic Manager (Basic)** _(NOT STARTED)_
-- All core inventory/fill logic still located in AssetLibrary.
-- No campaign/inventory pool or constraints present.
-- Break slot rule engine under proposal.
+### 3.2 **Traffic Manager (Basic)** _(v1 DELIVERED, v2 PLANNED)_
+- **v1 delivered:** `traffic_manager.py` fills empty filler slots with a single filler asset. Pure function, deterministic, no side effects. Each break plays filler from offset 0 for exactly the break duration.
+- **Playout log expander delivered:** Two breakpoint classes (chapter markers = first-class, computed = second-class). Ad block duration calculated from slot/episode delta.
+- **Segment transitions in progress:** Configurable fade-out/fade-in for second-class breakpoints (Feb 2026).
+- **NOT YET:** Pool partitioning (bumper/promo/ad), campaign/inventory, frequency caps, ad selection engine.
 
-### 3.3 **HLS / Multi-Viewer Scalability Layer** _(NOT STARTED)_
-- Tooling for HLS block/segment alignment to be developed after traffic/horizon work.
-- Contract written, implementation pending.
+### 3.3 **HLS / Multi-Viewer Scalability Layer** _(DELIVERED)_
+- **HLS streaming delivered:** `hls_writer.py` segments MPEG-TS into HLS playlists. On-demand channel spinup — AIR only encodes when viewers are present. Linger timeout (20s) after last viewer.
+- **Multi-viewer fanout delivered:** `ChannelStream` distributes a single MPEG-TS stream to N viewers. One playout pipeline per channel regardless of viewer count.
+- **EPG web UI delivered:** Channel guide with grid layout, click-to-watch modal player, HLS.js with smart buffer detection.
+- **4 production channels running:** cheers-24-7, nightmare-theater, retro-prime, chicago-3.
+
+### 3.4 **Programming DSL** _(DELIVERED — Feb 2026)_
+- YAML DSL for channel programming (`config/dsl/*.yaml`).
+- Schedule compiler (1035 lines): single-pool, multi-pool round-robin, shuffle, random, movie marathons.
+- Catalog asset resolver: 12,364 assets + 24,375 aliases loaded from Plex DB.
+- DSL schedule service bridges compiler output to runtime ChannelManager.
+- Reviewed with Steve (Feb 17, 2026).
 
 ---
 
@@ -149,7 +159,7 @@ Spot-check against the repo (main, pkg/core and tools):
 | **As-Run:** AsRunLogger | ✅ Verified: `AsRunLogger` in `asrun_logger.py`. |
 | **As-Run reconciliation:** Contract + reconciler | ✅ Verified: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`; `asrun_types.py`, `asrun_reconciler.py`; `reconcile_transmission_log()`; contract tests in `test_asrun_reconciliation_contract.py`. |
 | **Runway Min (INV-RUNWAY-MIN-001)** | ✅ Verified: `docs/contracts/core/RunwayMinContract_v0.1.md`; operational promise (queue_depth ≥ 3 ⇒ no starvation PADDED_GAP except ScheduleService returns None). |
-| **Phase 3:** Multi-zone, Traffic, HLS not started | ✅ Verified: no campaign/inventory or HLS implementation in tree. |
+| **Phase 3:** Traffic v1 + HLS delivered; multi-zone + Traffic v2 not started | ✅ Updated Feb 2026: Traffic Manager v1, HLS streaming, EPG UI, DSL compiler all in production. |
 
 _Audit re-run: roadmap checked against current code (contracts, Core runtime, tools). Burn-in updated to reflect --pipeline removal._
 

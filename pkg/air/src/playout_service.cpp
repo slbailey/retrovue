@@ -176,6 +176,11 @@ namespace retrovue
         s.segment_duration_ms = seg.segment_duration_ms();
         s.segment_type = static_cast<blockplan::SegmentType>(seg.segment_type());
         s.event_id = seg.event_id();
+        // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
+        s.transition_in = static_cast<blockplan::TransitionType>(seg.transition_in());
+        s.transition_in_duration_ms = seg.transition_in_duration_ms();
+        s.transition_out = static_cast<blockplan::TransitionType>(seg.transition_out());
+        s.transition_out_duration_ms = seg.transition_out_duration_ms();
         block.segments.push_back(s);
       }
       return block;

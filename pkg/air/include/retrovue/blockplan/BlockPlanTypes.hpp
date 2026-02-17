@@ -101,6 +101,20 @@ enum class SegmentType : int32_t {
   kPad     = 2,
 };
 
+// =============================================================================
+// Transition Type
+// Specifies the fade applied at a segment boundary.
+// Wire-compatible with proto TransitionType enum.
+// Contract Reference: docs/contracts/coordination/SegmentTransitionContract.md
+// INV-TRANSITION-001: Only second-class (computed) breakpoints use kFade.
+// INV-TRANSITION-005: AIR applies what Core declares; no overrides here.
+// =============================================================================
+
+enum class TransitionType : int32_t {
+  kNone = 0,  // Clean cut (first-class chapter-marker breakpoints, default)
+  kFade = 1,  // Linear fade to/from black+silence (second-class computed breakpoints)
+};
+
 // Human-readable segment type name for structured logging.
 inline const char* SegmentTypeName(SegmentType t) {
   switch (t) {
@@ -125,6 +139,14 @@ struct Segment {
   SegmentType segment_type = SegmentType::kContent;  // Segment role
 
   std::string event_id;  // Scheduled event_id from TransmissionLog
+
+  // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
+  // Applied only to second-class breakpoints (computed interval division).
+  // First-class breakpoints (chapter markers) always use kNone.
+  TransitionType transition_in = TransitionType::kNone;      // Fade at segment start
+  uint32_t transition_in_duration_ms = 0;                    // Duration in ms (0 if kNone)
+  TransitionType transition_out = TransitionType::kNone;     // Fade at segment end
+  uint32_t transition_out_duration_ms = 0;                   // Duration in ms (0 if kNone)
 
   // EXTENSION POINT: Segment metadata (Section 8.2.1)
   // INV-BLOCKPLAN-METADATA-IGNORED: AIR MUST NOT alter execution based on this

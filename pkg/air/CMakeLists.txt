@@ -377,6 +377,7 @@ add_test(
 add_executable(blockplan_contract_tests
   # NOTE: BlockPlanContractTests.cpp excluded — depends on removed BlockPlanQueue.hpp
   # (removed in 497a9d6). Object was stale-cached; exposed by clean rebuild.
+  tests/blockplan/test_segment_transitions.cpp
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp

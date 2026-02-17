@@ -40,6 +40,11 @@ struct FedBlock {
     int64_t segment_duration_ms = 0;
     SegmentType segment_type = SegmentType::kContent;
     std::string event_id;  // Scheduled event_id from TransmissionLog
+    // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
+    TransitionType transition_in = TransitionType::kNone;
+    uint32_t transition_in_duration_ms = 0;
+    TransitionType transition_out = TransitionType::kNone;
+    uint32_t transition_out_duration_ms = 0;
   };
   std::vector<Segment> segments;
 };
@@ -61,6 +66,11 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
     s.segment_duration_ms = seg.segment_duration_ms;
     s.segment_type = seg.segment_type;
     s.event_id = seg.event_id;
+    // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
+    s.transition_in = seg.transition_in;
+    s.transition_in_duration_ms = seg.transition_in_duration_ms;
+    s.transition_out = seg.transition_out;
+    s.transition_out_duration_ms = seg.transition_out_duration_ms;
     plan.segments.push_back(s);
   }
   return plan;
