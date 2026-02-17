@@ -101,14 +101,14 @@ TEST(SegmentTransitionTest, FadeFieldsRoundTripProto) {
   retrovue::playout::BlockPlan plan;
   plan.set_block_id("blk-test");
   plan.set_channel_id(1);
-  plan.set_start_utc_ms(1_000_000_000LL);
-  plan.set_end_utc_ms(1_001_800_000LL);
+  plan.set_start_utc_ms(1000000000LL);
+  plan.set_end_utc_ms(1001800000LL);
 
   auto* seg = plan.add_segments();
   seg->set_segment_index(0);
   seg->set_asset_uri("/media/ep01.mkv");
   seg->set_asset_start_offset_ms(0);
-  seg->set_segment_duration_ms(600_000);
+  seg->set_segment_duration_ms(600000);
   seg->set_transition_in(retrovue::playout::TRANSITION_FADE);
   seg->set_transition_in_duration_ms(500);
   seg->set_transition_out(retrovue::playout::TRANSITION_FADE);
@@ -137,11 +137,11 @@ TEST(SegmentTransitionTest, ProtoToFedBlockMapsTransitionFields) {
   plan.set_block_id("blk-trans-test");
   plan.set_channel_id(1);
   plan.set_start_utc_ms(0);
-  plan.set_end_utc_ms(1_800_000);
+  plan.set_end_utc_ms(1800000);
 
   // Segment 0: second-class, fade-out
   *plan.add_segments() = MakeProtoSegment(
-      0, "/media/ep.mkv", 0, 600_000,
+      0, "/media/ep.mkv", 0, 600000,
       retrovue::playout::TRANSITION_NONE, 0,
       retrovue::playout::TRANSITION_FADE, 500);
 
@@ -149,11 +149,11 @@ TEST(SegmentTransitionTest, ProtoToFedBlockMapsTransitionFields) {
   auto* filler = plan.add_segments();
   filler->set_segment_index(1);
   filler->set_segment_type(retrovue::playout::SEGMENT_TYPE_FILLER);
-  filler->set_segment_duration_ms(100_000);
+  filler->set_segment_duration_ms(100000);
 
   // Segment 2: second-class, fade-in
   *plan.add_segments() = MakeProtoSegment(
-      2, "/media/ep.mkv", 600_000, 1_100_000,
+      2, "/media/ep.mkv", 600000, 1100000,
       retrovue::playout::TRANSITION_FADE, 500,
       retrovue::playout::TRANSITION_NONE, 0);
 
@@ -186,13 +186,13 @@ TEST(SegmentTransitionTest, FedBlockToBlockPlanPropagatesTransitions) {
   fed.block_id = "blk-fed";
   fed.channel_id = 1;
   fed.start_utc_ms = 0;
-  fed.end_utc_ms = 1_000_000;
+  fed.end_utc_ms = 1000000;
 
   FedBlock::Segment s0;
   s0.segment_index = 0;
   s0.asset_uri = "/media/ep.mkv";
   s0.asset_start_offset_ms = 0;
-  s0.segment_duration_ms = 1_000_000;
+  s0.segment_duration_ms = 1000000;
   s0.segment_type = SegmentType::kContent;
   s0.transition_in = TransitionType::kFade;
   s0.transition_in_duration_ms = 750;
