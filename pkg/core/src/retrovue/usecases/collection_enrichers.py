@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.importers.base import DiscoveredItem
 from ..adapters.registry import ENRICHERS
+from .asset_path_resolver import AssetPathResolver
 from ..domain.entities import Asset, Collection, Enricher
 
 
@@ -266,6 +267,36 @@ def apply_enrichers_to_collection(
             path_uri = asset.canonical_uri or asset.uri or ""
             if not path_uri:
                 continue
+
+            # If still a plex:// URI, try to resolve via AssetPathResolver
+            if path_uri.startswith("plex://"):
+                try:
+                    from ..domain.entities import PathMapping as _PM
+                    pm_rows = db.query(_PM).filter(
+                        _PM.collection_uuid == collection.uuid
+                    ).all()
+                    pm_list = [(r.plex_path, r.local_path) for r in pm_rows]
+                    coll_locs = (collection.config or {}).get("locations", [])
+                    # Get plex client from source
+                    plex_client = None
+                    src = getattr(collection, "source", None)
+                    if src and getattr(src, "type", None) == "plex":
+                        from ..adapters.registry import get_importer
+                        src_cfg = {k: v for k, v in (src.config or {}).items() if k != "enrichers"}
+                        imp = get_importer(src.type, **src_cfg)
+                        plex_client = getattr(imp, "client", None)
+                    resolver = AssetPathResolver(
+                        path_mappings=pm_list,
+                        plex_client=plex_client,
+                        collection_locations=coll_locs,
+                    )
+                    resolved = resolver.resolve(uri=path_uri)
+                    if resolved:
+                        path_uri = resolved
+                        asset.canonical_uri = resolved
+                except Exception:
+                    pass  # Fall through with plex:// URI; enricher will skip
+
             item = DiscoveredItem(path_uri=path_uri, raw_labels=[], size=asset.size)
             # Run pipeline
             for _, _, enr in pipeline:
