@@ -95,6 +95,7 @@ class _CatalogEntry:
     genres: tuple[str, ...] = ()
     production_year: int | None = None
     title: str = ""
+    description: str = ""
 
 
 class CatalogAssetResolver:
@@ -168,6 +169,7 @@ class CatalogAssetResolver:
             resolved_file_uri = asset.canonical_uri if asset.canonical_uri and not asset.canonical_uri.startswith("plex://") else asset.uri
 
             display_title = editorial.get("title", "") or series_title or ""
+            description = editorial.get("description", "") or ""
             meta = AssetMetadata(
                 type="episode",
                 duration_sec=duration_sec,
@@ -176,6 +178,7 @@ class CatalogAssetResolver:
                 rating=rating,
                 file_uri=resolved_file_uri,
                 chapter_markers_sec=chapter_secs if chapter_secs else None,
+                description=description,
             )
 
             # Register by UUID (canonical)
@@ -235,6 +238,7 @@ class CatalogAssetResolver:
                 genres=genres,
                 production_year=production_year,
                 title=asset_title,
+                description=description,
             ))
 
         logger.info(

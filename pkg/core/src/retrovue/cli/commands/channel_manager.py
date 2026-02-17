@@ -11,9 +11,29 @@ import time
 import typer
 from pathlib import Path
 from retrovue.runtime.program_director import ProgramDirector
-from retrovue.runtime.providers import FileChannelConfigProvider
+from retrovue.runtime.providers import FileChannelConfigProvider, YamlChannelConfigProvider
 
 app = typer.Typer(help="Retrovue Channel Manager commands (alias for program-director)")
+
+YAML_CHANNELS_DIR = Path("/opt/retrovue/config/channels")
+
+
+def _build_config_provider(channel_config: str | None):
+    """Build the appropriate config provider, preferring YAML directory if it exists."""
+    # If explicit path given, use FileChannelConfigProvider
+    if channel_config:
+        return FileChannelConfigProvider(Path(channel_config))
+
+    # Prefer YAML auto-discovery directory
+    if YAML_CHANNELS_DIR.is_dir():
+        return YamlChannelConfigProvider(YAML_CHANNELS_DIR)
+
+    # Fall back to channels.json
+    json_path = Path("/opt/retrovue/config/channels.json")
+    if json_path.exists():
+        return FileChannelConfigProvider(json_path)
+
+    return None
 
 
 @app.command("start")
@@ -36,14 +56,7 @@ def start(
         format="%(levelname)s:     %(message)s",
         force=True,
     )
-    config_provider = None
-    if channel_config:
-        config_path = Path(channel_config)
-    else:
-        config_path = Path("/opt/retrovue/config/channels.json")
-    if config_path.exists():
-        config_provider = FileChannelConfigProvider(config_path)
-        typer.echo(f"Loading channel config from: {config_path}")
+    config_provider = _build_config_provider(channel_config)
 
     if config_provider is None:
         typer.echo(
@@ -104,14 +117,7 @@ def start_channel_cmd(
         format="%(levelname)s:     %(message)s",
         force=True,
     )
-    config_provider = None
-    if channel_config:
-        config_path = Path(channel_config)
-    else:
-        config_path = Path("/opt/retrovue/config/channels.json")
-    if config_path.exists():
-        config_provider = FileChannelConfigProvider(config_path)
-        typer.echo(f"Loading channel config from: {config_path}")
+    config_provider = _build_config_provider(channel_config)
 
     if config_provider is None:
         typer.echo("Error: Channel config file is required.", err=True)

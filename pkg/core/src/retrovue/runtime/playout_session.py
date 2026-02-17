@@ -289,7 +289,7 @@ class PlayoutSession:
                 ]
 
                 # Create log directory
-                log_dir = Path("pkg/air/logs")
+                log_dir = Path("/opt/retrovue/pkg/air/logs")
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = log_dir / f"{self.channel_id}-air.log"
 

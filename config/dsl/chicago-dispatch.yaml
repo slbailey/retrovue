@@ -1,0 +1,30 @@
+channel: chicago-dispatch
+timezone: America/New_York
+notes:
+  vibe: "Chicago Med, Fire & PD — rotating 24/7"
+  tagline: "One City. Three Shifts."
+
+pools:
+  chicago_med:
+    match:
+      type: episode
+      series_title: "Chicago Med"
+
+  chicago_fire:
+    match:
+      type: episode
+      series_title: "Chicago Fire"
+
+  chicago_pd:
+    match:
+      type: episode
+      series_title: "Chicago P.D."
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Chicago Rotation"
+        pool: [chicago_med, chicago_fire, chicago_pd]
+        mode: sequential

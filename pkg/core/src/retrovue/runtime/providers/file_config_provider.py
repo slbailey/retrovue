@@ -131,6 +131,33 @@ class FileChannelConfigProvider:
         return list(self._configs.keys())
 
 
+
+    def to_channels_list(self):
+        """Return channel configs as list of dicts (compatible with channels.json format)."""
+        self._ensure_loaded()
+        result = []
+        for config in self._configs.values():
+            result.append({
+                'channel_id': config.channel_id,
+                'channel_id_int': config.channel_id_int,
+                'name': config.name,
+                'program_format': {
+                    'video': {
+                        'width': config.program_format.video_width,
+                        'height': config.program_format.video_height,
+                        'frame_rate': config.program_format.frame_rate,
+                    },
+                    'audio': {
+                        'sample_rate': config.program_format.audio_sample_rate,
+                        'channels': config.program_format.audio_channels,
+                    },
+                },
+                'schedule_source': config.schedule_source,
+                'schedule_config': config.schedule_config,
+            })
+        return result
+
+
 __all__ = [
     "FileChannelConfigProvider",
 ]

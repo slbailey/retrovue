@@ -102,3 +102,93 @@ def resolve_asset(
         typer.echo(json.dumps({"status": "ok", "asset": result}, indent=2))
     else:
         typer.echo(f"Asset {result['uuid']} updated")
+
+
+@app.command("reprobe")
+def reprobe_asset_cmd(
+    asset_uuid: str = typer.Argument(None, help="Asset UUID to reprobe"),
+    collection: str = typer.Option(None, "--collection", help="Reprobe all assets in collection UUID"),
+    force: bool = typer.Option(False, "--force", help="Include ready assets when reprobing a collection"),
+    limit: int = typer.Option(None, "--limit", help="Max assets to reprobe (collection mode only)"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+):
+    """
+    Re-probe asset(s): reset metadata and re-run the enrichment pipeline.
+
+    Use this when an asset's file has been replaced or corrected and you need
+    fresh duration/codec metadata from the actual file on disk.
+
+    Single asset:
+        retrovue asset reprobe <uuid>
+
+    Entire collection:
+        retrovue asset reprobe --collection <uuid>
+        retrovue asset reprobe --collection <uuid> --force   # include ready assets
+        retrovue asset reprobe --collection <uuid> --limit 50
+    """
+    import json as _json
+    from ...usecases import asset_reprobe as _uc_reprobe
+    from ...infra.uow import session as _session
+
+    if not asset_uuid and not collection:
+        typer.echo("Error: provide either an asset UUID or --collection <uuid>", err=True)
+        raise typer.Exit(1)
+
+    if asset_uuid and collection:
+        typer.echo("Error: provide either an asset UUID or --collection, not both", err=True)
+        raise typer.Exit(1)
+
+    try:
+        with _session() as db:
+            if asset_uuid:
+                result = _uc_reprobe.reprobe_asset(db, asset_uuid=asset_uuid)
+
+                if json_output:
+                    typer.echo(_json.dumps(result, indent=2, default=str))
+                else:
+                    typer.echo(f"Reprobed asset {result['uuid']}")
+                    typer.echo(f"  State: {result['old_state']} -> {result['new_state']}")
+                    old_dur = result['old_duration_ms']
+                    new_dur = result['new_duration_ms']
+                    old_str = f"{old_dur/1000:.1f}s" if old_dur else "none"
+                    new_str = f"{new_dur/1000:.1f}s" if new_dur else "none"
+                    typer.echo(f"  Duration: {old_str} -> {new_str}")
+
+            else:
+                typer.echo(f"Reprobing collection {collection}...")
+                if force:
+                    typer.echo("  (--force: including ready assets)")
+                if limit:
+                    typer.echo(f"  (--limit {limit})")
+
+                result = _uc_reprobe.reprobe_collection(
+                    db,
+                    collection_uuid=collection,
+                    include_ready=force,
+                    limit=limit,
+                )
+
+                if json_output:
+                    typer.echo(_json.dumps(result, indent=2, default=str))
+                else:
+                    typer.echo(f"Collection: {result['collection_name']}")
+                    typer.echo(f"  Total: {result['total']}")
+                    typer.echo(f"  Succeeded: {result.get('succeeded', 0)}")
+                    typer.echo(f"  Failed: {result.get('failed', 0)}")
+
+                    for r in result.get('results', []):
+                        if 'error' in r:
+                            typer.echo(f"  ✗ {r['uuid']}: {r['error']}")
+                        else:
+                            old_dur = r.get('old_duration_ms')
+                            new_dur = r.get('new_duration_ms')
+                            old_str = f"{old_dur/1000:.1f}s" if old_dur else "none"
+                            new_str = f"{new_dur/1000:.1f}s" if new_dur else "none"
+                            typer.echo(f"  ✓ {r['uuid']}: {r['old_state']}->{r['new_state']}  duration {old_str}->{new_str}")
+
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)

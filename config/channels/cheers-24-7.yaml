@@ -1,0 +1,29 @@
+channel: cheers-24-7
+channel_number: 2
+name: "Cheers 24/7"
+timezone: America/New_York
+
+format:
+  video: { width: 968, height: 720, frame_rate: "30/1" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+filler: !include _defaults.yaml:filler
+
+notes:
+  vibe: "Where Everybody Knows Your Name — all day, every day"
+
+pools:
+  cheers:
+    match:
+      type: episode
+      series_title: Cheers
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Cheers"
+        pool: cheers
+        mode: sequential

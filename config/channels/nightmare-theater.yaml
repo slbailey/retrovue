@@ -1,0 +1,57 @@
+channel: nightmare-theater
+channel_number: 4
+name: "Nightmare Theater"
+timezone: America/New_York
+
+format:
+  video: { width: 1280, height: 720, frame_rate: "30/1" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+filler: !include _defaults.yaml:filler
+
+notes:
+  vibe: "24/7 horror — Tales from the Crypt, Freddy's Nightmares, and classic horror movies"
+  tagline: "Don't. Fall. Asleep."
+
+pools:
+  tales_from_the_crypt:
+    match:
+      type: episode
+      series_title: "Tales from the Crypt"
+
+  freddys_nightmares:
+    match:
+      type: episode
+      series_title: "Freddy's Nightmares"
+
+  horror_all:
+    match:
+      type: movie
+      genre: horror
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "09:00"
+        title: "Freddy's Nightmares"
+        pool: freddys_nightmares
+        mode: sequential
+
+    - movie_marathon:
+        start: "09:00"
+        end: "22:00"
+        title: "Horror Movie Marathon"
+        movie_selector:
+          pool: horror_all
+          mode: random
+          max_duration_sec: 9000
+        allow_bleed: true
+
+    - block:
+        start: "22:00"
+        end: "06:00"
+        title: "Tales from the Crypt"
+        pool: tales_from_the_crypt
+        mode: sequential

@@ -70,9 +70,9 @@
       }
     },
     {
-      "channel_id": "chicago-3",
+      "channel_id": "chicago-dispatch",
       "channel_id_int": 5,
-      "name": "Chicago 3",
+      "name": "Chicago Dispatch",
       "program_format": {
         "video": {
           "width": 1280,
@@ -86,7 +86,7 @@
       },
       "schedule_source": "dsl",
       "schedule_config": {
-        "dsl_path": "/opt/retrovue/config/dsl/chicago-3.yaml",
+        "dsl_path": "/opt/retrovue/config/dsl/chicago-dispatch.yaml",
         "filler_path": "/opt/retrovue/assets/filler.mp4",
         "filler_duration_ms": 3650000,
         "grid_minutes": 30

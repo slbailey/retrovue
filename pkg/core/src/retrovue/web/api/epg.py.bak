@@ -98,15 +98,11 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[s
         episode_title = ""
 
         # Find the catalog entry for richer metadata
-        description = ''
-        episode_title = ''
         for cat_entry in resolver._catalog:
             if cat_entry.canonical_id == asset_id:
                 series_title = cat_entry.series_title or series_title
                 season_number = cat_entry.season
                 episode_number = cat_entry.episode
-                description = cat_entry.description or ''
-                episode_title = cat_entry.title or ''
                 break
 
         start_dt = datetime.fromisoformat(block["start_at"])
@@ -120,10 +116,8 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[s
             "start_time": start_dt.isoformat(),
             "end_time": end_dt.isoformat(),
             "title": series_title,
-            "episode_title": episode_title,
             "season": season_number,
             "episode": episode_number,
-            "description": description,
             "duration_minutes": round(ep_sec / 60, 1),
             "slot_minutes": round(slot_sec / 60, 1),
         })
