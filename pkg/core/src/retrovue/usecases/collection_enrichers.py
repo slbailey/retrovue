@@ -12,6 +12,68 @@ from .asset_path_resolver import AssetPathResolver
 from ..domain.entities import Asset, Collection, Enricher
 
 
+# ---------------------------------------------------------------------------
+# Label helpers (module-level for testability)
+# ---------------------------------------------------------------------------
+
+MAX_DURATION_MS = 10_800_000  # 3 hours
+
+
+def extract_label_value(labels: list[str] | None, key: str) -> str | None:
+    """Extract the value for *key* from a list of ``key:value`` labels."""
+    if not labels:
+        return None
+    prefix = f"{key}:"
+    for label in labels:
+        if isinstance(label, str) and label.startswith(prefix):
+            return label[len(prefix):]
+    return None
+
+
+def compute_confidence_from_labels(item: DiscoveredItem) -> float:
+    """Score an enriched DiscoveredItem for auto-promotion eligibility.
+
+    Returns a float in [0.0, 1.0].  A return of 0.0 means the item must
+    NOT be auto-promoted (missing or invalid duration, etc.).
+
+    Scoring breakdown:
+        +0.2  size > 0
+        +0.3  valid duration (0 < dur <= MAX_DURATION_MS)
+        +0.2  video_codec present
+        +0.1  audio_codec present
+        +0.1  container present
+    """
+    score = 0.0
+    try:
+        if (item.size or 0) > 0:
+            score += 0.2
+        labels = item.raw_labels or []
+
+        dur = extract_label_value(labels, "duration_ms")
+        if dur is not None:
+            try:
+                dur_int = int(dur)
+                if dur_int <= 0:
+                    return 0.0
+                if dur_int > MAX_DURATION_MS:
+                    return 0.0
+                score += 0.3
+            except Exception:
+                pass
+        else:
+            return 0.0
+
+        if extract_label_value(labels, "video_codec") is not None:
+            score += 0.2
+        if extract_label_value(labels, "audio_codec") is not None:
+            score += 0.1
+        if extract_label_value(labels, "container") is not None:
+            score += 0.1
+    except Exception:
+        pass
+    return max(0.0, min(1.0, score))
+
+
 def _resolve_collection(db: Session, selector: str) -> Collection:
     """Resolve a collection by UUID, external_id, or case-insensitive name.
 
@@ -210,49 +272,9 @@ def apply_enrichers_to_collection(
     else:
         assets = q.all()
 
-    def _extract_label_value(labels: list[str] | None, key: str) -> str | None:
-        if not labels:
-            return None
-        prefix = f"{key}:"
-        for label in labels:
-            if isinstance(label, str) and label.startswith(prefix):
-                return label[len(prefix) :]
-        return None
-
-    def _compute_confidence_from_labels(item: DiscoveredItem) -> float:
-        score = 0.0
-        try:
-            size_ok = (item.size or 0) > 0
-            if size_ok:
-                score += 0.2
-            labels = item.raw_labels or []
-            MAX_DURATION_MS = 10_800_000  # 3 hours
-            dur = _extract_label_value(labels, "duration_ms")
-            if dur is not None:
-                try:
-                    dur_int = int(dur)
-                    if dur_int <= 0:
-                        return 0.0
-                    if dur_int > MAX_DURATION_MS:
-                        return 0.0
-                    score += 0.3
-                except Exception:
-                    pass
-            else:
-                return 0.0
-            if _extract_label_value(labels, "video_codec") is not None:
-                score += 0.2
-            if _extract_label_value(labels, "audio_codec") is not None:
-                score += 0.1
-            if _extract_label_value(labels, "container") is not None:
-                score += 0.1
-        except Exception:
-            pass
-        if score < 0.0:
-            return 0.0
-        if score > 1.0:
-            return 1.0
-        return score
+    # Use module-level functions (extracted for testability)
+    _extract_label_value = extract_label_value
+    _compute_confidence_from_labels = compute_confidence_from_labels
 
     stats = {
         "assets_considered": len(assets),
