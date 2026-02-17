@@ -143,35 +143,53 @@
     align-items: center;
     justify-content: center;
     z-index: 25;
-    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a0a 100%);
+    background: #1a1a2e;
     transition: opacity 0.8s ease-out;
+    overflow: hidden;
+  }
+  .splash-overlay::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="%23222"/><rect x="0" y="0" width="1" height="1" fill="%23333" opacity="0.5"/><rect x="2" y="2" width="1" height="1" fill="%23333" opacity="0.3"/></svg>');
+    opacity: 0.6;
+    animation: static-flicker 0.15s steps(3) infinite;
+  }
+  @keyframes static-flicker {
+    0% { transform: translate(0,0); }
+    33% { transform: translate(-2px,1px); }
+    66% { transform: translate(1px,-1px); }
+    100% { transform: translate(0,0); }
   }
   .splash-overlay.hidden { opacity: 0; pointer-events: none; }
   .splash-logo {
-    font-size: 2rem;
+    font-size: 2.5rem;
     font-weight: bold;
     color: #ffc107;
     letter-spacing: 6px;
     text-transform: uppercase;
-    text-shadow: 0 0 30px rgba(255,193,7,0.4);
-    margin-bottom: 24px;
+    text-shadow: 0 0 30px rgba(255,193,7,0.6), 0 0 60px rgba(255,193,7,0.3);
+    margin-bottom: 16px;
+    z-index: 1;
   }
   .splash-spinner {
-    width: 40px; height: 40px;
-    border: 3px solid #333;
-    border-top: 3px solid #ffc107;
+    width: 48px; height: 48px;
+    border: 4px solid #333;
+    border-top: 4px solid #ffc107;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 16px;
+    z-index: 1;
   }
   @keyframes spin { 100% { transform: rotate(360deg); } }
   .splash-text {
-    font-size: 0.8rem;
-    color: #666;
-    letter-spacing: 2px;
+    font-size: 1.1rem;
+    color: #ccc;
+    letter-spacing: 3px;
     text-transform: uppercase;
+    z-index: 1;
   }
-  .splash-text.active { color: #ffc107; }
+  .splash-text.active { color: #ffc107; text-shadow: 0 0 10px rgba(255,193,7,0.4); }
 
 </style>
 </head>
@@ -185,7 +203,7 @@
   <div class="splash-overlay" id="splashOverlay">
     <div class="splash-logo">RetroVue</div>
     <div class="splash-spinner"></div>
-    <div class="splash-text" id="splashText">Tuning in...</div>
+    <div class="splash-text" id="splashText">Tuning in<span id="splashDots"></span></div>
   </div>
   <div class="unmute-overlay" id="unmuteOverlay">
     <div class="unmute-btn">🔊</div>
@@ -219,8 +237,8 @@ unmuteOverlay.addEventListener('click', () => {
 function startHLS() {
   if (Hls.isSupported()) {
     const hls = new Hls({
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 5,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 3,
       enableWorker: true,
       lowLatencyMode: false,
     });
@@ -235,7 +253,13 @@ function startHLS() {
     });
     hls.on(Hls.Events.FRAG_LOADED, function onFirstFrag() {
       hls.off(Hls.Events.FRAG_LOADED, onFirstFrag);
+      splashText.textContent = 'Buffering...';
+      splashText.className = 'splash-text active';
       video.play().catch(() => {});
+    });
+    // Hide splash only when video actually has frames rendering
+    video.addEventListener('playing', function onPlaying() {
+      video.removeEventListener('playing', onPlaying);
       splash.classList.add('hidden');
       statusEl.textContent = '▲ Tap screen for sound';
       statusEl.className = 'status';
@@ -256,6 +280,15 @@ function startHLS() {
     hls.on(Hls.Events.BUFFER_STALLED, () => {
       statusEl.textContent = 'Buffering...';
       statusEl.className = 'status buffering';
+      // Re-show splash during mid-stream stalls
+      splash.classList.remove('hidden');
+      splashText.textContent = 'Buffering...';
+      splashText.className = 'splash-text active';
+    });
+    // Hide splash again when playback resumes after stall
+    video.addEventListener('playing', () => {
+      splash.classList.add('hidden');
+      statusEl.className = 'status';
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = hlsUrl;
@@ -287,6 +320,15 @@ function waitAndStart(attempts) {
     setTimeout(() => waitAndStart(attempts - 1), 2000);
   });
 }
+
+
+// Animated dots on splash text
+const splashDots = document.getElementById('splashDots');
+let dotCount = 0;
+const dotInterval = setInterval(() => {
+  dotCount = (dotCount % 3) + 1;
+  if (splashDots) splashDots.textContent = '.'.repeat(dotCount);
+}, 500);
 
 waitAndStart(30);
 </script>

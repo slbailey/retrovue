@@ -52,7 +52,7 @@
       "name": "Nightmare Theater",
       "program_format": {
         "video": {
-          "width": 968,
+          "width": 1280,
           "height": 720,
           "frame_rate": "30/1"
         },
