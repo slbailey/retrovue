@@ -134,45 +134,6 @@
   }
   .status.error { color: #ff5252; }
   .status.buffering { color: #ffc107; }
-  /* Buffering splash overlay */
-  .splash-overlay {
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 25;
-    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a0a 100%);
-    transition: opacity 0.8s ease-out;
-  }
-  .splash-overlay.hidden { opacity: 0; pointer-events: none; }
-  .splash-logo {
-    font-size: 2rem;
-    font-weight: bold;
-    color: #ffc107;
-    letter-spacing: 6px;
-    text-transform: uppercase;
-    text-shadow: 0 0 30px rgba(255,193,7,0.4);
-    margin-bottom: 24px;
-  }
-  .splash-spinner {
-    width: 40px; height: 40px;
-    border: 3px solid #333;
-    border-top: 3px solid #ffc107;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin-bottom: 16px;
-  }
-  @keyframes spin { 100% { transform: rotate(360deg); } }
-  .splash-text {
-    font-size: 0.8rem;
-    color: #666;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-  }
-  .splash-text.active { color: #ffc107; }
-
 </style>
 </head>
 <body>
@@ -182,11 +143,6 @@
   <div class="crt-overlay"></div>
   <div class="crt-curve"></div>
   <div class="channel-badge" id="badge">{{CHANNEL_NAME}}</div>
-  <div class="splash-overlay" id="splashOverlay">
-    <div class="splash-logo">RetroVue</div>
-    <div class="splash-spinner"></div>
-    <div class="splash-text" id="splashText">Tuning in...</div>
-  </div>
   <div class="unmute-overlay" id="unmuteOverlay">
     <div class="unmute-btn">🔊</div>
   </div>
@@ -200,8 +156,6 @@
 
 <script>
 const channelId = '{{CHANNEL_ID}}';
-const splash = document.getElementById('splashOverlay');
-const splashText = document.getElementById('splashText');
 const hlsUrl = '/'+'hls/'+channelId+'/'+'live.m3u8';
 const video = document.getElementById('video');
 const statusEl = document.getElementById('status');
@@ -228,15 +182,12 @@ function startHLS() {
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       statusEl.textContent = 'Loading first segment...';
-      splashText.textContent = 'Buffering...';
-      splashText.className = 'splash-text active';
       statusEl.className = 'status buffering';
       // Don't play until we have actual data buffered
     });
     hls.on(Hls.Events.FRAG_LOADED, function onFirstFrag() {
       hls.off(Hls.Events.FRAG_LOADED, onFirstFrag);
       video.play().catch(() => {});
-      splash.classList.add('hidden');
       statusEl.textContent = '▲ Tap screen for sound';
       statusEl.className = 'status';
     });
@@ -277,7 +228,6 @@ function waitAndStart(attempts) {
     if (r.ok) { startHLS(); }
     else {
       statusEl.textContent = 'Waiting for stream... ('+attempts+')';
-      splashText.textContent = 'Waiting for stream...';
       statusEl.className = 'status buffering';
       setTimeout(() => waitAndStart(attempts - 1), 2000);
     }
