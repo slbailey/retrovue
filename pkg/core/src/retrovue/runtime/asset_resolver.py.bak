@@ -24,7 +24,6 @@ class AssetMetadata:
     availability_window: tuple[str, str] | None = None  # (start_date, end_date) ISO strings
     file_uri: str = ""
     chapter_markers_sec: tuple[float, ...] | None = None  # Times where ad breaks should be inserted
-    description: str = ""  # Synopsis/description from editorial metadata
 
 
 class AssetResolver(Protocol):

@@ -476,6 +476,29 @@ class ProgramDirector:
             port,
         )
 
+    def _load_channels_list(self):
+        """Load channels as list of dicts, using provider if available."""
+        import json as _json
+        if self._channel_config_provider is not None and hasattr(self._channel_config_provider, 'to_channels_list'):
+            return self._channel_config_provider.to_channels_list()
+        elif self._channel_config_provider is not None:
+            result = []
+            for cid in self._channel_config_provider.list_channel_ids():
+                cfg = self._channel_config_provider.get_channel_config(cid)
+                if cfg:
+                    result.append({
+                        'channel_id': cfg.channel_id,
+                        'channel_id_int': cfg.channel_id_int,
+                        'name': cfg.name,
+                        'schedule_config': cfg.schedule_config,
+                    })
+            return result
+        else:
+            from pathlib import Path
+            channels_path = Path('/opt/retrovue/config/channels.json')
+            with open(channels_path) as f:
+                return _json.load(f)['channels']
+
     def _init_embedded_registry(
         self, channel_config_provider: Optional[Any] = None
     ) -> None:
@@ -1784,9 +1807,7 @@ class ProgramDirector:
             else:
                 broadcast_day = date
 
-            channels_path = Path("/opt/retrovue/config/channels.json")
-            with open(channels_path) as f:
-                channels = _json.load(f)["channels"]
+            channels = self._load_channels_list()
 
             if channel:
                 channels = [c for c in channels if c["channel_id"] == channel]
@@ -1828,11 +1849,15 @@ class ProgramDirector:
                         season_number = None
                         episode_number = None
 
+                        description = ""
+                        episode_title = ""
                         for cat_entry in resolver._catalog:
                             if cat_entry.canonical_id == asset_id:
                                 series_title = cat_entry.series_title or series_title
                                 season_number = cat_entry.season
                                 episode_number = cat_entry.episode
+                                description = getattr(cat_entry, "description", "") or ""
+                                episode_title = getattr(cat_entry, "title", "") or ""
                                 break
 
                         start_dt = datetime.fromisoformat(block["start_at"])
@@ -1846,8 +1871,10 @@ class ProgramDirector:
                             "start_time": start_dt.isoformat(),
                             "end_time": end_dt.isoformat(),
                             "title": series_title,
+                            "episode_title": episode_title,
                             "season": season_number,
                             "episode": episode_number,
+                            "description": description,
                             "duration_minutes": round(ep_sec / 60, 1),
                             "slot_minutes": round(slot_sec / 60, 1),
                         })
@@ -2020,12 +2047,10 @@ class ProgramDirector:
             html_path = Path("/opt/retrovue/pkg/core/templates/player/watch.html")
             html = html_path.read_text()
 
-            channels_path = Path("/opt/retrovue/config/channels.json")
             channel_name = channel_id
             channel_buttons = ""
             try:
-                with open(channels_path) as f:
-                    channels = _json.load(f)["channels"]
+                channels = self._load_channels_list()
                 for ch in channels:
                     if ch["channel_id"] == channel_id:
                         channel_name = ch["name"]

@@ -188,25 +188,39 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
     from retrovue.usecases.channel_manager_launch import launch_air, terminate_air
     from retrovue.runtime.config import ChannelConfig
 
-    # Load channel config
-    config_path = Path(config_file) if config_file else Path("/opt/retrovue/config/channels.json")
-    if not config_path.exists():
-        typer.echo(f"Error: Channel config not found: {config_path}", err=True)
-        raise typer.Exit(1)
-
-    with open(config_path) as f:
-        channels_data = json.load(f)
+    # Load channel config — prefer YAML channels dir, fall back to channels.json
+    yaml_dir = Path("/opt/retrovue/config/channels")
+    if config_file:
+        config_path = Path(config_file)
+        if not config_path.exists():
+            typer.echo(f"Error: Channel config not found: {config_path}", err=True)
+            raise typer.Exit(1)
+        with open(config_path) as f:
+            channels_data = json.load(f)
+        all_channels = channels_data.get("channels", [])
+    elif yaml_dir.is_dir():
+        from retrovue.runtime.providers import YamlChannelConfigProvider
+        provider = YamlChannelConfigProvider(yaml_dir)
+        all_channels = provider.to_channels_list()
+    else:
+        config_path = Path("/opt/retrovue/config/channels.json")
+        if not config_path.exists():
+            typer.echo(f"Error: Channel config not found: {config_path}", err=True)
+            raise typer.Exit(1)
+        with open(config_path) as f:
+            channels_data = json.load(f)
+        all_channels = channels_data.get("channels", [])
 
     # Find the channel
     channel_data = None
-    for ch in channels_data.get("channels", []):
+    for ch in all_channels:
         if ch.get("channel_id") == channel_id:
             channel_data = ch
             break
 
     if not channel_data:
-        typer.echo(f"Error: Channel '{channel_id}' not found in {config_path}", err=True)
-        typer.echo(f"Available channels: {[c.get('channel_id') for c in channels_data.get('channels', [])]}", err=True)
+        typer.echo(f"Error: Channel '{channel_id}' not found", err=True)
+        typer.echo(f"Available channels: {[c.get('channel_id') for c in all_channels]}", err=True)
         raise typer.Exit(1)
 
     # Build channel config using from_dict for proper deserialization

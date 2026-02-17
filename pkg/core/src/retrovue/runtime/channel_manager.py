@@ -1942,16 +1942,37 @@ class BlockPlanProducer(Producer):
         effective_dur = end_ms - start_ms
 
         # Convert ScheduledSegment tuple to segment dicts for BlockPlan/AIR
-        plan_segments: list[dict[str, Any]] = [
-            {
+        plan_segments: list[dict[str, Any]] = []
+        for i, seg in enumerate(scheduled.segments):
+            d = {
                 "segment_index": i,
                 "segment_type": seg.segment_type,
                 "asset_uri": seg.asset_uri,
                 "asset_start_offset_ms": seg.asset_start_offset_ms,
                 "segment_duration_ms": seg.segment_duration_ms,
             }
-            for i, seg in enumerate(scheduled.segments)
-        ]
+            # Propagate transition fields (INV-TRANSITION-001)
+            if seg.transition_in != "TRANSITION_NONE":
+                d["transition_in"] = seg.transition_in
+                d["transition_in_duration_ms"] = seg.transition_in_duration_ms
+            if seg.transition_out != "TRANSITION_NONE":
+                d["transition_out"] = seg.transition_out
+                d["transition_out_duration_ms"] = seg.transition_out_duration_ms
+            plan_segments.append(d)
+
+        # Log transition fields for debugging (INV-TRANSITION-001)
+        import logging as _logging
+        _tlog = _logging.getLogger(__name__)
+        for d in plan_segments:
+            t_in = d.get("transition_in", "TRANSITION_NONE")
+            t_out = d.get("transition_out", "TRANSITION_NONE")
+            if t_in != "TRANSITION_NONE" or t_out != "TRANSITION_NONE":
+                _tlog.info(
+                    "TRANSITION_TAG block=%s seg=%d type=%s t_in=%s/%dms t_out=%s/%dms",
+                    block_id, d["segment_index"], d["segment_type"],
+                    t_in, d.get("transition_in_duration_ms", 0),
+                    t_out, d.get("transition_out_duration_ms", 0),
+                )
 
         if jip_offset_ms > 0:
             plan_segments = _apply_jip_to_segments(plan_segments, jip_offset_ms, effective_dur)

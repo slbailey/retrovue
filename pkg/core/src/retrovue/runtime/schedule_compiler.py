@@ -883,8 +883,15 @@ def validate_program_blocks(blocks: list[ProgramBlockOutput]) -> list[str]:
 
 
 def parse_dsl(yaml_text: str) -> dict[str, Any]:
-    """Parse YAML DSL text into a dict."""
-    return yaml.safe_load(yaml_text)
+    """Parse YAML DSL text into a dict.
+
+    Uses a loader that ignores !include tags (treated as None)
+    so channel YAML files with !include directives can be parsed
+    without error by the schedule compiler.
+    """
+    loader = type('DSLLoader', (yaml.SafeLoader,), {})
+    loader.add_constructor('!include', lambda loader, node: None)
+    return yaml.load(yaml_text, Loader=loader)
 
 
 def compile_schedule(

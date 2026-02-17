@@ -1,0 +1,41 @@
+channel: retro-prime
+channel_number: 3
+name: "Retro Prime"
+timezone: America/New_York
+
+format:
+  video: { width: 968, height: 720, frame_rate: "30/1" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+filler: !include _defaults.yaml:filler
+
+notes:
+  vibe: "Classic TV rotation — Cheers, Cosby, Barney Miller, Batman"
+
+pools:
+  cheers:
+    match:
+      type: episode
+      series_title: Cheers
+  cosby:
+    match:
+      type: episode
+      series_title: The Cosby Show
+  barney:
+    match:
+      type: episode
+      series_title: Barney Miller
+  batman:
+    match:
+      type: episode
+      series_title: "Batman (1966)"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "06:00"
+        title: "Retro Prime"
+        pool: [batman, barney, cheers, cosby]
+        mode: shuffle
