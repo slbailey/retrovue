@@ -488,6 +488,9 @@ class CollectionIngestService:
         auto_ready_threshold: float = 0.80
         review_threshold: float = 0.50
 
+        # Maximum movie duration for auto-ready (3 hours in ms)
+        MAX_MOVIE_DURATION_MS = 3 * 60 * 60 * 1000
+
         def _compute_confidence(it: Any) -> float:
             score = 0.0
             try:
@@ -497,9 +500,11 @@ class CollectionIngestService:
                 labels = getattr(it, "raw_labels", None) if not isinstance(it, dict) else it.get("raw_labels")
                 # Lightweight features
                 dur = _extract_label_value(labels, "duration_ms")
+                dur_ms = 0
                 if dur is not None:
                     try:
-                        if int(dur) > 0:
+                        dur_ms = int(dur)
+                        if dur_ms > 0:
                             score += 0.3
                     except Exception:
                         pass
@@ -509,6 +514,25 @@ class CollectionIngestService:
                     score += 0.1
                 if _extract_label_value(labels, "container") is not None:
                     score += 0.1
+
+                # Editorial-based confidence boost
+                editorial = it.get("editorial") if isinstance(it, dict) else getattr(it, "editorial", None)
+                if editorial and isinstance(editorial, dict):
+                    has_series = bool(editorial.get("series_title"))
+                    has_season = editorial.get("season_number") is not None
+                    has_episode = editorial.get("episode_number") is not None
+                    has_title = bool(editorial.get("title"))
+
+                    if has_series and has_season and has_episode:
+                        # TV episode with full metadata
+                        score += 0.2
+                    elif has_title and not has_series:
+                        # Movie: title + duration required, duration must be < 3 hours
+                        if dur_ms > 0 and dur_ms <= MAX_MOVIE_DURATION_MS:
+                            score += 0.2
+                        elif dur_ms > MAX_MOVIE_DURATION_MS:
+                            # Suspiciously long for a movie — needs review
+                            score -= 0.2
             except Exception:
                 pass
             # Clamp 0..1
