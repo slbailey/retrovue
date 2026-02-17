@@ -118,6 +118,9 @@ class AssetPathResolver:
         if mapped and Path(mapped).exists():
             return mapped
 
+        # Track whether any mapping matched (even if file missing) for better diagnostics
+        _mapping_matched = mapped is not None
+
         # Try stripping collection location prefixes to get relative path,
         # then re-map through path mappings
         for loc in self._collection_locations:
@@ -127,6 +130,7 @@ class AssetPathResolver:
                 # Try each mapping's local side + relative
                 for _, local_base in self._path_mappings:
                     candidate = str(Path(local_base) / relative.lstrip("/\\"))
+                    _mapping_matched = True
                     if Path(candidate).exists():
                         return candidate
 
@@ -134,12 +138,19 @@ class AssetPathResolver:
         if Path(plex_file_path).exists():
             return plex_file_path
 
-        logger.warning(
-            "Could not map Plex file path to local: %s (mappings: %s, locations: %s)",
-            plex_file_path,
-            self._path_mappings,
-            self._collection_locations,
-        )
+        if _mapping_matched:
+            logger.debug(
+                "File not found locally (path mapped OK): %s -> %s",
+                plex_file_path,
+                mapped,
+            )
+        else:
+            logger.warning(
+                "No path mapping matched for Plex file: %s (mappings: %s, locations: %s)",
+                plex_file_path,
+                self._path_mappings,
+                self._collection_locations,
+            )
         return None
 
     def _fetch_plex_file_path(self, rating_key: int) -> str | None:

@@ -1429,8 +1429,25 @@ def collection_ingest(
                     else:
                         typer.echo(f"Assets discovered: {result.stats.assets_discovered}")
                         typer.echo(f"Assets ingested: {result.stats.assets_ingested}")
-                        typer.echo(f"Assets skipped: {result.stats.assets_skipped}")
+                        if result.stats.assets_skipped:
+                            typer.echo(f"Assets skipped: {result.stats.assets_skipped} (already in database)")
+                        else:
+                            typer.echo(f"Assets skipped: {result.stats.assets_skipped}")
                         typer.echo(f"Assets updated: {result.stats.assets_updated}")
+                        if result.stats.assets_auto_ready:
+                            typer.echo(f"Assets auto-ready: {result.stats.assets_auto_ready}")
+                        if result.stats.assets_needs_enrichment:
+                            typer.echo(f"Assets needs enrichment: {result.stats.assets_needs_enrichment}")
+                        if result.stats.assets_needs_review:
+                            typer.echo(f"Assets needs review: {result.stats.assets_needs_review}")
+                        if result.stats.duplicates_prevented:
+                            typer.echo(f"Duplicates prevented: {result.stats.duplicates_prevented}")
+                        if result.stats.errors:
+                            typer.echo(f"Errors: {len(result.stats.errors)}")
+                            for err in result.stats.errors[:5]:
+                                typer.echo(f"  - {err}")
+                            if len(result.stats.errors) > 5:
+                                typer.echo(f"  ... and {len(result.stats.errors) - 5} more")
                         if result.last_ingest_time:
                             typer.echo(f"Last ingest: {result.last_ingest_time}")
 
