@@ -33,6 +33,7 @@ from ....domain.entities import Asset, Collection
 from ....infra.canonical import canonical_hash, canonical_key_for
 from ....infra.exceptions import IngestError
 from ....usecases.metadata_handler import handle_ingest
+from ....usecases.asset_path_resolver import AssetPathResolver
 
 logger = structlog.get_logger(__name__)
 
@@ -524,20 +525,26 @@ class CollectionIngestService:
                 source_uri_val = _get_uri(item)
             except Exception:
                 source_uri_val = None
-            # Ask importer to resolve a local file URI for enrichment; do not persist this URI
+            # Resolve local file URI for enrichment via AssetPathResolver
             try:
-                local_uri = importer.resolve_local_uri(
-                    item, collection=collection, path_mappings=path_mappings
+                collection_locations = (collection.config or {}).get("locations", [])
+                plex_client = getattr(importer, "client", None)
+                resolver = AssetPathResolver(
+                    path_mappings=path_mappings,
+                    plex_client=plex_client,
+                    collection_locations=collection_locations,
                 )
-                if isinstance(local_uri, str) and local_uri:
+                local_path = resolver.resolve(
+                    uri=_get_uri(item) or "",
+                )
+                if isinstance(local_path, str) and local_path:
                     try:
                         if isinstance(item, dict):
-                            item["path_uri"] = local_uri
+                            item["path_uri"] = local_path
                         else:
-                            item.path_uri = local_uri
+                            item.path_uri = local_path
                     except Exception:
                         pass
-                
             except Exception:
                 pass
             # Snapshot importer editorial BEFORE pipeline runs

@@ -9,6 +9,7 @@ They should be stateless and operate on simple data structures.
 """
 
 from __future__ import annotations
+import warnings
 
 import json
 from abc import ABC, abstractmethod
@@ -189,6 +190,11 @@ class ImporterInterface(Protocol):
         - Else, attempt path-mapping substitution using provided path_mappings (plex_path -> local_path).
         - Fallback to the original path_uri if no mapping applies.
         """
+        warnings.warn(
+            "resolve_local_uri is deprecated; use AssetPathResolver.resolve() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         try:
             # Extract uri
             uri = None

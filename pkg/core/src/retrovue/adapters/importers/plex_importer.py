@@ -6,6 +6,7 @@ from their libraries, following the plugin contract defined in docs/developer/Pl
 """
 
 from __future__ import annotations
+import warnings
 
 import logging
 from datetime import datetime
@@ -1374,6 +1375,9 @@ class PlexImporter(BaseImporter):
         """
         Resolve a local file:// URI using Plex library locations and PathMappings.
 
+        .. deprecated::
+            Use :class:`AssetPathResolver` instead.
+
         Steps:
         - Determine the file path for the item (from labels or metadata lookup)
         - Find the item's library and compute the relative suffix from a library location
@@ -1381,6 +1385,11 @@ class PlexImporter(BaseImporter):
         - Apply longest-prefix match from path_mappings to map to local path
         - Return file:// URI to the mapped local path
         """
+        warnings.warn(
+            "resolve_local_uri is deprecated; use AssetPathResolver.resolve() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         try:
             # Extract upstream file path from labels when available
             def _labels(obj: DiscoveredItem | dict) -> list[str]:
