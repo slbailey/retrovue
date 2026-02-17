@@ -206,6 +206,10 @@ def ingest_collection_assets(
                 # Add resolved path to discovered_item
                 discovered_item.path_uri = local_uri
 
+                # Persist the resolved local path as canonical_uri for future enrichment
+                asset.canonical_uri = local_uri
+                db.flush()
+
             except Exception as e:
                 logger.error(f"Error resolving local URI for asset {asset.uuid}: {e}")
                 summary["skipped"] += 1
@@ -262,8 +266,13 @@ def ingest_collection_assets(
                     )
                     db.add(marker)
 
-            # Transition to "ready" state
-            asset.state = "ready"
+            # Only promote to ready if we got meaningful probe data
+            if asset.duration_ms and asset.duration_ms > 0:
+                asset.state = "ready"
+            else:
+                asset.state = "new"
+                asset.approved_for_broadcast = False
+                logger.warning(f"Asset {asset.uuid} enriched but missing valid duration, keeping in new state")
             db.flush()
 
             summary["enriched"] += 1

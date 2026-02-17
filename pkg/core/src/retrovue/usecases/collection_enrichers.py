@@ -225,13 +225,20 @@ def apply_enrichers_to_collection(
             if size_ok:
                 score += 0.2
             labels = item.raw_labels or []
+            MAX_DURATION_MS = 10_800_000  # 3 hours
             dur = _extract_label_value(labels, "duration_ms")
             if dur is not None:
                 try:
-                    if int(dur) > 0:
-                        score += 0.3
+                    dur_int = int(dur)
+                    if dur_int <= 0:
+                        return 0.0
+                    if dur_int > MAX_DURATION_MS:
+                        return 0.0
+                    score += 0.3
                 except Exception:
                     pass
+            else:
+                return 0.0
             if _extract_label_value(labels, "video_codec") is not None:
                 score += 0.2
             if _extract_label_value(labels, "audio_codec") is not None:

@@ -45,6 +45,29 @@
         "filler_duration_ms": 3650000,
         "grid_minutes": 30
       }
+    },
+    {
+      "channel_id": "nightmare-theater",
+      "channel_id_int": 4,
+      "name": "Nightmare Theater",
+      "program_format": {
+        "video": {
+          "width": 968,
+          "height": 720,
+          "frame_rate": "30/1"
+        },
+        "audio": {
+          "sample_rate": 48000,
+          "channels": 2
+        }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/nightmare-theater.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
     }
   ]
 }

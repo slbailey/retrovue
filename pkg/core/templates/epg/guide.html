@@ -408,11 +408,18 @@ const PX_PER_MIN = 200 / 30;
 let currentDate = null;
 let epgData = null;
 
+function formatDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
 function today() {
   const now = new Date();
   const et = new Date(now.toLocaleString('en-US', {timeZone: 'America/New_York'}));
   if (et.getHours() < 6) et.setDate(et.getDate() - 1);
-  return et.toISOString().slice(0, 10);
+  return formatDateStr(et);
 }
 
 function goToday() { loadDate(today()); }
@@ -421,7 +428,7 @@ function changeDay(delta) {
   if (!currentDate) return;
   const d = new Date(currentDate + 'T12:00:00');
   d.setDate(d.getDate() + delta);
-  loadDate(d.toISOString().slice(0, 10));
+  loadDate(formatDateStr(d));
 }
 
 async function loadDate(dateStr) {

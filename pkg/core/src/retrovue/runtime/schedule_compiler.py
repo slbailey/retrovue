@@ -410,7 +410,12 @@ def _compile_movie_block(
     mb = block_def.get("movie_block", {})
     ms = mb.get("movie_selector", {}) if mb else block_def.get("movie_selector", {})
 
+    # Support singular 'pool' (wraps to list) and plural 'pools'/'collections'
     collections = ms.get("pools", ms.get("collections", []))
+    if not collections:
+        single_pool = ms.get("pool")
+        if single_pool:
+            collections = [single_pool]
     rating_cfg = ms.get("rating", {})
     movie_asset_id = select_movie(
         collections=collections,
@@ -425,7 +430,7 @@ def _compile_movie_block(
     slot_duration = _grid_slot_duration(grid_minutes, movie_meta.duration_sec)
 
     block = ProgramBlockOutput(
-        title=movie_asset_id,
+        title=movie_meta.title or movie_asset_id,
         asset_id=movie_asset_id,
         start_at=current_time,
         slot_duration_sec=slot_duration,
@@ -438,6 +443,170 @@ def _compile_movie_block(
         },
     )
     return [block]
+
+
+
+def _compile_movie_marathon(
+    block_def: dict[str, Any],
+    broadcast_day: str,
+    tz_name: str,
+    resolver: AssetResolver,
+    grid_minutes: int,
+    seed: int | None = None,
+    used_movie_ids: set | None = None,
+) -> list[ProgramBlockOutput]:
+    """Compile a contiguous movie marathon — fills a time range with back-to-back movies.
+
+    DSL shape:
+        - movie_marathon:
+            start: "09:00"
+            end: "22:00"
+            title: "Horror Movie Marathon"
+            movie_selector: { pool: horror_80s, mode: random }
+            allow_bleed: true   # optional, default false
+
+    When allow_bleed is true, if the last movie would end before `end`, one
+    more movie is scheduled even if it bleeds past `end`. The downstream
+    block pruner will absorb any overlapped slots.
+    """
+    mm = block_def.get("movie_marathon", {})
+    start_str = mm.get("start") or block_def.get("start", "09:00")
+    end_str = mm.get("end", "22:00")
+    allow_bleed = mm.get("allow_bleed", False)
+    ms = mm.get("movie_selector", {})
+    marathon_title = mm.get("title", "Movie Marathon")
+
+    current_time = _parse_time(start_str, broadcast_day, tz_name)
+    end_time = _parse_time(end_str, broadcast_day, tz_name)
+
+    # Support both "pool"/"pools"/"collections"
+    collections = ms.get("pools", ms.get("collections", []))
+    if not collections:
+        single_pool = ms.get("pool")
+        if single_pool:
+            collections = [single_pool]
+    rating_cfg = ms.get("rating", {})
+
+    if used_movie_ids is None:
+        used_movie_ids = set()
+
+    blocks: list[ProgramBlockOutput] = []
+    movie_seed = seed or 42
+    max_attempts = 200  # safety valve
+
+    while current_time < end_time and max_attempts > 0:
+        max_attempts -= 1
+
+        movie_asset_id = _select_movie_no_repeat(
+            collections=collections,
+            resolver=resolver,
+            rating_include=rating_cfg.get("include"),
+            rating_exclude=rating_cfg.get("exclude"),
+            max_duration_sec=ms.get("max_duration_sec"),
+            seed=movie_seed,
+            used_ids=used_movie_ids,
+        )
+        movie_seed += 1  # increment seed for next pick
+
+        if movie_asset_id is None:
+            # Exhausted pool, reset used set and try again
+            used_movie_ids.clear()
+            continue
+
+        used_movie_ids.add(movie_asset_id)
+        movie_meta = resolver.lookup(movie_asset_id)
+        slot_duration = _grid_slot_duration(grid_minutes, movie_meta.duration_sec)
+
+        block = ProgramBlockOutput(
+            title=movie_meta.title or movie_asset_id,
+            asset_id=movie_asset_id,
+            start_at=current_time,
+            slot_duration_sec=slot_duration,
+            episode_duration_sec=movie_meta.duration_sec,
+            collection=collections[0] if collections else None,
+            selector={
+                "collections": collections,
+                "rating": rating_cfg,
+                "seed": movie_seed - 1,
+            },
+        )
+        blocks.append(block)
+        current_time = block.end_at()
+
+        # If we've reached or passed the end, check bleed logic
+        if current_time >= end_time:
+            break
+
+    # allow_bleed: if we stopped short, add one more movie
+    if allow_bleed and blocks and blocks[-1].end_at() < end_time:
+        movie_asset_id = _select_movie_no_repeat(
+            collections=collections,
+            resolver=resolver,
+            rating_include=rating_cfg.get("include"),
+            rating_exclude=rating_cfg.get("exclude"),
+            max_duration_sec=ms.get("max_duration_sec"),
+            seed=movie_seed,
+            used_ids=used_movie_ids,
+        )
+        if movie_asset_id:
+            used_movie_ids.add(movie_asset_id)
+            movie_meta = resolver.lookup(movie_asset_id)
+            slot_duration = _grid_slot_duration(grid_minutes, movie_meta.duration_sec)
+            block = ProgramBlockOutput(
+                title=movie_meta.title or movie_asset_id,
+                asset_id=movie_asset_id,
+                start_at=current_time,
+                slot_duration_sec=slot_duration,
+                episode_duration_sec=movie_meta.duration_sec,
+                collection=collections[0] if collections else None,
+                selector={
+                    "collections": collections,
+                    "rating": rating_cfg,
+                    "seed": movie_seed,
+                },
+            )
+            blocks.append(block)
+
+    return blocks
+
+
+def _select_movie_no_repeat(
+    collections: list[str],
+    resolver: AssetResolver,
+    rating_include: list[str] | None = None,
+    rating_exclude: list[str] | None = None,
+    max_duration_sec: int | None = None,
+    seed: int | None = None,
+    used_ids: set | None = None,
+) -> str | None:
+    """Select a movie, avoiding already-used IDs. Returns None if exhausted."""
+    candidates: list[str] = []
+    for col_id in collections:
+        col_meta = resolver.lookup(col_id)
+        candidates.extend(col_meta.tags)
+
+    if not candidates:
+        return None
+
+    filtered: list[str] = []
+    for cid in candidates:
+        if used_ids and cid in used_ids:
+            continue
+        meta = resolver.lookup(cid)
+        if rating_include and meta.rating not in rating_include:
+            continue
+        if rating_exclude and meta.rating in rating_exclude:
+            continue
+        if max_duration_sec and meta.duration_sec > max_duration_sec:
+            continue
+        filtered.append(cid)
+
+    if not filtered:
+        return None
+
+    filtered.sort()
+    rng = random.Random(seed)
+    return rng.choice(filtered)
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +692,12 @@ def _validate_block_assets(
     # Movie block / movie_selector
     mb = block.get("movie_block", {})
     ms = mb.get("movie_selector", {}) if mb else block.get("movie_selector", {})
-    # Movie selectors: support "pools" (new) alongside "collections" (legacy)
+    # Movie selectors: support "pool" (singular), "pools" (new), and "collections" (legacy)
     movie_pool_ids = ms.get("pools", ms.get("collections", []))
+    if not movie_pool_ids:
+        single_pool = ms.get("pool")
+        if single_pool:
+            movie_pool_ids = [single_pool]
     for pool_id in movie_pool_ids:
         try:
             resolver.lookup(pool_id)
@@ -600,6 +773,7 @@ def compile_schedule(
 
     # Compile program blocks — use day-of-week resolver if broadcast_day is set
     all_blocks: list[ProgramBlockOutput] = []
+    used_movie_ids: set[str] = set()  # track movies across marathon blocks to avoid repeats
     schedule = expanded.get("schedule", {})
 
     # Check if schedule uses any DOW/group keys (new layered format)
@@ -612,7 +786,12 @@ def compile_schedule(
         resolved_blocks = resolve_day_schedule(expanded, target)
         for block_def in resolved_blocks:
             if isinstance(block_def, dict):
-                if "movie_block" in block_def or "movie_selector" in block_def:
+                if "movie_marathon" in block_def:
+                    blocks = _compile_movie_marathon(
+                        block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                        used_movie_ids=used_movie_ids,
+                    )
+                elif "movie_block" in block_def or "movie_selector" in block_def:
                     blocks = _compile_movie_block(
                         block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
                     )
@@ -634,7 +813,11 @@ def compile_schedule(
             elif isinstance(day_value, list):
                 for block_def in day_value:
                     if isinstance(block_def, dict):
-                        if "movie_block" in block_def or "movie_selector" in block_def:
+                        if "movie_marathon" in block_def:
+                            blocks = _compile_movie_marathon(
+                                block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                            )
+                        elif "movie_block" in block_def or "movie_selector" in block_def:
                             blocks = _compile_movie_block(
                                 block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
                             )
@@ -645,13 +828,17 @@ def compile_schedule(
                             )
                         all_blocks.extend(blocks)
 
-    # Validate compiled blocks
-    block_errors = validate_program_blocks(all_blocks)
-    if block_errors:
-        raise ValidationError(block_errors)
-
-    # Sort
+    # Sort before pruning
     all_blocks.sort(key=lambda b: b.start_at)
+
+    # Auto-prune overlapping blocks (later blocks absorbed by earlier movie blocks)
+    pruned: list[ProgramBlockOutput] = []
+    for block in all_blocks:
+        if pruned and pruned[-1].end_at() > block.start_at:
+            pass  # overlapped block pruned
+            continue
+        pruned.append(block)
+    all_blocks = pruned
 
     # Build output
     plan: dict[str, Any] = {

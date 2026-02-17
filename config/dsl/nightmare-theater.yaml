@@ -1,0 +1,130 @@
+channel: nightmare-theater
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "24/7 horror — Tales from the Crypt, Freddy's Nightmares, and classic horror movies"
+  tagline: "Don't. Fall. Asleep."
+
+pools:
+  # --- TV Pools ---
+  tales_from_the_crypt:
+    match:
+      type: episode
+      series_title: "Tales from the Crypt"
+    # 107 episodes, ~25min each — perfect 30min grid fit
+
+  freddys_nightmares:
+    match:
+      type: episode
+      series_title: "Freddy's Nightmares"
+    # 44 episodes, ~45min each — will preempt into 2 grid slots
+
+  # --- Movie Pools ---
+  horror_80s:
+    match:
+      type: movie
+      genre: horror
+      year_range: "1980-1989"
+
+  horror_classics:
+    match:
+      type: movie
+      genre: horror
+      year_range: "1950-1979"
+
+  horror_90s:
+    match:
+      type: movie
+      genre: horror
+      year_range: "1990-1999"
+
+  horror_all:
+    match:
+      type: movie
+      genre: horror
+
+schedule:
+  # ═══════════════════════════════════════════════════════
+  # BASE: all_day — the daily programming grid
+  #
+  #   6:00 AM –  9:00 AM  Freddy's Nightmares
+  #   9:00 AM – 10:00 PM  Horror Movies (contiguous marathon)
+  #  10:00 PM –  6:00 AM  Tales from the Crypt
+  # ═══════════════════════════════════════════════════════
+  all_day:
+    # ── Freddy's Nightmares  6:00 AM – 9:00 AM ──
+    - start: "06:00"
+      slots:
+        - title: "Freddy's Nightmares"
+          episode_selector: { pool: freddys_nightmares, mode: sequential }
+    - start: "07:00"
+      slots:
+        - title: "Freddy's Nightmares"
+          episode_selector: { pool: freddys_nightmares, mode: sequential }
+    - start: "08:00"
+      slots:
+        - title: "Freddy's Nightmares"
+          episode_selector: { pool: freddys_nightmares, mode: sequential }
+
+    # ── Horror Movie Marathon  9:00 AM – 10:00 PM ──
+    # Back-to-back movies, no gaps. Last movie bleeds into Crypt block
+    # if needed — Tales picks up at the next available slot.
+    - movie_marathon:
+        start: "09:00"
+        end: "22:00"
+        title: "Horror Movie Marathon"
+        movie_selector:
+          pool: horror_all
+          mode: random
+          max_duration_sec: 9000    # cap at 2.5 hours — no 6-hour docs
+        allow_bleed: true
+
+    # ── Tales from the Crypt  10:00 PM – 6:00 AM ──
+    - start: "22:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "23:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "00:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "01:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "02:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "03:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "04:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+    - start: "05:00"
+      slots:
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
+        - title: "Tales from the Crypt"
+          episode_selector: { pool: tales_from_the_crypt, mode: sequential }
