@@ -92,9 +92,6 @@ class _CatalogEntry:
     source_name: str
     collection_name: str
     meta: AssetMetadata
-    genres: tuple[str, ...] = ()
-    production_year: int | None = None
-    title: str = ""
 
 
 class CatalogAssetResolver:
@@ -167,11 +164,9 @@ class CatalogAssetResolver:
             # so the runtime resolver can map via PathMappings without calling the source API.
             resolved_file_uri = asset.canonical_uri if asset.canonical_uri and not asset.canonical_uri.startswith("plex://") else asset.uri
 
-            display_title = editorial.get("title", "") or series_title or ""
             meta = AssetMetadata(
                 type="episode",
                 duration_sec=duration_sec,
-                title=display_title,
                 tags=(),
                 rating=rating,
                 file_uri=resolved_file_uri,
@@ -191,39 +186,10 @@ class CatalogAssetResolver:
                 slug = f"asset.{series_slug}.s{season:02d}e{episode_num:02d}"
                 self._aliases[slug] = uuid_str
 
-            # Detect asset type from collection config or editorial data
-            col_config = {}
-            col_obj = None
-            for c in collections:
-                if str(c.uuid) == col_uuid:
-                    col_obj = c
-                    col_config = c.config or {}
-                    break
-            coll_type = col_config.get("type", "")
-            has_episode_data = series_title and season is not None and episode_num is not None
-            if coll_type == "movie" or (not has_episode_data and editorial.get("title") and not series_title):
-                detected_type = "movie"
-            else:
-                detected_type = "episode"
-
-            # Extract genres and year
-            genres_raw = editorial.get("genres", [])
-            if isinstance(genres_raw, list):
-                genres = tuple(g.lower() for g in genres_raw if isinstance(g, str))
-            else:
-                genres = ()
-            production_year = editorial.get("production_year") or editorial.get("year")
-            if production_year is not None:
-                try:
-                    production_year = int(production_year)
-                except (ValueError, TypeError):
-                    production_year = None
-            asset_title = editorial.get("title", "")
-
             # Catalog entry for query()
             self._catalog.append(_CatalogEntry(
                 canonical_id=uuid_str,
-                asset_type=detected_type,
+                asset_type="episode",  # TODO: detect movies vs episodes from metadata
                 duration_sec=duration_sec,
                 series_title=series_title,
                 season=season,
@@ -232,9 +198,6 @@ class CatalogAssetResolver:
                 source_name=source_name,
                 collection_name=col_name,
                 meta=meta,
-                genres=genres,
-                production_year=production_year,
-                title=asset_title,
             ))
 
         logger.info(
@@ -348,22 +311,6 @@ class CatalogAssetResolver:
         collection = match.get("collection")
         if collection:
             results = [e for e in results if e.collection_name.lower() == collection.lower()]
-
-        # Filter: genre (single string, case-insensitive match against genres list)
-        genre = match.get("genre")
-        if genre:
-            genre_lower = genre.lower()
-            results = [e for e in results if genre_lower in e.genres]
-
-        # Filter: year_range ("YYYY-YYYY" string)
-        year_range = match.get("year_range")
-        if year_range and isinstance(year_range, str) and "-" in year_range:
-            parts = year_range.split("-")
-            try:
-                yr_start, yr_end = int(parts[0]), int(parts[1])
-                results = [e for e in results if e.production_year is not None and yr_start <= e.production_year <= yr_end]
-            except (ValueError, IndexError):
-                pass
 
         # Sort: episodes by series/season/episode, default stable
         results.sort(key=lambda e: (

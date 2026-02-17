@@ -18,6 +18,7 @@ class AssetMetadata:
 
     type: str  # "episode", "movie", "pool", "virtual", "bumper", "promo", "filler", etc.
     duration_sec: int
+    title: str = ""  # Display title from catalog
     tags: tuple[str, ...] = ()
     rating: str | None = None  # MPAA rating: G, PG, PG-13, R, etc.
     availability_window: tuple[str, str] | None = None  # (start_date, end_date) ISO strings

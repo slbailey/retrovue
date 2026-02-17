@@ -181,8 +181,15 @@ function startHLS() {
     hls.loadSource(hlsUrl);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      statusEl.textContent = 'Loading first segment...';
+      statusEl.className = 'status buffering';
+      // Don't play until we have actual data buffered
+    });
+    hls.on(Hls.Events.FRAG_LOADED, function onFirstFrag() {
+      hls.off(Hls.Events.FRAG_LOADED, onFirstFrag);
       video.play().catch(() => {});
       statusEl.textContent = '▲ Tap screen for sound';
+      statusEl.className = 'status';
     });
     hls.on(Hls.Events.ERROR, (event, data) => {
       if (data.fatal) {
