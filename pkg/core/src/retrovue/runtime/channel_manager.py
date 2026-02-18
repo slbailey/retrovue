@@ -1728,12 +1728,17 @@ class BlockPlanProducer(Producer):
                     now_utc_ms=join_utc_ms,
                 )
                 self._advance_cursor(block_a)
+                # INV-JIP-ADBLOCK-001: If JIP used TX log segments (previously
+                # filled ads), skip re-fill to preserve ad continuity.
+                if not getattr(block_a, '_txlog_filled', False):
+                    block_a = self._fill_block_at_feed_time(block_a)
 
                 next_entry = self._resolve_plan_for_block()
                 if not next_entry:
                     raise RuntimeError("No next block data from schedule service")
                 block_b = self._generate_next_block(next_entry)
                 self._advance_cursor(block_b)
+                block_b = self._fill_block_at_feed_time(block_b)
 
                 if not self._session.seed(block_a, block_b,
                                          join_utc_ms=join_utc_ms,
@@ -1914,6 +1919,39 @@ class BlockPlanProducer(Producer):
             return None
         return self.schedule_service.get_block_at(self.channel_id, utc_ms)
 
+    def _lookup_txlog_segments(self, block_id: str) -> list[dict[str, Any]] | None:
+        """Look up filled segments from TransmissionLog for a previously-played block.
+
+        INV-JIP-ADBLOCK-001: On re-join, use the same ad assignments that were
+        originally played.  Without this, JIP into a filler segment would
+        trigger fresh ad selection, causing the viewer to see a different
+        commercial than what was originally scheduled.
+
+        Returns None if no TX log entry exists (first play of this block).
+        """
+        try:
+            from retrovue.infra.uow import session as db_session_factory
+            from retrovue.domain.entities import TransmissionLog
+
+            with db_session_factory() as db:
+                entry = db.query(TransmissionLog).filter(
+                    TransmissionLog.block_id == block_id,
+                ).first()
+                if entry is not None:
+                    self._logger.info(
+                        "INV-JIP-ADBLOCK-001: TX log hit for block=%s — "
+                        "using previously filled segments (%d segs)",
+                        block_id, len(entry.segments),
+                    )
+                    return list(entry.segments)
+        except Exception as e:
+            self._logger.warning(
+                "INV-JIP-ADBLOCK-001: TX log lookup failed for block=%s: %s "
+                "(falling back to fresh fill)",
+                block_id, e,
+            )
+        return None
+
     def _generate_next_block(
         self,
         scheduled: ScheduledBlock,
@@ -1941,24 +1979,35 @@ class BlockPlanProducer(Producer):
 
         effective_dur = end_ms - start_ms
 
-        # Convert ScheduledSegment tuple to segment dicts for BlockPlan/AIR
-        plan_segments: list[dict[str, Any]] = []
-        for i, seg in enumerate(scheduled.segments):
-            d = {
-                "segment_index": i,
-                "segment_type": seg.segment_type,
-                "asset_uri": seg.asset_uri,
-                "asset_start_offset_ms": seg.asset_start_offset_ms,
-                "segment_duration_ms": seg.segment_duration_ms,
-            }
-            # Propagate transition fields (INV-TRANSITION-001)
-            if seg.transition_in != "TRANSITION_NONE":
-                d["transition_in"] = seg.transition_in
-                d["transition_in_duration_ms"] = seg.transition_in_duration_ms
-            if seg.transition_out != "TRANSITION_NONE":
-                d["transition_out"] = seg.transition_out
-                d["transition_out_duration_ms"] = seg.transition_out_duration_ms
-            plan_segments.append(d)
+        # INV-JIP-ADBLOCK-001: On re-join, prefer previously-filled segments
+        # from TransmissionLog so JIP resumes into the same ads that were
+        # originally playing (not fresh random assignments).
+        txlog_segments = None
+        if jip_offset_ms > 0:
+            txlog_segments = self._lookup_txlog_segments(block_id)
+
+        if txlog_segments is not None:
+            # Use TX log segments (already filled with real ad URIs)
+            plan_segments = txlog_segments
+        else:
+            # Convert ScheduledSegment tuple to segment dicts for BlockPlan/AIR
+            plan_segments: list[dict[str, Any]] = []
+            for i, seg in enumerate(scheduled.segments):
+                d = {
+                    "segment_index": i,
+                    "segment_type": seg.segment_type,
+                    "asset_uri": seg.asset_uri,
+                    "asset_start_offset_ms": seg.asset_start_offset_ms,
+                    "segment_duration_ms": seg.segment_duration_ms,
+                }
+                # Propagate transition fields (INV-TRANSITION-001)
+                if seg.transition_in != "TRANSITION_NONE":
+                    d["transition_in"] = seg.transition_in
+                    d["transition_in_duration_ms"] = seg.transition_in_duration_ms
+                if seg.transition_out != "TRANSITION_NONE":
+                    d["transition_out"] = seg.transition_out
+                    d["transition_out_duration_ms"] = seg.transition_out_duration_ms
+                plan_segments.append(d)
 
         # Log transition fields for debugging (INV-TRANSITION-001)
         import logging as _logging
@@ -1986,6 +2035,9 @@ class BlockPlanProducer(Producer):
             end_utc_ms=end_ms,
             segments=plan_segments,
         )
+
+        # INV-JIP-ADBLOCK-001: Mark block so caller can skip redundant ad fill
+        block._txlog_filled = txlog_segments is not None
 
         # INV-EXEC-NO-STRUCTURE-001: Immutability enforcement
         # Non-JIP: outbound (start, end) must equal scheduled (start, end)
@@ -2024,16 +2076,85 @@ class BlockPlanProducer(Producer):
         self._block_index += 1
         self._next_block_start_ms = block.end_utc_ms
 
+    def _persist_transmission_log(self, block: "BlockPlan", db_session) -> None:
+        """Persist a filled block to the transmission_log table.
+
+        INV-TXLOG-WRITE-BEFORE-FEED-001: Called before session.feed(block).
+        Gracefully degrades on DB error -- playout is never interrupted.
+        """
+        try:
+            from retrovue.domain.entities import TransmissionLog
+            from datetime import date, timezone
+
+            def _derive_title_simple(seg_type: str, asset_uri: str) -> str:
+                if seg_type == "pad" or not asset_uri:
+                    return "BLACK"
+                name = asset_uri.rsplit("/", 1)[-1] if "/" in asset_uri else asset_uri
+                if "." in name:
+                    name = name.rsplit(".", 1)[0]
+                for prefix in ("Interstitial - Commercial - ", "Interstitial - ", "Commercial - "):
+                    if name.startswith(prefix):
+                        name = name[len(prefix):]
+                        break
+                return name
+
+            segments_data = []
+            for seg in block.segments:
+                seg_type = seg.get("segment_type", "content") if isinstance(seg, dict) else getattr(seg, "segment_type", "content")
+                uri = seg.get("asset_uri", "") if isinstance(seg, dict) else getattr(seg, "asset_uri", "")
+                duration = seg.get("segment_duration_ms", 0) if isinstance(seg, dict) else getattr(seg, "segment_duration_ms", 0)
+                offset = seg.get("asset_start_offset_ms", 0) if isinstance(seg, dict) else getattr(seg, "asset_start_offset_ms", 0)
+                idx = seg.get("segment_index", len(segments_data)) if isinstance(seg, dict) else getattr(seg, "segment_index", len(segments_data))
+                segments_data.append({
+                    "segment_index": idx,
+                    "segment_type": seg_type,
+                    "asset_uri": uri or "",
+                    "asset_start_offset_ms": offset,
+                    "segment_duration_ms": duration,
+                    "title": _derive_title_simple(seg_type, uri or ""),
+                })
+
+            import datetime as _dt
+            broadcast_day = _dt.datetime.fromtimestamp(
+                block.start_utc_ms / 1000.0, tz=_dt.timezone.utc
+            ).date()
+
+            row = TransmissionLog(
+                block_id=block.block_id,
+                channel_slug=str(self.channel_id),
+                broadcast_day=broadcast_day,
+                start_utc_ms=block.start_utc_ms,
+                end_utc_ms=block.end_utc_ms,
+                segments=segments_data,
+            )
+            db_session.merge(row)
+            db_session.flush()
+            self._logger.info(
+                "TXLOG: Persisted transmission_log block=%s segs=%d",
+                block.block_id, len(segments_data),
+            )
+        except Exception as e:
+            self._logger.warning(
+                "TXLOG: Failed to persist transmission_log for block=%s: %s",
+                block.block_id, e,
+            )
+
     def _try_feed_block(self, block: "BlockPlan") -> FeedResult:
         """
         Attempt to feed a block to AIR.
 
+        INV-TRAFFIC-LATE-BIND-001: Traffic fill happens here, ~30 min before air.
         INV-FEED-QUEUE-001: Cursor advances only on ACCEPTED.
         INV-FEED-QUEUE-002: Rejected block stored in _pending_block.
         INV-FEED-CREDIT-001: Credits decremented on ACCEPTED, zeroed on QUEUE_FULL.
         """
         if not self._session:
             return FeedResult.ERROR
+
+        # INV-TRAFFIC-LATE-BIND-001: Fill empty filler placeholders with real
+        # interstitials at feed time (~30 min before air).
+        # Open a fresh DB session; do NOT hold it across feeds.
+        block = self._fill_block_at_feed_time(block)
 
         result = self._session.feed(block)
 
@@ -2076,6 +2197,174 @@ class BlockPlanProducer(Producer):
                 self._error_backoff_remaining,
             )
             return FeedResult.ERROR
+
+    def _fill_block_at_feed_time(self, block: "BlockPlan") -> "BlockPlan":
+        """Fill empty filler placeholders with real interstitials at feed time.
+
+        INV-TRAFFIC-LATE-BIND-001: Called from _try_feed_block(), ~30 min before air.
+        Opens and closes its own DB session. On any error, falls back to the
+        unmodified block (empty placeholders will become black via AIR).
+
+        Also persists the filled block to transmission_log and writes
+        traffic_play_log entries for each commercial.
+        """
+        try:
+            from retrovue.runtime.traffic_manager import fill_ad_blocks
+            from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+            from retrovue.infra.uow import session as db_session_factory
+
+            # Get filler config from channel_config.schedule_config
+            filler_uri = ""
+            filler_duration_ms = 3_650_000
+            if self.channel_config:
+                sc = getattr(self.channel_config, "schedule_config", {}) or {}
+                filler_uri = sc.get("filler_path", "/opt/retrovue/assets/filler.mp4")
+                filler_duration_ms = sc.get("filler_duration_ms", 3_650_000)
+
+            # Convert BlockPlan segments to ScheduledBlock for fill_ad_blocks
+            # (fill_ad_blocks expects ScheduledBlock, not BlockPlan)
+            sched_segments = []
+            for seg in block.segments:
+                seg_type = seg.get("segment_type", "content") if isinstance(seg, dict) else getattr(seg, "segment_type", "content")
+                uri = seg.get("asset_uri", "") if isinstance(seg, dict) else getattr(seg, "asset_uri", "")
+                duration = seg.get("segment_duration_ms", 0) if isinstance(seg, dict) else getattr(seg, "segment_duration_ms", 0)
+                offset = seg.get("asset_start_offset_ms", 0) if isinstance(seg, dict) else getattr(seg, "asset_start_offset_ms", 0)
+                sched_segments.append(ScheduledSegment(
+                    segment_type=seg_type,
+                    asset_uri=uri or "",
+                    asset_start_offset_ms=offset,
+                    segment_duration_ms=duration,
+                ))
+
+            sched_block = ScheduledBlock(
+                block_id=block.block_id,
+                start_utc_ms=block.start_utc_ms,
+                end_utc_ms=block.end_utc_ms,
+                segments=tuple(sched_segments),
+            )
+
+            with db_session_factory() as db:
+                # Create asset library for this channel
+                asset_lib = None
+                if filler_uri:  # Only try if we have a filler configured
+                    try:
+                        from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
+                        asset_lib = DatabaseAssetLibrary(db, channel_slug=str(self.channel_id))
+                    except Exception as e:
+                        self._logger.warning("TRAFFIC: Could not create DatabaseAssetLibrary: %s", e)
+
+                # Fill empty filler placeholders
+                if filler_uri:
+                    filled_sched = fill_ad_blocks(
+                        sched_block,
+                        filler_uri=filler_uri,
+                        filler_duration_ms=filler_duration_ms,
+                        asset_library=asset_lib,
+                    )
+                else:
+                    filled_sched = sched_block
+                    self._logger.debug(
+                        "TRAFFIC: No filler_uri configured for channel=%s, skipping fill",
+                        self.channel_id,
+                    )
+
+                # Build a new BlockPlan from the filled ScheduledBlock
+                filled_segments = []
+                for i, seg in enumerate(filled_sched.segments):
+                    d = {
+                        "segment_index": i,
+                        "segment_type": seg.segment_type,
+                        "asset_uri": seg.asset_uri,
+                        "asset_start_offset_ms": seg.asset_start_offset_ms,
+                        "segment_duration_ms": seg.segment_duration_ms,
+                    }
+                    filled_segments.append(d)
+
+                from retrovue.runtime.playout_session import BlockPlan as _BlockPlan
+                filled_block = _BlockPlan(
+                    block_id=block.block_id,
+                    channel_id=block.channel_id,
+                    start_utc_ms=block.start_utc_ms,
+                    end_utc_ms=block.end_utc_ms,
+                    segments=filled_segments,
+                )
+
+                # INV-TXLOG-WRITE-BEFORE-FEED-001: persist before feed
+                self._persist_transmission_log(filled_block, db)
+                db.commit()
+
+                # Write traffic_play_log entries separately (non-critical)
+                try:
+                    self._write_traffic_play_log(filled_block, db)
+                    db.commit()
+                except Exception as e:
+                    db.rollback()
+                    self._logger.warning(
+                        "TRAFFIC: traffic_play_log write failed (non-critical): %s", e
+                    )
+
+            self._logger.info(
+                "TRAFFIC: Filled block=%s at feed time segs=%d",
+                block.block_id, len(filled_segments),
+            )
+            return filled_block
+
+        except Exception as e:
+            self._logger.warning(
+                "TRAFFIC: Feed-time fill failed for block=%s: %s -- using unfilled block",
+                block.block_id, e,
+            )
+            return block
+
+    def _write_traffic_play_log(self, block: "BlockPlan", db_session) -> None:
+        """Write traffic_play_log entries for each commercial/promo in the block.
+
+        Called from _fill_block_at_feed_time after fill_ad_blocks succeeds.
+        Gracefully degrades on error.
+        """
+        try:
+            from retrovue.domain.entities import TrafficPlayLog, Asset
+            import datetime as _dt
+            import uuid as _uuid
+
+            interstitial_types = {"commercial", "promo", "ident", "psa", "filler", "ad"}
+            played_at = _dt.datetime.now(_dt.timezone.utc)
+
+            for seg in block.segments:
+                seg_type = seg.get("segment_type", "") if isinstance(seg, dict) else getattr(seg, "segment_type", "")
+                if seg_type not in interstitial_types:
+                    continue
+                uri = seg.get("asset_uri", "") if isinstance(seg, dict) else getattr(seg, "asset_uri", "")
+                if not uri:
+                    continue
+                duration = seg.get("segment_duration_ms", 0) if isinstance(seg, dict) else getattr(seg, "segment_duration_ms", 0)
+                idx = seg.get("segment_index", 0) if isinstance(seg, dict) else getattr(seg, "segment_index", 0)
+
+                # Look up asset UUID from URI
+                asset = db_session.query(Asset).filter(
+                    Asset.canonical_uri == uri
+                ).first()
+                if asset is None:
+                    self._logger.debug("TRAFFIC: No asset found for URI=%s, skipping play log", uri)
+                    continue
+
+                row = TrafficPlayLog(
+                    channel_slug=str(self.channel_id),
+                    asset_uuid=asset.uuid,
+                    asset_uri=uri,
+                    asset_type=seg_type,
+                    played_at=played_at,
+                    break_index=idx,
+                    block_id=block.block_id,
+                    duration_ms=duration,
+                )
+                db_session.add(row)
+
+        except Exception as e:
+            self._logger.warning(
+                "TRAFFIC: Failed to write traffic_play_log for block=%s: %s",
+                block.block_id, e,
+            )
 
     def _feed_ahead(self) -> None:
         """Deadline-driven feed-ahead: feed blocks whose ready_by deadline
