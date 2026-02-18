@@ -586,20 +586,17 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_008_MissDoesNotStallFenceOrCorruptSeamSche
       << "Expected forced MISS from delay hook -- test infrastructure error if 0";
 
   // Block fences must fire -- both blocks must complete (proves MISS does not stall).
-  // NOTE: After segment MISS, the live_ replacement TickProducer may lose the
-  // parent block identity in on_block_completed.  We verify completion COUNT
-  // rather than exact block_ids.  The block identity accounting is a known
-  // cosmetic defect tracked separately from this resilience contract.
-  EXPECT_GE(static_cast<int>(completed_blocks_.size()), 2)
+  // INV-BLOCK-IDENTITY-001: Block identity is owned by the manager (live_parent_block_),
+  // not derived from live_->GetBlock().  After segment MISS PAD fallback, the
+  // manager-owned identity must still be correct in on_block_completed.
+  ASSERT_GE(static_cast<int>(completed_blocks_.size()), 2)
       << "Both blocks must complete -- MISS must not stall block fences";
 
-  // At least one completion must carry block B's identity (the non-MISS block).
-  bool found_miss_b = false;
-  for (const auto& id : completed_blocks_) {
-    if (id == "miss-b") found_miss_b = true;
-  }
-  EXPECT_TRUE(found_miss_b)
-      << "Block B (non-MISS) must complete with correct identity";
+  // Block identity must be preserved across MISS fallback.
+  EXPECT_EQ(completed_blocks_[0], "miss-a")
+      << "Block A identity must survive segment MISS PAD fallback";
+  EXPECT_EQ(completed_blocks_[1], "miss-b")
+      << "Block B must complete with correct identity";
 
   // Session survived -- no detach, no crash.
   EXPECT_EQ(m.detach_count, 0)
