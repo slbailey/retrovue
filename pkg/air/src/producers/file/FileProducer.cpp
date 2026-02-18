@@ -804,6 +804,29 @@ namespace retrovue::producers::file
         video_stream_index_ = i;
         AVStream* stream = format_ctx_->streams[i];
         time_base_ = av_q2d(stream->time_base);
+
+        // INV-FPS-RESAMPLE: Detect source frame rate for PTS-driven resampling
+        AVRational guessed_fps = av_guess_frame_rate(format_ctx_, stream, nullptr);
+        if (guessed_fps.num > 0 && guessed_fps.den > 0) {
+          source_fps_ = av_q2d(guessed_fps);
+        } else {
+          source_fps_ = config_.target_fps;
+        }
+        output_tick_interval_us_ = static_cast<int64_t>(
+            std::round(1000000.0 / config_.target_fps));
+
+        // Activate when source and target differ by > 1%
+        double fps_ratio = source_fps_ / config_.target_fps;
+        resample_active_ = (fps_ratio < 0.99 || fps_ratio > 1.01);
+        if (resample_active_) {
+          std::cout << "[FileProducer] INV-FPS-RESAMPLE: Active"
+                    << " source=" << source_fps_ << "fps"
+                    << " target=" << config_.target_fps << "fps"
+                    << " ratio=" << fps_ratio
+                    << " tick=" << output_tick_interval_us_ << "us"
+                    << std::endl;
+        }
+
         break;
       }
     }
@@ -1248,6 +1271,97 @@ namespace retrovue::producers::file
     bool in_shadow = shadow_decode_mode_.load(std::memory_order_acquire);
     if (!in_shadow && !WaitForDecodeReady()) {
       return true;  // Stop or write barrier - continue loop to check termination
+    }
+
+    // ======================================================================
+    // INV-FPS-RESAMPLE: Promote pending frame before decoding
+    // ======================================================================
+    // When a slow source caused a crossing frame to be saved as pending
+    // (because the held frame needed to repeat for intermediate ticks),
+    // check if it's time to promote the pending frame.
+    // ======================================================================
+    if (resample_active_ && pending_frame_valid_) {
+      if (pending_frame_mt_us_ <= next_output_tick_us_) {
+        // Pending frame is at or before current tick — promote to held
+        held_frame_storage_ = pending_frame_storage_;
+        held_frame_valid_ = true;
+        held_frame_mt_us_ = pending_frame_mt_us_;
+        pending_frame_valid_ = false;
+        // Fall through to decode next frame
+      } else if (held_frame_valid_) {
+        // Pending still past current tick — emit held as repeat (no decode needed).
+        // We need to go through the full emission path (VIDEO_EPOCH_SET, pacing, push).
+        // Construct a synthetic output and jump to the emission path.
+        //
+        // To avoid duplicating the emission path, we create the output_frame here
+        // and use a mini-goto pattern (resample_emit_repeat label).
+        buffer::Frame output_frame = held_frame_storage_;
+        int64_t tick_pts_us = next_output_tick_us_;
+        int64_t base_pts_us = tick_pts_us;
+        int64_t frame_pts_us = tick_pts_us;
+        output_frame.metadata.pts = tick_pts_us;
+        output_frame.metadata.duration = 1.0 / config_.target_fps;
+        last_decoded_mt_pts_us_ = tick_pts_us;
+        last_mt_pts_us_ = tick_pts_us;
+        resample_frames_emitted_++;
+        next_output_tick_us_ += output_tick_interval_us_;
+
+        // VIDEO_EPOCH_SET (if first frame)
+        if (first_mt_pts_us_ == 0) {
+          first_mt_pts_us_ = tick_pts_us;
+          if (master_clock_) {
+            playback_start_utc_us_ = master_clock_->now_utc_us();
+          }
+          std::cout << "[FileProducer] VIDEO_EPOCH_SET (resample repeat) first_mt_pts_us="
+                    << tick_pts_us << std::endl;
+          {
+            std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
+            g_video_epoch_time[this] = std::chrono::steady_clock::now();
+          }
+        }
+
+        // Pacing
+        int64_t frame_offset_us = tick_pts_us - first_mt_pts_us_;
+        int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
+        if (master_clock_) {
+          int64_t now_us = master_clock_->now_utc_us();
+          if (now_us < target_utc_us && !stop_requested_.load(std::memory_order_acquire)) {
+            if (master_clock_->is_fake()) {
+              while (master_clock_->now_utc_us() < target_utc_us &&
+                     !stop_requested_.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            } else {
+              std::this_thread::sleep_for(
+                  std::chrono::microseconds(target_utc_us - now_us));
+            }
+          }
+        }
+
+        // Truncation check
+        if (planned_frame_count_ >= 0 &&
+            frames_delivered_.load(std::memory_order_acquire) >= planned_frame_count_) {
+          return true;
+        }
+
+        // Push
+        while (!output_buffer_.Push(output_frame)) {
+          if (stop_requested_.load(std::memory_order_acquire)) return true;
+          if (writes_disabled_.load(std::memory_order_acquire)) return true;
+          buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
+          if (master_clock_ && !master_clock_->is_fake())
+            std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+          else
+            std::this_thread::yield();
+        }
+        frames_produced_.fetch_add(1, std::memory_order_relaxed);
+        frames_delivered_.fetch_add(1, std::memory_order_relaxed);
+
+        // Keep audio flowing during repeats
+        if (audio_stream_index_ >= 0 && !audio_eof_reached_)
+          ReceiveAudioFrames();
+
+        return true;  // Next call checks pending again
+      }
     }
 
     // Decode ONE frame at a time (paced according to fake time)
@@ -1758,6 +1872,95 @@ namespace retrovue::producers::file
     // Storing CT here causes contamination: next frame's raw MT gets "corrected" to CT-based value.
     last_decoded_mt_pts_us_ = base_pts_us;  // MT, not CT!
     last_mt_pts_us_ = base_pts_us;  // MT, not CT!
+
+    // ======================================================================
+    // INV-FPS-RESAMPLE: PTS-driven output tick resampling (frame synchronizer)
+    // ======================================================================
+    // House rate tick grid is authoritative. Exactly one frame per output tick.
+    // For each tick, select the latest decoded frame with MT PTS <= tick.
+    //
+    // Fast sources (60->30): intermediate frames skipped naturally.
+    // Slow sources (23.976->30): held frame repeated on empty ticks.
+    // VFR / non-standard: handled uniformly via PTS comparison.
+    //
+    // Output PTS is stamped to the tick grid — encoder sees perfect cadence,
+    // no PTS collisions, no monotonicity guard hacks.
+    //
+    // Pending frame mechanism:
+    // When a decoded frame crosses the tick boundary and the held frame needs
+    // to repeat for intermediate ticks (slow source), the crossing frame is
+    // saved as pending. On the next ProduceRealFrame() call, the pending
+    // frame is promoted to held before any new decoding occurs.
+    // ======================================================================
+    if (resample_active_) {
+      resample_frames_decoded_++;
+
+      // Initialize tick grid from first frame after seek/start
+      if (next_output_tick_us_ < 0) {
+        next_output_tick_us_ = base_pts_us;
+        std::cout << "[FileProducer] INV-FPS-RESAMPLE: Tick grid anchored at "
+                  << base_pts_us << "us (source=" << source_fps_
+                  << "fps, target=" << config_.target_fps << "fps)" << std::endl;
+      }
+
+      // Is this frame a candidate for the current tick?
+      if (base_pts_us <= next_output_tick_us_) {
+        // At or before tick boundary — hold as best candidate, continue decoding
+        held_frame_storage_ = output_frame;
+        held_frame_valid_ = true;
+        held_frame_mt_us_ = base_pts_us;
+        return true;
+      }
+
+      // Crossed tick boundary: base_pts_us > next_output_tick_us_
+      // Check if the crossing frame is ALSO past the NEXT tick (slow source / repeat case)
+      int64_t after_tick = next_output_tick_us_ + output_tick_interval_us_;
+      if (base_pts_us > after_tick && held_frame_valid_) {
+        // Crossing frame is past the next tick too — we need to repeat held frame
+        // for the current tick and save crossing frame for later.
+        pending_frame_storage_ = output_frame;
+        pending_frame_valid_ = true;
+        pending_frame_mt_us_ = base_pts_us;
+        // Emit held frame as repeat at current tick
+        output_frame = held_frame_storage_;
+      } else {
+        // Normal case: crossing frame is between current tick and next tick.
+        // Save crossing frame as next tick's candidate.
+        buffer::Frame crossing = output_frame;
+        int64_t crossing_mt = base_pts_us;
+        // Emit held frame (or re-anchor if no held)
+        if (held_frame_valid_) {
+          output_frame = held_frame_storage_;
+        }
+        // Stash crossing as new held for next tick
+        held_frame_storage_ = crossing;
+        held_frame_valid_ = true;
+        held_frame_mt_us_ = crossing_mt;
+      }
+
+      // Stamp output to tick grid
+      int64_t tick_pts_us = next_output_tick_us_;
+      output_frame.metadata.pts = tick_pts_us;
+      output_frame.metadata.duration = 1.0 / config_.target_fps;
+      base_pts_us = tick_pts_us;
+      last_decoded_mt_pts_us_ = tick_pts_us;
+      last_mt_pts_us_ = tick_pts_us;
+      resample_frames_emitted_++;
+      next_output_tick_us_ += output_tick_interval_us_;
+
+      // Periodic stats
+      if (resample_frames_emitted_ % 300 == 0) {
+        std::cout << "[FileProducer] INV-FPS-RESAMPLE: decoded="
+                  << resample_frames_decoded_
+                  << " emitted=" << resample_frames_emitted_
+                  << " skip=" << (resample_frames_decoded_ - resample_frames_emitted_)
+                  << std::endl;
+      }
+      // Fall through to VIDEO_EPOCH_SET / pacing / push with tick-stamped frame
+    }
+    // ======================================================================
+    // End INV-FPS-RESAMPLE
+    // ======================================================================
 
     // Establish time mapping on first emitted frame (VIDEO_EPOCH_SET)
     // CRITICAL: Use base_pts_us (MT), not frame_pts_us (CT)!
