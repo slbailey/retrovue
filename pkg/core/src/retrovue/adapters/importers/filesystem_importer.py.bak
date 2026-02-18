@@ -3,7 +3,6 @@ Filesystem importer for discovering content from local file systems.
 
 This importer scans local directories for media files and returns them as discovered items.
 It supports glob patterns and can extract basic metadata from file system attributes.
-It also supports directory-based tag inference for interstitial content classification.
 """
 
 from __future__ import annotations
@@ -27,55 +26,12 @@ if TYPE_CHECKING:
     from ...domain.entities import Collection
 
 
-# Default inference rules for interstitial content classification.
-# Maps directory name patterns (case-insensitive) to canonical tags.
-DEFAULT_INFERENCE_RULES: dict[str, list[dict[str, Any]]] = {
-    "type_rules": [
-        {"match": ["commercials", "commercial", "ads"], "tag": "commercial"},
-        {"match": ["station id", "station ids", "ident", "idents"], "tag": "station_id"},
-        {"match": ["stinger", "stingers"], "tag": "stinger"},
-        {"match": ["bumper", "bumpers"], "tag": "bumper"},
-        {"match": ["promo", "promos", "trailer", "trailers", "movie trailers"], "tag": "promo"},
-        {"match": ["psa", "psas", "public service"], "tag": "psa"},
-        {"match": ["filler"], "tag": "filler"},
-        {"match": ["special programming", "specials"], "tag": "promo"},
-    ],
-    "category_rules": [
-        {"match": ["restaurant", "restaurants", "fast food"], "tag": "restaurant"},
-        {"match": ["auto", "auto manufacturers", "cars", "car dealers", "car care"], "tag": "auto"},
-        {"match": ["food", "sodas", "drinks"], "tag": "food"},
-        {"match": ["insurance"], "tag": "insurance"},
-        {"match": ["retail", "box stores"], "tag": "retail"},
-        {"match": ["travel"], "tag": "travel"},
-        {"match": ["products"], "tag": "products"},
-        {"match": ["clothes", "clothing"], "tag": "clothing"},
-        {"match": ["credit cards", "credit card"], "tag": "finance"},
-        {"match": ["infomercials", "infomercial"], "tag": "infomercial"},
-        {"match": ["local"], "tag": "local"},
-        {"match": ["show adverts", "show advert"], "tag": "show_promo"},
-        {"match": ["station adverts", "station advert", "network ads", "network ad"], "tag": "station_promo"},
-        {"match": ["dvds", "dvd", "vhsdvd", "vhs dvd", "vhs/dvd"], "tag": "home_video"},
-        {"match": ["odd", "misc", "miscellaneous"], "tag": "misc"},
-        {"match": ["adult", "adult content"], "tag": "adult"},
-        {"match": ["toys", "kids toys"], "tag": "toys"},
-        {"match": ["video games", "games", "gaming"], "tag": "tech"},
-        {"match": ["music"], "tag": "entertainment"},
-        {"match": ["health", "women", "kitchen", "businesses"], "tag": "misc"},
-        {"match": ["mtv"], "tag": "music_channel"},
-        {"match": ["tnt"], "tag": "tnt_channel"},
-    ],
-}
-
-
 class FilesystemImporter(BaseImporter):
     """
     Filesystem importer for discovering content from local file systems.
 
     This importer scans specified directories for media files and returns them
     as discovered items with file:// URIs and basic metadata.
-
-    Supports directory-based tag inference for interstitial content classification
-    via the ``inference_rules`` configuration option.
     """
 
     name = "filesystem"
@@ -87,7 +43,6 @@ class FilesystemImporter(BaseImporter):
         glob_patterns: list[str] | None = None,
         include_hidden: bool = False,
         calculate_hash: bool = False,
-        inference_rules: dict[str, list[dict[str, Any]]] | None = None,
     ):
         """
         Initialize the filesystem importer.
@@ -98,9 +53,6 @@ class FilesystemImporter(BaseImporter):
             glob_patterns: List of glob patterns to match (default: common video extensions)
             include_hidden: Whether to include hidden files and directories
             calculate_hash: Deprecated; full-file hashing is not performed during ingest
-            inference_rules: Optional dict with ``type_rules`` and ``category_rules`` lists,
-                             each containing ``{"match": [...], "tag": "..."}`` entries.
-                             If omitted, ``DEFAULT_INFERENCE_RULES`` are used.
         """
         super().__init__(
             source_name=source_name,
@@ -108,7 +60,6 @@ class FilesystemImporter(BaseImporter):
             glob_patterns=glob_patterns,
             include_hidden=include_hidden,
             calculate_hash=calculate_hash,
-            inference_rules=inference_rules,
         )
 
         self.source_name = source_name
@@ -127,48 +78,6 @@ class FilesystemImporter(BaseImporter):
         ]
         self.include_hidden = include_hidden
         self.calculate_hash = calculate_hash
-        self.inference_rules: dict[str, list[dict[str, Any]]] = (
-            inference_rules if inference_rules is not None else DEFAULT_INFERENCE_RULES
-        )
-
-    # ------------------------------------------------------------------
-    # Collection discovery
-    # ------------------------------------------------------------------
-
-    def list_collections(self, source_config: dict[str, Any]) -> list[dict[str, Any]]:
-        """
-        Return a single collection representing all configured root paths.
-
-        This satisfies the interface expected by ``source_discover.py``
-        (``discover_collections``).  Each dict contains:
-
-        - ``external_id``: stable hash-based ID derived from root_paths
-        - ``name``: the source_name
-        - ``type``: ``"interstitial"`` (default) or ``"directory"``
-        - ``locations``: list of root path strings
-
-        Args:
-            source_config: Unused for filesystem sources; kept for API parity.
-
-        Returns:
-            A one-element list containing the collection descriptor.
-        """
-        # Build a stable external_id from the sorted root paths
-        roots_key = "|".join(sorted(str(Path(p).resolve()) for p in self.root_paths))
-        external_id = hashlib.sha256(roots_key.encode()).hexdigest()[:16]
-
-        return [
-            {
-                "external_id": external_id,
-                "name": self.source_name,
-                "type": "interstitial",
-                "locations": list(self.root_paths),
-            }
-        ]
-
-    # ------------------------------------------------------------------
-    # Discovery
-    # ------------------------------------------------------------------
 
     def discover(self) -> list[DiscoveredItem]:
         """
@@ -218,86 +127,6 @@ class FilesystemImporter(BaseImporter):
                 return True
         return False
 
-    # ------------------------------------------------------------------
-    # Tag inference
-    # ------------------------------------------------------------------
-
-    def _infer_tags_from_path(self, file_path: Path) -> dict[str, Any]:
-        """
-        Walk directory ancestors of *file_path* and apply ``inference_rules``
-        to infer interstitial type and category tags.
-
-        The algorithm:
-        1. Collect all ancestor directory names (case-normalised) between any
-           configured root_path and the file's parent (inclusive of the file's
-           parent, exclusive of anything above the highest matching root).
-        2. For each directory name, check ``type_rules`` first-match wins.
-        3. For each directory name, check ``category_rules`` first-match wins.
-        4. Default ``interstitial_type`` to ``"filler"`` when no rule matches.
-
-        Returns:
-            dict with keys ``interstitial_type`` (str), ``interstitial_category``
-            (str | None), and ``inferred_labels`` (list[str]).
-        """
-        type_rules = self.inference_rules.get("type_rules", [])
-        category_rules = self.inference_rules.get("category_rules", [])
-
-        # Resolve root paths for boundary detection
-        resolved_roots = {Path(r).resolve() for r in self.root_paths}
-
-        # Collect directory names from file parent up to (but not including)
-        # the first matching root.  We stop walking when we hit a root path.
-        dir_names: list[str] = []
-        current = file_path.resolve().parent
-        while True:
-            dir_names.append(current.name)
-            if current in resolved_roots or current == current.parent:
-                break
-            current = current.parent
-
-        # Normalise for case-insensitive matching
-        dir_names_lower = [d.lower() for d in dir_names]
-
-        inferred_type: str | None = None
-        inferred_category: str | None = None
-        inferred_labels: list[str] = []
-
-        # Build a fast lookup: pattern → tag for each rule set
-        def _build_lookup(rules: list[dict[str, Any]]) -> dict[str, str]:
-            lookup: dict[str, str] = {}
-            for rule in rules:
-                for pattern in rule["match"]:
-                    lookup[pattern.lower()] = rule["tag"]
-            return lookup
-
-        type_lookup = _build_lookup(type_rules)
-        category_lookup = _build_lookup(category_rules)
-
-        # Iterate directories from deepest (most specific) to shallowest so that
-        # a subdirectory like "PSAs" takes priority over its ancestor "Commercials".
-        for dir_name in dir_names_lower:
-            if inferred_type is None and dir_name in type_lookup:
-                inferred_type = type_lookup[dir_name]
-            if inferred_category is None and dir_name in category_lookup:
-                inferred_category = category_lookup[dir_name]
-            if inferred_type is not None and inferred_category is not None:
-                break
-
-        if inferred_type:
-            inferred_labels.append(f"interstitial_type:{inferred_type}")
-        if inferred_category:
-            inferred_labels.append(f"interstitial_category:{inferred_category}")
-
-        return {
-            "interstitial_type": inferred_type or "filler",
-            "interstitial_category": inferred_category,
-            "inferred_labels": inferred_labels,
-        }
-
-    # ------------------------------------------------------------------
-    # Config schema / update fields
-    # ------------------------------------------------------------------
-
     @classmethod
     def get_config_schema(cls) -> ImporterConfig:
         """
@@ -329,14 +158,6 @@ class FilesystemImporter(BaseImporter):
                     "name": "calculate_hash",
                     "description": "Whether to calculate SHA-256 hash of files",
                     "default": "true",
-                },
-                {
-                    "name": "inference_rules",
-                    "description": (
-                        "Dict with 'type_rules' and 'category_rules' for directory-based "
-                        "interstitial tag inference. Defaults to built-in rules."
-                    ),
-                    "default": "DEFAULT_INFERENCE_RULES",
                 },
             ],
             description="Scan local filesystem directories for media files and discover content",
@@ -383,14 +204,6 @@ class FilesystemImporter(BaseImporter):
                 is_sensitive=False,
                 is_immutable=False,
             ),
-            UpdateFieldSpec(
-                config_key="inference_rules",
-                cli_flag="--inference-rules",
-                help="JSON dict with type_rules/category_rules for directory-based tag inference",
-                field_type="json",
-                is_sensitive=False,
-                is_immutable=False,
-            ),
         ]
 
     @classmethod
@@ -431,14 +244,6 @@ class FilesystemImporter(BaseImporter):
             calculate_hash = partial_config["calculate_hash"]
             if not isinstance(calculate_hash, bool):
                 raise ImporterConfigurationError("calculate_hash must be a boolean")
-
-        if "inference_rules" in partial_config:
-            rules = partial_config["inference_rules"]
-            if not isinstance(rules, dict):
-                raise ImporterConfigurationError("inference_rules must be a dict")
-            for key in ("type_rules", "category_rules"):
-                if key in rules and not isinstance(rules[key], list):
-                    raise ImporterConfigurationError(f"inference_rules['{key}'] must be a list")
 
     def _validate_parameter_types(self) -> None:
         """
@@ -675,10 +480,6 @@ class FilesystemImporter(BaseImporter):
         """
         Create a DiscoveredItem from a file path.
 
-        Applies directory-based inference rules to populate
-        ``editorial["interstitial_type"]`` and ``editorial["interstitial_category"]``
-        from the file's ancestor directory names.
-
         Args:
             file_path: Path to the file
 
@@ -702,20 +503,12 @@ class FilesystemImporter(BaseImporter):
             # Extract basic labels from filename
             raw_labels = self._extract_filename_labels(file_path.name)
 
-            # Apply directory-based inference rules
-            inferred = self._infer_tags_from_path(file_path)
-            raw_labels = (raw_labels or []) + inferred["inferred_labels"]
-
-            # Build editorial from filename, fs attributes, and inferred tags
+            # Build basic editorial from filename and fs attributes
             editorial: dict[str, Any] = {
                 "title": file_path.stem,
                 "size": size,
                 "modified": last_modified.isoformat(),
-                "interstitial_type": inferred["interstitial_type"],
             }
-            if inferred["interstitial_category"] is not None:
-                editorial["interstitial_category"] = inferred["interstitial_category"]
-
             # Try loading a JSON/YAML sidecar adjacent to the file
             sidecar: dict[str, Any] | None = None
             try:

@@ -44,6 +44,7 @@ struct PipelineMetrics {
   int32_t segment_seam_ready_count = 0;  // Segment seams where prep was ready
   int32_t segment_seam_miss_count = 0;   // Segment seams where prep was NOT ready
   int32_t segment_prep_armed_count = 0;  // Segment prep requests submitted
+  int32_t segment_seam_pad_inline_count = 0;  // PAD segment seams handled inline (no worker)
 
   // ---- Tick Deadline Discipline (INV-TICK-DEADLINE-DISCIPLINE-001) ----
   int64_t late_ticks_total = 0;
@@ -185,6 +186,11 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_segment_seam_miss_count counter\n";
     oss << "air_continuous_segment_seam_miss_count{channel=\"" << ch << "\"} "
         << segment_seam_miss_count << "\n";
+
+    oss << "\n# HELP air_continuous_segment_seam_pad_inline_count PAD segment seams handled inline\n";
+    oss << "# TYPE air_continuous_segment_seam_pad_inline_count counter\n";
+    oss << "air_continuous_segment_seam_pad_inline_count{channel=\"" << ch << "\"}  "
+        << segment_seam_pad_inline_count << "\n";
 
     oss << "\n# HELP air_continuous_segment_prep_armed_count Segment prep requests submitted\n";
     oss << "# TYPE air_continuous_segment_prep_armed_count counter\n";

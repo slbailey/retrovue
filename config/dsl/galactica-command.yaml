@@ -1,0 +1,31 @@
+channel: galactica-command
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Battlestar Galactica — classic and reimagined"
+  tagline: "So Say We All."
+
+pools:
+  bsg_classic:
+    match:
+      type: episode
+      series_title: "Battlestar Galactica (1978)"
+  bsg_new:
+    match:
+      type: episode
+      series_title: "Battlestar Galactica (2003)"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "18:00"
+        title: "Battlestar Galactica (2003)"
+        pool: bsg_new
+        mode: sequential
+    - block:
+        start: "18:00"
+        end: "06:00"
+        title: "Battlestar Galactica (1978)"
+        pool: bsg_classic
+        mode: sequential

@@ -1,0 +1,21 @@
+channel: babylon-5-tv
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Babylon 5 — the complete saga on loop"
+  tagline: "The Last Best Hope for Peace."
+
+pools:
+  b5:
+    match:
+      type: episode
+      series_title: "Babylon 5"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Babylon 5"
+        pool: b5
+        mode: sequential

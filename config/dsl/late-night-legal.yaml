@@ -1,0 +1,31 @@
+channel: late-night-legal
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Boston Legal and Suits — legal drama all day"
+  tagline: "Objection Overruled."
+
+pools:
+  boston_legal:
+    match:
+      type: episode
+      series_title: "Boston Legal"
+  suits:
+    match:
+      type: episode
+      series_title: "Suits"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "18:00"
+        title: "Suits"
+        pool: suits
+        mode: sequential
+    - block:
+        start: "18:00"
+        end: "06:00"
+        title: "Boston Legal"
+        pool: boston_legal
+        mode: sequential

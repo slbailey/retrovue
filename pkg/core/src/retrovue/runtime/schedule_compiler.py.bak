@@ -155,8 +155,6 @@ def select_movie(
             continue
         if max_duration_sec and meta.duration_sec > max_duration_sec:
             continue
-        if meta.duration_sec and meta.duration_sec < 3600:
-            continue  # skip movies with bad/short duration metadata
         filtered.append(cid)
 
     if not filtered:
@@ -538,14 +536,10 @@ def _compile_movie_marathon(
         used_movie_ids = set()
 
     blocks: list[ProgramBlockOutput] = []
-    movie_seed = seed if seed is not None else 42
+    movie_seed = seed or 42
     max_attempts = 200  # safety valve
 
-    while max_attempts > 0:
-        # Stop if we have already filled past end_time
-        if current_time >= end_time:
-            break
-
+    while current_time < end_time and max_attempts > 0:
         max_attempts -= 1
 
         movie_asset_id = _select_movie_no_repeat(
@@ -584,10 +578,39 @@ def _compile_movie_marathon(
         blocks.append(block)
         current_time = block.end_at()
 
-        # This movie bleeds past end_time — keep it if allow_bleed, else remove
-        if current_time > end_time and not allow_bleed:
-            blocks.pop()
+        # If we've reached or passed the end, check bleed logic
+        if current_time >= end_time:
             break
+
+    # allow_bleed: if we stopped short, add one more movie
+    if allow_bleed and blocks and blocks[-1].end_at() < end_time:
+        movie_asset_id = _select_movie_no_repeat(
+            collections=collections,
+            resolver=resolver,
+            rating_include=rating_cfg.get("include"),
+            rating_exclude=rating_cfg.get("exclude"),
+            max_duration_sec=ms.get("max_duration_sec"),
+            seed=movie_seed,
+            used_ids=used_movie_ids,
+        )
+        if movie_asset_id:
+            used_movie_ids.add(movie_asset_id)
+            movie_meta = resolver.lookup(movie_asset_id)
+            slot_duration = _grid_slot_duration(grid_minutes, movie_meta.duration_sec)
+            block = ProgramBlockOutput(
+                title=movie_meta.title or movie_asset_id,
+                asset_id=movie_asset_id,
+                start_at=current_time,
+                slot_duration_sec=slot_duration,
+                episode_duration_sec=movie_meta.duration_sec,
+                collection=collections[0] if collections else None,
+                selector={
+                    "collections": collections,
+                    "rating": rating_cfg,
+                    "seed": movie_seed,
+                },
+            )
+            blocks.append(block)
 
     return blocks
 
@@ -732,8 +755,6 @@ def _select_movie_no_repeat(
             continue
         if max_duration_sec and meta.duration_sec > max_duration_sec:
             continue
-        if meta.duration_sec and meta.duration_sec < 3600:
-            continue  # skip movies with bad/short duration metadata
         filtered.append(cid)
 
     if not filtered:

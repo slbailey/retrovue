@@ -280,6 +280,7 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/Phase815FileProducerTests.cpp
   tests/contracts/Phase84PersistentMpegTsMuxTests.cpp
   tests/contracts/file_producer/FileProducerContractTests.cpp
+  tests/contracts/file_producer/FpsResampleTests.cpp
   tests/contracts/TimelineController/TimelineControllerContractTests.cpp
   tests/contracts/TimelineController/Phase8IntegrationTests.cpp
   tests/contracts/Phase9OutputBootstrapTests.cpp
@@ -391,6 +392,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ProgramBlockAuthorityContractTests.cpp
   tests/contracts/BlockPlan/SeamContinuityEngineContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
+  tests/contracts/BlockPlan/SegmentSeamRaceConditionFixTests.cpp
   tests/blockplan/test_segment_aware_playback_proof.cpp
 )
 

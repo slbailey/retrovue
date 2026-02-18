@@ -84,8 +84,13 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[s
     for pool_id in pools:
         sequential_counters[pool_id] = starting_counter
 
+    # Derive channel-specific seed so different channels with the same pool
+    # don't get identical movie sequences
+    _channel_seed = abs(hash(channel_cfg[channel_id])) % 100000
+
     schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path,
-                                sequential_counters=sequential_counters)
+                                sequential_counters=sequential_counters,
+                                seed=_channel_seed)
 
     entries = []
     for block in schedule["program_blocks"]:

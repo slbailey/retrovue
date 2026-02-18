@@ -1,0 +1,34 @@
+channel: trek-tv
+channel_number: 8
+name: "Trek TV"
+timezone: America/New_York
+
+format:
+  video: { width: 1280, height: 720, frame_rate: "30/1" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+filler: !include _defaults.yaml:filler
+
+notes:
+  vibe: "All Star Trek, all the time"
+  tagline: "Make It So."
+
+pools:
+  all_trek:
+    match:
+      type: episode
+      series_title:
+        - "Star Trek: The Next Generation"
+        - "Star Trek: Deep Space Nine"
+        - "Star Trek: Voyager"
+        - "Star Trek: Strange New Worlds"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Star Trek"
+        pool: all_trek
+        mode: shuffle

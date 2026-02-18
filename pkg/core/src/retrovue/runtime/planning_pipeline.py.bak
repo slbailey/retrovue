@@ -682,8 +682,13 @@ def fill_breaks(
             filled = _fill_one_break(brk, asset_library, policy)
             filled_breaks.append(filled)
 
-        # Unfilled break time is now handled as inline pad segments
-        # within _interleave_segments, so block-level pad stays unchanged.
+        # Absorb unfilled break time back into pad to preserve the invariant:
+        # content + filled_breaks + pad == block_duration
+        unfilled_ms = sum(
+            fb.allocated_ms - fb.filled_ms
+            for fb in filled_breaks
+        )
+        adjusted_pad_ms = block.pad_ms + unfilled_ms
 
         result.append(FilledBlock(
             slot_index=block.slot_index,
@@ -692,7 +697,7 @@ def fill_breaks(
             filled_breaks=filled_breaks,
             content_duration_ms=block.content_duration_ms,
             block_duration_ms=block.block_duration_ms,
-            pad_ms=block.pad_ms,
+            pad_ms=adjusted_pad_ms,
             program_event_id=block.program_event_id,
             block_index_within_event=block.block_index_within_event,
         ))
@@ -824,27 +829,8 @@ def _interleave_segments(
         seg_index += 1
 
         # After each content segment (except the last), insert break items
-        # with any leftover pad distributed evenly between ads
-        # (INV-BREAK-PAD-DISTRIBUTED-001)
         if next_break is not None and i < len(fb.content_segments) - 1:
-            num_items = len(next_break.items)
-            break_gap_ms = next_break.allocated_ms - next_break.filled_ms
-
-            if num_items > 0 and break_gap_ms > 0:
-                # Distribute gap evenly; remainder goes to last gaps
-                base_pad_ms = break_gap_ms // num_items
-                extra_ms = break_gap_ms % num_items
-                # Pads go BETWEEN items (after each item except possibly
-                # adjusted so total is exact). We place a pad after every
-                # item: N items → N pads, distributed evenly.
-                pad_sizes = [base_pad_ms] * num_items
-                # Distribute remainder one ms at a time from the end
-                for r in range(extra_ms):
-                    pad_sizes[num_items - 1 - r] += 1
-            else:
-                pad_sizes = [0] * max(num_items, 1)
-
-            for idx, item in enumerate(next_break.items):
+            for item in next_break.items:
                 seg_type = item.asset_type if item.asset_type in ("filler", "promo", "ad") else "filler"
                 flat.append({
                     "segment_index": seg_index,
@@ -854,14 +840,6 @@ def _interleave_segments(
                     "segment_type": seg_type,
                 })
                 seg_index += 1
-                # Insert distributed pad after this item
-                if pad_sizes[idx] > 0:
-                    flat.append({
-                        "segment_index": seg_index,
-                        "segment_duration_ms": pad_sizes[idx],
-                        "segment_type": "pad",
-                    })
-                    seg_index += 1
             next_break = next(break_iter, None)
 
     # Append PAD segment if needed

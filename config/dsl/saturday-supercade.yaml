@@ -1,0 +1,41 @@
+channel: saturday-supercade
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Saturday morning cartoons all week long"
+  tagline: "Every Day Is Saturday."
+
+pools:
+  supercade:
+    match:
+      type: episode
+      series_title: "Saturday Supercade"
+  mario:
+    match:
+      type: episode
+      series_title: "Super Mario World"
+  xmen:
+    match:
+      type: episode
+      series_title: "X-Men '97"
+  smiling:
+    match:
+      type: episode
+      series_title: "Smiling Friends"
+  stooges:
+    match:
+      type: episode
+      series_title: "The New Three Stooges"
+  superman:
+    match:
+      type: episode
+      series_title: "The Superman+Aquaman Hour of Adventure"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "06:00"
+        title: "Cartoon Block"
+        pool: [supercade, mario, superman, stooges, xmen, smiling]
+        mode: shuffle

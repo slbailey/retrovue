@@ -105,7 +105,7 @@ def ingest_collection_assets(
                     EnricherEntity.enricher_id == enricher_id
                 ).first()
                 if enricher_row:
-                    enricher_type = enricher_row.name.lower()
+                    enricher_type = enricher_row.type
                 else:
                     logger.error(f"Enricher not found in DB: {enricher_id}")
                     continue

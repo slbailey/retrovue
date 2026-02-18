@@ -1,0 +1,21 @@
+channel: soap-opera
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Soap — the original absurd drama"
+  tagline: "Confused? You Will Be."
+
+pools:
+  soap:
+    match:
+      type: episode
+      series_title: "Soap"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Soap"
+        pool: soap
+        mode: sequential

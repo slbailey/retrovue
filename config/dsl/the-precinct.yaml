@@ -1,0 +1,51 @@
+channel: the-precinct
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Crime and justice around the clock"
+  tagline: "Justice Never Sleeps."
+
+pools:
+  criminal_minds:
+    match:
+      type: episode
+      series_title: "Criminal Minds"
+  fbi:
+    match:
+      type: episode
+      series_title: "FBI"
+  csi:
+    match:
+      type: episode
+      series_title: "CSI - NY"
+  person:
+    match:
+      type: episode
+      series_title: "Person of Interest"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "12:00"
+        title: "Criminal Minds"
+        pool: criminal_minds
+        mode: sequential
+    - block:
+        start: "12:00"
+        end: "18:00"
+        title: "FBI"
+        pool: fbi
+        mode: sequential
+    - block:
+        start: "18:00"
+        end: "00:00"
+        title: "CSI: New York"
+        pool: csi
+        mode: sequential
+    - block:
+        start: "00:00"
+        end: "06:00"
+        title: "Person of Interest"
+        pool: person
+        mode: sequential

@@ -1,0 +1,32 @@
+channel: late-night-legal
+channel_number: 14
+name: "Legal Drama"
+timezone: America/New_York
+
+format:
+  video: { width: 1280, height: 720, frame_rate: "30/1" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+filler: !include _defaults.yaml:filler
+
+notes:
+  vibe: "Boston Legal and Suits — legal drama all day"
+  tagline: "Objection Overruled."
+
+pools:
+  all_legal:
+    match:
+      type: episode
+      series_title:
+        - "Boston Legal"
+        - "Suits"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Legal Drama"
+        pool: all_legal
+        mode: shuffle

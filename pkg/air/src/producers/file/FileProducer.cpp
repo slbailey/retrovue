@@ -576,6 +576,26 @@ namespace retrovue::producers::file
     std::cout << "[FileProducer] Decode loop started (stub_mode=" 
               << (config_.stub_mode ? "true" : "false") << ")" << std::endl;
 
+    // INV-FPS-RESAMPLE: Initialize resampler for stub mode when stub_source_fps is set
+    if (config_.stub_mode && config_.stub_source_fps > 0.0) {
+      source_fps_ = config_.stub_source_fps;
+      output_tick_interval_us_ = static_cast<int64_t>(
+          std::round(1000000.0 / config_.target_fps));
+      double fps_ratio = source_fps_ / config_.target_fps;
+      resample_active_ = (fps_ratio < 0.99 || fps_ratio > 1.01);
+      if (resample_active_) {
+        // Override stub frame interval to source fps (decode at source rate)
+        frame_interval_us_ = static_cast<int64_t>(
+            std::round(1000000.0 / source_fps_));
+        std::cout << "[FileProducer] INV-FPS-RESAMPLE (stub): Active"
+                  << " source=" << source_fps_ << "fps"
+                  << " target=" << config_.target_fps << "fps"
+                  << " stub_frame_interval=" << frame_interval_us_ << "us"
+                  << " tick=" << output_tick_interval_us_ << "us"
+                  << std::endl;
+      }
+    }
+
     // Non-stub: decoder already initialized in start() (Phase 6A.2). Init here only if not yet done.
     if (!config_.stub_mode && !decoder_initialized_)
     {
@@ -1273,47 +1293,23 @@ namespace retrovue::producers::file
       return true;  // Stop or write barrier - continue loop to check termination
     }
 
-    // ======================================================================
-    // INV-FPS-RESAMPLE: Promote pending frame before decoding
-    // ======================================================================
-    // When a slow source caused a crossing frame to be saved as pending
-    // (because the held frame needed to repeat for intermediate ticks),
-    // check if it's time to promote the pending frame.
-    // ======================================================================
-    if (resample_active_ && pending_frame_valid_) {
-      if (pending_frame_mt_us_ <= next_output_tick_us_) {
-        // Pending frame is at or before current tick — promote to held
-        held_frame_storage_ = pending_frame_storage_;
-        held_frame_valid_ = true;
-        held_frame_mt_us_ = pending_frame_mt_us_;
-        pending_frame_valid_ = false;
-        // Fall through to decode next frame
-      } else if (held_frame_valid_) {
-        // Pending still past current tick — emit held as repeat (no decode needed).
-        // We need to go through the full emission path (VIDEO_EPOCH_SET, pacing, push).
-        // Construct a synthetic output and jump to the emission path.
-        //
-        // To avoid duplicating the emission path, we create the output_frame here
-        // and use a mini-goto pattern (resample_emit_repeat label).
-        buffer::Frame output_frame = held_frame_storage_;
-        int64_t tick_pts_us = next_output_tick_us_;
-        int64_t base_pts_us = tick_pts_us;
-        int64_t frame_pts_us = tick_pts_us;
-        output_frame.metadata.pts = tick_pts_us;
-        output_frame.metadata.duration = 1.0 / config_.target_fps;
-        last_decoded_mt_pts_us_ = tick_pts_us;
-        last_mt_pts_us_ = tick_pts_us;
-        resample_frames_emitted_++;
-        next_output_tick_us_ += output_tick_interval_us_;
+    // INV-FPS-RESAMPLE: Check for pending frame repeats
+    {
+      buffer::Frame repeat_frame;
+      int64_t repeat_pts = 0;
+      if (ResamplePromotePending(repeat_frame, repeat_pts)) {
+        // Emit repeat frame through the normal emission path.
+        // We need VIDEO_EPOCH_SET + pacing + push.
+        // Set up for the emission path below.
 
         // VIDEO_EPOCH_SET (if first frame)
         if (first_mt_pts_us_ == 0) {
-          first_mt_pts_us_ = tick_pts_us;
+          first_mt_pts_us_ = repeat_pts;
           if (master_clock_) {
             playback_start_utc_us_ = master_clock_->now_utc_us();
           }
           std::cout << "[FileProducer] VIDEO_EPOCH_SET (resample repeat) first_mt_pts_us="
-                    << tick_pts_us << std::endl;
+                    << repeat_pts << std::endl;
           {
             std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
             g_video_epoch_time[this] = std::chrono::steady_clock::now();
@@ -1321,7 +1317,7 @@ namespace retrovue::producers::file
         }
 
         // Pacing
-        int64_t frame_offset_us = tick_pts_us - first_mt_pts_us_;
+        int64_t frame_offset_us = repeat_pts - first_mt_pts_us_;
         int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
         if (master_clock_) {
           int64_t now_us = master_clock_->now_utc_us();
@@ -1344,7 +1340,7 @@ namespace retrovue::producers::file
         }
 
         // Push
-        while (!output_buffer_.Push(output_frame)) {
+        while (!output_buffer_.Push(repeat_frame)) {
           if (stop_requested_.load(std::memory_order_acquire)) return true;
           if (writes_disabled_.load(std::memory_order_acquire)) return true;
           buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
@@ -1356,7 +1352,7 @@ namespace retrovue::producers::file
         frames_produced_.fetch_add(1, std::memory_order_relaxed);
         frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
-        // Keep audio flowing during repeats
+        // Keep audio flowing
         if (audio_stream_index_ >= 0 && !audio_eof_reached_)
           ReceiveAudioFrames();
 
@@ -1364,7 +1360,7 @@ namespace retrovue::producers::file
       }
     }
 
-    // Decode ONE frame at a time (paced according to fake time)
+        // Decode ONE frame at a time (paced according to fake time)
     // Read packet
     int ret = av_read_frame(format_ctx_, packet_);
 
@@ -1873,94 +1869,15 @@ namespace retrovue::producers::file
     last_decoded_mt_pts_us_ = base_pts_us;  // MT, not CT!
     last_mt_pts_us_ = base_pts_us;  // MT, not CT!
 
-    // ======================================================================
-    // INV-FPS-RESAMPLE: PTS-driven output tick resampling (frame synchronizer)
-    // ======================================================================
-    // House rate tick grid is authoritative. Exactly one frame per output tick.
-    // For each tick, select the latest decoded frame with MT PTS <= tick.
-    //
-    // Fast sources (60->30): intermediate frames skipped naturally.
-    // Slow sources (23.976->30): held frame repeated on empty ticks.
-    // VFR / non-standard: handled uniformly via PTS comparison.
-    //
-    // Output PTS is stamped to the tick grid — encoder sees perfect cadence,
-    // no PTS collisions, no monotonicity guard hacks.
-    //
-    // Pending frame mechanism:
-    // When a decoded frame crosses the tick boundary and the held frame needs
-    // to repeat for intermediate ticks (slow source), the crossing frame is
-    // saved as pending. On the next ProduceRealFrame() call, the pending
-    // frame is promoted to held before any new decoding occurs.
-    // ======================================================================
-    if (resample_active_) {
-      resample_frames_decoded_++;
-
-      // Initialize tick grid from first frame after seek/start
-      if (next_output_tick_us_ < 0) {
-        next_output_tick_us_ = base_pts_us;
-        std::cout << "[FileProducer] INV-FPS-RESAMPLE: Tick grid anchored at "
-                  << base_pts_us << "us (source=" << source_fps_
-                  << "fps, target=" << config_.target_fps << "fps)" << std::endl;
+    // INV-FPS-RESAMPLE: PTS-driven resampler gate
+    {
+      auto gate_result = ResampleGate(output_frame, base_pts_us);
+      if (gate_result == ResampleGateResult::HOLD) {
+        return true;  // Continue decoding
       }
-
-      // Is this frame a candidate for the current tick?
-      if (base_pts_us <= next_output_tick_us_) {
-        // At or before tick boundary — hold as best candidate, continue decoding
-        held_frame_storage_ = output_frame;
-        held_frame_valid_ = true;
-        held_frame_mt_us_ = base_pts_us;
-        return true;
-      }
-
-      // Crossed tick boundary: base_pts_us > next_output_tick_us_
-      // Check if the crossing frame is ALSO past the NEXT tick (slow source / repeat case)
-      int64_t after_tick = next_output_tick_us_ + output_tick_interval_us_;
-      if (base_pts_us > after_tick && held_frame_valid_) {
-        // Crossing frame is past the next tick too — we need to repeat held frame
-        // for the current tick and save crossing frame for later.
-        pending_frame_storage_ = output_frame;
-        pending_frame_valid_ = true;
-        pending_frame_mt_us_ = base_pts_us;
-        // Emit held frame as repeat at current tick
-        output_frame = held_frame_storage_;
-      } else {
-        // Normal case: crossing frame is between current tick and next tick.
-        // Save crossing frame as next tick's candidate.
-        buffer::Frame crossing = output_frame;
-        int64_t crossing_mt = base_pts_us;
-        // Emit held frame (or re-anchor if no held)
-        if (held_frame_valid_) {
-          output_frame = held_frame_storage_;
-        }
-        // Stash crossing as new held for next tick
-        held_frame_storage_ = crossing;
-        held_frame_valid_ = true;
-        held_frame_mt_us_ = crossing_mt;
-      }
-
-      // Stamp output to tick grid
-      int64_t tick_pts_us = next_output_tick_us_;
-      output_frame.metadata.pts = tick_pts_us;
-      output_frame.metadata.duration = 1.0 / config_.target_fps;
-      base_pts_us = tick_pts_us;
-      last_decoded_mt_pts_us_ = tick_pts_us;
-      last_mt_pts_us_ = tick_pts_us;
-      resample_frames_emitted_++;
-      next_output_tick_us_ += output_tick_interval_us_;
-
-      // Periodic stats
-      if (resample_frames_emitted_ % 300 == 0) {
-        std::cout << "[FileProducer] INV-FPS-RESAMPLE: decoded="
-                  << resample_frames_decoded_
-                  << " emitted=" << resample_frames_emitted_
-                  << " skip=" << (resample_frames_decoded_ - resample_frames_emitted_)
-                  << std::endl;
-      }
-      // Fall through to VIDEO_EPOCH_SET / pacing / push with tick-stamped frame
+      // EMIT or PASS: fall through to VIDEO_EPOCH_SET / pacing / push
+      // For EMIT: output_frame and base_pts_us have been updated to tick grid
     }
-    // ======================================================================
-    // End INV-FPS-RESAMPLE
-    // ======================================================================
 
     // Establish time mapping on first emitted frame (VIDEO_EPOCH_SET)
     // CRITICAL: Use base_pts_us (MT), not frame_pts_us (CT)!
@@ -2400,6 +2317,32 @@ namespace retrovue::producers::file
     // Generate YUV420 planar data (stub: all zeros for now)
     size_t frame_size = static_cast<size_t>(config_.target_width * config_.target_height * 1.5);
     frame.data.resize(frame_size, 0);
+
+    // INV-FPS-RESAMPLE: Route stub frames through resampler gate
+    if (resample_active_) {
+      int64_t base_pts = frame.metadata.pts;
+
+      // Check for pending repeat first
+      buffer::Frame repeat_frame;
+      int64_t repeat_pts = 0;
+      while (ResamplePromotePending(repeat_frame, repeat_pts)) {
+        // Emit repeat frames before processing new decoded frame
+        while (!output_buffer_.Push(repeat_frame)) {
+          if (stop_requested_.load(std::memory_order_acquire)) return;
+          if (writes_disabled_.load(std::memory_order_acquire)) return;
+          std::this_thread::yield();
+        }
+        frames_produced_.fetch_add(1, std::memory_order_relaxed);
+        frames_delivered_.fetch_add(1, std::memory_order_relaxed);
+      }
+
+      auto result = ResampleGate(frame, base_pts);
+      if (result == ResampleGateResult::HOLD) {
+        return;  // Frame absorbed, continue to next stub frame
+      }
+      // EMIT: frame has been updated with tick-stamped PTS
+      // Fall through to shadow check / push
+    }
 
     // INV-P8-SHADOW-PACE: Shadow mode caches first frame, then waits IN PLACE
     bool in_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
@@ -3156,6 +3099,115 @@ namespace retrovue::producers::file
     output_frame.nb_samples = samples_out;
 
     return true;
+  }
+
+  // ======================================================================
+  // INV-FPS-RESAMPLE: Extracted resampler gate
+  // ======================================================================
+  ResampleGateResult FileProducer::ResampleGate(
+      buffer::Frame& output_frame, int64_t& base_pts_us)
+  {
+    if (!resample_active_) {
+      return ResampleGateResult::PASS;
+    }
+
+    resample_frames_decoded_++;
+
+    // Initialize tick grid from first frame after seek/start
+    if (next_output_tick_us_ < 0) {
+      next_output_tick_us_ = base_pts_us;
+      std::cout << "[FileProducer] INV-FPS-RESAMPLE: Tick grid anchored at "
+                << base_pts_us << "us (source=" << source_fps_
+                << "fps, target=" << config_.target_fps << "fps)" << std::endl;
+    }
+
+    // Is this frame a candidate for the current tick?
+    if (base_pts_us <= next_output_tick_us_) {
+      // At or before tick boundary — hold as best candidate, continue decoding
+      held_frame_storage_ = output_frame;
+      held_frame_valid_ = true;
+      held_frame_mt_us_ = base_pts_us;
+      return ResampleGateResult::HOLD;
+    }
+
+    // Crossed tick boundary: base_pts_us > next_output_tick_us_
+    // Check if the crossing frame is ALSO past the NEXT tick (slow source / repeat case)
+    int64_t after_tick = next_output_tick_us_ + output_tick_interval_us_;
+    if (base_pts_us > after_tick && held_frame_valid_) {
+      // Crossing frame is past the next tick too — repeat held frame,
+      // save crossing frame for later
+      pending_frame_storage_ = output_frame;
+      pending_frame_valid_ = true;
+      pending_frame_mt_us_ = base_pts_us;
+      output_frame = held_frame_storage_;
+    } else {
+      // Normal case: crossing frame between current and next tick
+      buffer::Frame crossing = output_frame;
+      int64_t crossing_mt = base_pts_us;
+      if (held_frame_valid_) {
+        output_frame = held_frame_storage_;
+      }
+      held_frame_storage_ = crossing;
+      held_frame_valid_ = true;
+      held_frame_mt_us_ = crossing_mt;
+    }
+
+    // Stamp output to tick grid
+    int64_t tick_pts_us = next_output_tick_us_;
+    output_frame.metadata.pts = tick_pts_us;
+    output_frame.metadata.duration = 1.0 / config_.target_fps;
+    base_pts_us = tick_pts_us;
+    last_decoded_mt_pts_us_ = tick_pts_us;
+    last_mt_pts_us_ = tick_pts_us;
+    resample_frames_emitted_++;
+    next_output_tick_us_ += output_tick_interval_us_;
+
+    // Periodic stats
+    if (resample_frames_emitted_ % 300 == 0) {
+      std::cout << "[FileProducer] INV-FPS-RESAMPLE: decoded="
+                << resample_frames_decoded_
+                << " emitted=" << resample_frames_emitted_
+                << " skip=" << (resample_frames_decoded_ - resample_frames_emitted_)
+                << std::endl;
+    }
+
+    return ResampleGateResult::EMIT;
+  }
+
+  // ======================================================================
+  // INV-FPS-RESAMPLE: Pending frame promotion (for slow source repeats)
+  // ======================================================================
+  bool FileProducer::ResamplePromotePending(
+      buffer::Frame& output_frame, int64_t& base_pts_us)
+  {
+    if (!resample_active_ || !pending_frame_valid_) {
+      return false;
+    }
+
+    if (pending_frame_mt_us_ <= next_output_tick_us_) {
+      // Promote pending to held, let caller decode next
+      held_frame_storage_ = pending_frame_storage_;
+      held_frame_valid_ = true;
+      held_frame_mt_us_ = pending_frame_mt_us_;
+      pending_frame_valid_ = false;
+      return false;
+    }
+
+    if (!held_frame_valid_) {
+      return false;
+    }
+
+    // Pending still past current tick — emit held as repeat
+    output_frame = held_frame_storage_;
+    int64_t tick_pts_us = next_output_tick_us_;
+    base_pts_us = tick_pts_us;
+    output_frame.metadata.pts = tick_pts_us;
+    output_frame.metadata.duration = 1.0 / config_.target_fps;
+    last_decoded_mt_pts_us_ = tick_pts_us;
+    last_mt_pts_us_ = tick_pts_us;
+    resample_frames_emitted_++;
+    next_output_tick_us_ += output_tick_interval_us_;
+    return true;  // Caller should emit this frame, skip decode
   }
 
 } // namespace retrovue::producers::file
