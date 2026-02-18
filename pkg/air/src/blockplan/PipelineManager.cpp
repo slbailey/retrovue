@@ -326,8 +326,10 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
   // Guard 2: SeamPreparer already has a block result — wait for PRE-TAKE to consume it.
   if (seam_preparer_->HasBlockResult()) return;
 
-  // Guard 3: SeamPreparer worker is currently running and no block result yet — don't cancel.
-  if (seam_preparer_->IsRunning() && !seam_preparer_->HasBlockResult()) return;
+  // INV-SEAM-SUBMIT-SAFE: Callers must NOT gate Submit() on IsRunning().
+  // The queue is sorted by seam_frame — priority is structural, not temporal.
+  // Gating on IsRunning() starves segment prep when block prep is in-flight,
+  // causing segment MISS at seam time.  See: FIX-seam-prep-starvation.md
 
   bool has_next = false;
   FedBlock block;
@@ -2510,43 +2512,76 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
   int32_t next_seg = current_segment_index_ + 1;
   if (next_seg >= static_cast<int32_t>(live_boundaries_.size())) return;
 
+  // FIX (skip-PAD prep): PAD segments are handled inline in PerformSegmentSwap --
+  // they need no decoder, no file I/O, and no async worker involvement.
+  // Scan forward from next_seg to find the first non-PAD segment to prep.
+  // This gives the worker the full duration of the current content segment as
+  // lead time, instead of racing a 1-frame PAD window (which always loses).
+  int32_t target_seg = next_seg;
+  while (target_seg < static_cast<int32_t>(live_parent_block_.segments.size()) &&
+         live_parent_block_.segments[target_seg].segment_type == SegmentType::kPad) {
+    target_seg++;
+  }
+  // If all remaining segments are PAD (or block ends here), nothing to prep.
+  if (target_seg >= static_cast<int32_t>(live_parent_block_.segments.size())) {
+    return;
+  }
+
+  // Guard: don't re-arm if the worker already has a result for the target segment.
+  // This prevents double-submission when a PAD inline swap calls ArmSegmentPrep
+  // and the content prep was already armed at block activation.
+  if (seam_preparer_->HasSegmentResult()) {
+    auto peek = seam_preparer_->PeekSegmentResult();
+    if (peek && peek->parent_block_id == live_parent_block_.block_id &&
+        peek->parent_segment_index == target_seg) {
+      return;  // Already prepped -- PerformSegmentSwap will consume at seam tick.
+    }
+  }
+
   // Use live_parent_block_ (the original multi-segment block stored at block
   // activation), NOT live_->GetBlock().  After a segment swap, live_ holds a
-  // synthetic single-segment block, so live_->GetBlock().segments[next_seg]
+  // synthetic single-segment block, so live_->GetBlock().segments[target_seg]
   // would be out of range.
   FedBlock synth = MakeSyntheticSegmentBlock(
-      live_parent_block_, next_seg, live_boundaries_);
+      live_parent_block_, target_seg, live_boundaries_);
 
   // Determine segment type for logging.
   const char* seg_type_name = "UNKNOWN";
-  if (next_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
+  if (target_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
     seg_type_name = SegmentTypeName(
-        live_parent_block_.segments[next_seg].segment_type);
+        live_parent_block_.segments[target_seg].segment_type);
   }
+
+  // seam_frame = the session frame when the target segment activates
+  //            = end of the segment immediately before target_seg.
+  int32_t seam_boundary_idx = target_seg - 1;
+  int64_t seam_frame_val =
+      (seam_boundary_idx < static_cast<int32_t>(segment_seam_frames_.size()))
+      ? segment_seam_frames_[seam_boundary_idx]
+      : INT64_MAX;
 
   SeamRequest req;
   req.type = SeamRequestType::kSegment;
   req.block = std::move(synth);
-  req.seam_frame = (current_segment_index_ < static_cast<int32_t>(segment_seam_frames_.size()))
-      ? segment_seam_frames_[current_segment_index_]
-      : INT64_MAX;
+  req.seam_frame = seam_frame_val;
   req.width = ctx_->width;
   req.height = ctx_->height;
   req.fps = ctx_->fps;
   req.min_audio_prime_ms = kMinAudioPrimeMs;
   req.parent_block_id = live_parent_block_.block_id;
-  req.segment_index = next_seg;
+  req.segment_index = target_seg;
   seam_preparer_->Submit(std::move(req));
 
   { std::ostringstream oss;
-    int64_t sf = (current_segment_index_ < static_cast<int32_t>(segment_seam_frames_.size()))
-        ? segment_seam_frames_[current_segment_index_] : std::numeric_limits<int64_t>::max();
     oss << "[PipelineManager] SEGMENT_PREP_ARMED"
         << " tick=" << session_frame_index
         << " parent_block=" << live_parent_block_.block_id
-        << " next_segment=" << next_seg
+        << " next_segment=" << target_seg
         << " segment_type=" << seg_type_name
-        << " seam_frame=" << FormatFenceTick(sf);
+        << " seam_frame=" << FormatFenceTick(seam_frame_val);
+    if (target_seg != next_seg) {
+      oss << " skipped_pads=" << (target_seg - next_seg);
+    }
     Logger::Info(oss.str()); }
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -2598,6 +2633,71 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
 
   // Step 3: Save old live_ for deferred cleanup.
   auto outgoing_producer = std::move(live_);
+
+
+  // FIX (PAD inline handling): If the incoming segment is PAD, handle it
+  // directly without touching the SeamPreparer worker.
+  // PAD segments have no asset, no decoder, and no audio -- just create an
+  // empty TickProducer and let the tick loop emit pad frames via PadProducer.
+  // This avoids the 1-frame race window that caused prep_mode=MISS.
+  if (incoming_is_pad) {
+    live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+    video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
+        outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
+        outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
+    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+    const auto& pad_bcfg = ctx_->buffer_config;
+    int pad_a_target = pad_bcfg.audio_target_depth_ms;
+    int pad_a_low = pad_bcfg.audio_low_water_ms > 0
+        ? pad_bcfg.audio_low_water_ms
+        : std::max(1, pad_a_target / 3);
+    audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+        pad_a_target, buffer::kHouseAudioSampleRate,
+        buffer::kHouseAudioChannels, pad_a_low);
+    // StartFilling on an empty (no decoder) TickProducer: fill thread parks
+    // immediately, buffer stays unprimed, tick loop uses PadProducer for frames.
+    video_buffer_->StartFilling(
+        AsTickProducer(live_.get()), audio_buffer_.get(),
+        0.0, ctx_->fps, &ctx_->stop_requested);
+
+    // Advance segment index and recompute next seam frame.
+    current_segment_index_++;
+    UpdateNextSeamFrame();
+
+    // Hand off outgoing buffers/producer to reaper.
+    ReapJob pad_job;
+    pad_job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
+    pad_job.block_id = GetBlockIdFromProducer(outgoing_producer.get());
+    pad_job.thread = std::move(detached.thread);
+    pad_job.producer = std::move(outgoing_producer);
+    pad_job.video_buffer = std::move(outgoing_video_buffer);
+    pad_job.audio_buffer = std::move(outgoing_audio_buffer);
+    HandOffToReaper(std::move(pad_job));
+
+    // Arm next segment prep (may skip further PADs or find next content).
+    ArmSegmentPrep(session_frame_index);
+
+    // Fire on_segment_start for the transition.
+    if (callbacks_.on_segment_start) {
+      callbacks_.on_segment_start(from_seg, to_seg, live_parent_block_, session_frame_index);
+    }
+
+    { std::ostringstream oss;
+      oss << "[PipelineManager] SEGMENT_SEAM_TAKE"
+          << " tick=" << session_frame_index
+          << " from_segment=" << from_seg << " (" << from_type << ")"
+          << " to_segment=" << to_seg << " (" << to_type << ")"
+          << " prep_mode=INSTANT"
+          << " next_seam_frame=" << FormatFenceTick(next_seam_frame_);
+      Logger::Info(oss.str()); }
+    {
+      std::lock_guard<std::mutex> lock(metrics_mutex_);
+      metrics_.segment_seam_count++;
+      metrics_.segment_seam_pad_inline_count++;
+      metrics_.segment_seam_ready_count++;  // PAD inline is always "ready" (no miss)
+    }
+    return;  // Early exit -- PAD handled inline, skip the normal prep/swap path.
+  }
 
   // Step 4: Swap segment preview into live.
   // prep_mode tracks how the incoming segment was acquired:
