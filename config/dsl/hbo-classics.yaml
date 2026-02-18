@@ -1,0 +1,23 @@
+channel: hbo-classics
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "HBO — premium movies all day, every day"
+  tagline: "It's Not TV. It's HBO."
+
+pools:
+  all_movies:
+    match:
+      type: movie
+
+schedule:
+  all_day:
+    - movie_marathon:
+        start: "06:00"
+        end: "06:00"
+        title: "HBO Feature Presentation"
+        movie_selector:
+          pool: all_movies
+          mode: random
+          max_duration_sec: 10800
+        allow_bleed: true

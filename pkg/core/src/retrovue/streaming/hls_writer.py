@@ -104,8 +104,8 @@ class HLSSegmenter:
     def __init__(
         self,
         channel_id: str,
-        target_duration: float = 6.0,
-        max_segments: int = 5,
+        target_duration: float = 2.0,
+        max_segments: int = 10,
     ):
         self.channel_id = channel_id
         self.target_duration = target_duration

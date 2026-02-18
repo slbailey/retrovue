@@ -27,3 +27,11 @@ schedule:
         title: "Cheers"
         pool: cheers
         mode: sequential
+
+traffic:
+  allowed_types: [commercial, promo, station_id, psa, stinger, bumper, filler]
+  default_cooldown_seconds: 3600
+  type_cooldowns:
+    commercial: 3600
+    promo: 1800
+  max_plays_per_day: 0

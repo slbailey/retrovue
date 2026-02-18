@@ -1,0 +1,51 @@
+channel: trek-tv
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "All Star Trek, all the time"
+  tagline: "Make It So."
+
+pools:
+  tng:
+    match:
+      type: episode
+      series_title: "Star Trek - The Next Generation"
+  ds9:
+    match:
+      type: episode
+      series_title: "Star Trek - Deep Space Nine"
+  voyager:
+    match:
+      type: episode
+      series_title: "Star Trek - Voyager"
+  snw:
+    match:
+      type: episode
+      series_title: "Star Trek - Strange New Worlds"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        end: "12:00"
+        title: "The Next Generation"
+        pool: tng
+        mode: sequential
+    - block:
+        start: "12:00"
+        end: "18:00"
+        title: "Deep Space Nine"
+        pool: ds9
+        mode: sequential
+    - block:
+        start: "18:00"
+        end: "00:00"
+        title: "Voyager"
+        pool: voyager
+        mode: sequential
+    - block:
+        start: "00:00"
+        end: "06:00"
+        title: "Strange New Worlds"
+        pool: snw
+        mode: sequential

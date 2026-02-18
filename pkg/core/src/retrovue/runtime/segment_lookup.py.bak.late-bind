@@ -1,0 +1,133 @@
+"""
+Segment Lookup — shared registry for resolving block_id + segment_index
+to segment metadata (asset_uri, segment_type, title).
+
+Thread-safe. Populated by BlockPlanProducer when block plans are dispatched.
+Consumed by EvidenceServicer for as-run log enrichment.
+
+This is a process-global singleton — both the block plan producer and the
+evidence server run in the same Core process.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SegmentInfo:
+    """Metadata for a single segment in a block plan."""
+    segment_index: int
+    segment_type: str          # "content", "commercial", "promo", "pad", etc.
+    asset_uri: str             # Full path or empty for pad
+    asset_start_offset_ms: int
+    segment_duration_ms: int
+    title: str                 # Human-readable label for the as-run log
+
+
+class SegmentLookup:
+    """Thread-safe segment metadata registry.
+
+    Keyed by block_id. Each block stores a list of SegmentInfo ordered by
+    segment_index.
+
+    Eviction: blocks are removed when explicitly cleared (after the block
+    fully airs) or when the registry exceeds MAX_BLOCKS.
+    """
+
+    MAX_BLOCKS = 200  # Keep last N blocks in memory
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._blocks: dict[str, list[SegmentInfo]] = {}
+        self._order: list[str] = []  # Insertion order for eviction
+
+    def register_block(self, block_id: str, segments: list[SegmentInfo]) -> None:
+        """Register segment metadata for a block plan."""
+        with self._lock:
+            self._blocks[block_id] = segments
+            if block_id not in self._order:
+                self._order.append(block_id)
+            # Evict oldest if over limit
+            while len(self._order) > self.MAX_BLOCKS:
+                old_id = self._order.pop(0)
+                self._blocks.pop(old_id, None)
+
+    def get_segment(self, block_id: str, segment_index: int) -> SegmentInfo | None:
+        """Look up a specific segment by block_id and index."""
+        with self._lock:
+            segments = self._blocks.get(block_id)
+            if segments is None:
+                return None
+            for seg in segments:
+                if seg.segment_index == segment_index:
+                    return seg
+            return None
+
+    def get_block_segments(self, block_id: str) -> list[SegmentInfo] | None:
+        """Get all segments for a block."""
+        with self._lock:
+            segs = self._blocks.get(block_id)
+            return list(segs) if segs is not None else None
+
+    def clear_block(self, block_id: str) -> None:
+        """Remove a block after it has fully aired."""
+        with self._lock:
+            self._blocks.pop(block_id, None)
+            if block_id in self._order:
+                self._order.remove(block_id)
+
+
+def _derive_title(segment_type: str, asset_uri: str) -> str:
+    """Derive a human-readable title from segment metadata.
+
+    For content: extracts filename without extension.
+    For commercials/promos: extracts filename, strips common prefixes.
+    For pad: returns "BLACK".
+    """
+    if segment_type == "pad" or not asset_uri:
+        return "BLACK"
+
+    # Extract filename from path
+    name = asset_uri.rsplit("/", 1)[-1] if "/" in asset_uri else asset_uri
+    # Strip extension
+    if "." in name:
+        name = name.rsplit(".", 1)[0]
+    # Strip common prefixes
+    for prefix in ("Interstitial - Commercial - ", "Interstitial - ", "Commercial - "):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name
+
+
+def segments_from_scheduled_block(block) -> list[SegmentInfo]:
+    """Convert a ScheduledBlock's segments into SegmentInfo list.
+
+    Works with ScheduledBlock from schedule_types (segment_type, asset_uri, etc.)
+    """
+    infos: list[SegmentInfo] = []
+    for i, seg in enumerate(block.segments):
+        seg_type = seg.segment_type or "content"
+        uri = seg.asset_uri or ""
+        title = _derive_title(seg_type, uri)
+
+        infos.append(SegmentInfo(
+            segment_index=i,
+            segment_type=seg_type,
+            asset_uri=uri,
+            asset_start_offset_ms=seg.asset_start_offset_ms or 0,
+            segment_duration_ms=seg.segment_duration_ms,
+            title=title,
+        ))
+    return infos
+
+
+# ── Process-global singleton ──
+_global_lookup = SegmentLookup()
+
+
+def get_global_lookup() -> SegmentLookup:
+    """Get the process-global SegmentLookup instance."""
+    return _global_lookup

@@ -1,0 +1,23 @@
+channel: showtime-cinema
+timezone: America/New_York
+grid_minutes: 30
+notes:
+  vibe: "Showtime — premium movie channel"
+  tagline: "No Limits."
+
+pools:
+  all_movies:
+    match:
+      type: movie
+
+schedule:
+  all_day:
+    - movie_marathon:
+        start: "06:00"
+        end: "06:00"
+        title: "Showtime Premiere"
+        movie_selector:
+          pool: all_movies
+          mode: random
+          max_duration_sec: 10800
+        allow_bleed: true

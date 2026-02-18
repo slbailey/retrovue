@@ -5,15 +5,8 @@
       "channel_id_int": 2,
       "name": "Cheers 24/7",
       "program_format": {
-        "video": {
-          "width": 968,
-          "height": 720,
-          "frame_rate": "30/1"
-        },
-        "audio": {
-          "sample_rate": 48000,
-          "channels": 2
-        }
+        "video": { "width": 968, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
       },
       "schedule_source": "dsl",
       "schedule_config": {
@@ -28,15 +21,8 @@
       "channel_id_int": 3,
       "name": "Retro Prime",
       "program_format": {
-        "video": {
-          "width": 968,
-          "height": 720,
-          "frame_rate": "30/1"
-        },
-        "audio": {
-          "sample_rate": 48000,
-          "channels": 2
-        }
+        "video": { "width": 968, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
       },
       "schedule_source": "dsl",
       "schedule_config": {
@@ -51,15 +37,8 @@
       "channel_id_int": 4,
       "name": "Nightmare Theater",
       "program_format": {
-        "video": {
-          "width": 1280,
-          "height": 720,
-          "frame_rate": "30/1"
-        },
-        "audio": {
-          "sample_rate": 48000,
-          "channels": 2
-        }
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
       },
       "schedule_source": "dsl",
       "schedule_config": {
@@ -74,19 +53,156 @@
       "channel_id_int": 5,
       "name": "Chicago Dispatch",
       "program_format": {
-        "video": {
-          "width": 1280,
-          "height": 720,
-          "frame_rate": "30/1"
-        },
-        "audio": {
-          "sample_rate": 48000,
-          "channels": 2
-        }
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
       },
       "schedule_source": "dsl",
       "schedule_config": {
         "dsl_path": "/opt/retrovue/config/dsl/chicago-dispatch.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "hbo-classics",
+      "channel_id_int": 6,
+      "name": "HBO",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/hbo-classics.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "showtime-cinema",
+      "channel_id_int": 7,
+      "name": "Showtime",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/showtime-cinema.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "trek-tv",
+      "channel_id_int": 8,
+      "name": "Trek TV",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/trek-tv.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "saturday-supercade",
+      "channel_id_int": 9,
+      "name": "Saturday Supercade",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/saturday-supercade.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "soap-opera",
+      "channel_id_int": 10,
+      "name": "Soap!",
+      "program_format": {
+        "video": { "width": 968, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/soap-opera.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "the-precinct",
+      "channel_id_int": 11,
+      "name": "The Precinct",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/the-precinct.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "galactica-command",
+      "channel_id_int": 12,
+      "name": "Galactica Command",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/galactica-command.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "babylon-5-tv",
+      "channel_id_int": 13,
+      "name": "Babylon 5",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/babylon-5-tv.yaml",
+        "filler_path": "/opt/retrovue/assets/filler.mp4",
+        "filler_duration_ms": 3650000,
+        "grid_minutes": 30
+      }
+    },
+    {
+      "channel_id": "late-night-legal",
+      "channel_id_int": 14,
+      "name": "Legal Drama",
+      "program_format": {
+        "video": { "width": 1280, "height": 720, "frame_rate": "30/1" },
+        "audio": { "sample_rate": 48000, "channels": 2 }
+      },
+      "schedule_source": "dsl",
+      "schedule_config": {
+        "dsl_path": "/opt/retrovue/config/dsl/late-night-legal.yaml",
         "filler_path": "/opt/retrovue/assets/filler.mp4",
         "filler_duration_ms": 3650000,
         "grid_minutes": 30

@@ -1,0 +1,34 @@
+channel: galactica-command
+channel_number: 12
+name: "Galactica Command"
+timezone: America/New_York
+
+format:
+  video: { width: 1280, height: 720, frame_rate: "30/1" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+filler: !include _defaults.yaml:filler
+
+notes:
+  vibe: "Battlestar Galactica — classic and reimagined"
+  tagline: "So Say We All."
+
+pools:
+  bsg:
+    match:
+      type: episode
+      series_title: "Battlestar Galactica"
+  galactica1980:
+    match:
+      type: episode
+      series_title: "Galactica 1980"
+
+schedule:
+  all_day:
+    - block:
+        start: "06:00"
+        duration: "24h"
+        title: "Battlestar Galactica"
+        pool: [bsg, galactica1980]
+        mode: shuffle

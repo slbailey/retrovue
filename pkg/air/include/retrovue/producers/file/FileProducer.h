@@ -63,6 +63,9 @@ namespace retrovue::producers::file
     int64_t start_offset_ms;     // Deprecated: use start_frame instead
     int64_t hard_stop_time_ms;   // Deprecated: use frame_count instead
 
+    // INV-FPS-RESAMPLE: Override source fps for testing (0 = auto-detect from file)
+    double stub_source_fps = 0.0;
+
     ProducerConfig()
         : target_width(1920),
           target_height(1080),
@@ -97,6 +100,13 @@ namespace retrovue::producers::file
   // - Self-contained: performs both reading and decoding internally
   // - Outputs only decoded frames (never encoded packets)
   // - Internal decoder subsystem: demuxer, decoder, scaler, frame assembly
+  // INV-FPS-RESAMPLE: Resampler gate result
+  enum class ResampleGateResult {
+    HOLD,  // Frame absorbed — caller should continue decoding, do NOT emit
+    EMIT,  // output_frame updated with tick-stamped frame — caller should emit
+    PASS   // Resampler inactive — emit frame as-is
+  };
+
   class FileProducer : public retrovue::producers::IProducer
   {
   public:
@@ -332,7 +342,15 @@ namespace retrovue::producers::file
     int64_t next_output_tick_us_ = -1;                 // Next tick boundary in MT domain
     bool resample_active_ = false;                     // True when source fps != target fps
     buffer::Frame held_frame_storage_;                  // Held candidate for current tick
-    bool held_frame_valid_ = false;                    // Whether held_frame_storage_ has content
+    bool held_frame_valid_ = false;
+
+    // Resampler gate: processes a decoded frame through the tick grid.
+    // Called from both ProduceRealFrame and ProduceStubFrame.
+    ResampleGateResult ResampleGate(buffer::Frame& output_frame, int64_t& base_pts_us);
+
+    // Pending frame promotion: called at top of produce loop.
+    // Returns true if a repeat frame was emitted (caller should skip decode).
+    bool ResamplePromotePending(buffer::Frame& output_frame, int64_t& base_pts_us);                    // Whether held_frame_storage_ has content
     int64_t held_frame_mt_us_ = -1;                    // MT PTS of held frame
     uint64_t resample_frames_decoded_ = 0;             // Source frames decoded (resampler scope)
     uint64_t resample_frames_emitted_ = 0;
