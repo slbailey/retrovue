@@ -586,9 +586,10 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_008_MissDoesNotStallFenceOrCorruptSeamSche
       << "Expected forced MISS from delay hook -- test infrastructure error if 0";
 
   // Block fences must fire -- both blocks must complete (proves MISS does not stall).
-  // INV-BLOCK-IDENTITY-001: Block identity is owned by the manager (live_parent_block_),
-  // not derived from live_->GetBlock().  After segment MISS PAD fallback, the
-  // manager-owned identity must still be correct in on_block_completed.
+  // INV-BLOCK-IDENTITY-001:
+  // Even if a segment MISS triggers PAD fallback and live_ is replaced,
+  // block completion events must report the originally activated block.
+  // MISS recovery must not erase or corrupt block identity.
   ASSERT_GE(static_cast<int>(completed_blocks_.size()), 2)
       << "Both blocks must complete -- MISS must not stall block fences";
 

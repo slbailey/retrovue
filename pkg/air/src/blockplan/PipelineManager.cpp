@@ -1379,10 +1379,12 @@ void PipelineManager::Run() {
       auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
 
       // Step 3: Snapshot outgoing block and finalize accumulator.
-      // INV-BLOCK-IDENTITY-001: Use live_parent_block_ (manager-owned) instead
-      // of live_tp()->GetBlock().  After segment MISS PAD fallback, live_ is a
-      // bare TickProducer with no block assigned.  live_parent_block_ is set at
-      // block activation and is never mutated by segment operations.
+      // INV-BLOCK-IDENTITY-001:
+      // Block identity is owned by PipelineManager and must survive producer swaps.
+      // Segment operations (including MISS PAD fallback) are allowed to replace
+      // live_ with a different producer, but block completion identity must remain
+      // stable and reflect the block that was activated at take-commit time.
+      // Do NOT derive block identity from live_->GetBlock().
       const FedBlock outgoing_block = live_parent_block_;
       const int64_t outgoing_fence_frame = block_fence_frame_;
       std::optional<BlockPlaybackSummary> outgoing_summary;
