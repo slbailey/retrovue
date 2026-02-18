@@ -35,6 +35,13 @@ SeamPreparer::~SeamPreparer() {
   }
 }
 
+// INV-SEAM-SUBMIT-SAFE: Submit() is thread-safe while the worker is running.
+// The queue is sorted by seam_frame ascending — this defines execution priority.
+// Callers must NOT gate submission on IsRunning(); doing so starves later
+// requests (e.g., segment prep blocked behind block prep) and causes MISS
+// at seam time.  The worker drains the queue in seam_frame order; a segment
+// request at frame 30 will be processed before a block request at frame 60,
+// even if both are submitted while the worker is busy with something else.
 void SeamPreparer::Submit(SeamRequest request) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
