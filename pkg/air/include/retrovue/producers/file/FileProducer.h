@@ -317,7 +317,32 @@ namespace retrovue::producers::file
     int audio_frame_count_;       // Total audio frames processed
     int frames_since_producer_start_;  // Frames since this producer started
     int audio_skip_count_;        // Audio frames skipped waiting for video epoch
-    int audio_drop_count_;        // Audio frames dropped due to buffer full
+    int audio_drop_count_;
+    // ======================================================================
+    // INV-FPS-RESAMPLE: PTS-driven output tick resampling (frame synchronizer)
+    // ======================================================================
+    // House rate tick grid is authoritative. For each output tick (1/target_fps),
+    // we select the latest decoded frame with PTS <= tick boundary.
+    // Fast sources (60->30): intermediate frames skipped naturally.
+    // Slow sources (23.976->30): last frame repeated on empty ticks.
+    // VFR/non-standard: handled uniformly via PTS comparison.
+    // ======================================================================
+    double source_fps_ = 0.0;                          // Detected source frame rate
+    int64_t output_tick_interval_us_ = 0;              // Target frame period in us
+    int64_t next_output_tick_us_ = -1;                 // Next tick boundary in MT domain
+    bool resample_active_ = false;                     // True when source fps != target fps
+    buffer::Frame held_frame_storage_;                  // Held candidate for current tick
+    bool held_frame_valid_ = false;                    // Whether held_frame_storage_ has content
+    int64_t held_frame_mt_us_ = -1;                    // MT PTS of held frame
+    uint64_t resample_frames_decoded_ = 0;             // Source frames decoded (resampler scope)
+    uint64_t resample_frames_emitted_ = 0;
+    // Pending frame: decoded frame saved when it crossed a tick boundary
+    // and the held frame needs repeat emission for intermediate ticks
+    buffer::Frame pending_frame_storage_;
+    bool pending_frame_valid_ = false;
+    int64_t pending_frame_mt_us_ = -1;
+             // Output frames emitted
+        // Audio frames dropped due to buffer full
     int audio_mapping_gate_drop_count_;  // Phase 8: Audio dropped while segment mapping pending
     bool audio_ungated_logged_;   // Whether we've logged audio ungating (one-shot)
 
