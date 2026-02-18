@@ -40,6 +40,59 @@ HORIZON_DAYS = 3
 RECOMPILE_THRESHOLD_HOURS = 6
 
 
+def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
+    """Serialize a ScheduledBlock to a JSON-safe dict for DB storage.
+
+    INV-SCHEDULE-HORIZON-001: Round-trip serialization preserves all
+    segment fields including transitions.
+    """
+    return {
+        "block_id": block.block_id,
+        "start_utc_ms": block.start_utc_ms,
+        "end_utc_ms": block.end_utc_ms,
+        "segments": [
+            {
+                "segment_type": s.segment_type,
+                "asset_uri": s.asset_uri,
+                "asset_start_offset_ms": s.asset_start_offset_ms,
+                "segment_duration_ms": s.segment_duration_ms,
+                "transition_in": s.transition_in,
+                "transition_in_duration_ms": s.transition_in_duration_ms,
+                "transition_out": s.transition_out,
+                "transition_out_duration_ms": s.transition_out_duration_ms,
+            }
+            for s in block.segments
+        ],
+    }
+
+
+def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
+    """Deserialize a dict back into a ScheduledBlock.
+
+    INV-SCHEDULE-HORIZON-001: Used by Tier 2 (Playlog Horizon Daemon)
+    and _hydrate_schedule to reconstruct blocks from DB cache.
+    """
+    from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+    return ScheduledBlock(
+        block_id=d["block_id"],
+        start_utc_ms=d["start_utc_ms"],
+        end_utc_ms=d["end_utc_ms"],
+        segments=tuple(
+            ScheduledSegment(
+                segment_type=s["segment_type"],
+                asset_uri=s.get("asset_uri", ""),
+                asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
+                segment_duration_ms=s.get("segment_duration_ms", 0),
+                transition_in=s.get("transition_in", "TRANSITION_NONE"),
+                transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                transition_out=s.get("transition_out", "TRANSITION_NONE"),
+                transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+            )
+            for s in d["segments"]
+        ),
+    )
+
+
 class DslScheduleService:
     """
     Schedule service backed by the Programming DSL compiler pipeline.
@@ -56,12 +109,14 @@ class DslScheduleService:
         filler_duration_ms: int,
         broadcast_day: str | None = None,
         programming_day_start_hour: int = 6,
+        channel_slug: str | None = None,
     ) -> None:
         self._dsl_path = dsl_path
         self._filler_path = filler_path
         self._filler_duration_ms = filler_duration_ms
         self._day_start_hour = programming_day_start_hour
         self._broadcast_day_override = broadcast_day
+        self._channel_slug = channel_slug
 
         # Pre-built blocks indexed by start_utc_ms
         self._blocks: list[ScheduledBlock] = []
@@ -305,7 +360,13 @@ class DslScheduleService:
         return None
 
     def _save_compiled_schedule(self, channel_id: str, broadcast_day: str, schedule: dict, dsl_hash: str) -> None:
-        """Persist a compiled schedule to the DB."""
+        """Persist a compiled schedule to the DB.
+
+        INV-SCHEDULE-HORIZON-001: Stores both program-level metadata
+        (program_blocks) and segmented block data (segmented_blocks).
+        Segmented blocks contain content segments + empty filler
+        placeholders (break opportunities with durations/positions).
+        """
         from retrovue.domain.entities import CompiledProgramLog
         try:
             with session() as db:
@@ -358,22 +419,58 @@ class DslScheduleService:
         for pool_id in pools:
             sequential_counters[pool_id] = starting_counter
 
+        # Derive channel-specific seed from channel_id hash so different
+        # channels with the same pool don't get identical movie sequences
+        _channel_seed = abs(hash(channel_id)) % 100000
+
         # Compile program schedule with deterministic counters
         schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
-                                     sequential_counters=sequential_counters)
+                                     sequential_counters=sequential_counters,
+                                     seed=_channel_seed)
 
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
 
-        # Save to DB cache
+        # Expand each program block into segmented blocks
+        # (content segments + empty filler placeholders)
+        blocks = self._expand_schedule_to_blocks(schedule, resolver)
+
+        # INV-SCHEDULE-HORIZON-001: Persist segmented blocks alongside
+        # program metadata so Tier 2 (Playlog Horizon Daemon) can consume
+        # pre-segmented data without re-expanding.
+        schedule["segmented_blocks"] = [
+            _serialize_scheduled_block(b) for b in blocks
+        ]
+
+        # Save to DB cache (now includes segmented_blocks)
         dsl_hash = self._hash_dsl(dsl_text)
         self._save_compiled_schedule(channel_id, broadcast_day, schedule, dsl_hash)
 
-        # Expand each program block and fill ad breaks
-        return self._expand_schedule_to_blocks(schedule, resolver)
+        return blocks
 
     def _hydrate_schedule(self, schedule: dict, channel_id: str, broadcast_day: str) -> list[ScheduledBlock]:
-        """Hydrate a cached schedule dict into ScheduledBlocks."""
+        """Hydrate a cached schedule dict into ScheduledBlocks.
+
+        INV-SCHEDULE-HORIZON-001: If segmented_blocks are present in the
+        cached schedule, deserialize directly (no re-expansion needed).
+        Falls back to expand_program_block if segmented_blocks are absent
+        (backward compatibility with pre-Tier-1 cached schedules).
+        """
+        # Fast path: segmented blocks already cached
+        if "segmented_blocks" in schedule and schedule["segmented_blocks"]:
+            logger.info(
+                "INV-SCHEDULE-HORIZON-001: Using cached segmented_blocks "
+                "for %s/%s (%d blocks)",
+                channel_id, broadcast_day, len(schedule["segmented_blocks"]),
+            )
+            return [_deserialize_scheduled_block(b) for b in schedule["segmented_blocks"]]
+
+        # Slow path: re-expand from program metadata (backward compat)
+        logger.info(
+            "INV-SCHEDULE-HORIZON-001: No cached segmented_blocks for %s/%s, "
+            "falling back to expand",
+            channel_id, broadcast_day,
+        )
         dsl_text = Path(self._dsl_path).read_text()
         dsl = parse_dsl(dsl_text)
         dsl["broadcast_day"] = broadcast_day
@@ -393,7 +490,24 @@ class DslScheduleService:
         return self._expand_schedule_to_blocks(schedule, resolver)
 
     def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
-        """Expand compiled program blocks into filled ScheduledBlocks."""
+        """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.
+
+        INV-TRAFFIC-LATE-BIND-001: No DB session for traffic fill here.
+        Traffic fill happens at feed time in BlockPlanProducer._try_feed_block().
+        """
+        return self._expand_blocks_inner(schedule, resolver)
+
+    def _expand_blocks_inner(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
+        """Inner expand loop -- produces blocks with EMPTY filler placeholders.
+
+        INV-TRAFFIC-LATE-BIND-001: Traffic fill (commercial selection, break
+        filling, cooldown evaluation) MUST NOT happen at compile time.
+        This method produces ScheduledBlocks with empty filler placeholders
+        (segment_type=filler, asset_uri="") that BlockPlanProducer._try_feed_block()
+        will fill ~30 minutes before air.
+
+        See: docs/contracts/runtime/INV-TRAFFIC-LATE-BIND-001.md
+        """
         blocks: list[ScheduledBlock] = []
         for block_def in schedule["program_blocks"]:
             asset_id = block_def["asset_id"]
@@ -412,7 +526,9 @@ class DslScheduleService:
             # Resolve asset URI to local path
             asset_uri = self._resolve_uri(meta.file_uri)
 
-            # Expand into acts + ad breaks
+            # Expand into acts + ad breaks (empty filler placeholders -- NOT filled here)
+            # INV-TRAFFIC-LATE-BIND-001: fill_ad_blocks() is called at feed time
+            # in BlockPlanProducer._try_feed_block(), not here at compile time.
             expanded = expand_program_block(
                 asset_id=asset_id,
                 asset_uri=asset_uri,
@@ -422,16 +538,12 @@ class DslScheduleService:
                 chapter_markers_ms=chapter_ms,
             )
 
-            # Fill ad breaks with filler
-            filled = fill_ad_blocks(
-                expanded,
-                filler_uri=self._filler_path,
-                filler_duration_ms=self._filler_duration_ms,
-            )
-
-            blocks.append(filled)
+            blocks.append(expanded)
 
         return blocks
+
+    # _get_asset_library removed: INV-TRAFFIC-LATE-BIND-001.
+    # Traffic fill now happens at feed time in BlockPlanProducer._try_feed_block().
 
     def _resolve_uris(self, resolver: CatalogAssetResolver, schedule: dict) -> None:
         """Pre-resolve source file paths to local paths using PathMappings.

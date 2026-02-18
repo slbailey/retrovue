@@ -410,6 +410,8 @@ class ProgramDirector:
         self._horizon_managers: dict[str, Any] = {}
         self._horizon_execution_stores: dict[str, Any] = {}
         self._horizon_resolved_stores: dict[str, Any] = {}
+        # Playlog Horizon Daemons (Tier 2 — INV-PLAYLOG-HORIZON-001)
+        self._playlog_daemons: dict[str, Any] = {}
         self._channel_config_provider: Optional[Any] = None
         self._health_check_stop: Optional[threading.Event] = None
         self._health_check_thread: Optional[Thread] = None
@@ -642,6 +644,7 @@ class ProgramDirector:
             dsl_path=dsl_path,
             filler_path=filler_path,
             filler_duration_ms=filler_duration_ms,
+            channel_slug=channel_id,
         )
         ok, err = svc.load_schedule(channel_id)
         if not ok:
@@ -787,6 +790,70 @@ class ProgramDirector:
         self._logger.info(
             "HorizonManagers initialized: %d channels",
             len(self._horizon_managers),
+        )
+
+    def _init_playlog_daemons(self) -> None:
+        """Create and start PlaylogHorizonDaemons for DSL channels.
+
+        INV-PLAYLOG-HORIZON-001: Each DSL channel gets a daemon that
+        maintains 2-3+ hours of fully-filled playout logs in
+        TransmissionLog (Postgres).
+
+        Called from start(), after _init_horizon_managers.
+        """
+        if self._channel_config_provider is None:
+            return
+
+        if not hasattr(self._channel_config_provider, "list_channel_ids"):
+            return
+
+        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+
+        for channel_id in self._channel_config_provider.list_channel_ids():
+            config = self._channel_config_provider.get_channel_config(channel_id)
+            if config is None:
+                continue
+            # Only DSL channels for now (phase3 uses ExecutionWindowStore path)
+            if config.schedule_source != "dsl":
+                continue
+
+            sc = config.schedule_config or {}
+
+            daemon = PlaylogHorizonDaemon(
+                channel_id=channel_id,
+                min_hours=sc.get("playlog_min_hours", 3),
+                evaluation_interval_seconds=sc.get(
+                    "playlog_eval_interval_seconds", 60,
+                ),
+                programming_day_start_hour=sc.get(
+                    "programming_day_start_hour", 6,
+                ),
+                grid_minutes=sc.get("grid_minutes", 30),
+                filler_path=sc.get("filler_path", "/opt/retrovue/assets/filler.mp4"),
+                filler_duration_ms=sc.get("filler_duration_ms", 3_650_000),
+                master_clock=self._embedded_clock,
+            )
+
+            # Readiness gate: synchronous initial evaluation
+            blocks_filled = daemon.evaluate_once()
+            report = daemon.get_health_report()
+            self._logger.info(
+                "PlaylogHorizon[%s]: readiness gate — "
+                "healthy=%s depth=%.1fh blocks=%d filled=%d",
+                channel_id,
+                report.is_healthy,
+                report.depth_hours,
+                report.blocks_in_window,
+                blocks_filled,
+            )
+
+            # Start background thread
+            daemon.start()
+            self._playlog_daemons[channel_id] = daemon
+
+        self._logger.info(
+            "PlaylogHorizonDaemons initialized: %d channels",
+            len(self._playlog_daemons),
         )
 
     def _get_or_create_manager(self, channel_id: str) -> Any:
@@ -1014,6 +1081,8 @@ class ProgramDirector:
             self.load_all_schedules()
             # Horizon management: create/start HorizonManagers before HTTP server
             self._init_horizon_managers()
+            # Playlog Horizon Daemons: Tier 2 pre-fill for all DSL channels
+            self._init_playlog_daemons()
             if self._health_check_stop is not None:
                 self._health_check_stop.clear()
                 self._health_check_thread = Thread(
@@ -1838,9 +1907,12 @@ class ProgramDirector:
                         pid: _day_offset * _slots
                         for pid in dsl.get("pools", {})
                     }
+                    # Derive channel-specific seed from channel_id hash
+                    _channel_seed = abs(hash(ch["channel_id"])) % 100000
                     schedule = compile_schedule(
                         dsl, resolver=resolver, dsl_path=dsl_path,
                         sequential_counters=_seq_counters,
+                        seed=_channel_seed,
                     )
 
                     for block in schedule["program_blocks"]:
