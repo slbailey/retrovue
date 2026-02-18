@@ -582,7 +582,8 @@ namespace retrovue::producers::file
       output_tick_interval_us_ = static_cast<int64_t>(
           std::round(1000000.0 / config_.target_fps));
       double fps_ratio = source_fps_ / config_.target_fps;
-      resample_active_ = (fps_ratio < 0.99 || fps_ratio > 1.01);
+      resample_active_ = (fps_ratio < (1.0 - kFpsMatchToleranceRatio) ||
+                          fps_ratio > (1.0 + kFpsMatchToleranceRatio));
       if (resample_active_) {
         // Override stub frame interval to source fps (decode at source rate)
         frame_interval_us_ = static_cast<int64_t>(
@@ -837,7 +838,8 @@ namespace retrovue::producers::file
 
         // Activate when source and target differ by > 1%
         double fps_ratio = source_fps_ / config_.target_fps;
-        resample_active_ = (fps_ratio < 0.99 || fps_ratio > 1.01);
+        resample_active_ = (fps_ratio < (1.0 - kFpsMatchToleranceRatio) ||
+                            fps_ratio > (1.0 + kFpsMatchToleranceRatio));
         if (resample_active_) {
           std::cout << "[FileProducer] INV-FPS-RESAMPLE: Active"
                     << " source=" << source_fps_ << "fps"
@@ -1293,70 +1295,14 @@ namespace retrovue::producers::file
       return true;  // Stop or write barrier - continue loop to check termination
     }
 
-    // INV-FPS-RESAMPLE: Check for pending frame repeats
+    // INV-FPS-RESAMPLE: Check for pending frame repeats (one per call max)
     {
       buffer::Frame repeat_frame;
       int64_t repeat_pts = 0;
       if (ResamplePromotePending(repeat_frame, repeat_pts)) {
-        // Emit repeat frame through the normal emission path.
-        // We need VIDEO_EPOCH_SET + pacing + push.
-        // Set up for the emission path below.
-
-        // VIDEO_EPOCH_SET (if first frame)
-        if (first_mt_pts_us_ == 0) {
-          first_mt_pts_us_ = repeat_pts;
-          if (master_clock_) {
-            playback_start_utc_us_ = master_clock_->now_utc_us();
-          }
-          std::cout << "[FileProducer] VIDEO_EPOCH_SET (resample repeat) first_mt_pts_us="
-                    << repeat_pts << std::endl;
-          {
-            std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
-            g_video_epoch_time[this] = std::chrono::steady_clock::now();
-          }
-        }
-
-        // Pacing
-        int64_t frame_offset_us = repeat_pts - first_mt_pts_us_;
-        int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
-        if (master_clock_) {
-          int64_t now_us = master_clock_->now_utc_us();
-          if (now_us < target_utc_us && !stop_requested_.load(std::memory_order_acquire)) {
-            if (master_clock_->is_fake()) {
-              while (master_clock_->now_utc_us() < target_utc_us &&
-                     !stop_requested_.load(std::memory_order_acquire))
-                std::this_thread::yield();
-            } else {
-              std::this_thread::sleep_for(
-                  std::chrono::microseconds(target_utc_us - now_us));
-            }
-          }
-        }
-
-        // Truncation check
-        if (planned_frame_count_ >= 0 &&
-            frames_delivered_.load(std::memory_order_acquire) >= planned_frame_count_) {
-          return true;
-        }
-
-        // Push
-        while (!output_buffer_.Push(repeat_frame)) {
-          if (stop_requested_.load(std::memory_order_acquire)) return true;
-          if (writes_disabled_.load(std::memory_order_acquire)) return true;
-          buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
-          if (master_clock_ && !master_clock_->is_fake())
-            std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
-          else
-            std::this_thread::yield();
-        }
-        frames_produced_.fetch_add(1, std::memory_order_relaxed);
-        frames_delivered_.fetch_add(1, std::memory_order_relaxed);
-
-        // Keep audio flowing
-        if (audio_stream_index_ >= 0 && !audio_eof_reached_)
-          ReceiveAudioFrames();
-
-        return true;  // Next call checks pending again
+        // Single emit via EmitFrameAtTick — no duplicated epoch/pacing/push logic
+        EmitFrameAtTick(repeat_frame, repeat_pts);
+        return true;  // One repeat emitted; next call checks pending again
       }
     }
 
@@ -1875,8 +1821,13 @@ namespace retrovue::producers::file
       if (gate_result == ResampleGateResult::HOLD) {
         return true;  // Continue decoding
       }
-      // EMIT or PASS: fall through to VIDEO_EPOCH_SET / pacing / push
-      // For EMIT: output_frame and base_pts_us have been updated to tick grid
+      if (gate_result == ResampleGateResult::EMIT) {
+        // Resampler selected a frame for this tick. Emit via the single
+        // canonical emit path — no fallthrough to the non-resampled path.
+        EmitFrameAtTick(output_frame, base_pts_us);
+        return true;
+      }
+      // PASS: resampler inactive, fall through to existing emission path
     }
 
     // Establish time mapping on first emitted frame (VIDEO_EPOCH_SET)
@@ -2318,30 +2269,27 @@ namespace retrovue::producers::file
     size_t frame_size = static_cast<size_t>(config_.target_width * config_.target_height * 1.5);
     frame.data.resize(frame_size, 0);
 
-    // INV-FPS-RESAMPLE: Route stub frames through resampler gate
+    // INV-FPS-RESAMPLE: Route stub frames through resampler gate.
+    // At most one emission per ProduceStubFrame call — same contract as real mode.
+    // If repeats need draining, the main loop calls us again next iteration.
     if (resample_active_) {
-      int64_t base_pts = frame.metadata.pts;
-
-      // Check for pending repeat first
+      // Check for pending repeat first (one per call max)
       buffer::Frame repeat_frame;
       int64_t repeat_pts = 0;
-      while (ResamplePromotePending(repeat_frame, repeat_pts)) {
-        // Emit repeat frames before processing new decoded frame
-        while (!output_buffer_.Push(repeat_frame)) {
-          if (stop_requested_.load(std::memory_order_acquire)) return;
-          if (writes_disabled_.load(std::memory_order_acquire)) return;
-          std::this_thread::yield();
-        }
-        frames_produced_.fetch_add(1, std::memory_order_relaxed);
-        frames_delivered_.fetch_add(1, std::memory_order_relaxed);
+      if (ResamplePromotePending(repeat_frame, repeat_pts)) {
+        // Emit single repeat via EmitFrameAtTick, skip decode this iteration
+        EmitFrameAtTick(repeat_frame, repeat_pts);
+        return;  // Next call checks pending again before decoding
       }
 
+      int64_t base_pts = frame.metadata.pts;
       auto result = ResampleGate(frame, base_pts);
       if (result == ResampleGateResult::HOLD) {
         return;  // Frame absorbed, continue to next stub frame
       }
-      // EMIT: frame has been updated with tick-stamped PTS
-      // Fall through to shadow check / push
+      // EMIT: emit via EmitFrameAtTick, then return (don't fall through to legacy push)
+      EmitFrameAtTick(frame, base_pts);
+      return;
     }
 
     // INV-P8-SHADOW-PACE: Shadow mode caches first frame, then waits IN PLACE
@@ -3102,6 +3050,91 @@ namespace retrovue::producers::file
   }
 
   // ======================================================================
+  // INV-FPS-RESAMPLE: EmitFrameAtTick — sole emission path for resampled frames
+  // ======================================================================
+  // This is the ONLY place where resampler-emitted frames:
+  //   - Get PTS/duration stamped to tick grid
+  //   - Trigger VIDEO_EPOCH_SET
+  //   - Get paced to wall clock
+  //   - Get pushed to output buffer
+  // By routing all resampler emissions through here, the single-emit-per-tick
+  // contract is mechanically enforced: callers select frames, this method emits.
+  // ======================================================================
+  bool FileProducer::EmitFrameAtTick(buffer::Frame& frame, int64_t tick_pts_us)
+  {
+    // Stamp PTS and duration to tick grid — NEVER source PTS
+    frame.metadata.pts = tick_pts_us;
+    frame.metadata.duration = 1.0 / config_.target_fps;
+    frame.metadata.has_ct = true;
+
+    // Update MT tracking to tick grid
+    last_decoded_mt_pts_us_ = tick_pts_us;
+    last_mt_pts_us_ = tick_pts_us;
+
+    // VIDEO_EPOCH_SET (if first emitted frame)
+    if (!resample_epoch_set_) {
+      resample_epoch_set_ = true;
+      first_mt_pts_us_ = tick_pts_us;
+      if (master_clock_) {
+        playback_start_utc_us_ = master_clock_->now_utc_us();
+      }
+      std::cout << "[FileProducer] VIDEO_EPOCH_SET (resample) first_mt_pts_us="
+                << tick_pts_us << std::endl;
+      {
+        std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
+        g_video_epoch_time[this] = std::chrono::steady_clock::now();
+      }
+      if (timeline_controller_ && master_clock_) {
+        playback_start_utc_us_ = master_clock_->now_utc_us();
+      }
+    }
+
+    // Pacing: wait until target UTC time
+    int64_t frame_offset_us = tick_pts_us - first_mt_pts_us_;
+    int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
+    if (master_clock_) {
+      int64_t now_us = master_clock_->now_utc_us();
+      if (now_us < target_utc_us && !stop_requested_.load(std::memory_order_acquire)) {
+        if (master_clock_->is_fake()) {
+          while (master_clock_->now_utc_us() < target_utc_us &&
+                 !stop_requested_.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        } else {
+          int64_t sleep_us = target_utc_us - now_us;
+          if (sleep_us > 0)
+            std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+        }
+      }
+    }
+
+    // Truncation check
+    if (planned_frame_count_ >= 0 &&
+        frames_delivered_.load(std::memory_order_acquire) >= planned_frame_count_) {
+      return false;  // Truncated — caller should stop
+    }
+
+    // Push with backpressure
+    while (!output_buffer_.Push(frame)) {
+      if (stop_requested_.load(std::memory_order_acquire)) return false;
+      if (writes_disabled_.load(std::memory_order_acquire)) return false;
+      buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
+      if (master_clock_ && !master_clock_->is_fake())
+        std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+      else
+        std::this_thread::yield();
+    }
+
+    frames_produced_.fetch_add(1, std::memory_order_relaxed);
+    frames_delivered_.fetch_add(1, std::memory_order_relaxed);
+
+    // Keep audio flowing during resampler emissions
+    if (audio_stream_index_ >= 0 && !audio_eof_reached_)
+      ReceiveAudioFrames();
+
+    return true;  // Frame emitted successfully
+  }
+
+  // ======================================================================
   // INV-FPS-RESAMPLE: Extracted resampler gate
   // ======================================================================
   ResampleGateResult FileProducer::ResampleGate(
@@ -3116,6 +3149,10 @@ namespace retrovue::producers::file
     // Initialize tick grid from first frame after seek/start
     if (next_output_tick_us_ < 0) {
       next_output_tick_us_ = base_pts_us;
+      // TODO(INV-FPS-RESAMPLE): Consider anchoring tick grid to block-start MT PTS
+      // (house clock alignment) when available, instead of first decoded frame PTS.
+      // Current approach: phase depends on first frame seen after seek.
+      // With block-start anchor: phase is deterministic across seeks/restarts.
       std::cout << "[FileProducer] INV-FPS-RESAMPLE: Tick grid anchored at "
                 << base_pts_us << "us (source=" << source_fps_
                 << "fps, target=" << config_.target_fps << "fps)" << std::endl;
@@ -3127,6 +3164,12 @@ namespace retrovue::producers::file
       held_frame_storage_ = output_frame;
       held_frame_valid_ = true;
       held_frame_mt_us_ = base_pts_us;
+      // HOLD returns to caller (ProduceRealFrame), which returns true to the main
+      // decode loop. The loop immediately calls ProduceRealFrame() again, which calls
+      // av_read_frame(). Audio packets are dispatched at the av_read_frame level
+      // (audio packet → ReceiveAudioFrames() → return true). Therefore HOLD never
+      // starves audio: there is no internal spin, and packet consumption remains
+      // interleaved between video HOLD iterations.
       return ResampleGateResult::HOLD;
     }
 
@@ -3171,6 +3214,9 @@ namespace retrovue::producers::file
                 << std::endl;
     }
 
+    // Reset consecutive repeat counter — this is a fresh (non-repeat) emission
+    consecutive_repeat_emits_ = 0;
+
     return ResampleGateResult::EMIT;
   }
 
@@ -3190,6 +3236,7 @@ namespace retrovue::producers::file
       held_frame_valid_ = true;
       held_frame_mt_us_ = pending_frame_mt_us_;
       pending_frame_valid_ = false;
+      consecutive_repeat_emits_ = 0;  // Pending promoted — repeat streak ended
       return false;
     }
 
@@ -3207,6 +3254,19 @@ namespace retrovue::producers::file
     last_mt_pts_us_ = tick_pts_us;
     resample_frames_emitted_++;
     next_output_tick_us_ += output_tick_interval_us_;
+
+    // Track consecutive repeats for freeze-frame diagnostics.
+    // Freeze-frame under source stall is valid broadcast behavior, but extended
+    // repeats may indicate a stuck decoder or missing content.
+    consecutive_repeat_emits_++;
+    if (consecutive_repeat_emits_ == kRepeatLogThreshold ||
+        (consecutive_repeat_emits_ > kRepeatLogThreshold &&
+         consecutive_repeat_emits_ % (kRepeatLogThreshold * 10) == 0)) {
+      std::cout << "[FileProducer] INV-FPS-RESAMPLE: consecutive repeats="
+                << consecutive_repeat_emits_
+                << " (source may be stalled or content missing)" << std::endl;
+    }
+
     return true;  // Caller should emit this frame, skip decode
   }
 

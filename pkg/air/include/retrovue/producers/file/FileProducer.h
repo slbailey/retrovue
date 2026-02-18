@@ -100,6 +100,13 @@ namespace retrovue::producers::file
   // - Self-contained: performs both reading and decoding internally
   // - Outputs only decoded frames (never encoded packets)
   // - Internal decoder subsystem: demuxer, decoder, scaler, frame assembly
+  // INV-FPS-RESAMPLE: Frame-rate mismatch tolerance.
+  // Treat source and target fps within ±1% as "same rate" to avoid unnecessary
+  // resampling for 29.97 vs 30, probe noise, or container metadata rounding.
+  // If a known use case requires tighter or looser matching, make this a
+  // ProducerConfig field; do not add per-case heuristics.
+  constexpr double kFpsMatchToleranceRatio = 0.01;
+
   // INV-FPS-RESAMPLE: Resampler gate result
   enum class ResampleGateResult {
     HOLD,  // Frame absorbed — caller should continue decoding, do NOT emit
@@ -348,6 +355,12 @@ namespace retrovue::producers::file
     // Called from both ProduceRealFrame and ProduceStubFrame.
     ResampleGateResult ResampleGate(buffer::Frame& output_frame, int64_t& base_pts_us);
 
+    // Resampler emit helper: stamps PTS to tick grid, handles VIDEO_EPOCH_SET,
+    // pacing, and push. This is the ONLY place resampler-emitted frames touch
+    // the output buffer. Enforces single-emit-per-tick mechanically.
+    // Returns true if frame was pushed, false if stopped/truncated.
+    bool EmitFrameAtTick(buffer::Frame& frame, int64_t tick_pts_us);
+
     // Pending frame promotion: called at top of produce loop.
     // Returns true if a repeat frame was emitted (caller should skip decode).
     bool ResamplePromotePending(buffer::Frame& output_frame, int64_t& base_pts_us);                    // Whether held_frame_storage_ has content
@@ -359,6 +372,13 @@ namespace retrovue::producers::file
     buffer::Frame pending_frame_storage_;
     bool pending_frame_valid_ = false;
     int64_t pending_frame_mt_us_ = -1;
+
+    // Consecutive repeat emission counter (for freeze-frame diagnostics).
+    // Incremented when ResamplePromotePending emits a repeat; reset when
+    // a non-repeat frame is emitted via ResampleGate or pending is promoted.
+    uint64_t consecutive_repeat_emits_ = 0;
+    bool resample_epoch_set_ = false;  // Guards VIDEO_EPOCH_SET in EmitFrameAtTick
+    static constexpr uint64_t kRepeatLogThreshold = 30;  // Log every N consecutive repeats
              // Output frames emitted
         // Audio frames dropped due to buffer full
     int audio_mapping_gate_drop_count_;  // Phase 8: Audio dropped while segment mapping pending
