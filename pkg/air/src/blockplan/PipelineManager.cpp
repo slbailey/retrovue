@@ -1379,7 +1379,12 @@ void PipelineManager::Run() {
       auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
 
       // Step 3: Snapshot outgoing block and finalize accumulator.
-      const FedBlock outgoing_block = live_tp()->GetBlock();
+      // INV-BLOCK-IDENTITY-001: Use live_parent_block_ (manager-owned) instead
+      // of live_tp()->GetBlock().  After segment MISS PAD fallback, live_ is a
+      // bare TickProducer with no block assigned.  live_parent_block_ is set at
+      // block activation and is never mutated by segment operations.
+      const FedBlock outgoing_block = live_parent_block_;
+      const int64_t outgoing_fence_frame = block_fence_frame_;
       std::optional<BlockPlaybackSummary> outgoing_summary;
       std::optional<BlockPlaybackProof> outgoing_proof;
       int64_t ct_at_fence_ms = -1;
@@ -1609,7 +1614,7 @@ void PipelineManager::Run() {
         std::ostringstream oss;
         oss << "[PipelineManager] BLOCK_COMPLETE"
             << " block=" << outgoing_summary->block_id
-            << " fence_frame=" << compute_fence_frame(outgoing_block)
+            << " fence_frame=" << outgoing_fence_frame
             << " emitted=" << outgoing_summary->frames_emitted
             << " pad=" << outgoing_summary->pad_frames
             << " asset=" << (!outgoing_summary->asset_uris.empty()
@@ -1633,7 +1638,7 @@ void PipelineManager::Run() {
             << " actual_ms=" << now_utc_ms
             << " delta_ms=" << delta_ms
             << " ct_at_fence_ms=" << ct_at_fence_ms
-            << " fence_frame=" << compute_fence_frame(outgoing_block)
+            << " fence_frame=" << outgoing_fence_frame
             << " session_frame=" << session_frame_index
             << " remaining_budget=" << remaining_block_frames_;
         Logger::Info(oss.str());
