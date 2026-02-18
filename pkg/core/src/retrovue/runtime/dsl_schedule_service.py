@@ -141,21 +141,92 @@ class DslScheduleService:
 
     def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Return the ScheduledBlock covering the given wall-clock time.
-        
+
+        INV-CHANNEL-NO-COMPILE-001: Prefers Tier 2 (TransmissionLog) data
+        which contains fully-filled ad breaks. Falls back to in-memory
+        unfilled blocks only if Tier 2 hasn't pre-filled yet.
+
         Also checks if the horizon needs extending.
         """
         # Check horizon before lookup
         self._maybe_extend_horizon(channel_id, utc_ms)
 
+        # Tier 2 first: check TransmissionLog for pre-filled block
+        filled = self._get_filled_block_at(channel_id, utc_ms)
+        if filled is not None:
+            return filled
+
+        # Fallback: unfilled in-memory block (Tier 2 hasn't reached this block yet)
         with self._lock:
             for block in self._blocks:
                 if block.start_utc_ms <= utc_ms < block.end_utc_ms:
+                    logger.info(
+                        "INV-CHANNEL-NO-COMPILE-001: Tier 2 miss for "
+                        "channel=%s utc_ms=%d — using unfilled block %s",
+                        channel_id, utc_ms, block.block_id,
+                    )
                     return block
 
         logger.warning(
             "No DSL block covers utc_ms=%d for channel=%s", utc_ms, channel_id
         )
         return None
+
+    def _get_filled_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
+        """Look up a pre-filled block from TransmissionLog (Tier 2).
+
+        INV-CHANNEL-NO-COMPILE-001 / INV-PLAYLOG-PREFILL-001:
+        Returns a ScheduledBlock with real ad URIs if the Playlog Horizon
+        Daemon has already filled this block. Returns None otherwise.
+        """
+        try:
+            from retrovue.infra.uow import session as db_session_factory
+            from retrovue.domain.entities import TransmissionLog
+
+            with db_session_factory() as db:
+                row = db.query(TransmissionLog).filter(
+                    TransmissionLog.channel_slug == channel_id,
+                    TransmissionLog.start_utc_ms <= utc_ms,
+                    TransmissionLog.end_utc_ms > utc_ms,
+                ).first()
+
+                if row is None:
+                    return None
+
+                # Deserialize TX log segments into ScheduledBlock
+                segments = []
+                for s in row.segments:
+                    segments.append(ScheduledSegment(
+                        segment_type=s.get("segment_type", "content"),
+                        asset_uri=s.get("asset_uri", ""),
+                        asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
+                        segment_duration_ms=s.get("segment_duration_ms", 0),
+                        transition_in=s.get("transition_in", "TRANSITION_NONE"),
+                        transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                        transition_out=s.get("transition_out", "TRANSITION_NONE"),
+                        transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                    ))
+
+                logger.debug(
+                    "INV-CHANNEL-NO-COMPILE-001: Tier 2 hit for "
+                    "channel=%s block=%s (%d segs)",
+                    channel_id, row.block_id, len(segments),
+                )
+
+                return ScheduledBlock(
+                    block_id=row.block_id,
+                    start_utc_ms=row.start_utc_ms,
+                    end_utc_ms=row.end_utc_ms,
+                    segments=tuple(segments),
+                )
+
+        except Exception as e:
+            logger.warning(
+                "INV-CHANNEL-NO-COMPILE-001: Tier 2 lookup failed for "
+                "channel=%s utc_ms=%d: %s — falling back to unfilled",
+                channel_id, utc_ms, e,
+            )
+            return None
 
     def get_playout_plan_now(
         self,
@@ -492,21 +563,24 @@ class DslScheduleService:
     def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
         """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.
 
-        INV-TRAFFIC-LATE-BIND-001: No DB session for traffic fill here.
-        Traffic fill happens at feed time in BlockPlanProducer._try_feed_block().
+        Produces Tier 1 data: content segments + empty filler placeholders
+        (break opportunities). Ad fill happens at Tier 2 (PlaylogHorizonDaemon),
+        not here.
+
+        INV-TRAFFIC-LATE-BIND-001: RETIRED — replaced by INV-PLAYLOG-PREFILL-001.
+        Ad fill now happens at Tier 2 generation time (2-3h ahead), not at
+        feed time. See: docs/architecture/two-tier-horizon.md
         """
         return self._expand_blocks_inner(schedule, resolver)
 
     def _expand_blocks_inner(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
-        """Inner expand loop -- produces blocks with EMPTY filler placeholders.
+        """Inner expand loop -- produces Tier 1 blocks with EMPTY filler placeholders.
 
-        INV-TRAFFIC-LATE-BIND-001: Traffic fill (commercial selection, break
-        filling, cooldown evaluation) MUST NOT happen at compile time.
-        This method produces ScheduledBlocks with empty filler placeholders
-        (segment_type=filler, asset_uri="") that BlockPlanProducer._try_feed_block()
-        will fill ~30 minutes before air.
+        Filler placeholders (segment_type=filler, asset_uri="") are filled by
+        PlaylogHorizonDaemon at Tier 2 generation time and written to
+        TransmissionLog. ChannelManager reads filled blocks from TransmissionLog.
 
-        See: docs/contracts/runtime/INV-TRAFFIC-LATE-BIND-001.md
+        INV-PLAYLOG-PREFILL-001: Ad selection at Tier 2, not compile time or feed time.
         """
         blocks: list[ScheduledBlock] = []
         for block_def in schedule["program_blocks"]:
@@ -526,9 +600,9 @@ class DslScheduleService:
             # Resolve asset URI to local path
             asset_uri = self._resolve_uri(meta.file_uri)
 
-            # Expand into acts + ad breaks (empty filler placeholders -- NOT filled here)
-            # INV-TRAFFIC-LATE-BIND-001: fill_ad_blocks() is called at feed time
-            # in BlockPlanProducer._try_feed_block(), not here at compile time.
+            # Expand into acts + ad breaks (empty filler placeholders — Tier 1 data).
+            # INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 (PlaylogHorizonDaemon),
+            # not here at compile time and not at feed time.
             expanded = expand_program_block(
                 asset_id=asset_id,
                 asset_uri=asset_uri,
@@ -542,8 +616,8 @@ class DslScheduleService:
 
         return blocks
 
-    # _get_asset_library removed: INV-TRAFFIC-LATE-BIND-001.
-    # Traffic fill now happens at feed time in BlockPlanProducer._try_feed_block().
+    # _get_asset_library removed: ad fill now handled by PlaylogHorizonDaemon (Tier 2).
+    # See: INV-PLAYLOG-PREFILL-001, docs/architecture/two-tier-horizon.md
 
     def _resolve_uris(self, resolver: CatalogAssetResolver, schedule: dict) -> None:
         """Pre-resolve source file paths to local paths using PathMappings.
