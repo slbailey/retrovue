@@ -102,3 +102,20 @@ the immediate window.
 - `INV-PLAYLOG-HORIZON-001` — Tier 2 maintains ≥2 hours coverage
 - `INV-PLAYLOG-PREFILL-001` — Ad fill happens at Tier 2 generation, never at feed time
 - `INV-CHANNEL-NO-COMPILE-001` — ChannelManager never compiles schedules or fills ads
+
+## Implementation Status (2026-02-18)
+
+### Completed
+- [x] Tier 1: CompiledProgramLog stores segmented_blocks (content + break opportunities)
+- [x] Tier 2: PlaylogHorizonDaemon fills ads and writes to TransmissionLog
+- [x] Consumer: DslScheduleService.get_block_at reads Tier 2 first
+- [x] Wiring: ProgramDirector starts PlaylogHorizonDaemon per DSL channel
+- [x] INV-TRAFFIC-LATE-BIND-001 retired, replaced by INV-PLAYLOG-PREFILL-001
+- [x] JIP ad continuity: re-join returns same ads from TransmissionLog
+
+### Remaining
+- [ ] Recompile all channels' CompiledProgramLog caches (only cheers-24-7 done)
+- [ ] Schedule Horizon Daemon (Tier 1 rolling — currently manual/on-demand)
+- [ ] Remove _fill_block_at_feed_time from ChannelManager (already absent post-revert)
+- [ ] Eviction policy for old TransmissionLog entries
+- [ ] Health endpoint exposing PlaylogHorizonDaemon status
