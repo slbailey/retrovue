@@ -91,6 +91,95 @@ def _format_asrun_line(
     )
 
 
+
+
+# ---------------------------------------------------------------------------
+# DB-backed segment lookup (replaces SegmentLookup singleton)
+# Contract: docs/contracts/runtime/AsRunEnrichmentContract.md
+# INV-ASRUN-ENRICH-SOURCE-001
+# ---------------------------------------------------------------------------
+
+# In-memory cache: block_id -> list of segment dicts
+# Cleared on block completion (INV-ASRUN-ENRICH-CACHE-001).
+_block_segment_cache: dict = {}
+_block_segment_cache_lock = __import__("threading").Lock()
+_BLOCK_SEGMENT_CACHE_MAX = 10
+
+
+def _lookup_segment_from_db(block_id: str, segment_index: int) -> object | None:
+    """Look up segment metadata from transmission_log.
+
+    Returns a simple namespace with .title, .segment_type, .asset_uri,
+    .segment_duration_ms, .asset_start_offset_ms attributes, or None if not found.
+
+    Gracefully degrades (returns None) on any error (DB unavailable, missing row, etc.)
+    INV-ASRUN-ENRICH-DEGRADE-001: Never raises; always degrades to None.
+    """
+    import types as _types
+
+    # Check in-memory cache first (INV-ASRUN-ENRICH-CACHE-001)
+    with _block_segment_cache_lock:
+        segments = _block_segment_cache.get(block_id)
+
+    if segments is None:
+        try:
+            from retrovue.infra.uow import session as db_session_factory
+            from retrovue.domain.entities import TransmissionLog
+            with db_session_factory() as db:
+                row = db.query(TransmissionLog).filter(
+                    TransmissionLog.block_id == block_id
+                ).first()
+                if row is None:
+                    return None
+                segments = row.segments or []
+
+            # Cache the result (evict oldest if over limit)
+            with _block_segment_cache_lock:
+                if len(_block_segment_cache) >= _BLOCK_SEGMENT_CACHE_MAX:
+                    oldest = next(iter(_block_segment_cache))
+                    del _block_segment_cache[oldest]
+                _block_segment_cache[block_id] = segments
+
+        except Exception as e:
+            logger.warning(
+                "TXLOG: Segment lookup failed block_id=%s seg_idx=%d: %s",
+                block_id, segment_index, e,
+            )
+            return None
+
+    if segments is None:
+        return None
+
+    # Find segment by index
+    seg_data = None
+    for s in segments:
+        if isinstance(s, dict) and s.get("segment_index") == segment_index:
+            seg_data = s
+            break
+
+    if seg_data is None:
+        return None
+
+    # Return as a simple namespace so callers can use attribute access
+    info = _types.SimpleNamespace(
+        segment_index=seg_data.get("segment_index", segment_index),
+        segment_type=seg_data.get("segment_type", "content"),
+        asset_uri=seg_data.get("asset_uri", ""),
+        asset_start_offset_ms=seg_data.get("asset_start_offset_ms", 0),
+        segment_duration_ms=seg_data.get("segment_duration_ms", 0),
+        title=seg_data.get("title", ""),
+    )
+    return info
+
+
+def _clear_block_segment_cache(block_id: str) -> None:
+    """Clear cached segments for a completed block.
+
+    INV-ASRUN-ENRICH-CACHE-001: Prevents stale data after block completion.
+    """
+    with _block_segment_cache_lock:
+        _block_segment_cache.pop(block_id, None)
+
 class DurableAckStore:
     """Thread-safe, per-session durable ack tracking.
 
@@ -385,11 +474,42 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                     ss.block_id,
                 )
             actual = writer.display_time(ss.actual_start_utc_ms)
+
+            # Enrich with segment metadata from transmission_log (INV-ASRUN-ENRICH-SOURCE-001)
+            seg_info = None
+            try:
+                seg_info = _lookup_segment_from_db(ss.block_id, ss.segment_index)
+            except Exception:
+                pass
+
+            seg_type_label = "PROGRAM"
+            seg_title = ""
+            seg_asset_type = ""
+            if seg_info is not None:
+                seg_title = seg_info.title
+                seg_asset_type = seg_info.segment_type
+                # Map segment_type to human-readable as-run type label
+                _type_labels = {
+                    "content": "PROGRAM",
+                    "episode": "PROGRAM",
+                    "commercial": "COMMERCL",
+                    "promo": "PROMO",
+                    "station_id": "IDENT",
+                    "stinger": "STINGER",
+                    "bumper": "BUMPER",
+                    "filler": "FILLER",
+                    "psa": "PSA",
+                    "pad": "PAD",
+                }
+                seg_type_label = _type_labels.get(seg_info.segment_type, "PROGRAM")
+
             notes = f"segment_index={ss.segment_index} asset_start_frame={ss.asset_start_frame}"
+            if seg_title:
+                notes += f" [{seg_title}]"
             if ss.join_in_progress:
                 notes += " join_in_progress=Y"
             asrun_line = _format_asrun_line(
-                actual, "00:00:00", "SEG_START", "PROGRAM",
+                actual, "00:00:00", "SEG_START", seg_type_label,
                 ss.event_id or ss.block_id, notes
             )
             jsonl_rec = {
@@ -403,6 +523,12 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "asset_start_frame": ss.asset_start_frame,
                 "scheduled_duration_ms": ss.scheduled_duration_ms,
             }
+            # Enrich JSONL with full segment metadata
+            if seg_info is not None:
+                jsonl_rec["segment_type"] = seg_info.segment_type
+                jsonl_rec["asset_uri"] = seg_info.asset_uri
+                jsonl_rec["segment_title"] = seg_info.title
+                jsonl_rec["segment_duration_ms"] = seg_info.segment_duration_ms
             if ss.join_in_progress:
                 jsonl_rec["join_in_progress"] = True
                 join_in_progress_by_event[ss.event_id or ss.block_id] = True
@@ -435,7 +561,10 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 )
                 return
 
-            actual = writer.display_time(se.actual_start_utc_ms)
+            # Use end time for AIRED display so .asrun reads chronologically.
+            # Previous: actual_start_utc_ms caused out-of-order timestamps
+            # when segment_end arrived after the next segment_start.
+            actual = writer.display_time(se.actual_end_utc_ms)
             dur = _ms_to_hhmmss(se.computed_duration_ms)
             seg_idx = last_segment_index[0]
             notes = (
