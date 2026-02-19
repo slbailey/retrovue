@@ -1,6 +1,7 @@
 channel: showtime-cinema
 channel_number: 7
 name: "Showtime"
+channel_type: movie
 timezone: America/New_York
 
 format:

@@ -645,6 +645,7 @@ class ProgramDirector:
             filler_path=filler_path,
             filler_duration_ms=filler_duration_ms,
             channel_slug=channel_id,
+            channel_type=sc.get("channel_type", "network"),
         )
         ok, err = svc.load_schedule(channel_id)
         if not ok:

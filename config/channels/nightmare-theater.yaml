@@ -1,6 +1,7 @@
 channel: nightmare-theater
 channel_number: 4
 name: "Nightmare Theater"
+channel_type: network
 timezone: America/New_York
 
 format:

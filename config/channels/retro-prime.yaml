@@ -1,6 +1,7 @@
 channel: retro-prime
 channel_number: 3
 name: "Retro Prime"
+channel_type: network
 timezone: America/New_York
 
 format:

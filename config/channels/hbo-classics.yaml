@@ -1,6 +1,7 @@
 channel: hbo-classics
 channel_number: 6
 name: "HBO"
+channel_type: movie
 timezone: America/New_York
 
 format:

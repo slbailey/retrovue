@@ -185,3 +185,4 @@ pkg/air/build-asan/
 # CTest artifacts
 Testing/
 CTestTestfile.cmake
+*.bak*

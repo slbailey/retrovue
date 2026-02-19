@@ -1,6 +1,7 @@
 channel: chicago-dispatch
 channel_number: 5
 name: "Chicago Dispatch"
+channel_type: network
 timezone: America/New_York
 
 format:

@@ -140,6 +140,11 @@ struct Segment {
 
   std::string event_id;  // Scheduled event_id from TransmissionLog
 
+  // INV-AIR-SEGMENT-ID-001: Execution identity UUID (generated at block feed time)
+  // INV-AIR-SEGMENT-ID-002: Asset identity (empty string for PAD)
+  std::string segment_uuid;
+  std::string asset_uuid;
+
   // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
   // Applied only to second-class breakpoints (computed interval division).
   // First-class breakpoints (chapter markers) always use kNone.

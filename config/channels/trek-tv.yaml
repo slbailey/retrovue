@@ -1,6 +1,7 @@
 channel: trek-tv
 channel_number: 8
 name: "Trek TV"
+channel_type: network
 timezone: America/New_York
 
 format:

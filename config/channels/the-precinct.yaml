@@ -1,6 +1,7 @@
 channel: the-precinct
 channel_number: 11
 name: "The Precinct"
+channel_type: network
 timezone: America/New_York
 
 format:

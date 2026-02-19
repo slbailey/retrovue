@@ -1,6 +1,7 @@
 channel: babylon-5-tv
 channel_number: 13
 name: "Babylon 5"
+channel_type: network
 timezone: America/New_York
 
 format:
