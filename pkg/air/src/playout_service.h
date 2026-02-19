@@ -172,6 +172,9 @@ class PlayoutControlImpl final : public PlayoutControl::Service {
       int64_t start_frame = 0;       // Block-relative (internal fence accounting)
       int64_t asset_start_frame = 0; // Asset-relative (evidence output only)
       int32_t segment_index = -1;
+      std::string segment_uuid;        // INV-AIR-SEGMENT-ID-001: execution identity
+      std::string segment_type_name;   // INV-AIR-SEGMENT-ID-003: echoed at SegmentEnd
+      std::string asset_uuid;          // INV-AIR-SEGMENT-ID-002: echoed at SegmentEnd
     };
     LiveSegmentInfo live_segment;  // Currently-airing segment
 

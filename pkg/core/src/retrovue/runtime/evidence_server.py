@@ -353,6 +353,8 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         emitted_terminals: set[tuple[str, int]] = set()
         # Track most recent segment_index from SEG_START so AIRED can echo it.
         last_segment_index: list[int] = [-1]
+        # INV-AIR-SEGMENT-ID-001: Track segment_uuid for segment_end correlation
+        last_segment_uuid: list[str] = [""]
         # Block start UTC ms for current block (set on block_start; used for SegmentStart warning).
         last_block_start_utc_ms: list[int | None] = [None]
         # Contiguity invariant: last asset_end_frame per block; join_in_progress per event_id.
@@ -410,6 +412,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                         writer, msg, payload_name, emitted_terminals,
                         last_segment_index, last_block_start_utc_ms,
                         last_asset_end_frame_by_block, join_in_progress_by_event,
+                        last_segment_uuid,
                     )
 
                 # Persist ack durably, then ACK the client.
@@ -438,6 +441,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         last_block_start_utc_ms: list[int | None],
         last_asset_end_frame_by_block: dict[str, int],
         join_in_progress_by_event: dict[str, bool],
+        last_segment_uuid: list[str] | None = None,
     ) -> None:
         """Map a single evidence message to .asrun + .jsonl and write durably.
 
@@ -475,6 +479,8 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         elif payload_name == "segment_start":
             ss = msg.segment_start
             last_segment_index[0] = ss.segment_index
+            # INV-AIR-SEGMENT-ID-001: Track segment_uuid for segment_end correlation
+            last_segment_uuid[0] = ss.segment_uuid or ""
             if (
                 ss.segment_index == 0
                 and ss.asset_start_frame == 0
@@ -492,42 +498,40 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 )
             actual = writer.display_time(ss.actual_start_utc_ms)
 
-            # Enrich with segment metadata from transmission_log (INV-ASRUN-ENRICH-SOURCE-001)
-            seg_info = None
-            try:
-                seg_info = _lookup_segment_from_db(ss.block_id, ss.segment_index)
-            except Exception:
-                pass
+            # INV-AIR-SEGMENT-ID-001/003: Use AIR-authoritative identity fields
+            # from proto. Do NOT fall back to _lookup_segment_from_db for runtime
+            # reporting. Segment metadata is carried in the evidence event itself.
+            seg_type_name = ss.segment_type_name or ""
+            seg_title = ss.segment_title or ""
+            seg_asset_uri = ss.asset_uri or ""
+            seg_uuid = ss.segment_uuid or ""
+            seg_asset_uuid = ss.asset_uuid or ""
 
-            seg_type_label = "PROGRAM"
-            seg_title = ""
-            seg_asset_type = ""
-            if seg_info is not None:
-                seg_title = seg_info.title
-                # INV-ASRUN-JIP-ATTR-001: Derive title from asset_uri when
-                # title is empty (JIP-renumbered segments lack DB titles).
-                if not seg_title and getattr(seg_info, "asset_uri", ""):
-                    import os
-                    seg_title = os.path.splitext(os.path.basename(seg_info.asset_uri))[0]
-                if not seg_title and getattr(seg_info, "segment_type", "") == "pad":
-                    seg_title = "BLACK"
-                seg_asset_type = seg_info.segment_type
-                # Map segment_type to human-readable as-run type label
-                _type_labels = {
-                    "content": "PROGRAM",
-                    "episode": "PROGRAM",
-                    "commercial": "COMMERCL",
-                    "promo": "PROMO",
-                    "station_id": "IDENT",
-                    "stinger": "STINGER",
-                    "bumper": "BUMPER",
-                    "filler": "FILLER",
-                    "psa": "PSA",
-                    "pad": "PAD",
-                }
-                seg_type_label = _type_labels.get(seg_info.segment_type, "PROGRAM")
+            # Derive title from asset_uri when title is empty
+            if not seg_title and seg_asset_uri:
+                import os as _os
+                seg_title = _os.path.splitext(_os.path.basename(seg_asset_uri))[0]
+            if not seg_title and seg_type_name == "pad":
+                seg_title = "BLACK"
+
+            # Map segment_type to human-readable as-run type label
+            _type_labels = {
+                "content": "PROGRAM",
+                "episode": "PROGRAM",
+                "commercial": "COMMERCL",
+                "promo": "PROMO",
+                "station_id": "IDENT",
+                "stinger": "STINGER",
+                "bumper": "BUMPER",
+                "filler": "FILLER",
+                "psa": "PSA",
+                "pad": "PAD",
+            }
+            seg_type_label = _type_labels.get(seg_type_name, "PROGRAM")
 
             notes = f"segment_index={ss.segment_index} asset_start_frame={ss.asset_start_frame}"
+            if seg_uuid:
+                notes += f" segment_uuid={seg_uuid}"
             if seg_title:
                 notes += f" [{seg_title}]"
             if ss.join_in_progress:
@@ -546,13 +550,13 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "segment_index": ss.segment_index,
                 "asset_start_frame": ss.asset_start_frame,
                 "scheduled_duration_ms": ss.scheduled_duration_ms,
+                # INV-AIR-SEGMENT-ID-001/002: UUID-based identity
+                "segment_uuid": seg_uuid,
+                "asset_uuid": seg_asset_uuid,
+                "segment_type": seg_type_name,
+                "asset_uri": seg_asset_uri,
+                "segment_title": seg_title,
             }
-            # Enrich JSONL with full segment metadata
-            if seg_info is not None:
-                jsonl_rec["segment_type"] = seg_info.segment_type
-                jsonl_rec["asset_uri"] = seg_info.asset_uri
-                jsonl_rec["segment_title"] = seg_info.title
-                jsonl_rec["segment_duration_ms"] = seg_info.segment_duration_ms
             if ss.join_in_progress:
                 jsonl_rec["join_in_progress"] = True
                 join_in_progress_by_event[ss.event_id or ss.block_id] = True
@@ -564,10 +568,18 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             status = se.status or "AIRED"
             frames = se.computed_duration_frames
 
-            # AR-ART-008: Suppress duplicate terminal event for same (EVENT_ID, segment_index).
-            # Multi-segment blocks may share the same event_id across segments;
-            # segment_index disambiguates legitimate per-segment terminals.
-            dedup_key = (event_id, last_segment_index[0])
+            # AR-ART-008 + INV-AIR-SEGMENT-ID-001: Suppress duplicate terminal
+            # event for same (EVENT_ID, segment_uuid). Using segment_uuid instead
+            # of segment_index for identity-stable dedup across JIP renumbering.
+            seg_uuid = ""
+            if hasattr(se, "segment_uuid") and se.segment_uuid:
+                seg_uuid = se.segment_uuid
+            elif last_segment_uuid is not None:
+                seg_uuid = last_segment_uuid[0]
+            # INV-AIR-SEGMENT-ID-003/002: Extract identity fields from proto
+            seg_type_name = getattr(se, "segment_type_name", "") or ""
+            seg_asset_uuid = getattr(se, "asset_uuid", "") or ""
+            dedup_key = (event_id, seg_uuid or last_segment_index[0])
             if dedup_key in emitted_terminals:
                 logger.warning(
                     "AR-ART-008 guard: suppressing duplicate terminal %s "
@@ -596,6 +608,8 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 f"ontime=Y fallback={se.fallback_frames_used} "
                 f"asset_start={se.asset_start_frame} asset_end={se.asset_end_frame} frames={frames}"
             )
+            if seg_uuid:
+                notes += f" segment_uuid={seg_uuid}"
             if se.reason:
                 notes += f" reason={se.reason}"
             asrun_line = _format_asrun_line(
@@ -614,6 +628,10 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 "status": status,
                 "reason": se.reason or None,
                 "fallback_frames_used": se.fallback_frames_used,
+                # INV-AIR-SEGMENT-ID-001/002/003: UUID-based identity in evidence trail
+                "segment_uuid": seg_uuid,
+                "segment_type_name": seg_type_name,
+                "asset_uuid": seg_asset_uuid,
             }
             # Contiguity invariant: within the SAME segment_index, consecutive
             # SEGMENT_END events should have contiguous asset frames. Across

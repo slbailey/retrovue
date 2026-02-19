@@ -110,6 +110,7 @@ class DslScheduleService:
         broadcast_day: str | None = None,
         programming_day_start_hour: int = 6,
         channel_slug: str | None = None,
+        channel_type: str = "network",
     ) -> None:
         self._dsl_path = dsl_path
         self._filler_path = filler_path
@@ -117,6 +118,7 @@ class DslScheduleService:
         self._day_start_hour = programming_day_start_hour
         self._broadcast_day_override = broadcast_day
         self._channel_slug = channel_slug
+        self._channel_type = channel_type
 
         # Pre-built blocks indexed by start_utc_ms
         self._blocks: list[ScheduledBlock] = []
@@ -610,6 +612,7 @@ class DslScheduleService:
                 slot_duration_ms=block_def["slot_duration_sec"] * 1000,
                 episode_duration_ms=block_def["episode_duration_sec"] * 1000,
                 chapter_markers_ms=chapter_ms,
+                channel_type=self._channel_type,
             )
 
             blocks.append(expanded)

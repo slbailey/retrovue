@@ -32,11 +32,18 @@ struct SegmentStartPayload {
   int64_t asset_start_frame = 0;    // Asset-relative frame index at segment start (decoder at TAKE)
   int64_t scheduled_duration_ms = 0;
   bool join_in_progress = false;    // True only for first SEGMENT_START in session when JIP
+  // INV-AIR-SEGMENT-ID-001,002,005: Identity fields
+  std::string segment_uuid;
+  std::string asset_uuid;
+  std::string segment_type;
 };
 
 struct SegmentEndPayload {
   std::string block_id;
   std::string event_id_ref;         // Same event_id as matching SegmentStart
+  std::string segment_uuid;  // INV-AIR-SEGMENT-ID-001: echoed from SegmentStart
+  std::string segment_type_name;   // INV-AIR-SEGMENT-ID-003: echoed from SegmentStart
+  std::string asset_uuid;          // INV-AIR-SEGMENT-ID-002: echoed (empty for PAD)
   int64_t actual_start_utc_ms = 0;  // Captured at SegmentStart, echoed here
   int64_t actual_end_utc_ms = 0;
   int64_t asset_start_frame = 0;    // Asset-relative frame index at segment start

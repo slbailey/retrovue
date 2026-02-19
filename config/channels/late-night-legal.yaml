@@ -1,6 +1,7 @@
 channel: late-night-legal
 channel_number: 14
 name: "Legal Drama"
+channel_type: network
 timezone: America/New_York
 
 format:

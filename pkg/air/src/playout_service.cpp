@@ -176,6 +176,9 @@ namespace retrovue
         s.segment_duration_ms = seg.segment_duration_ms();
         s.segment_type = static_cast<blockplan::SegmentType>(seg.segment_type());
         s.event_id = seg.event_id();
+        // INV-AIR-SEGMENT-ID-001,002: Segment and asset identity
+        s.segment_uuid = seg.segment_uuid();
+        s.asset_uuid = seg.asset_uuid();
         // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
         s.transition_in = static_cast<blockplan::TransitionType>(seg.transition_in());
         s.transition_in_duration_ms = seg.transition_in_duration_ms();
@@ -855,7 +858,12 @@ namespace retrovue
                 se.computed_duration_ms = now_ms - ls.start_utc_ms;
                 se.computed_duration_frames = seg_frames;
                 se.status = "AIRED";
-                em->EmitSegmentEnd(se);
+                se.segment_uuid = ls.segment_uuid;
+
+                se.segment_type_name = ls.segment_type_name;
+
+                se.asset_uuid = ls.asset_uuid;
+              em->EmitSegmentEnd(se);
               }
               ls.segment_index = -1;  // Clear — prevents duplicate close
             }
@@ -945,6 +953,11 @@ namespace retrovue
               se.computed_duration_ms = now_ms - ls.start_utc_ms;
               se.computed_duration_frames = seg_frames;
               se.status = "AIRED";
+              se.segment_uuid = ls.segment_uuid;
+
+              se.segment_type_name = ls.segment_type_name;
+
+              se.asset_uuid = ls.asset_uuid;
               em->EmitSegmentEnd(se);
             }
           }
@@ -957,6 +970,9 @@ namespace retrovue
             ls.start_utc_ms = now_ms;
             ls.start_frame = frame_idx;
             ls.segment_index = to_idx;
+            ls.segment_uuid = seg.segment_uuid;
+            ls.segment_type_name = blockplan::SegmentTypeName(seg.segment_type);
+            ls.asset_uuid = seg.asset_uuid;
             // Asset-relative frame: decoder position within asset at TAKE.
             ls.asset_start_frame = static_cast<int64_t>(std::round(
                 seg.asset_start_offset_ms * blockplan_session_->fps / 1000.0));
@@ -980,6 +996,9 @@ namespace retrovue
             ss.asset_start_frame = ls.asset_start_frame;
             ss.scheduled_duration_ms = seg.segment_duration_ms;
             ss.join_in_progress = join_in_progress;
+            ss.segment_uuid = seg.segment_uuid;
+            ss.asset_uuid = seg.asset_uuid;
+            ss.segment_type = blockplan::SegmentTypeName(seg.segment_type);
             em->EmitSegmentStart(ss);
           }
         };

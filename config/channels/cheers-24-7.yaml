@@ -1,6 +1,7 @@
 channel: cheers-24-7
 channel_number: 2
 name: "Cheers 24/7"
+channel_type: network
 timezone: America/New_York
 
 format:

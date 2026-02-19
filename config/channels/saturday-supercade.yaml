@@ -1,6 +1,7 @@
 channel: saturday-supercade
 channel_number: 9
 name: "Saturday Supercade"
+channel_type: network
 timezone: America/New_York
 
 format:

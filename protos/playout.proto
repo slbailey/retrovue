@@ -288,6 +288,8 @@ message BlockSegment {
   uint32 transition_in_duration_ms = 9;       // Fade-in duration in milliseconds (0 if NONE)
   TransitionType transition_out = 10;          // Fade type applied at segment end
   uint32 transition_out_duration_ms = 11;     // Fade-out duration in milliseconds (0 if NONE)
+  string segment_uuid = 12;          // INV-AIR-SEGMENT-ID-001: execution identity UUID (generated at feed time)
+  string asset_uuid = 13;            // INV-AIR-SEGMENT-ID-002: asset identity (null for PAD)
 }
 
 // StartBlockPlanSessionRequest initializes BlockPlan mode with 2 seed blocks.

@@ -122,7 +122,10 @@ void EvidenceEmitter::EmitSegmentStart(const SegmentStartPayload& p) {
     << ",\"actual_start_utc_ms\":" << p.actual_start_utc_ms
     << ",\"asset_start_frame\":" << p.asset_start_frame
     << ",\"scheduled_duration_ms\":" << p.scheduled_duration_ms
-    << ",\"join_in_progress\":" << (p.join_in_progress ? "true" : "false") << "}";
+    << ",\"join_in_progress\":" << (p.join_in_progress ? "true" : "false")
+    << ",\"segment_uuid\":\"" << JsonEscape(p.segment_uuid) << "\""
+    << ",\"asset_uuid\":\"" << JsonEscape(p.asset_uuid) << "\""
+    << ",\"segment_type\":\"" << JsonEscape(p.segment_type) << "\"" << "}";
   EvidenceFromAir msg = MakeEnvelope("SEGMENT_START", o.str());
   auto status = spool_->Append(msg);
   if (status == AppendStatus::kSpoolFull) {
@@ -155,7 +158,10 @@ void EvidenceEmitter::EmitSegmentEnd(const SegmentEndPayload& p) {
     << ",\"computed_duration_frames\":" << p.computed_duration_frames
     << ",\"status\":\"" << JsonEscape(p.status) << "\""
     << ",\"reason\":\"" << JsonEscape(p.reason) << "\""
-    << ",\"fallback_frames_used\":" << p.fallback_frames_used << "}";
+    << ",\"fallback_frames_used\":" << p.fallback_frames_used
+    << ",\"segment_uuid\":\"" << JsonEscape(p.segment_uuid) << "\""
+    << ",\"segment_type_name\":\"" << JsonEscape(p.segment_type_name) << "\""
+    << ",\"asset_uuid\":\"" << JsonEscape(p.asset_uuid) << "\"" << "}";
   EvidenceFromAir msg = MakeEnvelope("SEGMENT_END", o.str());
   auto status = spool_->Append(msg);
   if (status == AppendStatus::kSpoolFull) {

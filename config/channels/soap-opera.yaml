@@ -1,6 +1,7 @@
 channel: soap-opera
 channel_number: 10
 name: "Soap!"
+channel_type: network
 timezone: America/New_York
 
 format:

@@ -1,6 +1,7 @@
 channel: galactica-command
 channel_number: 12
 name: "Galactica Command"
+channel_type: network
 timezone: America/New_York
 
 format:

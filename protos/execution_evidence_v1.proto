@@ -64,6 +64,8 @@ message SegmentStart {
   string segment_type_name = 8;       // AIR-authoritative: "content", "commercial", "filler", "pad", etc.
   string asset_uri = 9;               // AIR-authoritative: asset path (empty for PAD)
   string segment_title = 10;          // AIR-authoritative: display title (from block plan)
+  string segment_uuid = 11;          // INV-AIR-SEGMENT-ID-001: execution identity UUID
+  string asset_uuid = 12;            // INV-AIR-SEGMENT-ID-002: asset identity (null for PAD)
 }
 
 message SegmentEnd {
@@ -78,6 +80,9 @@ message SegmentEnd {
   string status = 9;                // AIRED, SKIPPED, TRUNCATED
   string reason = 10;
   uint64 fallback_frames_used = 11;
+  string segment_uuid = 12;          // INV-AIR-SEGMENT-ID-001: echoed from SegmentStart
+  string segment_type_name = 13;     // INV-AIR-SEGMENT-ID-003: echoed from SegmentStart
+  string asset_uuid = 14;            // INV-AIR-SEGMENT-ID-002: echoed (empty for PAD)
 }
 
 message BlockFence {
