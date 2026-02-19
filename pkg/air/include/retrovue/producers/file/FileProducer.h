@@ -286,6 +286,7 @@ namespace retrovue::producers::file
     int64_t last_mt_pts_us_;  // For PTS monotonicity enforcement (MT ONLY!)
     int64_t last_decoded_mt_pts_us_;  // PTS of last decoded frame (MT ONLY!)
     int64_t first_mt_pts_us_;  // PTS of first frame for time mapping (MT ONLY!)
+    bool video_epoch_set_ = false;  // True once VIDEO_EPOCH_SET has fired (replaces first_mt_pts_us_==0 sentinel)
     int64_t playback_start_utc_us_;  // UTC time when first frame was decoded (for pacing)
 
     // Phase 8.9: Audio decoder subsystem
@@ -361,6 +362,12 @@ namespace retrovue::producers::file
     // Returns true if frame was pushed, false if stopped/truncated.
     bool EmitFrameAtTick(buffer::Frame& frame, int64_t tick_pts_us);
 
+    // Drain any pending decoded audio frames from the audio codec.
+    // Called after video frame emission in both resampled and non-resampled paths
+    // to maintain A/V interleaving. Audio packet dispatch (demux-level) happens
+    // in the av_read_frame loop; this drains the decoder's output queue.
+    void DrainAudioDecoderIfNeeded();
+
     // Pending frame promotion: called at top of produce loop.
     // Returns true if a repeat frame was emitted (caller should skip decode).
     bool ResamplePromotePending(buffer::Frame& output_frame, int64_t& base_pts_us);                    // Whether held_frame_storage_ has content
@@ -377,7 +384,6 @@ namespace retrovue::producers::file
     // Incremented when ResamplePromotePending emits a repeat; reset when
     // a non-repeat frame is emitted via ResampleGate or pending is promoted.
     uint64_t consecutive_repeat_emits_ = 0;
-    bool resample_epoch_set_ = false;  // Guards VIDEO_EPOCH_SET in EmitFrameAtTick
     static constexpr uint64_t kRepeatLogThreshold = 30;  // Log every N consecutive repeats
              // Output frames emitted
         // Audio frames dropped due to buffer full

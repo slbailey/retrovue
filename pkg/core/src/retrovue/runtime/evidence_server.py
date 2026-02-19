@@ -172,6 +172,23 @@ def _lookup_segment_from_db(block_id: str, segment_index: int) -> object | None:
     return info
 
 
+
+def prepopulate_block_segment_cache(block_id: str, segments: list) -> None:
+    """Pre-populate segment cache with JIP-renumbered segments from the fed block.
+
+    INV-ASRUN-JIP-ENRICH-001: When a block is fed to AIR after JIP renumbering,
+    the segment_index values in the fed block may differ from the original
+    TransmissionLog. Pre-populating ensures evidence_server uses the correct
+    (renumbered) segment metadata for AsRun attribution.
+
+    Called from BlockPlanProducer._try_feed_block() after successful feed.
+    """
+    with _block_segment_cache_lock:
+        if len(_block_segment_cache) >= _BLOCK_SEGMENT_CACHE_MAX:
+            oldest = next(iter(_block_segment_cache))
+            del _block_segment_cache[oldest]
+        _block_segment_cache[block_id] = segments
+
 def _clear_block_segment_cache(block_id: str) -> None:
     """Clear cached segments for a completed block.
 
@@ -487,6 +504,13 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             seg_asset_type = ""
             if seg_info is not None:
                 seg_title = seg_info.title
+                # INV-ASRUN-JIP-ATTR-001: Derive title from asset_uri when
+                # title is empty (JIP-renumbered segments lack DB titles).
+                if not seg_title and getattr(seg_info, "asset_uri", ""):
+                    import os
+                    seg_title = os.path.splitext(os.path.basename(seg_info.asset_uri))[0]
+                if not seg_title and getattr(seg_info, "segment_type", "") == "pad":
+                    seg_title = "BLACK"
                 seg_asset_type = seg_info.segment_type
                 # Map segment_type to human-readable as-run type label
                 _type_labels = {

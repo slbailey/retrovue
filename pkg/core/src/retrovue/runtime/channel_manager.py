@@ -2041,6 +2041,22 @@ class BlockPlanProducer(Producer):
             self._advance_cursor(block)
             self._pending_block = None
             self._feed_credits = max(0, self._feed_credits - 1)
+            # INV-ASRUN-JIP-ATTR-001: Pre-populate evidence cache with
+            # JIP-renumbered segments so AsRun attribution uses the correct
+            # segment metadata (not stale pre-JIP DB indices).
+            from retrovue.runtime.evidence_server import prepopulate_block_segment_cache
+            fed_segments = [
+                {
+                    "segment_index": seg.get("segment_index", idx),
+                    "segment_type": seg.get("segment_type", "content"),
+                    "asset_uri": seg.get("asset_uri", ""),
+                    "asset_start_offset_ms": seg.get("asset_start_offset_ms", 0),
+                    "segment_duration_ms": seg.get("segment_duration_ms", 0),
+                    "title": seg.get("title", ""),
+                }
+                for idx, seg in enumerate(block.segments)
+            ]
+            prepopulate_block_segment_cache(block.block_id, fed_segments)
             # INV-WALLCLOCK-FENCE-002: Track fed block as active
             self._in_flight_block_ids.add(block.block_id)
             # Success clears error state
