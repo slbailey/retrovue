@@ -344,7 +344,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
     def EvidenceStream(self, request_iterator, context):
         """Bidirectional stream: receive evidence, write as-run, yield ACKs."""
         peer = context.peer()
-        logger.info("EvidenceStream opened from %s", peer)
+        logger.debug("EvidenceStream opened from %s", peer)
 
         writer: AsRunWriter | None = None
         seen_uuids: set[str] = set()
@@ -368,7 +368,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             for msg in request_iterator:
                 payload_name = msg.WhichOneof("payload") or "unknown"
 
-                logger.info(
+                logger.debug(
                     "Evidence seq=%d uuid=%s channel=%s session=%s type=%s",
                     msg.sequence,
                     msg.event_uuid,
@@ -429,7 +429,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
         finally:
             if writer is not None:
                 writer.close()
-            logger.info("EvidenceStream closed from %s", peer)
+            logger.debug("EvidenceStream closed from %s", peer)
 
     def _process_evidence(
         self,

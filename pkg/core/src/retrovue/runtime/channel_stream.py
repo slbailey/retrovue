@@ -109,7 +109,7 @@ class UdsTsSource:
             try:
                 rcvbuf = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
                 sndbuf = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
-                _logger.info("[AUDIT-BUF] UdsTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
+                _logger.debug("[AUDIT-BUF] UdsTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
                             rcvbuf, sndbuf)
             except Exception as e:
                 _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
@@ -182,7 +182,7 @@ class SocketTsSource:
                 _requested_rcvbuf = 32768
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _requested_rcvbuf)
                 effective = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
-                _logger.info(
+                _logger.debug(
                     "[UDS-BUF] SO_RCVBUF: requested=%d effective=%d", _requested_rcvbuf, effective
                 )
             except Exception as e:
@@ -195,7 +195,7 @@ class SocketTsSource:
         try:
             rcvbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
             sndbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
-            _logger.info("[AUDIT-BUF] SocketTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
+            _logger.debug("[AUDIT-BUF] SocketTsSource socket: SO_RCVBUF=%d bytes, SO_SNDBUF=%d bytes",
                         rcvbuf, sndbuf)
         except Exception as e:
             _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
@@ -349,7 +349,7 @@ class ChannelStream:
                     return True
             else:
                 # SocketTsSource (Air) or FakeTsSource: already connected / no connect
-                self._logger.info(
+                self._logger.debug(
                     "TS source ready for channel %s (socket from queue)",
                     self.channel_id,
                 )
@@ -377,7 +377,7 @@ class ChannelStream:
         """Background thread loop that reads TS data and fans out to subscribers."""
         global _AUDIT_T0, _AUDIT_T1, _AUDIT_T2, _AUDIT_FIRST_RECV_DONE
 
-        self._logger.info("ChannelStream reader loop started for channel %s", self.channel_id)
+        self._logger.debug("ChannelStream reader loop started for channel %s", self.channel_id)
         chunk_size = 188 * 10  # Read 10 TS packets at a time (188 bytes each)
 
         # AUDIT: Track inter-recv gaps for steady-state analysis (telemetry only)
@@ -414,7 +414,7 @@ class ChannelStream:
                     if not _AUDIT_FIRST_RECV_DONE:
                         _AUDIT_T1 = time.monotonic_ns()
                         t0_val = _AUDIT_T0 or 0
-                        self._logger.info(
+                        self._logger.debug(
                             "[AUDIT-T1] First recv() ENTERING at %d ns (T0→T1 = %.2f ms) for channel %s",
                             _AUDIT_T1, (_AUDIT_T1 - t0_val) / 1e6, self.channel_id
                         )
@@ -442,7 +442,7 @@ class ChannelStream:
                             _AUDIT_FIRST_RECV_DONE = True
                             t0_val = _AUDIT_T0 or 0
                             t1_val = _AUDIT_T1 or 0
-                            self._logger.info(
+                            self._logger.debug(
                                 "[AUDIT-T2] First recv() RETURNED DATA at %d ns "
                                 "(T1→T2 = %.2f ms, T0→T2 = %.2f ms, %d bytes) for channel %s",
                                 _AUDIT_T2,
@@ -469,12 +469,24 @@ class ChannelStream:
                     first_byte = chunk[0]
                     is_valid_ts = first_byte == 0x47
                     if is_valid_ts:
-                        self._logger.info(
-                            "FIRST-ON-AIR: Channel %s: First TS chunk verified "
-                            "(0x47 sync byte present, %d bytes): %s",
-                            self.channel_id,
-                            len(chunk),
-                            chunk[:16].hex(),
+                        # Compute T0→T2 latency for the concise on-air line
+                        _onair_latency_ms = None
+                        with _AUDIT_LOCK:
+                            if _AUDIT_T0 is not None and _AUDIT_T2 is not None:
+                                _onair_latency_ms = (_AUDIT_T2 - _AUDIT_T0) / 1e6
+                        if _onair_latency_ms is not None:
+                            self._logger.info(
+                                "[%s] On-air in %.0fms (sync OK)",
+                                self.channel_id, _onair_latency_ms,
+                            )
+                        else:
+                            self._logger.info(
+                                "[%s] On-air (sync OK, %d bytes)",
+                                self.channel_id, len(chunk),
+                            )
+                        self._logger.debug(
+                            "FIRST-ON-AIR: Channel %s: TS hex: %s (%d bytes)",
+                            self.channel_id, chunk[:16].hex(), len(chunk),
                         )
                     else:
                         self._logger.error(
@@ -553,7 +565,7 @@ class ChannelStream:
         # This is informational only - recv gaps are NOT correctness signals.
         max_gap_ms = _max_inter_recv_gap_ns / 1e6
         if _max_inter_recv_gap_ns > 0:
-            self._logger.info(
+            self._logger.debug(
                 "[AUDIT-EXIT] Max inter-recv gap was %.2f ms (gaps>%dms: %d) for channel %s",
                 max_gap_ms, RECV_GAP_WARN_THRESHOLD_MS, _count_gaps_over_threshold,
                 self.channel_id
@@ -576,7 +588,7 @@ class ChannelStream:
             self.ts_source = None
 
         self._stopped = True
-        self._logger.info("ChannelStream reader loop stopped for channel %s", self.channel_id)
+        self._logger.debug("ChannelStream reader loop stopped for channel %s", self.channel_id)
 
     def start(self) -> None:
         """Start the UDS reader thread."""
@@ -594,21 +606,21 @@ class ChannelStream:
             _AUDIT_T1 = None
             _AUDIT_T2 = None
             _AUDIT_FIRST_RECV_DONE = False
-        self._logger.info("[AUDIT-T0] Reader thread spawning at %d ns for channel %s",
+        self._logger.debug("[AUDIT-T0] Reader thread spawning at %d ns for channel %s",
                          _AUDIT_T0, self.channel_id)
 
         self.reader_thread = threading.Thread(
             target=self._reader_loop, name=f"ChannelStream-{self.channel_id}", daemon=True
         )
         self.reader_thread.start()
-        self._logger.info("ChannelStream started for channel %s", self.channel_id)
+        self._logger.debug("ChannelStream started for channel %s", self.channel_id)
 
     def stop(self) -> None:
         """Stop the UDS reader thread and clean up (Phase 8.5/8.7: no ongoing work when no viewers). No wait for external I/O."""
         if self._stopped:
             return
 
-        self._logger.info("[teardown] stopping reader loop for channel %s", self.channel_id)
+        self._logger.debug("[teardown] stopping reader loop for channel %s", self.channel_id)
         self._stop_event.set()
 
         # Close source first so reader thread unblocks from read() and can exit
@@ -634,7 +646,7 @@ class ChannelStream:
             self.subscribers.clear()
 
         self._stopped = True
-        self._logger.info("ChannelStream stopped for channel %s", self.channel_id)
+        self._logger.debug("ChannelStream stopped for channel %s", self.channel_id)
 
     def subscribe(self, client_id: str, queue_size: int = 15) -> Queue[bytes]:
         """
