@@ -40,6 +40,10 @@ struct FedBlock {
     int64_t segment_duration_ms = 0;
     SegmentType segment_type = SegmentType::kContent;
     std::string event_id;  // Scheduled event_id from TransmissionLog
+    // INV-AIR-SEGMENT-ID-001: Execution identity UUID
+    std::string segment_uuid;
+    // INV-AIR-SEGMENT-ID-002: Asset identity (empty for PAD)
+    std::string asset_uuid;
     // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
     TransitionType transition_in = TransitionType::kNone;
     uint32_t transition_in_duration_ms = 0;
@@ -66,6 +70,8 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
     s.segment_duration_ms = seg.segment_duration_ms;
     s.segment_type = seg.segment_type;
     s.event_id = seg.event_id;
+    s.segment_uuid = seg.segment_uuid;
+    s.asset_uuid = seg.asset_uuid;
     // Transition fields (INV-TRANSITION-001..005: SegmentTransitionContract.md)
     s.transition_in = seg.transition_in;
     s.transition_in_duration_ms = seg.transition_in_duration_ms;

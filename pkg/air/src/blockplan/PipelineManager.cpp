@@ -74,6 +74,9 @@ static std::string FormatFenceTick(int64_t tick) {
   return std::to_string(tick);
 }
 
+// INV-FENCE-TAKE-READY-001: Max time (ms) to hold last A frame before escalating to standby (slot 'S').
+static constexpr int64_t kDegradedHoldMaxMs = 5000;
+
 PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
     Callbacks callbacks,
@@ -324,6 +327,8 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
   if (AsTickProducer(live_.get())->GetState() != ITickProducer::State::kReady) return;
 
   // Guard 2: SeamPreparer already has a block result — wait for PRE-TAKE to consume it.
+  // Job ownership: single block_result_ slot; we never submit the next block until we take,
+  // so the result we take is always for the block we last submitted (no overwrite by a later block).
   if (seam_preparer_->HasBlockResult()) return;
 
   // INV-SEAM-SUBMIT-SAFE: Callers must NOT gate Submit() on IsRunning().
@@ -356,6 +361,20 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
     ctx_->block_queue.erase(ctx_->block_queue.begin());
   }
 
+  expected_preroll_block_id_ = block.block_id;
+  expected_preroll_first_seg_content_ =
+      !block.segments.empty() && block.segments[0].segment_type != SegmentType::kPad;
+  last_submitted_block_ = block;
+  last_submitted_block_valid_ = true;
+  if (block.block_id != retry_attempted_block_id_) {
+    retry_attempted_block_id_.clear();  // New block eligible for one retry
+  }
+
+  { std::ostringstream oss;
+    oss << "[PipelineManager] PREROLL_SUBMIT block_id=" << block.block_id
+        << " fence_tick=" << FormatFenceTick(block_fence_frame_);
+    Logger::Info(oss.str()); }
+
   SeamRequest req;
   req.type = SeamRequestType::kBlock;
   req.block = block;
@@ -367,11 +386,13 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
   req.parent_block_id = block.block_id;
   seam_preparer_->Submit(std::move(req));
 
+  std::string first_seg_uri(block.segments.empty() ? "none" : block.segments[0].asset_uri);
   { std::ostringstream oss;
     oss << "[PipelineManager] PREROLL_ARMED"
         << " tick=" << tick
         << " fence_tick=" << FormatFenceTick(block_fence_frame_)
         << " block=" << block.block_id
+        << " first_seg_asset_uri=" << (first_seg_uri.empty() ? "empty" : first_seg_uri)
         << " preview_exists=" << (preview_ != nullptr);
     Logger::Info(oss.str()); }
   {
@@ -384,9 +405,50 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
 // TryTakePreviewProducer — non-blocking check for preloader result.
 // =============================================================================
 
-std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer() {
+std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer(int64_t headroom_ms) {
   auto result = seam_preparer_->TakeBlockResult();
   if (!result) return nullptr;
+
+  { std::ostringstream oss;
+    oss << "[PipelineManager] PREROLL_TAKE_RESULT block_id=" << result->block_id
+        << " segment_type=" << SegmentTypeName(result->segment_type)
+        << " decoder_used=" << (result->producer && AsTickProducer(result->producer.get())->HasDecoder() ? "Y" : "N");
+    Logger::Info(oss.str()); }
+
+  // Reject zombie: content block with no decoder (open/seek failed in worker).
+  // Do not set preview_ so next_block_opened=0 and we enter PADDED_GAP or fallback.
+  if (result->segment_type != SegmentType::kPad && result->producer &&
+      !AsTickProducer(result->producer.get())->HasDecoder()) {
+    { std::ostringstream oss;
+      oss << "[PipelineManager] PREROLL_DECODER_FAILED"
+          << " block_id=" << result->block_id
+          << " reason=content_block_no_decoder discarding_result";
+      Logger::Warn(oss.str()); }
+    // Retry once if fence headroom > 2000ms and we have the block to re-submit.
+    if (headroom_ms >= 2000 && last_submitted_block_valid_ &&
+        last_submitted_block_.block_id == result->block_id &&
+        result->block_id != retry_attempted_block_id_) {
+      retry_attempted_block_id_ = result->block_id;
+      SeamRequest retry_req;
+      retry_req.type = SeamRequestType::kBlock;
+      retry_req.block = last_submitted_block_;
+      retry_req.seam_frame = block_fence_frame_;
+      retry_req.width = ctx_->width;
+      retry_req.height = ctx_->height;
+      retry_req.fps = ctx_->fps;
+      retry_req.min_audio_prime_ms = kMinAudioPrimeMs;
+      retry_req.parent_block_id = last_submitted_block_.block_id;
+      seam_preparer_->Submit(std::move(retry_req));
+      { std::ostringstream retry_oss;
+        retry_oss << "[PipelineManager] PREROLL_RETRY block_id=" << result->block_id
+                  << " headroom_ms=" << headroom_ms;
+        Logger::Info(retry_oss.str()); }
+    }
+    return nullptr;  // result destructs, producer destructs; slot cleared by Take.
+  }
+
+  last_submitted_block_valid_ = false;
+  retry_attempted_block_id_.clear();
 
   // Policy B: capture audio prime depth for TAKE_READINESS and degraded_take_count.
   preview_audio_prime_depth_ms_ = result->audio_prime_depth_ms;
@@ -794,6 +856,17 @@ void PipelineManager::Run() {
         live_tp()->GetInputFPS(), ctx_->fps,
         &ctx_->stop_requested);
 
+    // Step 4 probe: JIP/session-first-block path — decoder opened and primed synchronously
+    // before first tick; StartFilling called. Compare with natural rollover (B primed async).
+    { std::ostringstream oss;
+      oss << "[PipelineManager] SESSION_FIRST_BLOCK"
+          << " block=" << live_tp()->GetBlock().block_id
+          << " decoder_opened=" << (live_tp()->HasDecoder() ? "Y" : "N")
+          << " prime_done_before_clock=Y"
+          << " StartFilling_called=Y"
+          << " path=JIP_or_cold_start";
+      Logger::Info(oss.str()); }
+
     // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
     block_activation_frame_ = session_frame_index;
     live_parent_block_ = live_tp()->GetBlock();
@@ -1100,12 +1173,19 @@ void PipelineManager::Run() {
     }
 
     if (!preview_ && seam_preparer_->HasBlockResult()) {
-      preview_ = TryTakePreviewProducer();
+      int64_t headroom_ms = (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index)
+          ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock.FrameDurationMs())
+          : -1;
+      preview_ = TryTakePreviewProducer(headroom_ms);
       if (preview_) {
+        auto* ptp = AsTickProducer(preview_.get());
         const bool met = (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs);
+        std::string first_uri(ptp->GetBlock().segments.empty() ? "none" : ptp->GetBlock().segments[0].asset_uri);
         { std::ostringstream oss;
           oss << "[PipelineManager] PREROLL_STATUS"
-              << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id
+              << " block=" << ptp->GetBlock().block_id
+              << " next_block_opened=Y first_seg_asset_uri=" << (first_uri.empty() ? "empty" : first_uri)
+              << " decoder_used=" << (ptp->HasDecoder() ? "Y" : "N")
               << " met_threshold=" << met
               << " depth_ms=" << preview_audio_prime_depth_ms_
               << " wanted_ms=" << kMinAudioPrimeMs;
@@ -1153,6 +1233,30 @@ void PipelineManager::Run() {
         Logger::Info(oss.str()); }
     }
 
+    // Step 2 probe: one tick before fence — was next block opened, first seg opened, B primed?
+    if (session_frame_index == block_fence_frame_ - 1 && block_fence_frame_ != INT64_MAX) {
+      std::string next_block_id("none");
+      std::string first_seg_uri;
+      bool next_fed = false;
+      if (preview_) {
+        auto* ptp = AsTickProducer(preview_.get());
+        next_block_id = ptp->GetBlock().block_id;
+        if (!ptp->GetBlock().segments.empty()) {
+          first_seg_uri = ptp->GetBlock().segments[0].asset_uri;
+        }
+        if (preview_video_buffer_) next_fed = preview_video_buffer_->IsPrimed();
+      }
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PRE_FENCE_TICK"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+            << " next_block_id=" << next_block_id
+            << " next_block_opened=" << (preview_ != nullptr)
+            << " first_seg_asset_uri=" << (first_seg_uri.empty() ? "empty" : first_seg_uri)
+            << " next_fed=" << next_fed;
+        Logger::Info(oss.str()); }
+    }
+
     // ==================================================================
     // FRAME-ACCURATE TAKE — source selection at the commitment point.
     //
@@ -1172,6 +1276,8 @@ void PipelineManager::Run() {
     bool is_pad = true;
     VideoBufferFrame vbf;
     int audio_frames_this_tick = 0;
+    bool committed_b_frame_this_tick = false;   // Rotation only when we actually committed a B frame.
+    bool using_degraded_held_this_tick = false;  // DEGRADED_TAKE_MODE: output held frame + silence this tick.
 
     // ── TAKE: unified source selection based on tick vs next seam ──
     const bool take = (session_frame_index >= next_seam_frame_);
@@ -1208,10 +1314,51 @@ void PipelineManager::Run() {
     const char* commit_slot = take_b ? "B" : (take_segment ? "S" : "A");
     // Authoritative TAKE slot source for fingerprint:
     //   'A' = live buffer slot, 'B' = preview buffer slot, 'P' = pad.
-    // This is a slot identifier, not a block identifier.  After PADDED_GAP
+    // This is a slot identifier, not a block identity.  After PADDED_GAP
     // exit, the new block occupies the live slot and is labeled 'A'.
     // Use active_block_id (from live_tp()->GetBlock()) for block identity.
     char take_source_char = 'P';
+
+    // FENCE_TRANSITION probe: at block fence (take_b && !take_rotated), log
+    // current/next block, whether B is fed, producer/decoder state, first-seg uri.
+    if (take_b && !take_rotated) {
+      std::string next_block_id("none");
+      bool next_fed = false;
+      std::string producer_state_str("none");
+      bool decoder_state = false;
+      std::string first_seg_asset_uri;
+      if (preview_) {
+        auto* ptp = AsTickProducer(preview_.get());
+        next_block_id = ptp->GetBlock().block_id;
+        producer_state_str = (ptp->GetState() == ITickProducer::State::kReady) ? "kReady" : "other";
+        decoder_state = ptp->HasDecoder();
+        if (!ptp->GetBlock().segments.empty()) {
+          first_seg_asset_uri = ptp->GetBlock().segments[0].asset_uri;
+        }
+        if (preview_video_buffer_) next_fed = preview_video_buffer_->IsPrimed();
+      }
+      { std::ostringstream oss;
+        oss << "[PipelineManager] FENCE_TRANSITION"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+            << " current_block_id=" << live_parent_block_.block_id
+            << " next_block_id=" << next_block_id
+            << " next_block_fed=" << next_fed
+            << " producer_state=" << producer_state_str
+            << " decoder_state=" << (decoder_state ? "has_decoder" : "no_decoder")
+            << " first_seg_asset_uri=" << (first_seg_asset_uri.empty() ? "empty" : first_seg_asset_uri);
+        Logger::Info(oss.str()); }
+
+      // Preview ownership: preroll_owner_block_id must match next_block_id.
+      if (preview_ && !expected_preroll_block_id_.empty() && next_block_id != expected_preroll_block_id_) {
+        { std::ostringstream oss;
+          oss << "[PipelineManager] PREROLL_OWNERSHIP_VIOLATION"
+              << " expected=" << expected_preroll_block_id_
+              << " actual_next=" << next_block_id
+              << " tick=" << session_frame_index;
+          Logger::Error(oss.str()); }
+      }
+    }
 
     // INV-PREROLL-READY-001: On the fence tick, B SHOULD be primed.
     // If it's not, log the failure mode for diagnostics.  The TAKE
@@ -1239,8 +1386,89 @@ void PipelineManager::Run() {
       session_encoder->encodeFrame(vbf.video, video_pts_90k);
       is_pad = false;
       take_source_char = take_b ? 'B' : 'A';
+      last_good_video_frame_ = vbf.video;
+      has_last_good_video_frame_ = true;
+      last_good_asset_uri_ = vbf.asset_uri;
+      last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+          ? live_tp()->GetBlock().block_id : std::string();
+      last_good_offset_ms_ = vbf.block_ct_ms;
+      if (!vbf.video.data.empty()) {
+        size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+        last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                        std::min(y_size, vbf.video.data.size()));
+      } else {
+        last_good_y_crc32_ = 0;
+      }
+      if (take_b) {
+        committed_b_frame_this_tick = true;
+        degraded_take_active_ = false;  // Exiting degraded: B frame committed.
+      }
     } else if (take_b) {
       // B not primed or empty at fence — PADDED_GAP.
+      const char* pad_cause = "no_preview_buffers";
+      if (v_src) {
+        if (!v_src->IsPrimed())
+          pad_cause = "buffer_not_primed";
+        else
+          pad_cause = "buffer_empty_after_primed";
+      }
+      bool first_seg_is_pad = false;
+      if (preview_ && !AsTickProducer(preview_.get())->GetBlock().segments.empty()) {
+        first_seg_is_pad =
+            (AsTickProducer(preview_.get())->GetBlock().segments[0].segment_type == SegmentType::kPad);
+      }
+      // When preview_ was discarded (zombie), we don't have segment info; use submitted block.
+      bool next_block_first_seg_content = preview_ ? !first_seg_is_pad : expected_preroll_first_seg_content_;
+
+      // INV-FENCE-TAKE-READY-001 / DEGRADED_TAKE_MODE: content-first but B not primed at fence.
+      // Do not crash. Log violation once per fence event; enter degraded take (hold last A frame + silence).
+      if (next_block_first_seg_content) {
+        const bool entering_degraded = !degraded_take_active_;
+        if (entering_degraded) {
+          degraded_entered_frame_index_ = session_frame_index;
+          degraded_escalated_to_standby_ = false;
+          int64_t headroom_ms = (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index)
+              ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock.FrameDurationMs())
+              : -1;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] INV-FENCE-TAKE-READY-001 VIOLATION DEGRADED_TAKE_MODE"
+                << " tick=" << session_frame_index
+                << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+                << " next_block_id=" << (preview_ ? AsTickProducer(preview_.get())->GetBlock().block_id : expected_preroll_block_id_)
+                << " cause=" << pad_cause
+                << " headroom_ms=" << headroom_ms;
+            Logger::Error(oss.str()); }
+        }
+        degraded_take_active_ = true;
+        // Bounded escalation: after HOLD_MAX_MS switch to standby (slot 'S') — continuous output, no tick skip.
+        const int64_t degraded_elapsed_ms = (session_frame_index - degraded_entered_frame_index_) *
+            static_cast<int64_t>(clock.FrameDurationMs());
+        if (degraded_elapsed_ms >= kDegradedHoldMaxMs) {
+          degraded_escalated_to_standby_ = true;
+        }
+        if (degraded_escalated_to_standby_) {
+          session_encoder->encodeFrame(pad_producer_->VideoFrame(), video_pts_90k);
+          is_pad = true;
+          take_source_char = 'S';  // Standby (bounded hold escalation)
+          // Audio: silence handled below in audio path
+        } else if (has_last_good_video_frame_) {
+          session_encoder->encodeFrame(last_good_video_frame_, video_pts_90k);
+          is_pad = false;
+          take_source_char = 'H';  // Held frame (degraded)
+          using_degraded_held_this_tick = true;
+        }
+        // else: no held frame (should not happen after first real frame); fall through to FENCE_PAD_CAUSE
+      }
+
+      if (!using_degraded_held_this_tick && !degraded_escalated_to_standby_) {
+        { std::ostringstream oss;
+          oss << "[PipelineManager] FENCE_PAD_CAUSE"
+            << " tick=" << session_frame_index
+            << " cause=" << pad_cause
+            << " segment_type_first_seg=" << (first_seg_is_pad ? "PAD" : "content")
+            << " decoder_returned_empty=" << (preview_ && AsTickProducer(preview_.get())->HasDecoder() && v_src && !v_src->IsPrimed() ? "likely" : "n/a");
+        Logger::Info(oss.str()); }
+      }
     } else if (a_was_primed) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
       { std::ostringstream oss;
@@ -1307,11 +1535,15 @@ void PipelineManager::Run() {
       if (take_b && preview_ &&
           AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
         block_id = AsTickProducer(preview_.get())->GetBlock().block_id;
-      } else if (!take_b &&
+      } else       if (!take_b &&
                  live_tp()->GetState() == ITickProducer::State::kReady) {
         block_id = live_tp()->GetBlock().block_id;
       }
-      if (!is_pad) asset_uri = vbf.asset_uri;
+      if (using_degraded_held_this_tick) {
+        asset_uri = "held";
+      } else if (!is_pad) {
+        asset_uri = vbf.asset_uri;
+      }
       { std::ostringstream oss;
         oss << "[PipelineManager] TAKE_COMMIT"
             << " tick=" << session_frame_index
@@ -1326,12 +1558,10 @@ void PipelineManager::Run() {
     }
 
     // ==================================================================
-    // POST-TAKE ROTATION: On the first tick at or past the fence, stop
-    // A's fill thread, rotate B→A, and set up the next block's fence.
-    // This runs AFTER the frame is committed so the TAKE itself is the
-    // selector — not a buffer swap.
+    // POST-TAKE ROTATION: Only when we actually committed a B frame this tick.
+    // In DEGRADED_TAKE_MODE we output held frame and do not rotate until B is primed.
     // ==================================================================
-    if (take_b && !take_rotated) {
+    if (take_b && !take_rotated && committed_b_frame_this_tick) {
       take_rotated = true;
 
       // Step 1: Join PREVIOUS fence's deferred fill thread.
@@ -1810,16 +2040,31 @@ void PipelineManager::Run() {
     // silence at the correct PTS so audio never skips a tick — otherwise
     // the A/V delta permanently drifts by 1 frame period per fence.
     // ==================================================================
-    if (!is_pad) {
-      // Exact per-tick sample count via rational arithmetic (drift-free).
-      // samples_this_tick = floor((N+1)*sr*fps_den/fps_num)
-      //                   - floor(N*sr*fps_den/fps_num)
-      int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
-      int64_t next_total =
-          ((audio_ticks_emitted + 1) * sr * ctx_->fps_den) / ctx_->fps_num;
-      int samples_this_tick =
-          static_cast<int>(next_total - audio_buffer_samples_emitted);
+    // Exact per-tick sample count via rational arithmetic (drift-free).
+    int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
+    int64_t next_total =
+        ((audio_ticks_emitted + 1) * sr * ctx_->fps_den) / ctx_->fps_num;
+    int samples_this_tick =
+        static_cast<int>(next_total - audio_buffer_samples_emitted);
 
+    if (using_degraded_held_this_tick) {
+      // DEGRADED_TAKE_MODE: hold last video frame + silence (no pop from B).
+      static constexpr int kChannels = buffer::kHouseAudioChannels;
+      static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
+      buffer::AudioFrame silence;
+      silence.sample_rate = kSampleRate;
+      silence.channels = kChannels;
+      silence.nb_samples = samples_this_tick;
+      silence.data.resize(
+          static_cast<size_t>(samples_this_tick * kChannels) * sizeof(int16_t), 0);
+      session_encoder->encodeAudioFrame(silence, audio_pts_90k,
+                                         /*is_silence_pad=*/true);
+      audio_samples_emitted += samples_this_tick;
+      audio_buffer_samples_emitted += samples_this_tick;
+      audio_ticks_emitted++;
+      audio_frames_this_tick = 1;
+      current_consecutive_fallback_ticks++;
+    } else if (!is_pad) {
       if (a_src && a_src->IsPrimed()) {
         buffer::AudioFrame audio_out;
         if (a_src->TryPopSamples(samples_this_tick, audio_out)) {
@@ -1904,6 +2149,7 @@ void PipelineManager::Run() {
         current_consecutive_fallback_ticks++;
       }
     }
+    // else: is_pad — pad audio handled below (pad_producer_ path).
 
     // OUT-SEG-005b: Update max consecutive fallback ticks metric.
     if (current_consecutive_fallback_ticks > 0) {
@@ -2097,9 +2343,15 @@ void PipelineManager::Run() {
         fp.active_block_id = live_tp()->GetBlock().block_id;
       }
       if (is_pad) {
-        // INV-PAD-PRODUCER-003: Cached CRC32 — no per-tick recomputation.
+        // INV-PAD-PRODUCER-003: Cached CRC32 — no per-tick recomputation. Also standby ('S').
         fp.asset_uri = PadProducer::kAssetUri;
         fp.y_crc32 = pad_producer_->VideoCRC32();
+      } else if (using_degraded_held_this_tick && has_last_good_video_frame_) {
+        // No-unintentional-black: held frame must match last A content fingerprint.
+        fp.asset_uri = last_good_asset_uri_;
+        fp.active_block_id = last_good_block_id_;
+        fp.asset_offset_ms = last_good_offset_ms_;
+        fp.y_crc32 = last_good_y_crc32_;
       } else if (vbf.was_decoded) {
         fp.asset_uri = vbf.asset_uri;
         fp.asset_offset_ms = vbf.block_ct_ms;

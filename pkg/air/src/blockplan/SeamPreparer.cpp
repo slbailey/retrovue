@@ -188,6 +188,13 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   // Checkpoint 1
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
+  if (req.type == SeamRequestType::kBlock) {
+    std::ostringstream oss;
+    oss << "[SeamPreparer] PREROLL_WORKER_START block_id=" << req.block.block_id
+        << " seam_frame=" << req.seam_frame;
+    Logger::Info(oss.str());
+  }
+
   // Test hook: artificial delay
   {
     DelayHookFn hook;
@@ -221,10 +228,20 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   }
   const bool is_pad = (seg_type == SegmentType::kPad);
 
+  // First decode + audio prime loop (INV-AUDIO-PRIME-001)
   auto prime_result = source->PrimeFirstTick(req.min_audio_prime_ms);
 
   // Checkpoint 4
   if (cancel_requested_.load(std::memory_order_acquire)) return;
+
+  if (req.type == SeamRequestType::kBlock && !is_pad) {
+    std::ostringstream oss;
+    oss << "[SeamPreparer] PREROLL_WORKER_PRIME block_id=" << req.block.block_id
+        << " first_decode_ok=" << (source->HasDecoder() ? "Y" : "N")
+        << " audio_depth_ms=" << prime_result.actual_depth_ms
+        << " met_threshold=" << (prime_result.met_threshold ? "Y" : "N");
+    Logger::Info(oss.str());
+  }
 
   // Suppress AUDIO_PRIME_WARN for PAD segments: PAD has no decoder and no
   // audio to prime — wanted_ms is meaningless and the warning is misleading.
@@ -261,6 +278,14 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
         << " decoder_used=" << (source->HasDecoder() ? "true" : "false")
         << " audio_depth_ms=" << prime_result.actual_depth_ms;
     Logger::Info(oss.str());
+    // Surface preroll failure: content block but decoder open/seek failed.
+    if (req.type == SeamRequestType::kBlock && !source->HasDecoder()) {
+      std::ostringstream fail_oss;
+      fail_oss << "[SeamPreparer] PREROLL_DECODER_FAILED"
+               << " block_id=" << req.block.block_id
+               << " reason=content_block_no_decoder_in_worker";
+      Logger::Warn(fail_oss.str());
+    }
   }
 
   auto result = std::make_unique<SeamResult>();

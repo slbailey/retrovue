@@ -131,7 +131,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // P3.1b: Pop the preloaded preview_ if ready.  Returns non-null if
   // a fully READY IProducer was obtained.  Non-blocking.
-  std::unique_ptr<producers::IProducer> TryTakePreviewProducer();
+  // headroom_ms: fence headroom in ms; if >= 2000 and result discarded (decoder failed), retry once.
+  std::unique_ptr<producers::IProducer> TryTakePreviewProducer(int64_t headroom_ms = -1);
 
   // --- ITickProducer access helpers ---
   // All tick-method calls on IProducer pointers go through these.
@@ -284,6 +285,30 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // INV-PAD-PRODUCER: Session-lifetime pad source. Created once in Run().
   std::unique_ptr<PadProducer> pad_producer_;
+
+  // INV-FENCE-TAKE-READY-001 / preroll ownership: block_id we submitted for next fence.
+  std::string expected_preroll_block_id_;
+  // True when last submitted block has first segment CONTENT (for violation check when preview_ discarded).
+  bool expected_preroll_first_seg_content_ = false;
+
+  // Retry: re-submit same block once if preroll failed and headroom > 2000ms.
+  FedBlock last_submitted_block_;
+  bool last_submitted_block_valid_ = false;
+  std::string retry_attempted_block_id_;
+
+  // DEGRADED_TAKE_MODE (INV-FENCE-TAKE-READY-001 fallback): B content-first but not primed at fence.
+  // Output = hold last committed A frame + silence; no crash; log violation once; rotate only when B committed.
+  bool degraded_take_active_ = false;
+  buffer::Frame last_good_video_frame_;
+  bool has_last_good_video_frame_ = false;
+  // Fingerprint context for held frame (no-unintentional-black: H must match last A content).
+  uint32_t last_good_y_crc32_ = 0;
+  std::string last_good_asset_uri_;
+  std::string last_good_block_id_;
+  int64_t last_good_offset_ms_ = 0;
+  // Bounded escalation: after HOLD_MAX_MS in degraded, switch to standby (slot 'S').
+  int64_t degraded_entered_frame_index_ = -1;
+  bool degraded_escalated_to_standby_ = false;
 };
 
 }  // namespace retrovue::blockplan
