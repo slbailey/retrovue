@@ -552,7 +552,7 @@ class DslScheduleService:
                 blocks = self._compile_day(channel_id, day_str)
                 all_blocks.extend(blocks)
                 self._compiled_days.add(day_str)
-                logger.info(
+                logger.debug(
                     "Compiled day %s: %d blocks for channel=%s",
                     day_str, len(blocks), channel_id,
                 )
@@ -637,7 +637,7 @@ class DslScheduleService:
         # DB-first: check cache
         cached = self._get_cached_schedule(channel_id, broadcast_day)
         if cached is not None:
-            logger.info("Using cached schedule for %s/%s", channel_id, broadcast_day)
+            logger.debug("Using cached schedule for %s/%s", channel_id, broadcast_day)
             return self._hydrate_schedule(cached, channel_id, broadcast_day)
 
         dsl_text = Path(self._dsl_path).read_text()
@@ -699,7 +699,7 @@ class DslScheduleService:
         """
         # Fast path: segmented blocks already cached
         if "segmented_blocks" in schedule and schedule["segmented_blocks"]:
-            logger.info(
+            logger.debug(
                 "INV-SCHEDULE-HORIZON-001: Using cached segmented_blocks "
                 "for %s/%s (%d blocks)",
                 channel_id, broadcast_day, len(schedule["segmented_blocks"]),

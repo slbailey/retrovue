@@ -471,7 +471,7 @@ class ChannelManager:
         Called by ProgramDirector when the last viewer disconnects (StopChannel(channel_id)).
         Explicit stop bypasses linger — teardown is immediate.
         """
-        self._logger.info(
+        self._logger.debug(
             "[teardown] stopping producer for channel %s (no wait for EOF)", self.channel_id
         )
         self._cancel_linger()
@@ -826,7 +826,7 @@ class ChannelManager:
         """Start linger grace period. Producer stays alive until timeout."""
         if self._linger_handle is not None:
             return  # already lingering
-        self._logger.info(
+        self._logger.debug(
             "[channel %s] LINGER_STARTED %ds", self.channel_id, self.LINGER_SECONDS
         )
         if self._loop is not None:
@@ -903,7 +903,7 @@ class ChannelManager:
         # INV-EXEC-OFFSET-001: offset within block is allowed
         jip_offset_ms = now_utc_ms - current_block.start_utc_ms
         block_start_utc_ms = current_block.start_utc_ms
-        self._logger.info(
+        self._logger.debug(
             "INV-JIP-BP-BOOT: channel_id=%s station_now=%d "
             "block_start=%d block_dur=%d "
             "jip_offset=%d",
@@ -930,7 +930,7 @@ class ChannelManager:
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
         # P12-CORE-010 INV-SESSION-CREATION-UNGATED-001: Session created for viewer.
-        self._logger.info(
+        self._logger.debug(
             "INV-SESSION-CREATION-UNGATED-001: Session created for viewer at %s",
             station_time.isoformat() if hasattr(station_time, "isoformat") else station_time,
         )
@@ -1000,7 +1000,7 @@ class ChannelManager:
             if not producer.teardown_in_progress():
                 self._teardown_started_station = self._station_now()
                 self._teardown_reason = "viewer_inactive"
-                self._logger.info(
+                self._logger.debug(
                     "Channel %s initiating producer teardown (reason=%s)",
                     self.channel_id,
                     self._teardown_reason,
@@ -1022,7 +1022,7 @@ class ChannelManager:
         viewer_count = len(self.viewer_sessions)
         if viewer_count == 0 and self._linger_handle is None:
             if self.active_producer is not None:
-                self._logger.info(
+                self._logger.debug(
                     "Channel %s: zero viewers, stopping producer (no restarts)",
                     self.channel_id,
                 )
@@ -1122,7 +1122,7 @@ class ChannelManager:
         producer = self.active_producer
 
         if completed:
-            self._logger.info(
+            self._logger.debug(
                 "Channel %s producer teardown completed in %.3fs (reason=%s)",
                 self.channel_id,
                 duration,
@@ -1155,7 +1155,7 @@ class ChannelManager:
                 f"Channel {self.channel_id}: Only BlockPlanProducer is permitted. "
                 "Call set_blockplan_mode(True) before starting the channel."
             )
-        self._logger.info(
+        self._logger.debug(
             "Channel %s: Building BlockPlanProducer (mode=%s)",
             self.channel_id, mode,
         )
@@ -1653,7 +1653,7 @@ class BlockPlanProducer(Producer):
                 return True  # Idempotent - already running
 
             self._start_count += 1
-            self._logger.info(
+            self._logger.debug(
                 "INV-VIEWER-LIFECYCLE-001: Channel %s starting BlockPlan execution "
                 "(start_count=%d, station_time=%s)",
                 self.channel_id, self._start_count, start_at_station_time
@@ -1680,7 +1680,7 @@ class BlockPlanProducer(Producer):
                     try:
                         conn, _ = self._uds_server_socket.accept()
                         self._reader_socket_queue.put(conn)
-                        self._logger.info(
+                        self._logger.debug(
                             "FIRST-ON-AIR: Channel %s: AIR connected to UDS socket",
                             self.channel_id
                         )
@@ -1742,7 +1742,7 @@ class BlockPlanProducer(Producer):
 
                 # INV-EXEC-NO-STRUCTURE-001: Canary proof — every session start
                 # emits one unambiguous line proving timing came from schedule.
-                self._logger.info(
+                self._logger.debug(
                     "INV-EXEC-NO-STRUCTURE-001: USING_SCHEDULED_BLOCK | "
                     "block_a=%s start=%d end=%d dur=%d segs=%d jip_offset=%d | "
                     "block_b=%s start=%d end=%d dur=%d segs=%d jip_offset=0",
@@ -1773,7 +1773,7 @@ class BlockPlanProducer(Producer):
                 self.started_at = start_at_station_time
                 self.output_url = self._stream_endpoint
 
-                self._logger.info(
+                self._logger.debug(
                     "Channel %s: BlockPlan execution started, seeded 2 blocks",
                     self.channel_id
                 )
@@ -1781,7 +1781,7 @@ class BlockPlanProducer(Producer):
                 # =============================================================
                 # ARCHITECTURAL TELEMETRY: One-time per-session declaration
                 # =============================================================
-                self._logger.info(
+                self._logger.debug(
                     "INV-PLAYOUT-AUTHORITY: Channel %s session started | "
                     "playout_path=blockplan | "
                     "encoder_scope=session | "
@@ -1821,7 +1821,7 @@ class BlockPlanProducer(Producer):
                 return True  # Idempotent - already stopped
 
             self._stop_count += 1
-            self._logger.info(
+            self._logger.debug(
                 "INV-VIEWER-LIFECYCLE-002: Channel %s stopping BlockPlan execution "
                 "(stop_count=%d)",
                 self.channel_id, self._stop_count
@@ -2006,7 +2006,7 @@ class BlockPlanProducer(Producer):
             )
 
         # INV-EXEC-NO-STRUCTURE-001 proof
-        self._logger.info(
+        self._logger.debug(
             "INV-EXEC-NO-STRUCTURE-001: block=%s dur=%d start=%d end=%d "
             "segs=%d jip_offset=%d (timing from schedule service)",
             block.block_id, effective_dur, start_ms, end_ms,
@@ -2269,7 +2269,7 @@ class BlockPlanProducer(Producer):
                     first_due_utc_ms,
                 )
 
-            self._logger.info(
+            self._logger.debug(
                 "FEED_AHEAD_DECISION now=%d block=%s start=%d "
                 "ready_by=%d reason=%s runway=%dms miss=%s late_decision=%s",
                 now_utc_ms, block.block_id, block.start_utc_ms,
@@ -2364,7 +2364,7 @@ class BlockPlanProducer(Producer):
             # State transition: SEEDED → RUNNING on first BlockStarted
             if self._feed_state == _FeedState.SEEDED:
                 self._feed_state = _FeedState.RUNNING
-                self._logger.info(
+                self._logger.debug(
                     "FEED-AHEAD: SEEDED->RUNNING on BlockStarted(%s) "
                     "runway=%dms",
                     block_id, self._compute_runway_ms(),
@@ -2422,7 +2422,7 @@ class BlockPlanProducer(Producer):
             # (fallback if BlockStarted wasn't received first)
             if self._feed_state == _FeedState.SEEDED:
                 self._feed_state = _FeedState.RUNNING
-                self._logger.info(
+                self._logger.debug(
                     "FEED-AHEAD: SEEDED->RUNNING on BlockCompleted(%s) "
                     "runway=%dms horizon=%dms",
                     block_id,
@@ -2453,7 +2453,7 @@ class BlockPlanProducer(Producer):
             self._session_end_reason = reason
             self._feed_state = _FeedState.DRAINING
 
-        self._logger.info(
+        self._logger.debug(
             "INV-FEED-SESSION-END-REASON: Channel %s: Session ended: %s",
             self.channel_id, reason
         )

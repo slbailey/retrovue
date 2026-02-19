@@ -242,7 +242,7 @@ class PlayoutSession:
         self._event_thread: Optional[threading.Thread] = None
         self._event_stop = threading.Event()
 
-        logger.info(f"[PlayoutSession:{channel_id}] Initialized, ts_socket={ts_socket_path}")
+        logger.debug(f"[PlayoutSession:{channel_id}] Initialized, ts_socket={ts_socket_path}")
 
     def _find_air_binary(self) -> Path:
         """Find the AIR binary path."""
@@ -293,7 +293,7 @@ class PlayoutSession:
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = log_dir / f"{self.channel_id}-air.log"
 
-                logger.info(f"[PlayoutSession:{self.channel_id}] Starting AIR: {' '.join(cmd)}")
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Starting AIR: {' '.join(cmd)}")
 
                 with open(log_path, 'w') as log_file:
                     self._state.air_process = subprocess.Popen(
@@ -312,7 +312,7 @@ class PlayoutSession:
                     raise RuntimeError("Failed to attach stream")
 
                 self._state.is_running = True
-                logger.info(f"[PlayoutSession:{self.channel_id}] Started, grpc={self._state.grpc_addr}")
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Started, grpc={self._state.grpc_addr}")
                 return True
 
             except Exception as e:
@@ -355,7 +355,7 @@ class PlayoutSession:
             response = self._stub.AttachStream(request, timeout=5.0)
 
             if response.success:
-                logger.info(f"[PlayoutSession:{self.channel_id}] Stream attached: {self.ts_socket_path}")
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Stream attached: {self.ts_socket_path}")
                 return True
             else:
                 logger.error(f"[PlayoutSession:{self.channel_id}] AttachStream failed: {response.message}")
@@ -417,7 +417,7 @@ class PlayoutSession:
 
                     elif event.HasField("session_ended"):
                         ended = event.session_ended
-                        logger.info(
+                        logger.debug(
                             f"[PlayoutSession:{self.channel_id}] SessionEnded: "
                             f"reason={ended.reason}, "
                             f"final_ct_ms={ended.final_ct_ms}, "
@@ -516,7 +516,7 @@ class PlayoutSession:
 
                 if response.success:
                     self._state.blocks_seeded = 2
-                    logger.info(
+                    logger.debug(
                         f"[PlayoutSession:{self.channel_id}] Seeded: "
                         f"{block_a.block_id}, {block_b.block_id}"
                     )
@@ -574,7 +574,7 @@ class PlayoutSession:
 
                 if response.success:
                     self._state.blocks_fed += 1
-                    logger.info(f"[PlayoutSession:{self.channel_id}] Fed: {block.block_id}")
+                    logger.debug(f"[PlayoutSession:{self.channel_id}] Fed: {block.block_id}")
                     return FeedResult.ACCEPTED
                 else:
                     if response.queue_full:
@@ -608,7 +608,7 @@ class PlayoutSession:
                 logger.debug(f"[PlayoutSession:{self.channel_id}] Already stopped")
                 return True
 
-            logger.info(f"[PlayoutSession:{self.channel_id}] Stopping: {reason}")
+            logger.debug(f"[PlayoutSession:{self.channel_id}] Stopping: {reason}")
 
             try:
                 if self._stub:
@@ -620,7 +620,7 @@ class PlayoutSession:
 
                     if response.success:
                         self._state.blocks_executed = response.blocks_executed
-                        logger.info(
+                        logger.debug(
                             f"[PlayoutSession:{self.channel_id}] Stopped: "
                             f"final_ct={response.final_ct_ms}ms, "
                             f"blocks_executed={response.blocks_executed}"
@@ -655,10 +655,10 @@ class PlayoutSession:
 
         if self._state.air_process:
             try:
-                logger.info(f"[PlayoutSession:{self.channel_id}] Terminating AIR subprocess (pid={self._state.air_process.pid})")
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Terminating AIR subprocess (pid={self._state.air_process.pid})")
                 self._state.air_process.terminate()
                 self._state.air_process.wait(timeout=5.0)
-                logger.info(f"[PlayoutSession:{self.channel_id}] FIRST-ON-AIR: AIR terminated cleanly")
+                logger.debug(f"[PlayoutSession:{self.channel_id}] FIRST-ON-AIR: AIR terminated cleanly")
             except subprocess.TimeoutExpired:
                 logger.warning(f"[PlayoutSession:{self.channel_id}] AIR did not exit gracefully, killing")
                 self._state.air_process.kill()

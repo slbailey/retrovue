@@ -241,7 +241,7 @@ class CatalogAssetResolver:
                 description=description,
             ))
 
-        logger.info(
+        logger.debug(
             f"CatalogAssetResolver loaded: {len(self._assets)} assets, "
             f"{len(self._aliases)} aliases, {len(self._catalog)} catalog entries"
         )
@@ -254,7 +254,7 @@ class CatalogAssetResolver:
             pools: Dict of pool_name → {"match": {...}, "order": "sequential"|"random"}
         """
         self._pools.update(pools)
-        logger.info(f"Registered {len(pools)} pools")
+        logger.debug(f"Registered {len(pools)} pools")
 
     def lookup(self, asset_id: str) -> AssetMetadata:
         """
