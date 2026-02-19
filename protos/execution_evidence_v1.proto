@@ -61,6 +61,9 @@ message SegmentStart {
   int64 asset_start_frame = 5;      // Asset-relative frame index at segment start (decoder at TAKE)
   int64 scheduled_duration_ms = 6;  // From block plan, for audit comparison
   optional bool join_in_progress = 7;  // True only for first SEGMENT_START in session when JIP
+  string segment_type_name = 8;       // AIR-authoritative: "content", "commercial", "filler", "pad", etc.
+  string asset_uri = 9;               // AIR-authoritative: asset path (empty for PAD)
+  string segment_title = 10;          // AIR-authoritative: display title (from block plan)
 }
 
 message SegmentEnd {

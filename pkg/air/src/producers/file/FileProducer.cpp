@@ -192,6 +192,7 @@ namespace retrovue::producers::file
     last_decoded_mt_pts_us_ = 0;
     last_audio_pts_us_ = 0;
     first_mt_pts_us_ = 0;
+    video_epoch_set_ = false;
     playback_start_utc_us_ = 0;
     segment_end_pts_us_ = -1;
 
@@ -1464,7 +1465,7 @@ namespace retrovue::producers::file
     // =========================================================================
     // INV-SEEK-DISCARD: Completion - log summary when first frame is emitted
     // =========================================================================
-    if (phase6_gating_active && effective_seek_target_us_ > 0 && first_mt_pts_us_ == 0)
+    if (phase6_gating_active && effective_seek_target_us_ > 0 && !video_epoch_set_)
     {
       int64_t accuracy_us = base_pts_us - effective_seek_target_us_;
       std::cout << "[FileProducer] INV-SEEK-DISCARD: Complete, discarded="
@@ -1507,8 +1508,9 @@ namespace retrovue::producers::file
           // 2. A/V sync is maintained from the switch point forward
           // Scoped to shadow mode only - live mode establishes epoch normally.
           // ====================================================================
-          if (first_mt_pts_us_ == 0) {
+          if (!video_epoch_set_) {
             first_mt_pts_us_ = base_pts_us;
+            video_epoch_set_ = true;
             playback_start_utc_us_ = master_clock_ ? master_clock_->now_utc_us() : 0;
             {
               std::lock_guard<std::mutex> epoch_lock(g_video_epoch_mutex);
@@ -1834,9 +1836,10 @@ namespace retrovue::producers::file
     // CRITICAL: Use base_pts_us (MT), not frame_pts_us (CT)!
     // frame_pts_us may be CT if TimelineController mapped it.
     // Producer internal tracking must use MT to avoid double-mapping.
-    if (first_mt_pts_us_ == 0)
+    if (!video_epoch_set_)
     {
       first_mt_pts_us_ = base_pts_us;  // MT, not CT!
+      video_epoch_set_ = true;
 
       // Critical diagnostic: video epoch is now set, audio can start emitting
       // Log MT (base_pts_us), not CT (frame_pts_us) - this is what we store
@@ -1874,7 +1877,7 @@ namespace retrovue::producers::file
     }
 
     // INV-P10-AUDIO-VIDEO-GATE (P1-FP-003): Log violation once if 100ms elapsed without first audio
-    if (first_mt_pts_us_ != 0 && !audio_ungated_logged_) {
+    if (video_epoch_set_ && !audio_ungated_logged_) {
       std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
       auto it = g_video_epoch_time.find(this);
       if (it != g_video_epoch_time.end()) {
@@ -1899,11 +1902,9 @@ namespace retrovue::producers::file
 
     // Frame decoded and ready to push
 
-    // Phase 8.9: Try to receive any pending audio frames (non-blocking)
-    if (audio_stream_index_ >= 0 && !audio_eof_reached_)
-    {
-      ReceiveAudioFrames();
-    }
+    // Phase 8.9: Drain audio decoder queue (non-blocking).
+    // Symmetrical with resampled path (both call DrainAudioDecoderIfNeeded).
+    DrainAudioDecoderIfNeeded();
 
     // INV-P8-AUDIO-GATE Fix #2: Clear the flag after audio has been processed.
     // The flag was set when AdmitFrame locked the mapping, and ensured audio
@@ -2007,7 +2008,7 @@ namespace retrovue::producers::file
       }
 
       // Track if we're in seek discard phase
-      decode_probe_in_seek_ = (video_discard_count_ > 0 && first_mt_pts_us_ == 0);
+      decode_probe_in_seek_ = (video_discard_count_ > 0 && !video_epoch_set_);
 
       decode_probe_window_frames_++;
 
@@ -2019,7 +2020,7 @@ namespace retrovue::producers::file
         const double target_fps = config_.target_fps > 0 ? config_.target_fps : 30.0;
 
         // Only flag violation if NOT in seek phase and rate is below threshold
-        const bool in_steady_state = !decode_probe_in_seek_ && first_mt_pts_us_ != 0;
+        const bool in_steady_state = !decode_probe_in_seek_ && video_epoch_set_;
         const bool is_violation = in_steady_state && (decode_probe_last_rate_ < target_fps * 0.9);
 
         if (is_violation && !decode_rate_violation_logged_) {
@@ -2456,8 +2457,9 @@ namespace retrovue::producers::file
           // CRITICAL: Set first_mt_pts_us_ to MT (not CT!) so the producer thread
           // knows the first frame was already processed and doesn't re-establish epoch.
           // This prevents MT/CT contamination on subsequent frames.
-          if (first_mt_pts_us_ == 0) {
+          if (!video_epoch_set_) {
             first_mt_pts_us_ = media_time_us;  // MT, not CT!
+            video_epoch_set_ = true;
             std::cout << "[FileProducer] INV-P8-SHADOW-FLUSH: Set first_frame_pts_us=" << media_time_us
                       << "us (MT) to prevent epoch re-establishment" << std::endl;
           }
@@ -2505,8 +2507,9 @@ namespace retrovue::producers::file
         frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
         // Set first_mt_pts_us_ for legacy path too
-        if (first_mt_pts_us_ == 0) {
+        if (!video_epoch_set_) {
           first_mt_pts_us_ = media_time_us;
+          video_epoch_set_ = true;
         }
 
         std::cout << "[FileProducer] INV-P8-SHADOW-FLUSH: Cached frame flushed (legacy), PTS="
@@ -2753,7 +2756,7 @@ namespace retrovue::producers::file
         {
           // Skip audio emission if video epoch not yet established
           // This allows video decode loop to continue until video emits
-          if (first_mt_pts_us_ == 0)
+          if (!video_epoch_set_)
           {
             // Log every 100 skips to show progress without spam
             audio_skip_count_++;
@@ -2809,7 +2812,7 @@ namespace retrovue::producers::file
         // INV-P8-SHADOW-AUDIO-GATE: Gate audio until video epoch exists
         // =======================================================================
         // Audio must NOT advance ahead of video during shadow mode. However, once
-        // the video epoch is established (first_mt_pts_us_ != 0), audio is aligned
+        // the video epoch is established (video_epoch_set_), audio is aligned
         // to the video timeline and can safely buffer during shadow preroll.
         //
         // Gate conditions:
@@ -2822,7 +2825,7 @@ namespace retrovue::producers::file
         // buffers before the switch deadline.
         // =======================================================================
         bool audio_should_be_gated = shadow_decode_mode_.load(std::memory_order_acquire)
-                                     && (first_mt_pts_us_ == 0);  // Only gate if no video epoch
+                                     && (!video_epoch_set_);  // Only gate if no video epoch
         if (mapping_locked_this_iteration_) {
           audio_should_be_gated = false;  // Override: mapping just locked, audio must flow
         }
@@ -3050,6 +3053,21 @@ namespace retrovue::producers::file
   }
 
   // ======================================================================
+  // DrainAudioDecoderIfNeeded: flush pending audio frames from decoder queue
+  // ======================================================================
+  // Called after video frame emission in both resampled and non-resampled paths.
+  // This drains the audio decoder's output buffer (frames already decoded from
+  // previously-dispatched audio packets). Does NOT read new packets from demux.
+  // Keeps audio flowing in lockstep with video emission cadence.
+  // ======================================================================
+  void FileProducer::DrainAudioDecoderIfNeeded()
+  {
+    if (audio_stream_index_ >= 0 && !audio_eof_reached_) {
+      ReceiveAudioFrames();
+    }
+  }
+
+  // ======================================================================
   // INV-FPS-RESAMPLE: EmitFrameAtTick — sole emission path for resampled frames
   // ======================================================================
   // This is the ONLY place where resampler-emitted frames:
@@ -3072,8 +3090,8 @@ namespace retrovue::producers::file
     last_mt_pts_us_ = tick_pts_us;
 
     // VIDEO_EPOCH_SET (if first emitted frame)
-    if (!resample_epoch_set_) {
-      resample_epoch_set_ = true;
+    if (!video_epoch_set_) {
+      video_epoch_set_ = true;
       first_mt_pts_us_ = tick_pts_us;
       if (master_clock_) {
         playback_start_utc_us_ = master_clock_->now_utc_us();
@@ -3127,9 +3145,8 @@ namespace retrovue::producers::file
     frames_produced_.fetch_add(1, std::memory_order_relaxed);
     frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
-    // Keep audio flowing during resampler emissions
-    if (audio_stream_index_ >= 0 && !audio_eof_reached_)
-      ReceiveAudioFrames();
+    // Drain audio decoder queue — symmetrical with non-resampled emission path
+    DrainAudioDecoderIfNeeded();
 
     return true;  // Frame emitted successfully
   }
