@@ -228,6 +228,8 @@ namespace retrovue::producers::file
 
     // Phase 8.9: Audio decoding operations.
     bool ReceiveAudioFrames();  // Receive decoded audio frames (packets dispatched by ProduceRealFrame)
+    bool ReceiveOneAudioFrameAndPush(int64_t& pushed_duration_us);  // INV-AUDIO-DEBT: Decode+push one audio frame, report duration
+    void DrainAudioForTick(int64_t tick_us);  // INV-AUDIO-DEBT: Tick-driven audio time-debt drain
     bool ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& output_frame);
 
     // Emits producer event through callback.
@@ -333,6 +335,8 @@ namespace retrovue::producers::file
     int video_discard_count_;     // Video frames discarded before seek target
     bool seek_discard_logged_;    // INV-SEEK-DISCARD: Log once at start of discard phase
     int audio_frame_count_;       // Total audio frames processed
+    int64_t audio_debt_us_ = 0;   // INV-AUDIO-DEBT: Accumulated audio time debt (microseconds)
+    bool audio_debt_diagnostic_logged_ = false;  // INV-AUDIO-DEBT: One-shot diagnostic
     int frames_since_producer_start_;  // Frames since this producer started
     int audio_skip_count_;        // Audio frames skipped waiting for video epoch
     int audio_drop_count_;
