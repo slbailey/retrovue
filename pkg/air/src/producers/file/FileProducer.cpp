@@ -42,6 +42,7 @@ namespace retrovue::producers::file
   namespace
   {
     constexpr int64_t kProducerBackoffUs = 10'000; // 10ms backoff when buffer is full
+    constexpr int kMaxAudioFramesPerTick = 8;      // INV-AUDIO-DEBT: Cap frames drained per video tick
     constexpr int64_t kMicrosecondsPerSecond = 1'000'000;
 
     // INV-P10-AUDIO-VIDEO-GATE (P1-FP-001/002/003): video epoch time per producer for 100ms deadline
@@ -1902,9 +1903,8 @@ namespace retrovue::producers::file
 
     // Frame decoded and ready to push
 
-    // Phase 8.9: Drain audio decoder queue (non-blocking).
-    // Symmetrical with resampled path (both call DrainAudioDecoderIfNeeded).
-    DrainAudioDecoderIfNeeded();
+    // INV-AUDIO-DEBT: Tick-driven audio drain after video emission (non-resampled path).
+    DrainAudioForTick(output_tick_interval_us_);
 
     // INV-P8-AUDIO-GATE Fix #2: Clear the flag after audio has been processed.
     // The flag was set when AdmitFrame locked the mapping, and ensured audio
@@ -2621,10 +2621,13 @@ namespace retrovue::producers::file
     }
 
     bool received_any = false;
-    bool processed_one = false;  // Phase 6: Exit after processing one frame
+    int frames_this_call = 0;
+    constexpr int kMaxOpportunisticFrames = 2;  // INV-AUDIO-DEBT: Bounded opportunistic drain
 
-    // Receive decoded audio frames - but exit after processing ONE to prevent burst
-    while (!stop_requested_.load(std::memory_order_acquire) && !processed_one)
+    // Receive decoded audio frames — bounded opportunistic drain.
+    // Primary throughput is handled by DrainAudioForTick (tick-driven debt model).
+    // This function provides bounded opportunistic drain from inline packet dispatch.
+    while (!stop_requested_.load(std::memory_order_acquire) && frames_this_call < kMaxOpportunisticFrames)
     {
       // INV-P9-STEADY-003: Check audio buffer capacity BEFORE receiving
       // If audio buffer is full, return immediately and let the outer decode
@@ -2908,7 +2911,7 @@ namespace retrovue::producers::file
         steady_state_audio_count_.fetch_add(1, std::memory_order_release);
 
         received_any = true;
-        processed_one = true;  // Phase 6: Exit loop after this frame
+        frames_this_call++;
       }
       else
       {
@@ -3077,17 +3080,234 @@ namespace retrovue::producers::file
   }
 
   // ======================================================================
-  // DrainAudioDecoderIfNeeded: flush pending audio frames from decoder queue
   // ======================================================================
-  // Called after video frame emission in both resampled and non-resampled paths.
-  // This drains the audio decoder's output buffer (frames already decoded from
-  // previously-dispatched audio packets). Does NOT read new packets from demux.
-  // Keeps audio flowing in lockstep with video emission cadence.
+  // INV-AUDIO-DEBT: ReceiveOneAudioFrameAndPush — decode and push exactly one
+  // audio frame from the decoder queue. Reports pushed duration for debt tracking.
+  // Returns true if a frame was successfully pushed (pushed_duration_us set).
+  // Returns false on EAGAIN/EOF/error/buffer-full/stop/write-barrier.
   // ======================================================================
+  bool FileProducer::ReceiveOneAudioFrameAndPush(int64_t& pushed_duration_us)
+  {
+    pushed_duration_us = 0;
+
+    if (audio_stream_index_ < 0 || !audio_codec_ctx_ || !audio_frame_ || audio_eof_reached_)
+      return false;
+
+    if (stop_requested_.load(std::memory_order_acquire))
+      return false;
+
+    if (output_buffer_.IsAudioFull())
+      return false;
+
+    int ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
+    if (ret == AVERROR(EAGAIN))
+      return false;
+    if (ret == AVERROR_EOF) {
+      audio_eof_reached_ = true;
+      return false;
+    }
+    if (ret < 0)
+      return false;
+
+    buffer::AudioFrame output_audio_frame;
+    if (!ConvertAudioFrame(audio_frame_, output_audio_frame)) {
+      std::cerr << "[FileProducer] ===== FAILED TO CONVERT AUDIO FRAME =====" << std::endl;
+      av_frame_unref(audio_frame_);
+      return false;
+    }
+
+    // Write barrier check
+    if (writes_disabled_.load(std::memory_order_acquire)) {
+      av_frame_unref(audio_frame_);
+      return false;
+    }
+
+    int64_t base_pts_us = output_audio_frame.pts_us;
+
+    // Phase 6 gating (seek discard)
+    bool audio_shadow_mode = shadow_decode_mode_.load(std::memory_order_acquire);
+    bool audio_mapping_pending = timeline_controller_ && timeline_controller_->IsMappingPending();
+    bool audio_phase6_gating_active = !timeline_controller_ || audio_shadow_mode || audio_mapping_pending;
+
+    if (audio_phase6_gating_active && base_pts_us < effective_seek_target_us_) {
+      av_frame_unref(audio_frame_);
+      return false;  // Pre-seek frame, don't count as pushed
+    }
+
+    // First audio frame accuracy log
+    if (audio_phase6_gating_active && effective_seek_target_us_ > 0 && last_audio_pts_us_ == 0) {
+      int64_t accuracy_us = base_pts_us - effective_seek_target_us_;
+      std::cout << "[FileProducer] Phase 6: First audio frame - target_pts=" << effective_seek_target_us_
+                << "us, first_emitted_pts=" << base_pts_us
+                << "us, accuracy=" << accuracy_us << "us ("
+                << (accuracy_us / 1000) << "ms)" << std::endl;
+    }
+
+    // INV-P10-AUDIO-SAMPLE-CLOCK: CT assignment
+    int64_t sample_duration_us = 0;
+    if (timeline_controller_ && !shadow_decode_mode_.load(std::memory_order_acquire)) {
+      sample_duration_us = (static_cast<int64_t>(output_audio_frame.nb_samples) * 1000000LL)
+                           / output_audio_frame.sample_rate;
+      if (last_audio_pts_us_ == 0) {
+        int64_t audio_ct_us = 0;
+        timing::AdmissionResult result = timeline_controller_->AdmitFrame(base_pts_us, audio_ct_us);
+        if (result == timing::AdmissionResult::ADMITTED) {
+          output_audio_frame.pts_us = audio_ct_us;
+          std::cout << "[FileProducer] INV-P10-AUDIO-SAMPLE-CLOCK: Origin CT=" << audio_ct_us
+                    << "us, sample_duration=" << sample_duration_us << "us" << std::endl;
+        } else {
+          av_frame_unref(audio_frame_);
+          return false;
+        }
+      } else {
+        output_audio_frame.pts_us = last_audio_pts_us_ + sample_duration_us;
+      }
+      if (output_audio_frame.pts_us < last_audio_pts_us_)
+        output_audio_frame.pts_us = last_audio_pts_us_;
+    } else {
+      // Legacy path
+      sample_duration_us = (static_cast<int64_t>(output_audio_frame.nb_samples) * 1000000LL)
+                           / output_audio_frame.sample_rate;
+      output_audio_frame.pts_us += pts_offset_us_;
+      if (output_audio_frame.pts_us < last_audio_pts_us_)
+        output_audio_frame.pts_us = last_audio_pts_us_;
+    }
+    last_audio_pts_us_ = output_audio_frame.pts_us;
+
+    // Video epoch gate (Phase 6 only)
+    if (master_clock_ && audio_phase6_gating_active) {
+      if (!video_epoch_set_) {
+        audio_skip_count_++;
+        if (audio_skip_count_ == 1 || audio_skip_count_ % 100 == 0) {
+          std::cout << "[FileProducer] AUDIO_SKIP #" << audio_skip_count_
+                    << " waiting for video epoch (audio_pts_us=" << base_pts_us << ")" << std::endl;
+        }
+        av_frame_unref(audio_frame_);
+        return false;
+      }
+      if (!audio_ungated_logged_) {
+        std::cout << "[FileProducer] AUDIO_UNGATED first_audio_pts_us=" << base_pts_us
+                  << " aligned_to_video_pts_us=" << first_mt_pts_us_ << std::endl;
+        {
+          std::lock_guard<std::mutex> lock(g_video_epoch_mutex);
+          auto it = g_video_epoch_time.find(this);
+          if (it != g_video_epoch_time.end()) {
+            int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - it->second).count());
+            if (elapsed_ms <= 100) {
+              std::cout << "[FileProducer] INV-P10-AUDIO-VIDEO-GATE: First audio queued at "
+                        << elapsed_ms << "ms after video epoch" << std::endl;
+            }
+          }
+        }
+        audio_ungated_logged_ = true;
+      }
+      // Fake clock gating (tests only)
+      if (master_clock_->is_fake()) {
+        int64_t frame_offset_us = base_pts_us - first_mt_pts_us_;
+        int64_t target_utc_us = playback_start_utc_us_ + frame_offset_us;
+        while (master_clock_->now_utc_us() < target_utc_us &&
+               !stop_requested_.load(std::memory_order_acquire))
+          std::this_thread::yield();
+      }
+    }
+
+    // Shadow audio gate
+    bool audio_should_be_gated = shadow_decode_mode_.load(std::memory_order_acquire)
+                                 && (!video_epoch_set_);
+    if (mapping_locked_this_iteration_)
+      audio_should_be_gated = false;
+    if (audio_should_be_gated) {
+      audio_mapping_gate_drop_count_++;
+      if (audio_mapping_gate_drop_count_ <= 5 || audio_mapping_gate_drop_count_ % 100 == 0) {
+        std::cout << "[FileProducer] AUDIO_GATED #" << audio_mapping_gate_drop_count_
+                  << " - shadow mode active AND no video epoch" << std::endl;
+      }
+      av_frame_unref(audio_frame_);
+      return false;
+    }
+
+    // Push with backpressure
+    audio_frame_count_++;
+    frames_since_producer_start_++;
+    static thread_local bool audio_backpressure_logged = false;
+    while (!output_buffer_.PushAudioFrame(output_audio_frame)) {
+      if (!audio_backpressure_logged) {
+        std::cout << "[FileProducer] Audio backpressure: blocking at queue capacity" << std::endl;
+        audio_backpressure_logged = true;
+      }
+      if (stop_requested_.load(std::memory_order_acquire)) { av_frame_unref(audio_frame_); return false; }
+      if (writes_disabled_.load(std::memory_order_acquire)) { av_frame_unref(audio_frame_); return false; }
+      if (master_clock_ && !master_clock_->is_fake())
+        std::this_thread::sleep_for(std::chrono::microseconds(kProducerBackoffUs));
+      else
+        std::this_thread::yield();
+    }
+    if (audio_backpressure_logged) {
+      std::cout << "[FileProducer] Audio backpressure: released" << std::endl;
+      audio_backpressure_logged = false;
+    }
+
+    steady_state_audio_count_.fetch_add(1, std::memory_order_release);
+    av_frame_unref(audio_frame_);
+
+    pushed_duration_us = sample_duration_us;
+    return true;
+  }
+
+  // ======================================================================
+  // INV-AUDIO-DEBT: DrainAudioForTick — tick-driven audio time-debt drain
+  // ======================================================================
+  // Called after each video tick emission (both resampled and non-resampled).
+  // Adds tick_us to audio_debt_us_, then drains decoded audio frames until
+  // enough audio duration has been pushed to cover the debt.
+  //
+  // At 30fps / AAC 48kHz 1024-sample:
+  //   tick_us = 33333us, audio frame = 21333us
+  //   → typically drains 1-2 frames per tick, averaging ~1.56 frames/tick
+  //   → over 30 ticks/sec: ~46.8 frames/sec (matches audio requirement)
+  //
+  // Bounded by kMaxAudioFramesPerTick to prevent runaway in edge cases.
+  // ======================================================================
+  void FileProducer::DrainAudioForTick(int64_t tick_us)
+  {
+    audio_debt_us_ += tick_us;
+
+    int frames_drained = 0;
+    while (audio_debt_us_ > 0 && frames_drained < kMaxAudioFramesPerTick) {
+      if (stop_requested_.load(std::memory_order_acquire)) break;
+      if (writes_disabled_.load(std::memory_order_acquire)) break;
+
+      int64_t pushed_us = 0;
+      if (!ReceiveOneAudioFrameAndPush(pushed_us))
+        break;  // EAGAIN/EOF/full — no more frames available
+
+      audio_debt_us_ -= pushed_us;
+      frames_drained++;
+    }
+
+    // Clamp debt to prevent unbounded accumulation on prolonged starvation
+    // (e.g. audio EOF reached before video). Allow small negative debt (audio ahead).
+    if (audio_debt_us_ > 200000) {  // Cap at 200ms debt
+      audio_debt_us_ = 200000;
+    }
+
+    // One-shot diagnostic at frame 300 (~10s at 30fps)
+    if (!audio_debt_diagnostic_logged_ && audio_frame_count_ >= 300) {
+      audio_debt_diagnostic_logged_ = true;
+      std::cout << "[FileProducer] INV-AUDIO-DEBT: 10s checkpoint"
+                << " audio_frames=" << audio_frame_count_
+                << " debt_us=" << audio_debt_us_
+                << " (target ~469 frames for 48k/1024)" << std::endl;
+    }
+  }
+
+  // DrainAudioDecoderIfNeeded: LEGACY — now delegates to DrainAudioForTick
+  // Kept for any remaining call sites; uses one tick of debt.
   void FileProducer::DrainAudioDecoderIfNeeded()
   {
     if (audio_stream_index_ >= 0 && !audio_eof_reached_) {
-      ReceiveAudioFrames();
+      DrainAudioForTick(output_tick_interval_us_);
     }
   }
 
@@ -3169,8 +3389,8 @@ namespace retrovue::producers::file
     frames_produced_.fetch_add(1, std::memory_order_relaxed);
     frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
-    // Drain audio decoder queue — symmetrical with non-resampled emission path
-    DrainAudioDecoderIfNeeded();
+    // INV-AUDIO-DEBT: Tick-driven audio drain after video emission
+    DrainAudioForTick(output_tick_interval_us_);
 
     return true;  // Frame emitted successfully
   }
