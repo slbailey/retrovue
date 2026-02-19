@@ -67,6 +67,13 @@ using retrovue::util::Logger;
 // 500ms provides headroom above LOW_WATER (333ms), preventing micro-underruns
 // during initial playback before the fill thread reaches steady state.
 static constexpr int kMinAudioPrimeMs = 500;
+// Segment swap gate: minimum incoming buffer depth before swapping (avoids async fill race).
+static constexpr int kMinSegmentSwapAudioMs = 500;
+static constexpr int kMinSegmentSwapVideoFrames = 1;
+
+// B-chain fill: minimum lead time (frames/ms) so segment prep reaches target depth before seam.
+static constexpr int kMinSegmentPrepHeadroomMs = 250;
+static constexpr int kMinSegmentPrepHeadroomFrames = 8;
 
 // Task 2: Format fence_tick for logging — sentinel INT64_MAX prints as "UNARMED".
 static std::string FormatFenceTick(int64_t tick) {
@@ -177,20 +184,38 @@ void PipelineManager::Stop() {
         Logger::Info(oss.str()); }
     }
   }
-  if (segment_preview_video_buffer_ && segment_preview_video_buffer_->IsFilling()) {
+  if (segment_b_video_buffer_ && segment_b_video_buffer_->IsFilling()) {
     { std::ostringstream oss;
-      oss << "[PipelineManager] BUG: segment preview video fill thread still running "
+      oss << "[PipelineManager] BUG: segment B video fill thread still running "
           << "after Stop(). Stopping to prevent std::terminate.";
       Logger::Error(oss.str()); }
     { auto t0 = std::chrono::steady_clock::now();
       { std::ostringstream oss;
-        oss << "[PipelineManager] STOP_FILLING_BEGIN context=stop_defensive_segment_preview tick=stop";
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=stop_defensive_segment_b tick=stop";
         Logger::Info(oss.str()); }
-      segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+      segment_b_video_buffer_->StopFilling(/*flush=*/true);
       auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - t0).count();
       { std::ostringstream oss;
-        oss << "[PipelineManager] STOP_FILLING_END context=stop_defensive_segment_preview tick=stop dt_ms="
+        oss << "[PipelineManager] STOP_FILLING_END context=stop_defensive_segment_b tick=stop dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
+  }
+  if (pad_b_video_buffer_ && pad_b_video_buffer_->IsFilling()) {
+    { std::ostringstream oss;
+      oss << "[PipelineManager] BUG: pad B video fill thread still running "
+          << "after Stop(). Stopping to prevent std::terminate.";
+      Logger::Error(oss.str()); }
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=stop_defensive_pad_b tick=stop";
+        Logger::Info(oss.str()); }
+      pad_b_video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=stop_defensive_pad_b tick=stop dt_ms="
             << dt_ms;
         Logger::Info(oss.str()); }
     }
@@ -739,6 +764,21 @@ void PipelineManager::Run() {
       video_target_depth, video_low_water);
   video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
 
+  // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
+  pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+  pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+  pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
+  int pad_a_target = bcfg.audio_target_depth_ms;
+  int pad_a_low = bcfg.audio_low_water_ms > 0
+      ? bcfg.audio_low_water_ms
+      : std::max(1, pad_a_target / 3);
+  pad_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+      pad_a_target, buffer::kHouseAudioSampleRate,
+      buffer::kHouseAudioChannels, pad_a_low);
+  pad_b_video_buffer_->StartFilling(
+      AsTickProducer(pad_b_producer_.get()), pad_b_audio_buffer_.get(),
+      0.0, ctx_->fps, &ctx_->stop_requested);
+
   // Initialize fence_epoch_utc_ms_ to the same value as session_epoch_utc_ms_.
   // It will be re-anchored to system_clock::now() at clock.Start().
   // This initial value is needed so that compute_fence_frame works correctly
@@ -1118,58 +1158,13 @@ void PipelineManager::Run() {
 
     // ==================================================================
     // PRE-TAKE READINESS: Peek only — never consume.
-    //
-    // Only the seam commit path (PerformSegmentSwap) is allowed to call
-    // TakeSegmentResult(). This path may only PeekSegmentResult() to
-    // observe that the correct segment result is ready; consumption
-    // happens at seam time to avoid races (early consume → MISS at seam,
-    // or consuming a stale/wrong result).
+    // B is created in EnsureIncomingBReadyForSeam (called when take_segment).
     // ==================================================================
     const int32_t next_segment_index = current_segment_index_ + 1;
     auto seg_peek = seam_preparer_->PeekSegmentResult();
     if (seg_peek && seg_peek->parent_block_id == live_parent_block_.block_id &&
         seg_peek->parent_segment_index == next_segment_index) {
-      // Next segment preroll ready; seam commit consumes at next_seam_frame_.
-    }
-    // Segment preview is no longer populated here (only seam commit consumes).
-    // This block remains for any future path that might set segment_preview_.
-    if (segment_preview_ && !segment_preview_video_buffer_ &&
-        AsTickProducer(segment_preview_.get())->GetState() == ITickProducer::State::kReady) {
-      segment_preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
-          video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
-      segment_preview_video_buffer_->SetBufferLabel("SEGMENT_PREROLL_BUFFER");
-      const auto& scfg = ctx_->buffer_config;
-      int sa_target = scfg.audio_target_depth_ms;
-      int sa_low = scfg.audio_low_water_ms > 0
-          ? scfg.audio_low_water_ms
-          : std::max(1, sa_target / 3);
-      segment_preview_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
-          sa_target, buffer::kHouseAudioSampleRate,
-          buffer::kHouseAudioChannels, sa_low);
-      auto* seg_tp = AsTickProducer(segment_preview_.get());
-      // INV-AUDIO-PREROLL-ISOLATION-001: Snapshot live audio before segment preroll.
-      int seg_live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
-      segment_preview_video_buffer_->StartFilling(
-          seg_tp, segment_preview_audio_buffer_.get(),
-          seg_tp->GetInputFPS(), ctx_->fps,
-          &ctx_->stop_requested);
-      if (audio_buffer_ && seg_live_audio_before >= 0) {
-        int seg_live_audio_after = audio_buffer_->DepthMs();
-        if (seg_live_audio_after < seg_live_audio_before - 1) {
-          std::ostringstream oss;
-          oss << "[PipelineManager] INV-AUDIO-PREROLL-ISOLATION-001 VIOLATION:"
-              << " context=SEGMENT_PREROLL"
-              << " live_audio_before=" << seg_live_audio_before
-              << " live_audio_after=" << seg_live_audio_after;
-          Logger::Error(oss.str());
-        }
-      }
-      { std::ostringstream oss;
-        oss << "[PipelineManager] SEGMENT_PREROLL_START"
-            << " tick=" << session_frame_index
-            << " next_seam_frame=" << next_seam_frame_
-            << " headroom=" << (next_seam_frame_ - session_frame_index);
-        Logger::Info(oss.str()); }
+      // Next segment preroll ready; EnsureIncomingBReadyForSeam consumes at seam tick.
     }
 
     if (!preview_ && seam_preparer_->HasBlockResult()) {
@@ -1301,9 +1296,9 @@ void PipelineManager::Run() {
     if (take_b && preview_video_buffer_) {
       v_src = preview_video_buffer_.get();        // Block swap: B buffers
       a_src = preview_audio_buffer_.get();
-    } else if (take_segment && segment_preview_video_buffer_) {
-      v_src = segment_preview_video_buffer_.get(); // Segment swap: segment B buffers
-      a_src = segment_preview_audio_buffer_.get();
+    } else if (take_segment && segment_b_video_buffer_) {
+      v_src = segment_b_video_buffer_.get();  // Segment swap: segment B buffers
+      a_src = segment_b_audio_buffer_.get();
     } else if (take_b) {
       v_src = preview_video_buffer_.get();         // Block swap: may be null
       a_src = preview_audio_buffer_.get();
@@ -1953,34 +1948,80 @@ void PipelineManager::Run() {
     // ==================================================================
     // SEGMENT POST-TAKE: On the segment seam tick, swap segment preview
     // into live.  Only fires when take_segment is true (not a block seam).
+    // Gate: defer swap until incoming segment meets minimum readiness.
     // ==================================================================
     if (take_segment) {
-      // SEGMENT_TAKE_COMMIT: log decision state BEFORE swap (a_src still valid).
-      { std::ostringstream oss;
-        oss << "[PipelineManager] SEGMENT_TAKE_COMMIT"
-            << " tick=" << session_frame_index
-            << " from_segment=" << current_segment_index_
-            << " is_pad=" << is_pad
-            << " audio_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
-            << " audio_gen=" << (a_src ? a_src->CurrentGeneration() : 0)
-            << " asset=" << (is_pad ? "pad" : (vbf.asset_uri.empty() ? "none" : vbf.asset_uri))
-            << " seg_preview_ready=" << (segment_preview_video_buffer_ != nullptr);
-        Logger::Info(oss.str()); }
+      const int32_t to_seg = current_segment_index_ + 1;
+      EnsureIncomingBReadyForSeam(to_seg, session_frame_index);
+      std::optional<IncomingState> incoming = GetIncomingSegmentState(to_seg);
 
-      PerformSegmentSwap(session_frame_index);
+      if (!incoming) {
+        // No incoming source (no segment B, no worker result).
+        if (last_logged_defer_seam_frame_ != next_seam_frame_) {
+          last_logged_defer_seam_frame_ = next_seam_frame_;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
+                << " reason=no_incoming"
+                << " incoming_audio_ms=-1"
+                << " incoming_video_frames=-1"
+                << " tick=" << session_frame_index;
+            Logger::Info(oss.str()); }
+        }
+        // Keep current live; do not call PerformSegmentSwap.
+      } else if (!IsIncomingSegmentEligibleForSwap(*incoming)) {
+        if (last_logged_defer_seam_frame_ != next_seam_frame_) {
+          last_logged_defer_seam_frame_ = next_seam_frame_;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
+                << " reason=not_ready"
+                << " incoming_audio_ms=" << incoming->incoming_audio_ms
+                << " incoming_video_frames=" << incoming->incoming_video_frames
+                << " tick=" << session_frame_index;
+            Logger::Info(oss.str()); }
+        }
+        // Keep current live; do not call PerformSegmentSwap.
+      } else {
+        // Eligible: perform swap.
+        last_logged_defer_seam_frame_ = -1;  // Reset so next seam can log if deferred.
+        // SEGMENT_TAKE_COMMIT: log decision state BEFORE swap (a_src still valid).
+        { std::ostringstream oss;
+          const char* to_type_str =
+              (to_seg < static_cast<int32_t>(live_parent_block_.segments.size()))
+                  ? SegmentTypeName(live_parent_block_.segments[to_seg].segment_type)
+                  : "OUT_OF_RANGE";
+          oss << "[PipelineManager] SEGMENT_TAKE_COMMIT"
+              << " tick=" << session_frame_index
+              << " from_segment=" << current_segment_index_
+              << " to_segment=" << to_seg << " (" << to_type_str << ")"
+              << " is_pad=" << is_pad
+              << " segment_b_audio_depth_ms=" << incoming->incoming_audio_ms
+              << " segment_b_video_depth_frames=" << incoming->incoming_video_frames
+              << " audio_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
+              << " audio_gen=" << (a_src ? a_src->CurrentGeneration() : 0)
+              << " asset=" << (is_pad ? "pad" : (vbf.asset_uri.empty() ? "none" : vbf.asset_uri))
+              << " seg_b_ready=" << (segment_b_video_buffer_ != nullptr);
+          Logger::Info(oss.str()); }
 
-      // Update a_src after swap — old audio buffer may have been destroyed.
-      a_src = audio_buffer_.get();
+        PerformSegmentSwap(session_frame_index);
 
-      // Begin segment proof tracking for the new segment.
-      if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
-        const auto& seg = live_parent_block_.segments[current_segment_index_];
-        block_acc.BeginSegment(
-            current_segment_index_, seg.asset_uri,
-            static_cast<int64_t>(std::ceil(
-                static_cast<double>(seg.segment_duration_ms) /
-                static_cast<double>(clock.FrameDurationMs()))),
-            seg.segment_type, seg.event_id);
+        // Update a_src after swap — old audio buffer may have been destroyed.
+        a_src = audio_buffer_.get();
+        { std::ostringstream oss;
+          oss << "[PipelineManager] SEGMENT_SWAP_POST"
+              << " tick=" << session_frame_index
+              << " live_audio_depth_ms=" << (a_src ? a_src->DepthMs() : -1);
+          Logger::Info(oss.str()); }
+
+        // Begin segment proof tracking for the new segment.
+        if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
+          const auto& seg = live_parent_block_.segments[current_segment_index_];
+          block_acc.BeginSegment(
+              current_segment_index_, seg.asset_uri,
+              static_cast<int64_t>(std::ceil(
+                  static_cast<double>(seg.segment_duration_ms) /
+                  static_cast<double>(clock.FrameDurationMs()))),
+              seg.segment_type, seg.event_id);
+        }
       }
     }
 
@@ -2597,24 +2638,43 @@ void PipelineManager::Run() {
   }
   preview_audio_buffer_.reset();
 
-  // Stop segment preview buffers if still running.
-  if (segment_preview_video_buffer_) {
+  // Stop segment B buffers if still running.
+  if (segment_b_video_buffer_) {
     { auto t0 = std::chrono::steady_clock::now();
       { std::ostringstream oss;
-        oss << "[PipelineManager] STOP_FILLING_BEGIN context=teardown_segment_preview tick=teardown";
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=teardown_segment_b tick=teardown";
         Logger::Info(oss.str()); }
-      segment_preview_video_buffer_->StopFilling(/*flush=*/true);
+      segment_b_video_buffer_->StopFilling(/*flush=*/true);
       auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - t0).count();
       { std::ostringstream oss;
-        oss << "[PipelineManager] STOP_FILLING_END context=teardown_segment_preview tick=teardown dt_ms="
+        oss << "[PipelineManager] STOP_FILLING_END context=teardown_segment_b tick=teardown dt_ms="
             << dt_ms;
         Logger::Info(oss.str()); }
     }
-    segment_preview_video_buffer_.reset();
+    segment_b_video_buffer_.reset();
   }
-  segment_preview_audio_buffer_.reset();
-  segment_preview_.reset();
+  segment_b_audio_buffer_.reset();
+  segment_b_producer_.reset();
+
+  // Stop persistent pad B chain if still running.
+  if (pad_b_video_buffer_) {
+    { auto t0 = std::chrono::steady_clock::now();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_BEGIN context=teardown_pad_b tick=teardown";
+        Logger::Info(oss.str()); }
+      pad_b_video_buffer_->StopFilling(/*flush=*/true);
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] STOP_FILLING_END context=teardown_pad_b tick=teardown dt_ms="
+            << dt_ms;
+        Logger::Info(oss.str()); }
+    }
+    pad_b_video_buffer_.reset();
+  }
+  pad_b_audio_buffer_.reset();
+  pad_b_producer_.reset();
 
   // INV-PAD-PRODUCER: Release session-lifetime pad source.
   pad_producer_.reset();
@@ -2819,6 +2879,31 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
       ? segment_seam_frames_[seam_boundary_idx]
       : INT64_MAX;
 
+  // Lead time: frames/ms from this tick until seam. Must be >= required for B-chain to reach target depth.
+  int64_t headroom_frames = (seam_frame_val != INT64_MAX && seam_frame_val > session_frame_index)
+      ? (seam_frame_val - session_frame_index)
+      : 0;
+  int64_t headroom_ms = (headroom_frames > 0 && ctx_->fps_num > 0)
+      ? (headroom_frames * 1000 * ctx_->fps_den) / ctx_->fps_num
+      : 0;
+  int64_t required_frames_from_ms = (kMinSegmentPrepHeadroomMs * ctx_->fps_num + 1000 * ctx_->fps_den - 1)
+      / (1000 * ctx_->fps_den);
+  int64_t required_headroom_frames = std::max(
+      static_cast<int64_t>(kMinSegmentPrepHeadroomFrames),
+      required_frames_from_ms);
+
+  if (headroom_frames < required_headroom_frames) {
+    std::ostringstream oss;
+    oss << "[PipelineManager] SEAM_PREP_HEADROOM_LOW"
+        << " headroom_frames=" << headroom_frames
+        << " headroom_ms=" << headroom_ms
+        << " required_frames=" << required_headroom_frames
+        << " target_segment=" << target_seg
+        << " seam_frame=" << FormatFenceTick(seam_frame_val)
+        << " tick=" << session_frame_index;
+    Logger::Warn(oss.str());
+  }
+
   SeamRequest req;
   req.type = SeamRequestType::kSegment;
   req.block = std::move(synth);
@@ -2837,7 +2922,10 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
         << " parent_block=" << live_parent_block_.block_id
         << " next_segment=" << target_seg
         << " segment_type=" << seg_type_name
-        << " seam_frame=" << FormatFenceTick(seam_frame_val);
+        << " seam_frame=" << FormatFenceTick(seam_frame_val)
+        << " headroom_frames=" << headroom_frames
+        << " headroom_ms=" << headroom_ms
+        << " required_frames=" << required_headroom_frames;
     if (target_seg != next_seg) {
       oss << " skipped_pads=" << (target_seg - next_seg);
     }
@@ -2849,7 +2937,128 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
 }
 
 // =============================================================================
-// PerformSegmentSwap — segment POST-TAKE: rotate segment preview into live
+// EnsureIncomingBReadyForSeam — create B (segment_b_*) before eligibility gate
+// =============================================================================
+
+void PipelineManager::EnsureIncomingBReadyForSeam(int32_t to_seg, int64_t session_frame_index) {
+  if (to_seg >= static_cast<int32_t>(live_parent_block_.segments.size())) {
+    return;
+  }
+  const SegmentType seg_type = live_parent_block_.segments[to_seg].segment_type;
+  const bool is_pad = (seg_type == SegmentType::kPad);
+
+  // Already have B for this seam (e.g. from previous tick).
+  if (segment_b_video_buffer_ && segment_b_audio_buffer_) {
+    return;
+  }
+
+  // PAD: use persistent pad_b_* (created at session init). No segment_b_* for PAD.
+  if (is_pad) {
+    return;
+  }
+
+  // CONTENT: take result and create B + StartFilling (so swap never allocates A).
+  if (!seam_preparer_->HasSegmentResult()) {
+    return;
+  }
+  auto peek = seam_preparer_->PeekSegmentResult();
+  if (!peek || peek->parent_block_id != live_parent_block_.block_id ||
+      peek->parent_segment_index != to_seg) {
+    return;
+  }
+  auto result = seam_preparer_->TakeSegmentResult();
+  if (!result || !result->producer) {
+    return;
+  }
+  segment_b_producer_ = std::move(result->producer);
+  const auto& bcfg = ctx_->buffer_config;
+  int a_target = bcfg.audio_target_depth_ms;
+  int a_low = bcfg.audio_low_water_ms > 0
+      ? bcfg.audio_low_water_ms
+      : std::max(1, a_target / 3);
+  segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+  segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
+  segment_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+      a_target, buffer::kHouseAudioSampleRate,
+      buffer::kHouseAudioChannels, a_low);
+  int seg_live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+  segment_b_video_buffer_->StartFilling(
+      AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
+      AsTickProducer(segment_b_producer_.get())->GetInputFPS(), ctx_->fps,
+      &ctx_->stop_requested);
+  if (audio_buffer_ && seg_live_audio_before >= 0) {
+    int seg_live_audio_after = audio_buffer_->DepthMs();
+    if (seg_live_audio_after < seg_live_audio_before - 1) {
+      std::ostringstream oss;
+      oss << "[PipelineManager] INV-AUDIO-PREROLL-ISOLATION-001 VIOLATION:"
+          << " context=SEGMENT_B_PREROLL"
+          << " live_audio_before=" << seg_live_audio_before
+          << " live_audio_after=" << seg_live_audio_after;
+      Logger::Error(oss.str());
+    }
+  }
+  { std::ostringstream oss;
+    oss << "[PipelineManager] EnsureIncomingBReadyForSeam B_ready"
+        << " tick=" << session_frame_index
+        << " to_segment=" << to_seg
+        << " segment_b_audio_depth_ms=" << segment_b_audio_buffer_->DepthMs()
+        << " segment_b_video_depth_frames=" << segment_b_video_buffer_->DepthFrames();
+    Logger::Info(oss.str()); }
+}
+
+// =============================================================================
+// Segment seam eligibility gate
+// =============================================================================
+
+std::optional<IncomingState> PipelineManager::GetIncomingSegmentState(int32_t to_seg) const {
+  if (to_seg >= static_cast<int32_t>(live_parent_block_.segments.size())) {
+    return std::nullopt;
+  }
+  const SegmentType seg_type = live_parent_block_.segments[to_seg].segment_type;
+  const bool is_pad = (seg_type == SegmentType::kPad);
+
+  // CONTENT: only report state from actual B buffers (segment_b_*).
+  if (segment_b_video_buffer_ && segment_b_audio_buffer_) {
+    IncomingState s;
+    s.incoming_audio_ms = segment_b_audio_buffer_->DepthMs();
+    s.incoming_video_frames = segment_b_video_buffer_->DepthFrames();
+    s.is_pad = is_pad;
+    s.segment_type = seg_type;
+    return s;
+  }
+
+  // PAD: report state from persistent pad_b_* when present; else synthetic (always eligible).
+  if (is_pad) {
+    IncomingState s;
+    s.is_pad = true;
+    s.segment_type = SegmentType::kPad;
+    if (pad_b_video_buffer_ && pad_b_audio_buffer_) {
+      s.incoming_audio_ms = pad_b_audio_buffer_->DepthMs();
+      s.incoming_video_frames = pad_b_video_buffer_->DepthFrames();
+    } else {
+      s.incoming_audio_ms = 0;
+      s.incoming_video_frames = 1;  // PadProducer on demand; infinite
+    }
+    return s;
+  }
+
+  // CONTENT with no B: not eligible (swap deferred until B exists and meets depth).
+  return std::nullopt;
+}
+
+bool PipelineManager::IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const {
+  if (incoming.is_pad) {
+    // PAD: minimal prebuffer. PadProducer is session-lifetime, loopable (same
+    // frame/silence every tick), no buffered content; sustains continuous output.
+    return true;
+  }
+  // CONTENT: require minimum audio depth and video frames to avoid underflow.
+  return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs &&
+         incoming.incoming_video_frames >= kMinSegmentSwapVideoFrames;
+}
+
+// =============================================================================
+// PerformSegmentSwap — segment POST-TAKE: swap B into A only (no A allocation)
 // =============================================================================
 
 void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
@@ -2883,159 +3092,56 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
       Logger::Info(oss.str()); }
   }
 
-  // Step 2: Move outgoing buffers out FIRST so we can stop and hand off.
-  // The fill thread uses producer/audio_buffer — both must stay alive until
-  // reaper joins. ReapJob holds owners; we hand off after the swap.
+  // Step 2: Move outgoing A out FIRST so we can stop fill and hand off.
+  // ReapJob holds owners until join. No allocation of A in this function.
   auto outgoing_video_buffer = std::move(video_buffer_);
   auto outgoing_audio_buffer = std::move(audio_buffer_);
+  auto outgoing_producer = std::move(live_);
   auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
 
-  // Step 3: Save old live_ for deferred cleanup.
-  auto outgoing_producer = std::move(live_);
-
-
-  // FIX (PAD inline handling): If the incoming segment is PAD, handle it
-  // directly without touching the SeamPreparer worker.
-  // PAD segments have no asset, no decoder, and no audio -- just create an
-  // empty TickProducer and let the tick loop emit pad frames via PadProducer.
-  // This avoids the 1-frame race window that caused prep_mode=MISS.
-  if (incoming_is_pad) {
-    live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
-    video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
-        outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
-        outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
-    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
-    const auto& pad_bcfg = ctx_->buffer_config;
-    int pad_a_target = pad_bcfg.audio_target_depth_ms;
-    int pad_a_low = pad_bcfg.audio_low_water_ms > 0
-        ? pad_bcfg.audio_low_water_ms
-        : std::max(1, pad_a_target / 3);
-    audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
-        pad_a_target, buffer::kHouseAudioSampleRate,
-        buffer::kHouseAudioChannels, pad_a_low);
-    // StartFilling on an empty (no decoder) TickProducer: fill thread parks
-    // immediately, buffer stays unprimed, tick loop uses PadProducer for frames.
-    video_buffer_->StartFilling(
-        AsTickProducer(live_.get()), audio_buffer_.get(),
-        0.0, ctx_->fps, &ctx_->stop_requested);
-
-    // Advance segment index and recompute next seam frame.
-    current_segment_index_++;
-    UpdateNextSeamFrame();
-
-    // Hand off outgoing buffers/producer to reaper.
-    ReapJob pad_job;
-    pad_job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
-    pad_job.block_id = GetBlockIdFromProducer(outgoing_producer.get());
-    pad_job.thread = std::move(detached.thread);
-    pad_job.producer = std::move(outgoing_producer);
-    pad_job.video_buffer = std::move(outgoing_video_buffer);
-    pad_job.audio_buffer = std::move(outgoing_audio_buffer);
-    HandOffToReaper(std::move(pad_job));
-
-    // Arm next segment prep (may skip further PADs or find next content).
-    ArmSegmentPrep(session_frame_index);
-
-    // Fire on_segment_start for the transition.
-    if (callbacks_.on_segment_start) {
-      callbacks_.on_segment_start(from_seg, to_seg, live_parent_block_, session_frame_index);
-    }
-
-    { std::ostringstream oss;
-      oss << "[PipelineManager] SEGMENT_SEAM_TAKE"
-          << " tick=" << session_frame_index
-          << " from_segment=" << from_seg << " (" << from_type << ")"
-          << " to_segment=" << to_seg << " (" << to_type << ")"
-          << " prep_mode=INSTANT"
-          << " next_seam_frame=" << FormatFenceTick(next_seam_frame_);
-      Logger::Info(oss.str()); }
-    {
-      std::lock_guard<std::mutex> lock(metrics_mutex_);
-      metrics_.segment_seam_count++;
-      metrics_.segment_seam_pad_inline_count++;
-      metrics_.segment_seam_ready_count++;  // PAD inline is always "ready" (no miss)
-    }
-    return;  // Early exit -- PAD handled inline, skip the normal prep/swap path.
-  }
-
-  // Step 4: Swap segment preview into live.
-  // prep_mode tracks how the incoming segment was acquired:
-  //   PREROLLED — preview buffers were filled ahead of time
-  //   INSTANT   — PAD segment (trivially prepared, no decoder work)
-  //   MISS      — neither preview nor result available; emergency PAD fallback
   const char* prep_mode = "MISS";
-  bool swapped = false;
-  if (segment_preview_video_buffer_) {
-    video_buffer_ = std::move(segment_preview_video_buffer_);
-    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
-    audio_buffer_ = std::move(segment_preview_audio_buffer_);
-    live_ = std::move(segment_preview_);
-    swapped = true;
-    // PAD segments go through the same prep pipeline but complete trivially
-    // (no decoder open, no audio prime).  Label as INSTANT to distinguish
-    // from content/filler segments that required real decode work.
-    prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
-  } else if (seam_preparer_->HasSegmentResult()) {
-    auto peek = seam_preparer_->PeekSegmentResult();
-    if (peek && peek->parent_block_id == live_parent_block_.block_id &&
-        peek->parent_segment_index == to_seg) {
-      auto result = seam_preparer_->TakeSegmentResult();
-      if (result && result->producer) {
-        live_ = std::move(result->producer);
-        // Create fresh buffers and start filling.
-        // Old video fill thread was already stopped in Step 2.
-        video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
-            outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
-            outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
-        video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
-        const auto& bcfg = ctx_->buffer_config;
-        int a_target = bcfg.audio_target_depth_ms;
-        int a_low = bcfg.audio_low_water_ms > 0
-            ? bcfg.audio_low_water_ms
-            : std::max(1, a_target / 3);
-        audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
-            a_target, buffer::kHouseAudioSampleRate,
-            buffer::kHouseAudioChannels, a_low);
-        video_buffer_->StartFilling(
-            AsTickProducer(live_.get()), audio_buffer_.get(),
-            AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
-            &ctx_->stop_requested);
-        swapped = true;
-        prep_mode = incoming_is_pad ? "INSTANT" : "PREROLLED";
-      }
-    } else if (peek) {
-      // Identity mismatch: result was for a different block/segment. Do not consume.
-      { std::ostringstream oss;
-        oss << "[PipelineManager] SEGMENT_SEAM_PAD_FALLBACK reason=IDENTITY_MISMATCH"
-            << " expected_block=" << live_parent_block_.block_id
-            << " expected_segment=" << to_seg
-            << " result_block=" << peek->parent_block_id
-            << " result_segment=" << peek->parent_segment_index
-            << " tick=" << session_frame_index;
-        Logger::Warn(oss.str()); }
-      // Fall through to !swapped PAD fallback (do not TakeSegmentResult).
-    }
-  }
+  const char* swap_branch = "NONE";
+  bool pad_swap_used_pad_b = false;  // Recreate pad_b_* after handoff if true.
 
-  if (!swapped) {
-    // INV-SEAM-SEG-007: Segment miss — PAD fallback (no audio underflow).
-    live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
-    video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+  if (incoming_is_pad && pad_b_video_buffer_ && pad_b_audio_buffer_) {
+    // PAD seam: swap A with persistent pad B only. No A allocation.
+    video_buffer_ = std::move(pad_b_video_buffer_);
+    audio_buffer_ = std::move(pad_b_audio_buffer_);
+    live_ = std::move(pad_b_producer_);
     video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+    prep_mode = "INSTANT";
+    swap_branch = "PAD_SWAP";
+    pad_swap_used_pad_b = true;
+  } else if (segment_b_video_buffer_ && segment_b_audio_buffer_) {
+    // CONTENT: swap only — B into A slots. No allocation.
+    video_buffer_ = std::move(segment_b_video_buffer_);
+    audio_buffer_ = std::move(segment_b_audio_buffer_);
+    live_ = std::move(segment_b_producer_);
+    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+    prep_mode = "PREROLLED";
+    swap_branch = "SWAP_B_TO_A";
+  } else {
+    // INV-SEAM-SEG-007: MISS — create B (only), then move B into A slots.
+    segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+    segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+    segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
     const auto& bcfg = ctx_->buffer_config;
     int a_target = bcfg.audio_target_depth_ms;
     int a_low = bcfg.audio_low_water_ms > 0
         ? bcfg.audio_low_water_ms
         : std::max(1, a_target / 3);
-    audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+    segment_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
         a_target, buffer::kHouseAudioSampleRate,
         buffer::kHouseAudioChannels, a_low);
-    video_buffer_->StartFilling(
-        AsTickProducer(live_.get()), audio_buffer_.get(),
-        0.0, ctx_->fps,
-        &ctx_->stop_requested);
-    swapped = true;
+    segment_b_video_buffer_->StartFilling(
+        AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
+        0.0, ctx_->fps, &ctx_->stop_requested);
+    video_buffer_ = std::move(segment_b_video_buffer_);
+    audio_buffer_ = std::move(segment_b_audio_buffer_);
+    live_ = std::move(segment_b_producer_);
+    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
     prep_mode = "MISS";
+    swap_branch = "MISS";
     { std::ostringstream oss;
       oss << "[PipelineManager] SEGMENT_SEAM_PAD_FALLBACK"
           << " tick=" << session_frame_index
@@ -3045,16 +3151,22 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
       std::lock_guard<std::mutex> lock(metrics_mutex_);
       metrics_.segment_seam_miss_count++;
     }
-  } else {
+  }
+
+  if (swap_branch != "MISS") {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.segment_seam_ready_count++;
   }
+  if (incoming_is_pad && swap_branch != "MISS") {
+    std::lock_guard<std::mutex> lock(metrics_mutex_);
+    metrics_.segment_seam_pad_inline_count++;
+  }
 
-  // Step 5: Advance segment index and update next seam frame.
+  // Step 3: Advance segment index and update next seam frame.
   current_segment_index_++;
   UpdateNextSeamFrame();
 
-  // Step 6: Hand off to reaper (owners stay in job until join).
+  // Step 4: Hand off ex-A to reaper.
   ReapJob job;
   job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
   job.block_id = GetBlockIdFromProducer(outgoing_producer.get());
@@ -3064,21 +3176,38 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   job.audio_buffer = std::move(outgoing_audio_buffer);
   HandOffToReaper(std::move(job));
 
-  // Step 7: Arm next segment prep (call site #4).
+  // Step 4b: Recreate persistent pad B after PAD swap so it is ready for next PAD.
+  if (pad_swap_used_pad_b) {
+    const auto& pad_bcfg = ctx_->buffer_config;
+    int pad_a_target = pad_bcfg.audio_target_depth_ms;
+    int pad_a_low = pad_bcfg.audio_low_water_ms > 0
+        ? pad_bcfg.audio_low_water_ms
+        : std::max(1, pad_a_target / 3);
+    pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+    pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+    pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
+    pad_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
+        pad_a_target, buffer::kHouseAudioSampleRate,
+        buffer::kHouseAudioChannels, pad_a_low);
+    pad_b_video_buffer_->StartFilling(
+        AsTickProducer(pad_b_producer_.get()), pad_b_audio_buffer_.get(),
+        0.0, ctx_->fps, &ctx_->stop_requested);
+  }
+
+  // Step 5: Arm next segment prep.
   ArmSegmentPrep(session_frame_index);
 
-  // Step 7b: Fire on_segment_start for the segment transition.
   if (callbacks_.on_segment_start) {
     callbacks_.on_segment_start(from_seg, to_seg, live_parent_block_, session_frame_index);
   }
 
-  // Step 8: Log and metrics.
   { std::ostringstream oss;
     oss << "[PipelineManager] SEGMENT_SEAM_TAKE"
         << " tick=" << session_frame_index
         << " from_segment=" << from_seg << " (" << from_type << ")"
         << " to_segment=" << to_seg << " (" << to_type << ")"
         << " prep_mode=" << prep_mode
+        << " swap_branch=" << swap_branch
         << " next_seam_frame=" << FormatFenceTick(next_seam_frame_);
     Logger::Info(oss.str()); }
   {

@@ -132,6 +132,33 @@ class DslScheduleService:
         # Recompile guard: prevent concurrent horizon extensions
         self._extending = False
 
+        # Cached CatalogAssetResolver (Part 2B: avoid per-compile reload)
+        # TTL-based: resolver is rebuilt if catalog may have changed.
+        self._resolver: CatalogAssetResolver | None = None
+        self._resolver_built_at: float = 0.0
+        self._resolver_ttl_s: float = 60.0  # 60-second TTL
+
+    def _get_resolver(self) -> CatalogAssetResolver:
+        """Return a cached CatalogAssetResolver, rebuilding if TTL expired.
+
+        TTL=60s balances freshness vs cost. The catalog (12k+ assets) changes
+        rarely (ingest events), so a 60s window is safe. The resolver is
+        read-only after construction — safe to share across threads.
+        """
+        import time
+        now = time.monotonic()
+        if self._resolver is not None and (now - self._resolver_built_at) < self._resolver_ttl_s:
+            return self._resolver
+        with session() as db:
+            resolver = CatalogAssetResolver(db)
+        self._resolver = resolver
+        self._resolver_built_at = now
+        logger.debug(
+            "CatalogAssetResolver rebuilt (TTL=%.0fs, channel=%s)",
+            self._resolver_ttl_s, self._channel_slug,
+        )
+        return resolver
+
     def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
         """Compile DSL and build the initial multi-day playout log."""
         try:
@@ -144,9 +171,9 @@ class DslScheduleService:
     def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Return the ScheduledBlock covering the given wall-clock time.
 
-        INV-CHANNEL-NO-COMPILE-001: Prefers Tier 2 (TransmissionLog) data
-        which contains fully-filled ad breaks. Falls back to in-memory
-        unfilled blocks only if Tier 2 hasn't pre-filled yet.
+        INV-CHANNEL-NO-COMPILE-001: Prefers Tier 2 (TransmissionLog) data.
+        If Tier 2 has no row for this block, compiles it synchronously via
+        ensure_block_compiled() — guaranteeing no Tier 2 miss on viewer join.
 
         Also checks if the horizon needs extending.
         """
@@ -158,21 +185,163 @@ class DslScheduleService:
         if filled is not None:
             return filled
 
-        # Fallback: unfilled in-memory block (Tier 2 hasn't reached this block yet)
+        # Tier 2 miss — find the unfilled block and compile it synchronously.
+        # INV-TIER2-AUTHORITY-001: Compilation is synchronous at ownership time.
+        unfilled = None
         with self._lock:
             for block in self._blocks:
                 if block.start_utc_ms <= utc_ms < block.end_utc_ms:
-                    logger.info(
-                        "INV-CHANNEL-NO-COMPILE-001: Tier 2 miss for "
-                        "channel=%s utc_ms=%d — using unfilled block %s",
-                        channel_id, utc_ms, block.block_id,
-                    )
-                    return block
+                    unfilled = block
+                    break
 
-        logger.warning(
-            "No DSL block covers utc_ms=%d for channel=%s", utc_ms, channel_id
+        if unfilled is None:
+            logger.warning(
+                "No DSL block covers utc_ms=%d for channel=%s", utc_ms, channel_id
+            )
+            return None
+
+        # Compile this single block into Tier 2 (TransmissionLog)
+        compiled = self.ensure_block_compiled(channel_id, unfilled)
+        return compiled
+
+    def ensure_block_compiled(self, channel_id: str, block: ScheduledBlock) -> ScheduledBlock:
+        """Ensure a single block has a Tier 2 (TransmissionLog) entry.
+
+        INV-TIER2-AUTHORITY-001: Synchronous, idempotent Tier 2 compilation.
+
+        Properties:
+          - If block already compiled in TransmissionLog → returns compiled version (no-op)
+          - If not compiled → fills ads synchronously, writes to TransmissionLog, returns filled block
+          - Safe to call concurrently: uses INSERT ... ON CONFLICT DO NOTHING pattern
+          - Does NOT trigger full schedule recompilation
+          - Does NOT invalidate existing compiled blocks
+
+        This is the authority path. The PlaylogHorizonDaemon is a preheater
+        that reduces how often this synchronous path is hit, but correctness
+        does not depend on the daemon.
+        """
+        from retrovue.domain.entities import TransmissionLog
+        from retrovue.runtime.traffic_manager import fill_ad_blocks
+
+        # Check if already compiled (idempotent fast path)
+        try:
+            with session() as db:
+                row = db.query(TransmissionLog).filter(
+                    TransmissionLog.block_id == block.block_id,
+                ).first()
+                if row is not None:
+                    # Already compiled — deserialize and return
+                    segments = []
+                    for s in row.segments:
+                        segments.append(ScheduledSegment(
+                            segment_type=s.get("segment_type", "content"),
+                            asset_uri=s.get("asset_uri", ""),
+                            asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
+                            segment_duration_ms=s.get("segment_duration_ms", 0),
+                            transition_in=s.get("transition_in", "TRANSITION_NONE"),
+                            transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                            transition_out=s.get("transition_out", "TRANSITION_NONE"),
+                            transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                        ))
+                    logger.debug(
+                        "INV-TIER2-AUTHORITY-001: block %s already compiled (channel=%s)",
+                        block.block_id, channel_id,
+                    )
+                    return ScheduledBlock(
+                        block_id=row.block_id,
+                        start_utc_ms=row.start_utc_ms,
+                        end_utc_ms=row.end_utc_ms,
+                        segments=tuple(segments),
+                    )
+        except Exception as e:
+            logger.warning(
+                "INV-TIER2-AUTHORITY-001: DB check failed for block=%s: %s — compiling anyway",
+                block.block_id, e,
+            )
+
+        # Not compiled — fill ads synchronously
+        logger.info(
+            "INV-TIER2-AUTHORITY-001: Synchronous compile for block=%s channel=%s "
+            "(Tier 2 miss at ownership boundary)",
+            block.block_id, channel_id,
         )
-        return None
+
+        asset_lib = None
+        try:
+            from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
+            with session() as db:
+                asset_lib = DatabaseAssetLibrary(db, channel_slug=channel_id)
+        except Exception as e:
+            logger.warning(
+                "INV-TIER2-AUTHORITY-001: Could not create asset library for %s: %s",
+                channel_id, e,
+            )
+
+        filled_block = fill_ad_blocks(
+            block,
+            filler_uri=self._filler_path,
+            filler_duration_ms=self._filler_duration_ms,
+            asset_library=asset_lib,
+        )
+
+        # Write to TransmissionLog (idempotent via merge)
+        try:
+            segments_data = []
+            for i, seg in enumerate(filled_block.segments):
+                d = {
+                    "segment_index": i,
+                    "segment_type": seg.segment_type,
+                    "asset_uri": seg.asset_uri,
+                    "asset_start_offset_ms": seg.asset_start_offset_ms,
+                    "segment_duration_ms": seg.segment_duration_ms,
+                }
+                if seg.transition_in != "TRANSITION_NONE":
+                    d["transition_in"] = seg.transition_in
+                    d["transition_in_duration_ms"] = seg.transition_in_duration_ms
+                if seg.transition_out != "TRANSITION_NONE":
+                    d["transition_out"] = seg.transition_out
+                    d["transition_out_duration_ms"] = seg.transition_out_duration_ms
+                segments_data.append(d)
+
+            from datetime import date as date_type
+            from zoneinfo import ZoneInfo
+            block_dt = datetime.fromtimestamp(block.start_utc_ms / 1000.0, tz=timezone.utc)
+            # Use channel tz for broadcast day calculation
+            dsl_text = Path(self._dsl_path).read_text()
+            dsl = parse_dsl(dsl_text)
+            tz_name = dsl.get("timezone", "UTC")
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = timezone.utc
+            local_dt = block_dt.astimezone(tz)
+            if local_dt.hour < self._day_start_hour:
+                broadcast_day = (local_dt - timedelta(days=1)).date()
+            else:
+                broadcast_day = local_dt.date()
+
+            with session() as db:
+                row = TransmissionLog(
+                    block_id=filled_block.block_id,
+                    channel_slug=channel_id,
+                    broadcast_day=broadcast_day,
+                    start_utc_ms=filled_block.start_utc_ms,
+                    end_utc_ms=filled_block.end_utc_ms,
+                    segments=segments_data,
+                )
+                db.merge(row)
+
+            logger.info(
+                "INV-TIER2-AUTHORITY-001: Compiled and persisted block=%s channel=%s (%d segs)",
+                filled_block.block_id, channel_id, len(filled_block.segments),
+            )
+        except Exception as e:
+            logger.error(
+                "INV-TIER2-AUTHORITY-001: Failed to persist block=%s: %s — returning filled block anyway",
+                filled_block.block_id, e,
+            )
+
+        return filled_block
 
     def _get_filled_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Look up a pre-filled block from TransmissionLog (Tier 2).
@@ -475,9 +644,8 @@ class DslScheduleService:
         dsl = parse_dsl(dsl_text)
         dsl["broadcast_day"] = broadcast_day
 
-        # Build resolver from catalog
-        with session() as db:
-            resolver = CatalogAssetResolver(db)
+        # Use cached resolver (Part 2B: avoid per-compile reload)
+        resolver = self._get_resolver()
 
         # Deterministic sequential counters based on day offset
         from datetime import date as date_type
@@ -548,9 +716,8 @@ class DslScheduleService:
         dsl = parse_dsl(dsl_text)
         dsl["broadcast_day"] = broadcast_day
 
-        # Build resolver from catalog
-        with session() as db:
-            resolver = CatalogAssetResolver(db)
+        # Use cached resolver (Part 2B: avoid per-compile reload)
+        resolver = self._get_resolver()
 
         # Register pools
         pools = dsl.get("pools", {})

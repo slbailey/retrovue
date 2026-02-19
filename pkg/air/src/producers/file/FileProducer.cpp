@@ -2149,7 +2149,31 @@ namespace retrovue::producers::file
     }
     if (pts_us <= last_mt_pts_us_)
     {
+      std::cout
+        << "[MT_REPAIR_TRIGGERED]"
+        << " asset=" << config_.asset_uri
+        << " raw_pts=" << raw_mt_pts_us
+        << " last_mt=" << last_mt_pts_us_
+        << " repaired_to=" << (last_mt_pts_us_ + frame_interval_us_)
+        << " frame_interval_us=" << frame_interval_us_
+        << " source_fps=" << source_fps_
+        << " target_fps=" << config_.target_fps
+        << std::endl;
       pts_us = last_mt_pts_us_ + frame_interval_us_;
+    }
+    // First 10 frame MT deltas for Ricola (diagnostic for 60fps→30fps resample slope)
+    if (config_.asset_uri.find("Ricola") != std::string::npos &&
+        debug_mt_delta_count_ < 10)
+    {
+      std::cout
+        << "[MT_DELTA]"
+        << " asset=" << config_.asset_uri
+        << " pts_us=" << pts_us
+        << " delta=" << (pts_us - last_mt_pts_us_)
+        << " source_fps=" << source_fps_
+        << " target_fps=" << config_.target_fps
+        << std::endl;
+      debug_mt_delta_count_++;
     }
     // DOMAIN MIXING DETECTION: If raw decoder MT is small (<1s) but corrected pts_us
     // is large (>1s), we're mixing MT with CT. This catches the case where last_mt_pts_us_

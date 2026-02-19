@@ -47,6 +47,7 @@ struct SeamRequest {
 struct SeamResult {
   std::unique_ptr<producers::IProducer> producer;
   int audio_prime_depth_ms = 0;
+  int video_primed_frames = 0;  // At least 1 after PrimeFirstTick
   SeamRequestType type;
   std::string block_id;      // For logging correlation
   int32_t segment_index = -1;
@@ -54,6 +55,13 @@ struct SeamResult {
   // Identity: which parent block and segment index this result is for (for swap validation).
   std::string parent_block_id;
   int32_t parent_segment_index = -1;
+};
+
+// Readiness peek for segment swap gate (no ownership transfer).
+struct SegmentReadiness {
+  int audio_prime_depth_ms = 0;
+  int video_primed_frames = 0;
+  SegmentType segment_type = SegmentType::kContent;
 };
 
 // Lightweight identity for PeekSegmentResult (no ownership).
@@ -87,6 +95,10 @@ class SeamPreparer {
 
   // Peek segment result identity without consuming (for swap validation).
   std::optional<SeamResultIdentity> PeekSegmentResult() const;
+
+  // Peek segment readiness for swap gate (identity must match). Does not consume.
+  std::optional<SegmentReadiness> PeekSegmentReadiness(
+      const std::string& parent_block_id, int32_t parent_segment_index) const;
 
   // Move result out (ownership transfer).  Returns nullptr if no result.
   std::unique_ptr<SeamResult> TakeSegmentResult();

@@ -52,7 +52,7 @@ def _count_slots_in_dsl(dsl: dict[str, Any]) -> int:
     return count
 
 
-def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[str, Any]]:
+def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: CatalogAssetResolver | None = None) -> list[dict[str, Any]]:
     """Compile a single channel's DSL for a broadcast day and return EPG entries.
     
     Uses deterministic sequential counters based on the broadcast day offset
@@ -63,8 +63,9 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str) -> list[dict[s
     dsl = parse_dsl(dsl_text)
     dsl["broadcast_day"] = broadcast_day
 
-    with session() as db:
-        resolver = CatalogAssetResolver(db)
+    if resolver is None:
+        with session() as db:
+            resolver = CatalogAssetResolver(db)
 
     # Calculate deterministic counter offset based on day number from epoch
     # This ensures each day starts at the right episode regardless of
@@ -156,10 +157,14 @@ async def get_epg(
     if channel:
         channels = [c for c in channels if c["channel_id"] == channel]
 
+    # Part 2A: Build resolver once per EPG request, not per channel.
+    with session() as db:
+        shared_resolver = CatalogAssetResolver(db)
+
     all_entries = []
     for ch in channels:
         try:
-            entries = _compile_epg(ch, broadcast_day)
+            entries = _compile_epg(ch, broadcast_day, resolver=shared_resolver)
             all_entries.extend(entries)
         except Exception as e:
             logger.error(f"Failed to compile EPG for {ch['channel_id']}: {e}", exc_info=True)

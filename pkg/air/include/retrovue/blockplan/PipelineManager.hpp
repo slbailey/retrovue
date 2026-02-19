@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -44,7 +45,16 @@ class EncoderPipeline;
 
 namespace retrovue::blockplan {
 
+// Incoming segment state for segment seam swap eligibility gate.
+struct IncomingState {
+  int incoming_audio_ms = 0;
+  int incoming_video_frames = 0;
+  bool is_pad = false;
+  SegmentType segment_type = SegmentType::kContent;
+};
+
 class PadProducer;
+class TickProducer;
 struct FrameData;
 struct FrameFingerprint;
 struct BlockPlaybackSummary;
@@ -267,16 +277,26 @@ class PipelineManager : public IPlayoutExecutionEngine {
   enum class SeamType { kSegment, kBlock, kNone };
   SeamType next_seam_type_ = SeamType::kNone;
 
-  // Segment preview (mirrors preview_ / preview_video_buffer_ / preview_audio_buffer_)
-  std::unique_ptr<producers::IProducer> segment_preview_;
-  std::unique_ptr<VideoLookaheadBuffer> segment_preview_video_buffer_;
-  std::unique_ptr<AudioLookaheadBuffer> segment_preview_audio_buffer_;
+  // A/B segment chain: B slot holds incoming segment until swap. Swap is pointer swap only.
+  // Legacy segment_preview_* path fully decommissioned; no segment_preview_* members or branches.
+  std::unique_ptr<producers::IProducer> segment_b_producer_;
+  std::unique_ptr<VideoLookaheadBuffer> segment_b_video_buffer_;
+  std::unique_ptr<AudioLookaheadBuffer> segment_b_audio_buffer_;
+
+  // Swap deferral: log at most once per seam frame (avoid spam).
+  int64_t last_logged_defer_seam_frame_ = -1;
 
   // Segment seam private methods
   void ComputeSegmentSeamFrames();
   void UpdateNextSeamFrame();
   void ArmSegmentPrep(int64_t session_frame_index);
+  // Ensures B (segment_b_*) is created and StartFilling for to_seg before eligibility gate.
+  void EnsureIncomingBReadyForSeam(int32_t to_seg, int64_t session_frame_index);
   void PerformSegmentSwap(int64_t session_frame_index);
+
+  // Segment seam eligibility gate: minimum readiness before swapping.
+  bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;
+  std::optional<IncomingState> GetIncomingSegmentState(int32_t to_seg) const;
 
   // Static helper: build synthetic single-segment FedBlock for segment prep.
   static FedBlock MakeSyntheticSegmentBlock(
@@ -285,6 +305,13 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // INV-PAD-PRODUCER: Session-lifetime pad source. Created once in Run().
   std::unique_ptr<PadProducer> pad_producer_;
+
+  // Persistent pad B chain: created once at session init, always-ready for PAD seams.
+  // At PAD seam we swap A with pad_b_* only (no A allocation). After handoff we
+  // recreate pad_b_* so the chain is ready for the next PAD.
+  std::unique_ptr<TickProducer> pad_b_producer_;
+  std::unique_ptr<VideoLookaheadBuffer> pad_b_video_buffer_;
+  std::unique_ptr<AudioLookaheadBuffer> pad_b_audio_buffer_;
 
   // INV-FENCE-TAKE-READY-001 / preroll ownership: block_id we submitted for next fence.
   std::string expected_preroll_block_id_;

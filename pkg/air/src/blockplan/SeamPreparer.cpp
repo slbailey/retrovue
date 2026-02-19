@@ -75,6 +75,21 @@ std::optional<SeamResultIdentity> SeamPreparer::PeekSegmentResult() const {
   return id;
 }
 
+std::optional<SegmentReadiness> SeamPreparer::PeekSegmentReadiness(
+    const std::string& parent_block_id, int32_t parent_segment_index) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!segment_result_) return std::nullopt;
+  if (segment_result_->parent_block_id != parent_block_id ||
+      segment_result_->parent_segment_index != parent_segment_index) {
+    return std::nullopt;
+  }
+  SegmentReadiness r;
+  r.audio_prime_depth_ms = segment_result_->audio_prime_depth_ms;
+  r.video_primed_frames = segment_result_->video_primed_frames;
+  r.segment_type = segment_result_->segment_type;
+  return r;
+}
+
 std::unique_ptr<SeamResult> SeamPreparer::TakeSegmentResult() {
   std::lock_guard<std::mutex> lock(mutex_);
   return std::move(segment_result_);
@@ -291,6 +306,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   auto result = std::make_unique<SeamResult>();
   result->producer = std::move(source);
   result->audio_prime_depth_ms = prime_result.actual_depth_ms;
+  result->video_primed_frames = 1;  // PrimeFirstTick guarantees at least one frame
   result->type = req.type;
   result->block_id = req.block.block_id;
   result->segment_index = req.segment_index;
