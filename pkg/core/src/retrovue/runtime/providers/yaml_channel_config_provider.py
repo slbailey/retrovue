@@ -155,11 +155,15 @@ class YamlChannelConfigProvider:
 
         grid_minutes = fmt.get("grid_minutes", data.get("grid_minutes", 30))
 
+        # Channel timezone for broadcast day computation (used by PlaylogHorizonDaemon)
+        channel_tz = data.get("timezone", "UTC")
+
         schedule_config = {
             "dsl_path": str(yaml_file),
             "filler_path": filler_path,
             "filler_duration_ms": filler_duration_ms,
             "grid_minutes": grid_minutes,
+            "channel_tz": channel_tz,
         }
 
         config = ChannelConfig(
