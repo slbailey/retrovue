@@ -393,6 +393,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SeamContinuityEngineContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamRaceConditionFixTests.cpp
+  tests/contracts/BlockPlan/DegradedTakeModeContractTests.cpp
   tests/blockplan/test_segment_aware_playback_proof.cpp
 )
 

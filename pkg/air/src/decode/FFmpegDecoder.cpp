@@ -34,6 +34,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/samplefmt.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/error.h>
 #include <libavutil/log.h>  // For av_log_set_level
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
@@ -79,24 +80,33 @@ bool FFmpegDecoder::Open() {
     format_ctx_->interrupt_callback.opaque = &interrupt_flags_;
   }
 
-  // Open input file
-  if (avformat_open_input(&format_ctx_, config_.input_uri.c_str(), nullptr, nullptr) < 0) {
-    std::cerr << "[FFmpegDecoder] Failed to open input: " << config_.input_uri << std::endl;
+  // Open input file — DECODER_STEP: open_input
+  int ret = avformat_open_input(&format_ctx_, config_.input_uri.c_str(), nullptr, nullptr);
+  if (ret < 0) {
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(ret, errbuf, sizeof(errbuf));
+    std::cerr << "[FFmpegDecoder] DECODER_STEP open_input FAILED uri=" << config_.input_uri
+              << " ret=" << ret << " err=" << errbuf << std::endl;
     avformat_free_context(format_ctx_);
     format_ctx_ = nullptr;
     return false;
   }
 
-  // Retrieve stream information
-  if (avformat_find_stream_info(format_ctx_, nullptr) < 0) {
-    std::cerr << "[FFmpegDecoder] Failed to find stream info" << std::endl;
+  // Retrieve stream information — DECODER_STEP: avformat_find_stream_info
+  ret = avformat_find_stream_info(format_ctx_, nullptr);
+  if (ret < 0) {
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(ret, errbuf, sizeof(errbuf));
+    std::cerr << "[FFmpegDecoder] DECODER_STEP avformat_find_stream_info FAILED uri="
+              << config_.input_uri << " ret=" << ret << " err=" << errbuf << std::endl;
     Close();
     return false;
   }
 
-  // Find video stream
+  // Find video stream — DECODER_STEP: find_video_stream
   if (!FindVideoStream()) {
-    std::cerr << "[FFmpegDecoder] No video stream found" << std::endl;
+    std::cerr << "[FFmpegDecoder] DECODER_STEP find_video_stream FAILED uri="
+              << config_.input_uri << " (no video stream)" << std::endl;
     Close();
     return false;
   }
@@ -104,9 +114,10 @@ bool FFmpegDecoder::Open() {
   // Find audio stream (optional)
   FindAudioStream();
 
-  // Initialize codec
+  // Initialize codec — DECODER_STEP: initialize_codec
   if (!InitializeCodec()) {
-    std::cerr << "[FFmpegDecoder] Failed to initialize codec" << std::endl;
+    std::cerr << "[FFmpegDecoder] DECODER_STEP initialize_codec FAILED uri="
+              << config_.input_uri << std::endl;
     Close();
     return false;
   }
@@ -132,22 +143,25 @@ bool FFmpegDecoder::Open() {
     std::cout << "[FFmpegDecoder] No audio stream found in file" << std::endl;
   }
 
-  // Initialize scaler
+  // Initialize scaler — DECODER_STEP: initialize_scaler
   if (!InitializeScaler()) {
-    std::cerr << "[FFmpegDecoder] Failed to initialize scaler" << std::endl;
+    std::cerr << "[FFmpegDecoder] DECODER_STEP initialize_scaler FAILED uri="
+              << config_.input_uri << std::endl;
     Close();
     return false;
   }
 
-  // Allocate packet
+  // Allocate packet — DECODER_STEP: packet_alloc
   packet_ = av_packet_alloc();
   if (!packet_) {
-    std::cerr << "[FFmpegDecoder] Failed to allocate packet" << std::endl;
+    std::cerr << "[FFmpegDecoder] DECODER_STEP packet_alloc FAILED uri="
+              << config_.input_uri << std::endl;
     Close();
     return false;
   }
 
-  std::cout << "[FFmpegDecoder] Opened successfully: " << GetVideoWidth() << "x" 
+  std::cout << "[FFmpegDecoder] DECODER_STEP open_input OK uri=" << config_.input_uri
+            << " " << GetVideoWidth() << "x" 
             << GetVideoHeight() << " @ " << GetVideoFPS() << " fps" << std::endl;
 
   return true;
@@ -268,11 +282,14 @@ bool FFmpegDecoder::SeekToMs(int64_t position_ms) {
                                     {1, AV_TIME_BASE},
                                     stream->time_base);
 
-  // Seek to keyframe before the target position
+  // Seek to keyframe before the target position — DECODER_STEP: seek
   int ret = av_seek_frame(format_ctx_, video_stream_index_, timestamp,
                           AVSEEK_FLAG_BACKWARD);
   if (ret < 0) {
-    std::cerr << "[FFmpegDecoder] Seek failed to " << position_ms << "ms" << std::endl;
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(ret, errbuf, sizeof(errbuf));
+    std::cerr << "[FFmpegDecoder] DECODER_STEP seek FAILED position_ms=" << position_ms
+              << " ret=" << ret << " err=" << errbuf << std::endl;
     return false;
   }
 

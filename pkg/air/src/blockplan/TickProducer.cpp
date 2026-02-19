@@ -76,9 +76,8 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   if (!all_probed) {
     decoder_ok_ = false;
     state_ = State::kReady;
-    std::cout << "[TickProducer] Block assigned (no decoder — probe failed): "
-              << block.block_id << " frames_per_block=" << frames_per_block_
-              << std::endl;
+    std::cout << "[TickProducer] DECODER_STEP block_id=" << block.block_id
+              << " step=probe result=fail (asset probe failed)" << std::endl;
     return;
   }
 
@@ -92,8 +91,8 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   if (!result.valid) {
     decoder_ok_ = false;
     state_ = State::kReady;
-    std::cerr << "[TickProducer] Validation failed: " << result.detail
-              << std::endl;
+    std::cout << "[TickProducer] DECODER_STEP block_id=" << block.block_id
+              << " step=validation result=fail detail=" << result.detail << std::endl;
     return;
   }
 
@@ -138,8 +137,9 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
   if (!decoder_->Open()) {
-    std::cerr << "[TickProducer] Failed to open decoder: "
-              << first_seg.asset_uri << std::endl;
+    std::cout << "[TickProducer] DECODER_STEP block_id=" << block.block_id
+              << " step=open result=fail asset_uri=" << first_seg.asset_uri
+              << " (see FFmpegDecoder DECODER_STEP for exact stage)" << std::endl;
     decoder_.reset();
     decoder_ok_ = false;
     state_ = State::kReady;
@@ -150,8 +150,9 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   if (first_seg.asset_start_offset_ms > 0) {
     int preroll = decoder_->SeekPreciseToMs(first_seg.asset_start_offset_ms);
     if (preroll < 0) {
-      std::cerr << "[TickProducer] Seek failed to "
-                << first_seg.asset_start_offset_ms << "ms" << std::endl;
+      std::cout << "[TickProducer] DECODER_STEP block_id=" << block.block_id
+                << " step=seek result=fail offset_ms=" << first_seg.asset_start_offset_ms
+                << " (see FFmpegDecoder DECODER_STEP seek)" << std::endl;
       decoder_.reset();
       decoder_ok_ = false;
       state_ = State::kReady;
