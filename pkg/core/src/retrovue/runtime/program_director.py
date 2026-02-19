@@ -1883,6 +1883,10 @@ class ProgramDirector:
             if channel:
                 channels = [c for c in channels if c["channel_id"] == channel]
 
+            # Part 2: Build resolver once per EPG request, not per channel
+            with session() as db:
+                _shared_resolver = CatalogAssetResolver(db)
+
             all_entries = []
             for ch in channels:
                 try:
@@ -1891,8 +1895,7 @@ class ProgramDirector:
                     dsl = parse_dsl(dsl_text)
                     dsl["broadcast_day"] = broadcast_day
 
-                    with session() as db:
-                        resolver = CatalogAssetResolver(db)
+                    resolver = _shared_resolver
 
                     # Deterministic sequential counters based on day offset
                     from datetime import date as _date_type

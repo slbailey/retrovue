@@ -336,6 +336,7 @@ namespace retrovue::producers::file
     int frames_since_producer_start_;  // Frames since this producer started
     int audio_skip_count_;        // Audio frames skipped waiting for video epoch
     int audio_drop_count_;
+    int debug_mt_delta_count_ = 0;  // Ricola-only: first 10 MT deltas (diagnostic)
     // ======================================================================
     // INV-FPS-RESAMPLE: PTS-driven output tick resampling (frame synchronizer)
     // ======================================================================

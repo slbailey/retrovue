@@ -4,6 +4,9 @@
 //          Provides immutable black video and silence audio with zero per-tick
 //          allocations.  PadProducer is NOT an ITickProducer — it is a data
 //          source selected by the TAKE at the commitment point.
+//          Loopable / infinite: VideoFrame() and SilenceTemplate() return the
+//          same pre-allocated buffers every call; no frame count or exhaustion.
+//          Safe for 1–2 frame PAD segments and indefinite continuous output.
 // Contract Reference: INV-PAD-PRODUCER
 // Copyright (c) 2025 RetroVue
 
@@ -67,7 +70,8 @@ class PadProducer {
         sizeof(int16_t), 0);
   }
 
-  // Pre-allocated black YUV420P frame (Y=16, U=V=128).  Immutable.
+  // Pre-allocated black YUV420P frame (Y=16, U=V=128).  Immutable; same frame
+  // every call — loopable indefinitely at target fps.
   const buffer::Frame& VideoFrame() const { return video_frame_; }
 
   // Pre-allocated max-sized silence buffer (all zeros).  Caller sets

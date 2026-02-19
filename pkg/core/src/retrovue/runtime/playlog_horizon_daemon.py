@@ -96,10 +96,16 @@ class PlaylogHorizonDaemon:
     def evaluate_once(self) -> int:
         """Evaluate Tier 2 depth and extend if below threshold.
 
+        INV-PLAYLOG-COVERAGE-HOLE-001: Ensures Tier 2 always covers the block
+        containing now_ms (backfill current block if missing) before forward fill.
+
         Returns the number of blocks filled in this evaluation.
         """
         now_ms = self._now_utc_ms()
         self._last_evaluation_utc_ms = now_ms
+
+        # Pre-step: ensure Tier 2 covers the block containing now (backfill if hole)
+        backfill_count = self._ensure_tier2_covers_now(now_ms)
 
         # Discover current Tier 2 frontier
         frontier_ms = self._get_frontier_utc_ms()
@@ -115,10 +121,10 @@ class PlaylogHorizonDaemon:
                 "PlaylogHorizon[%s]: depth=%.1fh >= %.1fh — no extension needed",
                 self._channel_id, depth_ms / 3_600_000, target_ms / 3_600_000,
             )
-            return 0
+            return backfill_count
 
         # Need to extend: find blocks from Tier 1 that don't yet have Tier 2 entries
-        blocks_filled = self._extend_to_target(now_ms, target_ms)
+        blocks_filled = backfill_count + self._extend_to_target(now_ms, target_ms)
 
         if blocks_filled > 0:
             self._consecutive_zero_fills = 0
@@ -277,6 +283,92 @@ class PlaylogHorizonDaemon:
             scan_date += timedelta(days=1)
 
         return blocks_filled
+
+    def _ensure_tier2_covers_now(self, now_ms: int) -> int:
+        """Backfill the Tier-1 block containing now_ms if Tier-2 has no row covering it.
+
+        INV-PLAYLOG-COVERAGE-HOLE-001: Ensures Tier 2 always covers the block that
+        contains now_ms (e.g. daemon started late or Tier-2 was empty). Backfill
+        allowed only if now_ms < block_end (do not backfill wholly-past blocks).
+
+        Returns 1 if a block was filled, 0 otherwise.
+        """
+        if self._tier2_row_covers_now(now_ms):
+            return 0
+
+        block = self._get_tier1_block_containing(now_ms)
+        if block is None:
+            return 0
+
+        block_end = block["end_utc_ms"]
+        if now_ms >= block_end:
+            return 0
+
+        block_id = block["block_id"]
+        logger.warning(
+            "INV-PLAYLOG-COVERAGE-HOLE-001: missing Tier2 coverage for now_ms=%d "
+            "backfilling block_id=%s",
+            now_ms, block_id,
+        )
+
+        try:
+            from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
+
+            scheduled_block = _deserialize_scheduled_block(block)
+            filled_block = self._fill_ads(scheduled_block)
+            block_start_dt = datetime.fromtimestamp(
+                block["start_utc_ms"] / 1000.0, tz=timezone.utc
+            )
+            broadcast_day = self._broadcast_date_for(block_start_dt)
+            self._write_to_txlog(filled_block, broadcast_day)
+
+            self._last_fill_block_id = block_id
+            if block_end > self._farthest_end_utc_ms:
+                self._farthest_end_utc_ms = block_end
+            return 1
+        except Exception as e:
+            self._fill_errors += 1
+            logger.error(
+                "PlaylogHorizon[%s]: backfill failed for block=%s: %s",
+                self._channel_id, block_id, e,
+            )
+            return 0
+
+    def _tier2_row_covers_now(self, now_ms: int) -> bool:
+        """True if TransmissionLog has a row covering now_ms (by time window)."""
+        from retrovue.infra.uow import session as db_session_factory
+        from retrovue.domain.entities import TransmissionLog
+
+        try:
+            with db_session_factory() as db:
+                return (
+                    db.query(TransmissionLog)
+                    .filter(
+                        TransmissionLog.channel_slug == self._channel_id,
+                        TransmissionLog.start_utc_ms <= now_ms,
+                        TransmissionLog.end_utc_ms > now_ms,
+                    )
+                    .first()
+                    is not None
+                )
+        except Exception:
+            return False
+
+    def _get_tier1_block_containing(self, now_ms: int) -> dict | None:
+        """Return the Tier-1 segmented block dict that contains now_ms, or None.
+
+        Checks broadcast_date(now) and broadcast_date(now)-1 for day-boundary blocks.
+        """
+        now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
+        bd = self._broadcast_date_for(now_dt)
+        for scan_date in (bd - timedelta(days=1), bd):
+            blocks = self._load_tier1_blocks(scan_date)
+            if blocks is None:
+                continue
+            for sb_dict in blocks:
+                if sb_dict["start_utc_ms"] <= now_ms < sb_dict["end_utc_ms"]:
+                    return sb_dict
+        return None
 
     def _load_tier1_blocks(self, broadcast_day: date) -> list[dict] | None:
         """Load segmented_blocks from CompiledProgramLog (Tier 1)."""
