@@ -832,6 +832,7 @@ class ProgramDirector:
                 filler_path=sc.get("filler_path", "/opt/retrovue/assets/filler.mp4"),
                 filler_duration_ms=sc.get("filler_duration_ms", 3_650_000),
                 master_clock=self._embedded_clock,
+                channel_tz=sc.get("channel_tz", "UTC"),
             )
 
             # Readiness gate: synchronous initial evaluation

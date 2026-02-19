@@ -24,6 +24,7 @@ import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class PlaylogHorizonDaemon:
         filler_path: str = "/opt/retrovue/assets/filler.mp4",
         filler_duration_ms: int = 3_650_000,
         master_clock=None,
+        channel_tz: str = "UTC",
     ):
         self._channel_id = channel_id
         self._min_hours = min_hours
@@ -73,8 +75,10 @@ class PlaylogHorizonDaemon:
         self._filler_path = filler_path
         self._filler_duration_ms = filler_duration_ms
         self._clock = master_clock
+        self._channel_tz = ZoneInfo(channel_tz)
 
         # State
+        self._consecutive_zero_fills: int = 0
         self._farthest_end_utc_ms: int = 0
         self._last_evaluation_utc_ms: int = 0
         self._last_fill_block_id: str | None = None
@@ -106,6 +110,7 @@ class PlaylogHorizonDaemon:
         target_ms = self._min_hours * 3_600_000
 
         if depth_ms >= target_ms:
+            self._consecutive_zero_fills = 0
             logger.debug(
                 "PlaylogHorizon[%s]: depth=%.1fh >= %.1fh — no extension needed",
                 self._channel_id, depth_ms / 3_600_000, target_ms / 3_600_000,
@@ -116,10 +121,30 @@ class PlaylogHorizonDaemon:
         blocks_filled = self._extend_to_target(now_ms, target_ms)
 
         if blocks_filled > 0:
+            self._consecutive_zero_fills = 0
             logger.info(
                 "PlaylogHorizon[%s]: filled %d blocks, depth now %.1fh",
                 self._channel_id, blocks_filled,
                 max(0, self._farthest_end_utc_ms - now_ms) / 3_600_000,
+            )
+        else:
+            self._consecutive_zero_fills += 1
+            frontier_dt = datetime.fromtimestamp(
+                self._farthest_end_utc_ms / 1000.0, tz=timezone.utc
+            ) if self._farthest_end_utc_ms > 0 else None
+            now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
+            logger.warning(
+                "PlaylogHorizon[%s]: INV-PLAYLOG-HORIZON-002 VIOLATION: "
+                "depth=%.1fh < target=%.1fh but 0 blocks filled "
+                "(consecutive_zeros=%d, frontier=%s, now=%s, "
+                "scan_start_bd=%s, errors=%d)",
+                self._channel_id,
+                depth_ms / 3_600_000, target_ms / 3_600_000,
+                self._consecutive_zero_fills,
+                frontier_dt.isoformat() if frontier_dt else "none",
+                now_dt.isoformat(),
+                self._broadcast_date_for(now_dt).isoformat(),
+                self._fill_errors,
             )
 
         return blocks_filled
@@ -186,7 +211,10 @@ class PlaylogHorizonDaemon:
         cursor_dt = datetime.fromtimestamp(cursor_ms / 1000.0, tz=timezone.utc)
         target_dt = datetime.fromtimestamp(target_end_ms / 1000.0, tz=timezone.utc)
 
-        scan_date = self._broadcast_date_for(cursor_dt)
+        # INV-PLAYLOG-HORIZON-TZ-001: Start scan 1 day earlier than computed
+        # broadcast day to handle blocks near the day boundary that might
+        # belong to the previous broadcast day's compiled schedule.
+        scan_date = self._broadcast_date_for(cursor_dt) - timedelta(days=1)
         end_date = self._broadcast_date_for(target_dt) + timedelta(days=1)
 
         while scan_date <= end_date and cursor_ms < target_end_ms:
@@ -425,9 +453,17 @@ class PlaylogHorizonDaemon:
             self._stop_event.wait(timeout=self._eval_interval_s)
 
     def _broadcast_date_for(self, dt: datetime) -> date:
-        if dt.hour < self._day_start_hour:
-            return (dt - timedelta(days=1)).date()
-        return dt.date()
+        """Compute broadcast day using the channel's local timezone.
+
+        INV-PLAYLOG-HORIZON-TZ-001: Broadcast day boundary MUST be computed
+        in the channel's configured timezone, not UTC. A channel with
+        programming_day_start_hour=6 and tz=America/New_York starts its
+        broadcast day at 06:00 EST (11:00 UTC), not 06:00 UTC.
+        """
+        local_dt = dt.astimezone(self._channel_tz)
+        if local_dt.hour < self._day_start_hour:
+            return (local_dt - timedelta(days=1)).date()
+        return local_dt.date()
 
     def _now_utc_ms(self) -> int:
         if self._clock is not None:
