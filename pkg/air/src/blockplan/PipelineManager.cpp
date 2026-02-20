@@ -55,12 +55,6 @@ extern "C" {
 #include <unistd.h>
 #endif
 
-
-
-#ifndef GIT_SHA
-#define GIT_SHA "unknown"
-#endif
-
 namespace retrovue::blockplan {
 
 using retrovue::util::Logger;
@@ -85,30 +79,6 @@ static constexpr int kMinSegmentPrepHeadroomFrames = 8;
 static std::string FormatFenceTick(int64_t tick) {
   if (tick == std::numeric_limits<int64_t>::max()) return "UNARMED";
   return std::to_string(tick);
-}
-
-
-// FORENSIC: Session epoch for monotonic timestamps (set once per session in Run()).
-static std::chrono::steady_clock::time_point g_session_epoch;
-
-inline int64_t MonoMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - g_session_epoch).count();
-}
-
-// FORENSIC: RequestStop — always logs provenance when stop_requested is set.
-inline void RequestStop(BlockPlanSessionContext* ctx, const char* reason,
-                        int64_t frame, const char* file, int line,
-                        int err_no = 0, int queue_depth = -1) {
-  ctx->stop_requested.store(true, std::memory_order_release);
-  std::ostringstream oss;
-  oss << "[STOP_PROVENANCE] reason=" << reason
-      << " t_mono_ms=" << MonoMs()
-      << " frame=" << frame
-      << " file=" << file << " line=" << line;
-  if (err_no != 0) oss << " errno=" << err_no;
-  if (queue_depth >= 0) oss << " queue_depth=" << queue_depth;
-  Logger::Error(oss.str());
 }
 
 // INV-FENCE-TAKE-READY-001: Max time (ms) to hold last A frame before escalating to standby (slot 'S').
@@ -143,7 +113,7 @@ void PipelineManager::Start() {
 
 void PipelineManager::Stop() {
   if (!started_) return;
-  RequestStop(ctx_, "external_stop", -1, __FILE__, __LINE__);
+  ctx_->stop_requested.store(true, std::memory_order_release);
   ctx_->queue_cv.notify_all();
   seam_preparer_->Cancel();
   if (thread_.joinable()) {
@@ -529,10 +499,6 @@ void PipelineManager::Run() {
   // 1. SESSION SETUP
   // ========================================================================
   auto session_start_time = std::chrono::steady_clock::now();
-  g_session_epoch = session_start_time;  // FORENSIC: anchor for MonoMs()
-  { std::ostringstream oss;
-    oss << "[AIR_BUILD] git_sha=" << GIT_SHA << " channel=" << ctx_->channel_id;
-    Logger::Info(oss.str()); }
   {
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.session_start_epoch_ms =
@@ -626,17 +592,13 @@ void PipelineManager::Run() {
   // output_detached is checked in the tick loop condition for immediate exit
   // without waiting for the next boundary check or spamming write errors.
   std::atomic<bool> output_detached{false};
-  std::atomic<int64_t> current_frame_index{0};  // FORENSIC: readable from detach lambda
   socket_sink->SetDetachOnOverflow(true);
-  socket_sink->SetDetachCallback([this, &output_detached, &current_frame_index, &socket_sink](const std::string& reason) {
-    int saved_errno = errno;
-    int64_t frame = current_frame_index.load(std::memory_order_relaxed);
-    int qdepth = socket_sink ? static_cast<int>(socket_sink->GetCurrentBufferSize()) : -1;
+  socket_sink->SetDetachCallback([this, &output_detached](const std::string& reason) {
     { std::ostringstream oss;
       oss << "[PipelineManager] SocketSink detach: " << reason;
       Logger::Error(oss.str()); }
     output_detached.store(true, std::memory_order_release);
-    RequestStop(ctx_, "socket_sink_detach", frame, __FILE__, __LINE__, saved_errno, qdepth);
+    ctx_->stop_requested.store(true, std::memory_order_release);
   });
 
   // Write callback context: enqueue into SocketSink (blocking if full).
@@ -1333,11 +1295,11 @@ void PipelineManager::Run() {
     if (take_b && preview_video_buffer_) {
       v_src = preview_video_buffer_.get();        // Block swap: B buffers
     } else if (take_segment && segment_b_video_buffer_) {
-      v_src = segment_b_video_buffer_.get();      // Segment seam path (video may pre-roll on B)
+      v_src = segment_b_video_buffer_.get();  // Segment seam path (video may pre-roll on B)
     } else if (take_b) {
-      v_src = preview_video_buffer_.get();        // Block swap: may be null
+      v_src = preview_video_buffer_.get();         // Block swap: may be null
     } else {
-      v_src = video_buffer_.get();                // No swap: A buffers
+      v_src = video_buffer_.get();                 // No swap: A buffers
     }
 
     // INV-SEAM-AUDIO-001: segment-B audio must not be consumed by tick loop
@@ -1351,18 +1313,6 @@ void PipelineManager::Run() {
         preview_audio_buffer_.get(),
         segment_b_audio_buffer_.get());
     const char* commit_slot = take_b ? "B" : (take_segment ? "S" : "A");
-    // ATTRIBUTION: Log which buffer the tick loop will consume from
-    if (session_frame_index % 30 == 0) {
-      std::ostringstream bind_oss;
-      bind_oss << "[LIVE_AUDIO_BIND] frame=" << session_frame_index
-               << " a_src_ptr=" << (void*)a_src
-               << " source=" << commit_slot
-               << " live_audio_ptr=" << (void*)audio_buffer_.get()
-               << " seg_b_audio_ptr=" << (void*)segment_b_audio_buffer_.get()
-               << " take_segment=" << take_segment
-               << " seg_idx=" << current_segment_index_;
-      Logger::Info(bind_oss.str());
-    }
     // Authoritative TAKE slot source for fingerprint:
     //   'A' = live buffer slot, 'B' = preview buffer slot, 'P' = pad.
     // This is a slot identifier, not a block identity.  After PADDED_GAP
@@ -1436,16 +1386,6 @@ void PipelineManager::Run() {
     if (v_src && v_src->TryPopFrame(vbf)) {
       session_encoder->encodeFrame(vbf.video, video_pts_90k);
       is_pad = false;
-#ifdef DEBUG_AIR_MONITOR
-      if (session_frame_index % 100 == 0) {
-        std::ostringstream oss;
-        oss << "[DEBUG_MONITOR] POP"
-            << " tick=" << session_frame_index
-            << " v_depth=" << (v_src ? v_src->DepthFrames() : -1)
-            << " a_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
-            << " slot=" << commit_slot;
-        Logger::Info(oss.str()); }
-#endif
       take_source_char = take_b ? 'B' : 'A';
       last_good_video_frame_ = vbf.video;
       has_last_good_video_frame_ = true;
@@ -1532,33 +1472,16 @@ void PipelineManager::Run() {
       }
     } else if (a_was_primed) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
-      // Non-fatal: log violation, emit fallback frame (freeze/black), continue loop.
       { std::ostringstream oss;
-        oss << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW (fallback)"
+        oss << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
             << " frame=" << session_frame_index
             << " buffer_depth=" << v_src->DepthFrames()
             << " total_pushed=" << v_src->TotalFramesPushed()
-            << " total_popped=" << v_src->TotalFramesPopped()
-            << " a_buf_depth_ms=" << (a_src ? a_src->DepthMs() : -1);
+            << " total_popped=" << v_src->TotalFramesPopped();
         Logger::Error(oss.str()); }
-      { std::ostringstream uoss;
-        uoss << "[UNDERFLOW_EVENT] type=video"
-             << " t_mono_ms=" << MonoMs()
-             << " frame=" << session_frame_index
-             << " buffer_depth=" << v_src->DepthFrames();
-        Logger::Error(uoss.str()); }
-      { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.video_underflow_fallback_count++; }
-      if (has_last_good_video_frame_) {
-        session_encoder->encodeFrame(last_good_video_frame_, video_pts_90k);
-        is_pad = false;
-        take_source_char = 'F';  // Fallback (freeze)
-        using_degraded_held_this_tick = true;
-      } else {
-        session_encoder->encodeFrame(pad_producer_->VideoFrame(), video_pts_90k);
-        is_pad = true;
-        take_source_char = 'B';  // Black (pad)
-      }
-      // Do not set stop_requested; do not break — continue tick loop.
+      { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
+      ctx_->stop_requested.store(true, std::memory_order_release);
+      break;
     }
     // else: A not primed (no block loaded yet or buffer warming up) — pad.
 
@@ -1590,10 +1513,7 @@ void PipelineManager::Run() {
       { std::ostringstream oss;
         oss << "[PipelineManager] TAKE_PAD_ENTER"
             << " tick=" << session_frame_index
-            << " slot=" << commit_slot
-            << " audio_buf_depth_ms=" << (audio_buffer_ ? audio_buffer_->DepthMs() : -1)
-            << " audio_samples_emitted=" << audio_samples_emitted
-            << " audio_ticks_emitted=" << audio_ticks_emitted;
+            << " slot=" << commit_slot;
         Logger::Info(oss.str()); }
     } else if (!is_pad && prev_was_pad) {
       { std::ostringstream oss;
@@ -1601,10 +1521,7 @@ void PipelineManager::Run() {
             << " tick=" << session_frame_index
             << " slot=" << commit_slot
             << " block=" << (live_tp()->GetState() == ITickProducer::State::kReady
-                ? live_tp()->GetBlock().block_id : "none")
-            << " audio_buf_depth_ms=" << (audio_buffer_ ? audio_buffer_->DepthMs() : -1)
-            << " audio_samples_emitted=" << audio_samples_emitted
-            << " audio_ticks_emitted=" << audio_ticks_emitted;
+                ? live_tp()->GetBlock().block_id : "none");
         Logger::Info(oss.str()); }
     }
     prev_was_pad = is_pad;
@@ -2039,88 +1956,6 @@ void PipelineManager::Run() {
     // into live.  Only fires when take_segment is true (not a block seam).
     // Gate: defer swap until incoming segment meets minimum readiness.
     // ==================================================================
-    // SEAM_EVAL: Rate-limited diagnostic logging after seam frame
-    static int64_t last_seam_eval_frame = -1;
-    if (session_frame_index >= next_seam_frame_ && next_seam_type_ == SeamType::kSegment) {
-      if (session_frame_index - last_seam_eval_frame >= 30) { // Every 30 ticks (~1 second)
-        last_seam_eval_frame = session_frame_index;
-        const int32_t to_seg = current_segment_index_ + 1;
-        std::optional<IncomingState> incoming = GetIncomingSegmentState(to_seg);
-        std::string decision = take_segment ? "COMMIT" : "DEFER";
-        std::string reason;
-        int incoming_audio_ms = -1;
-        int incoming_video_frames = -1;
-        if (!incoming) {
-          reason = "no_incoming";
-        } else {
-          incoming_audio_ms = incoming->incoming_audio_ms;
-          incoming_video_frames = incoming->incoming_video_frames;
-          if (!IsIncomingSegmentEligibleForSwap(*incoming)) {
-            reason = "not_ready";
-          } else {
-            reason = "ready";
-          }
-        }
-        { std::ostringstream oss;
-          oss << "[SEAM_EVAL] frame=" << session_frame_index
-              << " seg=" << to_seg
-              << " incoming_audio_ms=" << incoming_audio_ms
-              << " incoming_video_frames=" << incoming_video_frames
-              << " decision=" << decision
-              << " reason=" << reason;
-          Logger::Info(oss.str()); }
-
-        // SEAM_GATE_SNAPSHOT: Rate-limited detailed buffer state (every 30 frames while deferred)
-        if (incoming && !IsIncomingSegmentEligibleForSwap(*incoming)) {
-          std::string asset_uri = "unknown";
-          bool b_has_audio_stream = false;
-          int b_sample_rate = 0;
-          int b_channels = 0;
-          int64_t b_audio_pushed_total = 0;
-          bool b_has_decoder = false;
-          void* b_audio_ptr = nullptr;
-          void* b_producer_ptr = nullptr;
-
-          // Extract details from segment B producer and buffers
-          if (segment_b_producer_) {
-            b_producer_ptr = segment_b_producer_.get();
-            auto* tp = AsTickProducer(segment_b_producer_.get());
-            if (tp && tp->GetState() == ITickProducer::State::kReady && !tp->GetBlock().segments.empty()) {
-              asset_uri = tp->GetBlock().segments[0].asset_uri;
-            }
-            b_has_decoder = tp ? tp->HasDecoder() : false;
-          }
-          if (segment_b_audio_buffer_) {
-            b_audio_ptr = segment_b_audio_buffer_.get();
-            b_audio_pushed_total = segment_b_audio_buffer_->TotalSamplesPushed();
-            b_sample_rate = buffer::kHouseAudioSampleRate;
-            b_channels = buffer::kHouseAudioChannels;
-            b_has_audio_stream = true; // If buffer exists, assume audio stream exists
-          }
-
-          { std::ostringstream snapshot_oss;
-            snapshot_oss << "[SEAM_GATE_SNAPSHOT] frame=" << session_frame_index
-                        << " to_seg=" << to_seg
-                        << " asset=" << asset_uri
-                        << " b_audio_ms=" << incoming_audio_ms
-                        << " b_audio_pushed_total=" << b_audio_pushed_total
-                        << " b_has_audio_stream=" << (b_has_audio_stream ? 1 : 0)
-                        << " b_video_frames=" << incoming_video_frames
-                        << " b_has_decoder=" << (b_has_decoder ? 1 : 0)
-                        << " b_sample_rate=" << b_sample_rate
-                        << " b_channels=" << b_channels
-                        << " b_audio_popped_total=" << (segment_b_audio_buffer_ ? segment_b_audio_buffer_->TotalSamplesPopped() : -1)
-                        << " b_fill_parked=" << (segment_b_video_buffer_ ? (segment_b_video_buffer_->IsFilling() ? 0 : 1) : -1)
-                        << " b_audio_ptr=" << b_audio_ptr
-                        << " gate_buf=" << (void*)segment_b_audio_buffer_.get()
-                        << " live_buf=" << (void*)audio_buffer_.get()
-                        << " a_src_ptr=" << (void*)a_src
-                        << " b_producer_ptr=" << b_producer_ptr;
-            Logger::Info(snapshot_oss.str()); }
-        }
-      }
-    }
-
     if (take_segment) {
       const int32_t to_seg = current_segment_index_ + 1;
       EnsureIncomingBReadyForSeam(to_seg, session_frame_index);
@@ -2132,12 +1967,6 @@ void PipelineManager::Run() {
           last_logged_defer_seam_frame_ = next_seam_frame_;
           { std::ostringstream oss;
             oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
-            << " b_has_decoder=" << (segment_b_producer_ && AsTickProducer(segment_b_producer_.get())->HasDecoder() ? 1 : 0)
-            << " b_has_audio=" << (segment_b_audio_buffer_ ? 1 : 0)
-            << " b_audio_primed=" << (segment_b_audio_buffer_ && segment_b_audio_buffer_->IsPrimed() ? 1 : 0)
-            << " b_audio_depth_ms=" << (segment_b_audio_buffer_ ? segment_b_audio_buffer_->DepthMs() : -1)
-            << " b_video_depth_frames=" << (segment_b_video_buffer_ ? segment_b_video_buffer_->DepthFrames() : -1)
-            << " b_fill_running=" << (segment_b_video_buffer_ && segment_b_video_buffer_->IsFilling() ? 1 : 0)
                 << " reason=no_incoming"
                 << " incoming_audio_ms=-1"
                 << " incoming_video_frames=-1"
@@ -2150,12 +1979,6 @@ void PipelineManager::Run() {
           last_logged_defer_seam_frame_ = next_seam_frame_;
           { std::ostringstream oss;
             oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
-            << " b_has_decoder=" << (segment_b_producer_ && AsTickProducer(segment_b_producer_.get())->HasDecoder() ? 1 : 0)
-            << " b_has_audio=" << (segment_b_audio_buffer_ ? 1 : 0)
-            << " b_audio_primed=" << (segment_b_audio_buffer_ && segment_b_audio_buffer_->IsPrimed() ? 1 : 0)
-            << " b_audio_depth_ms=" << (segment_b_audio_buffer_ ? segment_b_audio_buffer_->DepthMs() : -1)
-            << " b_video_depth_frames=" << (segment_b_video_buffer_ ? segment_b_video_buffer_->DepthFrames() : -1)
-            << " b_fill_running=" << (segment_b_video_buffer_ && segment_b_video_buffer_->IsFilling() ? 1 : 0)
                 << " reason=not_ready"
                 << " incoming_audio_ms=" << incoming->incoming_audio_ms
                 << " incoming_video_frames=" << incoming->incoming_video_frames
@@ -2182,9 +2005,7 @@ void PipelineManager::Run() {
               << " audio_depth_ms=" << (a_src ? a_src->DepthMs() : -1)
               << " audio_gen=" << (a_src ? a_src->CurrentGeneration() : 0)
               << " asset=" << (is_pad ? "pad" : (vbf.asset_uri.empty() ? "none" : vbf.asset_uri))
-              << " seg_b_ready=" << (segment_b_video_buffer_ != nullptr)
-              << " live_video_ptr=" << (void*)video_buffer_.get()
-              << " segment_b_ptr=" << (void*)segment_b_video_buffer_.get();
+              << " seg_b_ready=" << (segment_b_video_buffer_ != nullptr);
           Logger::Info(oss.str()); }
 
         PerformSegmentSwap(session_frame_index);
@@ -2250,17 +2071,6 @@ void PipelineManager::Run() {
       audio_ticks_emitted++;
       audio_frames_this_tick = 1;
 
-      // DIAG: PAD audio emission proof
-      if (session_frame_index % 30 == 0) {  // Log every 30 ticks (~1s) during PAD
-        std::cout << "[PipelineManager] DIAG_PAD_AUDIO"
-                  << " tick=" << session_frame_index
-                  << " is_pad=1"
-                  << " samples=" << pad_samples_this_tick
-                  << " audio_pts_90k=" << audio_pts_90k
-                  << " audio_samples_emitted=" << audio_samples_emitted
-                  << " tag=SILENCE_AUDIO" << std::endl;
-      }
-
       if (past_fence) {
         std::lock_guard<std::mutex> lock(metrics_mutex_);
         metrics_.fence_pad_frames_total++;
@@ -2312,27 +2122,6 @@ void PipelineManager::Run() {
       if (a_src && a_src->IsPrimed()) {
         buffer::AudioFrame audio_out;
         if (a_src->TryPopSamples(samples_this_tick, audio_out)) {
-          // ATTRIBUTION: Pop source identification
-          if (session_frame_index % 30 == 0) {
-            std::ostringstream pop_oss;
-            pop_oss << "[AUDIO_POP] frame=" << session_frame_index
-                    << " buf_ptr=" << (void*)a_src
-                    << " consumer=TICK_LOOP"
-                    << " is_seg_b=" << (a_src == segment_b_audio_buffer_.get())
-                    << " depth_ms=" << a_src->DepthMs()
-                    << " popped_total=" << a_src->TotalSamplesPopped();
-            Logger::Info(pop_oss.str());
-          }
-          // DIAG: Real audio emission proof
-          if (session_frame_index % 30 == 0) {
-            std::cout << "[PipelineManager] DIAG_CONTENT_AUDIO"
-                      << " tick=" << session_frame_index
-                      << " is_pad=0"
-                      << " samples=" << samples_this_tick
-                      << " a_src_depth_ms=" << a_src->DepthMs()
-                      << " audio_pts_90k=" << audio_pts_90k
-                      << " tag=REAL_AUDIO" << std::endl;
-          }
           session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, false);
           audio_samples_emitted += samples_this_tick;
           audio_buffer_samples_emitted += samples_this_tick;
@@ -2348,20 +2137,11 @@ void PipelineManager::Run() {
           { std::ostringstream oss;
             oss << "[PipelineManager] AUDIO_UNDERFLOW_SILENCE"
                 << " frame=" << session_frame_index
-                << " is_pad=" << is_pad
                 << " buffer_depth_ms=" << a_src->DepthMs()
                 << " needed=" << samples_this_tick
                 << " total_pushed=" << a_src->TotalSamplesPushed()
-                << " total_popped=" << a_src->TotalSamplesPopped()
-                << " a_src_primed=" << a_src->IsPrimed()
-                << " audio_ticks_emitted=" << audio_ticks_emitted;
+                << " total_popped=" << a_src->TotalSamplesPopped();
             Logger::Warn(oss.str()); }
-          { std::ostringstream auoss;
-            auoss << "[UNDERFLOW_EVENT] type=audio"
-                  << " t_mono_ms=" << MonoMs()
-                  << " frame=" << session_frame_index
-                  << " buffer_depth_ms=" << a_src->DepthMs();
-            Logger::Error(auoss.str()); }
 
           static constexpr int kChannels = buffer::kHouseAudioChannels;
           static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
@@ -2813,31 +2593,7 @@ void PipelineManager::Run() {
       }
     }
 
-    // MINUTE_TELEMETRY: Emit telemetry every 1800 frames (1 minute at 30fps)
-    {
-      static int64_t last_telemetry_frame = 0;
-      if (session_frame_index - last_telemetry_frame >= 1800) {
-        int depth_frames = video_buffer_ ? video_buffer_->DepthFrames() : -1;
-        int64_t total_pushed = video_buffer_ ? video_buffer_->TotalFramesPushed() : -1;
-        int64_t total_popped = video_buffer_ ? video_buffer_->TotalFramesPopped() : -1;
-        int64_t net = (total_pushed >= 0 && total_popped >= 0) ? (total_pushed - total_popped) : -1;
-        int audio_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
-        
-        { std::ostringstream oss;
-          oss << "[MINUTE_TELEMETRY] frame=" << session_frame_index
-              << " buffer=LIVE_VIDEO depth=" << depth_frames
-              << " pushed=" << total_pushed
-              << " popped=" << total_popped
-              << " net=" << net
-              << " audio_ms=" << audio_ms;
-          Logger::Info(oss.str()); }
-        
-        last_telemetry_frame = session_frame_index;
-      }
-    }
-
     session_frame_index++;
-    current_frame_index.store(session_frame_index, std::memory_order_relaxed);
   }
 
   // ========================================================================
@@ -2967,10 +2723,6 @@ void PipelineManager::Run() {
 
   {
     auto session_end_time = std::chrono::steady_clock::now();
-    { std::ostringstream oss;
-      oss << "[SESSION_END] t_mono_ms=" << MonoMs()
-          << " frame=" << session_frame_index;
-      Logger::Info(oss.str()); }
     std::lock_guard<std::mutex> lock(metrics_mutex_);
     metrics_.encoder_close_count = 1;
     metrics_.session_duration_ms =
@@ -3014,7 +2766,6 @@ void PipelineManager::SetPreloaderDelayHook(
     std::function<void()> hook) {
   seam_preparer_->SetDelayHook(std::move(hook));
 }
-
 
 AudioLookaheadBuffer* PipelineManager::SelectAudioSourceForTick(
     bool take_block,
@@ -3070,33 +2821,12 @@ void PipelineManager::ComputeSegmentSeamFrames() {
   const int64_t fps_num = ctx_->fps_num;
   const int64_t fps_den = ctx_->fps_den;
   int64_t denom = fps_den * 1000;
-  for (size_t i = 0; i < live_boundaries_.size(); ++i) {
-    const auto& boundary = live_boundaries_[i];
+  for (const auto& boundary : live_boundaries_) {
     int64_t ct_ms = boundary.end_ct_ms;
     int64_t seam = (ct_ms > 0)
         ? block_activation_frame_ + (ct_ms * fps_num + denom - 1) / denom
         : block_activation_frame_;
     segment_seam_frames_.push_back(seam);
-    // Block activation: log each segment boundary (seg_idx, type, start/end/dur, asset_uri).
-    int64_t start_ct = boundary.start_ct_ms;
-    int64_t end_ct = boundary.end_ct_ms;
-    int64_t dur_ms = end_ct - start_ct;
-    const char* seg_type = "UNKNOWN";
-    std::string asset_uri;
-    if (boundary.segment_index < static_cast<int32_t>(live_parent_block_.segments.size())) {
-      const auto& seg = live_parent_block_.segments[boundary.segment_index];
-      seg_type = SegmentTypeName(seg.segment_type);
-      asset_uri = seg.asset_uri;
-    }
-    { std::ostringstream oss;
-      oss << "[PipelineManager] SEGMENT_BOUNDARY_AT_ACTIVATION"
-          << " seg_idx=" << boundary.segment_index
-          << " type=" << seg_type
-          << " start_ct_ms=" << start_ct
-          << " end_ct_ms=" << end_ct
-          << " dur_ms=" << dur_ms
-          << " asset_uri=" << (asset_uri.empty() ? "(empty)" : asset_uri);
-      Logger::Info(oss.str()); }
   }
   UpdateNextSeamFrame();
 }
@@ -3163,36 +2893,6 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
   // would be out of range.
   FedBlock synth = MakeSyntheticSegmentBlock(
       live_parent_block_, target_seg, live_boundaries_);
-
-  // ArmSegmentPrep diagnostic: synth block and boundary vs expected frame count.
-  const SegmentBoundary& bound = live_boundaries_[target_seg];
-  int64_t bound_start = bound.start_ct_ms;
-  int64_t bound_end = bound.end_ct_ms;
-  int64_t bound_dur_ms = bound_end - bound_start;
-  int64_t synth_dur_ms = synth.end_utc_ms - synth.start_utc_ms;
-  // Expected frames at 30000/1001 fps (rational NTSC).
-  int64_t expected_frames_30_1001 = (bound_dur_ms > 0)
-      ? (bound_dur_ms * 30000 + 1001 - 1) / 1001
-      : 0;
-  std::string prep_asset_uri;
-  int64_t seg_duration_ms = -1;
-  if (target_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
-    prep_asset_uri = live_parent_block_.segments[target_seg].asset_uri;
-    seg_duration_ms = live_parent_block_.segments[target_seg].segment_duration_ms;
-  }
-  { std::ostringstream oss;
-    oss << "[PipelineManager] ARM_SEGMENT_PREP_SYNTH"
-        << " target_seg=" << target_seg
-        << " asset_uri=" << (prep_asset_uri.empty() ? "(empty)" : prep_asset_uri)
-        << " boundary start_ct_ms=" << bound_start
-        << " end_ct_ms=" << bound_end
-        << " dur_ms=" << bound_dur_ms
-        << " synth.start_utc_ms=" << synth.start_utc_ms
-        << " synth.end_utc_ms=" << synth.end_utc_ms
-        << " synth_dur_ms=" << synth_dur_ms
-        << " expected_frames_30000_1001=" << expected_frames_30_1001
-        << " segment_duration_ms=" << seg_duration_ms;
-    Logger::Info(oss.str()); }
 
   // Determine segment type for logging.
   const char* seg_type_name = "UNKNOWN";
