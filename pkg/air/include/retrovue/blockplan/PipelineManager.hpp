@@ -122,8 +122,20 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Generate Prometheus text exposition.  Thread-safe.
   std::string GenerateMetricsText() const;
 
-  // P3.2: Test-only — forward delay hook to internal ProducerPreloader.
+  // P3.2: Test-only - forward delay hook to internal ProducerPreloader.
   void SetPreloaderDelayHook(std::function<void()> hook);
+
+  // INV-SEAM-AUDIO-001 / INV-SEAM-GATE-001 helper:
+  // While segment swap is deferred, live tick consumption must stay on the
+  // current live(A) audio buffer. Segment-B audio becomes consumable only
+  // after SEGMENT_TAKE_COMMIT succeeds.
+  static AudioLookaheadBuffer* SelectAudioSourceForTick(
+      bool take_block,
+      bool take_segment,
+      bool segment_swap_committed,
+      AudioLookaheadBuffer* live_audio,
+      AudioLookaheadBuffer* preview_audio,
+      AudioLookaheadBuffer* segment_b_audio);
 
  private:
   std::shared_ptr<ITimeSource> time_source_;
