@@ -344,18 +344,22 @@ namespace retrovue::producers::file
     // ======================================================================
     // INV-FPS-RESAMPLE: PTS-driven output tick resampling (frame synchronizer)
     // ======================================================================
-    // House rate tick grid is authoritative. For each output tick (1/target_fps),
-    // we select the latest decoded frame with PTS <= tick boundary.
-    // Fast sources (60->30): intermediate frames skipped naturally.
-    // Slow sources (23.976->30): last frame repeated on empty ticks.
-    // VFR/non-standard: handled uniformly via PTS comparison.
+    // Output tick grid is rational: tick_time_us(n) = floor(n * 1e6 * fps_den / fps_num).
+    // Never advance by rounded interval; use tick index and compute time each time.
     // ======================================================================
     double source_fps_ = 0.0;                          // Detected source frame rate
-    int64_t output_tick_interval_us_ = 0;              // Target frame period in us
-    int64_t next_output_tick_us_ = -1;                 // Next tick boundary in MT domain
+    int64_t target_fps_num_ = 30;                      // Rational target FPS (do NOT use double for grid)
+    int64_t target_fps_den_ = 1;
+    int64_t tick_index_ = 0;                           // Current output tick index
+    int64_t next_output_tick_us_ = -1;                 // tick_time_us(tick_index_) after alignment
     bool resample_active_ = false;                     // True when source fps != target fps
     buffer::Frame held_frame_storage_;                  // Held candidate for current tick
     bool held_frame_valid_ = false;
+
+    // INV-FPS-RESAMPLE: Rational tick grid. Floor for monotonicity.
+    // tick_time_us(n) = floor(n * 1_000_000 * fps_den / fps_num)
+    int64_t TickTimeUs(int64_t n) const;
+    int64_t TickDurationUs() const { return TickTimeUs(1); }
 
     // Resampler gate: processes a decoded frame through the tick grid.
     // Called from both ProduceRealFrame and ProduceStubFrame.

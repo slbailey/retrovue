@@ -58,6 +58,8 @@ void VideoLookaheadBuffer::StartFilling(
   producer_->SetInterruptFlags(flags);
   input_fps_ = input_fps;
   output_fps_ = output_fps;
+  resample_mode_ = producer ? producer->GetResampleMode() : ResampleMode::OFF;
+  drop_step_ = producer ? producer->GetDropStep() : 1;
   fill_start_time_ = std::chrono::steady_clock::now();
 
   // INV-BLOCK-PRIME-002: Consume primed frame synchronously (non-blocking).
@@ -77,6 +79,9 @@ void VideoLookaheadBuffer::StartFilling(
   if (has_primed) {
     auto fd = producer_->TryGetFrame();
     if (fd) {
+      const size_t primed_audio_count = fd->audio.size();
+      const bool has_audio_stream = producer_->HasAudioStream();
+
       VideoBufferFrame vf;
       vf.video = fd->video;          // copy for potential cache use
       vf.asset_uri = std::move(fd->asset_uri);
@@ -84,19 +89,28 @@ void VideoLookaheadBuffer::StartFilling(
       vf.was_decoded = true;
 
       // Push decoded audio to AudioLookaheadBuffer.
-      { std::ostringstream oss;
-        oss << "[VideoBuffer:" << buffer_label_ << "] StartFilling:"
-            << " primed_frame audio_count=" << fd->audio.size();
-        Logger::Info(oss.str()); }
       if (audio_buffer_) {
         for (auto& af : fd->audio) {
           audio_buffer_->Push(std::move(af));
         }
-        { std::ostringstream oss;
-          oss << "[VideoBuffer:" << buffer_label_ << "] StartFilling:"
-              << " audio_depth_ms=" << audio_buffer_->DepthMs();
-          Logger::Info(oss.str()); }
       }
+
+      int audio_depth_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+      constexpr int kMinAudioForSeamMs = 200;  // below this, gate will wait
+      bool ready_for_seam = (!audio_buffer_) || (audio_depth_ms >= kMinAudioForSeamMs);
+      const char* reason = !audio_buffer_ ? "no_audio_buffer"
+          : (primed_audio_count == 0 && has_audio_stream) ? "primed_has_no_audio"
+          : (audio_depth_ms >= kMinAudioForSeamMs) ? "sufficient_audio"
+          : "insufficient_audio";
+
+      { std::ostringstream oss;
+        oss << "[VideoBuffer:" << buffer_label_ << "] StartFilling: primed_frame"
+            << " has_audio_stream=" << has_audio_stream
+            << " audio_count=" << primed_audio_count
+            << " audio_depth_ms=" << audio_depth_ms
+            << " ready_for_seam=" << ready_for_seam
+            << " reason=" << reason;
+        Logger::Info(oss.str()); }
 
       std::lock_guard<std::mutex> lock(mutex_);
       frames_.push_back(std::move(vf));
@@ -105,15 +119,20 @@ void VideoLookaheadBuffer::StartFilling(
     }
   }
 
-  // Log cadence detection (matches old InitCadence diagnostic).
+  // Log resample mode (rational detection: OFF / DROP / CADENCE).
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] FPS_CADENCE:"
         << " input_fps=" << input_fps_
         << " output_fps=" << output_fps_;
-    if (input_fps_ > 0.0 && input_fps_ < output_fps_ * 0.98) {
-      oss << " cadence=ACTIVE ratio=" << (input_fps_ / output_fps_);
+    if (resample_mode_ == ResampleMode::OFF) {
+      oss << " mode=OFF";
+    } else if (resample_mode_ == ResampleMode::DROP) {
+      oss << " mode=DROP ratio=" << drop_step_;
+      if (output_fps_ > 0.0) {
+        oss << " expected_tick_duration_s=" << (1.0 / output_fps_);
+      }
     } else {
-      oss << " cadence=OFF";
+      oss << " mode=CADENCE ratio=" << (output_fps_ > 0.0 && input_fps_ > 0.0 ? (input_fps_ / output_fps_) : 0.0);
     }
     Logger::Info(oss.str()); }
 
@@ -207,18 +226,17 @@ void VideoLookaheadBuffer::FillLoop() {
     my_audio_gen = audio_buffer->CurrentGeneration();
   }
 
-  // --- Cadence setup (same logic as old PipelineManager::InitCadence) ---
-  bool cadence_active = false;
+  // --- Cadence setup: use ResampleMode from TickProducer (rational detection) ---
+  // INV-FPS-MAPPING: decode_budget / input_fps-derived budgeting ONLY when mode==CADENCE.
+  // OFF and DROP must not use input_fps for decode gating; they decode every tick.
+  bool cadence_active = (resample_mode_ == ResampleMode::CADENCE);
   double cadence_ratio = 0.0;
   double decode_budget = 0.0;
-
-  // Activate cadence only when input is meaningfully slower than output.
-  // Tolerance: 2% — avoids activation for 29.97 vs 30.
-  if (input_fps_ > 0.0 && input_fps_ < output_fps_ * 0.98) {
-    cadence_active = true;
+  if (cadence_active && output_fps_ > 0.0 && input_fps_ > 0.0) {
     cadence_ratio = input_fps_ / output_fps_;
     decode_budget = 1.0;  // guarantees first tick decodes
   }
+  // OFF: 1:1 decode every tick. DROP: TickProducer decodes step internally, we decode every tick.
 
   // Pre-build silence template for hold-last / cadence-repeat ticks.
   // One tick demands at most ceil(48000 / output_fps) samples.
@@ -370,7 +388,8 @@ void VideoLookaheadBuffer::FillLoop() {
               ? "fill_stop" : "session_stop";
           break;
         }
-        // BOOTSTRAP TRACE: log fill decisions during bootstrap phase only
+        // BOOTSTRAP: log each wake only when debugging (enable RETROVUE_DEBUG_BOOTSTRAP at build).
+#ifdef RETROVUE_DEBUG_BOOTSTRAP
         if (fill_phase_.load(std::memory_order_relaxed) ==
             static_cast<int>(FillPhase::kBootstrap)) {
           int d = static_cast<int>(frames_.size());
@@ -385,6 +404,7 @@ void VideoLookaheadBuffer::FillLoop() {
                 << " min_audio_ms=" << bootstrap_min_audio_ms_;
             Logger::Info(oss.str()); }
         }
+#endif
       }
     }
 

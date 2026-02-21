@@ -93,7 +93,7 @@ PipelineManager::PipelineManager(
       time_source_(time_source ? std::move(time_source)
                                : std::make_shared<SystemTimeSource>()),
       live_(std::make_unique<TickProducer>(ctx->width, ctx->height,
-                                                    ctx->fps)),
+                                     ctx->fps_num, ctx->fps_den)),
       seam_preparer_(std::make_unique<SeamPreparer>()) {
   metrics_.channel_id = ctx->channel_id;
 }
@@ -765,7 +765,7 @@ void PipelineManager::Run() {
   video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
 
   // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
-  pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+  pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
   pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
   int pad_a_target = bcfg.audio_target_depth_ms;
@@ -1682,7 +1682,7 @@ void PipelineManager::Run() {
                   << " fence_frame=" << session_frame_index;
               Logger::Info(oss.str()); }
             auto fresh = std::make_unique<TickProducer>(
-                ctx_->width, ctx_->height, ctx_->fps);
+                ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
             AsTickProducer(fresh.get())->AssignBlock(fallback_block);
             live_ = std::move(fresh);
             swapped = true;
@@ -1712,7 +1712,7 @@ void PipelineManager::Run() {
 
       if (!swapped) {
         // No B available — PADDED_GAP.
-        live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+        live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
         // Fresh buffers — outgoing buffers will die with the deferred fill thread.
         video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
         video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
@@ -3152,7 +3152,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     swap_branch = "SWAP_B_TO_A";
   } else {
     // INV-SEAM-SEG-007: MISS — create B (only), then move B into A slots.
-    segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+    segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
     segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
     const auto& bcfg = ctx_->buffer_config;
@@ -3213,7 +3213,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     int pad_a_low = pad_bcfg.audio_low_water_ms > 0
         ? pad_bcfg.audio_low_water_ms
         : std::max(1, pad_a_target / 3);
-    pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+    pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
     pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
     pad_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(

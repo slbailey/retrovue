@@ -9,6 +9,7 @@
 #include <cassert>
 #include <iostream>
 
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 
@@ -101,7 +102,9 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height,
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  auto source = std::make_unique<TickProducer>(width, height, fps);
+  int64_t fps_num = 30, fps_den = 1;
+  DeriveRationalFPS(fps, fps_num, fps_den);
+  auto source = std::make_unique<TickProducer>(width, height, fps_num, fps_den);
   source->AssignBlock(block);
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;

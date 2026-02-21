@@ -148,6 +148,9 @@ class FFmpegDecoder {
   double GetVideoFPS() const;
   double GetVideoDuration() const;
 
+  // True if the asset has an audio stream (for INV-AUDIO-PRIME-002 / priming logs).
+  bool HasAudioStream() const { return audio_stream_index_ >= 0; }
+
  private:
   // Finds the best video stream in the input.
   bool FindVideoStream();

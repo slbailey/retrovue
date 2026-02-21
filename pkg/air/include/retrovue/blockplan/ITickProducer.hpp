@@ -47,9 +47,19 @@ class ITickProducer {
   // Returns 0.0 if unknown (no decoder, probe failed, etc.).
   virtual double GetInputFPS() const = 0;
 
+  // Resample mode (rational detection: OFF / DROP / CADENCE).
+  // Default OFF for producers that do not compute it.
+  virtual ResampleMode GetResampleMode() const { return ResampleMode::OFF; }
+
+  // For DROP mode: integer step (input frames per output frame). Always >= 1.
+  virtual int64_t GetDropStep() const { return 1; }
+
   // INV-BLOCK-PRIME-002: True when a pre-decoded primed frame is available.
   // Retrieving a primed frame via TryGetFrame() is non-blocking.
   virtual bool HasPrimedFrame() const = 0;
+
+  // True if the current segment has an audio stream (from decoder). For priming logs / INV-AUDIO-PRIME-002.
+  virtual bool HasAudioStream() const { return false; }
 
   // INV-SEAM-SEG: Return computed segment boundaries for the assigned block.
   // Empty if no block assigned or validation failed.
