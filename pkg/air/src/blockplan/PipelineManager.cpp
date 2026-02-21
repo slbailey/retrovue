@@ -440,14 +440,14 @@ std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer(in
         << " decoder_used=" << (result->producer && AsTickProducer(result->producer.get())->HasDecoder() ? "Y" : "N");
     Logger::Info(oss.str()); }
 
-  // Reject zombie: content block with no decoder (open/seek failed in worker).
-  // Do not set preview_ so next_block_opened=0 and we enter PADDED_GAP or fallback.
+  // Content block with no decoder (open/seek failed in worker).
+  // Keep the producer so fence/PADDED_GAP path can adopt it and run as all-pad.
   if (result->segment_type != SegmentType::kPad && result->producer &&
       !AsTickProducer(result->producer.get())->HasDecoder()) {
     { std::ostringstream oss;
       oss << "[PipelineManager] PREROLL_DECODER_FAILED"
           << " block_id=" << result->block_id
-          << " reason=content_block_no_decoder discarding_result";
+          << " reason=content_block_no_decoder keeping_as_preview";
       Logger::Warn(oss.str()); }
     // Retry once if fence headroom > 2000ms and we have the block to re-submit.
     if (headroom_ms >= 2000 && last_submitted_block_valid_ &&
@@ -469,7 +469,7 @@ std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer(in
                   << " headroom_ms=" << headroom_ms;
         Logger::Info(retry_oss.str()); }
     }
-    return nullptr;  // result destructs, producer destructs; slot cleared by Take.
+    return std::move(result->producer);  // Keep decoderless producer — fence/PADDED_GAP path will run it as all-pad.
   }
 
   last_submitted_block_valid_ = false;
@@ -1562,10 +1562,17 @@ void PipelineManager::Run() {
     }
 
     // ==================================================================
-    // POST-TAKE ROTATION: Only when we actually committed a B frame this tick.
-    // In DEGRADED_TAKE_MODE we output held frame and do not rotate until B is primed.
+    // POST-TAKE ROTATION: Execute when fence has fired and we are ready to
+    // transition.  Two cases:
+    //   1. B committed a frame this tick (normal seamless swap).
+    //   2. B failed to prime (pad at fence) — fence has fired, block A is
+    //      done, enter PADDED_GAP immediately.  Do NOT loop in fence-pad
+    //      state; the old block ended, respect the timeline and move forward.
+    //      INV-BLOCK-WALLFENCE-001: fence timing is respected (fence already fired).
+    //      INV-TICK-GUARANTEED-OUTPUT: pad continues under gap mode.
     // ==================================================================
-    if (take_b && !take_rotated && committed_b_frame_this_tick) {
+    const bool fence_fired_b_missing = take_b && !take_rotated && !committed_b_frame_this_tick;
+    if (take_b && !take_rotated && (committed_b_frame_this_tick || fence_fired_b_missing)) {
       take_rotated = true;
 
       // Step 1: Join PREVIOUS fence's deferred fill thread.
