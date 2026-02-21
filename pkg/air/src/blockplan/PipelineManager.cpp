@@ -1060,6 +1060,9 @@ void PipelineManager::Run() {
     oss << "[PipelineManager] INV-AUDIO-BOOTSTRAP-GATE-001: emission gate opened"
         << " audio_depth_ms=" << audio_buffer_->DepthMs();
     Logger::Info(oss.str()); }
+  { std::ostringstream oss;
+    oss << "[PipelineManager] STREAM_READY";
+    Logger::Info(oss.str()); }
 
   // ========================================================================
   // 5b. START OUTPUT CLOCK (monotonic epoch) — after audio depth gate.

@@ -780,6 +780,7 @@ bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame)
       : 0;
   output_frame.metadata.pts = pts_us;
 
+#ifdef RETROVUE_DEBUG
   // Diagnostic: log PTS for first 20 frames
   static int decode_diag_count = 0;
   ++decode_diag_count;
@@ -791,6 +792,7 @@ bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame)
               << " pict_type=" << av_get_picture_type_char(av_frame->pict_type)
               << std::endl;
   }
+#endif
   output_frame.metadata.dts = av_frame->pkt_dts;
   // Use duration field (pkt_duration is deprecated in newer FFmpeg)
   int64_t frame_duration = av_frame->duration != AV_NOPTS_VALUE ? av_frame->duration : 0;

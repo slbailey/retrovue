@@ -5,6 +5,7 @@
 
 #include "retrovue/util/Logger.hpp"
 
+#include <cstdlib>
 #include <iostream>
 
 namespace retrovue::util {
@@ -18,6 +19,13 @@ void Logger::SetErrorSink(std::function<void(const std::string&)> sink) {
 }
 
 void Logger::Info(const std::string& line) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::cout << line << '\n';
+  std::cout.flush();
+}
+
+void Logger::Debug(const std::string& line) {
+  if (std::getenv("RETROVUE_DEBUG") == nullptr) return;
   std::lock_guard<std::mutex> lock(mutex_);
   std::cout << line << '\n';
   std::cout.flush();
