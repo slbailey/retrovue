@@ -97,18 +97,32 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   // Probe all segment assets (skip PAD — no asset to probe). Skip probe when using test decoder.
   bool all_probed = decoder_factory_for_test_.has_value();
+  int attempted = 0;
   if (!all_probed) {
+    all_probed = true;
     for (const auto& seg : plan.segments) {
       if (seg.segment_type == SegmentType::kPad) continue;
-      if (!assets_.HasAsset(seg.asset_uri)) {
-        if (!assets_.ProbeAsset(seg.asset_uri)) {
-          std::cerr << "[TickProducer] Failed to probe asset: " << seg.asset_uri
-                    << std::endl;
-          all_probed = false;
-          break;
-        }
+      attempted++;
+#ifdef RETROVUE_DEBUG
+      std::cout << "[TickProducer] PROBE_ATTEMPT block=" << block.block_id
+                << " segment_type=" << SegmentTypeName(seg.segment_type)
+                << " uri=" << seg.asset_uri << std::endl;
+#endif
+      bool ok = assets_.ProbeAsset(seg.asset_uri);
+#ifdef RETROVUE_DEBUG
+      std::cout << "[TickProducer] PROBE_RESULT block=" << block.block_id
+                << " ok=" << (ok ? "Y" : "N")
+                << " uri=" << seg.asset_uri << std::endl;
+#endif
+      if (!ok) {
+        all_probed = false;
+        break;
       }
     }
+    std::cout << "[TickProducer] PROBE_SUMMARY block=" << block.block_id
+              << " attempted=" << attempted
+              << " all_probed=" << (all_probed ? "Y" : "N")
+              << std::endl;
   }
 
   if (!all_probed) {

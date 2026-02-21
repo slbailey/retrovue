@@ -119,7 +119,7 @@ void VideoLookaheadBuffer::StartFilling(
     }
   }
 
-  // Log resample mode (rational detection: OFF / DROP / CADENCE).
+  // Log resample mode (rational detection: OFF / DROP / CADENCE). DEBUG: chatty per segment.
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] FPS_CADENCE:"
         << " input_fps=" << input_fps_
@@ -134,7 +134,7 @@ void VideoLookaheadBuffer::StartFilling(
     } else {
       oss << " mode=CADENCE ratio=" << (output_fps_ > 0.0 && input_fps_ > 0.0 ? (input_fps_ / output_fps_) : 0.0);
     }
-    Logger::Info(oss.str()); }
+    Logger::Debug(oss.str()); }
 
   fill_running_ = true;
   {
@@ -280,7 +280,7 @@ void VideoLookaheadBuffer::FillLoop() {
         << " cadence_active=" << cadence_active
         << " my_audio_gen=" << my_audio_gen
         << " have_last_decoded=" << have_last_decoded;
-    Logger::Info(oss.str()); }
+    Logger::Debug(oss.str()); }
 
   const char* exit_reason = "unknown";
   try {
@@ -539,7 +539,7 @@ void VideoLookaheadBuffer::FillLoop() {
   if (strcmp(exit_reason, "exception") != 0) {
     { std::ostringstream oss;
       oss << "[FillLoop:" << buffer_label_ << "] FILL_EXIT reason=" << exit_reason;
-      Logger::Info(oss.str()); }
+      Logger::Debug(oss.str()); }
   }
 }
 
