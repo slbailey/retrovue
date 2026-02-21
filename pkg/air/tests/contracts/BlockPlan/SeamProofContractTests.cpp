@@ -298,7 +298,7 @@ TEST_F(SeamProofContractTest, FingerprintCallbackFiresEveryFrame) {
 // Verify FramesPerBlock matches ceil formula.
 // =============================================================================
 TEST_F(SeamProofContractTest, FrameDataCarriesMetadata) {
-  TickProducer source(640, 480, 30.0);
+  TickProducer source(640, 480, 30, 1);
 
   // AssignBlock with synthetic (probe fails, no decoder)
   FedBlock block = MakeSyntheticBlock("sp004", 5000);

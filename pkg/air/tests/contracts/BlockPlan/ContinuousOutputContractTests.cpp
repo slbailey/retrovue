@@ -312,7 +312,7 @@ FedBlock MakeSyntheticBlock(const std::string& block_id,
 // TryGetFrame repeatedly (returns nullopt for synthetic block). Reset → EMPTY.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
-  TickProducer source(640, 480, 30.0);
+  TickProducer source(640, 480, 30, 1);
 
   // Initial state: EMPTY
   EXPECT_EQ(source.GetState(), TickProducer::State::kEmpty);
@@ -349,7 +349,7 @@ TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
 // Contract: INV-AIR-MEDIA-TIME-001
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, FrameCountDeterministic) {
-  TickProducer source(640, 480, 30.0);
+  TickProducer source(640, 480, 30, 1);
 
   // 5000ms block at 30fps: ceil(5000 * 30 / 1000) = ceil(150.0) = 150
   {

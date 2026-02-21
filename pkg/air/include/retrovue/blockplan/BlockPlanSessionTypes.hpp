@@ -122,6 +122,16 @@ inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
   fps_den = 1;
 }
 
+// =============================================================================
+// ResampleMode — frame selection policy for input_fps vs output_fps (rational).
+// Used by TickProducer and VideoLookaheadBuffer. No floats.
+// =============================================================================
+enum class ResampleMode {
+  OFF,     // exact fps match: 1 input frame per output tick
+  DROP,    // integer downscale (e.g. 60→30, 120→30): emit first of every step
+  CADENCE  // non-integer ratio (e.g. 23.976→30): accumulator / Bresenham
+};
+
 struct BufferConfig {
   int video_target_depth_frames = 0;  // 0 = auto: max(1, fps * 0.5)
   int video_low_water_frames = 0;     // 0 = auto: max(1, target / 3)

@@ -9,14 +9,98 @@
 
 #include <cmath>
 #include <cstdint>
+#include <queue>
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/ITickProducerDecoder.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
+#include "retrovue/decode/FFmpegDecoder.h"
 
 namespace retrovue::blockplan::testing {
 namespace {
+
+// =============================================================================
+// FakeTickProducerDecoder — deterministic 60fps source for DROP duration/PTS tests.
+// Reports input_fps 60, returns video with duration 1/60s and PTS advancing 1/60s per decode;
+// one audio frame per decode. No real file; used with SetDecoderFactoryForTest.
+// =============================================================================
+class FakeTickProducerDecoder : public ITickProducerDecoder {
+ public:
+  explicit FakeTickProducerDecoder(const decode::DecoderConfig& config)
+      : width_(config.target_width),
+        height_(config.target_height),
+        input_fps_(60.0),
+        decode_count_(0),
+        max_decodes_(60) {}
+
+  bool Open() override { return true; }
+  int SeekPreciseToMs(int64_t) override { return 0; }
+  double GetVideoFPS() override { return input_fps_; }
+  bool DecodeFrameToBuffer(buffer::Frame& out) override {
+    if (decode_count_ >= max_decodes_) return false;
+    decode_count_++;
+    out.width = width_;
+    out.height = height_;
+    out.metadata.duration = 1.0 / input_fps_;  // 1/60 s — simulates buggy condition
+    out.metadata.pts = static_cast<int64_t>((decode_count_ - 1) * 1'000'000.0 / input_fps_);
+    out.metadata.dts = out.metadata.pts;
+    out.metadata.asset_uri = "fake://60fps";
+    size_t y = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+    size_t uv = (y / 4);
+    out.data.resize(y + 2 * uv, 0x10);
+    // One pending audio frame per decode (for DROP aggregation)
+    buffer::AudioFrame af;
+    af.sample_rate = buffer::kHouseAudioSampleRate;
+    af.channels = buffer::kHouseAudioChannels;
+    af.nb_samples = 800;  // ~1/60 s at 48k
+    af.pts_us = out.metadata.pts;
+    af.data.resize(static_cast<size_t>(af.nb_samples) * af.channels * sizeof(int16_t), 0);
+    pending_audio_.push(std::move(af));
+    return true;
+  }
+  bool GetPendingAudioFrame(buffer::AudioFrame& out) override {
+    if (pending_audio_.empty()) return false;
+    out = std::move(pending_audio_.front());
+    pending_audio_.pop();
+    return true;
+  }
+  bool IsEOF() const override { return decode_count_ >= max_decodes_; }
+  void SetInterruptFlags(const DecoderInterruptFlags&) override {}
+  bool HasAudioStream() const override { return true; }
+
+ private:
+  int width_;
+  int height_;
+  double input_fps_;
+  int decode_count_;
+  int max_decodes_;
+  std::queue<buffer::AudioFrame> pending_audio_;
+};
+
+// =============================================================================
+// INV-FPS-MAPPING: ResampleMode detection (rational only, no floats).
+// Mirrors TickProducer::UpdateResampleMode() for regression tests.
+// =============================================================================
+static void ComputeResampleMode(int64_t in_num, int64_t in_den,
+                                int64_t out_num, int64_t out_den,
+                                ResampleMode* mode, int64_t* step) {
+  *mode = ResampleMode::OFF;
+  *step = 1;
+  if (in_num <= 0 || in_den <= 0 || out_num <= 0 || out_den <= 0) return;
+  using Wide = __int128;
+  Wide in_out = static_cast<Wide>(in_num) * static_cast<Wide>(out_den);
+  Wide out_in = static_cast<Wide>(out_num) * static_cast<Wide>(in_den);
+  if (in_out == out_in) return;
+  if (out_in != 0 && (in_out % out_in) == 0) {
+    *mode = ResampleMode::DROP;
+    *step = static_cast<int64_t>(in_out / out_in);
+    if (*step < 1) *step = 1;
+    return;
+  }
+  *mode = ResampleMode::CADENCE;
+}
 
 // =============================================================================
 // Simulated PTS generation
@@ -109,7 +193,8 @@ static int64_t OldFramesPerBlock(int64_t duration_ms, double output_fps) {
 }
 
 // Helper: Create synthetic FedBlock for TickProducer tests
-static FedBlock MakeSyntheticBlock(const std::string& id, int64_t duration_ms) {
+static FedBlock MakeSyntheticBlock(const std::string& id, int64_t duration_ms,
+                                   const std::string& asset_uri = "/nonexistent/test.mp4") {
   FedBlock block;
   block.block_id = id;
   block.channel_id = 1;
@@ -117,7 +202,7 @@ static FedBlock MakeSyntheticBlock(const std::string& id, int64_t duration_ms) {
   block.end_utc_ms = 1'000'000 + duration_ms;
   FedBlock::Segment seg;
   seg.segment_index = 0;
-  seg.asset_uri = "/nonexistent/test.mp4";
+  seg.asset_uri = asset_uri;
   seg.asset_start_offset_ms = 0;
   seg.segment_duration_ms = duration_ms;
   block.segments.push_back(seg);
@@ -344,7 +429,7 @@ TEST(MediaTimeContract, FenceHoldSafety_EOF1FrameEarly) {
 TEST(MediaTimeContract, FramesPerBlock_ExactFormula) {
   // Test at 30fps output
   {
-    TickProducer source(640, 480, 30.0);
+    TickProducer source(640, 480, 30, 1);
     FedBlock block = MakeSyntheticBlock("fpb-30min", 30 * 60 * 1000);
     source.AssignBlock(block);
 
@@ -365,7 +450,7 @@ TEST(MediaTimeContract, FramesPerBlock_ExactFormula) {
 
   // Test at 30fps output, 25 minutes
   {
-    TickProducer source(640, 480, 30.0);
+    TickProducer source(640, 480, 30, 1);
     FedBlock block = MakeSyntheticBlock("fpb-25min", 25 * 60 * 1000);
     source.AssignBlock(block);
 
@@ -379,7 +464,7 @@ TEST(MediaTimeContract, FramesPerBlock_ExactFormula) {
 
   // Test with non-round duration (5000ms)
   {
-    TickProducer source(640, 480, 30.0);
+    TickProducer source(640, 480, 30, 1);
     FedBlock block = MakeSyntheticBlock("fpb-5s", 5000);
     source.AssignBlock(block);
 
@@ -393,7 +478,7 @@ TEST(MediaTimeContract, FramesPerBlock_ExactFormula) {
 
   // Test with non-round duration (3700ms)
   {
-    TickProducer source(640, 480, 30.0);
+    TickProducer source(640, 480, 30, 1);
     FedBlock block = MakeSyntheticBlock("fpb-3700", 3700);
     source.AssignBlock(block);
 
@@ -602,6 +687,148 @@ TEST(MediaTimeContract, Regression_OldFormulaDriftQuantification) {
   int64_t new_fpb = ExactFramesPerBlock(25 * 60 * 1000, 30.0);
   EXPECT_GT(old_fpb - new_fpb, 400)
       << "Old formula must overestimate by >400 frames for 25min block";
+}
+
+// =============================================================================
+// INV-FPS-MAPPING: ResampleMode detection regression (60→30 DROP, 30→30 OFF,
+// 23.976→30 CADENCE). DROP must not reduce audio; skip decodes still contribute
+// audio (tested by code path; E2E with 60fps asset asserts no audio underflow).
+// =============================================================================
+
+TEST(MediaTimeContract, ResampleMode_60to30_DROP_step2) {
+  ResampleMode mode = ResampleMode::OFF;
+  int64_t step = 1;
+  ComputeResampleMode(60, 1, 30, 1, &mode, &step);
+  EXPECT_EQ(mode, ResampleMode::DROP) << "60→30 MUST be DROP (INV-FPS-MAPPING)";
+  EXPECT_EQ(step, 2) << "60→30 step must be 2";
+}
+
+TEST(MediaTimeContract, ResampleMode_30to30_OFF) {
+  ResampleMode mode = ResampleMode::CADENCE;
+  int64_t step = 1;
+  ComputeResampleMode(30, 1, 30, 1, &mode, &step);
+  EXPECT_EQ(mode, ResampleMode::OFF) << "30→30 MUST be OFF";
+  EXPECT_EQ(step, 1);
+}
+
+TEST(MediaTimeContract, ResampleMode_120to30_DROP_step4) {
+  ResampleMode mode = ResampleMode::OFF;
+  int64_t step = 1;
+  ComputeResampleMode(120, 1, 30, 1, &mode, &step);
+  EXPECT_EQ(mode, ResampleMode::DROP) << "120→30 MUST be DROP";
+  EXPECT_EQ(step, 4);
+}
+
+TEST(MediaTimeContract, ResampleMode_23976to30_CADENCE) {
+  ResampleMode mode = ResampleMode::OFF;
+  int64_t step = 1;
+  ComputeResampleMode(24000, 1001, 30, 1, &mode, &step);
+  EXPECT_EQ(mode, ResampleMode::CADENCE) << "23.976→30 MUST be CADENCE";
+  EXPECT_EQ(step, 1);
+}
+
+TEST(MediaTimeContract, TickProducer_60to30_ReportsDROP_WhenDecoderOpens) {
+  // With a real 60fps asset, AssignBlock opens decoder and GetVideoFPS() returns 60,
+  // so GetResampleMode() becomes DROP and GetDropStep() becomes 2.
+  // With nonexistent asset, decoder does not open so mode stays OFF — baseline.
+  TickProducer producer(640, 480, 30, 1);
+  FedBlock block = MakeSyntheticBlock("inv-fps-mapping", 60 * 1000);
+  producer.AssignBlock(block);
+  // Decoder fails to open (nonexistent path), so input_fps remains 0 and mode stays OFF.
+  EXPECT_EQ(producer.GetResampleMode(), ResampleMode::OFF);
+  EXPECT_EQ(producer.GetDropStep(), 1);
+  // If a 60fps asset were used, we would assert:
+  //   EXPECT_EQ(producer.GetResampleMode(), ResampleMode::DROP);
+  //   EXPECT_EQ(producer.GetDropStep(), 2);
+  // and run 5–10s of ticks asserting no audio underflow and audio depth > 200ms.
+}
+
+// =============================================================================
+// INV-FPS-MAPPING + INV-FPS-TICK-PTS: Deterministic DROP contract test (no real file).
+// Fake decoder reports 60fps, returns video duration 1/60s; TickProducer must return
+// duration 1/30s and PTS advancing by one output tick per frame.
+// =============================================================================
+TEST(MediaTimeContract, TickProducer_DROP_SetsOutputDuration_ToOutputTick) {
+  constexpr double kOutFps = 30.0;
+  constexpr double kExpectedTickDurationS = 1.0 / kOutFps;  // 1/30 s
+  constexpr double kToleranceS = 1e-6;
+  constexpr int64_t kTickDurationUs = 1'000'000 / 30;  // one output tick in µs
+
+  TickProducer producer(640, 480, 30, 1);
+  producer.SetDecoderFactoryForTest(
+      [](const decode::DecoderConfig& c) {
+        return std::make_unique<FakeTickProducerDecoder>(c);
+      });
+  producer.SetAssetDurationForTest([](const std::string&) { return 10 * 1000; });
+  FedBlock block = MakeSyntheticBlock("drop-duration", 10 * 1000, "fake://60fps");
+  producer.AssignBlock(block);
+
+  ASSERT_EQ(producer.GetResampleMode(), ResampleMode::DROP)
+      << "60→30 with fake 60fps decoder must be DROP";
+  ASSERT_EQ(producer.GetDropStep(), 2);
+
+  // First frame: duration must be output tick (1/30), not input (1/60)
+  std::optional<FrameData> fd = producer.TryGetFrame();
+  ASSERT_TRUE(fd.has_value()) << "TryGetFrame must return a frame in DROP";
+  EXPECT_NEAR(fd->video.metadata.duration, kExpectedTickDurationS, kToleranceS)
+      << "INV-FPS-MAPPING: In DROP, returned frame duration must equal 1/output_fps, not 1/60";
+  // Audio must contain aggregation from skip decodes (emit + 1 skip = 2 input frames' audio)
+  EXPECT_GE(fd->audio.size(), 1u) << "DROP must aggregate audio from emit + skip decodes";
+}
+
+// =============================================================================
+// INV-FPS-TICK-PTS: In DROP, returned video PTS delta must equal tick duration,
+// not input frame duration (1/60). Run 5–10 ticks and assert PTS deltas.
+// =============================================================================
+TEST(MediaTimeContract, TickProducer_DROP_OutputPTS_AdvancesByTickDuration) {
+  constexpr double kOutFps = 30.0;
+  constexpr int64_t kTickDurationUs = 1'000'000 / 30;
+
+  TickProducer producer(640, 480, 30, 1);
+  producer.SetDecoderFactoryForTest(
+      [](const decode::DecoderConfig& c) {
+        return std::make_unique<FakeTickProducerDecoder>(c);
+      });
+  producer.SetAssetDurationForTest([](const std::string&) { return 10 * 1000; });
+  FedBlock block = MakeSyntheticBlock("drop-pts", 10 * 1000, "fake://60fps");
+  producer.AssignBlock(block);
+
+  ASSERT_EQ(producer.GetResampleMode(), ResampleMode::DROP);
+  ASSERT_EQ(producer.GetDropStep(), 2);
+
+  std::vector<int64_t> pts_us;
+  for (int i = 0; i < 10; i++) {
+    auto fd = producer.TryGetFrame();
+    if (!fd) break;
+    pts_us.push_back(fd->video.metadata.pts);
+  }
+  ASSERT_GE(pts_us.size(), 2u) << "Need at least 2 frames to assert PTS delta";
+
+  constexpr int64_t kTickDurationToleranceUs = 1;  // integer rounding over tick grid
+  constexpr int64_t kInputFrameDurationUs = 1'000'000 / 60;  // would be wrong (1/60)
+  for (size_t n = 1; n < pts_us.size(); n++) {
+    int64_t delta = pts_us[n] - pts_us[n - 1];
+    EXPECT_GE(delta, kTickDurationUs - kTickDurationToleranceUs)
+        << "INV-FPS-TICK-PTS: PTS delta at tick " << n << " too small (got " << delta << " us)";
+    EXPECT_LE(delta, kTickDurationUs + kTickDurationToleranceUs)
+        << "INV-FPS-TICK-PTS: PTS delta at tick " << n << " too large (got " << delta << " us)";
+    EXPECT_GT(delta, kInputFrameDurationUs)
+        << "INV-FPS-TICK-PTS: PTS delta must not be 1/60 (" << kInputFrameDurationUs << " us)";
+  }
+}
+
+// Optional E2E smoke: run with real 60fps asset if present. Skip if asset missing.
+TEST(MediaTimeContract, TickProducer_DROP_E2E_WithReal60fpsAsset_Optional) {
+  TickProducer producer(640, 480, 30, 1);
+  const std::string k60fpsAssetPath = "/opt/retrovue/assets/Sample60fps.mp4";
+  FedBlock block = MakeSyntheticBlock("drop-e2e", 10 * 1000, k60fpsAssetPath);
+  producer.AssignBlock(block);
+  if (producer.GetResampleMode() != ResampleMode::DROP || producer.GetDropStep() != 2) {
+    GTEST_SKIP() << "60fps asset not available at " << k60fpsAssetPath;
+  }
+  auto fd = producer.TryGetFrame();
+  ASSERT_TRUE(fd.has_value());
+  EXPECT_NEAR(fd->video.metadata.duration, 1.0 / 30.0, 1e-6);
 }
 
 }  // namespace

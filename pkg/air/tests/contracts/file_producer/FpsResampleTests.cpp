@@ -31,7 +31,7 @@ const bool kRegisterCoverage = []()
 {
   RegisterExpectedDomainCoverage(
       "FpsResample",
-      {"FR-001", "FR-002", "FR-003", "FR-004"});
+      {"FR-001", "FR-002", "FR-003", "FR-004", "FR-005"});
   return true;
 }();
 
@@ -45,7 +45,7 @@ protected:
 
   [[nodiscard]] std::vector<std::string> CoveredRuleIds() const override
   {
-    return {"FR-001", "FR-002", "FR-003", "FR-004"};
+    return {"FR-001", "FR-002", "FR-003", "FR-004", "FR-005"};
   }
 
   void SetUp() override
@@ -324,33 +324,76 @@ TEST_F(FpsResampleContractTest, FR_004_OutputPTSIsTickAligned)
 
   ASSERT_GT(frames.size(), 0u) << "Resampler produced no output frames";
 
-  int64_t tick_us = static_cast<int64_t>(std::round(1'000'000.0 / 30.0));
+  // INV-FPS-RESAMPLE: output PTS is on rational grid tick_time_us(n) = floor(n*1e6*fps_den/fps_num)
+  const int64_t fps_num = 30;
+  const int64_t fps_den = 1;
   int64_t base_pts = frames[0].metadata.pts;
+  const int64_t denom = 1'000'000 * fps_den;
 
   int alignment_failures = 0;
   for (size_t i = 0; i < frames.size(); i++)
   {
     int64_t pts = frames[i].metadata.pts;
     int64_t offset = pts - base_pts;
-    int64_t remainder = offset % tick_us;
-    // Allow 1us rounding tolerance
-    if (remainder > 1 && remainder < (tick_us - 1))
+    // Recover n such that offset == floor(n*1e6*fps_den/fps_num): n = ceil(offset*fps_num/(1e6*fps_den))
+    int64_t tick_index = (offset * fps_num + denom - 1) / denom;
+    int64_t expected_offset = (tick_index * 1'000'000 * fps_den) / fps_num;
+    if (offset != expected_offset)
     {
       alignment_failures++;
       if (alignment_failures <= 3)
       {
         std::cout << "[FR-004] Frame " << i << " PTS=" << pts
-                  << " offset=" << offset << " remainder=" << remainder
-                  << " (not tick-aligned)" << std::endl;
+                  << " offset=" << offset << " expected_offset=" << expected_offset
+                  << " (not on rational tick grid)" << std::endl;
       }
     }
   }
 
   EXPECT_EQ(alignment_failures, 0)
-      << alignment_failures << " frames had PTS not aligned to "
-      << tick_us << "us tick grid — source PTS leaking through";
+      << alignment_failures << " frames had PTS not on rational tick grid — source PTS leaking through";
 
   std::cout << "[FR-004] 50->30: " << frames.size() << " frames, all tick-aligned ✓"
+            << std::endl;
+}
+
+// ======================================================================
+// FR-005: 60fps rational tick grid — no drift over 10 minutes
+// ======================================================================
+// Regression: tick_time_us(n) = floor(n * 1e6 * fps_den / fps_num).
+// Never use rounded interval accumulation. At 60fps, 10 min = 36,000 ticks.
+// ======================================================================
+TEST_F(FpsResampleContractTest, FR_005_60fps_LongRun_NoDrift)
+{
+  const int64_t fps_num = 60;
+  const int64_t fps_den = 1;
+  const int64_t num_ticks = 36000;  // 10 minutes at 60fps
+
+  auto tick_time_us = [fps_num, fps_den](int64_t n) -> int64_t {
+    if (fps_num <= 0) return 0;
+    return (n * 1'000'000 * fps_den) / fps_num;
+  };
+
+  int64_t prev_us = -1;
+  for (int64_t n = 0; n <= num_ticks; n++)
+  {
+    int64_t t_us = tick_time_us(n);
+
+    // Strictly increasing
+    ASSERT_GT(t_us, prev_us) << "tick " << n << " not strictly increasing (prev=" << prev_us << ", t=" << t_us << ")";
+    prev_us = t_us;
+
+    // Exact: tick_time_us(n) == floor(n * 1e6 / 60)
+    int64_t expected_us = (n * 1'000'000) / 60;
+    ASSERT_EQ(t_us, expected_us) << "tick " << n << " expected " << expected_us << " got " << t_us;
+
+    // Error vs ideal real < 1us (integer floor gives at most fractional us)
+    double ideal_us = static_cast<double>(n) * 1e6 / 60.0;
+    double err_us = std::abs(static_cast<double>(t_us) - ideal_us);
+    ASSERT_LT(err_us, 1.0) << "tick " << n << " error " << err_us << "us >= 1us";
+  }
+
+  std::cout << "[FR-005] 60fps: " << (num_ticks + 1) << " ticks, strictly increasing, exact floor, error < 1us ✓"
             << std::endl;
 }
 

@@ -21,6 +21,7 @@
 #include <string>
 #include <thread>
 
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 
 namespace retrovue::blockplan {
@@ -246,6 +247,8 @@ class VideoLookaheadBuffer {
   std::atomic<bool>* stop_signal_ = nullptr;
   double input_fps_ = 0.0;
   double output_fps_ = 0.0;
+  ResampleMode resample_mode_ = ResampleMode::OFF;
+  int64_t drop_step_ = 1;
 
   // Metrics (under mutex_).
   int64_t total_pushed_ = 0;

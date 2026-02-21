@@ -12,21 +12,58 @@
 #include <iostream>
 
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
+#include "retrovue/blockplan/FFmpegDecoderAdapter.hpp"
 #include "retrovue/decode/FFmpegDecoder.h"
 
 namespace retrovue::blockplan {
 
 static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 
-TickProducer::TickProducer(int width, int height, double fps)
+// Output tick duration in seconds (1/output_fps). Used for DROP pacing metadata.
+static double TickDurationSeconds(double output_fps) {
+  return (output_fps > 0.0) ? (1.0 / output_fps) : 0.0;
+}
+
+TickProducer::TickProducer(int width, int height, int64_t fps_num, int64_t fps_den)
     : width_(width),
       height_(height),
-      output_fps_(fps),
-      frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)),
-      input_frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)) {}
+      fps_num_(fps_num <= 0 ? 1 : fps_num),
+      fps_den_(fps_den <= 0 ? 1 : fps_den),
+      output_fps_(static_cast<double>(fps_num_) / static_cast<double>(fps_den_)) {}
 
 TickProducer::~TickProducer() {
   Reset();
+}
+
+// ct_ms(k) = floor(k * 1000 * fps_den / fps_num). Rational grid, no drift.
+int64_t TickProducer::CtMs(int64_t k) const {
+  if (fps_num_ <= 0) return 0;
+  return (k * 1000 * fps_den_) / fps_num_;
+}
+
+// =============================================================================
+// UpdateResampleMode — OFF / DROP / CADENCE from rational input vs output FPS.
+// Uses 128-bit intermediates to avoid overflow. No floats, no epsilon.
+// =============================================================================
+void TickProducer::UpdateResampleMode() {
+  resample_mode_ = ResampleMode::OFF;
+  drop_step_ = 1;
+  if (input_fps_num_ <= 0 || input_fps_den_ <= 0 || fps_num_ <= 0 || fps_den_ <= 0) {
+    return;
+  }
+  using Wide = __int128;
+  Wide in_out = static_cast<Wide>(input_fps_num_) * static_cast<Wide>(fps_den_);
+  Wide out_in = static_cast<Wide>(fps_num_) * static_cast<Wide>(input_fps_den_);
+  if (in_out == out_in) {
+    return;
+  }
+  if (out_in != 0 && (in_out % out_in) == 0) {
+    resample_mode_ = ResampleMode::DROP;
+    drop_step_ = static_cast<int64_t>(in_out / out_in);
+    if (drop_step_ < 1) drop_step_ = 1;
+    return;
+  }
+  resample_mode_ = ResampleMode::CADENCE;
 }
 
 // =============================================================================
@@ -40,12 +77,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   block_ = block;
 
-  // Compute frames_per_block using exact fps to avoid truncation error.
-  // OLD: ceil(duration_ms / frame_duration_ms_) — truncated integer division
-  // NEW: ceil(duration_ms * output_fps_ / 1000.0) — exact floating-point
+  // Compute frames_per_block using rational fps (same formula as fence).
   int64_t duration_ms = block.end_utc_ms - block.start_utc_ms;
-  frames_per_block_ = static_cast<int64_t>(
-      std::ceil(static_cast<double>(duration_ms) * output_fps_ / 1000.0));
+  int64_t denom = fps_den_ * 1000;
+  frames_per_block_ = (duration_ms * fps_num_ + denom - 1) / denom;
+  frame_index_ = 0;
 
   // Convert FedBlock → BlockPlan for validation
   BlockPlan plan = FedBlockToBlockPlan(block);
@@ -59,16 +95,18 @@ void TickProducer::AssignBlock(const FedBlock& block) {
     }
   }
 
-  // Probe all segment assets (skip PAD — no asset to probe)
-  bool all_probed = true;
-  for (const auto& seg : plan.segments) {
-    if (seg.segment_type == SegmentType::kPad) continue;
-    if (!assets_.HasAsset(seg.asset_uri)) {
-      if (!assets_.ProbeAsset(seg.asset_uri)) {
-        std::cerr << "[TickProducer] Failed to probe asset: " << seg.asset_uri
-                  << std::endl;
-        all_probed = false;
-        break;
+  // Probe all segment assets (skip PAD — no asset to probe). Skip probe when using test decoder.
+  bool all_probed = decoder_factory_for_test_.has_value();
+  if (!all_probed) {
+    for (const auto& seg : plan.segments) {
+      if (seg.segment_type == SegmentType::kPad) continue;
+      if (!assets_.HasAsset(seg.asset_uri)) {
+        if (!assets_.ProbeAsset(seg.asset_uri)) {
+          std::cerr << "[TickProducer] Failed to probe asset: " << seg.asset_uri
+                    << std::endl;
+          all_probed = false;
+          break;
+        }
       }
     }
   }
@@ -83,6 +121,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   // Validate via BlockPlanValidator to get segment boundaries
   auto asset_duration_fn = [this](const std::string& uri) -> int64_t {
+    if (asset_duration_for_test_) return (*asset_duration_for_test_)(uri);
     return assets_.GetDuration(uri);
   };
   BlockPlanValidator validator(asset_duration_fn);
@@ -125,7 +164,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
               << " frames_per_block=" << frames_per_block_
               << " segments=" << plan.segments.size()
               << " first_segment=PAD"
-              << " output_frame_dur_ms=" << frame_duration_ms_
+              << " output_frame_dur_ms=" << FramePeriodMs()
               << std::endl;
     return;
   }
@@ -135,7 +174,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   dec_config.target_width = width_;
   dec_config.target_height = height_;
 
-  decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
+  if (decoder_factory_for_test_) {
+    decoder_ = (*decoder_factory_for_test_)(dec_config);
+  } else {
+    decoder_ = std::make_unique<FFmpegDecoderAdapter>(dec_config);
+  }
   if (!decoder_->Open()) {
     std::cout << "[TickProducer] DECODER_STEP block_id=" << block.block_id
               << " step=open result=fail asset_uri=" << first_seg.asset_uri
@@ -176,15 +219,9 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << std::endl;
 
   // Detect input FPS from decoder for cadence support.
-  // If input FPS differs from output FPS, PipelineManager will use
-  // cadence-based frame repeat to avoid consuming content too fast.
   input_fps_ = decoder_->GetVideoFPS();
-  if (input_fps_ > 0.0) {
-    input_frame_duration_ms_ = static_cast<int64_t>(
-        std::round(1000.0 / input_fps_));
-  } else {
-    input_frame_duration_ms_ = frame_duration_ms_;
-  }
+  DeriveRationalFPS(input_fps_, input_fps_num_, input_fps_den_);
+  UpdateResampleMode();
 
   state_ = State::kReady;
 
@@ -194,8 +231,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " decoder_ok=true"
             << " has_pad=" << has_pad_segments_
             << " input_fps=" << input_fps_
-            << " input_frame_dur_ms=" << input_frame_duration_ms_
-            << " output_frame_dur_ms=" << frame_duration_ms_
+            << " fps_num=" << fps_num_ << " fps_den=" << fps_den_
             << std::endl;
 }
 
@@ -206,7 +242,7 @@ void TickProducer::SetLogicalSegmentIndex(int32_t index) {
 void TickProducer::SetInterruptFlags(const ITickProducer::InterruptFlags& flags) {
   interrupt_flags_ = flags;
   if (decoder_) {
-    decode::FFmpegDecoder::InterruptFlags dec_flags;
+    DecoderInterruptFlags dec_flags;
     dec_flags.fill_stop = flags.fill_stop;
     dec_flags.session_stop = flags.session_stop;
     decoder_->SetInterruptFlags(dec_flags);
@@ -251,8 +287,7 @@ void TickProducer::PrimeFirstFrame() {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  block_ct_ms_ = ct_before + input_frame_duration_ms_;
-  next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
+  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
 
   primed_frame_ = FrameData{
       std::move(video_frame),
@@ -342,6 +377,15 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
     buffered_frames_.push_back(std::move(f));
   }
 
+  // INV-AUDIO-PRIME-002: Prime frame must carry at least one audio packet when audio exists.
+  // First decoded frame can have 0 audio (codec/resampler delay). Steal one from buffered.
+  if (decoder_ && decoder_->HasAudioStream() &&
+      primed_frame_->audio.empty() && !buffered_frames_.empty() &&
+      !buffered_frames_.front().audio.empty()) {
+    primed_frame_->audio.push_back(std::move(buffered_frames_.front().audio.front()));
+    buffered_frames_.front().audio.erase(buffered_frames_.front().audio.begin());
+  }
+
   bool met = depth_ms >= min_audio_prime_ms;
 
   std::cout << "[TickProducer] INV-AUDIO-PRIME-001: PrimeFirstTick"
@@ -351,6 +395,8 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
             << " total_decodes=" << total_decodes
             << " null_run=" << null_run
             << " buffered_video=" << buffered_frames_.size()
+            << " primed_audio_count=" << (primed_frame_.has_value() ? primed_frame_->audio.size() : 0)
+            << " has_audio_stream=" << (decoder_ && decoder_->HasAudioStream())
             << std::endl;
 
   return {met, depth_ms};
@@ -369,6 +415,8 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (primed_frame_.has_value()) {
     auto frame = std::move(*primed_frame_);
     primed_frame_.reset();
+    block_ct_ms_ = CtMs(frame_index_);
+    frame_index_++;
     return frame;
   }
 
@@ -376,10 +424,56 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (!buffered_frames_.empty()) {
     auto frame = std::move(buffered_frames_.front());
     buffered_frames_.pop_front();
+    block_ct_ms_ = CtMs(frame_index_);
+    frame_index_++;
     return frame;
   }
 
-  // Decode-only path: handles both real decode and PAD generation.
+  // DROP mode: decode drop_step_ input frames, emit first VIDEO only; harvest ALL audio.
+  // INV-FPS-MAPPING: DROP must not reduce audio production — skip decodes still contribute
+  // their decoded audio so total audio matches input time advanced (e.g. 2/60s per 1/30s tick).
+  // Single push point: TickProducer does NOT push to any audio buffer; the returned FrameData
+  // is the only carrier. The fill thread (VideoLookaheadBuffer) pushes fd->audio once per tick.
+  // INV-FPS-MAPPING: In DROP, returned output frame duration metadata MUST equal the output
+  // tick duration (1/output_fps), not the input frame duration. Decoder sets per-input-frame
+  // duration (e.g. 1/60s); we override so consumers (ProgramOutput, pacing) don't pop/pace 2×.
+  if (resample_mode_ == ResampleMode::DROP && drop_step_ > 1) {
+    auto first = DecodeNextFrameRaw(true);
+    if (!first) return std::nullopt;
+    for (int64_t i = 1; i < drop_step_; i++) {
+      auto skip = DecodeNextFrameRaw(false);
+      if (skip) {
+        for (auto& af : skip->audio) {
+          first->audio.push_back(std::move(af));
+        }
+      }
+    }
+    const double expected_tick_duration_s = TickDurationSeconds(output_fps_);
+    if (expected_tick_duration_s > 0.0) {
+      first->video.metadata.duration = expected_tick_duration_s;
+    }
+    // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
+    // frame_index_ was already advanced by DecodeNextFrameRaw(true), so this frame is tick (frame_index_ - 1).
+    const int64_t this_tick_index = frame_index_ - 1;
+    const int64_t tick_pts_us = (fps_num_ > 0)
+        ? (this_tick_index * 1'000'000 * fps_den_) / fps_num_
+        : static_cast<int64_t>(this_tick_index * 1'000'000.0 / output_fps_);
+    first->video.metadata.pts = tick_pts_us;
+    first->video.metadata.dts = tick_pts_us;
+    // INV-TICK-AUTHORITY-001: duration already set to expected_tick_duration_s above.
+    // Log mismatch only when debugging (enable RETROVUE_DEBUG_DROP_DURATION at build).
+#ifdef RETROVUE_DEBUG_DROP_DURATION
+    constexpr double kDurationEpsilon = 1e-6;
+    if (expected_tick_duration_s > 0.0 &&
+        std::abs(first->video.metadata.duration - expected_tick_duration_s) > kDurationEpsilon) {
+      std::cout << "[TickProducer] DROP duration mismatch returned=" << first->video.metadata.duration
+                << " expected_tick_s=" << expected_tick_duration_s << std::endl;
+    }
+#endif
+    return first;
+  }
+
+  // OFF / CADENCE: one decode per output tick.
   return DecodeNextFrameRaw();
 }
 
@@ -450,7 +544,7 @@ static void ApplyFade(FrameData& fd, double alpha) {
 // DecodeNextFrameRaw — decode-only frame advancement (no delivery state)
 // =============================================================================
 
-std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
+std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_state) {
   if (state_ != State::kReady) {
     return std::nullopt;
   }
@@ -463,7 +557,10 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
   }
 
   if (!decoder_ok_) {
-    block_ct_ms_ += input_frame_duration_ms_;
+    if (advance_output_state) {
+      block_ct_ms_ = CtMs(frame_index_);
+      frame_index_++;
+    }
     return std::nullopt;
   }
 
@@ -477,9 +574,11 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
                 << " block_id=" << block_.block_id
                 << std::endl;
       decoder_ok_ = false;
-      return std::nullopt;
     }
-    block_ct_ms_ += input_frame_duration_ms_;
+    if (advance_output_state) {
+      block_ct_ms_ = CtMs(frame_index_);
+      frame_index_++;
+    }
     return std::nullopt;
   }
 
@@ -503,8 +602,7 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
   }
 
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  block_ct_ms_ = ct_before + input_frame_duration_ms_;
-  next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
+  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
 
   FrameData result{
       std::move(video_frame),
@@ -550,6 +648,10 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
     }
   }
 
+  if (advance_output_state) {
+    block_ct_ms_ = CtMs(frame_index_);
+    frame_index_++;
+  }
   return result;
 }
 
@@ -571,9 +673,8 @@ void TickProducer::InitPadFrames() {
               static_cast<size_t>(2 * uv_size));
 
   int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
-  int64_t fps_num_i = static_cast<int64_t>(output_fps_ + 0.5);
   pad_audio_samples_per_frame_ = static_cast<int>(
-      (sr + fps_num_i - 1) / fps_num_i);
+      (sr * fps_den_ + fps_num_ - 1) / fps_num_);
 }
 
 // AdvanceToNextSegment REMOVED — reactive segment advancement replaced by
@@ -599,8 +700,9 @@ std::optional<FrameData> TickProducer::GeneratePadFrame() {
       static_cast<size_t>(buffer::kHouseAudioChannels) *
       sizeof(int16_t), 0);
 
-  int64_t ct_before = block_ct_ms_;
-  block_ct_ms_ += frame_duration_ms_;
+  int64_t ct_before = CtMs(frame_index_);
+  block_ct_ms_ = CtMs(frame_index_);
+  frame_index_++;
 
   return FrameData{
       std::move(vf),
@@ -627,7 +729,11 @@ void TickProducer::Reset() {
   buffered_frames_.clear();
   has_pad_segments_ = false;
   input_fps_ = 0.0;
-  input_frame_duration_ms_ = frame_duration_ms_;
+  input_fps_num_ = 1;
+  input_fps_den_ = 1;
+  resample_mode_ = ResampleMode::OFF;
+  drop_step_ = 1;
+  frame_index_ = 0;
   seg_first_pts_ms_ = -1;
   open_generation_ = 0;
   state_ = State::kEmpty;
@@ -653,8 +759,20 @@ double TickProducer::GetInputFPS() const {
   return input_fps_;
 }
 
+ResampleMode TickProducer::GetResampleMode() const {
+  return resample_mode_;
+}
+
+int64_t TickProducer::GetDropStep() const {
+  return drop_step_;
+}
+
 bool TickProducer::HasPrimedFrame() const {
   return primed_frame_.has_value();
+}
+
+bool TickProducer::HasAudioStream() const {
+  return decoder_ && decoder_->HasAudioStream();
 }
 
 const std::vector<SegmentBoundary>& TickProducer::GetBoundaries() const {

@@ -18,15 +18,17 @@
 #include <string>
 #include <vector>
 
+#include <functional>
+
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
+#include "retrovue/blockplan/ITickProducerDecoder.hpp"
 #include "retrovue/blockplan/RealAssetSource.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
 
 namespace retrovue::decode {
-class FFmpegDecoder;
 struct DecoderConfig;
 }  // namespace retrovue::decode
 
@@ -74,7 +76,7 @@ class TickProducer : public producers::IProducer,
  public:
   using State = ITickProducer::State;
 
-  TickProducer(int width, int height, double fps);
+  TickProducer(int width, int height, int64_t fps_num, int64_t fps_den);
   ~TickProducer() override;
 
   // --- ITickProducer ---
@@ -86,7 +88,10 @@ class TickProducer : public producers::IProducer,
   int64_t FramesPerBlock() const override;
   bool HasDecoder() const override;
   double GetInputFPS() const override;
+  ResampleMode GetResampleMode() const override;
+  int64_t GetDropStep() const override;
   bool HasPrimedFrame() const override;
+  bool HasAudioStream() const override;
   const std::vector<SegmentBoundary>& GetBoundaries() const override;
 
   void SetInterruptFlags(const ITickProducer::InterruptFlags&) override;
@@ -125,6 +130,19 @@ class TickProducer : public producers::IProducer,
   // RequestStop flag — PipelineManager reads this to respect cooperative stop.
   bool IsStopRequested() const { return stop_requested_; }
 
+  // Test-only: inject a decoder factory so contract tests can use FakeTickProducerDecoder
+  // (deterministic DROP duration/PTS tests). Production leaves this unset.
+  using DecoderFactory =
+      std::function<std::unique_ptr<ITickProducerDecoder>(const decode::DecoderConfig&)>;
+  void SetDecoderFactoryForTest(DecoderFactory factory) {
+    decoder_factory_for_test_ = std::move(factory);
+  }
+  // When using a fake decoder, validation still needs segment duration. Optional: return ms for URI.
+  using AssetDurationFnForTest = std::function<int64_t(const std::string&)>;
+  void SetAssetDurationForTest(AssetDurationFnForTest fn) {
+    asset_duration_for_test_ = std::move(fn);
+  }
+
  private:
   State state_ = State::kEmpty;
   FedBlock block_;
@@ -134,8 +152,10 @@ class TickProducer : public producers::IProducer,
   bool running_ = false;
   bool stop_requested_ = false;
 
-  // Decode state
-  std::unique_ptr<decode::FFmpegDecoder> decoder_;
+  // Decode state (interface so tests can inject FakeTickProducerDecoder)
+  std::unique_ptr<ITickProducerDecoder> decoder_;
+  std::optional<DecoderFactory> decoder_factory_for_test_;
+  std::optional<AssetDurationFnForTest> asset_duration_for_test_;
   ITickProducer::InterruptFlags interrupt_flags_;
   std::string current_asset_uri_;
   int64_t next_frame_offset_ms_ = 0;
@@ -151,10 +171,25 @@ class TickProducer : public producers::IProducer,
 
   int width_;
   int height_;
-  double output_fps_;                     // Output fps (exact, for frames_per_block)
-  int64_t frame_duration_ms_;            // Output frame duration (for fence/frames_per_block)
-  double input_fps_ = 0.0;              // Detected input FPS (0 = unknown)
-  int64_t input_frame_duration_ms_ = 0;  // Content advance per decode (matches input cadence)
+  int64_t fps_num_;                       // Rational output FPS (authoritative)
+  int64_t fps_den_;
+  double output_fps_;                     // Derived double for frames_per_block formula only
+  double input_fps_ = 0.0;                // Detected input FPS (0 = unknown)
+  int64_t input_fps_num_ = 1;             // Rational input FPS (for resample mode detection)
+  int64_t input_fps_den_ = 1;
+
+  ResampleMode resample_mode_ = ResampleMode::OFF;
+  int64_t drop_step_ = 1;                 // For DROP: input frames per output frame (>= 1)
+
+  void UpdateResampleMode();               // Rational detection, 128-bit intermediates
+
+  // Output tick index: each TryGetFrame return advances it. CT from grid, not accumulated ms.
+  int64_t frame_index_ = 0;
+
+  // ct_ms(k) = floor(k * 1000 * fps_den / fps_num). No rounded step accumulation.
+  int64_t CtMs(int64_t k) const;
+  // One output frame period in ms (for next_frame_offset look-ahead and display).
+  int64_t FramePeriodMs() const { return fps_num_ > 0 ? (1000 * fps_den_) / fps_num_ : 33; }
 
   // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
   // Audio vector contains only this frame's own decoded audio (0-2 frames).
@@ -177,10 +212,11 @@ class TickProducer : public producers::IProducer,
 
   // Decode-only frame advancement.  Advances the decoder exactly one frame,
   // extracts pending audio, advances CT based on decoded PTS.
-  // Does NOT inspect or mutate primed_frame_ or buffered_frames_.
+  // When advance_output_state is false (DROP skip), decoder advances but
+  // frame_index_/block_ct_ms_ are not updated.
   // Returns nullopt on EOF, decode failure, or decoder_ok_ == false.
   // For PAD segments: returns GeneratePadFrame() (no decode needed).
-  std::optional<FrameData> DecodeNextFrameRaw();
+  std::optional<FrameData> DecodeNextFrameRaw(bool advance_output_state = true);
 
   // REMOVED: AdvanceToNextSegment() — reactive segment advancement replaced by
   // eager overlap via SeamPreparer.  See INV-SEAM-SEG-001..006.

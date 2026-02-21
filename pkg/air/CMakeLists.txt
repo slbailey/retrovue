@@ -203,6 +203,7 @@ set(AIR_CORE_SOURCES
   src/blockplan/RealAssetSource.cpp
   # PipelineManager playout engine (P3.0 + P3.1a + P3.1b: pad + A/B producer swap)
   src/blockplan/OutputClock.cpp
+  src/blockplan/FFmpegDecoderAdapter.cpp
   src/blockplan/TickProducer.cpp
   src/blockplan/ProducerPreloader.cpp
   src/blockplan/SeamPreparer.cpp

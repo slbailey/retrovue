@@ -30,6 +30,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/runtime/AspectPolicy.h"
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/timing/TimelineController.h"
@@ -578,11 +579,11 @@ namespace retrovue::producers::file
     std::cout << "[FileProducer] Decode loop started (stub_mode=" 
               << (config_.stub_mode ? "true" : "false") << ")" << std::endl;
 
-    // INV-FPS-RESAMPLE: Initialize resampler for stub mode when stub_source_fps is set
+    // INV-FPS-RESAMPLE: Initialize resampler for stub mode when stub_source_fps is set.
+    // Rational target FPS for tick grid (no rounded interval).
+    retrovue::blockplan::DeriveRationalFPS(config_.target_fps, target_fps_num_, target_fps_den_);
     if (config_.stub_mode && config_.stub_source_fps > 0.0) {
       source_fps_ = config_.stub_source_fps;
-      output_tick_interval_us_ = static_cast<int64_t>(
-          std::round(1000000.0 / config_.target_fps));
       double fps_ratio = source_fps_ / config_.target_fps;
       resample_active_ = (fps_ratio < (1.0 - kFpsMatchToleranceRatio) ||
                           fps_ratio > (1.0 + kFpsMatchToleranceRatio));
@@ -594,7 +595,7 @@ namespace retrovue::producers::file
                   << " source=" << source_fps_ << "fps"
                   << " target=" << config_.target_fps << "fps"
                   << " stub_frame_interval=" << frame_interval_us_ << "us"
-                  << " tick=" << output_tick_interval_us_ << "us"
+                  << " tick_duration=" << TickDurationUs() << "us"
                   << std::endl;
       }
     }
@@ -828,15 +829,15 @@ namespace retrovue::producers::file
         AVStream* stream = format_ctx_->streams[i];
         time_base_ = av_q2d(stream->time_base);
 
-        // INV-FPS-RESAMPLE: Detect source frame rate for PTS-driven resampling
+        // INV-FPS-RESAMPLE: Detect source frame rate for PTS-driven resampling.
+        // Rational target FPS for tick grid (no rounded interval).
+        retrovue::blockplan::DeriveRationalFPS(config_.target_fps, target_fps_num_, target_fps_den_);
         AVRational guessed_fps = av_guess_frame_rate(format_ctx_, stream, nullptr);
         if (guessed_fps.num > 0 && guessed_fps.den > 0) {
           source_fps_ = av_q2d(guessed_fps);
         } else {
           source_fps_ = config_.target_fps;
         }
-        output_tick_interval_us_ = static_cast<int64_t>(
-            std::round(1000000.0 / config_.target_fps));
 
         // Activate when source and target differ by > 1%
         double fps_ratio = source_fps_ / config_.target_fps;
@@ -847,7 +848,7 @@ namespace retrovue::producers::file
                     << " source=" << source_fps_ << "fps"
                     << " target=" << config_.target_fps << "fps"
                     << " ratio=" << fps_ratio
-                    << " tick=" << output_tick_interval_us_ << "us"
+                    << " tick_duration=" << TickDurationUs() << "us"
                     << std::endl;
         }
 
@@ -1904,7 +1905,7 @@ namespace retrovue::producers::file
     // Frame decoded and ready to push
 
     // INV-AUDIO-DEBT: Tick-driven audio drain after video emission (non-resampled path).
-    DrainAudioForTick(output_tick_interval_us_);
+    DrainAudioForTick(TickDurationUs());
 
     // INV-P8-AUDIO-GATE Fix #2: Clear the flag after audio has been processed.
     // The flag was set when AdmitFrame locked the mapping, and ensured audio
@@ -3307,8 +3308,15 @@ namespace retrovue::producers::file
   void FileProducer::DrainAudioDecoderIfNeeded()
   {
     if (audio_stream_index_ >= 0 && !audio_eof_reached_) {
-      DrainAudioForTick(output_tick_interval_us_);
+      DrainAudioForTick(TickDurationUs());
     }
+  }
+
+  // INV-FPS-RESAMPLE: tick_time_us(n) = floor(n * 1_000_000 * fps_den / fps_num). Integer math, no drift.
+  int64_t FileProducer::TickTimeUs(int64_t n) const
+  {
+    if (target_fps_num_ <= 0) return 0;
+    return (n * 1'000'000 * target_fps_den_) / target_fps_num_;
   }
 
   // ======================================================================
@@ -3390,7 +3398,7 @@ namespace retrovue::producers::file
     frames_delivered_.fetch_add(1, std::memory_order_relaxed);
 
     // INV-AUDIO-DEBT: Tick-driven audio drain after video emission
-    DrainAudioForTick(output_tick_interval_us_);
+    DrainAudioForTick(TickDurationUs());
 
     return true;  // Frame emitted successfully
   }
@@ -3407,15 +3415,16 @@ namespace retrovue::producers::file
 
     resample_frames_decoded_++;
 
-    // Initialize tick grid from first frame after seek/start
+    // Initialize tick grid from first frame: align tick index so current tick contains base_pts_us.
     if (next_output_tick_us_ < 0) {
-      next_output_tick_us_ = base_pts_us;
-      // TODO(INV-FPS-RESAMPLE): Consider anchoring tick grid to block-start MT PTS
-      // (house clock alignment) when available, instead of first decoded frame PTS.
-      // Current approach: phase depends on first frame seen after seek.
-      // With block-start anchor: phase is deterministic across seeks/restarts.
+      // tick_index_ such that tick_time_us(tick_index_) <= base_pts_us < tick_time_us(tick_index_+1)
+      if (target_fps_num_ > 0 && target_fps_den_ > 0) {
+        tick_index_ = (base_pts_us * target_fps_num_) / (1'000'000 * target_fps_den_);
+      }
+      next_output_tick_us_ = TickTimeUs(tick_index_);
       std::cout << "[FileProducer] INV-FPS-RESAMPLE: Tick grid anchored at "
-                << base_pts_us << "us (source=" << source_fps_
+                << base_pts_us << "us tick_index=" << tick_index_
+                << " (source=" << source_fps_
                 << "fps, target=" << config_.target_fps << "fps)" << std::endl;
     }
 
@@ -3436,7 +3445,7 @@ namespace retrovue::producers::file
 
     // Crossed tick boundary: base_pts_us > next_output_tick_us_
     // Check if the crossing frame is ALSO past the NEXT tick (slow source / repeat case)
-    int64_t after_tick = next_output_tick_us_ + output_tick_interval_us_;
+    int64_t after_tick = TickTimeUs(tick_index_ + 1);
     if (base_pts_us > after_tick && held_frame_valid_) {
       // Crossing frame is past the next tick too — repeat held frame,
       // save crossing frame for later
@@ -3456,7 +3465,7 @@ namespace retrovue::producers::file
       held_frame_mt_us_ = crossing_mt;
     }
 
-    // Stamp output to tick grid
+    // Stamp output to tick grid (rational: no accumulated interval)
     int64_t tick_pts_us = next_output_tick_us_;
     output_frame.metadata.pts = tick_pts_us;
     output_frame.metadata.duration = 1.0 / config_.target_fps;
@@ -3464,7 +3473,7 @@ namespace retrovue::producers::file
     last_decoded_mt_pts_us_ = tick_pts_us;
     last_mt_pts_us_ = tick_pts_us;
     resample_frames_emitted_++;
-    next_output_tick_us_ += output_tick_interval_us_;
+    next_output_tick_us_ = TickTimeUs(++tick_index_);
 
     // Periodic stats
     if (resample_frames_emitted_ % 300 == 0) {
@@ -3514,7 +3523,7 @@ namespace retrovue::producers::file
     last_decoded_mt_pts_us_ = tick_pts_us;
     last_mt_pts_us_ = tick_pts_us;
     resample_frames_emitted_++;
-    next_output_tick_us_ += output_tick_interval_us_;
+    next_output_tick_us_ = TickTimeUs(++tick_index_);
 
     // Track consecutive repeats for freeze-frame diagnostics.
     // Freeze-frame under source stall is valid broadcast behavior, but extended

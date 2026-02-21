@@ -11,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "retrovue/util/Logger.hpp"
@@ -229,7 +230,9 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
            "INV-SEAM-SEG-PRIME-001: Segment prep blocks must be single-segment");
   }
 
-  auto source = std::make_unique<TickProducer>(req.width, req.height, req.fps);
+  int64_t fps_num = 30, fps_den = 1;
+  DeriveRationalFPS(req.fps, fps_num, fps_den);
+  auto source = std::make_unique<TickProducer>(req.width, req.height, fps_num, fps_den);
   source->AssignBlock(req.block);
   source->SetLogicalSegmentIndex(req.segment_index);
 
