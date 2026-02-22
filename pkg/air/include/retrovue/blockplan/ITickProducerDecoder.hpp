@@ -16,6 +16,7 @@
 #include <string>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 namespace retrovue::blockplan {
 
@@ -33,7 +34,9 @@ class ITickProducerDecoder {
 
   virtual bool Open() = 0;
   virtual int SeekPreciseToMs(int64_t target_ms) = 0;
-  virtual double GetVideoFPS() = 0;
+  virtual RationalFps GetVideoRationalFps() = 0;
+  // Legacy helper for compatibility; prefer GetVideoRationalFps().
+  virtual double GetVideoFPS() { return GetVideoRationalFps().ToDouble(); }
   virtual bool DecodeFrameToBuffer(buffer::Frame& output_frame) = 0;
   virtual bool GetPendingAudioFrame(buffer::AudioFrame& output_frame) = 0;
   virtual bool IsEOF() const = 0;

@@ -21,6 +21,17 @@
 namespace retrovue::blockplan::testing {
 namespace {
 
+constexpr RationalFps kFps_60{60, 1};
+constexpr RationalFps kFps_30{30, 1};
+constexpr RationalFps kFps_120{120, 1};
+constexpr RationalFps kFps_23_976{24000, 1001};
+constexpr RationalFps kFps_59_94{60000, 1001};
+constexpr RationalFps kFps_29_97{30000, 1001};
+
+constexpr double FpsToDouble(const RationalFps& fps) {
+  return static_cast<double>(fps.num) / static_cast<double>(fps.den);
+}
+
 // =============================================================================
 // FakeTickProducerDecoder — deterministic 60fps source for DROP duration/PTS tests.
 // Reports input_fps 60, returns video with duration 1/60s and PTS advancing 1/60s per decode;
@@ -37,7 +48,7 @@ class FakeTickProducerDecoder : public ITickProducerDecoder {
 
   bool Open() override { return true; }
   int SeekPreciseToMs(int64_t) override { return 0; }
-  double GetVideoFPS() override { return input_fps_; }
+  RationalFps GetVideoRationalFps() override { return DeriveRationalFPS(input_fps_); }
   bool DecodeFrameToBuffer(buffer::Frame& out) override {
     if (decode_count_ >= max_decodes_) return false;
     decode_count_++;
@@ -698,7 +709,7 @@ TEST(MediaTimeContract, Regression_OldFormulaDriftQuantification) {
 TEST(MediaTimeContract, ResampleMode_60to30_DROP_step2) {
   ResampleMode mode = ResampleMode::OFF;
   int64_t step = 1;
-  ComputeResampleMode(60, 1, 30, 1, &mode, &step);
+  ComputeResampleMode(kFps_60.num, kFps_60.den, kFps_30.num, kFps_30.den, &mode, &step);
   EXPECT_EQ(mode, ResampleMode::DROP) << "60→30 MUST be DROP (INV-FPS-MAPPING)";
   EXPECT_EQ(step, 2) << "60→30 step must be 2";
 }
@@ -706,7 +717,7 @@ TEST(MediaTimeContract, ResampleMode_60to30_DROP_step2) {
 TEST(MediaTimeContract, ResampleMode_30to30_OFF) {
   ResampleMode mode = ResampleMode::CADENCE;
   int64_t step = 1;
-  ComputeResampleMode(30, 1, 30, 1, &mode, &step);
+  ComputeResampleMode(kFps_30.num, kFps_30.den, kFps_30.num, kFps_30.den, &mode, &step);
   EXPECT_EQ(mode, ResampleMode::OFF) << "30→30 MUST be OFF";
   EXPECT_EQ(step, 1);
 }
@@ -714,7 +725,7 @@ TEST(MediaTimeContract, ResampleMode_30to30_OFF) {
 TEST(MediaTimeContract, ResampleMode_120to30_DROP_step4) {
   ResampleMode mode = ResampleMode::OFF;
   int64_t step = 1;
-  ComputeResampleMode(120, 1, 30, 1, &mode, &step);
+  ComputeResampleMode(kFps_120.num, kFps_120.den, kFps_30.num, kFps_30.den, &mode, &step);
   EXPECT_EQ(mode, ResampleMode::DROP) << "120→30 MUST be DROP";
   EXPECT_EQ(step, 4);
 }
@@ -722,16 +733,49 @@ TEST(MediaTimeContract, ResampleMode_120to30_DROP_step4) {
 TEST(MediaTimeContract, ResampleMode_23976to30_CADENCE) {
   ResampleMode mode = ResampleMode::OFF;
   int64_t step = 1;
-  ComputeResampleMode(24000, 1001, 30, 1, &mode, &step);
+  ComputeResampleMode(kFps_23_976.num, kFps_23_976.den, kFps_30.num, kFps_30.den, &mode, &step);
   EXPECT_EQ(mode, ResampleMode::CADENCE) << "23.976→30 MUST be CADENCE";
   EXPECT_EQ(step, 1);
+}
+
+TEST(MediaTimeContract, ResampleMode_5994to2997_DROP_step2) {
+  ResampleMode mode = ResampleMode::OFF;
+  int64_t step = 1;
+  ComputeResampleMode(kFps_59_94.num, kFps_59_94.den, kFps_29_97.num, kFps_29_97.den, &mode, &step);
+  EXPECT_EQ(mode, ResampleMode::DROP) << "59.94→29.97 MUST be DROP";
+  EXPECT_EQ(step, 2) << "59.94→29.97 drop step must be exactly 2";
+}
+
+TEST(MediaTimeContract, TickGrid_2997fps_CadenceAndDriftBounded) {
+  // INV-FPS-TICK-PTS: rational tick grid should hold exact cadence with no cumulative drift.
+  constexpr int64_t kNum = kFps_29_97.num;
+  constexpr int64_t kDen = kFps_29_97.den;
+  auto ct_us = [](int64_t k) -> int64_t { return (k * 1000000 * kDen) / kNum; };
+
+  // Cadence: deltas should alternate 33366/33367 µs for 29.97.
+  bool saw_33366 = false;
+  bool saw_33367 = false;
+  for (int64_t k = 1; k <= 120; ++k) {
+    int64_t d = ct_us(k) - ct_us(k - 1);
+    EXPECT_TRUE(d == 33366 || d == 33367) << "unexpected tick delta at k=" << k << ": " << d;
+    saw_33366 = saw_33366 || (d == 33366);
+    saw_33367 = saw_33367 || (d == 33367);
+  }
+  EXPECT_TRUE(saw_33366);
+  EXPECT_TRUE(saw_33367);
+
+  // Drift bound: at 10 minutes, rational floor grid must match closed-form exactly.
+  constexpr int64_t kTicks10Min = 10 * 60 * kFps_29_97.num / kFps_29_97.den;  // floor(600s * 29.97)
+  const int64_t actual = ct_us(kTicks10Min);
+  const int64_t expected = (kTicks10Min * 1000000 * kDen) / kNum;
+  EXPECT_EQ(actual, expected);
 }
 
 TEST(MediaTimeContract, TickProducer_60to30_ReportsDROP_WhenDecoderOpens) {
   // With a real 60fps asset, AssignBlock opens decoder and GetVideoFPS() returns 60,
   // so GetResampleMode() becomes DROP and GetDropStep() becomes 2.
   // With nonexistent asset, decoder does not open so mode stays OFF — baseline.
-  TickProducer producer(640, 480, 30, 1);
+  TickProducer producer(640, 480, kFps_30);
   FedBlock block = MakeSyntheticBlock("inv-fps-mapping", 60 * 1000);
   producer.AssignBlock(block);
   // Decoder fails to open (nonexistent path), so input_fps remains 0 and mode stays OFF.
@@ -749,12 +793,12 @@ TEST(MediaTimeContract, TickProducer_60to30_ReportsDROP_WhenDecoderOpens) {
 // duration 1/30s and PTS advancing by one output tick per frame.
 // =============================================================================
 TEST(MediaTimeContract, TickProducer_DROP_SetsOutputDuration_ToOutputTick) {
-  constexpr double kOutFps = 30.0;
-  constexpr double kExpectedTickDurationS = 1.0 / kOutFps;  // 1/30 s
+  constexpr RationalFps kOutFps = kFps_30;
+  constexpr double kExpectedTickDurationS = FpsToDouble({kOutFps.den, kOutFps.num});  // 1/30 s
   constexpr double kToleranceS = 1e-6;
   constexpr int64_t kTickDurationUs = 1'000'000 / 30;  // one output tick in µs
 
-  TickProducer producer(640, 480, 30, 1);
+  TickProducer producer(640, 480, kFps_30);
   producer.SetDecoderFactoryForTest(
       [](const decode::DecoderConfig& c) {
         return std::make_unique<FakeTickProducerDecoder>(c);
@@ -781,10 +825,10 @@ TEST(MediaTimeContract, TickProducer_DROP_SetsOutputDuration_ToOutputTick) {
 // not input frame duration (1/60). Run 5–10 ticks and assert PTS deltas.
 // =============================================================================
 TEST(MediaTimeContract, TickProducer_DROP_OutputPTS_AdvancesByTickDuration) {
-  constexpr double kOutFps = 30.0;
-  constexpr int64_t kTickDurationUs = 1'000'000 / 30;
+  constexpr RationalFps kOutFps = kFps_30;
+  constexpr int64_t kTickDurationUs = 1'000'000 * kOutFps.den / kOutFps.num;
 
-  TickProducer producer(640, 480, 30, 1);
+  TickProducer producer(640, 480, kFps_30);
   producer.SetDecoderFactoryForTest(
       [](const decode::DecoderConfig& c) {
         return std::make_unique<FakeTickProducerDecoder>(c);
@@ -819,7 +863,7 @@ TEST(MediaTimeContract, TickProducer_DROP_OutputPTS_AdvancesByTickDuration) {
 
 // Optional E2E smoke: run with real 60fps asset if present. Skip if asset missing.
 TEST(MediaTimeContract, TickProducer_DROP_E2E_WithReal60fpsAsset_Optional) {
-  TickProducer producer(640, 480, 30, 1);
+  TickProducer producer(640, 480, kFps_30);
   const std::string k60fpsAssetPath = "/opt/retrovue/assets/Sample60fps.mp4";
   FedBlock block = MakeSyntheticBlock("drop-e2e", 10 * 1000, k60fpsAssetPath);
   producer.AssignBlock(block);

@@ -13,6 +13,7 @@
 #include <string>
 
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 // Forward declarations for FFmpeg types (avoids pulling in FFmpeg headers here)
 struct AVFormatContext;
@@ -145,7 +146,8 @@ class FFmpegDecoder {
   // Gets video stream information.
   int GetVideoWidth() const;
   int GetVideoHeight() const;
-  double GetVideoFPS() const;
+  blockplan::RationalFps GetVideoRationalFps() const;
+  double GetVideoFPS() const { return GetVideoRationalFps().ToDouble(); }
   double GetVideoDuration() const;
 
   // True if the asset has an audio stream (for INV-AUDIO-PRIME-002 / priming logs).

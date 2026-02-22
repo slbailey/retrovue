@@ -591,6 +591,13 @@ target_include_directories(no_asrun_guardrail_test PRIVATE
 )
 add_test(NAME NoAsRunArtifactGuardrail COMMAND no_asrun_guardrail_test)
 
+# ---- RationalFps Hot-Path Guard ----
+# Prevent regression to fps-double step math in blockplan hot path.
+add_test(
+  NAME RationalFpsHotPathGuard
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_rationalfps_hotpath.sh
+)
+
 # ---- P3.2: Seam Verify Standalone Harness ----
 # Standalone binary for real-media boundary verification using PipelineManager.
 add_executable(retrovue_air_seam_verify

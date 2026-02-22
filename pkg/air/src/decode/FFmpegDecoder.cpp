@@ -389,14 +389,14 @@ int FFmpegDecoder::GetVideoHeight() const {
   return codec_ctx_->height;
 }
 
-double FFmpegDecoder::GetVideoFPS() const {
-  if (!format_ctx_ || video_stream_index_ < 0) return 0.0;
+blockplan::RationalFps FFmpegDecoder::GetVideoRationalFps() const {
+  if (!format_ctx_ || video_stream_index_ < 0) return blockplan::RationalFps{0,1};
   
   AVStream* stream = format_ctx_->streams[video_stream_index_];
   AVRational fps = stream->avg_frame_rate;
   
-  if (fps.den == 0) return 0.0;
-  return static_cast<double>(fps.num) / static_cast<double>(fps.den);
+  if (fps.num <= 0 || fps.den <= 0) return blockplan::RationalFps{0,1};
+  return blockplan::RationalFps{fps.num, fps.den};
 }
 
 double FFmpegDecoder::GetVideoDuration() const {

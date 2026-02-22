@@ -21,7 +21,9 @@ static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 
 // Output tick duration in seconds (1/output_fps). Used for DROP pacing metadata.
 static double TickDurationSeconds(const RationalFps& output_fps) {
-  return (output_fps.num > 0 && output_fps.den > 0) ? (1.0 / output_fps.ToDouble()) : 0.0;
+  return (output_fps.num > 0 && output_fps.den > 0)
+      ? (static_cast<double>(output_fps.den) / static_cast<double>(output_fps.num))
+      : 0.0;
 }
 
 TickProducer::TickProducer(int width, int height, RationalFps output_fps)
@@ -38,6 +40,11 @@ TickProducer::~TickProducer() {
 int64_t TickProducer::CtMs(int64_t k) const {
   if (output_fps_.num <= 0) return 0;
   return (k * 1000 * output_fps_.den) / output_fps_.num;
+}
+
+int64_t TickProducer::CtUs(int64_t k) const {
+  if (output_fps_.num <= 0) return 0;
+  return (k * 1000000 * output_fps_.den) / output_fps_.num;
 }
 
 // =============================================================================
@@ -231,9 +238,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " seek_offset_ms=" << first_seg.asset_start_offset_ms
             << std::endl;
 
-  // Detect input FPS from decoder for cadence support.
-  input_fps_ = decoder_->GetVideoFPS();
-  DeriveRationalFPS(input_fps_, input_fps_num_, input_fps_den_);
+  // Detect input FPS from decoder for cadence support (rational-first path).
+  const RationalFps input_fps = decoder_->GetVideoRationalFps();
+  input_fps_num_ = input_fps.num;
+  input_fps_den_ = input_fps.den;
+  input_fps_ = input_fps.ToDouble();  // logging/telemetry only
   UpdateResampleMode();
 
   state_ = State::kReady;
@@ -468,9 +477,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
     // frame_index_ was already advanced by DecodeNextFrameRaw(true), so this frame is tick (frame_index_ - 1).
     const int64_t this_tick_index = frame_index_ - 1;
-    const int64_t tick_pts_us = (output_fps_.num > 0)
-        ? (this_tick_index * 1'000'000 * output_fps_.den) / output_fps_.num
-        : static_cast<int64_t>(this_tick_index * 1'000'000.0 / output_fps_.ToDouble());
+    const int64_t tick_pts_us = CtUs(this_tick_index);
     first->video.metadata.pts = tick_pts_us;
     first->video.metadata.dts = tick_pts_us;
     // INV-TICK-AUTHORITY-001: duration already set to expected_tick_duration_s above.

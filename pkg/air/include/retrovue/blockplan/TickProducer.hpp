@@ -188,6 +188,8 @@ class TickProducer : public producers::IProducer,
 
   // ct_ms(k) = floor(k * 1000 * fps_den / fps_num). No rounded step accumulation.
   int64_t CtMs(int64_t k) const;
+  // ct_us(k) = floor(k * 1,000,000 * fps_den / fps_num). Rational microsecond grid.
+  int64_t CtUs(int64_t k) const;
   // One output frame period in ms (for next_frame_offset look-ahead and display).
   int64_t FramePeriodMs() const { return output_fps_.num > 0 ? (1000 * output_fps_.den) / output_fps_.num : 33; }
 
