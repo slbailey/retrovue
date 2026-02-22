@@ -141,7 +141,7 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = DeriveRationalFPS(30.0);
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -272,7 +272,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001a_ClockIsolation_SegmentSeam)
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -326,7 +326,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001b_ClockIsolation_BlockSeam) {
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -378,7 +378,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001b_ClockIsolation_BlockSeam) {
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_001c_ClockIsolation_AdversarialProbeLatency) {
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -437,7 +437,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_002a_DecoderReadiness_AchievedBe
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -510,7 +510,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_002b_DecoderReadiness_OverlapWin
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -595,7 +595,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_003a_AudioContinuity_ZeroSilence
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -653,7 +653,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_003a_AudioContinuity_ZeroSilence
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_003b_AudioContinuity_NoAudioTrackExempt) {
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -708,7 +708,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004a_MechanicalEquivalence_Segme
   }
 
   // ---- Session 1: Segment seam (multi-segment block) ----
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
   auto now = NowMs();
 
   FedBlock seg_block = MakeMultiSegmentBlock(
@@ -762,7 +762,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004a_MechanicalEquivalence_Segme
   });
   ctx_->width = 640;
   ctx_->height = 480;
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   // ---- Session 2: Block seam (two single-segment blocks) ----
   now = NowMs();
@@ -836,7 +836,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004b_MechanicalEquivalence_Mixed
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -896,7 +896,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004b_MechanicalEquivalence_Mixed
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_005a_BoundedFallbackObservability_MetricTrackedAndExposed) {
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -950,7 +950,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_005b_BoundedFallbackObservabilit
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -1002,7 +1002,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_005b_BoundedFallbackObservabilit
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_006_FallbackOnPreloaderFailure_SessionSurvives) {
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -1069,7 +1069,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_007_AudioUnderflowAbsenceAtSeam_
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = DeriveRationalFPS(30.0);
+  ctx_->fps = FPS_30;
   ctx_->buffer_config.audio_target_depth_ms = 200;
   ctx_->buffer_config.audio_low_water_ms = 50;
 

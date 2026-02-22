@@ -96,7 +96,7 @@ class TakeAtCommitContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = DeriveRationalFPS(30.0);
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 

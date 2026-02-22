@@ -3,25 +3,32 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-FILES=(
-  "$ROOT_DIR/src/blockplan/TickProducer.cpp"
-  "$ROOT_DIR/src/blockplan/VideoLookaheadBuffer.cpp"
-  "$ROOT_DIR/src/blockplan/OutputClock.cpp"
+SCOPES=(
+  "$ROOT_DIR/src/blockplan"
+  "$ROOT_DIR/tests/contracts/BlockPlan/VideoLookaheadBufferTests.cpp"
+  "$ROOT_DIR/tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp"
+  "$ROOT_DIR/tests/contracts/BlockPlan/BufferConfigTests.cpp"
+  "$ROOT_DIR/tests/contracts/BlockPlan/SegmentAdvanceOnEOFTests.cpp"
+  "$ROOT_DIR/tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp"
 )
 
 PATTERNS=(
-  '1\.0[[:space:]]*/[[:space:]]*[A-Za-z0-9_\.]*fps'
-  '1000\.0[[:space:]]*/[[:space:]]*[A-Za-z0-9_\.]*fps'
-  "1'000'000\.0[[:space:]]*/[[:space:]]*[A-Za-z0-9_\.]*fps"
+  '1\.0[[:space:]]*/[[:space:]]*fps\b'
+  '1000\.0[[:space:]]*/[[:space:]]*fps\b'
+  "1'000'000\.0[[:space:]]*/[[:space:]]*fps\b"
+  'DeriveRationalFPS\(30\.0\)'
+  'DeriveRationalFPS\(29\.97\)'
+  'DeriveRationalFPS\(59\.94\)'
+  'DeriveRationalFPS\(23\.976\)'
 )
 
 fail=0
-for f in "${FILES[@]}"; do
-  [[ -f "$f" ]] || continue
+for scope in "${SCOPES[@]}"; do
+  [[ -e "$scope" ]] || continue
   for p in "${PATTERNS[@]}"; do
-    if rg -n --pcre2 "$p" "$f" >/tmp/rfps_guard_hits.txt 2>/dev/null; then
+    if rg -n --pcre2 "$p" "$scope" >/tmp/rfps_guard_hits.txt 2>/dev/null; then
       if [[ -s /tmp/rfps_guard_hits.txt ]]; then
-        echo "[RationalFps guard] Forbidden fps-double pattern in $f (pattern: $p)" >&2
+        echo "[RationalFps guard] Forbidden pattern in $scope (pattern: $p)" >&2
         cat /tmp/rfps_guard_hits.txt >&2
         fail=1
       fi

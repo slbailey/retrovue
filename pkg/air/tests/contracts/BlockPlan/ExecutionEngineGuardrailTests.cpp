@@ -30,7 +30,7 @@ class ExecutionEngineGuardrailTest : public ::testing::Test {
     ctx_->fd = -1;  // No real FD needed for structural tests
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = DeriveRationalFPS(30.0);
+    ctx_->fps = FPS_30;
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
