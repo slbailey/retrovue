@@ -89,7 +89,7 @@ class TickProducer : public producers::IProducer,
   const FedBlock& GetBlock() const override;
   int64_t FramesPerBlock() const override;
   bool HasDecoder() const override;
-  double GetInputFPS() const override;
+  RationalFps GetInputRationalFps() const override;
   ResampleMode GetResampleMode() const override;
   int64_t GetDropStep() const override;
   bool HasPrimedFrame() const override;

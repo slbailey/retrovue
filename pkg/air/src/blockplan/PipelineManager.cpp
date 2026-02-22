@@ -899,7 +899,7 @@ void PipelineManager::Run() {
     // INV-VIDEO-LOOKAHEAD-001: Start fill thread (cadence resolved inside).
     video_buffer_->StartFilling(
         live_tp(), audio_buffer_.get(),
-        DeriveRationalFPS(live_tp()->GetInputFPS()), ctx_->fps,
+        live_tp()->GetInputRationalFps(), ctx_->fps,
         &ctx_->stop_requested);
 
     // Step 4 probe: JIP/session-first-block path — decoder opened and primed synchronously
@@ -981,16 +981,20 @@ void PipelineManager::Run() {
       // the fill thread continues decoding until audio depth is satisfied,
       // bounded by a hard video cap.
       //
-      // GetInputFPS() may return 0 if the decoder hasn't finished probing
-      // (cold start, slow NFS).  Fall back to 24.0 fps — a conservative
-      // estimate that covers 23.976 (NTSC film) through 25 (PAL).
-      constexpr double kFallbackInputFps = 24.0;
-      double input_fps = live_tp()->GetInputFPS();
-      if (input_fps <= 0.0) input_fps = kFallbackInputFps;
+      // GetInputRationalFps() may return invalid {<=0,*} while decoder probing
+      // is incomplete (cold start, slow NFS). Fall back to 24/1 — conservative
+      // for 23.976 (NTSC film) through 25 (PAL).
+      RationalFps input_fps = live_tp()->GetInputRationalFps();
+      if (input_fps.num <= 0 || input_fps.den <= 0) input_fps = FPS_24;
+
+      // frames_for_500ms = ceil(kMinAudioPrimeMs / frame_duration_ms)
+      //                  = ceil(kMinAudioPrimeMs * fps_num / (1000 * fps_den))
+      const int64_t numer = static_cast<int64_t>(kMinAudioPrimeMs) * input_fps.num;
+      const int64_t denom = 1000LL * input_fps.den;
+      const int64_t frames_for_prime = (numer + denom - 1) / denom;
       int bootstrap_target = std::max(
           video_buffer_->TargetDepthFrames(),
-          static_cast<int>(std::ceil(
-              kMinAudioPrimeMs * input_fps / 1000.0)) + kMarginFrames);
+          static_cast<int>(frames_for_prime) + kMarginFrames);
       auto bootstrap_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now().time_since_epoch()).count();
 
@@ -1211,7 +1215,7 @@ void PipelineManager::Run() {
       int live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
       preview_video_buffer_->StartFilling(
           preview_tp, preview_audio_buffer_.get(),
-          DeriveRationalFPS(preview_tp->GetInputFPS()), ctx_->fps,
+          preview_tp->GetInputRationalFps(), ctx_->fps,
           &ctx_->stop_requested);
       // INV-AUDIO-PREROLL-ISOLATION-001: Verify live audio was not mutated by preview fill.
       if (audio_buffer_ && live_audio_before >= 0) {
@@ -1718,7 +1722,7 @@ void PipelineManager::Run() {
               buffer::kHouseAudioChannels, fa_low);
           video_buffer_->StartFilling(
               AsTickProducer(live_.get()), audio_buffer_.get(),
-              DeriveRationalFPS(AsTickProducer(live_.get())->GetInputFPS()), ctx_->fps,
+              AsTickProducer(live_.get())->GetInputRationalFps(), ctx_->fps,
               &ctx_->stop_requested);
         }
       }
@@ -2518,7 +2522,7 @@ void PipelineManager::Run() {
         // INV-VIDEO-LOOKAHEAD-001: Start fill thread with loaded producer.
         video_buffer_->StartFilling(
             live_tp(), audio_buffer_.get(),
-            DeriveRationalFPS(live_tp()->GetInputFPS()), ctx_->fps,
+            live_tp()->GetInputRationalFps(), ctx_->fps,
             &ctx_->stop_requested);
 
         // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
@@ -3027,7 +3031,7 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int32_t to_seg, int64_t sessio
   int seg_live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
   segment_b_video_buffer_->StartFilling(
       AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
-      DeriveRationalFPS(AsTickProducer(segment_b_producer_.get())->GetInputFPS()), ctx_->fps,
+      AsTickProducer(segment_b_producer_.get())->GetInputRationalFps(), ctx_->fps,
       &ctx_->stop_requested);
   if (audio_buffer_ && seg_live_audio_before >= 0) {
     int seg_live_audio_after = audio_buffer_->DepthMs();

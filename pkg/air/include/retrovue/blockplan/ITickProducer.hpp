@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 
 namespace retrovue::blockplan {
@@ -43,9 +44,14 @@ class ITickProducer {
   virtual int64_t FramesPerBlock() const = 0;
   virtual bool HasDecoder() const = 0;
 
-  // Return the detected input (source) FPS from the decoder.
-  // Returns 0.0 if unknown (no decoder, probe failed, etc.).
-  virtual double GetInputFPS() const = 0;
+  // Return the detected input (source) FPS from the decoder as RationalFps.
+  // Returns {0, 1} if unknown (no decoder, probe failed, etc.).
+  virtual RationalFps GetInputRationalFps() const = 0;
+
+  // Legacy accessor (implemented as ToDouble() wrapper for compatibility).
+  // Prefer GetInputRationalFps() for new code.
+  double GetInputFPS() const { return GetInputRationalFps().ToDouble(); }
+
 
   // Resample mode (rational detection: OFF / DROP / CADENCE).
   // Default OFF for producers that do not compute it.
