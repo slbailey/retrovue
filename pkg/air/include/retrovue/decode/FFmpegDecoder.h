@@ -147,7 +147,6 @@ class FFmpegDecoder {
   int GetVideoWidth() const;
   int GetVideoHeight() const;
   blockplan::RationalFps GetVideoRationalFps() const;
-  double GetVideoFPS() const { return GetVideoRationalFps().ToDouble(); }
   double GetVideoDuration() const;
 
   // True if the asset has an audio stream (for INV-AUDIO-PRIME-002 / priming logs).

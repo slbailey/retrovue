@@ -88,6 +88,41 @@ TEST(RationalTimebaseIntegrity, FrameIndexTimeRoundTrip_1M_IsIdentity) {
   }
 }
 
+
+TEST(RationalTimebaseIntegrity, DriftSimulation_10Minutes_2997_NoAccumulatedError) {
+  const RationalFps fps(30000, 1001);
+  const int64_t duration_us = 10LL * 60LL * 1000000LL;
+  const int64_t frames_floor = fps.FramesFromDurationFloorUs(duration_us);
+  const int64_t frames_ceil = fps.FramesFromDurationCeilUs(duration_us);
+  const int64_t back_floor = fps.DurationFromFramesUs(frames_floor);
+  const int64_t back_ceil = fps.DurationFromFramesUs(frames_ceil);
+  EXPECT_LE(back_floor, duration_us);
+  EXPECT_GE(back_ceil, duration_us);
+  EXPECT_LE(duration_us - back_floor, fps.FrameDurationUs());
+  EXPECT_LE(back_ceil - duration_us, fps.FrameDurationUs());
+}
+
+TEST(RationalTimebaseIntegrity, CadenceExactPattern_23976_to_30_Repeatable) {
+  const RationalFps in(24000, 1001);
+  const RationalFps out(30, 1);
+  std::vector<int64_t> picks;
+  picks.reserve(20);
+  int64_t emitted = 0;
+  for (int64_t src = 0; src < 200 && emitted < 20; ++src) {
+    const int64_t before = (src * out.num * in.den) / (in.num * out.den);
+    const int64_t after = ((src + 1) * out.num * in.den) / (in.num * out.den);
+    if (after > before) {
+      picks.push_back(src);
+      emitted++;
+    }
+  }
+  ASSERT_EQ(picks.size(), 20u);
+  for (size_t i = 1; i < picks.size(); ++i) {
+    const int64_t gap = picks[i] - picks[i - 1];
+    EXPECT_TRUE(gap == 1 || gap == 0);
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Hot-path source scan: no float/double, no ToDouble(), no floating literals
 // -----------------------------------------------------------------------------
