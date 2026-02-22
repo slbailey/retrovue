@@ -989,11 +989,9 @@ void PipelineManager::Run() {
       RationalFps input_fps = live_tp()->GetInputRationalFps();
       if (input_fps.num <= 0 || input_fps.den <= 0) input_fps = FPS_24;
 
-      // frames_for_500ms = ceil(kMinAudioPrimeMs / frame_duration_ms)
-      //                  = ceil(kMinAudioPrimeMs * fps_num / (1000 * fps_den))
-      const int64_t numer = static_cast<int64_t>(kMinAudioPrimeMs) * input_fps.num;
-      const int64_t denom = 1000LL * input_fps.den;
-      const int64_t frames_for_prime = (numer + denom - 1) / denom;
+      // frames_for_500ms = ceil(delta_ms * fps_num / (1000 * fps_den))
+      const int64_t frames_for_prime =
+          input_fps.FramesFromDurationCeilMs(static_cast<int64_t>(kMinAudioPrimeMs));
       int bootstrap_target = std::max(
           video_buffer_->TargetDepthFrames(),
           static_cast<int>(frames_for_prime) + kMarginFrames);
@@ -3002,7 +3000,7 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
 // EnsureIncomingBReadyForSeam — create B (segment_b_*) before eligibility gate
 // =============================================================================
 
-void PipelineManager::EnsureIncomingBReadyForSeam(int32_t to_seg, int64_t session_frame_index) {
+void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index) {
   if (to_seg >= static_cast<int32_t>(live_parent_block_.segments.size())) {
     return;
   }

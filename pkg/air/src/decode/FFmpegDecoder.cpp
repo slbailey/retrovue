@@ -162,7 +162,7 @@ bool FFmpegDecoder::Open() {
 
   std::cout << "[FFmpegDecoder] DECODER_STEP open_input OK uri=" << config_.input_uri
             << " " << GetVideoWidth() << "x" 
-            << GetVideoHeight() << " @ " << GetVideoFPS() << " fps" << std::endl;
+            << GetVideoHeight() << " @ " << GetVideoRationalFps().num << "/" << GetVideoRationalFps().den << " fps" << std::endl;
 
   return true;
 }

@@ -313,7 +313,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   void UpdateNextSeamFrame();
   void ArmSegmentPrep(int64_t session_frame_index);
   // Ensures B (segment_b_*) is created and StartFilling for to_seg before eligibility gate.
-  void EnsureIncomingBReadyForSeam(int32_t to_seg, int64_t session_frame_index);
+  void EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index);
   void PerformSegmentSwap(int64_t session_frame_index);
 
   // Segment seam eligibility gate: minimum readiness before swapping.
