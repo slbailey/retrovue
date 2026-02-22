@@ -768,8 +768,8 @@ bool TickProducer::HasDecoder() const {
   return decoder_ok_;
 }
 
-double TickProducer::GetInputFPS() const {
-  return input_fps_;
+RationalFps TickProducer::GetInputRationalFps() const {
+  return RationalFps{input_fps_num_, input_fps_den_};
 }
 
 ResampleMode TickProducer::GetResampleMode() const {

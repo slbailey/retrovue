@@ -108,7 +108,7 @@ class MockTickProducer : public ITickProducer {
   const FedBlock& GetBlock() const override { return block_; }
   int64_t FramesPerBlock() const override { return total_frames_; }
   bool HasDecoder() const override { return true; }
-  double GetInputFPS() const override { return input_fps_; }
+  RationalFps GetInputRationalFps() const override { return DeriveRationalFPS(input_fps_); }
   bool HasPrimedFrame() const override { return false; }
 
   const std::vector<SegmentBoundary>& GetBoundaries() const override {

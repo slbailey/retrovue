@@ -146,7 +146,7 @@ class SegmentAdvanceMockProducer : public ITickProducer {
     return episode_frames_ + gap_frames_ + filler_frames_;
   }
   bool HasDecoder() const override { return true; }
-  double GetInputFPS() const override { return input_fps_; }
+  RationalFps GetInputRationalFps() const override { return DeriveRationalFPS(input_fps_); }
   bool HasPrimedFrame() const override { return has_primed_; }
 
   const std::vector<SegmentBoundary>& GetBoundaries() const override {
