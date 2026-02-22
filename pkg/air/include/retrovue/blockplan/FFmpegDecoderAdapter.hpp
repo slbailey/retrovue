@@ -21,7 +21,7 @@ class FFmpegDecoderAdapter : public ITickProducerDecoder {
 
   bool Open() override;
   int SeekPreciseToMs(int64_t target_ms) override;
-  double GetVideoFPS() override;
+  RationalFps GetVideoRationalFps() override;
   bool DecodeFrameToBuffer(buffer::Frame& output_frame) override;
   bool GetPendingAudioFrame(buffer::AudioFrame& output_frame) override;
   bool IsEOF() const override;

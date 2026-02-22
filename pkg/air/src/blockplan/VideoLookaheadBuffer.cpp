@@ -129,7 +129,7 @@ void VideoLookaheadBuffer::StartFilling(
     } else if (resample_mode_ == ResampleMode::DROP) {
       oss << " mode=DROP ratio=" << drop_step_;
       if (output_fps_.num > 0) {
-        oss << " expected_tick_duration_s=" << (1.0 / output_fps_.ToDouble());
+        oss << " expected_tick_duration_s=" << (static_cast<double>(output_fps_.den) / static_cast<double>(output_fps_.num));
       }
     } else {
       oss << " mode=CADENCE ratio=" << (output_fps_.num > 0 && input_fps_.num > 0 ? (input_fps_.ToDouble() / output_fps_.ToDouble()) : 0.0);

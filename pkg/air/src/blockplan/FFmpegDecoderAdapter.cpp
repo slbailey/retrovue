@@ -17,7 +17,7 @@ int FFmpegDecoderAdapter::SeekPreciseToMs(int64_t target_ms) {
   return impl_->SeekPreciseToMs(target_ms);
 }
 
-double FFmpegDecoderAdapter::GetVideoFPS() { return impl_->GetVideoFPS(); }
+RationalFps FFmpegDecoderAdapter::GetVideoRationalFps() { return impl_->GetVideoRationalFps(); }
 
 bool FFmpegDecoderAdapter::DecodeFrameToBuffer(buffer::Frame& output_frame) {
   return impl_->DecodeFrameToBuffer(output_frame);
