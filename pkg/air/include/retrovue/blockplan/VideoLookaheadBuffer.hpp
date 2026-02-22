@@ -87,11 +87,6 @@ class VideoLookaheadBuffer {
                     AudioLookaheadBuffer* audio_buffer,
                     RationalFps input_fps, RationalFps output_fps,
                     std::atomic<bool>* stop_signal);
-  void StartFilling(ITickProducer* producer,
-                    AudioLookaheadBuffer* audio_buffer,
-                    double input_fps, double output_fps,
-                    std::atomic<bool>* stop_signal);
-
   // Stop the fill loop and join the thread.
   // If flush=true, clears all buffered frames and resets IsPrimed().
   void StopFilling(bool flush = false);
@@ -196,9 +191,10 @@ class VideoLookaheadBuffer {
   // Returns 0 when no decodes have occurred.
   int64_t DecodeLatencyMeanUs() const;
 
-  // Fill thread refill rate in frames per second.
-  // Computed as total_pushed / elapsed since StartFilling.
-  double RefillRateFps() const;
+  // Fill thread refill rate: frames pushed and elapsed us since StartFilling.
+  // INV-FPS-RATIONAL-001: Caller may display as (frames * 1000000 / elapsed_us) for telemetry.
+  struct RefillRate { int64_t frames = 0; int64_t elapsed_us = 0; };
+  RefillRate GetRefillRate() const;
 
   // --- Lifecycle ---
 

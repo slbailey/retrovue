@@ -23,7 +23,9 @@ struct MpegTSPlayoutSinkConfig {
   int port = 9000;                    // TCP server port (used if ts_socket_path is empty)
   std::string bind_host = "127.0.0.1"; // TCP bind address (default: localhost)
   std::string ts_socket_path;         // Unix domain socket path for TS output (if empty, use TCP)
-  double target_fps = 30.0;           // Target frame rate
+  double target_fps = 30.0;           // Target frame rate (legacy; use fps_num/fps_den when set)
+  int64_t fps_num = 0;                // INV-FPS-RATIONAL-001: rational FPS (num/den); when both > 0, encoder uses this
+  int64_t fps_den = 0;
   int target_width = 640;             // Phase 8.6: per-channel fixed output width (all content scaled to this)
   int target_height = 480;            // Phase 8.6: per-channel fixed output height
   int bitrate = 5000000;              // Encoding bitrate (5 Mbps)

@@ -315,7 +315,10 @@ TEST(BufferConfigTest, RefillRateFps_Positive) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  EXPECT_DOUBLE_EQ(buf.RefillRateFps(), 0.0);
+  {
+    auto r = buf.GetRefillRate();
+    EXPECT_EQ(r.frames, 0);
+  }
 
   buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
@@ -323,8 +326,9 @@ TEST(BufferConfigTest, RefillRateFps_Positive) {
   ASSERT_TRUE(WaitFor([&] { return buf.TotalFramesPushed() >= 3; },
                        std::chrono::seconds(2)));
 
-  double rate = buf.RefillRateFps();
-  EXPECT_GT(rate, 0.0) << "rate=" << rate;
+  auto r = buf.GetRefillRate();
+  int64_t rate_fps = (r.elapsed_us > 0) ? (r.frames * 1000000 / r.elapsed_us) : 0;
+  EXPECT_GT(rate_fps, 0) << "rate_fps=" << rate_fps;
 
   buf.StopFilling(true);
 }

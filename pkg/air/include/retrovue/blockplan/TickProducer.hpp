@@ -174,7 +174,6 @@ class TickProducer : public producers::IProducer,
   int width_;
   int height_;
   RationalFps output_fps_;                // Rational output FPS (authoritative)
-  double input_fps_ = 0.0;                // Detected input FPS (0 = unknown)
   int64_t input_fps_num_ = 1;             // Rational input FPS (for resample mode detection)
   int64_t input_fps_den_ = 1;
 
