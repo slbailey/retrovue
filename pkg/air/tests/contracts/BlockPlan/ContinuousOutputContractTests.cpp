@@ -22,10 +22,12 @@
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/OutputClock.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PadProducer.hpp"
 #include "retrovue/blockplan/ProducerPreloader.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -55,7 +57,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -91,15 +93,19 @@ class ContinuousOutputContractTest : public ::testing::Test {
       session_ended_cv_.notify_all();
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
-  // Wait for session_ended callback with timeout
-  bool WaitForSessionEnded(int timeout_ms = 2000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return session_ended_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
-        [this] { return session_ended_count_ > 0; });
+  // Wait for session_ended callback (bounded iterations, no wall clock).
+  bool WaitForSessionEndedBounded(int64_t max_poll_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
+        [this] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
+          return session_ended_count_ > 0;
+        },
+        max_poll_steps);
   }
 
   int64_t NowMs() { return test_ts_->NowUtcMs(); }
@@ -137,7 +143,9 @@ class ContinuousOutputContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(fp_mutex_);
       fingerprints_.push_back(fp);
     };
-    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_);
+    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
   std::vector<FrameFingerprint> SnapshotFingerprints() {
@@ -148,39 +156,40 @@ class ContinuousOutputContractTest : public ::testing::Test {
 
 // =============================================================================
 // TEST-CONT-001: Session produces output with zero blocks (all pad)
-// Run engine ~100ms with no blocks, verify frames are all pad.
+// Advance until at least 5 frames emitted (bounded), then stop. Verify all pad.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, PadOnlyWithZeroBlocks) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Let it run for ~150ms (should produce ~4-5 frames at 30fps / 33ms each)
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-
+  const int64_t kMinFrames = 5;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kMinFrames);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
   EXPECT_GT(m.continuous_frames_emitted_total, 0)
       << "Engine must emit frames even with zero blocks";
+  EXPECT_LE(m.continuous_frames_emitted_total, retrovue::blockplan::test_utils::kMaxTestTicks)
+      << "Test must not exceed deterministic tick ceiling";
   EXPECT_EQ(m.pad_frames_emitted_total, m.continuous_frames_emitted_total)
       << "All frames must be pad frames in P3.0 (pad-only mode)";
 }
 
 // =============================================================================
 // TEST-CONT-002: No inter-frame gap exceeds 40ms (at 30fps ~33ms cadence)
-// Run engine ~200ms, verify max gap stays under 40ms.
+// Advance until enough frames for gap measurement (bounded), then stop.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, InterFrameGapUnder40ms) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run for ~250ms to get enough frames for measurement
-  std::this_thread::sleep_for(std::chrono::milliseconds(250));
-
+  const int64_t kFramesForGap = 10;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kFramesForGap);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
-  // Need at least 2 frames to have a gap measurement
+  ASSERT_LE(m.continuous_frames_emitted_total, retrovue::blockplan::test_utils::kMaxTestTicks)
+      << "Test must not exceed deterministic tick ceiling";
   ASSERT_GT(m.frame_gap_count, 0)
       << "Must have at least one inter-frame gap measurement";
   EXPECT_LT(m.max_inter_frame_gap_us, 40000)
@@ -220,10 +229,9 @@ TEST_F(ContinuousOutputContractTest, EncoderOpenedAndClosedOnce) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Let it run briefly
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  const int64_t kBriefFrames = 5;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kBriefFrames);
 
-  // Before stopping, encoder should be open
   {
     auto m = engine_->SnapshotMetrics();
     EXPECT_EQ(m.encoder_open_count, 1)
@@ -234,7 +242,6 @@ TEST_F(ContinuousOutputContractTest, EncoderOpenedAndClosedOnce) {
 
   engine_->Stop();
 
-  // After stopping, encoder should be closed
   auto m = engine_->SnapshotMetrics();
   EXPECT_EQ(m.encoder_open_count, 1)
       << "Encoder open count must remain 1 after session end";
@@ -250,15 +257,15 @@ TEST_F(ContinuousOutputContractTest, StopIsIdempotent) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Let it run briefly
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const int64_t kBriefFrames = 3;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kBriefFrames);
 
-  // Stop three times
   engine_->Stop();
   engine_->Stop();
   engine_->Stop();
 
-  // Verify on_session_ended fired exactly once
+  ASSERT_TRUE(WaitForSessionEndedBounded())
+      << "on_session_ended must fire after Stop()";
   {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     EXPECT_EQ(session_ended_count_, 1)
@@ -276,6 +283,12 @@ using test_infra::kBootGuardMs;
 using test_infra::kStdBlockMs;
 using test_infra::kShortBlockMs;
 using test_infra::kBlockTimeOffsetMs;
+
+// Fence tick for "bootstrap + block duration + margin" at 30fps. Deterministic.
+static int64_t FenceTickForBootstrapPlusBlockMs(int64_t boot_ms, int64_t block_ms,
+                                                 int64_t margin_ms = 500) {
+  return ((boot_ms + block_ms + margin_ms) * 30 + 999) / 1000;
+}
 
 // =============================================================================
 // Helper: Create a synthetic FedBlock (unresolvable URI)
@@ -312,7 +325,7 @@ FedBlock MakeSyntheticBlock(const std::string& block_id,
 // TryGetFrame repeatedly (returns nullopt for synthetic block). Reset → EMPTY.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
-  TickProducer source(640, 480, 30.0);
+  TickProducer source(640, 480, RationalFps{30, 1});
 
   // Initial state: EMPTY
   EXPECT_EQ(source.GetState(), TickProducer::State::kEmpty);
@@ -349,7 +362,7 @@ TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
 // Contract: INV-AIR-MEDIA-TIME-001
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, FrameCountDeterministic) {
-  TickProducer source(640, 480, 30.0);
+  TickProducer source(640, 480, RationalFps{30, 1});
 
   // 5000ms block at 30fps: ceil(5000 * 30 / 1000) = ceil(150.0) = 150
   {
@@ -369,18 +382,17 @@ TEST_F(ContinuousOutputContractTest, FrameCountDeterministic) {
     source.Reset();
   }
 
-  // Engine fence logic: source_ticks >= FramesPerBlock() completes the block.
-  // Simulate with a 5000ms block:
+  // Engine fence logic: exactly FramesPerBlock() ticks complete the block.
+  // Bounded for-loop (no unbounded while).
   {
     FedBlock block = MakeSyntheticBlock("fc-fence", 5000);
     source.AssignBlock(block);
     int64_t fpb = source.FramesPerBlock();
-    int64_t ticks = 0;
-    while (ticks < fpb) {
+    ASSERT_LE(fpb, retrovue::blockplan::test_utils::kMaxTestTicks)
+        << "FramesPerBlock must be within test ceiling";
+    for (int64_t i = 0; i < fpb; ++i) {
       source.TryGetFrame();  // nullopt (no decoder) but advances ct
-      ticks++;
     }
-    EXPECT_GE(ticks, fpb) << "Fence must trigger at exactly FramesPerBlock ticks";
     source.Reset();
   }
 }
@@ -403,13 +415,10 @@ TEST_F(ContinuousOutputContractTest, BlockCompletedCallbackFires) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 500));
-
+  int64_t fence = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence);
   engine_->Stop();
 
-  // Verify on_block_completed fired
   {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     ASSERT_EQ(completed_blocks_.size(), 1u)
@@ -425,10 +434,9 @@ TEST_F(ContinuousOutputContractTest, BlockCompletedCallbackFires) {
 
 // =============================================================================
 // CONT-ACT-004: StopDuringBlockExecution
-// Feed a 30s block. Stop after 100ms. Verify clean shutdown.
+// Feed a 30s block. Advance a few frames then stop. Verify clean shutdown.
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, StopDuringBlockExecution) {
-  // Pre-load a 30-second block
   FedBlock block = MakeSyntheticBlock("stop-mid", 30000);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
@@ -438,21 +446,12 @@ TEST_F(ContinuousOutputContractTest, StopDuringBlockExecution) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Let a few frames emit, then stop
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // This must complete in bounded time (not wait for the 30s block to finish)
-  auto stop_start = std::chrono::steady_clock::now();
+  const int64_t kFewFrames = 5;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kFewFrames);
   engine_->Stop();
-  auto stop_end = std::chrono::steady_clock::now();
-  auto stop_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      stop_end - stop_start).count();
 
-  // Stop should complete quickly (well under 1 second)
-  EXPECT_LT(stop_ms, 1000)
-      << "Stop() must terminate quickly, not wait for block completion";
-
-  // Verify session ended callback fired
+  ASSERT_TRUE(WaitForSessionEndedBounded())
+      << "on_session_ended must fire on Stop()";
   {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     EXPECT_EQ(session_ended_count_, 1)
@@ -478,10 +477,8 @@ TEST_F(ContinuousOutputContractTest, PadFramesForEntireBlock) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 500));
-
+  int64_t fence = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence);
   engine_->Stop();
 
   // Verify the block completed
@@ -533,10 +530,8 @@ TEST_F(ContinuousOutputContractTest, SourceSwapCountIncrements) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Bootstrap + 2 blocks + margin
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + 2 * kShortBlockMs + 500));
-
+  int64_t fence_two = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, 2 * kShortBlockMs);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_two);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -571,19 +566,12 @@ TEST_F(ContinuousOutputContractTest, StopDuringPreloadNoDeadlock) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Let it start and begin preloading
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Stop must complete quickly even if preload was in progress
-  auto stop_start = std::chrono::steady_clock::now();
+  const int64_t kPreloadFewFrames = 5;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kPreloadFewFrames);
   engine_->Stop();
-  auto stop_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - stop_start).count();
 
-  EXPECT_LT(stop_ms, 1000)
-      << "Stop() must complete quickly during preload (no deadlock)";
-
-  // Session ended cleanly
+  ASSERT_TRUE(WaitForSessionEndedBounded())
+      << "Session must end after Stop() during preload";
   {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     EXPECT_EQ(session_ended_count_, 1);
@@ -600,23 +588,30 @@ TEST_F(ContinuousOutputContractTest, PreloaderDelayDoesNotStallEngine) {
   ProducerPreloader preloader;
 
   std::atomic<bool> hook_called{false};
-  preloader.SetDelayHook([&hook_called]() {
+  preloader.SetDelayHook([&hook_called](const std::atomic<bool>& cancel) {
     hook_called.store(true, std::memory_order_release);
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Cancellable 200ms delay — check cancel every 10ms
+    for (int i = 0; i < 20 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
 
   FedBlock block = MakeSyntheticBlock("delay-001", 1000);
-  preloader.StartPreload(block, 640, 480, 30.0);
+  preloader.StartPreload(block, 640, 480, FPS_30);
 
-  // Preloader should not be ready immediately (delay hook is sleeping)
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  EXPECT_TRUE(hook_called.load(std::memory_order_acquire))
-      << "Delay hook must have been called";
+  // Wait for hook to be called (bounded poll)
+  ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
+      [&hook_called]() { return hook_called.load(std::memory_order_acquire); },
+      5000))
+      << "Delay hook must be called";
   EXPECT_FALSE(preloader.IsReady())
       << "Preloader must not be ready while delay hook is sleeping";
 
-  // Wait for preload to complete
-  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  // Wait for preload to complete (bounded poll)
+  ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
+      [&preloader]() { return preloader.IsReady(); },
+      10000))
+      << "Preloader must become ready after delay";
   EXPECT_TRUE(preloader.IsReady())
       << "Preloader must be ready after delay completes";
 
@@ -633,22 +628,21 @@ TEST_F(ContinuousOutputContractTest, PreloaderDelayDoesNotStallEngine) {
 // =============================================================================
 TEST_F(ContinuousOutputContractTest, AssignBlockRunsOffThread) {
   ProducerPreloader preloader;
-
   std::atomic<std::thread::id> preload_thread_id{};
   std::thread::id caller_thread_id = std::this_thread::get_id();
 
-  preloader.SetDelayHook([&preload_thread_id]() {
+  preloader.SetDelayHook([&preload_thread_id](const std::atomic<bool>& cancel) {
     preload_thread_id.store(std::this_thread::get_id(),
                             std::memory_order_release);
   });
 
   FedBlock block = MakeSyntheticBlock("thread-001", 1000);
-  preloader.StartPreload(block, 640, 480, 30.0);
+  preloader.StartPreload(block, 640, 480, FPS_30);
 
-  // Wait for preload to complete
-  for (int i = 0; i < 100 && !preloader.IsReady(); i++) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
+      [&preloader]() { return preloader.IsReady(); },
+      10000))
+      << "Preloader must complete";
 
   auto observed_id = preload_thread_id.load(std::memory_order_acquire);
   EXPECT_NE(observed_id, std::thread::id{})
@@ -675,12 +669,13 @@ TEST_F(ContinuousOutputContractTest, DISABLED_SLOW_PTSMonotonicAcrossSwaps) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // 3 * 5000ms = 15000ms of blocks + pad tail. Wait 18s for full completion.
-  std::this_thread::sleep_for(std::chrono::milliseconds(18000));
-
+  int64_t fence_slow = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, 3 * kStdBlockMs);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_slow);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
+  EXPECT_LE(m.continuous_frames_emitted_total, retrovue::blockplan::test_utils::kMaxTestTicks)
+      << "Test must not exceed deterministic tick ceiling";
 
   // Multiple blocks must execute
   EXPECT_GE(m.total_blocks_executed, 2)
@@ -755,12 +750,10 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadPostFence) {
   engine_ = MakeEngineWithTrace();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin for post-fence pad frames.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 1500));
+  int64_t fence_pad1 = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs, 1500);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_pad1);
   engine_->Stop();
 
-  // Block must have completed.
   {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     ASSERT_GE(completed_blocks_.size(), 1u)
@@ -816,9 +809,8 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadsPostFence) {
   engine_ = MakeEngineWithTrace();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin for 5 post-fence pad frames.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 2000));
+  int64_t fence_pad5 = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs, 2000);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_pad5);
   engine_->Stop();
 
   {
@@ -914,18 +906,19 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
     }
   };
 
-  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_);
+  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
+      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      PipelineManagerOptions{0});
   engine_->Start();
 
-  // Wait for session to end (stop_requested fires after 90 frames).
-  ASSERT_TRUE(WaitForSessionEnded(6000))
-      << "Session must end within 6s after emitting " << kTargetFrames << " frames";
+  ASSERT_TRUE(WaitForSessionEndedBounded())
+      << "Session must end after emitting " << kTargetFrames << " frames";
   engine_->Stop();
 
   // ======================== VALIDATION ========================
 
   auto fps = SnapshotFingerprints();
-  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps.num, ctx_->fps.den);
   uint32_t expected_crc = ref_pad.VideoCRC32();
 
   std::cout << "=== PAD-PROOF-003: PadOnlyMicroBlock ===" << std::endl;
@@ -971,7 +964,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
   // For 30fps (fps_num=30, fps_den=1): frame_duration_90k = 90000/30 = 3000.
   // Verify session_frame_indices are [0, 1, 2, ..., 89] and PTS increments
   // by exactly frame_duration_90k per tick.
-  OutputClock clock(ctx_->fps_num, ctx_->fps_den);
+  OutputClock clock(ctx_->fps.num, ctx_->fps.den);
   clock.Start();
   int64_t frame_dur_90k = clock.FrameDuration90k();
   ASSERT_GT(frame_dur_90k, 0);
@@ -1023,10 +1016,10 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
     int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
     int64_t total_expected_audio_samples = 0;
     for (int i = 0; i < kTargetFrames; i++) {
-      int64_t next = (static_cast<int64_t>(i + 1) * sr * ctx_->fps_den) /
-                     ctx_->fps_num;
-      int64_t curr = (static_cast<int64_t>(i) * sr * ctx_->fps_den) /
-                     ctx_->fps_num;
+      int64_t next = (static_cast<int64_t>(i + 1) * sr * ctx_->fps.den) /
+                     ctx_->fps.num;
+      int64_t curr = (static_cast<int64_t>(i) * sr * ctx_->fps.den) /
+                     ctx_->fps.num;
       int samples_this_tick = static_cast<int>(next - curr);
       // For 30fps, every tick must produce exactly 1600 samples.
       EXPECT_EQ(samples_this_tick, 1600)
@@ -1162,14 +1155,14 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadSeam) {
     ctx_->block_queue.push_back(block_a);
   }
 
-  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_);
+  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
+      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      PipelineManagerOptions{0});
   engine_->Start();
 
-  // Wait: 5s (A content) + ~300ms (B sync load) + 500ms (B content margin).
-  std::this_thread::sleep_for(std::chrono::milliseconds(7000));
+  int64_t fence_seam = ((5000 + 300 + 500) * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_seam);
   engine_->Stop();
-
-  // ======================== VALIDATION ========================
 
   ASSERT_TRUE(b_injected) << "Block A must have completed (on_block_completed)";
 
@@ -1178,7 +1171,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadSeam) {
       << "Must have enough frames to verify boundary";
 
   // Reference CRC for PadProducer black frame at session resolution.
-  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps.num, ctx_->fps.den);
   uint32_t expected_crc = ref_pad.VideoCRC32();
 
   // --- Locate the three regions: A content, pad gap, B content ---
@@ -1286,7 +1279,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadSeam) {
   // PTS is computed by OutputClock: pts(N) = N * frame_duration_90k.
   // For 30fps (fps_num=30, fps_den=1): frame_duration_90k = 3000.
   // Monotonicity is guaranteed if session_frame_indices are consecutive.
-  OutputClock clock(ctx_->fps_num, ctx_->fps_den);
+  OutputClock clock(ctx_->fps.num, ctx_->fps.den);
   clock.Start();
   int64_t frame_dur_90k = clock.FrameDuration90k();
 
@@ -1457,14 +1450,14 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadSeam) {
     ctx_->block_queue.push_back(block_a);
   }
 
-  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_);
+  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
+      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      PipelineManagerOptions{0});
   engine_->Start();
 
-  // Wait: 5s (A) + 5*33ms (pad gap ~167ms) + ~300ms (B load) + 500ms (B margin).
-  std::this_thread::sleep_for(std::chrono::milliseconds(7000));
+  int64_t fence_seam5 = ((5000 + 200 + 300 + 500) * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_seam5);
   engine_->Stop();
-
-  // ======================== VALIDATION ========================
 
   ASSERT_TRUE(b_injected) << "B must have been injected after 5 pad frames";
 
@@ -1472,7 +1465,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadSeam) {
   ASSERT_GT(fps.size(), 30u)
       << "Must have enough frames to verify boundary";
 
-  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps.num, ctx_->fps.den);
   uint32_t expected_crc = ref_pad.VideoCRC32();
 
   // --- Locate regions: A content, pad gap, B content ---
@@ -1552,7 +1545,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadSeam) {
   // Window: [last_a_content, last_a_content + 6] = last A, 5 pads, first B.
   // Each tick: video_pts_90k = session_frame_index * frame_duration_90k.
   // Consecutive indices ⇒ PTS increments by exactly frame_duration_90k.
-  OutputClock clock(ctx_->fps_num, ctx_->fps_den);
+  OutputClock clock(ctx_->fps.num, ctx_->fps.den);
   clock.Start();
   int64_t frame_dur_90k = clock.FrameDuration90k();
 
@@ -1691,19 +1684,21 @@ TEST_F(ContinuousOutputContractTest, PadProof_BudgetShortfall_ExactCount) {
     }
   };
 
-  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_);
+  engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
+      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      PipelineManagerOptions{0});
   engine_->Start();
 
-  ASSERT_TRUE(WaitForSessionEnded(5000))
-      << "Session must end within 5s after emitting " << kN << " pad frames";
+  ASSERT_TRUE(WaitForSessionEndedBounded())
+      << "Session must end after emitting " << kN << " pad frames";
   engine_->Stop();
 
   // ======================== VALIDATION ========================
 
   auto fps = SnapshotFingerprints();
-  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+  PadProducer ref_pad(ctx_->width, ctx_->height, ctx_->fps.num, ctx_->fps.den);
   uint32_t expected_crc = ref_pad.VideoCRC32();
-  OutputClock clock(ctx_->fps_num, ctx_->fps_den);
+  OutputClock clock(ctx_->fps.num, ctx_->fps.den);
   clock.Start();
   int64_t frame_dur_90k = clock.FrameDuration90k();
 
@@ -1822,12 +1817,8 @@ TEST_F(ContinuousOutputContractTest, AudioUnderflowBridgedWithSilence) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run long enough that the segment transition definitely occurs
-  // and filler content plays for at least 1s after the transition.
-  // If the old hard-stop was still in place, the session would die
-  // at or shortly after the transition (~1s in).
-  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
-
+  const int64_t kFenceSegmentTransition = (3500 * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kFenceSegmentTransition);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -1914,22 +1905,20 @@ TEST_F(ContinuousOutputContractTest, DISABLED_SLOW_PrerollArmingNextNextBlock) {
 
   engine_ = MakeEngine();
 
-  // Simulate slow preloader (600ms per preload).
-  // With the old bug, C's preload starts at A's fence (5s),
-  // finishes at 5.6s, too late for B's fence at 7s.
-  engine_->SetPreloaderDelayHook([]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable 600ms delay — check cancel every 10ms
+    for (int i = 0; i < 60 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
-
-  engine_->Start();
-
-  // kBootGuardMs + total block duration + margin.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 2000 + kStdBlockMs + 2000));
-
+  int64_t fence_preroll = FenceTickForBootstrapPlusBlockMs(
+      kBootGuardMs, kStdBlockMs + 2000 + kStdBlockMs, 2000);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_preroll);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
+  EXPECT_LE(m.continuous_frames_emitted_total, retrovue::blockplan::test_utils::kMaxTestTicks)
+      << "Test must not exceed deterministic tick ceiling";
 
   std::cout << "=== INV-PREROLL-READY-001: PrerollArmingNextNextBlock ===" << std::endl;
   std::cout << "  source_swap_count=" << m.source_swap_count
@@ -1996,15 +1985,12 @@ TEST_F(ContinuousOutputContractTest, NulloptBurstTolerance) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin for post-fence pad.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 500));
-
+  int64_t fence_nullopt = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_nullopt);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
 
-  // ASSERTION 1: No underflow-triggered detach.
   EXPECT_EQ(m.detach_count, 0)
       << "Unresolvable asset must NOT trigger underflow detach";
 
@@ -2060,10 +2046,8 @@ TEST_F(ContinuousOutputContractTest, DegradedTakeCountTracked) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Bootstrap + both blocks + margin.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + 2 * kShortBlockMs + 500));
-
+  int64_t fence_degrade = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, 2 * kShortBlockMs);
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_degrade);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();

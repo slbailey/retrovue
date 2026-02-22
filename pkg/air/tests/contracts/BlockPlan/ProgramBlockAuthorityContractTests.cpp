@@ -28,9 +28,11 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -87,7 +89,7 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -142,23 +144,27 @@ class ProgramBlockAuthorityContractTest : public ::testing::Test {
       proofs_.push_back(proof);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
-  bool WaitForSessionEnded(int timeout_ms = 5000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return session_ended_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
-        [this] { return session_ended_count_ > 0; });
+  bool WaitForSessionEndedBounded(int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
+        [this] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
+          return session_ended_count_ > 0;
+        },
+        max_steps);
   }
 
-  bool WaitForBlocksCompleted(int count, int timeout_ms = 10000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return blocks_completed_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
+  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
         [this, count] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
           return static_cast<int>(completed_blocks_.size()) >= count;
-        });
+        },
+        max_steps);
   }
 
   std::vector<FrameFingerprint> SnapshotFingerprints() {
@@ -211,11 +217,11 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_001_BlockTransferOccursOnlyAtF
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 10000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
       << "Block A must complete at its fence";
 
-  // Let B run for a bit, then stop.
-  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  int64_t cur = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), cur + 50);
   engine_->Stop();
 
   auto fps = SnapshotFingerprints();
@@ -279,11 +285,11 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_002_BlockLifecycleEventsAreEmi
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 8000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
       << "Block must complete at fence";
 
-  // Let post-fence pad run briefly, then stop.
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  int64_t cur = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), cur + 15);
   engine_->Stop();
 
   // OUT-BLOCK-002: on_block_completed fired with correct block_id.
@@ -342,9 +348,10 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_003_BlockCompletionIsRecordedA
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 8000));
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1));
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  int64_t c = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), c + 10);
   engine_->Stop();
 
   {
@@ -400,10 +407,11 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_004_BlockToBlockTransitionSati
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 8000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(2))
       << "Both blocks must complete";
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  int64_t c2 = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), c2 + 15);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -460,9 +468,8 @@ TEST_F(ProgramBlockAuthorityContractTest, T_BLOCK_005_MissingNextBlockPadsInstea
   engine_ = MakeEngine();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin for post-fence pad.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kStdBlockMs + 500));
+  int64_t fence_blk5 = ((kBootGuardMs + kStdBlockMs + 500) * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_blk5);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();

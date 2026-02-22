@@ -14,6 +14,7 @@ int64_t ToMicroseconds(double seconds) {
   return static_cast<int64_t>(std::llround(seconds * kMicrosecondsPerSecond));
 }
 
+// telemetry-only helper; MUST NOT influence pacing/scheduling decisions.
 double ToMilliseconds(int64_t microseconds) {
   return static_cast<double>(microseconds) / 1'000.0;
 }
@@ -87,8 +88,9 @@ TimingLoop::Stats TimingLoop::Snapshot() const {
 }
 
 void TimingLoop::Run() {
-  const double interval_seconds = 1.0 / std::max(config_.target_fps, 1.0);
-  const int64_t interval_us = ToMicroseconds(interval_seconds);
+  const auto fps = retrovue::blockplan::DeriveRationalFPS(
+      config_.target_fps > 0.0 ? config_.target_fps : 30.0);
+  const int64_t interval_us = fps.FrameDurationUs();
 
   int64_t next_deadline =
       clock_ ? clock_->now_utc_us() + interval_us

@@ -3,7 +3,6 @@
 #include "retrovue/producers/programmatic/ProgrammaticProducer.h"
 
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <thread>
@@ -28,7 +27,7 @@ namespace retrovue::producers::programmatic
         state_(State::STOPPED),
         stop_requested_(false),
         frames_produced_(0),
-        frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
+        frame_interval_us_(config.target_fps.FrameDurationUs()),
         next_pts_us_(0)
   {
   }
@@ -125,7 +124,7 @@ namespace retrovue::producers::programmatic
       frame.height = config_.target_height;
       frame.metadata.pts = next_pts_us_;
       frame.metadata.dts = next_pts_us_;
-      frame.metadata.duration = 1.0 / config_.target_fps;
+      frame.metadata.duration = config_.target_fps.FrameDurationSec();
       frame.metadata.asset_uri = config_.asset_uri;
 
       size_t data_size = static_cast<size_t>(config_.target_width * config_.target_height * 3 / 2);  // YUV420

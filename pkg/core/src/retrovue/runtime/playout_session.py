@@ -288,18 +288,20 @@ class PlayoutSession:
                     "--port", str(grpc_port),
                 ]
 
-                # Create log directory
+                # Create log directory; capture both stdout and stderr to channel log
                 log_dir = Path("/opt/retrovue/pkg/air/logs")
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = log_dir / f"{self.channel_id}-air.log"
 
                 logger.debug(f"[PlayoutSession:{self.channel_id}] Starting AIR: {' '.join(cmd)}")
 
-                with open(log_path, 'w') as log_file:
+                with open(
+                    log_path, "w", buffering=1, encoding="utf-8", errors="replace"
+                ) as log_file:
                     self._state.air_process = subprocess.Popen(
                         cmd,
                         stdout=log_file,
-                        stderr=subprocess.STDOUT,
+                        stderr=log_file,
                         cwd=str(Path.cwd()),
                     )
 
@@ -441,9 +443,16 @@ class PlayoutSession:
 
             except grpc.RpcError as e:
                 if not self._event_stop.is_set():
-                    logger.warning(
-                        f"[PlayoutSession:{self.channel_id}] Event stream error: {e.code()}"
-                    )
+                    # UNAVAILABLE is expected when AIR exits during shutdown; avoid warning.
+                    if e.code() == grpc.StatusCode.UNAVAILABLE:
+                        logger.debug(
+                            "[PlayoutSession:%s] Event stream closed (AIR exited): %s",
+                            self.channel_id, e.code(),
+                        )
+                    else:
+                        logger.warning(
+                            f"[PlayoutSession:{self.channel_id}] Event stream error: {e.code()}"
+                        )
 
         self._event_stop.clear()
         self._event_thread = threading.Thread(target=event_loop, daemon=True)
@@ -610,6 +619,9 @@ class PlayoutSession:
 
             logger.debug(f"[PlayoutSession:{self.channel_id}] Stopping: {reason}")
 
+            # Signal event thread immediately so it does not warn on stream errors during shutdown.
+            self._event_stop.set()
+
             try:
                 if self._stub:
                     request = playout_pb2.StopBlockPlanSessionRequest(
@@ -626,7 +638,14 @@ class PlayoutSession:
                             f"blocks_executed={response.blocks_executed}"
                         )
             except grpc.RpcError as e:
-                logger.warning(f"[PlayoutSession:{self.channel_id}] Stop RPC error: {e}")
+                # UNAVAILABLE / connection refused expected when AIR already exited during shutdown.
+                if e.code() == grpc.StatusCode.UNAVAILABLE:
+                    logger.debug(
+                        "[PlayoutSession:%s] Stop RPC unreachable (AIR likely already exited): %s",
+                        self.channel_id, e,
+                    )
+                else:
+                    logger.warning(f"[PlayoutSession:{self.channel_id}] Stop RPC error: {e}")
 
             self._cleanup()
 

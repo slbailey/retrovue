@@ -28,8 +28,10 @@ bool RealAssetSource::ProbeAsset(const std::string& uri) {
   auto open_end = std::chrono::steady_clock::now();
   auto open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
       open_end - open_start).count();
+#ifdef RETROVUE_DEBUG
   std::cout << "[METRIC] asset_open_input_ms=" << open_ms
             << " uri=" << uri << std::endl;
+#endif
 
   auto stream_info_start = std::chrono::steady_clock::now();
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
@@ -40,8 +42,10 @@ bool RealAssetSource::ProbeAsset(const std::string& uri) {
   auto stream_info_end = std::chrono::steady_clock::now();
   auto stream_info_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
       stream_info_end - stream_info_start).count();
+#ifdef RETROVUE_DEBUG
   std::cout << "[METRIC] asset_stream_info_ms=" << stream_info_ms
             << " uri=" << uri << std::endl;
+#endif
 
   // Get duration in milliseconds
   int64_t duration_ms = 0;

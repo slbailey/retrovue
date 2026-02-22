@@ -36,6 +36,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
@@ -140,7 +141,7 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -191,7 +192,9 @@ class SeamContinuityEngineContractTest : public ::testing::Test {
       summaries_.push_back(summary);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
@@ -269,7 +272,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001a_ClockIsolation_SegmentSeam)
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -323,7 +326,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001b_ClockIsolation_BlockSeam) {
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -375,7 +378,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001b_ClockIsolation_BlockSeam) {
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_001c_ClockIsolation_AdversarialProbeLatency) {
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -388,8 +391,11 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_001c_ClockIsolation_AdversarialP
   }
 
   engine_ = MakeEngine();
-  engine_->SetPreloaderDelayHook([] {
-    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable 800ms delay — check cancel every 10ms
+    for (int i = 0; i < 80 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
   engine_->Start();
 
@@ -431,7 +437,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_002a_DecoderReadiness_AchievedBe
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -504,7 +510,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_002b_DecoderReadiness_OverlapWin
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -589,7 +595,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_003a_AudioContinuity_ZeroSilence
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -647,7 +653,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_003a_AudioContinuity_ZeroSilence
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_003b_AudioContinuity_NoAudioTrackExempt) {
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -702,7 +708,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004a_MechanicalEquivalence_Segme
   }
 
   // ---- Session 1: Segment seam (multi-segment block) ----
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
   auto now = NowMs();
 
   FedBlock seg_block = MakeMultiSegmentBlock(
@@ -756,7 +762,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004a_MechanicalEquivalence_Segme
   });
   ctx_->width = 640;
   ctx_->height = 480;
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   // ---- Session 2: Block seam (two single-segment blocks) ----
   now = NowMs();
@@ -830,7 +836,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004b_MechanicalEquivalence_Mixed
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -890,7 +896,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_004b_MechanicalEquivalence_Mixed
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_005a_BoundedFallbackObservability_MetricTrackedAndExposed) {
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -944,7 +950,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_005b_BoundedFallbackObservabilit
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -996,7 +1002,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_005b_BoundedFallbackObservabilit
 // Assets: None (synthetic). Asset-agnostic.
 // =============================================================================
 TEST_F(SeamContinuityEngineContractTest, T_SEAM_006_FallbackOnPreloaderFailure_SessionSurvives) {
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
 
   auto now = NowMs();
 
@@ -1007,10 +1013,11 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_006_FallbackOnPreloaderFailure_S
     ctx_->block_queue.push_back(block_a);
     ctx_->block_queue.push_back(block_b);
   }
-
-  engine_ = MakeEngine();
-  engine_->SetPreloaderDelayHook([] {
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable 2s delay — check cancel every 10ms
+    for (int i = 0; i < 200 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
   engine_->Start();
 
@@ -1062,7 +1069,7 @@ TEST_F(SeamContinuityEngineContractTest, T_SEAM_007_AudioUnderflowAbsenceAtSeam_
     GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
   }
 
-  ctx_->fps = 30.0;
+  ctx_->fps = FPS_30;
   ctx_->buffer_config.audio_target_depth_ms = 200;
   ctx_->buffer_config.audio_low_water_ms = 50;
 

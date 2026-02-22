@@ -18,6 +18,7 @@ namespace retrovue::util {
 // (tick loop, fill thread, SeamPreparer worker, gRPC handlers).
 //
 // Info  → stdout (normal operational logs)
+// Debug → stdout only when RETROVUE_DEBUG env is set (verbose investigation)
 // Warn  → stderr (degraded but recoverable conditions)
 // Error → stderr (violations, bugs, hard faults)
 //
@@ -26,6 +27,7 @@ namespace retrovue::util {
 class Logger {
  public:
   static void Info(const std::string& line);
+  static void Debug(const std::string& line);
   static void Warn(const std::string& line);
   static void Error(const std::string& line);
 

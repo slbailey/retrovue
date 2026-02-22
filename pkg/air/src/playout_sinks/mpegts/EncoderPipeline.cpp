@@ -244,10 +244,17 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   codec_ctx_->bit_rate = config.bitrate;
   codec_ctx_->gop_size = config.gop_size;
   codec_ctx_->max_b_frames = 0;  // No B-frames for low latency
-  codec_ctx_->time_base.num = 1;
-  codec_ctx_->time_base.den = static_cast<int>(config.target_fps);
-  codec_ctx_->framerate.num = static_cast<int>(config.target_fps);
-  codec_ctx_->framerate.den = 1;
+  if (config.fps_num > 0 && config.fps_den > 0) {
+    codec_ctx_->time_base.num = static_cast<int>(config.fps_den);
+    codec_ctx_->time_base.den = static_cast<int>(config.fps_num);
+    codec_ctx_->framerate.num = static_cast<int>(config.fps_num);
+    codec_ctx_->framerate.den = static_cast<int>(config.fps_den);
+  } else {
+    codec_ctx_->time_base.num = 1;
+    codec_ctx_->time_base.den = static_cast<int>(config.target_fps);
+    codec_ctx_->framerate.num = static_cast<int>(config.target_fps);
+    codec_ctx_->framerate.den = 1;
+  }
 
   // Set stream time base to 90kHz (MPEG-TS standard)
   video_stream_->time_base.num = 1;
@@ -795,10 +802,17 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       codec_ctx_->bit_rate = config_.bitrate;
       codec_ctx_->gop_size = config_.gop_size;
       codec_ctx_->max_b_frames = 0;
-      codec_ctx_->time_base.num = 1;
-      codec_ctx_->time_base.den = static_cast<int>(config_.target_fps);
-      codec_ctx_->framerate.num = static_cast<int>(config_.target_fps);
-      codec_ctx_->framerate.den = 1;
+      if (config_.fps_num > 0 && config_.fps_den > 0) {
+        codec_ctx_->time_base.num = static_cast<int>(config_.fps_den);
+        codec_ctx_->time_base.den = static_cast<int>(config_.fps_num);
+        codec_ctx_->framerate.num = static_cast<int>(config_.fps_num);
+        codec_ctx_->framerate.den = static_cast<int>(config_.fps_den);
+      } else {
+        codec_ctx_->time_base.num = 1;
+        codec_ctx_->time_base.den = static_cast<int>(config_.target_fps);
+        codec_ctx_->framerate.num = static_cast<int>(config_.target_fps);
+        codec_ctx_->framerate.den = 1;
+      }
       codec_opened_ = false;
       // Only unref if this frame ever had buffers (av_frame_get_buffer sets buf[0]); never unref freshly alloc'd frame.
       if (frame_->buf[0] != nullptr) {

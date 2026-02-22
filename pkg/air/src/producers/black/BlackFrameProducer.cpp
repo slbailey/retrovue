@@ -10,7 +10,6 @@
 #include "retrovue/producers/black/BlackFrameProducer.h"
 
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <thread>
@@ -43,14 +42,13 @@ BlackFrameProducer::BlackFrameProducer(buffer::FrameRingBuffer& output_buffer,
   // Extract video parameters from format
   target_width_ = format_.video.width > 0 ? format_.video.width : 1920;
   target_height_ = format_.video.height > 0 ? format_.video.height : 1080;
-  target_fps_ = format_.GetFrameRateAsDouble();
-  if (target_fps_ <= 0.0) {
-    target_fps_ = 30.0;  // Default to 30fps if not specified
+  target_fps_r_ = retrovue::blockplan::DeriveRationalFPS(format_.GetFrameRateAsDouble());
+  if (!target_fps_r_.IsValid()) {
+    target_fps_r_ = retrovue::blockplan::FPS_30;
   }
 
-  // Calculate frame interval in microseconds
-  frame_interval_us_ = static_cast<int64_t>(
-      std::round(static_cast<double>(kMicrosecondsPerSecond) / target_fps_));
+  // Canonical frame interval in microseconds.
+  frame_interval_us_ = target_fps_r_.FrameDurationUs();
 
   // Pre-allocate black frame data (YUV420 planar format)
   // Y plane: width * height bytes
@@ -158,7 +156,7 @@ bool BlackFrameProducer::IsPaddingComplete() const {
 void BlackFrameProducer::ProduceLoop() {
   int64_t target = target_frame_count_.load(std::memory_order_acquire);
   std::cout << "[BlackFrameProducer] Started. Format: " << target_width_ << "x"
-            << target_height_ << " @ " << target_fps_ << " fps"
+            << target_height_ << " @ " << target_fps_r_.num << "/" << target_fps_r_.den << " fps"
             << ", target_frames=" << (target < 0 ? "unbounded" : std::to_string(target))
             << std::endl;
 
@@ -216,7 +214,7 @@ void BlackFrameProducer::ProduceBlackFrame() {
   int64_t pts = next_pts_us_.load(std::memory_order_acquire);
   frame.metadata.pts = pts;
   frame.metadata.dts = pts;
-  frame.metadata.duration = 1.0 / target_fps_;
+  frame.metadata.duration = target_fps_r_.FrameDurationSec();
   frame.metadata.asset_uri = kAssetUri;
 
   // Copy pre-allocated black frame data

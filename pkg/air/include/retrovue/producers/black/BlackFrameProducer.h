@@ -23,6 +23,7 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
 #include "retrovue/runtime/ProgramFormat.h"
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 
 namespace retrovue::timing {
 class MasterClock;
@@ -124,7 +125,7 @@ class BlackFrameProducer : public retrovue::producers::IProducer {
   runtime::ProgramFormat format_;
   int target_width_;
   int target_height_;
-  double target_fps_;
+  retrovue::blockplan::RationalFps target_fps_r_ = retrovue::blockplan::FPS_30;
   int64_t frame_interval_us_;
 
   // Output buffer reference

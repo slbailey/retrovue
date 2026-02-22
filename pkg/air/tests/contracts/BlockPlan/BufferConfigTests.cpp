@@ -108,7 +108,7 @@ class MockTickProducer : public ITickProducer {
   const FedBlock& GetBlock() const override { return block_; }
   int64_t FramesPerBlock() const override { return total_frames_; }
   bool HasDecoder() const override { return true; }
-  double GetInputFPS() const override { return input_fps_; }
+  RationalFps GetInputRationalFps() const override { return DeriveRationalFPS(input_fps_); }
   bool HasPrimedFrame() const override { return false; }
 
   const std::vector<SegmentBoundary>& GetBoundaries() const override {
@@ -155,7 +155,7 @@ TEST(BufferConfigTest, VideoTargetDepthConfigurable) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill to target depth.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= custom_depth; },
@@ -195,7 +195,7 @@ TEST(BufferConfigTest, VideoLowWaterDetection) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill above low-water.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 4; },
@@ -248,7 +248,7 @@ TEST(BufferConfigTest, LowWaterIsDiagnosticOnly) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 6; },
                        std::chrono::seconds(2)));
   buf.StopFilling(false);
@@ -287,7 +287,7 @@ TEST(BufferConfigTest, DecodeLatencyP95_ReflectsActualTimes) {
   mock.SetDecodeDelay(std::chrono::milliseconds(10));
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for enough frames to have meaningful latency data.
   ASSERT_TRUE(WaitFor([&] { return buf.TotalFramesPushed() >= 5; },
@@ -315,16 +315,20 @@ TEST(BufferConfigTest, RefillRateFps_Positive) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  EXPECT_DOUBLE_EQ(buf.RefillRateFps(), 0.0);
+  {
+    auto r = buf.GetRefillRate();
+    EXPECT_EQ(r.frames, 0);
+  }
 
-  buf.StartFilling(&mock, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for some frames to be pushed.
   ASSERT_TRUE(WaitFor([&] { return buf.TotalFramesPushed() >= 3; },
                        std::chrono::seconds(2)));
 
-  double rate = buf.RefillRateFps();
-  EXPECT_GT(rate, 0.0) << "rate=" << rate;
+  auto r = buf.GetRefillRate();
+  int64_t rate_fps = (r.elapsed_us > 0) ? (r.frames * 1000000 / r.elapsed_us) : 0;
+  EXPECT_GT(rate_fps, 0) << "rate_fps=" << rate_fps;
 
   buf.StopFilling(true);
 }

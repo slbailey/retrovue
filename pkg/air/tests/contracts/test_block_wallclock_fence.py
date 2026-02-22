@@ -114,10 +114,13 @@ class PipelineManagerModel:
         self.fence_log: list[FenceEvent] = []
         self.completion_log: list[str] = []  # block_ids in order
 
-        # Cadence (simplified: 1:1 when input_fps == output_fps)
+        # Rational cadence/drop model
         self.cadence_active = False
         self.cadence_ratio = 0.0
         self.decode_budget = 0.0
+        self.drop_active = False
+        self.drop_step = 1
+        self.input_frames_consumed = 0
         self.have_last_frame = False
 
     def load_block(self, block: FedBlock) -> None:
@@ -136,6 +139,18 @@ class PipelineManagerModel:
         self.preview_block = block
 
     def _init_cadence(self, block: FedBlock) -> None:
+        self.drop_active = False
+        self.drop_step = 1
+        ratio = (block.input_fps / self.output_fps) if self.output_fps > 0 else 0.0
+        rounded = int(round(ratio)) if ratio > 0 else 1
+        if ratio >= 1.0 and abs(ratio - rounded) < 1e-6:
+            self.drop_active = True
+            self.drop_step = max(1, rounded)
+            self.cadence_active = False
+            self.cadence_ratio = 0.0
+            self.decode_budget = 0.0
+            return
+
         if block.input_fps > 0 and block.input_fps < self.output_fps * 0.98:
             self.cadence_active = True
             self.cadence_ratio = block.input_fps / self.output_fps
@@ -146,6 +161,8 @@ class PipelineManagerModel:
             self.decode_budget = 0.0
 
     def _should_decode(self) -> bool:
+        if self.drop_active:
+            return True
         if not self.cadence_active:
             return True
         self.decode_budget += self.cadence_ratio
@@ -165,8 +182,10 @@ class PipelineManagerModel:
             if should_decode:
                 if self.content_frames_remaining > 0:
                     # Decode a real frame
-                    self.content_frames_remaining -= 1
+                    consumed = self.drop_step if self.drop_active else 1
+                    self.content_frames_remaining -= consumed
                     self.content_frames_decoded += 1
+                    self.input_frames_consumed += consumed
                     self.have_last_frame = True
                     event.source = "decode"
                     event.block_id = self.current_block.block_id
@@ -900,7 +919,7 @@ class TestBootstrapDelay:
         session_epoch = 1000000
         fence_epoch = 1003000  # 3s bootstrap delay
         fps = 30.0
-        frame_dur_ms = round(1000.0 / fps)
+        frame_dur_ms = 1000 // int(fps)
 
         block = FedBlock(
             block_id="delayed",
@@ -963,3 +982,73 @@ class TestBootstrapDelay:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestRationalCadenceLongRun:
+    """Explicit long-run cadence/drop criteria for RationalFps closure."""
+
+    def test_drop_5994_to_2997_step2_long_run(self):
+        epoch = 1_000_000
+        pm = PipelineManagerModel(output_fps=29.97, session_epoch_utc_ms=epoch)
+        block = FedBlock(
+            block_id="drop-5994-2997",
+            start_utc_ms=epoch,
+            end_utc_ms=epoch + 600_000,
+            input_fps=59.94,
+            total_content_frames=40_000,
+        )
+        pm.load_block(block)
+        pm.run_ticks(17_982)  # ~10 minutes at 29.97fps
+
+        decodes = sum(1 for e in pm.tick_log if e.source == "decode")
+        repeats = sum(1 for e in pm.tick_log if e.source == "repeat")
+        assert decodes == 17_982
+        assert pm.drop_active
+        assert pm.drop_step == 2
+        assert pm.input_frames_consumed == 35_964
+
+    def test_cadence_23976_to_30_exact_ratio_window(self):
+        epoch = 2_000_000
+        pm = PipelineManagerModel(output_fps=30.0, session_epoch_utc_ms=epoch)
+        block = FedBlock(
+            block_id="cadence-23976-30",
+            start_utc_ms=epoch,
+            # 3000 output ticks @ 30fps span exactly 100s; keep block long enough
+            # to measure cadence rather than end-of-block exhaustion effects.
+            end_utc_ms=epoch + 100_000,
+            input_fps=23.976,
+            total_content_frames=30_000,
+        )
+        pm.load_block(block)
+
+        window = pm.run_ticks(3000)
+        decodes = sum(1 for e in window if e.source == "decode")
+        repeats = sum(1 for e in window if e.source == "repeat")
+
+        # 23.976 is 24000/1001. Against 30fps output, decode probability is:
+        #   (24000/1001) / 30 = 800/1001
+        # Over a 3000-tick window, expected decodes are 3000*(800/1001)=2397.602…
+        # The deterministic cadence integrator yields 2398 decodes and 602 repeats.
+        assert decodes == 2398
+        assert repeats == 602
+
+    def test_ten_minute_no_accumulated_error_23976_to_30(self):
+        epoch = 3_000_000
+        pm = PipelineManagerModel(output_fps=30.0, session_epoch_utc_ms=epoch)
+        block = FedBlock(
+            block_id="longrun-23976-30",
+            start_utc_ms=epoch,
+            end_utc_ms=epoch + 600_000,
+            input_fps=23.976,
+            total_content_frames=100_000,
+        )
+        pm.load_block(block)
+
+        ticks = 18_000
+        pm.run_ticks(ticks)
+        decodes = sum(1 for e in pm.tick_log if e.source == "decode")
+        repeats = sum(1 for e in pm.tick_log if e.source == "repeat")
+
+        expected_decodes = int(ticks * (23.976 / 30.0))
+        assert abs(decodes - expected_decodes) <= 1
+        assert decodes + repeats == ticks

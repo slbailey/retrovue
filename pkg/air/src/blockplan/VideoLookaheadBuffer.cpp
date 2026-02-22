@@ -40,8 +40,8 @@ VideoLookaheadBuffer::~VideoLookaheadBuffer() {
 void VideoLookaheadBuffer::StartFilling(
     ITickProducer* producer,
     AudioLookaheadBuffer* audio_buffer,
-    double input_fps,
-    double output_fps,
+    RationalFps input_fps,
+    RationalFps output_fps,
     std::atomic<bool>* stop_signal) {
   // Ensure no fill thread is running.
   StopFilling(false);
@@ -58,6 +58,8 @@ void VideoLookaheadBuffer::StartFilling(
   producer_->SetInterruptFlags(flags);
   input_fps_ = input_fps;
   output_fps_ = output_fps;
+  resample_mode_ = producer ? producer->GetResampleMode() : ResampleMode::OFF;
+  drop_step_ = producer ? producer->GetDropStep() : 1;
   fill_start_time_ = std::chrono::steady_clock::now();
 
   // INV-BLOCK-PRIME-002: Consume primed frame synchronously (non-blocking).
@@ -77,6 +79,9 @@ void VideoLookaheadBuffer::StartFilling(
   if (has_primed) {
     auto fd = producer_->TryGetFrame();
     if (fd) {
+      const size_t primed_audio_count = fd->audio.size();
+      const bool has_audio_stream = producer_->HasAudioStream();
+
       VideoBufferFrame vf;
       vf.video = fd->video;          // copy for potential cache use
       vf.asset_uri = std::move(fd->asset_uri);
@@ -84,19 +89,28 @@ void VideoLookaheadBuffer::StartFilling(
       vf.was_decoded = true;
 
       // Push decoded audio to AudioLookaheadBuffer.
-      { std::ostringstream oss;
-        oss << "[VideoBuffer:" << buffer_label_ << "] StartFilling:"
-            << " primed_frame audio_count=" << fd->audio.size();
-        Logger::Info(oss.str()); }
       if (audio_buffer_) {
         for (auto& af : fd->audio) {
           audio_buffer_->Push(std::move(af));
         }
-        { std::ostringstream oss;
-          oss << "[VideoBuffer:" << buffer_label_ << "] StartFilling:"
-              << " audio_depth_ms=" << audio_buffer_->DepthMs();
-          Logger::Info(oss.str()); }
       }
+
+      int audio_depth_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+      constexpr int kMinAudioForSeamMs = 200;  // below this, gate will wait
+      bool ready_for_seam = (!audio_buffer_) || (audio_depth_ms >= kMinAudioForSeamMs);
+      const char* reason = !audio_buffer_ ? "no_audio_buffer"
+          : (primed_audio_count == 0 && has_audio_stream) ? "primed_has_no_audio"
+          : (audio_depth_ms >= kMinAudioForSeamMs) ? "sufficient_audio"
+          : "insufficient_audio";
+
+      { std::ostringstream oss;
+        oss << "[VideoBuffer:" << buffer_label_ << "] StartFilling: primed_frame"
+            << " has_audio_stream=" << has_audio_stream
+            << " audio_count=" << primed_audio_count
+            << " audio_depth_ms=" << audio_depth_ms
+            << " ready_for_seam=" << ready_for_seam
+            << " reason=" << reason;
+        Logger::Info(oss.str()); }
 
       std::lock_guard<std::mutex> lock(mutex_);
       frames_.push_back(std::move(vf));
@@ -105,17 +119,25 @@ void VideoLookaheadBuffer::StartFilling(
     }
   }
 
-  // Log cadence detection (matches old InitCadence diagnostic).
+  // Log resample mode (rational detection: OFF / DROP / CADENCE). DEBUG: chatty per segment.
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] FPS_CADENCE:"
-        << " input_fps=" << input_fps_
-        << " output_fps=" << output_fps_;
-    if (input_fps_ > 0.0 && input_fps_ < output_fps_ * 0.98) {
-      oss << " cadence=ACTIVE ratio=" << (input_fps_ / output_fps_);
+        << " input_fps=" << input_fps_.num << "/" << input_fps_.den
+        << " output_fps=" << output_fps_.num << "/" << output_fps_.den;
+    if (resample_mode_ == ResampleMode::OFF) {
+      oss << " mode=OFF";
+    } else if (resample_mode_ == ResampleMode::DROP) {
+      oss << " mode=DROP ratio=" << drop_step_;
+      if (output_fps_.num > 0) {
+        oss << " tick_duration_ms=" << (1000 * output_fps_.den / output_fps_.num);
+      }
     } else {
-      oss << " cadence=OFF";
+      int64_t ratio_num = (output_fps_.num > 0 && input_fps_.num > 0)
+          ? (input_fps_.num * output_fps_.den) / (input_fps_.den * output_fps_.num)
+          : 0;
+      oss << " mode=CADENCE ratio_approx=" << ratio_num;
     }
-    Logger::Info(oss.str()); }
+    Logger::Debug(oss.str()); }
 
   fill_running_ = true;
   {
@@ -186,6 +208,7 @@ bool VideoLookaheadBuffer::IsFilling() const {
 // FillLoop — background thread: decode ahead, resolve cadence, push to buffer
 // =============================================================================
 
+
 void VideoLookaheadBuffer::FillLoop() {
   // Capture producer/audio/stop at thread start so StopFillingAsync can null
   // members immediately. The fill thread uses only these locals — objects
@@ -207,26 +230,27 @@ void VideoLookaheadBuffer::FillLoop() {
     my_audio_gen = audio_buffer->CurrentGeneration();
   }
 
-  // --- Cadence setup (same logic as old PipelineManager::InitCadence) ---
-  bool cadence_active = false;
-  double cadence_ratio = 0.0;
-  double decode_budget = 0.0;
-
-  // Activate cadence only when input is meaningfully slower than output.
-  // Tolerance: 2% — avoids activation for 29.97 vs 30.
-  if (input_fps_ > 0.0 && input_fps_ < output_fps_ * 0.98) {
-    cadence_active = true;
-    cadence_ratio = input_fps_ / output_fps_;
-    decode_budget = 1.0;  // guarantees first tick decodes
+  // --- Cadence setup: use ResampleMode from TickProducer (rational detection) ---
+  // INV-FPS-MAPPING: decode_budget / input_fps-derived budgeting ONLY when mode==CADENCE.
+  // OFF and DROP must not use input_fps for decode gating; they decode every tick.
+  bool cadence_active = (resample_mode_ == ResampleMode::CADENCE);
+  using Wide = __int128;
+  Wide cadence_budget_num = 0;
+  Wide cadence_budget_den = 1;
+  if (cadence_active && output_fps_.num > 0 && output_fps_.den > 0 &&
+      input_fps_.num > 0 && input_fps_.den > 0) {
+    cadence_budget_num = static_cast<Wide>(output_fps_.num) * static_cast<Wide>(input_fps_.den);
+    cadence_budget_den = static_cast<Wide>(input_fps_.num) * static_cast<Wide>(output_fps_.den);
   }
+  // OFF: 1:1 decode every tick. DROP: TickProducer decodes step internally, we decode every tick.
 
   // Pre-build silence template for hold-last / cadence-repeat ticks.
   // One tick demands at most ceil(48000 / output_fps) samples.
   buffer::AudioFrame silence_template;
   int silence_samples_per_frame = 0;
-  if (audio_buffer && output_fps_ > 0.0) {
-    silence_samples_per_frame = static_cast<int>(
-        std::ceil(static_cast<double>(buffer::kHouseAudioSampleRate) / output_fps_));
+  if (audio_buffer && output_fps_.num > 0) {
+    const int64_t samples_num = static_cast<int64_t>(buffer::kHouseAudioSampleRate) * output_fps_.den;
+    silence_samples_per_frame = static_cast<int>((samples_num + output_fps_.num - 1) / output_fps_.num);
     silence_template.sample_rate = buffer::kHouseAudioSampleRate;
     silence_template.channels = buffer::kHouseAudioChannels;
     silence_template.nb_samples = silence_samples_per_frame;
@@ -257,12 +281,12 @@ void VideoLookaheadBuffer::FillLoop() {
 
   { std::ostringstream oss;
     oss << "[FillLoop:" << buffer_label_ << "] ENTER"
-        << " input_fps=" << input_fps_
-        << " output_fps=" << output_fps_
+        << " input_fps=" << input_fps_.num << "/" << input_fps_.den
+        << " output_fps=" << output_fps_.num << "/" << output_fps_.den
         << " cadence_active=" << cadence_active
         << " my_audio_gen=" << my_audio_gen
         << " have_last_decoded=" << have_last_decoded;
-    Logger::Info(oss.str()); }
+    Logger::Debug(oss.str()); }
 
   const char* exit_reason = "unknown";
   try {
@@ -370,7 +394,8 @@ void VideoLookaheadBuffer::FillLoop() {
               ? "fill_stop" : "session_stop";
           break;
         }
-        // BOOTSTRAP TRACE: log fill decisions during bootstrap phase only
+        // BOOTSTRAP: log each wake only when debugging (enable RETROVUE_DEBUG_BOOTSTRAP at build).
+#ifdef RETROVUE_DEBUG_BOOTSTRAP
         if (fill_phase_.load(std::memory_order_relaxed) ==
             static_cast<int>(FillPhase::kBootstrap)) {
           int d = static_cast<int>(frames_.size());
@@ -385,6 +410,7 @@ void VideoLookaheadBuffer::FillLoop() {
                 << " min_audio_ms=" << bootstrap_min_audio_ms_;
             Logger::Info(oss.str()); }
         }
+#endif
       }
     }
 
@@ -397,14 +423,12 @@ void VideoLookaheadBuffer::FillLoop() {
     }
 
     // --- Cadence gate ---
-    // ratio = input_fps / output_fps (e.g. 0.7992 for 23.976->30).
-    // decode_budget accumulates ratio each frame; decode when >= 1.0.
-    // Produces deterministic 4:1 dup pattern for 23.976->30.
+    // Rational cadence gate: budget += input/output per tick (integer accumulator).
     bool should_decode = true;
     if (cadence_active) {
-      decode_budget += cadence_ratio;
-      if (decode_budget >= 1.0) {
-        decode_budget -= 1.0;
+      cadence_budget_num += static_cast<Wide>(input_fps_.num) * static_cast<Wide>(output_fps_.den);
+      if (cadence_budget_num >= cadence_budget_den) {
+        cadence_budget_num -= cadence_budget_den;
         should_decode = true;
       } else {
         should_decode = false;
@@ -519,7 +543,7 @@ void VideoLookaheadBuffer::FillLoop() {
   if (strcmp(exit_reason, "exception") != 0) {
     { std::ostringstream oss;
       oss << "[FillLoop:" << buffer_label_ << "] FILL_EXIT reason=" << exit_reason;
-      Logger::Info(oss.str()); }
+      Logger::Debug(oss.str()); }
   }
 }
 
@@ -667,8 +691,8 @@ int64_t VideoLookaheadBuffer::DecodeLatencyP95Us() const {
   }
   std::sort(tmp.begin(), tmp.begin() + n);
 
-  // P95: index = floor(0.95 * (n-1))
-  int idx = static_cast<int>(0.95 * (n - 1));
+  // P95: index = floor(95/100 * (n-1))
+  int idx = (95 * (n - 1)) / 100;
   return tmp[idx];
 }
 
@@ -683,15 +707,11 @@ int64_t VideoLookaheadBuffer::DecodeLatencyMeanUs() const {
   return sum / latency_ring_count_;
 }
 
-double VideoLookaheadBuffer::RefillRateFps() const {
+VideoLookaheadBuffer::RefillRate VideoLookaheadBuffer::GetRefillRate() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (total_pushed_ == 0) return 0.0;
-
   auto elapsed = std::chrono::steady_clock::now() - fill_start_time_;
-  auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
-  if (elapsed_us <= 0) return 0.0;
-
-  return static_cast<double>(total_pushed_) * 1'000'000.0 / static_cast<double>(elapsed_us);
+  int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+  return RefillRate{total_pushed_, elapsed_us > 0 ? elapsed_us : 0};
 }
 
 }  // namespace retrovue::blockplan

@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include <vector>
 
 #include "retrovue/timing/MasterClock.h"
