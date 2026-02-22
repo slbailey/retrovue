@@ -155,7 +155,7 @@ TEST(BufferConfigTest, VideoTargetDepthConfigurable) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill to target depth.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= custom_depth; },
@@ -195,7 +195,7 @@ TEST(BufferConfigTest, VideoLowWaterDetection) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill above low-water.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 4; },
@@ -248,7 +248,7 @@ TEST(BufferConfigTest, LowWaterIsDiagnosticOnly) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 6; },
                        std::chrono::seconds(2)));
   buf.StopFilling(false);
@@ -287,7 +287,7 @@ TEST(BufferConfigTest, DecodeLatencyP95_ReflectsActualTimes) {
   mock.SetDecodeDelay(std::chrono::milliseconds(10));
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for enough frames to have meaningful latency data.
   ASSERT_TRUE(WaitFor([&] { return buf.TotalFramesPushed() >= 5; },
@@ -317,7 +317,7 @@ TEST(BufferConfigTest, RefillRateFps_Positive) {
 
   EXPECT_DOUBLE_EQ(buf.RefillRateFps(), 0.0);
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for some frames to be pushed.
   ASSERT_TRUE(WaitFor([&] { return buf.TotalFramesPushed() >= 3; },

@@ -6,7 +6,6 @@
 
 #include "retrovue/blockplan/OutputClock.hpp"
 
-#include <cmath>
 #include <thread>
 
 namespace retrovue::blockplan {
@@ -23,12 +22,8 @@ OutputClock::OutputClock(int64_t fps_num, int64_t fps_den)
       ns_per_frame_whole_((kNanosPerSecond * fps_den) / fps_num),
       ns_per_frame_rem_((kNanosPerSecond * fps_den) % fps_num),
       // Legacy: ms-rounded (diagnostic only, NOT used for pacing).
-      frame_duration_ms_(static_cast<int64_t>(
-          std::round(1000.0 * static_cast<double>(fps_den) /
-                     static_cast<double>(fps_num)))),
-      frame_duration_90k_(static_cast<int64_t>(
-          std::round(90000.0 * static_cast<double>(fps_den) /
-                     static_cast<double>(fps_num)))) {}
+      frame_duration_ms_(((1000LL * fps_den) + (fps_num / 2)) / fps_num),
+      frame_duration_90k_(((90000LL * fps_den) + (fps_num / 2)) / fps_num) {}
 
 void OutputClock::Start() {
   // INV-TICK-MONOTONIC-UTC-ANCHOR-001 R1: Monotonic epoch capture.

@@ -57,7 +57,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = DeriveRationalFPS(30.0);
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -597,7 +597,7 @@ TEST_F(ContinuousOutputContractTest, PreloaderDelayDoesNotStallEngine) {
   });
 
   FedBlock block = MakeSyntheticBlock("delay-001", 1000);
-  preloader.StartPreload(block, 640, 480, DeriveRationalFPS(30.0));
+  preloader.StartPreload(block, 640, 480, FPS_30);
 
   // Wait for hook to be called (bounded poll)
   ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
@@ -637,7 +637,7 @@ TEST_F(ContinuousOutputContractTest, AssignBlockRunsOffThread) {
   });
 
   FedBlock block = MakeSyntheticBlock("thread-001", 1000);
-  preloader.StartPreload(block, 640, 480, DeriveRationalFPS(30.0));
+  preloader.StartPreload(block, 640, 480, FPS_30);
 
   ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
       [&preloader]() { return preloader.IsReady(); },

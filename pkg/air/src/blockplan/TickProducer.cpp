@@ -19,13 +19,6 @@ namespace retrovue::blockplan {
 
 static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 
-// Output tick duration in seconds (1/output_fps). Used for DROP pacing metadata.
-static double TickDurationSeconds(const RationalFps& output_fps) {
-  return (output_fps.num > 0 && output_fps.den > 0)
-      ? (static_cast<double>(output_fps.den) / static_cast<double>(output_fps.num))
-      : 0.0;
-}
-
 TickProducer::TickProducer(int width, int height, RationalFps output_fps)
     : width_(width),
       height_(height),
@@ -242,7 +235,6 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   const RationalFps input_fps = decoder_->GetVideoRationalFps();
   input_fps_num_ = input_fps.num;
   input_fps_den_ = input_fps.den;
-  input_fps_ = input_fps.ToDouble();  // logging/telemetry only
   UpdateResampleMode();
 
   state_ = State::kReady;
@@ -252,7 +244,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " segments=" << plan.segments.size()
             << " decoder_ok=true"
             << " has_pad=" << has_pad_segments_
-            << " input_fps=" << input_fps_
+            << " input_fps=" << input_fps_num_ << "/" << input_fps_den_
             << " fps_num=" << output_fps_.num << " fps_den=" << output_fps_.den
             << std::endl;
 }
@@ -470,26 +462,14 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
         }
       }
     }
-    const double expected_tick_duration_s = TickDurationSeconds(output_fps_);
-    if (expected_tick_duration_s > 0.0) {
-      first->video.metadata.duration = expected_tick_duration_s;
+    if (output_fps_.num > 0) {
+      first->video.metadata.SetDurationFromUs(output_fps_.FrameDurationUs());
     }
     // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
-    // frame_index_ was already advanced by DecodeNextFrameRaw(true), so this frame is tick (frame_index_ - 1).
     const int64_t this_tick_index = frame_index_ - 1;
     const int64_t tick_pts_us = CtUs(this_tick_index);
     first->video.metadata.pts = tick_pts_us;
     first->video.metadata.dts = tick_pts_us;
-    // INV-TICK-AUTHORITY-001: duration already set to expected_tick_duration_s above.
-    // Log mismatch only when debugging (enable RETROVUE_DEBUG_DROP_DURATION at build).
-#ifdef RETROVUE_DEBUG_DROP_DURATION
-    constexpr double kDurationEpsilon = 1e-6;
-    if (expected_tick_duration_s > 0.0 &&
-        std::abs(first->video.metadata.duration - expected_tick_duration_s) > kDurationEpsilon) {
-      std::cout << "[TickProducer] DROP duration mismatch returned=" << first->video.metadata.duration
-                << " expected_tick_s=" << expected_tick_duration_s << std::endl;
-    }
-#endif
     return first;
   }
 
@@ -498,64 +478,53 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
 }
 
 // =============================================================================
-// ApplyFade — apply linear video+audio fade to a FrameData in-place
-// Contract Reference: docs/contracts/coordination/SegmentTransitionContract.md
-// INV-TRANSITION-004: Fade applied using segment-relative CT.
-// Video (YUV420P): Y *= alpha; U = 128 + (U-128)*alpha; V = 128 + (V-128)*alpha
-// Audio (S16 interleaved): each sample *= alpha
+// ApplyFade — apply linear video+audio fade to a FrameData in-place (fixed-point)
+// INV-FPS-RATIONAL-001: No floating point. alpha_q16 in [0, 65536] (1.0 = 65536).
 // =============================================================================
 
-static void ApplyFade(FrameData& fd, double alpha) {
-  if (alpha <= 0.0) {
-    // Full black + silence
+static constexpr int32_t kAlphaOne = 65536;
+
+static void ApplyFade(FrameData& fd, int32_t alpha_q16) {
+  if (alpha_q16 <= 0) {
     int y_size = fd.video.width * fd.video.height;
     int uv_size = (fd.video.width / 2) * (fd.video.height / 2);
     if (!fd.video.data.empty()) {
       std::memset(fd.video.data.data(), 0, static_cast<size_t>(y_size));
-      std::memset(fd.video.data.data() + y_size, 128,
-                  static_cast<size_t>(2 * uv_size));
+      std::memset(fd.video.data.data() + y_size, 128, static_cast<size_t>(2 * uv_size));
     }
     for (auto& af : fd.audio) {
       std::memset(af.data.data(), 0, af.data.size());
     }
     return;
   }
+  if (alpha_q16 >= kAlphaOne) return;
 
-  if (alpha >= 1.0) return;  // No change needed
-
-  // Video: YUV420P layout [Y][U][V]
   if (!fd.video.data.empty() && fd.video.width > 0 && fd.video.height > 0) {
     int y_size = fd.video.width * fd.video.height;
     int uv_size = (fd.video.width / 2) * (fd.video.height / 2);
     uint8_t* y_plane = fd.video.data.data();
     uint8_t* u_plane = y_plane + y_size;
     uint8_t* v_plane = u_plane + uv_size;
-
-    // Y plane: scale toward 0 (black)
     for (int i = 0; i < y_size && i < static_cast<int>(fd.video.data.size()); ++i) {
-      y_plane[i] = static_cast<uint8_t>(y_plane[i] * alpha + 0.5);
+      y_plane[i] = static_cast<uint8_t>((y_plane[i] * alpha_q16) >> 16);
     }
-    // U plane: blend toward 128 (neutral chroma)
     for (int i = 0; i < uv_size; ++i) {
       int idx = y_size + i;
       if (idx >= static_cast<int>(fd.video.data.size())) break;
-      u_plane[i] = static_cast<uint8_t>(128.0 + (u_plane[i] - 128.0) * alpha + 0.5);
+      u_plane[i] = static_cast<uint8_t>(128 + (((static_cast<int>(u_plane[i]) - 128) * alpha_q16) >> 16));
     }
-    // V plane: blend toward 128 (neutral chroma)
     for (int i = 0; i < uv_size; ++i) {
       int idx = y_size + uv_size + i;
       if (idx >= static_cast<int>(fd.video.data.size())) break;
-      v_plane[i] = static_cast<uint8_t>(128.0 + (v_plane[i] - 128.0) * alpha + 0.5);
+      v_plane[i] = static_cast<uint8_t>(128 + (((static_cast<int>(v_plane[i]) - 128) * alpha_q16) >> 16));
     }
   }
-
-  // Audio: S16 interleaved — scale each sample by alpha
   for (auto& af : fd.audio) {
     int num_samples = af.nb_samples * af.channels;
     int16_t* samples = reinterpret_cast<int16_t*>(af.data.data());
     int max_samples = static_cast<int>(af.data.size() / sizeof(int16_t));
     for (int i = 0; i < num_samples && i < max_samples; ++i) {
-      samples[i] = static_cast<int16_t>(samples[i] * alpha);
+      samples[i] = static_cast<int16_t>((samples[i] * alpha_q16) >> 16);
     }
   }
 }
@@ -631,40 +600,35 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
       ct_before
   };
 
-  // Apply segment transition fade (INV-TRANSITION-004: CT-based, not wall-clock).
-  // Only applies to second-class breakpoints tagged by Python Core.
+  // Apply segment transition fade (INV-TRANSITION-004). Fixed-point alpha_q16 [0, 65536].
   if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
       current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     const auto& seg = validated_.plan.segments[current_segment_index_];
     const auto& boundary = boundaries_[current_segment_index_];
+    int32_t alpha_q16 = kAlphaOne;
 
-    double alpha = 1.0;
-
-    // Transition in: fade from 0.0 → 1.0 over first transition_in_duration_ms
     if (seg.transition_in == TransitionType::kFade && seg.transition_in_duration_ms > 0) {
       int64_t seg_ct = ct_before - boundary.start_ct_ms;
-      int64_t fade_dur = static_cast<int64_t>(seg.transition_in_duration_ms);
-      if (seg_ct < fade_dur) {
-        double in_alpha = static_cast<double>(seg_ct) / static_cast<double>(fade_dur);
-        alpha = std::min(alpha, std::max(0.0, in_alpha));
+      int64_t fade_dur = seg.transition_in_duration_ms;
+      if (seg_ct < fade_dur && fade_dur > 0) {
+        int32_t in_alpha = static_cast<int32_t>((seg_ct * kAlphaOne) / fade_dur);
+        if (in_alpha < alpha_q16) alpha_q16 = in_alpha;
       }
     }
-
-    // Transition out: fade from 1.0 → 0.0 over last transition_out_duration_ms
     if (seg.transition_out == TransitionType::kFade && seg.transition_out_duration_ms > 0) {
       int64_t seg_duration = boundary.end_ct_ms - boundary.start_ct_ms;
       int64_t seg_ct = ct_before - boundary.start_ct_ms;
-      int64_t fade_dur = static_cast<int64_t>(seg.transition_out_duration_ms);
+      int64_t fade_dur = seg.transition_out_duration_ms;
       int64_t fade_start = seg_duration - fade_dur;
-      if (seg_ct >= fade_start) {
+      if (seg_ct >= fade_start && fade_dur > 0) {
         int64_t time_in_fade = seg_ct - fade_start;
-        double out_alpha = 1.0 - static_cast<double>(time_in_fade) / static_cast<double>(fade_dur);
-        alpha = std::min(alpha, std::max(0.0, out_alpha));
+        int32_t out_alpha = static_cast<int32_t>((time_in_fade * kAlphaOne) / fade_dur);
+        int32_t a = kAlphaOne - out_alpha;
+        if (a < alpha_q16) alpha_q16 = a;
       }
     }
-
-    if (alpha < 1.0) {
-      ApplyFade(result, alpha);
+    if (alpha_q16 < kAlphaOne) {
+      ApplyFade(result, alpha_q16);
     }
   }
 
@@ -748,7 +712,6 @@ void TickProducer::Reset() {
   primed_frame_.reset();
   buffered_frames_.clear();
   has_pad_segments_ = false;
-  input_fps_ = 0.0;
   input_fps_num_ = 1;
   input_fps_den_ = 1;
   resample_mode_ = ResampleMode::OFF;

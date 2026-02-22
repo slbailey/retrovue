@@ -170,7 +170,7 @@ TEST(VideoLookaheadBufferTest, BasicFillAndPop) {
   EXPECT_FALSE(buf.IsPrimed());
   EXPECT_EQ(buf.DepthFrames(), 0);
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill to high water (2× target under hysteresis).
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= buf.HighWaterFrames(); },
@@ -218,7 +218,7 @@ TEST(VideoLookaheadBufferTest, ResetClearsEverything) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
@@ -248,7 +248,7 @@ TEST(VideoLookaheadBufferTest, TargetDepthEnforcement) {
 
   int high_water = buf.HighWaterFrames();  // 2 × 8 = 16
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for fill thread to reach high water.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= high_water; },
@@ -272,7 +272,7 @@ TEST(VideoLookaheadBufferTest, FillThreadRefillsAfterPop) {
 
   int high_water = buf.HighWaterFrames();  // 2 × 5 = 10
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= high_water; },
                        std::chrono::milliseconds(500)));
@@ -306,7 +306,7 @@ TEST(VideoLookaheadBufferTest, StopFillingWithFlush) {
   MockTickProducer mock(64, 48, 30.0, 100);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
@@ -331,7 +331,7 @@ TEST(VideoLookaheadBufferTest, AudioPushedToAudioBuffer) {
   MockTickProducer mock(64, 48, 30.0, 20);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, &audio_buf, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, &audio_buf, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
@@ -363,7 +363,7 @@ TEST(VideoLookaheadBufferTest, PrimedFrameConsumedInStartFilling) {
 
   EXPECT_TRUE(mock.HasPrimedFrame());
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Primed frame should have been consumed and pushed immediately.
   EXPECT_TRUE(buf.IsPrimed());
@@ -394,7 +394,7 @@ TEST(VideoLookaheadBufferTest, CadenceResolution) {
   MockTickProducer mock(64, 48, 23.976, 20);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(23.976), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_23976, FPS_30, &stop);
 
   // Wait for fill thread to exhaust source content and fill with hold-last.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 25; },
@@ -431,7 +431,7 @@ TEST(VideoLookaheadBufferTest, ContentExhaustionHoldLast) {
   MockTickProducer mock(64, 48, 30.0, 5);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill to target (5 real + 15 hold-last).
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 20; },
@@ -470,7 +470,7 @@ TEST(VideoLookaheadBufferTest, StallSimulation) {
   std::atomic<bool> stop{false};
 
   // No delay initially — let buffer fill up.
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 10; },
                        std::chrono::milliseconds(500)));
@@ -504,7 +504,7 @@ TEST(VideoLookaheadBufferTest, ExternalStopSignal) {
   MockTickProducer mock(64, 48, 30.0, 10000);
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
@@ -528,7 +528,7 @@ TEST(VideoLookaheadBufferTest, MultipleStartStopCycles) {
 
   // Block 1: 30 frames.
   MockTickProducer mock1(64, 48, 30.0, 30);
-  buf.StartFilling(&mock1, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock1, nullptr, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
 
@@ -545,7 +545,7 @@ TEST(VideoLookaheadBufferTest, MultipleStartStopCycles) {
 
   // Block 2: 50 frames.
   MockTickProducer mock2(64, 48, 30.0, 50);
-  buf.StartFilling(&mock2, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  buf.StartFilling(&mock2, nullptr, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
 
@@ -570,7 +570,7 @@ TEST(VideoLookaheadBufferTest, HoldLastFramesPushSilenceAudio) {
   VideoLookaheadBuffer video_buf(10, 3);
   std::atomic<bool> stop{false};
 
-  video_buf.StartFilling(&mock, &audio_buf, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  video_buf.StartFilling(&mock, &audio_buf, FPS_30, FPS_30, &stop);
 
   // Wait for fill loop to push hold-last frames beyond the 3 decoded frames.
   ASSERT_TRUE(WaitFor(
@@ -613,7 +613,7 @@ TEST(VideoLookaheadBufferTest, HoldLastAudioContinuity_NeverUnderflows) {
   VideoLookaheadBuffer video_buf(15, 3);
   std::atomic<bool> stop{false};
 
-  video_buf.StartFilling(&mock, &audio_buf, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+  video_buf.StartFilling(&mock, &audio_buf, FPS_30, FPS_30, &stop);
 
   ASSERT_TRUE(WaitFor(
       [&] { return video_buf.TotalFramesPushed() >= 15; },
@@ -668,7 +668,7 @@ TEST(VideoLookaheadBufferTest, StressFirstPopRace_NoPrimedFrame) {
     std::atomic<bool> stop{false};
 
     // NO primed frame — fill thread must push first frame asynchronously.
-    buf.StartFilling(&mock, nullptr, DeriveRationalFPS(30.0), DeriveRationalFPS(30.0), &stop);
+    buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
     // Simulate TAKE: single TryPopFrame, then check IsPrimed.
     VideoBufferFrame out;

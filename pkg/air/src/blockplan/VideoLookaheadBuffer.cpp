@@ -122,17 +122,20 @@ void VideoLookaheadBuffer::StartFilling(
   // Log resample mode (rational detection: OFF / DROP / CADENCE). DEBUG: chatty per segment.
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] FPS_CADENCE:"
-        << " input_fps=" << input_fps_.ToDouble()
-        << " output_fps=" << output_fps_.ToDouble();
+        << " input_fps=" << input_fps_.num << "/" << input_fps_.den
+        << " output_fps=" << output_fps_.num << "/" << output_fps_.den;
     if (resample_mode_ == ResampleMode::OFF) {
       oss << " mode=OFF";
     } else if (resample_mode_ == ResampleMode::DROP) {
       oss << " mode=DROP ratio=" << drop_step_;
       if (output_fps_.num > 0) {
-        oss << " expected_tick_duration_s=" << (static_cast<double>(output_fps_.den) / static_cast<double>(output_fps_.num));
+        oss << " tick_duration_ms=" << (1000 * output_fps_.den / output_fps_.num);
       }
     } else {
-      oss << " mode=CADENCE ratio=" << (output_fps_.num > 0 && input_fps_.num > 0 ? (input_fps_.ToDouble() / output_fps_.ToDouble()) : 0.0);
+      int64_t ratio_num = (output_fps_.num > 0 && input_fps_.num > 0)
+          ? (input_fps_.num * output_fps_.den) / (input_fps_.den * output_fps_.num)
+          : 0;
+      oss << " mode=CADENCE ratio_approx=" << ratio_num;
     }
     Logger::Debug(oss.str()); }
 
@@ -206,16 +209,6 @@ bool VideoLookaheadBuffer::IsFilling() const {
 // =============================================================================
 
 
-void VideoLookaheadBuffer::StartFilling(
-    ITickProducer* producer,
-    AudioLookaheadBuffer* audio_buffer,
-    double input_fps,
-    double output_fps,
-    std::atomic<bool>* external_stop) {
-  StartFilling(producer, audio_buffer, DeriveRationalFPS(input_fps),
-               DeriveRationalFPS(output_fps), external_stop);
-}
-
 void VideoLookaheadBuffer::FillLoop() {
   // Capture producer/audio/stop at thread start so StopFillingAsync can null
   // members immediately. The fill thread uses only these locals — objects
@@ -241,11 +234,13 @@ void VideoLookaheadBuffer::FillLoop() {
   // INV-FPS-MAPPING: decode_budget / input_fps-derived budgeting ONLY when mode==CADENCE.
   // OFF and DROP must not use input_fps for decode gating; they decode every tick.
   bool cadence_active = (resample_mode_ == ResampleMode::CADENCE);
-  double cadence_ratio = 0.0;
-  double decode_budget = 0.0;
-  if (cadence_active && output_fps_.num > 0 && input_fps_.num > 0) {
-    cadence_ratio = input_fps_.ToDouble() / output_fps_.ToDouble();
-    decode_budget = 1.0;  // guarantees first tick decodes
+  using Wide = __int128;
+  Wide cadence_budget_num = 0;
+  Wide cadence_budget_den = 1;
+  if (cadence_active && output_fps_.num > 0 && output_fps_.den > 0 &&
+      input_fps_.num > 0 && input_fps_.den > 0) {
+    cadence_budget_num = static_cast<Wide>(output_fps_.num) * static_cast<Wide>(input_fps_.den);
+    cadence_budget_den = static_cast<Wide>(input_fps_.num) * static_cast<Wide>(output_fps_.den);
   }
   // OFF: 1:1 decode every tick. DROP: TickProducer decodes step internally, we decode every tick.
 
@@ -254,8 +249,8 @@ void VideoLookaheadBuffer::FillLoop() {
   buffer::AudioFrame silence_template;
   int silence_samples_per_frame = 0;
   if (audio_buffer && output_fps_.num > 0) {
-    silence_samples_per_frame = static_cast<int>(
-        std::ceil(static_cast<double>(buffer::kHouseAudioSampleRate) / output_fps_.ToDouble()));
+    const int64_t samples_num = static_cast<int64_t>(buffer::kHouseAudioSampleRate) * output_fps_.den;
+    silence_samples_per_frame = static_cast<int>((samples_num + output_fps_.num - 1) / output_fps_.num);
     silence_template.sample_rate = buffer::kHouseAudioSampleRate;
     silence_template.channels = buffer::kHouseAudioChannels;
     silence_template.nb_samples = silence_samples_per_frame;
@@ -286,8 +281,8 @@ void VideoLookaheadBuffer::FillLoop() {
 
   { std::ostringstream oss;
     oss << "[FillLoop:" << buffer_label_ << "] ENTER"
-        << " input_fps=" << input_fps_.ToDouble()
-        << " output_fps=" << output_fps_.ToDouble()
+        << " input_fps=" << input_fps_.num << "/" << input_fps_.den
+        << " output_fps=" << output_fps_.num << "/" << output_fps_.den
         << " cadence_active=" << cadence_active
         << " my_audio_gen=" << my_audio_gen
         << " have_last_decoded=" << have_last_decoded;
@@ -428,14 +423,12 @@ void VideoLookaheadBuffer::FillLoop() {
     }
 
     // --- Cadence gate ---
-    // ratio = input_fps / output_fps (e.g. 0.7992 for 23.976->30).
-    // decode_budget accumulates ratio each frame; decode when >= 1.0.
-    // Produces deterministic 4:1 dup pattern for 23.976->30.
+    // Rational cadence gate: budget += input/output per tick (integer accumulator).
     bool should_decode = true;
     if (cadence_active) {
-      decode_budget += cadence_ratio;
-      if (decode_budget >= 1.0) {
-        decode_budget -= 1.0;
+      cadence_budget_num += static_cast<Wide>(input_fps_.num) * static_cast<Wide>(output_fps_.den);
+      if (cadence_budget_num >= cadence_budget_den) {
+        cadence_budget_num -= cadence_budget_den;
         should_decode = true;
       } else {
         should_decode = false;
@@ -714,15 +707,11 @@ int64_t VideoLookaheadBuffer::DecodeLatencyMeanUs() const {
   return sum / latency_ring_count_;
 }
 
-double VideoLookaheadBuffer::RefillRateFps() const {
+VideoLookaheadBuffer::RefillRate VideoLookaheadBuffer::GetRefillRate() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (total_pushed_ == 0) return 0.0;
-
   auto elapsed = std::chrono::steady_clock::now() - fill_start_time_;
-  auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
-  if (elapsed_us <= 0) return 0.0;
-
-  return static_cast<double>(total_pushed_) * 1'000'000.0 / static_cast<double>(elapsed_us);
+  int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+  return RefillRate{total_pushed_, elapsed_us > 0 ? elapsed_us : 0};
 }
 
 }  // namespace retrovue::blockplan
