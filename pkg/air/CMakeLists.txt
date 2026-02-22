@@ -533,6 +533,7 @@ add_executable(rational_timebase_integrity_tests
 )
 target_compile_definitions(rational_timebase_integrity_tests PRIVATE
   RETROVUE_BLOCKPLAN_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/blockplan"
+  RETROVUE_AIR_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_link_libraries(rational_timebase_integrity_tests
   PRIVATE

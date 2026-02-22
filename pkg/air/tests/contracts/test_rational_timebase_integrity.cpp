@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cctype>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -121,6 +122,39 @@ TEST(RationalTimebaseIntegrity, CadenceExactPattern_23976_to_30_Repeatable) {
     const int64_t gap = picks[i] - picks[i - 1];
     EXPECT_TRUE(gap == 1 || gap == 0);
   }
+}
+
+TEST(RationalTimebaseIntegrity, HotPath_NoFloatOutsideTelemetry) {
+#ifdef RETROVUE_AIR_ROOT_DIR
+  std::string root(RETROVUE_AIR_ROOT_DIR);
+  std::string cmd = "python3 " + root + "/scripts/check_rationalfps_hotpath.py > /tmp/rfps_scan.out 2>&1";
+  int rc = std::system(cmd.c_str());
+  if (rc != 0) {
+    std::ifstream f("/tmp/rfps_scan.out");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    FAIL() << ss.str();
+  }
+#else
+  GTEST_SKIP() << "RETROVUE_AIR_ROOT_DIR not set";
+#endif
+}
+
+TEST(RationalTimebaseIntegrity, OutputClock_UsesCanonicalHelpers) {
+#ifdef RETROVUE_AIR_ROOT_DIR
+  std::string path = std::string(RETROVUE_AIR_ROOT_DIR) + "/src/blockplan/OutputClock.cpp";
+  std::ifstream f(path);
+  ASSERT_TRUE(f.good()) << path;
+  std::stringstream ss;
+  ss << f.rdbuf();
+  const std::string body = ss.str();
+  EXPECT_NE(body.find("DurationFromFramesNs"), std::string::npos);
+  EXPECT_EQ(body.find("ns_per_frame_whole_"), std::string::npos);
+  EXPECT_EQ(body.find("ns_per_frame_rem_"), std::string::npos);
+  EXPECT_EQ(body.find("kNanosPerSecond * fps_den"), std::string::npos);
+#else
+  GTEST_SKIP() << "RETROVUE_AIR_ROOT_DIR not set";
+#endif
 }
 
 // -----------------------------------------------------------------------------

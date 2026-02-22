@@ -533,10 +533,10 @@ EngineResult PlayoutEngine::LoadPreview(
   // ==========================================================================
   // Compute legacy time-based values for ProducerConfig (backward compatibility).
   // Direction: frame → time (never time → frame)
-  double fps = (fps_denominator > 0)
-      ? static_cast<double>(fps_numerator) / static_cast<double>(fps_denominator)
-      : it->second->program_format.GetFrameRateAsDouble();
-  int64_t start_offset_ms = (fps > 0) ? static_cast<int64_t>((start_frame * 1000.0) / fps) : 0;
+  retrovue::blockplan::RationalFps fps_r = (fps_denominator > 0)
+      ? retrovue::blockplan::RationalFps(fps_numerator, fps_denominator)
+      : retrovue::blockplan::DeriveRationalFPS(it->second->program_format.GetFrameRateAsDouble());
+  int64_t start_offset_ms = fps_r.DurationFromFramesUs(start_frame) / 1000;
   // frame_count is authoritative - no need to convert back to wall-clock time
   // (hard_stop_time_ms was deprecated, we use frame_count directly now)
 
@@ -544,7 +544,7 @@ EngineResult PlayoutEngine::LoadPreview(
     // Create preview producer config
     producers::file::ProducerConfig preview_config;
     preview_config.asset_uri = asset_path;
-    preview_config.target_fps = fps;
+    preview_config.target_fps = fps_r;
     preview_config.stub_mode = false;
     preview_config.target_width = it->second->program_format.video.width;
     preview_config.target_height = it->second->program_format.video.height;
@@ -1151,8 +1151,8 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
         if (state->program_output) {
           last_emitted_pts = state->program_output->GetLastEmittedPTS();
           if (last_emitted_pts > 0) {
-            double fps = state->program_format.GetFrameRateAsDouble();
-            int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+            retrovue::blockplan::RationalFps fps_r = retrovue::blockplan::DeriveRationalFPS(state->program_format.GetFrameRateAsDouble());
+            int64_t frame_period_us = fps_r.FrameDurationUs();
             target_next_pts = last_emitted_pts + frame_period_us;
           }
         }
@@ -1423,8 +1423,8 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
       if (state->program_output) {
         last_emitted_pts = state->program_output->GetLastEmittedPTS();
         if (last_emitted_pts > 0) {
-          double fps = state->program_format.GetFrameRateAsDouble();
-          int64_t frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+          retrovue::blockplan::RationalFps fps_r = retrovue::blockplan::DeriveRationalFPS(state->program_format.GetFrameRateAsDouble());
+          int64_t frame_period_us = fps_r.FrameDurationUs();
           state->preview_producer->AlignPTS(last_emitted_pts + frame_period_us);
         }
       }

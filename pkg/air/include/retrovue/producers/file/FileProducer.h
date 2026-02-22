@@ -17,6 +17,12 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
 #include "retrovue/runtime/AspectPolicy.h"
+#include "retrovue/blockplan/RationalFps.hpp"
+
+// Need full AVRational definition for member variables
+extern "C" {
+#include <libavutil/rational.h>
+}
 
 namespace retrovue::timing
 {
@@ -51,7 +57,7 @@ namespace retrovue::producers::file
     std::string asset_uri;       // URI or path to video file
     int target_width;            // Target frame width (e.g., 1920)
     int target_height;           // Target frame height (e.g., 1080)
-    double target_fps;           // Target frames per second (e.g., 30.0)
+    retrovue::blockplan::RationalFps target_fps; // Target frames per second
     bool stub_mode;              // If true, generate fake frames instead of decoding
     int tcp_port;                // TCP port for FFmpeg streaming (stub mode)
 
@@ -64,12 +70,12 @@ namespace retrovue::producers::file
     int64_t hard_stop_time_ms;   // Deprecated: use frame_count instead
 
     // INV-FPS-RESAMPLE: Override source fps for testing (0 = auto-detect from file)
-    double stub_source_fps = 0.0;
+    double stub_source_fps = 0;
 
     ProducerConfig()
         : target_width(1920),
           target_height(1080),
-          target_fps(30.0),
+          target_fps(retrovue::blockplan::FPS_30),
           stub_mode(false),
           tcp_port(12345),
           start_frame(0),
@@ -281,7 +287,7 @@ namespace retrovue::producers::file
     bool eof_signaled_;       // P8-EOF-001: DECODER_EOF signaled to PlayoutEngine only once per segment
     bool truncation_logged_;  // P8-PLAN-003: log CONTENT_TRUNCATED only once per segment
     LiveProducerEOFCallback live_producer_eof_callback_;
-    double time_base_;  // Stream time base for PTS/DTS conversion
+    AVRational time_base_;  // Stream time base for PTS/DTS conversion
     // MT-DOMAIN ONLY: These variables must NEVER hold CT values.
     // MT = Media Time (raw decoder PTS, typically 0 to media duration)
     // CT = Channel Time (timeline-mapped, can be hours into channel playback)
@@ -295,7 +301,7 @@ namespace retrovue::producers::file
     AVCodecContext* audio_codec_ctx_;
     AVFrame* audio_frame_;
     int audio_stream_index_;
-    double audio_time_base_;  // Audio stream time base for PTS conversion
+    AVRational audio_time_base_;  // Audio stream time base for PTS conversion
     bool audio_eof_reached_;
     int64_t last_audio_pts_us_;  // Last audio frame PTS (for monotonicity)
 
@@ -347,9 +353,8 @@ namespace retrovue::producers::file
     // Output tick grid is rational: tick_time_us(n) = floor(n * 1e6 * fps_den / fps_num).
     // Never advance by rounded interval; use tick index and compute time each time.
     // ======================================================================
-    double source_fps_ = 0.0;                          // Detected source frame rate
-    int64_t target_fps_num_ = 30;                      // Rational target FPS (do NOT use double for grid)
-    int64_t target_fps_den_ = 1;
+    retrovue::blockplan::RationalFps source_fps_r_ = retrovue::blockplan::FPS_30;  // Detected source frame rate (rational)
+    retrovue::blockplan::RationalFps target_fps_r_ = retrovue::blockplan::FPS_30;  // Rational target FPS (do NOT use double for grid)
     int64_t tick_index_ = 0;                           // Current output tick index
     int64_t next_output_tick_us_ = -1;                 // tick_time_us(tick_index_) after alignment
     bool resample_active_ = false;                     // True when source fps != target fps
