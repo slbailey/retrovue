@@ -69,7 +69,7 @@ class ProgramFormat:
             {"video_width": 1920, "video_height": 1080, ...}
 
         Nested:
-            {"video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
+            {"video": {"width": 1920, "height": 1080, "frame_rate": "30000/1001"},
              "audio": {"sample_rate": 48000, "channels": 2}}
         """
         if "video" in data and "audio" in data:
@@ -98,7 +98,7 @@ class ProgramFormat:
 DEFAULT_PROGRAM_FORMAT = ProgramFormat(
     video_width=1920,
     video_height=1080,
-    frame_rate="30/1",
+    frame_rate="30000/1001",
     audio_sample_rate=48000,
     audio_channels=2,
 )
