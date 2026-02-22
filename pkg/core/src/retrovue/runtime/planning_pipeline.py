@@ -879,13 +879,40 @@ def to_block_plan(entry: TransmissionLogEntry, channel_id_int: int) -> dict[str,
     """Convert a TransmissionLogEntry to a BlockPlan-compatible dict.
 
     Produces the format consumed by playout_session.BlockPlan.from_dict().
+    Ensures feed-time segment/asset identity invariants.
     """
+    segments: list[dict[str, Any]] = []
+    for seg in entry.segments:
+        seg_out = dict(seg)
+
+        # INV-AIR-SEGMENT-ID-001: segment_uuid must exist at feed time.
+        if not seg_out.get("segment_uuid"):
+            seg_out["segment_uuid"] = str(uuid.uuid4())
+
+        seg_type = str(seg_out.get("segment_type", "")).lower()
+
+        # INV-AIR-SEGMENT-ID-002:
+        # - PAD emits explicit null asset_uuid.
+        # - CONTENT/FILLER preserve provided asset_uuid, otherwise apply
+        #   deterministic fallback derived from block/segment identity.
+        if seg_type == "pad":
+            seg_out["asset_uuid"] = None
+        else:
+            if seg_out.get("asset_uuid") is None:
+                fallback_seed = (
+                    f"{entry.block_id}:{seg_out.get('segment_index', '')}:"
+                    f"{seg_out.get('asset_uri', '')}:{seg_type}"
+                )
+                seg_out["asset_uuid"] = str(uuid.uuid5(uuid.NAMESPACE_URL, fallback_seed))
+
+        segments.append(seg_out)
+
     return {
         "block_id": entry.block_id,
         "channel_id": channel_id_int,
         "start_utc_ms": entry.start_utc_ms,
         "end_utc_ms": entry.end_utc_ms,
-        "segments": entry.segments,
+        "segments": segments,
     }
 
 
