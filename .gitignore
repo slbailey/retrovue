@@ -186,3 +186,7 @@ pkg/air/build-asan/
 Testing/
 CTestTestfile.cmake
 *.bak*
+
+# Large backup files and test media
+backups/*.tar.gz
+Teaser.mp4
