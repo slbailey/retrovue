@@ -519,7 +519,8 @@ void PipelineManager::Run() {
   playout_sinks::mpegts::MpegTSPlayoutSinkConfig enc_config;
   enc_config.target_width = ctx_->width;
   enc_config.target_height = ctx_->height;
-  enc_config.target_fps = ctx_->fps.ToDouble();
+  enc_config.fps_num = ctx_->fps.num;
+  enc_config.fps_den = ctx_->fps.den;
   enc_config.enable_audio = true;
   enc_config.gop_size = 90;      // I-frame every 3 seconds
   enc_config.bitrate = 2000000;  // 2 Mbps
@@ -663,7 +664,7 @@ void PipelineManager::Run() {
 
   { std::ostringstream oss;
     oss << "[PipelineManager] Session encoder opened: "
-        << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps.ToDouble()
+        << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps.num << "/" << ctx_->fps.den
         << "fps, open_ms=" << encoder_open_ms;
     Logger::Info(oss.str()); }
 
@@ -695,7 +696,7 @@ void PipelineManager::Run() {
         << " | execution_model="
         << PlayoutExecutionModeToString(kExecutionMode)
         << " | format=" << ctx_->width << "x" << ctx_->height
-        << "@" << ctx_->fps.ToDouble();
+        << "@" << ctx_->fps.num << "/" << ctx_->fps.den;
     Logger::Info(oss.str()); }
 
   // ========================================================================
@@ -762,7 +763,7 @@ void PipelineManager::Run() {
   // Target depth: ~500ms at output FPS (e.g. 15 frames at 30fps).
   int video_target_depth = bcfg.video_target_depth_frames > 0
       ? bcfg.video_target_depth_frames
-      : static_cast<int>(std::max(1.0, ctx_->fps.ToDouble() * 0.5));
+      : std::max(1, static_cast<int>((ctx_->fps.num / 2) / (ctx_->fps.den > 0 ? ctx_->fps.den : 1)));
   int video_low_water = bcfg.video_low_water_frames > 0
       ? bcfg.video_low_water_frames
       : std::max(1, video_target_depth / 3);
@@ -937,12 +938,13 @@ void PipelineManager::Run() {
     // Begin segment proof tracking for first segment.
     if (!live_parent_block_.segments.empty()) {
       const auto& seg0 = live_parent_block_.segments[0];
-      block_acc.BeginSegment(
-          0, seg0.asset_uri,
-          static_cast<int64_t>(std::ceil(
-              static_cast<double>(seg0.segment_duration_ms) /
-              static_cast<double>(clock->FrameDurationMs()))),
-          seg0.segment_type, seg0.event_id);
+      {
+        int64_t frame_ms = clock->FrameDurationMs();
+        int64_t seg_frames = (frame_ms > 0)
+            ? (seg0.segment_duration_ms + frame_ms - 1) / frame_ms
+            : 0;
+        block_acc.BeginSegment(0, seg0.asset_uri, seg_frames, seg0.segment_type, seg0.event_id);
+      }
     }
 
     // ====================================================================
@@ -1802,12 +1804,13 @@ void PipelineManager::Run() {
         // Begin segment proof tracking for first segment.
         if (!live_parent_block_.segments.empty()) {
           const auto& seg0 = live_parent_block_.segments[0];
-          block_acc.BeginSegment(
-              0, seg0.asset_uri,
-              static_cast<int64_t>(std::ceil(
-                  static_cast<double>(seg0.segment_duration_ms) /
-                  static_cast<double>(clock->FrameDurationMs()))),
-              seg0.segment_type, seg0.event_id);
+          {
+            int64_t frame_ms = clock->FrameDurationMs();
+            int64_t seg_frames = (frame_ms > 0)
+                ? (seg0.segment_duration_ms + frame_ms - 1) / frame_ms
+                : 0;
+            block_acc.BeginSegment(0, seg0.asset_uri, seg_frames, seg0.segment_type, seg0.event_id);
+          }
         }
 
         int audio_depth = audio_buffer_->DepthMs();
@@ -2047,9 +2050,9 @@ void PipelineManager::Run() {
           const auto& seg = live_parent_block_.segments[current_segment_index_];
           block_acc.BeginSegment(
               current_segment_index_, seg.asset_uri,
-              static_cast<int64_t>(std::ceil(
-                  static_cast<double>(seg.segment_duration_ms) /
-                  static_cast<double>(clock->FrameDurationMs()))),
+              (clock->FrameDurationMs() > 0)
+                  ? (seg.segment_duration_ms + clock->FrameDurationMs() - 1) / clock->FrameDurationMs()
+                  : 0,
               seg.segment_type, seg.event_id);
         }
       }
@@ -2341,7 +2344,11 @@ void PipelineManager::Run() {
           metrics_.video_buffer_frames_popped = video_buffer_->TotalFramesPopped();
           metrics_.decode_latency_p95_us = video_buffer_->DecodeLatencyP95Us();
           metrics_.decode_latency_mean_us = video_buffer_->DecodeLatencyMeanUs();
-          metrics_.video_refill_rate_fps = video_buffer_->RefillRateFps();
+          {
+            auto r = video_buffer_->GetRefillRate();
+            metrics_.video_refill_rate_fps = (r.elapsed_us > 0)
+                ? (r.frames * 1000000 / r.elapsed_us) : 0;
+          }
           metrics_.video_low_water_frames = video_buffer_->LowWaterFrames();
         }
         if (audio_buffer_) {
@@ -2358,9 +2365,12 @@ void PipelineManager::Run() {
         oss << "[PipelineManager] HEARTBEAT"
             << " frame=" << session_frame_index;
         if (video_buffer_) {
+          auto refill = video_buffer_->GetRefillRate();
+          int64_t refill_fps = (refill.elapsed_us > 0)
+              ? (refill.frames * 1000000 / refill.elapsed_us) : 0;
           oss << " video=" << video_buffer_->DepthFrames()
               << "/" << video_buffer_->HighWaterFrames()
-              << " refill=" << video_buffer_->RefillRateFps() << "fps"
+              << " refill=" << refill_fps << "fps"
               << " decode_p95=" << video_buffer_->DecodeLatencyP95Us() << "us";
         }
         if (audio_buffer_) {
@@ -2549,12 +2559,13 @@ void PipelineManager::Run() {
         // Begin segment proof tracking for first segment.
         if (!live_parent_block_.segments.empty()) {
           const auto& seg0 = live_parent_block_.segments[0];
-          block_acc.BeginSegment(
-              0, seg0.asset_uri,
-              static_cast<int64_t>(std::ceil(
-                  static_cast<double>(seg0.segment_duration_ms) /
-                  static_cast<double>(clock->FrameDurationMs()))),
-              seg0.segment_type, seg0.event_id);
+          {
+            int64_t frame_ms = clock->FrameDurationMs();
+            int64_t seg_frames = (frame_ms > 0)
+                ? (seg0.segment_duration_ms + frame_ms - 1) / frame_ms
+                : 0;
+            block_acc.BeginSegment(0, seg0.asset_uri, seg_frames, seg0.segment_type, seg0.event_id);
+          }
         }
 
         { std::ostringstream oss;
@@ -2579,7 +2590,7 @@ void PipelineManager::Run() {
     if (have_prev_frame_time) {
       auto gap_us = std::chrono::duration_cast<std::chrono::microseconds>(
           wake_time - prev_frame_time).count();
-      double gap_ms = gap_us / 1000.0;
+      int64_t gap_ms = gap_us / 1000;
       if (gap_ms > 50) {
         const char* phase =
             past_fence ? "past_fence"
@@ -2763,7 +2774,11 @@ void PipelineManager::Run() {
       metrics_.video_buffer_frames_popped = video_buffer_->TotalFramesPopped();
       metrics_.decode_latency_p95_us = video_buffer_->DecodeLatencyP95Us();
       metrics_.decode_latency_mean_us = video_buffer_->DecodeLatencyMeanUs();
-      metrics_.video_refill_rate_fps = video_buffer_->RefillRateFps();
+      {
+        auto r = video_buffer_->GetRefillRate();
+        metrics_.video_refill_rate_fps = (r.elapsed_us > 0)
+            ? (r.frames * 1000000 / r.elapsed_us) : 0;
+      }
     }
   }
 

@@ -818,6 +818,19 @@ class ProgramDirector:
             if config.schedule_source != "dsl":
                 continue
 
+            # Warm Tier 1 (CompiledProgramLog) so the daemon can extend Tier 2.
+            # _get_schedule_service_for_channel (→ _get_dsl_service) calls
+            # load_schedule(channel_id), which compiles and caches Tier 1. Without
+            # this, DSL channels that have never had a viewer would have empty
+            # Tier 1 and the daemon would log INV-PLAYLOG-HORIZON-002.
+            try:
+                self._get_schedule_service_for_channel(channel_id, config)
+            except Exception as e:
+                self._logger.warning(
+                    "PlaylogHorizon[%s]: Tier 1 warm failed: %s",
+                    channel_id, e, exc_info=True,
+                )
+
             sc = config.schedule_config or {}
 
             daemon = PlaylogHorizonDaemon(

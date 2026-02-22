@@ -34,6 +34,11 @@ namespace retrovue::buffer
 
     FrameMetadata(int64_t p, int64_t d, double dur, const std::string &uri)
         : pts(p), dts(d), duration(dur), asset_uri(uri), has_ct(false) {}
+
+    // INV-FPS-RATIONAL-001: Set duration from integer microseconds (avoids double in hot path).
+    void SetDurationFromUs(int64_t duration_us) {
+      duration = static_cast<double>(duration_us) / 1000000.0;
+    }
   };
 
   // Frame holds the actual decoded frame data along with metadata.

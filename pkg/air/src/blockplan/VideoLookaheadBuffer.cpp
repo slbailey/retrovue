@@ -691,8 +691,8 @@ int64_t VideoLookaheadBuffer::DecodeLatencyP95Us() const {
   }
   std::sort(tmp.begin(), tmp.begin() + n);
 
-  // P95: index = floor(0.95 * (n-1))
-  int idx = static_cast<int>(0.95 * (n - 1));
+  // P95: index = floor(95/100 * (n-1))
+  int idx = (95 * (n - 1)) / 100;
   return tmp[idx];
 }
 

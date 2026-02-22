@@ -229,7 +229,7 @@ TEST(SegmentAdvanceOnEOF, EpisodeEOFAdvancesToFiller) {
                             buffer::kHouseAudioChannels, 333);
 
   std::atomic<bool> stop{false};
-  vlb.StartFilling(producer_ptr, &alb, kFps, kFps, &stop);
+  vlb.StartFilling(producer_ptr, &alb, FPS_30, FPS_30, &stop);
 
   // Wait until filler frames have been produced.
   // The fill loop must NOT stop permanently at episode EOF.
@@ -330,7 +330,7 @@ TEST(SegmentAdvanceOnEOF, ContentGapDoesNotPermanentlyStopFillLoop) {
                             buffer::kHouseAudioChannels, 333);
 
   std::atomic<bool> stop{false};
-  vlb.StartFilling(producer_ptr, &alb, kFps, kFps, &stop);
+  vlb.StartFilling(producer_ptr, &alb, FPS_30, FPS_30, &stop);
 
   // Wait for the fill loop to push through the gap and emit filler frames.
   bool filler_arrived = WaitFor(
@@ -381,7 +381,7 @@ TEST(SegmentAdvanceOnEOF, HoldLastFramesBridgeGap) {
                             buffer::kHouseAudioChannels, 333);
 
   std::atomic<bool> stop{false};
-  vlb.StartFilling(producer_ptr, &alb, kFps, kFps, &stop);
+  vlb.StartFilling(producer_ptr, &alb, FPS_30, FPS_30, &stop);
 
   // Wait for all phases to complete.
   bool all_done = WaitFor(

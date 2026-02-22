@@ -479,7 +479,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
 
 // =============================================================================
 // ApplyFade — apply linear video+audio fade to a FrameData in-place (fixed-point)
-// INV-FPS-RATIONAL-001: No floating point. alpha_q16 in [0, 65536] (1.0 = 65536).
+// INV-FPS-RATIONAL-001: No floating point. alpha_q16 in [0, 65536]; full opacity = 65536.
 // =============================================================================
 
 static constexpr int32_t kAlphaOne = 65536;

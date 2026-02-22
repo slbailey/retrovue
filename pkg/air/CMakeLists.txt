@@ -527,6 +527,28 @@ add_test(
   COMMAND buffer_config_tests
 )
 
+# ---- INV-FPS-RATIONAL-001: Rational timebase integrity (math + hot-path scan) ----
+add_executable(rational_timebase_integrity_tests
+  tests/contracts/test_rational_timebase_integrity.cpp
+)
+target_compile_definitions(rational_timebase_integrity_tests PRIVATE
+  RETROVUE_BLOCKPLAN_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/blockplan"
+)
+target_link_libraries(rational_timebase_integrity_tests
+  PRIVATE
+    retrovue_blockplan
+    GTest::gtest
+    GTest::gtest_main
+)
+target_include_directories(rational_timebase_integrity_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+  NAME RationalTimebaseIntegrity
+  COMMAND rational_timebase_integrity_tests
+)
+
 # ---- Evidence Spool Contract Tests (AirExecutionEvidenceSpoolContract_v0.1) ----
 add_executable(evidence_spool_tests
   tests/test_evidence_spool.cpp
