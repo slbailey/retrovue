@@ -162,7 +162,7 @@ bool FFmpegDecoder::Open() {
 
   std::cout << "[FFmpegDecoder] DECODER_STEP open_input OK uri=" << config_.input_uri
             << " " << GetVideoWidth() << "x" 
-            << GetVideoHeight() << " @ " << GetVideoFPS() << " fps" << std::endl;
+            << GetVideoHeight() << " @ " << GetVideoRationalFps().num << "/" << GetVideoRationalFps().den << " fps" << std::endl;
 
   return true;
 }
@@ -389,14 +389,14 @@ int FFmpegDecoder::GetVideoHeight() const {
   return codec_ctx_->height;
 }
 
-double FFmpegDecoder::GetVideoFPS() const {
-  if (!format_ctx_ || video_stream_index_ < 0) return 0.0;
+blockplan::RationalFps FFmpegDecoder::GetVideoRationalFps() const {
+  if (!format_ctx_ || video_stream_index_ < 0) return blockplan::RationalFps{0,1};
   
   AVStream* stream = format_ctx_->streams[video_stream_index_];
   AVRational fps = stream->avg_frame_rate;
   
-  if (fps.den == 0) return 0.0;
-  return static_cast<double>(fps.num) / static_cast<double>(fps.den);
+  if (fps.num <= 0 || fps.den <= 0) return blockplan::RationalFps{0,1};
+  return blockplan::RationalFps{fps.num, fps.den};
 }
 
 double FFmpegDecoder::GetVideoDuration() const {
@@ -780,6 +780,7 @@ bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame)
       : 0;
   output_frame.metadata.pts = pts_us;
 
+#ifdef RETROVUE_DEBUG
   // Diagnostic: log PTS for first 20 frames
   static int decode_diag_count = 0;
   ++decode_diag_count;
@@ -791,6 +792,7 @@ bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame)
               << " pict_type=" << av_get_picture_type_char(av_frame->pict_type)
               << std::endl;
   }
+#endif
   output_frame.metadata.dts = av_frame->pkt_dts;
   // Use duration field (pkt_duration is deprecated in newer FFmpeg)
   int64_t frame_duration = av_frame->duration != AV_NOPTS_VALUE ? av_frame->duration : 0;

@@ -32,6 +32,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
@@ -105,7 +106,7 @@ class SegmentSeamRaceFixTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -148,7 +149,9 @@ class SegmentSeamRaceFixTest : public ::testing::Test {
     };
     callbacks.on_block_summary = [](const BlockPlaybackSummary&) {};
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
@@ -565,9 +568,12 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_008_MissDoesNotStallFenceOrCorruptSeamSche
   // earliest seam_frame) hits the delay and misses its 1-second window.
   // Subsequent requests (block B prep) run at normal speed.
   auto delay_fired = std::make_shared<std::atomic<bool>>(false);
-  engine_->SetPreloaderDelayHook([delay_fired] {
+  engine_->SetPreloaderDelayHook([delay_fired](const std::atomic<bool>& cancel) {
     if (!delay_fired->exchange(true, std::memory_order_acq_rel)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+      // Cancellable 3s delay — check cancel every 10ms
+      for (int i = 0; i < 300 && !cancel.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
     }
   });
 

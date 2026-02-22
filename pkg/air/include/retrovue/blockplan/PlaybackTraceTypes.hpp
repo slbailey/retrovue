@@ -355,9 +355,10 @@ inline BlockPlaybackIntent BuildIntent(const FedBlock& block,
   BlockPlaybackIntent intent;
   intent.block_id = block.block_id;
   intent.expected_duration_ms = block.end_utc_ms - block.start_utc_ms;
-  intent.expected_frames = static_cast<int64_t>(
-      std::ceil(static_cast<double>(intent.expected_duration_ms) /
-                static_cast<double>(frame_duration_ms)));
+  const RationalFps block_fps(frame_duration_ms > 0 ? 1000 : 0,
+                              frame_duration_ms > 0 ? frame_duration_ms : 1);
+  intent.expected_frames = block_fps.FramesFromDurationCeilMs(
+      intent.expected_duration_ms);
   for (const auto& seg : block.segments) {
     intent.expected_asset_uris.push_back(seg.asset_uri);
   }

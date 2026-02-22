@@ -170,6 +170,9 @@ Decoded media time governs **intra-block** segment transitions and CT tracking. 
 | **INV-AIR-MEDIA-TIME-003** | Fence alignment — decoded media time converges to block end within one frame | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-004** | Cadence independence — output FPS does not affect media time tracking | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-005** | Pad is never primary — padding only when decoded media time exceeds block end | `TickProducer` | Semantic |
+| **INV-FPS-RESAMPLE** | Output tick grid and block CT from rational (fps_num, fps_den); no round(1e6/fps) accumulation, no int(1000/fps) advancement. Contract: [INV-FPS-RESAMPLE.md](semantics/INV-FPS-RESAMPLE.md). Tests: FR-001–FR-005, MediaTimeContractTests. | FileProducer, TickProducer | Semantic |
+| **INV-FPS-MAPPING** | Source→output frame authority: input≠output MUST use OFF (exact rational equality), DROP (integer step), or CADENCE (rational accumulator). 60→30/120→30 DROP; 23.976→30 CADENCE; 30→30 OFF. No float/epsilon, no default OFF. Contract: [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md). | TickProducer, VideoLookaheadBuffer | Semantic |
+| **INV-TICK-AUTHORITY-001** | Returned video PTS delta and video.metadata.duration MUST equal exactly one output tick (OFF/DROP/CADENCE). Input frame duration must never leak into output. Contract: [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md). | TickProducer | Semantic |
 
 ### Block Boundary Authorities (Canonical Model)
 
@@ -222,6 +225,7 @@ Zero-decode-latency priming at block boundaries. See [INV-BLOCK-LOOKAHEAD-PRIMIN
 | **INV-BLOCK-PRIME-005** | Priming failure degrades safely — kReady still reached, swap still fires at fence tick | `TickProducer` | Coordination |
 | **INV-BLOCK-PRIME-006** | Priming is event-driven — executes after AssignBlock, no polling or timers | `ProducerPreloader` | Coordination |
 | **INV-BLOCK-PRIME-007** | Primed frame metadata integrity — PTS, audio, asset_uri match normal decode | `TickProducer` | Coordination |
+| **INV-AUDIO-PRIME-002** | Primed frame must carry ≥1 audio packet when asset has audio; ready for seam not declared until audio depth threshold satisfied. Contract: [INV-AUDIO-PRIME-002.md](semantics/INV-AUDIO-PRIME-002.md). | `TickProducer` / `VideoLookaheadBuffer` | Coordination |
 
 ### Lookahead Buffer Authority Invariants (Decode Decoupling)
 
@@ -337,5 +341,6 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Program block authority** (fence ownership, block lifecycle) | [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |
+| **Timing authority** (tick grid, FPS resample, frame mapping, audio prime) | [TIMING-AUTHORITY-OVERVIEW.md](semantics/TIMING-AUTHORITY-OVERVIEW.md) · [INV-FPS-RESAMPLE.md](semantics/INV-FPS-RESAMPLE.md) · [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md) · [INV-AUDIO-PRIME-002.md](semantics/INV-AUDIO-PRIME-002.md) |
 
 Canonical contract documents take precedence over this index. When in doubt, the contract wins.

@@ -761,10 +761,8 @@ namespace retrovue
         if (format.has_value()) {
           blockplan_session_->width = format->video.width;
           blockplan_session_->height = format->video.height;
-          blockplan_session_->fps = format->GetFrameRateAsDouble();
-          if (blockplan_session_->fps <= 0.0) {
-            blockplan_session_->fps = 30.0;  // Fallback
-          }
+          const double parsed_fps = format->GetFrameRateAsDouble();
+          blockplan_session_->fps = blockplan::DeriveRationalFPS(parsed_fps > 0.0 ? parsed_fps : 30.0);
         } else {
           Logger::Error("[StartBlockPlanSession] Failed to parse program_format_json");
         }
@@ -824,7 +822,7 @@ namespace retrovue
             << " with blocks: " << block_a.block_id() << ", " << block_b.block_id()
             << ", fd=" << blockplan_session_->fd
             << ", format=" << blockplan_session_->width << "x" << blockplan_session_->height
-            << "@" << blockplan_session_->fps << "fps";
+            << "@" << blockplan_session_->fps.ToDouble() << "fps";
         Logger::Info(oss.str()); }
 
       // ========================================================================
@@ -975,7 +973,7 @@ namespace retrovue
             ls.asset_uuid = seg.asset_uuid;
             // Asset-relative frame: decoder position within asset at TAKE.
             ls.asset_start_frame = static_cast<int64_t>(std::round(
-                seg.asset_start_offset_ms * blockplan_session_->fps / 1000.0));
+                seg.asset_start_offset_ms * blockplan_session_->fps.ToDouble() / 1000.0));
 
             bool join_in_progress = false;
             if (from_idx == -1 && to_idx == 0 && !block.segments.empty()) {

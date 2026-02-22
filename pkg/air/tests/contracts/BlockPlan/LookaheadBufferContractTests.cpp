@@ -148,7 +148,7 @@ class ThreadTrackingProducer : public ITickProducer {
   const FedBlock& GetBlock() const override { return block_; }
   int64_t FramesPerBlock() const override { return total_frames_; }
   bool HasDecoder() const override { return true; }
-  double GetInputFPS() const override { return input_fps_; }
+  RationalFps GetInputRationalFps() const override { return DeriveRationalFPS(input_fps_); }
   bool HasPrimedFrame() const override { return has_primed_; }
 
   const std::vector<SegmentBoundary>& GetBoundaries() const override {
@@ -224,7 +224,7 @@ TEST(LookaheadContract, TickThread_NeverCallsVideoDecodeAPIs) {
   std::atomic<bool> stop{false};
 
   // Start fill thread.
-  buf.StartFilling(&prod, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&prod, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to reach target depth.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= kTargetDepth; },
@@ -269,7 +269,7 @@ TEST(LookaheadContract, TickThread_NeverCallsAudioDecodeAPIs) {
   ThreadTrackingProducer prod(64, 48, 30.0, 200, "a.mp4");
   std::atomic<bool> stop{false};
 
-  vbuf.StartFilling(&prod, &abuf, 30.0, 30.0, &stop);
+  vbuf.StartFilling(&prod, &abuf, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return vbuf.DepthFrames() >= 10; },
                        std::chrono::milliseconds(1000)));
 
@@ -318,7 +318,7 @@ TEST(LookaheadContract, TickThread_PrimedFrameIsOnlyException) {
   prod.SetPrimedFrame(std::move(primed));
 
   // StartFilling will consume primed frame on tick thread.
-  buf.StartFilling(&prod, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&prod, nullptr, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 10; },
                        std::chrono::milliseconds(1000)));
 
@@ -360,7 +360,7 @@ TEST(LookaheadContract, VideoDecodeStall_BufferAbsorbsLatency) {
   ThreadTrackingProducer prod(64, 48, 30.0, 500, "a.mp4");
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&prod, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&prod, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for full buffer.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= kTargetDepth; },
@@ -401,7 +401,7 @@ TEST(LookaheadContract, AudioDecodeStall_BufferAbsorbsLatency) {
   ThreadTrackingProducer prod(64, 48, 30.0, 500, "a.mp4");
   std::atomic<bool> stop{false};
 
-  vbuf.StartFilling(&prod, &abuf, 30.0, 30.0, &stop);
+  vbuf.StartFilling(&prod, &abuf, FPS_30, FPS_30, &stop);
 
   // Wait for buffers to fill.
   ASSERT_TRUE(WaitFor([&] { return vbuf.DepthFrames() >= kVideoTargetDepth; },
@@ -456,7 +456,7 @@ TEST(LookaheadContract, CombinedStall_BothBuffersSustainOutput) {
   ThreadTrackingProducer prod(64, 48, 30.0, 500, "a.mp4");
   std::atomic<bool> stop{false};
 
-  vbuf.StartFilling(&prod, &abuf, 30.0, 30.0, &stop);
+  vbuf.StartFilling(&prod, &abuf, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return vbuf.DepthFrames() >= 15; },
                        std::chrono::milliseconds(1000)));
 
@@ -504,7 +504,7 @@ TEST(LookaheadContract, VideoUnderflow_ReturnsFalse_NoPadInjected) {
   ThreadTrackingProducer prod(64, 48, 30.0, 3, "a.mp4");
   std::atomic<bool> stop{false};
 
-  buf.StartFilling(&prod, nullptr, 30.0, 30.0, &stop);
+  buf.StartFilling(&prod, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for fill thread to exhaust content (3 real + hold-last to 5).
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
@@ -650,7 +650,7 @@ TEST(LookaheadContract, FenceTick_DeliversNextBlock_ExactIndex) {
   std::atomic<bool> stop{false};
 
   // Phase 1: Fill with block A.
-  buf.StartFilling(&block_a, &abuf, 30.0, 30.0, &stop);
+  buf.StartFilling(&block_a, &abuf, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 10; },
                        std::chrono::milliseconds(1000)));
 
@@ -669,7 +669,7 @@ TEST(LookaheadContract, FenceTick_DeliversNextBlock_ExactIndex) {
   EXPECT_FALSE(buf.IsPrimed());
   EXPECT_EQ(buf.DepthFrames(), 0);
 
-  buf.StartFilling(&block_b, &abuf, 30.0, 30.0, &stop);
+  buf.StartFilling(&block_b, &abuf, FPS_30, FPS_30, &stop);
 
   // Phase 3: Pop the fence tick frame — MUST be from block B.
   VideoBufferFrame fence_frame;
@@ -720,7 +720,7 @@ TEST(LookaheadContract, FenceTick_PrecisionPreservedUnderStall) {
   std::atomic<bool> stop{false};
 
   // Fill with block A (with stall — fill thread is slower).
-  buf.StartFilling(&block_a, &abuf, 30.0, 30.0, &stop);
+  buf.StartFilling(&block_a, &abuf, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 10; },
                        std::chrono::milliseconds(5000)));
 
@@ -735,7 +735,7 @@ TEST(LookaheadContract, FenceTick_PrecisionPreservedUnderStall) {
 
   // Fence transition.
   buf.StopFilling(/*flush=*/true);
-  buf.StartFilling(&block_b, &abuf, 30.0, 30.0, &stop);
+  buf.StartFilling(&block_b, &abuf, FPS_30, FPS_30, &stop);
 
   // Fence tick frame: MUST be from block B, available immediately.
   VideoBufferFrame fence_frame;
@@ -770,7 +770,7 @@ TEST(LookaheadContract, FenceTick_AudioAvailableFromNewBlock) {
   std::atomic<bool> stop{false};
 
   // Fill with block A.
-  vbuf.StartFilling(&block_a, &abuf, 30.0, 30.0, &stop);
+  vbuf.StartFilling(&block_a, &abuf, FPS_30, FPS_30, &stop);
   ASSERT_TRUE(WaitFor([&] { return vbuf.DepthFrames() >= 10; },
                        std::chrono::milliseconds(1000)));
 
@@ -786,7 +786,7 @@ TEST(LookaheadContract, FenceTick_AudioAvailableFromNewBlock) {
   vbuf.StopFilling(/*flush=*/true);
   // Note: audio buffer is NOT flushed — audio continuity across block cuts.
 
-  vbuf.StartFilling(&block_b, &abuf, 30.0, 30.0, &stop);
+  vbuf.StartFilling(&block_b, &abuf, FPS_30, FPS_30, &stop);
 
   // Audio samples from block B's primed frame should now be in the buffer.
   EXPECT_GT(abuf.TotalSamplesPushed(), audio_before_fence)
@@ -812,7 +812,7 @@ TEST(LookaheadContract, FenceTick_RapidTransitions_Stable) {
     primed.audio.push_back(MakeAudioFrame(1024));
     prod.SetPrimedFrame(std::move(primed));
 
-    buf.StartFilling(&prod, &abuf, 30.0, 30.0, &stop);
+    buf.StartFilling(&prod, &abuf, FPS_30, FPS_30, &stop);
 
     // Verify first frame is from this block.
     ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 1; },

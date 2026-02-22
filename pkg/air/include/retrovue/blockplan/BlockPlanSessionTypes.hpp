@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 namespace retrovue::blockplan {
 
@@ -96,7 +97,7 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
 // Fence computation requires exact rational fps_num/fps_den.
 // round(1000/fps) is NOT authoritative for fence math.
 // =============================================================================
-inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
+inline RationalFps DeriveRationalFPS(double fps) {
   // Standard broadcast frame rates → exact rational representation.
   // Tolerance: 0.01 for matching (handles 23.976 vs 23.9760239...).
   struct Entry { double approx; int64_t num; int64_t den; };
@@ -112,15 +113,28 @@ inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
   };
   for (const auto& e : kTable) {
     if (std::abs(fps - e.approx) < 0.01) {
-      fps_num = e.num;
-      fps_den = e.den;
-      return;
+      return RationalFps{e.num, e.den};
     }
   }
   // Fallback for non-standard rates: treat as integer fps.
-  fps_num = static_cast<int64_t>(fps + 0.5);
-  fps_den = 1;
+  return RationalFps{static_cast<int64_t>(fps + 0.5), 1};
 }
+
+inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
+  const auto rational = DeriveRationalFPS(fps);
+  fps_num = rational.num;
+  fps_den = rational.den;
+}
+
+// =============================================================================
+// ResampleMode — frame selection policy for input_fps vs output_fps (rational).
+// Used by TickProducer and VideoLookaheadBuffer. No floats.
+// =============================================================================
+enum class ResampleMode {
+  OFF,     // exact fps match: 1 input frame per output tick
+  DROP,    // integer downscale (e.g. 60→30, 120→30): emit first of every step
+  CADENCE  // non-integer ratio (e.g. 23.976→30): accumulator / Bresenham
+};
 
 struct BufferConfig {
   int video_target_depth_frames = 0;  // 0 = auto: max(1, fps * 0.5)
@@ -134,12 +148,7 @@ struct BlockPlanSessionContext {
   int fd = -1;           // UDS file descriptor for output
   int width = 640;
   int height = 480;
-  double fps = 30.0;
-  // Rational FPS for authoritative fence computation.
-  // Derived from fps via DeriveRationalFPS() at session init.
-  // fence_tick = ceil(delta_ms * fps_num / (fps_den * 1000))
-  int64_t fps_num = 30;
-  int64_t fps_den = 1;
+  RationalFps fps = FPS_30;
 
   BufferConfig buffer_config;
 

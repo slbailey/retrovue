@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 
 namespace retrovue::blockplan {
@@ -43,13 +44,28 @@ class ITickProducer {
   virtual int64_t FramesPerBlock() const = 0;
   virtual bool HasDecoder() const = 0;
 
-  // Return the detected input (source) FPS from the decoder.
-  // Returns 0.0 if unknown (no decoder, probe failed, etc.).
-  virtual double GetInputFPS() const = 0;
+  // Return the detected input (source) FPS from the decoder as RationalFps.
+  // Returns {0, 1} if unknown (no decoder, probe failed, etc.).
+  virtual RationalFps GetInputRationalFps() const = 0;
+
+  // Legacy accessor (implemented as ToDouble() wrapper for compatibility).
+  // Prefer GetInputRationalFps() for new code.
+  double GetInputFPS() const { return GetInputRationalFps().ToDouble(); }
+
+
+  // Resample mode (rational detection: OFF / DROP / CADENCE).
+  // Default OFF for producers that do not compute it.
+  virtual ResampleMode GetResampleMode() const { return ResampleMode::OFF; }
+
+  // For DROP mode: integer step (input frames per output frame). Always >= 1.
+  virtual int64_t GetDropStep() const { return 1; }
 
   // INV-BLOCK-PRIME-002: True when a pre-decoded primed frame is available.
   // Retrieving a primed frame via TryGetFrame() is non-blocking.
   virtual bool HasPrimedFrame() const = 0;
+
+  // True if the current segment has an audio stream (from decoder). For priming logs / INV-AUDIO-PRIME-002.
+  virtual bool HasAudioStream() const { return false; }
 
   // INV-SEAM-SEG: Return computed segment boundaries for the assigned block.
   // Empty if no block assigned or validation failed.

@@ -30,9 +30,11 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -123,7 +125,7 @@ class SegmentContinuityContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -173,23 +175,27 @@ class SegmentContinuityContractTest : public ::testing::Test {
       summaries_.push_back(summary);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
-  bool WaitForSessionEnded(int timeout_ms = 5000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return session_ended_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
-        [this] { return session_ended_count_ > 0; });
+  bool WaitForSessionEndedBounded(int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
+        [this] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
+          return session_ended_count_ > 0;
+        },
+        max_steps);
   }
 
-  bool WaitForBlocksCompleted(int count, int timeout_ms = 10000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return blocks_completed_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
+  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
         [this, count] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
           return static_cast<int>(completed_blocks_.size()) >= count;
-        });
+        },
+        max_steps);
   }
 
   std::vector<FrameFingerprint> SnapshotFingerprints() {
@@ -242,9 +248,8 @@ TEST_F(SegmentContinuityContractTest, T_SEG_001_SegmentSeamDoesNotKillSession) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // kBootGuardMs + duration + margin for post-fence pad.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + kSegBlockMs + 1000));
+  int64_t fence_seg = ((kBootGuardMs + kSegBlockMs + 1000) * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_seg);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -307,10 +312,12 @@ TEST_F(SegmentContinuityContractTest, T_SEG_002_SegmentSeamAudioContinuity_NoSil
   };
 
   engine_ = std::make_unique<PipelineManager>(
-      ctx_.get(), std::move(callbacks), test_ts_);
+      ctx_.get(), std::move(callbacks), test_ts_,
+      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      PipelineManagerOptions{0});
   engine_->Start();
 
-  ASSERT_TRUE(WaitForSessionEnded(6000))
+  ASSERT_TRUE(WaitForSessionEndedBounded())
       << "Session must end after " << kTargetFrames << " frames";
   engine_->Stop();
 
@@ -366,7 +373,8 @@ TEST_F(SegmentContinuityContractTest, T_SEG_003_SegmentSeamUnderflowInjectsSilen
   engine_ = MakeEngine();
   engine_->Start();
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+  const int64_t kFence3500 = (3500 * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kFence3500);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -420,8 +428,7 @@ TEST_F(SegmentContinuityContractTest, T_SEG_004_SegmentSeamDoesNotBlockTickLoop)
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run through both blocks + margin.
-  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), (3500 * 30 + 999) / 1000);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -464,7 +471,7 @@ TEST_F(SegmentContinuityContractTest, T_SEG_005_SegmentSeamMetricsIncrementOnFal
   engine_ = MakeEngine();
   engine_->Start();
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), (3500 * 30 + 999) / 1000);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -515,9 +522,8 @@ TEST_F(SegmentContinuityContractTest, T_SEG_006_SegmentSeamAppliesToBlockToBlock
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Bootstrap + 3 blocks + margin.
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      kBootGuardMs + 3 * kShortBlockMs + 500));
+  int64_t fence_3b = ((kBootGuardMs + 3 * kShortBlockMs + 500) * 30 + 999) / 1000;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_3b);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -588,7 +594,7 @@ TEST_F(SegmentContinuityContractTest, T_SEG_007_RealMediaSeamBoundedFallback) {
   // immediately.  Sleeping past the last block would accumulate trailing
   // pad frames that inflate max_consecutive_audio_fallback_ticks — those
   // aren't seam fallback, they're normal end-of-content pad.
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 10000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(2))
       << "Both blocks must complete within timeout";
 
   // Snapshot metrics while block B's content is still fresh — before

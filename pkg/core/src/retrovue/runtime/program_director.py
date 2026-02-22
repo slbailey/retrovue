@@ -818,6 +818,19 @@ class ProgramDirector:
             if config.schedule_source != "dsl":
                 continue
 
+            # Warm Tier 1 (CompiledProgramLog) so the daemon can extend Tier 2.
+            # _get_schedule_service_for_channel (→ _get_dsl_service) calls
+            # load_schedule(channel_id), which compiles and caches Tier 1. Without
+            # this, DSL channels that have never had a viewer would have empty
+            # Tier 1 and the daemon would log INV-PLAYLOG-HORIZON-002.
+            try:
+                self._get_schedule_service_for_channel(channel_id, config)
+            except Exception as e:
+                self._logger.warning(
+                    "PlaylogHorizon[%s]: Tier 1 warm failed: %s",
+                    channel_id, e, exc_info=True,
+                )
+
             sc = config.schedule_config or {}
 
             daemon = PlaylogHorizonDaemon(
@@ -1157,15 +1170,6 @@ class ProgramDirector:
         """
         self._logger.debug("ProgramDirector.stop() requested")
 
-        # Stop evidence server
-        if self._evidence_server is not None:
-            try:
-                self._evidence_server.stop(grace=2.0)
-                self._logger.info("Evidence gRPC server stopped")
-            except Exception as e:
-                self._logger.warning("Error stopping evidence server: %s", e)
-            self._evidence_server = None
-
         # Stop HTTP server
         self._stop_http_server()
         
@@ -1192,7 +1196,11 @@ class ProgramDirector:
                     self._logger.warning("Error stopping fanout buffer for channel %s: %s", channel_id, e)
             self._fanout_buffers.clear()
 
-        # Embedded mode: stop health-check thread and tear down all managers
+        # Embedded mode: stop health-check thread and tear down all managers (including AIR).
+        # Stop channel managers (and thus PlayoutSession/AIR) before stopping the Evidence
+        # server so AIR receives Stop RPC and exits gracefully; otherwise Evidence server
+        # stop can cause AIR to disconnect and exit, leading to "Event stream error" and
+        # "Stop RPC error: connection refused" during shutdown.
         if self._channel_manager_provider is None:
             if self._health_check_stop is not None:
                 self._health_check_stop.set()
@@ -1211,6 +1219,15 @@ class ProgramDirector:
                         manager.active_producer = None
                 self._managers.clear()
 
+            # Stop evidence server after AIR has been stopped (no remaining clients).
+            if self._evidence_server is not None:
+                try:
+                    self._evidence_server.stop(grace=2.0)
+                    self._logger.info("Evidence gRPC server stopped")
+                except Exception as e:
+                    self._logger.warning("Error stopping evidence server: %s", e)
+                self._evidence_server = None
+
             # Stop all HorizonManagers
             for channel_id, hm in list(self._horizon_managers.items()):
                 try:
@@ -1223,6 +1240,15 @@ class ProgramDirector:
                         "Error stopping HorizonManager for %s: %s", channel_id, e,
                     )
             self._horizon_managers.clear()
+        else:
+            # Non-embedded mode: stop evidence server (managers are external).
+            if self._evidence_server is not None:
+                try:
+                    self._evidence_server.stop(grace=2.0)
+                    self._logger.info("Evidence gRPC server stopped")
+                except Exception as e:
+                    self._logger.warning("Error stopping evidence server: %s", e)
+                self._evidence_server = None
 
         self._logger.debug("ProgramDirector stopped")
 

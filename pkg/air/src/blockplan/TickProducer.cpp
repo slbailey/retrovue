@@ -12,21 +12,57 @@
 #include <iostream>
 
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
+#include "retrovue/blockplan/FFmpegDecoderAdapter.hpp"
 #include "retrovue/decode/FFmpegDecoder.h"
 
 namespace retrovue::blockplan {
 
 static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 
-TickProducer::TickProducer(int width, int height, double fps)
+TickProducer::TickProducer(int width, int height, RationalFps output_fps)
     : width_(width),
       height_(height),
-      output_fps_(fps),
-      frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)),
-      input_frame_duration_ms_(static_cast<int64_t>(1000.0 / fps)) {}
+      output_fps_{output_fps.num <= 0 ? 1 : output_fps.num,
+                  output_fps.den <= 0 ? 1 : output_fps.den} {}
 
 TickProducer::~TickProducer() {
   Reset();
+}
+
+// ct_ms(k) = floor(k * 1000 * fps_den / fps_num). Rational grid, no drift.
+int64_t TickProducer::CtMs(int64_t k) const {
+  if (output_fps_.num <= 0) return 0;
+  return (k * 1000 * output_fps_.den) / output_fps_.num;
+}
+
+int64_t TickProducer::CtUs(int64_t k) const {
+  if (output_fps_.num <= 0) return 0;
+  return (k * 1000000 * output_fps_.den) / output_fps_.num;
+}
+
+// =============================================================================
+// UpdateResampleMode — OFF / DROP / CADENCE from rational input vs output FPS.
+// Uses 128-bit intermediates to avoid overflow. No floats, no epsilon.
+// =============================================================================
+void TickProducer::UpdateResampleMode() {
+  resample_mode_ = ResampleMode::OFF;
+  drop_step_ = 1;
+  if (input_fps_num_ <= 0 || input_fps_den_ <= 0 || output_fps_.num <= 0 || output_fps_.den <= 0) {
+    return;
+  }
+  using Wide = __int128;
+  Wide in_out = static_cast<Wide>(input_fps_num_) * static_cast<Wide>(output_fps_.den);
+  Wide out_in = static_cast<Wide>(output_fps_.num) * static_cast<Wide>(input_fps_den_);
+  if (in_out == out_in) {
+    return;
+  }
+  if (out_in != 0 && (in_out % out_in) == 0) {
+    resample_mode_ = ResampleMode::DROP;
+    drop_step_ = static_cast<int64_t>(in_out / out_in);
+    if (drop_step_ < 1) drop_step_ = 1;
+    return;
+  }
+  resample_mode_ = ResampleMode::CADENCE;
 }
 
 // =============================================================================
@@ -40,12 +76,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   block_ = block;
 
-  // Compute frames_per_block using exact fps to avoid truncation error.
-  // OLD: ceil(duration_ms / frame_duration_ms_) — truncated integer division
-  // NEW: ceil(duration_ms * output_fps_ / 1000.0) — exact floating-point
+  // Compute frames_per_block using rational fps (same formula as fence).
   int64_t duration_ms = block.end_utc_ms - block.start_utc_ms;
-  frames_per_block_ = static_cast<int64_t>(
-      std::ceil(static_cast<double>(duration_ms) * output_fps_ / 1000.0));
+  int64_t denom = output_fps_.den * 1000;
+  frames_per_block_ = (duration_ms * output_fps_.num + denom - 1) / denom;
+  frame_index_ = 0;
 
   // Convert FedBlock → BlockPlan for validation
   BlockPlan plan = FedBlockToBlockPlan(block);
@@ -59,18 +94,34 @@ void TickProducer::AssignBlock(const FedBlock& block) {
     }
   }
 
-  // Probe all segment assets (skip PAD — no asset to probe)
-  bool all_probed = true;
-  for (const auto& seg : plan.segments) {
-    if (seg.segment_type == SegmentType::kPad) continue;
-    if (!assets_.HasAsset(seg.asset_uri)) {
-      if (!assets_.ProbeAsset(seg.asset_uri)) {
-        std::cerr << "[TickProducer] Failed to probe asset: " << seg.asset_uri
-                  << std::endl;
+  // Probe all segment assets (skip PAD — no asset to probe). Skip probe when using test decoder.
+  bool all_probed = decoder_factory_for_test_.has_value();
+  int attempted = 0;
+  if (!all_probed) {
+    all_probed = true;
+    for (const auto& seg : plan.segments) {
+      if (seg.segment_type == SegmentType::kPad) continue;
+      attempted++;
+#ifdef RETROVUE_DEBUG
+      std::cout << "[TickProducer] PROBE_ATTEMPT block=" << block.block_id
+                << " segment_type=" << SegmentTypeName(seg.segment_type)
+                << " uri=" << seg.asset_uri << std::endl;
+#endif
+      bool ok = assets_.ProbeAsset(seg.asset_uri);
+#ifdef RETROVUE_DEBUG
+      std::cout << "[TickProducer] PROBE_RESULT block=" << block.block_id
+                << " ok=" << (ok ? "Y" : "N")
+                << " uri=" << seg.asset_uri << std::endl;
+#endif
+      if (!ok) {
         all_probed = false;
         break;
       }
     }
+    std::cout << "[TickProducer] PROBE_SUMMARY block=" << block.block_id
+              << " attempted=" << attempted
+              << " all_probed=" << (all_probed ? "Y" : "N")
+              << std::endl;
   }
 
   if (!all_probed) {
@@ -83,6 +134,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   // Validate via BlockPlanValidator to get segment boundaries
   auto asset_duration_fn = [this](const std::string& uri) -> int64_t {
+    if (asset_duration_for_test_) return (*asset_duration_for_test_)(uri);
     return assets_.GetDuration(uri);
   };
   BlockPlanValidator validator(asset_duration_fn);
@@ -125,7 +177,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
               << " frames_per_block=" << frames_per_block_
               << " segments=" << plan.segments.size()
               << " first_segment=PAD"
-              << " output_frame_dur_ms=" << frame_duration_ms_
+              << " output_frame_dur_ms=" << FramePeriodMs()
               << std::endl;
     return;
   }
@@ -135,7 +187,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   dec_config.target_width = width_;
   dec_config.target_height = height_;
 
-  decoder_ = std::make_unique<decode::FFmpegDecoder>(dec_config);
+  if (decoder_factory_for_test_) {
+    decoder_ = (*decoder_factory_for_test_)(dec_config);
+  } else {
+    decoder_ = std::make_unique<FFmpegDecoderAdapter>(dec_config);
+  }
   if (!decoder_->Open()) {
     std::cout << "[TickProducer] DECODER_STEP block_id=" << block.block_id
               << " step=open result=fail asset_uri=" << first_seg.asset_uri
@@ -175,16 +231,11 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " seek_offset_ms=" << first_seg.asset_start_offset_ms
             << std::endl;
 
-  // Detect input FPS from decoder for cadence support.
-  // If input FPS differs from output FPS, PipelineManager will use
-  // cadence-based frame repeat to avoid consuming content too fast.
-  input_fps_ = decoder_->GetVideoFPS();
-  if (input_fps_ > 0.0) {
-    input_frame_duration_ms_ = static_cast<int64_t>(
-        std::round(1000.0 / input_fps_));
-  } else {
-    input_frame_duration_ms_ = frame_duration_ms_;
-  }
+  // Detect input FPS from decoder for cadence support (rational-first path).
+  const RationalFps input_fps = decoder_->GetVideoRationalFps();
+  input_fps_num_ = input_fps.num;
+  input_fps_den_ = input_fps.den;
+  UpdateResampleMode();
 
   state_ = State::kReady;
 
@@ -193,9 +244,8 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " segments=" << plan.segments.size()
             << " decoder_ok=true"
             << " has_pad=" << has_pad_segments_
-            << " input_fps=" << input_fps_
-            << " input_frame_dur_ms=" << input_frame_duration_ms_
-            << " output_frame_dur_ms=" << frame_duration_ms_
+            << " input_fps=" << input_fps_num_ << "/" << input_fps_den_
+            << " fps_num=" << output_fps_.num << " fps_den=" << output_fps_.den
             << std::endl;
 }
 
@@ -206,7 +256,7 @@ void TickProducer::SetLogicalSegmentIndex(int32_t index) {
 void TickProducer::SetInterruptFlags(const ITickProducer::InterruptFlags& flags) {
   interrupt_flags_ = flags;
   if (decoder_) {
-    decode::FFmpegDecoder::InterruptFlags dec_flags;
+    DecoderInterruptFlags dec_flags;
     dec_flags.fill_stop = flags.fill_stop;
     dec_flags.session_stop = flags.session_stop;
     decoder_->SetInterruptFlags(dec_flags);
@@ -251,8 +301,7 @@ void TickProducer::PrimeFirstFrame() {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  block_ct_ms_ = ct_before + input_frame_duration_ms_;
-  next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
+  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
 
   primed_frame_ = FrameData{
       std::move(video_frame),
@@ -342,6 +391,15 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
     buffered_frames_.push_back(std::move(f));
   }
 
+  // INV-AUDIO-PRIME-002: Prime frame must carry at least one audio packet when audio exists.
+  // First decoded frame can have 0 audio (codec/resampler delay). Steal one from buffered.
+  if (decoder_ && decoder_->HasAudioStream() &&
+      primed_frame_->audio.empty() && !buffered_frames_.empty() &&
+      !buffered_frames_.front().audio.empty()) {
+    primed_frame_->audio.push_back(std::move(buffered_frames_.front().audio.front()));
+    buffered_frames_.front().audio.erase(buffered_frames_.front().audio.begin());
+  }
+
   bool met = depth_ms >= min_audio_prime_ms;
 
   std::cout << "[TickProducer] INV-AUDIO-PRIME-001: PrimeFirstTick"
@@ -351,6 +409,8 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
             << " total_decodes=" << total_decodes
             << " null_run=" << null_run
             << " buffered_video=" << buffered_frames_.size()
+            << " primed_audio_count=" << (primed_frame_.has_value() ? primed_frame_->audio.size() : 0)
+            << " has_audio_stream=" << (decoder_ && decoder_->HasAudioStream())
             << std::endl;
 
   return {met, depth_ms};
@@ -369,6 +429,8 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (primed_frame_.has_value()) {
     auto frame = std::move(*primed_frame_);
     primed_frame_.reset();
+    block_ct_ms_ = CtMs(frame_index_);
+    frame_index_++;
     return frame;
   }
 
@@ -376,72 +438,93 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (!buffered_frames_.empty()) {
     auto frame = std::move(buffered_frames_.front());
     buffered_frames_.pop_front();
+    block_ct_ms_ = CtMs(frame_index_);
+    frame_index_++;
     return frame;
   }
 
-  // Decode-only path: handles both real decode and PAD generation.
+  // DROP mode: decode drop_step_ input frames, emit first VIDEO only; harvest ALL audio.
+  // INV-FPS-MAPPING: DROP must not reduce audio production — skip decodes still contribute
+  // their decoded audio so total audio matches input time advanced (e.g. 2/60s per 1/30s tick).
+  // Single push point: TickProducer does NOT push to any audio buffer; the returned FrameData
+  // is the only carrier. The fill thread (VideoLookaheadBuffer) pushes fd->audio once per tick.
+  // INV-FPS-MAPPING: In DROP, returned output frame duration metadata MUST equal the output
+  // tick duration (1/output_fps), not the input frame duration. Decoder sets per-input-frame
+  // duration (e.g. 1/60s); we override so consumers (ProgramOutput, pacing) don't pop/pace 2×.
+  if (resample_mode_ == ResampleMode::DROP && drop_step_ > 1) {
+    auto first = DecodeNextFrameRaw(true);
+    if (!first) return std::nullopt;
+    for (int64_t i = 1; i < drop_step_; i++) {
+      auto skip = DecodeNextFrameRaw(false);
+      if (skip) {
+        for (auto& af : skip->audio) {
+          first->audio.push_back(std::move(af));
+        }
+      }
+    }
+    if (output_fps_.num > 0) {
+      first->video.metadata.SetDurationFromUs(output_fps_.FrameDurationUs());
+    }
+    // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
+    const int64_t this_tick_index = frame_index_ - 1;
+    const int64_t tick_pts_us = CtUs(this_tick_index);
+    first->video.metadata.pts = tick_pts_us;
+    first->video.metadata.dts = tick_pts_us;
+    return first;
+  }
+
+  // OFF / CADENCE: one decode per output tick.
   return DecodeNextFrameRaw();
 }
 
 // =============================================================================
-// ApplyFade — apply linear video+audio fade to a FrameData in-place
-// Contract Reference: docs/contracts/coordination/SegmentTransitionContract.md
-// INV-TRANSITION-004: Fade applied using segment-relative CT.
-// Video (YUV420P): Y *= alpha; U = 128 + (U-128)*alpha; V = 128 + (V-128)*alpha
-// Audio (S16 interleaved): each sample *= alpha
+// ApplyFade — apply linear video+audio fade to a FrameData in-place (fixed-point)
+// INV-FPS-RATIONAL-001: No floating point. alpha_q16 in [0, 65536]; full opacity = 65536.
 // =============================================================================
 
-static void ApplyFade(FrameData& fd, double alpha) {
-  if (alpha <= 0.0) {
-    // Full black + silence
+static constexpr int32_t kAlphaOne = 65536;
+
+static void ApplyFade(FrameData& fd, int32_t alpha_q16) {
+  if (alpha_q16 <= 0) {
     int y_size = fd.video.width * fd.video.height;
     int uv_size = (fd.video.width / 2) * (fd.video.height / 2);
     if (!fd.video.data.empty()) {
       std::memset(fd.video.data.data(), 0, static_cast<size_t>(y_size));
-      std::memset(fd.video.data.data() + y_size, 128,
-                  static_cast<size_t>(2 * uv_size));
+      std::memset(fd.video.data.data() + y_size, 128, static_cast<size_t>(2 * uv_size));
     }
     for (auto& af : fd.audio) {
       std::memset(af.data.data(), 0, af.data.size());
     }
     return;
   }
+  if (alpha_q16 >= kAlphaOne) return;
 
-  if (alpha >= 1.0) return;  // No change needed
-
-  // Video: YUV420P layout [Y][U][V]
   if (!fd.video.data.empty() && fd.video.width > 0 && fd.video.height > 0) {
     int y_size = fd.video.width * fd.video.height;
     int uv_size = (fd.video.width / 2) * (fd.video.height / 2);
     uint8_t* y_plane = fd.video.data.data();
     uint8_t* u_plane = y_plane + y_size;
     uint8_t* v_plane = u_plane + uv_size;
-
-    // Y plane: scale toward 0 (black)
     for (int i = 0; i < y_size && i < static_cast<int>(fd.video.data.size()); ++i) {
-      y_plane[i] = static_cast<uint8_t>(y_plane[i] * alpha + 0.5);
+      y_plane[i] = static_cast<uint8_t>((y_plane[i] * alpha_q16) >> 16);
     }
-    // U plane: blend toward 128 (neutral chroma)
     for (int i = 0; i < uv_size; ++i) {
       int idx = y_size + i;
       if (idx >= static_cast<int>(fd.video.data.size())) break;
-      u_plane[i] = static_cast<uint8_t>(128.0 + (u_plane[i] - 128.0) * alpha + 0.5);
+      u_plane[i] = static_cast<uint8_t>(128 + (((static_cast<int>(u_plane[i]) - 128) * alpha_q16) >> 16));
     }
-    // V plane: blend toward 128 (neutral chroma)
     for (int i = 0; i < uv_size; ++i) {
       int idx = y_size + uv_size + i;
       if (idx >= static_cast<int>(fd.video.data.size())) break;
-      v_plane[i] = static_cast<uint8_t>(128.0 + (v_plane[i] - 128.0) * alpha + 0.5);
+      v_plane[i] = static_cast<uint8_t>(128 + (((static_cast<int>(v_plane[i]) - 128) * alpha_q16) >> 16));
     }
   }
-
-  // Audio: S16 interleaved — scale each sample by alpha
   for (auto& af : fd.audio) {
     int num_samples = af.nb_samples * af.channels;
     int16_t* samples = reinterpret_cast<int16_t*>(af.data.data());
     int max_samples = static_cast<int>(af.data.size() / sizeof(int16_t));
     for (int i = 0; i < num_samples && i < max_samples; ++i) {
-      samples[i] = static_cast<int16_t>(samples[i] * alpha);
+      samples[i] = static_cast<int16_t>((samples[i] * alpha_q16) >> 16);
     }
   }
 }
@@ -450,7 +533,7 @@ static void ApplyFade(FrameData& fd, double alpha) {
 // DecodeNextFrameRaw — decode-only frame advancement (no delivery state)
 // =============================================================================
 
-std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
+std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_state) {
   if (state_ != State::kReady) {
     return std::nullopt;
   }
@@ -463,7 +546,10 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
   }
 
   if (!decoder_ok_) {
-    block_ct_ms_ += input_frame_duration_ms_;
+    if (advance_output_state) {
+      block_ct_ms_ = CtMs(frame_index_);
+      frame_index_++;
+    }
     return std::nullopt;
   }
 
@@ -477,9 +563,11 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
                 << " block_id=" << block_.block_id
                 << std::endl;
       decoder_ok_ = false;
-      return std::nullopt;
     }
-    block_ct_ms_ += input_frame_duration_ms_;
+    if (advance_output_state) {
+      block_ct_ms_ = CtMs(frame_index_);
+      frame_index_++;
+    }
     return std::nullopt;
   }
 
@@ -503,8 +591,7 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
   }
 
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  block_ct_ms_ = ct_before + input_frame_duration_ms_;
-  next_frame_offset_ms_ = decoded_pts_ms + input_frame_duration_ms_;
+  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
 
   FrameData result{
       std::move(video_frame),
@@ -513,43 +600,42 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw() {
       ct_before
   };
 
-  // Apply segment transition fade (INV-TRANSITION-004: CT-based, not wall-clock).
-  // Only applies to second-class breakpoints tagged by Python Core.
+  // Apply segment transition fade (INV-TRANSITION-004). Fixed-point alpha_q16 [0, 65536].
   if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
       current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     const auto& seg = validated_.plan.segments[current_segment_index_];
     const auto& boundary = boundaries_[current_segment_index_];
+    int32_t alpha_q16 = kAlphaOne;
 
-    double alpha = 1.0;
-
-    // Transition in: fade from 0.0 → 1.0 over first transition_in_duration_ms
     if (seg.transition_in == TransitionType::kFade && seg.transition_in_duration_ms > 0) {
       int64_t seg_ct = ct_before - boundary.start_ct_ms;
-      int64_t fade_dur = static_cast<int64_t>(seg.transition_in_duration_ms);
-      if (seg_ct < fade_dur) {
-        double in_alpha = static_cast<double>(seg_ct) / static_cast<double>(fade_dur);
-        alpha = std::min(alpha, std::max(0.0, in_alpha));
+      int64_t fade_dur = seg.transition_in_duration_ms;
+      if (seg_ct < fade_dur && fade_dur > 0) {
+        int32_t in_alpha = static_cast<int32_t>((seg_ct * kAlphaOne) / fade_dur);
+        if (in_alpha < alpha_q16) alpha_q16 = in_alpha;
       }
     }
-
-    // Transition out: fade from 1.0 → 0.0 over last transition_out_duration_ms
     if (seg.transition_out == TransitionType::kFade && seg.transition_out_duration_ms > 0) {
       int64_t seg_duration = boundary.end_ct_ms - boundary.start_ct_ms;
       int64_t seg_ct = ct_before - boundary.start_ct_ms;
-      int64_t fade_dur = static_cast<int64_t>(seg.transition_out_duration_ms);
+      int64_t fade_dur = seg.transition_out_duration_ms;
       int64_t fade_start = seg_duration - fade_dur;
-      if (seg_ct >= fade_start) {
+      if (seg_ct >= fade_start && fade_dur > 0) {
         int64_t time_in_fade = seg_ct - fade_start;
-        double out_alpha = 1.0 - static_cast<double>(time_in_fade) / static_cast<double>(fade_dur);
-        alpha = std::min(alpha, std::max(0.0, out_alpha));
+        int32_t out_alpha = static_cast<int32_t>((time_in_fade * kAlphaOne) / fade_dur);
+        int32_t a = kAlphaOne - out_alpha;
+        if (a < alpha_q16) alpha_q16 = a;
       }
     }
-
-    if (alpha < 1.0) {
-      ApplyFade(result, alpha);
+    if (alpha_q16 < kAlphaOne) {
+      ApplyFade(result, alpha_q16);
     }
   }
 
+  if (advance_output_state) {
+    block_ct_ms_ = CtMs(frame_index_);
+    frame_index_++;
+  }
   return result;
 }
 
@@ -571,9 +657,8 @@ void TickProducer::InitPadFrames() {
               static_cast<size_t>(2 * uv_size));
 
   int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
-  int64_t fps_num_i = static_cast<int64_t>(output_fps_ + 0.5);
   pad_audio_samples_per_frame_ = static_cast<int>(
-      (sr + fps_num_i - 1) / fps_num_i);
+      (sr * output_fps_.den + output_fps_.num - 1) / output_fps_.num);
 }
 
 // AdvanceToNextSegment REMOVED — reactive segment advancement replaced by
@@ -599,8 +684,9 @@ std::optional<FrameData> TickProducer::GeneratePadFrame() {
       static_cast<size_t>(buffer::kHouseAudioChannels) *
       sizeof(int16_t), 0);
 
-  int64_t ct_before = block_ct_ms_;
-  block_ct_ms_ += frame_duration_ms_;
+  int64_t ct_before = CtMs(frame_index_);
+  block_ct_ms_ = CtMs(frame_index_);
+  frame_index_++;
 
   return FrameData{
       std::move(vf),
@@ -626,8 +712,11 @@ void TickProducer::Reset() {
   primed_frame_.reset();
   buffered_frames_.clear();
   has_pad_segments_ = false;
-  input_fps_ = 0.0;
-  input_frame_duration_ms_ = frame_duration_ms_;
+  input_fps_num_ = 1;
+  input_fps_den_ = 1;
+  resample_mode_ = ResampleMode::OFF;
+  drop_step_ = 1;
+  frame_index_ = 0;
   seg_first_pts_ms_ = -1;
   open_generation_ = 0;
   state_ = State::kEmpty;
@@ -649,12 +738,24 @@ bool TickProducer::HasDecoder() const {
   return decoder_ok_;
 }
 
-double TickProducer::GetInputFPS() const {
-  return input_fps_;
+RationalFps TickProducer::GetInputRationalFps() const {
+  return RationalFps{input_fps_num_, input_fps_den_};
+}
+
+ResampleMode TickProducer::GetResampleMode() const {
+  return resample_mode_;
+}
+
+int64_t TickProducer::GetDropStep() const {
+  return drop_step_;
 }
 
 bool TickProducer::HasPrimedFrame() const {
   return primed_frame_.has_value();
+}
+
+bool TickProducer::HasAudioStream() const {
+  return decoder_ && decoder_->HasAudioStream();
 }
 
 const std::vector<SegmentBoundary>& TickProducer::GetBoundaries() const {

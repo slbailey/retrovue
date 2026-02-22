@@ -25,9 +25,11 @@
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/ProducerPreloader.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -92,7 +94,7 @@ class SeamProofContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = FPS_30;
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -135,23 +137,27 @@ class SeamProofContractTest : public ::testing::Test {
       fingerprints_.push_back(fp);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
-  bool WaitForBlocksCompleted(int count, int timeout_ms = 10000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return blocks_completed_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
+  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
         [this, count] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
           return static_cast<int>(completed_blocks_.size()) >= count;
-        });
+        },
+        max_steps);
   }
 
-  bool WaitForSessionEnded(int timeout_ms = 2000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return session_ended_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
-        [this] { return session_ended_count_ > 0; });
+  bool WaitForSessionEndedBounded(int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
+        [this] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
+          return session_ended_count_ > 0;
+        },
+        max_steps);
   }
 
   std::shared_ptr<ITimeSource> test_ts_;
@@ -196,7 +202,7 @@ TEST_F(SeamProofContractTest, PreloadSuccessZeroFencePad) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 8000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(2))
       << "Both blocks must complete within timeout";
 
   engine_->Stop();
@@ -219,8 +225,11 @@ TEST_F(SeamProofContractTest, PreloadSuccessZeroFencePad) {
 TEST_F(SeamProofContractTest, PreloadDelayerCausesFencePad) {
   engine_ = MakeEngine();
 
-  engine_->SetPreloaderDelayHook([]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable 2s delay — check cancel every 10ms
+    for (int i = 0; i < 200 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
 
   // Wall-anchored timestamps so fence fires at the correct future time.
@@ -241,7 +250,7 @@ TEST_F(SeamProofContractTest, PreloadDelayerCausesFencePad) {
 
   // Block 1 is ~500ms. Preloader has 2s delay. Second block will be delayed.
   // Wait for both to complete (the delay means pad frames at fence).
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 15000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(2))
       << "Both blocks must eventually complete";
 
   engine_->Stop();
@@ -260,9 +269,8 @@ TEST_F(SeamProofContractTest, FingerprintCallbackFiresEveryFrame) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Run pad-only for ~150ms
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-
+  const int64_t kMinFrames = 5;
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kMinFrames);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -298,7 +306,7 @@ TEST_F(SeamProofContractTest, FingerprintCallbackFiresEveryFrame) {
 // Verify FramesPerBlock matches ceil formula.
 // =============================================================================
 TEST_F(SeamProofContractTest, FrameDataCarriesMetadata) {
-  TickProducer source(640, 480, 30.0);
+  TickProducer source(640, 480, RationalFps{30, 1});
 
   // AssignBlock with synthetic (probe fails, no decoder)
   FedBlock block = MakeSyntheticBlock("sp004", 5000);
@@ -344,9 +352,9 @@ TEST_F(SeamProofContractTest, DISABLED_SLOW_RealMediaBoundarySeamless) {
 
   // Match output FPS to asset FPS (29.97 = 30000/1001) so fence budget
   // aligns with decoder cadence — no drift, no pad at the boundary.
-  ctx_->fps = 30000.0 / 1001.0;
-  ctx_->fps_num = 30000;
-  ctx_->fps_den = 1001;
+  ctx_->fps = DeriveRationalFPS(30000.0 / 1001.0);
+  ctx_->fps.num = 30000;
+  ctx_->fps.den = 1001;
 
   auto now_ms = NowMs();
   // Standard-duration blocks. Long enough to survive bootstrap.
@@ -376,11 +384,11 @@ TEST_F(SeamProofContractTest, DISABLED_SLOW_RealMediaBoundarySeamless) {
   // production-level gap (hold-last should emit silence audio), not a seam
   // proof defect.  The boundary report only needs block A completion +
   // enough block B fingerprints to verify the seam.
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 25000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
       << "Block A must complete at the first fence";
 
-  // Let block B emit enough frames for the boundary window (5 frames).
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  int64_t current = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), current + 20);
 
   engine_->Stop();
 

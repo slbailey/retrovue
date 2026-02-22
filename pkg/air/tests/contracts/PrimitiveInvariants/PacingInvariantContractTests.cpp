@@ -79,12 +79,12 @@ class PacingInvariantContractTest : public BaseContractTest {
   void FillBufferWithFrames(buffer::FrameRingBuffer& buffer,
                             int count,
                             double fps = 30.0) {
-    const int64_t frame_duration_us = static_cast<int64_t>(1'000'000.0 / fps);
+    const int64_t frame_duration_us = static_cast<int64_t>(1'000'000 / fps);
     for (int i = 0; i < count; ++i) {
       buffer::Frame frame;
       frame.metadata.pts = i * frame_duration_us;
       frame.metadata.dts = i * frame_duration_us;
-      frame.metadata.duration = 1.0 / fps;
+      frame.metadata.duration = frame_duration_s;
       frame.width = 1920;
       frame.height = 1080;
 

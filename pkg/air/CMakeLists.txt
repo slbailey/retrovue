@@ -203,6 +203,7 @@ set(AIR_CORE_SOURCES
   src/blockplan/RealAssetSource.cpp
   # PipelineManager playout engine (P3.0 + P3.1a + P3.1b: pad + A/B producer swap)
   src/blockplan/OutputClock.cpp
+  src/blockplan/FFmpegDecoderAdapter.cpp
   src/blockplan/TickProducer.cpp
   src/blockplan/ProducerPreloader.cpp
   src/blockplan/SeamPreparer.cpp
@@ -379,6 +380,8 @@ add_executable(blockplan_contract_tests
   # NOTE: BlockPlanContractTests.cpp excluded — depends on removed BlockPlanQueue.hpp
   # (removed in 497a9d6). Object was stale-cached; exposed by clean rebuild.
   tests/blockplan/test_segment_transitions.cpp
+  tests/test_utils/deterministic_tick_driver.cpp
+  tests/test_utils/DeterministicOutputClock.cpp
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
@@ -407,8 +410,10 @@ target_link_libraries(blockplan_contract_tests
 target_include_directories(blockplan_contract_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_utils
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/support
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_utils
 )
 
 # Optional: build with -DRETROVUE_FAST_TEST=1 for short-duration deterministic tests.
@@ -522,6 +527,29 @@ add_test(
   COMMAND buffer_config_tests
 )
 
+# ---- INV-FPS-RATIONAL-001: Rational timebase integrity (math + hot-path scan) ----
+add_executable(rational_timebase_integrity_tests
+  tests/contracts/test_rational_timebase_integrity.cpp
+)
+target_compile_definitions(rational_timebase_integrity_tests PRIVATE
+  RETROVUE_BLOCKPLAN_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/blockplan"
+  RETROVUE_AIR_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_link_libraries(rational_timebase_integrity_tests
+  PRIVATE
+    retrovue_blockplan
+    GTest::gtest
+    GTest::gtest_main
+)
+target_include_directories(rational_timebase_integrity_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+  NAME RationalTimebaseIntegrity
+  COMMAND rational_timebase_integrity_tests
+)
+
 # ---- Evidence Spool Contract Tests (AirExecutionEvidenceSpoolContract_v0.1) ----
 add_executable(evidence_spool_tests
   tests/test_evidence_spool.cpp
@@ -585,6 +613,13 @@ target_include_directories(no_asrun_guardrail_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME NoAsRunArtifactGuardrail COMMAND no_asrun_guardrail_test)
+
+# ---- RationalFps Hot-Path Guard ----
+# Prevent regression to fps-double step math in blockplan hot path.
+add_test(
+  NAME RationalFpsHotPathGuard
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_rationalfps_hotpath.sh
+)
 
 # ---- P3.2: Seam Verify Standalone Harness ----
 # Standalone binary for real-media boundary verification using PipelineManager.
