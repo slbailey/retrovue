@@ -14,6 +14,7 @@
 #include <cstdint>
 
 #include "retrovue/blockplan/IOutputClock.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 namespace retrovue::blockplan {
 
@@ -36,16 +37,7 @@ class OutputClock : public IOutputClock {
       int64_t session_frame_index) const override;
 
  private:
-  int64_t fps_num_;
-  int64_t fps_den_;
-
-  // Rational pacing: frame period = (1_000_000_000 * fps_den) / fps_num nanoseconds.
-  // Split into whole + remainder to avoid floating-point drift:
-  //   ns_per_frame_whole_ = (1_000_000_000 * fps_den) / fps_num
-  //   ns_per_frame_rem_   = (1_000_000_000 * fps_den) % fps_num
-  //   deadline_ns(N) = N * ns_per_frame_whole_ + (N * ns_per_frame_rem_) / fps_num_
-  int64_t ns_per_frame_whole_;
-  int64_t ns_per_frame_rem_;
+  RationalFps fps_;
 
   // Legacy values for backward-compatible APIs (diagnostics only).
   int64_t frame_duration_ms_;   // round(1000 * fps_den / fps_num)

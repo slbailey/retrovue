@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include "retrovue/blockplan/RationalFps.hpp"
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
@@ -28,7 +29,7 @@ namespace retrovue::producers::programmatic
     std::string asset_uri;
     int target_width = 1920;
     int target_height = 1080;
-    double target_fps = 30.0;
+    retrovue::blockplan::RationalFps target_fps = retrovue::blockplan::FPS_30;
     int64_t start_offset_ms = 0;
     int64_t hard_stop_time_ms = 0;
   };

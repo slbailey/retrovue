@@ -60,6 +60,16 @@ struct RationalFps {
     return IsValid() ? ((1000LL * den) / num) : 0;
   }
 
+  constexpr double FrameDurationSec() const {
+    return IsValid() ? (static_cast<double>(den) / static_cast<double>(num)) : 0.0;
+  }
+
+  constexpr bool MatchesWithinTolerance(const RationalFps& other, double tolerance) const {
+    if (!IsValid() || !other.IsValid()) return false;
+    const double ratio = ToDouble() / other.ToDouble();
+    return (ratio >= (1.0 - tolerance)) && (ratio <= (1.0 + tolerance));
+  }
+
   constexpr int64_t DurationFromFramesUs(int64_t frames) const {
     return IsValid() ? ((frames * 1000000LL * den) / num) : 0;
   }

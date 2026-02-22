@@ -100,7 +100,7 @@ namespace retrovue::producers::file
         eof_event_emitted_(false),
         eof_signaled_(false),
         truncation_logged_(false),
-        time_base_(0.0),
+        time_base_({0, 1}),
         last_mt_pts_us_(0),
         last_decoded_mt_pts_us_(0),
         first_mt_pts_us_(0),
@@ -109,7 +109,7 @@ namespace retrovue::producers::file
         audio_codec_ctx_(nullptr),
         audio_frame_(nullptr),
         audio_stream_index_(-1),
-        audio_time_base_(0.0),
+        audio_time_base_({0, 1}),
         audio_eof_reached_(false),
         last_audio_pts_us_(0),
         audio_swr_ctx_(nullptr),
@@ -118,7 +118,7 @@ namespace retrovue::producers::file
         audio_swr_src_fmt_(-1),  // AV_SAMPLE_FMT_NONE = -1
         effective_seek_target_us_(0),
         stub_pts_counter_(0),
-        frame_interval_us_(static_cast<int64_t>(std::round(kMicrosecondsPerSecond / config.target_fps))),
+        frame_interval_us_(config.target_fps.FrameDurationUs()),
         next_stub_deadline_utc_(0),
         shadow_decode_mode_(false),
         shadow_decode_ready_(false),
@@ -144,7 +144,7 @@ namespace retrovue::producers::file
         decode_gate_blocked_(false),
         decode_probe_window_start_us_(0),
         decode_probe_window_frames_(0),
-        decode_probe_last_rate_(0.0),
+        decode_probe_last_rate_(0),
         decode_probe_in_seek_(false),
         decode_rate_violation_logged_(false)
   {
@@ -460,10 +460,10 @@ namespace retrovue::producers::file
 
       // T4: Log audio/video depth ratio at block time
       if (video_capacity > 0) {
-        const double av_ratio = static_cast<double>(audio_depth) / static_cast<double>(video_depth > 0 ? video_depth : 1);
+        // Report raw depth ratio without float division
         std::cout << "[FileProducer] HYPOTHESIS_TEST_T4: audio_depth=" << audio_depth
                   << " video_depth=" << video_depth
-                  << " av_ratio=" << av_ratio
+                  // av_ratio reported above
                   << " (H1 predicts: audio_full with video_low)" << std::endl;
       }
     }
@@ -581,19 +581,17 @@ namespace retrovue::producers::file
 
     // INV-FPS-RESAMPLE: Initialize resampler for stub mode when stub_source_fps is set.
     // Rational target FPS for tick grid (no rounded interval).
-    retrovue::blockplan::DeriveRationalFPS(config_.target_fps, target_fps_num_, target_fps_den_);
-    if (config_.stub_mode && config_.stub_source_fps > 0.0) {
-      source_fps_ = config_.stub_source_fps;
-      double fps_ratio = source_fps_ / config_.target_fps;
-      resample_active_ = (fps_ratio < (1.0 - kFpsMatchToleranceRatio) ||
-                          fps_ratio > (1.0 + kFpsMatchToleranceRatio));
+    // Target FPS already initialized in constructor
+    if (config_.stub_mode && config_.stub_source_fps > 0) {
+      source_fps_r_ = retrovue::blockplan::DeriveRationalFPS(config_.stub_source_fps);
+      resample_active_ = !target_fps_r_.MatchesWithinTolerance(source_fps_r_, kFpsMatchToleranceRatio);
       if (resample_active_) {
         // Override stub frame interval to source fps (decode at source rate)
         frame_interval_us_ = static_cast<int64_t>(
-            std::round(1000000.0 / source_fps_));
+            source_fps_r_.FrameDurationUs());
         std::cout << "[FileProducer] INV-FPS-RESAMPLE (stub): Active"
-                  << " source=" << source_fps_ << "fps"
-                  << " target=" << config_.target_fps << "fps"
+                  << " source=" << source_fps_r_.num << "/" << source_fps_r_.den << "fps"
+                  << " target=" << config_.target_fps.num << "/" << config_.target_fps.den << "fps"
                   << " stub_frame_interval=" << frame_interval_us_ << "us"
                   << " tick_duration=" << TickDurationUs() << "us"
                   << std::endl;
@@ -827,27 +825,26 @@ namespace retrovue::producers::file
       {
         video_stream_index_ = i;
         AVStream* stream = format_ctx_->streams[i];
-        time_base_ = av_q2d(stream->time_base);
+        time_base_ = stream->time_base;
 
         // INV-FPS-RESAMPLE: Detect source frame rate for PTS-driven resampling.
-        // Rational target FPS for tick grid (no rounded interval).
-        retrovue::blockplan::DeriveRationalFPS(config_.target_fps, target_fps_num_, target_fps_den_);
+        // Use AVRational directly - never round-trip through double
         AVRational guessed_fps = av_guess_frame_rate(format_ctx_, stream, nullptr);
+        retrovue::blockplan::RationalFps source_fps_r;
         if (guessed_fps.num > 0 && guessed_fps.den > 0) {
-          source_fps_ = av_q2d(guessed_fps);
+          source_fps_r = retrovue::blockplan::RationalFps(guessed_fps.num, guessed_fps.den);
+          // source_fps_r will be used for logging directly
         } else {
-          source_fps_ = config_.target_fps;
+          source_fps_r = config_.target_fps;
+          // source_fps_r will be used for logging directly
         }
 
         // Activate when source and target differ by > 1%
-        double fps_ratio = source_fps_ / config_.target_fps;
-        resample_active_ = (fps_ratio < (1.0 - kFpsMatchToleranceRatio) ||
-                            fps_ratio > (1.0 + kFpsMatchToleranceRatio));
+        resample_active_ = !target_fps_r_.MatchesWithinTolerance(source_fps_r_, kFpsMatchToleranceRatio);
         if (resample_active_) {
           std::cout << "[FileProducer] INV-FPS-RESAMPLE: Active"
-                    << " source=" << source_fps_ << "fps"
-                    << " target=" << config_.target_fps << "fps"
-                    << " ratio=" << fps_ratio
+                    << " source=" << source_fps_r_.num << "/" << source_fps_r_.den << "fps"
+                    << " target=" << target_fps_r_.num << "/" << target_fps_r_.den << "fps"
                     << " tick_duration=" << TickDurationUs() << "us"
                     << std::endl;
         }
@@ -871,7 +868,7 @@ namespace retrovue::producers::file
       {
         audio_stream_index_ = i;
         AVStream* stream = format_ctx_->streams[i];
-        audio_time_base_ = av_q2d(stream->time_base);
+        audio_time_base_ = stream->time_base;
         break;
       }
     }
@@ -989,29 +986,36 @@ namespace retrovue::producers::file
     // Compute scale dimensions based on aspect policy
     if (aspect_policy_ == runtime::AspectPolicy::Preserve) {
       // Preserve aspect: scale to fit, pad with black bars
-      // Use Display Aspect Ratio (DAR) which accounts for Sample Aspect Ratio (SAR)
-      // DAR = (width * SAR.num) / (height * SAR.den)
-      double src_aspect;
+      // Use Display Aspect Ratio (DAR) via integer cross-multiplication
+      // Compare DAR to avoid float division: src_DAR vs dst_aspect
+      // src_DAR = (src_width * sar.num) / (src_height * sar.den)
+      // dst_aspect = dst_width / dst_height
+      // Compare: src_width * sar.num * dst_height  vs  src_height * sar.den * dst_width
+      
       AVRational sar = codec_ctx_->sample_aspect_ratio;
+      int64_t src_dar_num, src_dar_den;
       if (sar.num > 0 && sar.den > 0) {
-        // SAR is defined: calculate DAR
-        src_aspect = (static_cast<double>(src_width) * sar.num) /
-                     (static_cast<double>(src_height) * sar.den);
+        src_dar_num = static_cast<int64_t>(src_width) * sar.num;
+        src_dar_den = static_cast<int64_t>(src_height) * sar.den;
       } else {
         // No SAR: assume square pixels
-        src_aspect = static_cast<double>(src_width) / src_height;
+        src_dar_num = src_width;
+        src_dar_den = src_height;
       }
-      double dst_aspect = static_cast<double>(dst_width) / dst_height;
+      
+      // Cross-multiply to compare aspect ratios
+      const int64_t src_cross = src_dar_num * dst_height;
+      const int64_t dst_cross = src_dar_den * dst_width;
 
-      // Calculate scaled dimensions with proper rounding
+      // Calculate scaled dimensions using integer ratios (no float division)
       int calc_scale_width, calc_scale_height;
-      if (src_aspect > dst_aspect) {
+      if (src_cross > dst_cross) {
         // Source is wider: fit to width, pad height (letterbox)
         calc_scale_width = dst_width;
-        calc_scale_height = static_cast<int>(std::round(dst_width / src_aspect));
+        calc_scale_height = static_cast<int>((static_cast<int64_t>(dst_width) * src_dar_den) / src_dar_num);
       } else {
         // Source is taller or equal: fit to height, pad width (pillarbox)
-        calc_scale_width = static_cast<int>(std::round(dst_height * src_aspect));
+        calc_scale_width = static_cast<int>((static_cast<int64_t>(dst_height) * src_dar_num) / src_dar_den);
         calc_scale_height = dst_height;
       }
 
@@ -1411,23 +1415,20 @@ namespace retrovue::producers::file
       }
       const int64_t elapsed_us = now_us - av_rate_probe_start_us_;
       if (elapsed_us > 0) {
-        const double audio_rate = static_cast<double>(av_rate_probe_audio_count_) * 1'000'000.0 / elapsed_us;
-        const double video_rate = static_cast<double>(av_rate_probe_video_count_) * 1'000'000.0 / elapsed_us;
-        const double av_ratio = av_rate_probe_video_count_ > 0
-            ? static_cast<double>(av_rate_probe_audio_count_) / av_rate_probe_video_count_
-            : 0.0;
+        // Report counts and ratio without float math
         std::cout << "[FileProducer] HYPOTHESIS_TEST_T3: "
                   << "audio_packets=" << audio_packets_processed_
                   << " video_packets=" << video_packets_processed_
-                  << " audio_rate=" << audio_rate << "pkt/s"
-                  << " video_rate=" << video_rate << "pkt/s"
-                  << " av_ratio=" << av_ratio
+                  << " audio_count=" << av_rate_probe_audio_count_
+                  << " video_count=" << av_rate_probe_video_count_
+                  << " window_us=" << elapsed_us
                   << " (H1 predicts: audio >> video)" << std::endl;
-        // Detect imbalance: audio packets > 3x video packets
-        if (av_ratio > 3.0 && !av_rate_imbalance_logged_) {
+        // Detect imbalance: audio packets > 3x video packets (integer comparison)
+        const bool imbalance_detected = (av_rate_probe_audio_count_ > av_rate_probe_video_count_ * 3);
+        if (imbalance_detected && !av_rate_imbalance_logged_) {
           av_rate_imbalance_logged_ = true;
           std::cout << "[FileProducer] HYPOTHESIS_TEST_T3: AV_IMBALANCE_DETECTED "
-                    << "(av_ratio=" << av_ratio << " > 3.0, consistent with H1)" << std::endl;
+                    << "(audio=" << av_rate_probe_audio_count_ << " > 3*video=" << av_rate_probe_video_count_ * 3 << ", consistent with H1)" << std::endl;
         }
       }
     }
@@ -1770,7 +1771,7 @@ namespace retrovue::producers::file
                         << "asset=" << config_.asset_uri
                         << ", producer=" << static_cast<const void*>(this)
                         << ", raw_pts=" << (frame_ ? frame_->pts : -1)
-                        << ", time_base=" << time_base_
+                        << ", time_base=" << time_base_.num << "/" << time_base_.den
                         << ", computed_mt_us=" << base_pts_us
                         << ", mt_start_us=" << timeline_controller_->GetSegmentMTStart()
                         << ", ct_cursor=" << timeline_controller_->GetCTCursor()
@@ -1790,7 +1791,7 @@ namespace retrovue::producers::file
                         << "asset=" << config_.asset_uri
                         << ", producer=" << static_cast<const void*>(this)
                         << ", raw_pts=" << (frame_ ? frame_->pts : -1)
-                        << ", time_base=" << time_base_
+                        << ", time_base=" << time_base_.num << "/" << time_base_.den
                         << ", computed_mt_us=" << base_pts_us
                         << ", mt_start_us=" << timeline_controller_->GetSegmentMTStart()
                         << ", ct_cursor=" << timeline_controller_->GetCTCursor()
@@ -2016,31 +2017,36 @@ namespace retrovue::producers::file
       // Check 1-second window for rate measurement
       const int64_t window_elapsed_us = now_us - decode_probe_window_start_us_;
       if (window_elapsed_us >= kDecodeProbeWindowUs) {
-        decode_probe_last_rate_ = static_cast<double>(decode_probe_window_frames_) *
-                                  1'000'000.0 / static_cast<double>(window_elapsed_us);
-        const double target_fps = config_.target_fps > 0 ? config_.target_fps : 30.0;
-
+        // Decode rate monitoring: use integer comparison to avoid float math
+        // Rate check: observed_frames/window < target*0.9
+        // Rearrange: observed_frames * 10 < target*window*9
+        const int64_t observed_frames_x10 = decode_probe_window_frames_ * 10;
+        const int64_t threshold_90 = (window_elapsed_us * target_fps_r_.num * 9) / (target_fps_r_.den * 1000000);
+        
         // Only flag violation if NOT in seek phase and rate is below threshold
         const bool in_steady_state = !decode_probe_in_seek_ && video_epoch_set_;
-        const bool is_violation = in_steady_state && (decode_probe_last_rate_ < target_fps * 0.9);
+        const bool is_violation = in_steady_state && (observed_frames_x10 < threshold_90);
 
         if (is_violation && !decode_rate_violation_logged_) {
           decode_rate_violation_logged_ = true;
           std::cout << "[FileProducer] INV-DECODE-RATE-001 VIOLATION DETECTED: "
-                    << "decode_rate=" << decode_probe_last_rate_ << "fps "
-                    << "(target=" << target_fps << "fps), "
-                    << "frames_produced=" << frames_produced_.load()
+                    << "frames=" << decode_probe_window_frames_
+                    << ", window_us=" << window_elapsed_us
+                    << ", target=" << target_fps_r_.num << "/" << target_fps_r_.den << "fps"
+                    << ", frames_produced=" << frames_produced_.load()
                     << ", eof=" << (eof_reached_ ? "true" : "false")
                     << ", buffer_depth=" << output_buffer_.Size()
                     << std::endl;
         }
 
         // Log probe data only when approaching violation threshold (rate < 95% of target)
-        const bool approaching_violation = in_steady_state && (decode_probe_last_rate_ < target_fps * 0.95);
+        const int64_t threshold_95 = (window_elapsed_us * target_fps_r_.num * 19) / (target_fps_r_.den * 1000000 * 20);
+        const bool approaching_violation = in_steady_state && (decode_probe_window_frames_ < threshold_95);
         if (approaching_violation) {
           std::cout << "[FileProducer] INV-DECODE-RATE-001 PROBE: "
-                    << "rate=" << decode_probe_last_rate_ << "fps, "
-                    << "target=" << target_fps << "fps, "
+                    << "frames=" << decode_probe_window_frames_
+                    << ", window_us=" << window_elapsed_us
+                    << ", target=" << target_fps_r_.num << "/" << target_fps_r_.den << "fps, "
                     << "in_seek=" << (decode_probe_in_seek_ ? "true" : "false")
                     << ", steady_state=" << (in_steady_state ? "true" : "false")
                     << ", buffer_depth=" << output_buffer_.Size()
@@ -2133,8 +2139,8 @@ namespace retrovue::producers::file
     int64_t dts = frame_->pkt_dts != AV_NOPTS_VALUE ? frame_->pkt_dts : pts;
 
     // Convert to microseconds
-    int64_t pts_us = static_cast<int64_t>(pts * time_base_ * kMicrosecondsPerSecond);
-    int64_t dts_us = static_cast<int64_t>(dts * time_base_ * kMicrosecondsPerSecond);
+    int64_t pts_us = (pts * time_base_.num * kMicrosecondsPerSecond) / time_base_.den;
+    int64_t dts_us = (dts * time_base_.num * kMicrosecondsPerSecond) / time_base_.den;
     const int64_t raw_mt_pts_us = pts_us;  // Capture raw decoder MT before any correction
 
     // Ensure PTS monotonicity (operating in MT domain)
@@ -2157,8 +2163,8 @@ namespace retrovue::producers::file
         << " last_mt=" << last_mt_pts_us_
         << " repaired_to=" << (last_mt_pts_us_ + frame_interval_us_)
         << " frame_interval_us=" << frame_interval_us_
-        << " source_fps=" << source_fps_
-        << " target_fps=" << config_.target_fps
+        << " source_fps=" << source_fps_r_.num << "/" << source_fps_r_.den
+        << " target_fps=" << config_.target_fps.num << "/" << config_.target_fps.den
         << std::endl;
       pts_us = last_mt_pts_us_ + frame_interval_us_;
     }
@@ -2171,8 +2177,8 @@ namespace retrovue::producers::file
         << " asset=" << config_.asset_uri
         << " pts_us=" << pts_us
         << " delta=" << (pts_us - last_mt_pts_us_)
-        << " source_fps=" << source_fps_
-        << " target_fps=" << config_.target_fps
+        << " source_fps=" << source_fps_r_.num << "/" << source_fps_r_.den
+        << " target_fps=" << config_.target_fps.num << "/" << config_.target_fps.den
         << std::endl;
       debug_mt_delta_count_++;
     }
@@ -2196,7 +2202,7 @@ namespace retrovue::producers::file
 
     output_frame.metadata.pts = pts_us;
     output_frame.metadata.dts = dts_us;
-    output_frame.metadata.duration = 1.0 / config_.target_fps;
+    output_frame.metadata.duration = target_fps_r_.FrameDurationSec();
     output_frame.metadata.asset_uri = config_.asset_uri;
 
     // Copy YUV420 planar data
@@ -2285,14 +2291,14 @@ namespace retrovue::producers::file
     int64_t base_pts = pts_counter * frame_interval_us_;
     frame.metadata.pts = base_pts + pts_offset_us_;  // Apply PTS offset for alignment
     frame.metadata.dts = frame.metadata.pts;
-    frame.metadata.duration = 1.0 / config_.target_fps;
+    frame.metadata.duration = target_fps_r_.FrameDurationSec();
     frame.metadata.asset_uri = config_.asset_uri;
 
     // Update last_mt_pts_us_ for PTS tracking (use MT, not offset-adjusted PTS)
     last_mt_pts_us_ = base_pts;  // MT, not CT!
 
     // Generate YUV420 planar data (stub: all zeros for now)
-    size_t frame_size = static_cast<size_t>(config_.target_width * config_.target_height * 1.5);
+    size_t frame_size = static_cast<size_t>(config_.target_width * config_.target_height * 3 / 2);
     frame.data.resize(frame_size, 0);
 
     // INV-FPS-RESAMPLE: Route stub frames through resampler gate.
@@ -2959,11 +2965,11 @@ namespace retrovue::producers::file
     int64_t pts_us = 0;
     if (av_frame->pts != AV_NOPTS_VALUE)
     {
-      pts_us = static_cast<int64_t>(av_frame->pts * audio_time_base_ * kMicrosecondsPerSecond);
+      pts_us = (av_frame->pts * audio_time_base_.num * kMicrosecondsPerSecond) / audio_time_base_.den;
     }
     else if (av_frame->best_effort_timestamp != AV_NOPTS_VALUE)
     {
-      pts_us = static_cast<int64_t>(av_frame->best_effort_timestamp * audio_time_base_ * kMicrosecondsPerSecond);
+      pts_us = (av_frame->best_effort_timestamp * audio_time_base_.num * kMicrosecondsPerSecond) / audio_time_base_.den;
     }
 
     // Check if we need to create/recreate the resampler
@@ -3312,11 +3318,11 @@ namespace retrovue::producers::file
     }
   }
 
-  // INV-FPS-RESAMPLE: tick_time_us(n) = floor(n * 1_000_000 * fps_den / fps_num). Integer math, no drift.
+  // INV-FPS-RESAMPLE: tick_time_us(n) = DurationFromFramesUs(n) [using RationalFps helper]. Integer math, no drift.
   int64_t FileProducer::TickTimeUs(int64_t n) const
   {
-    if (target_fps_num_ <= 0) return 0;
-    return (n * 1'000'000 * target_fps_den_) / target_fps_num_;
+    if (target_fps_r_.num <= 0) return 0;
+    return (n * 1'000'000 * target_fps_r_.den) / target_fps_r_.num;
   }
 
   // ======================================================================
@@ -3334,7 +3340,7 @@ namespace retrovue::producers::file
   {
     // Stamp PTS and duration to tick grid — NEVER source PTS
     frame.metadata.pts = tick_pts_us;
-    frame.metadata.duration = 1.0 / config_.target_fps;
+    frame.metadata.duration = target_fps_r_.FrameDurationSec();
     frame.metadata.has_ct = true;
 
     // Update MT tracking to tick grid
@@ -3418,14 +3424,14 @@ namespace retrovue::producers::file
     // Initialize tick grid from first frame: align tick index so current tick contains base_pts_us.
     if (next_output_tick_us_ < 0) {
       // tick_index_ such that tick_time_us(tick_index_) <= base_pts_us < tick_time_us(tick_index_+1)
-      if (target_fps_num_ > 0 && target_fps_den_ > 0) {
-        tick_index_ = (base_pts_us * target_fps_num_) / (1'000'000 * target_fps_den_);
+      if (target_fps_r_.num > 0 && target_fps_r_.den > 0) {
+        tick_index_ = (base_pts_us * target_fps_r_.num) / (1'000'000 * target_fps_r_.den);
       }
       next_output_tick_us_ = TickTimeUs(tick_index_);
       std::cout << "[FileProducer] INV-FPS-RESAMPLE: Tick grid anchored at "
                 << base_pts_us << "us tick_index=" << tick_index_
-                << " (source=" << source_fps_
-                << "fps, target=" << config_.target_fps << "fps)" << std::endl;
+                << " (source=" << source_fps_r_.num << "/" << source_fps_r_.den
+                << "fps, target=" << config_.target_fps.num << "/" << config_.target_fps.den << "fps)" << std::endl;
     }
 
     // Is this frame a candidate for the current tick?
@@ -3468,7 +3474,7 @@ namespace retrovue::producers::file
     // Stamp output to tick grid (rational: no accumulated interval)
     int64_t tick_pts_us = next_output_tick_us_;
     output_frame.metadata.pts = tick_pts_us;
-    output_frame.metadata.duration = 1.0 / config_.target_fps;
+    output_frame.metadata.duration = target_fps_r_.FrameDurationSec();
     base_pts_us = tick_pts_us;
     last_decoded_mt_pts_us_ = tick_pts_us;
     last_mt_pts_us_ = tick_pts_us;
@@ -3519,7 +3525,7 @@ namespace retrovue::producers::file
     int64_t tick_pts_us = next_output_tick_us_;
     base_pts_us = tick_pts_us;
     output_frame.metadata.pts = tick_pts_us;
-    output_frame.metadata.duration = 1.0 / config_.target_fps;
+    output_frame.metadata.duration = target_fps_r_.FrameDurationSec();
     last_decoded_mt_pts_us_ = tick_pts_us;
     last_mt_pts_us_ = tick_pts_us;
     resample_frames_emitted_++;
