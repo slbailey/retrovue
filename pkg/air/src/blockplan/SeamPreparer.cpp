@@ -218,7 +218,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
       std::lock_guard<std::mutex> lock(mutex_);
       hook = delay_hook_;
     }
-    if (hook) hook();
+    if (hook) hook(cancel_requested_);
   }
 
   // Checkpoint 2
@@ -231,8 +231,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   }
 
   int64_t fps_num = 30, fps_den = 1;
-  DeriveRationalFPS(req.fps, fps_num, fps_den);
-  auto source = std::make_unique<TickProducer>(req.width, req.height, fps_num, fps_den);
+  auto source = std::make_unique<TickProducer>(req.width, req.height, req.fps);
   source->AssignBlock(req.block);
   source->SetLogicalSegmentIndex(req.segment_index);
 

@@ -380,6 +380,8 @@ add_executable(blockplan_contract_tests
   # NOTE: BlockPlanContractTests.cpp excluded — depends on removed BlockPlanQueue.hpp
   # (removed in 497a9d6). Object was stale-cached; exposed by clean rebuild.
   tests/blockplan/test_segment_transitions.cpp
+  tests/test_utils/deterministic_tick_driver.cpp
+  tests/test_utils/DeterministicOutputClock.cpp
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
@@ -408,8 +410,10 @@ target_link_libraries(blockplan_contract_tests
 target_include_directories(blockplan_contract_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_utils
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/BlockPlan
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/support
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_utils
 )
 
 # Optional: build with -DRETROVUE_FAST_TEST=1 for short-duration deterministic tests.

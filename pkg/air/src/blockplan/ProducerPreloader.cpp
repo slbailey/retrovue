@@ -27,7 +27,7 @@ void ProducerPreloader::JoinThread() {
 }
 
 void ProducerPreloader::StartPreload(const FedBlock& block,
-                                   int width, int height, double fps,
+                                   int width, int height, RationalFps fps,
                                    int min_audio_prime_ms) {
   Cancel();
 
@@ -92,19 +92,17 @@ void ProducerPreloader::SetDelayHook(DelayHookFn hook) {
 // =============================================================================
 
 void ProducerPreloader::Worker(FedBlock block, int width, int height,
-                               double fps, int min_audio_prime_ms) {
+                               RationalFps fps, int min_audio_prime_ms) {
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
   // Test hook: artificial delay before AssignBlock
   if (delay_hook_) {
-    delay_hook_();
+    delay_hook_(cancel_requested_);
   }
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
-  int64_t fps_num = 30, fps_den = 1;
-  DeriveRationalFPS(fps, fps_num, fps_den);
-  auto source = std::make_unique<TickProducer>(width, height, fps_num, fps_den);
+  auto source = std::make_unique<TickProducer>(width, height, fps);
   source->AssignBlock(block);
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;

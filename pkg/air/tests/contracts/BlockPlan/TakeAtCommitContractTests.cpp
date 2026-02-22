@@ -25,9 +25,11 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -94,7 +96,7 @@ class TakeAtCommitContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = DeriveRationalFPS(30.0);
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -137,26 +139,27 @@ class TakeAtCommitContractTest : public ::testing::Test {
       fingerprints_.push_back(fp);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
-  bool WaitForBlocksCompleted(int count, int timeout_ms = 15000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return blocks_completed_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
+  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
         [this, count] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
           return static_cast<int>(completed_blocks_.size()) >= count;
-        });
+        },
+        max_steps);
   }
 
-  // Wait for a fence to fire (block completion at the fence boundary).
-  // This is the correct wait primitive under the fence-authoritative model:
-  // block completion = commit sweep after fence, not media exhaustion.
-  bool WaitForFence(int timeout_ms = 15000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return blocks_completed_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
-        [this] { return !fence_frame_indices_.empty(); });
+  bool WaitForFenceBounded(int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
+        [this] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
+          return !fence_frame_indices_.empty();
+        },
+        max_steps);
   }
 
   std::shared_ptr<ITimeSource> test_ts_;
@@ -215,12 +218,11 @@ TEST_F(TakeAtCommitContractTest, FrameAccurateSourceSelection) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Wait for block A to complete (fires on_block_completed at fence).
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 10000))
-      << "Block A must complete within timeout";
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
+      << "Block A must complete within bounded steps";
 
-  // Let block B produce ~10 frames past the fence, then stop.
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  int64_t current = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), current + 15);
   engine_->Stop();
 
   // Collect fingerprints
@@ -354,10 +356,11 @@ TEST_F(TakeAtCommitContractTest, NoAFramesAfterFenceSweep) {
   // Wait for block A's fence (not completion count) — under the
   // fence-authoritative model, block completion fires only after the
   // commit sweep at the fence, not when media frames are exhausted.
-  ASSERT_TRUE(WaitForFence(10000))
+  ASSERT_TRUE(WaitForFenceBounded())
       << "Fence must fire for block A";
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  int64_t cur = retrovue::blockplan::test_utils::GetCurrentSessionFrameIndex(engine_.get());
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), cur + 15);
   engine_->Stop();
 
   std::vector<FrameFingerprint> fps;
@@ -407,8 +410,8 @@ TEST_F(TakeAtCommitContractTest, CommitSourceFieldPopulated) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 10000))
-      << "Block must complete within timeout";
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
+      << "Block must complete within bounded steps";
 
   engine_->Stop();
 

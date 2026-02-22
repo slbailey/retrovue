@@ -40,8 +40,8 @@ VideoLookaheadBuffer::~VideoLookaheadBuffer() {
 void VideoLookaheadBuffer::StartFilling(
     ITickProducer* producer,
     AudioLookaheadBuffer* audio_buffer,
-    double input_fps,
-    double output_fps,
+    RationalFps input_fps,
+    RationalFps output_fps,
     std::atomic<bool>* stop_signal) {
   // Ensure no fill thread is running.
   StopFilling(false);
@@ -122,17 +122,17 @@ void VideoLookaheadBuffer::StartFilling(
   // Log resample mode (rational detection: OFF / DROP / CADENCE). DEBUG: chatty per segment.
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] FPS_CADENCE:"
-        << " input_fps=" << input_fps_
-        << " output_fps=" << output_fps_;
+        << " input_fps=" << input_fps_.ToDouble()
+        << " output_fps=" << output_fps_.ToDouble();
     if (resample_mode_ == ResampleMode::OFF) {
       oss << " mode=OFF";
     } else if (resample_mode_ == ResampleMode::DROP) {
       oss << " mode=DROP ratio=" << drop_step_;
-      if (output_fps_ > 0.0) {
-        oss << " expected_tick_duration_s=" << (1.0 / output_fps_);
+      if (output_fps_.num > 0) {
+        oss << " expected_tick_duration_s=" << (1.0 / output_fps_.ToDouble());
       }
     } else {
-      oss << " mode=CADENCE ratio=" << (output_fps_ > 0.0 && input_fps_ > 0.0 ? (input_fps_ / output_fps_) : 0.0);
+      oss << " mode=CADENCE ratio=" << (output_fps_.num > 0 && input_fps_.num > 0 ? (input_fps_.ToDouble() / output_fps_.ToDouble()) : 0.0);
     }
     Logger::Debug(oss.str()); }
 
@@ -205,6 +205,17 @@ bool VideoLookaheadBuffer::IsFilling() const {
 // FillLoop — background thread: decode ahead, resolve cadence, push to buffer
 // =============================================================================
 
+
+void VideoLookaheadBuffer::StartFilling(
+    ITickProducer* producer,
+    AudioLookaheadBuffer* audio_buffer,
+    double input_fps,
+    double output_fps,
+    std::atomic<bool>* external_stop) {
+  StartFilling(producer, audio_buffer, DeriveRationalFPS(input_fps),
+               DeriveRationalFPS(output_fps), external_stop);
+}
+
 void VideoLookaheadBuffer::FillLoop() {
   // Capture producer/audio/stop at thread start so StopFillingAsync can null
   // members immediately. The fill thread uses only these locals — objects
@@ -232,8 +243,8 @@ void VideoLookaheadBuffer::FillLoop() {
   bool cadence_active = (resample_mode_ == ResampleMode::CADENCE);
   double cadence_ratio = 0.0;
   double decode_budget = 0.0;
-  if (cadence_active && output_fps_ > 0.0 && input_fps_ > 0.0) {
-    cadence_ratio = input_fps_ / output_fps_;
+  if (cadence_active && output_fps_.num > 0 && input_fps_.num > 0) {
+    cadence_ratio = input_fps_.ToDouble() / output_fps_.ToDouble();
     decode_budget = 1.0;  // guarantees first tick decodes
   }
   // OFF: 1:1 decode every tick. DROP: TickProducer decodes step internally, we decode every tick.
@@ -242,9 +253,9 @@ void VideoLookaheadBuffer::FillLoop() {
   // One tick demands at most ceil(48000 / output_fps) samples.
   buffer::AudioFrame silence_template;
   int silence_samples_per_frame = 0;
-  if (audio_buffer && output_fps_ > 0.0) {
+  if (audio_buffer && output_fps_.num > 0) {
     silence_samples_per_frame = static_cast<int>(
-        std::ceil(static_cast<double>(buffer::kHouseAudioSampleRate) / output_fps_));
+        std::ceil(static_cast<double>(buffer::kHouseAudioSampleRate) / output_fps_.ToDouble()));
     silence_template.sample_rate = buffer::kHouseAudioSampleRate;
     silence_template.channels = buffer::kHouseAudioChannels;
     silence_template.nb_samples = silence_samples_per_frame;
@@ -275,8 +286,8 @@ void VideoLookaheadBuffer::FillLoop() {
 
   { std::ostringstream oss;
     oss << "[FillLoop:" << buffer_label_ << "] ENTER"
-        << " input_fps=" << input_fps_
-        << " output_fps=" << output_fps_
+        << " input_fps=" << input_fps_.ToDouble()
+        << " output_fps=" << output_fps_.ToDouble()
         << " cadence_active=" << cadence_active
         << " my_audio_gen=" << my_audio_gen
         << " have_last_decoded=" << have_last_decoded;

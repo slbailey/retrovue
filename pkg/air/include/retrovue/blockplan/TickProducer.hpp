@@ -76,7 +76,9 @@ class TickProducer : public producers::IProducer,
  public:
   using State = ITickProducer::State;
 
-  TickProducer(int width, int height, int64_t fps_num, int64_t fps_den);
+  TickProducer(int width, int height, RationalFps output_fps);
+  TickProducer(int width, int height, int64_t fps_num, int64_t fps_den)
+      : TickProducer(width, height, RationalFps{fps_num, fps_den}) {}
   ~TickProducer() override;
 
   // --- ITickProducer ---
@@ -171,9 +173,7 @@ class TickProducer : public producers::IProducer,
 
   int width_;
   int height_;
-  int64_t fps_num_;                       // Rational output FPS (authoritative)
-  int64_t fps_den_;
-  double output_fps_;                     // Derived double for frames_per_block formula only
+  RationalFps output_fps_;                // Rational output FPS (authoritative)
   double input_fps_ = 0.0;                // Detected input FPS (0 = unknown)
   int64_t input_fps_num_ = 1;             // Rational input FPS (for resample mode detection)
   int64_t input_fps_den_ = 1;
@@ -189,7 +189,7 @@ class TickProducer : public producers::IProducer,
   // ct_ms(k) = floor(k * 1000 * fps_den / fps_num). No rounded step accumulation.
   int64_t CtMs(int64_t k) const;
   // One output frame period in ms (for next_frame_offset look-ahead and display).
-  int64_t FramePeriodMs() const { return fps_num_ > 0 ? (1000 * fps_den_) / fps_num_ : 33; }
+  int64_t FramePeriodMs() const { return output_fps_.num > 0 ? (1000 * output_fps_.den) / output_fps_.num : 33; }
 
   // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
   // Audio vector contains only this frame's own decoded audio (0-2 frames).

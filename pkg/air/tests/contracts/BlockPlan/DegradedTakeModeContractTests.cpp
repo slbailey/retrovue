@@ -23,9 +23,11 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/util/Logger.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -79,7 +81,7 @@ class DegradedTakeModeContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = DeriveRationalFPS(30.0);
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -122,16 +124,18 @@ class DegradedTakeModeContractTest : public ::testing::Test {
     callbacks.on_seam_transition = [](const SeamTransitionLog&) {};
     callbacks.on_block_summary = [](const BlockPlaybackSummary&) {};
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
-  bool WaitForBlocksCompleted(int count, int timeout_ms = 15000) {
-    std::unique_lock<std::mutex> lock(cb_mutex_);
-    return blocks_completed_cv_.wait_for(
-        lock, std::chrono::milliseconds(timeout_ms),
+  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {
+    return retrovue::blockplan::test_utils::WaitForBounded(
         [this, count] {
+          std::lock_guard<std::mutex> lock(cb_mutex_);
           return static_cast<int>(completed_blocks_.size()) >= count;
-        });
+        },
+        max_steps);
   }
 
   std::shared_ptr<ITimeSource> test_ts_;
@@ -197,9 +201,12 @@ TEST_F(DegradedTakeModeContractTest, UnprimedBAtFence_NoBlackNoCrash_HeldThenB) 
 
   // Delay block prep for B so at fence B is not primed -> DEGRADED_TAKE_MODE.
   auto delay_fired = std::make_shared<std::atomic<bool>>(false);
-  engine_->SetPreloaderDelayHook([delay_fired] {
+  engine_->SetPreloaderDelayHook([delay_fired](const std::atomic<bool>& cancel) {
     if (!delay_fired->exchange(true, std::memory_order_acq_rel)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+      // Cancellable 2.5s delay — check cancel every 10ms
+      for (int i = 0; i < 250 && !cancel.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
     }
   });
 
@@ -207,7 +214,7 @@ TEST_F(DegradedTakeModeContractTest, UnprimedBAtFence_NoBlackNoCrash_HeldThenB) 
   engine_->Start();
 
   // At least block A must complete (take at fence or after degraded recovery).
-  ASSERT_TRUE(WaitForBlocksCompleted(1, 15000))
+  ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
       << "Block A must complete — DEGRADED_TAKE_MODE must not crash or stall A→B";
 
   engine_->Stop();
@@ -285,11 +292,11 @@ TEST_F(DegradedTakeModeContractTest, UnprimedBAtFence_BNeverPrimes_EscalatesToSt
     ctx_->block_queue.push_back(block_b);
   }
   engine_ = MakeEngine();
-
-  // B prep never completes before HOLD_MAX_MS: delay longer than 8s test so B is not ready.
-  // Use 15s so teardown can join the preparer worker without blocking for hours.
-  engine_->SetPreloaderDelayHook([] {
-    std::this_thread::sleep_for(std::chrono::seconds(15));
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable 15s delay — check cancel every 10ms
+    for (int i = 0; i < 1500 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
 
   engine_->Start();

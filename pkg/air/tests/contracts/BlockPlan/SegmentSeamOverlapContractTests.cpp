@@ -147,6 +147,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
@@ -295,7 +296,7 @@ class SegmentSeamOverlapContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = DeriveRationalFPS(30.0);
   }
 
   void TearDown() override {
@@ -341,7 +342,9 @@ class SegmentSeamOverlapContractTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       summaries_.push_back(summary);
     };
-    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks));
+    return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks),
+        nullptr, std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
