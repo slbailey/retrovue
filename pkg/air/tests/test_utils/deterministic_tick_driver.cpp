@@ -1,0 +1,42 @@
+// Repository: Retrovue-playout
+// Component: Test utilities
+// Purpose: Deterministic tick driver implementation.
+// Copyright (c) 2025 RetroVue
+
+#include "deterministic_tick_driver.hpp"
+
+#include <gtest/gtest.h>
+
+#include "retrovue/blockplan/PipelineManager.hpp"
+#include "retrovue/blockplan/PipelineMetrics.hpp"
+
+namespace retrovue::blockplan::test_utils {
+
+int64_t GetCurrentSessionFrameIndex(const PipelineManager* engine) {
+  if (!engine) return 0;
+  return engine->SnapshotMetrics().continuous_frames_emitted_total;
+}
+
+bool AdvanceUntilFence(PipelineManager* engine, int64_t fence_tick) {
+  if (!engine) return fence_tick <= 0;
+  while (true) {
+    auto m = engine->SnapshotMetrics();
+    int64_t current = m.continuous_frames_emitted_total;
+    if (current >= fence_tick) return true;
+    if (current > kMaxTestTicks) {
+      ADD_FAILURE() << "Test exceeded deterministic tick ceiling: "
+                    << current << " > " << kMaxTestTicks
+                    << " (fence_tick=" << fence_tick << ")";
+      return false;
+    }
+    std::this_thread::yield();
+  }
+}
+
+void AdvanceUntilFenceOrFail(PipelineManager* engine, int64_t fence_tick) {
+  if (!AdvanceUntilFence(engine, fence_tick)) {
+    GTEST_FAIL() << "AdvanceUntilFence failed (ceiling or null engine)";
+  }
+}
+
+}  // namespace retrovue::blockplan::test_utils

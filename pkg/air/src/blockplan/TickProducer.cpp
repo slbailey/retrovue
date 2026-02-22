@@ -20,16 +20,15 @@ namespace retrovue::blockplan {
 static constexpr int kMaxAudioFramesPerVideoFrame = 2;
 
 // Output tick duration in seconds (1/output_fps). Used for DROP pacing metadata.
-static double TickDurationSeconds(double output_fps) {
-  return (output_fps > 0.0) ? (1.0 / output_fps) : 0.0;
+static double TickDurationSeconds(const RationalFps& output_fps) {
+  return (output_fps.num > 0 && output_fps.den > 0) ? (1.0 / output_fps.ToDouble()) : 0.0;
 }
 
-TickProducer::TickProducer(int width, int height, int64_t fps_num, int64_t fps_den)
+TickProducer::TickProducer(int width, int height, RationalFps output_fps)
     : width_(width),
       height_(height),
-      fps_num_(fps_num <= 0 ? 1 : fps_num),
-      fps_den_(fps_den <= 0 ? 1 : fps_den),
-      output_fps_(static_cast<double>(fps_num_) / static_cast<double>(fps_den_)) {}
+      output_fps_{output_fps.num <= 0 ? 1 : output_fps.num,
+                  output_fps.den <= 0 ? 1 : output_fps.den} {}
 
 TickProducer::~TickProducer() {
   Reset();
@@ -37,8 +36,8 @@ TickProducer::~TickProducer() {
 
 // ct_ms(k) = floor(k * 1000 * fps_den / fps_num). Rational grid, no drift.
 int64_t TickProducer::CtMs(int64_t k) const {
-  if (fps_num_ <= 0) return 0;
-  return (k * 1000 * fps_den_) / fps_num_;
+  if (output_fps_.num <= 0) return 0;
+  return (k * 1000 * output_fps_.den) / output_fps_.num;
 }
 
 // =============================================================================
@@ -48,12 +47,12 @@ int64_t TickProducer::CtMs(int64_t k) const {
 void TickProducer::UpdateResampleMode() {
   resample_mode_ = ResampleMode::OFF;
   drop_step_ = 1;
-  if (input_fps_num_ <= 0 || input_fps_den_ <= 0 || fps_num_ <= 0 || fps_den_ <= 0) {
+  if (input_fps_num_ <= 0 || input_fps_den_ <= 0 || output_fps_.num <= 0 || output_fps_.den <= 0) {
     return;
   }
   using Wide = __int128;
-  Wide in_out = static_cast<Wide>(input_fps_num_) * static_cast<Wide>(fps_den_);
-  Wide out_in = static_cast<Wide>(fps_num_) * static_cast<Wide>(input_fps_den_);
+  Wide in_out = static_cast<Wide>(input_fps_num_) * static_cast<Wide>(output_fps_.den);
+  Wide out_in = static_cast<Wide>(output_fps_.num) * static_cast<Wide>(input_fps_den_);
   if (in_out == out_in) {
     return;
   }
@@ -79,8 +78,8 @@ void TickProducer::AssignBlock(const FedBlock& block) {
 
   // Compute frames_per_block using rational fps (same formula as fence).
   int64_t duration_ms = block.end_utc_ms - block.start_utc_ms;
-  int64_t denom = fps_den_ * 1000;
-  frames_per_block_ = (duration_ms * fps_num_ + denom - 1) / denom;
+  int64_t denom = output_fps_.den * 1000;
+  frames_per_block_ = (duration_ms * output_fps_.num + denom - 1) / denom;
   frame_index_ = 0;
 
   // Convert FedBlock → BlockPlan for validation
@@ -245,7 +244,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " decoder_ok=true"
             << " has_pad=" << has_pad_segments_
             << " input_fps=" << input_fps_
-            << " fps_num=" << fps_num_ << " fps_den=" << fps_den_
+            << " fps_num=" << output_fps_.num << " fps_den=" << output_fps_.den
             << std::endl;
 }
 
@@ -469,9 +468,9 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
     // frame_index_ was already advanced by DecodeNextFrameRaw(true), so this frame is tick (frame_index_ - 1).
     const int64_t this_tick_index = frame_index_ - 1;
-    const int64_t tick_pts_us = (fps_num_ > 0)
-        ? (this_tick_index * 1'000'000 * fps_den_) / fps_num_
-        : static_cast<int64_t>(this_tick_index * 1'000'000.0 / output_fps_);
+    const int64_t tick_pts_us = (output_fps_.num > 0)
+        ? (this_tick_index * 1'000'000 * output_fps_.den) / output_fps_.num
+        : static_cast<int64_t>(this_tick_index * 1'000'000.0 / output_fps_.ToDouble());
     first->video.metadata.pts = tick_pts_us;
     first->video.metadata.dts = tick_pts_us;
     // INV-TICK-AUTHORITY-001: duration already set to expected_tick_duration_s above.
@@ -688,7 +687,7 @@ void TickProducer::InitPadFrames() {
 
   int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
   pad_audio_samples_per_frame_ = static_cast<int>(
-      (sr * fps_den_ + fps_num_ - 1) / fps_num_);
+      (sr * output_fps_.den + output_fps_.num - 1) / output_fps_.num);
 }
 
 // AdvanceToNextSegment REMOVED — reactive segment advancement replaced by

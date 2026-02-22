@@ -29,7 +29,7 @@ class ProducerPreloader {
  public:
   // Optional test hook: injected delay (milliseconds) before AssignBlock.
   // Production code leaves this null.  Tests set it to simulate slow preloads.
-  using DelayHookFn = std::function<void()>;
+  using DelayHookFn = std::function<void(const std::atomic<bool>&)>;
 
   ProducerPreloader() = default;
   ~ProducerPreloader();
@@ -46,7 +46,7 @@ class ProducerPreloader {
   //   min_audio_prime_ms: if > 0, PrimeFirstTick must reach this audio
   //     threshold for the preload to be considered READY.  If the threshold
   //     is not met, IsReady() stays false (preload failure).
-  void StartPreload(const FedBlock& block, int width, int height, double fps,
+  void StartPreload(const FedBlock& block, int width, int height, RationalFps fps,
                     int min_audio_prime_ms = 0);
 
   // Non-blocking: true if the background work has finished.
@@ -73,7 +73,7 @@ class ProducerPreloader {
   void SetDelayHook(DelayHookFn hook);
 
  private:
-  void Worker(FedBlock block, int width, int height, double fps,
+  void Worker(FedBlock block, int width, int height, RationalFps fps,
               int min_audio_prime_ms);
   void JoinThread();
 

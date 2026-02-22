@@ -87,13 +87,17 @@ static constexpr int64_t kDegradedHoldMaxMs = 5000;
 PipelineManager::PipelineManager(
     BlockPlanSessionContext* ctx,
     Callbacks callbacks,
-    std::shared_ptr<ITimeSource> time_source)
+    std::shared_ptr<ITimeSource> time_source,
+    std::shared_ptr<IOutputClock> output_clock,
+    PipelineManagerOptions options)
     : ctx_(ctx),
       callbacks_(std::move(callbacks)),
       time_source_(time_source ? std::move(time_source)
                                : std::make_shared<SystemTimeSource>()),
+      output_clock_(std::move(output_clock)),
+      options_(options),
       live_(std::make_unique<TickProducer>(ctx->width, ctx->height,
-                                     ctx->fps_num, ctx->fps_den)),
+                                     ctx->fps)),
       seam_preparer_(std::make_unique<SeamPreparer>()) {
   metrics_.channel_id = ctx->channel_id;
 }
@@ -515,7 +519,7 @@ void PipelineManager::Run() {
   playout_sinks::mpegts::MpegTSPlayoutSinkConfig enc_config;
   enc_config.target_width = ctx_->width;
   enc_config.target_height = ctx_->height;
-  enc_config.target_fps = ctx_->fps;
+  enc_config.target_fps = ctx_->fps.ToDouble();
   enc_config.enable_audio = true;
   enc_config.gop_size = 90;      // I-frame every 3 seconds
   enc_config.bitrate = 2000000;  // 2 Mbps
@@ -659,7 +663,7 @@ void PipelineManager::Run() {
 
   { std::ostringstream oss;
     oss << "[PipelineManager] Session encoder opened: "
-        << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps
+        << ctx_->width << "x" << ctx_->height << " @ " << ctx_->fps.ToDouble()
         << "fps, open_ms=" << encoder_open_ms;
     Logger::Info(oss.str()); }
 
@@ -691,17 +695,19 @@ void PipelineManager::Run() {
         << " | execution_model="
         << PlayoutExecutionModeToString(kExecutionMode)
         << " | format=" << ctx_->width << "x" << ctx_->height
-        << "@" << ctx_->fps;
+        << "@" << ctx_->fps.ToDouble();
     Logger::Info(oss.str()); }
 
   // ========================================================================
-  // 3. CREATE OUTPUT CLOCK
+  // 3. OUTPUT CLOCK (injected or default real-time)
   // ========================================================================
-  OutputClock clock(ctx_->fps_num, ctx_->fps_den);
+  std::shared_ptr<IOutputClock> clock = output_clock_
+      ? output_clock_
+      : std::make_shared<OutputClock>(ctx_->fps.num, ctx_->fps.den);
 
   // INV-PAD-PRODUCER: Session-lifetime pad source.
   pad_producer_ = std::make_unique<PadProducer>(
-      ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+      ctx_->width, ctx_->height, ctx_->fps.num, ctx_->fps.den);
 
   // INV-JIP-ANCHOR-001 / INV-BLOCK-WALLFENCE-001: Session epoch for fence math.
   // When Core provides join_utc_ms (non-zero), use it as the authoritative
@@ -756,7 +762,7 @@ void PipelineManager::Run() {
   // Target depth: ~500ms at output FPS (e.g. 15 frames at 30fps).
   int video_target_depth = bcfg.video_target_depth_frames > 0
       ? bcfg.video_target_depth_frames
-      : static_cast<int>(std::max(1.0, ctx_->fps * 0.5));
+      : static_cast<int>(std::max(1.0, ctx_->fps.ToDouble() * 0.5));
   int video_low_water = bcfg.video_low_water_frames > 0
       ? bcfg.video_low_water_frames
       : std::max(1, video_target_depth / 3);
@@ -765,7 +771,7 @@ void PipelineManager::Run() {
   video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
 
   // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
-  pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+  pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
   pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
   int pad_a_target = bcfg.audio_target_depth_ms;
@@ -777,12 +783,12 @@ void PipelineManager::Run() {
       buffer::kHouseAudioChannels, pad_a_low);
   pad_b_video_buffer_->StartFilling(
       AsTickProducer(pad_b_producer_.get()), pad_b_audio_buffer_.get(),
-      0.0, ctx_->fps, &ctx_->stop_requested);
+      FPS_30, ctx_->fps, &ctx_->stop_requested);
 
   // Initialize fence_epoch_utc_ms_ to the same value as session_epoch_utc_ms_.
-  // It will be re-anchored to system_clock::now() at clock.Start().
+  // It will be re-anchored to system_clock::now() at clock->Start().
   // This initial value is needed so that compute_fence_frame works correctly
-  // for the first block loaded BEFORE clock.Start().
+  // for the first block loaded BEFORE clock->Start().
   fence_epoch_utc_ms_ = session_epoch_utc_ms_;
 
   // ========================================================================
@@ -867,8 +873,8 @@ void PipelineManager::Run() {
   // Uses rational fps_num/fps_den — NOT ms-quantized frame_duration_ms.
   // Formula: fence_tick = ceil(delta_ms * fps_num / (fps_den * 1000))
   // Integer ceil: (delta_ms * fps_num + fps_den * 1000 - 1) / (fps_den * 1000)
-  const int64_t fence_fps_num = ctx_->fps_num;
-  const int64_t fence_fps_den = ctx_->fps_den;
+  const int64_t fence_fps_num = ctx_->fps.num;
+  const int64_t fence_fps_den = ctx_->fps.den;
   auto compute_fence_frame = [this, fence_fps_num, fence_fps_den](const FedBlock& block) -> int64_t {
     int64_t delta_ms = block.end_utc_ms - fence_epoch_utc_ms_;
     if (delta_ms <= 0) return 0;
@@ -893,7 +899,7 @@ void PipelineManager::Run() {
     // INV-VIDEO-LOOKAHEAD-001: Start fill thread (cadence resolved inside).
     video_buffer_->StartFilling(
         live_tp(), audio_buffer_.get(),
-        live_tp()->GetInputFPS(), ctx_->fps,
+        DeriveRationalFPS(live_tp()->GetInputFPS()), ctx_->fps,
         &ctx_->stop_requested);
 
     // Step 4 probe: JIP/session-first-block path — decoder opened and primed synchronously
@@ -935,7 +941,7 @@ void PipelineManager::Run() {
           0, seg0.asset_uri,
           static_cast<int64_t>(std::ceil(
               static_cast<double>(seg0.segment_duration_ms) /
-              static_cast<double>(clock.FrameDurationMs()))),
+              static_cast<double>(clock->FrameDurationMs()))),
           seg0.segment_type, seg0.event_id);
     }
 
@@ -958,9 +964,10 @@ void PipelineManager::Run() {
     //
     // Gate threshold is kMinAudioPrimeMs (500ms) — the same value the
     // system uses for PrimeFirstTick.  One threshold, one enforcement.
+    // Configurable via PipelineManagerOptions (tests set 0ms, production 2000ms).
     // ====================================================================
     {
-      constexpr int kGateTimeoutMs = 2000;
+      const int kGateTimeoutMs = options_.bootstrap_gate_timeout_ms;
       constexpr int kMarginFrames = 8;
       constexpr int kBootstrapCapFrames = 60;
 
@@ -1079,7 +1086,7 @@ void PipelineManager::Run() {
   // fire at the correct wall-clock instants.  PTS origins remain at 0,
   // so PTS computation is unaffected (no A/V desync).
   // ========================================================================
-  clock.Start();
+  clock->Start();
   {
     // INV-FENCE-WALLCLOCK-ANCHOR: Re-anchor fence epoch to actual tick-loop
     // start time.  session_epoch_utc_ms_ (Core join_utc_ms) is NOT mutated —
@@ -1131,16 +1138,12 @@ void PipelineManager::Run() {
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
     // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
-    // Compute monotonic deadline, detect lateness, conditionally sleep.
-    // Causal order: compute_deadline → wait/detect → fence → emit → work → increment.
-    auto deadline = clock.DeadlineFor(session_frame_index);
+    // Real clock: sleep until deadline. Deterministic clock: no-op (instant advance).
+    auto deadline = clock->DeadlineFor(session_frame_index);
     auto now_mono = std::chrono::steady_clock::now();
     bool tick_is_late = (now_mono > deadline);
 
-    if (!tick_is_late) {
-      // On-time: sleep until deadline (monotonic enforcement).
-      std::this_thread::sleep_until(deadline);
-    }
+    (void)clock->WaitForFrame(session_frame_index);
     auto wake_time = std::chrono::steady_clock::now();
 
     if (tick_is_late) {
@@ -1153,7 +1156,7 @@ void PipelineManager::Run() {
 
     // INV-FENCE-PTS-DECOUPLE: PTS relative to emission origin.
     // At normal startup origins are 0 → identity.
-    int64_t video_pts_90k = clock.FrameIndexToPts90k(
+    int64_t video_pts_90k = clock->FrameIndexToPts90k(
         session_frame_index - pts_origin_frame_index);
     int64_t audio_pts_90k =
         ((audio_samples_emitted - pts_origin_audio_samples) * 90000) /
@@ -1172,7 +1175,7 @@ void PipelineManager::Run() {
 
     if (!preview_ && seam_preparer_->HasBlockResult()) {
       int64_t headroom_ms = (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index)
-          ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock.FrameDurationMs())
+          ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock->FrameDurationMs())
           : -1;
       preview_ = TryTakePreviewProducer(headroom_ms);
       if (preview_) {
@@ -1208,7 +1211,7 @@ void PipelineManager::Run() {
       int live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
       preview_video_buffer_->StartFilling(
           preview_tp, preview_audio_buffer_.get(),
-          preview_tp->GetInputFPS(), ctx_->fps,
+          DeriveRationalFPS(preview_tp->GetInputFPS()), ctx_->fps,
           &ctx_->stop_requested);
       // INV-AUDIO-PREROLL-ISOLATION-001: Verify live audio was not mutated by preview fill.
       if (audio_buffer_ && live_audio_before >= 0) {
@@ -1432,7 +1435,7 @@ void PipelineManager::Run() {
           degraded_entered_frame_index_ = session_frame_index;
           degraded_escalated_to_standby_ = false;
           int64_t headroom_ms = (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index)
-              ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock.FrameDurationMs())
+              ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock->FrameDurationMs())
               : -1;
           { std::ostringstream oss;
             oss << "[PipelineManager] INV-FENCE-TAKE-READY-001 VIOLATION DEGRADED_TAKE_MODE"
@@ -1446,7 +1449,7 @@ void PipelineManager::Run() {
         degraded_take_active_ = true;
         // Bounded escalation: after HOLD_MAX_MS switch to standby (slot 'S') — continuous output, no tick skip.
         const int64_t degraded_elapsed_ms = (session_frame_index - degraded_entered_frame_index_) *
-            static_cast<int64_t>(clock.FrameDurationMs());
+            static_cast<int64_t>(clock->FrameDurationMs());
         if (degraded_elapsed_ms >= kDegradedHoldMaxMs) {
           degraded_escalated_to_standby_ = true;
         }
@@ -1635,7 +1638,7 @@ void PipelineManager::Run() {
         auto summary = block_acc.Finalize();
         ct_at_fence_ms = summary.last_block_ct_ms;
         auto proof = BuildPlaybackProof(
-            outgoing_block, summary, clock.FrameDurationMs(),
+            outgoing_block, summary, clock->FrameDurationMs(),
             block_acc.GetSegmentProofs());
         outgoing_summary = std::move(summary);
         outgoing_proof = std::move(proof);
@@ -1692,7 +1695,7 @@ void PipelineManager::Run() {
                   << " fence_frame=" << session_frame_index;
               Logger::Info(oss.str()); }
             auto fresh = std::make_unique<TickProducer>(
-                ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+                ctx_->width, ctx_->height, ctx_->fps);
             AsTickProducer(fresh.get())->AssignBlock(fallback_block);
             live_ = std::move(fresh);
             swapped = true;
@@ -1715,14 +1718,14 @@ void PipelineManager::Run() {
               buffer::kHouseAudioChannels, fa_low);
           video_buffer_->StartFilling(
               AsTickProducer(live_.get()), audio_buffer_.get(),
-              AsTickProducer(live_.get())->GetInputFPS(), ctx_->fps,
+              DeriveRationalFPS(AsTickProducer(live_.get())->GetInputFPS()), ctx_->fps,
               &ctx_->stop_requested);
         }
       }
 
       if (!swapped) {
         // No B available — PADDED_GAP.
-        live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+        live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
         // Fresh buffers — outgoing buffers will die with the deferred fill thread.
         video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
         video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
@@ -1799,7 +1802,7 @@ void PipelineManager::Run() {
               0, seg0.asset_uri,
               static_cast<int64_t>(std::ceil(
                   static_cast<double>(seg0.segment_duration_ms) /
-                  static_cast<double>(clock.FrameDurationMs()))),
+                  static_cast<double>(clock->FrameDurationMs()))),
               seg0.segment_type, seg0.event_id);
         }
 
@@ -2042,7 +2045,7 @@ void PipelineManager::Run() {
               current_segment_index_, seg.asset_uri,
               static_cast<int64_t>(std::ceil(
                   static_cast<double>(seg.segment_duration_ms) /
-                  static_cast<double>(clock.FrameDurationMs()))),
+                  static_cast<double>(clock->FrameDurationMs()))),
               seg.segment_type, seg.event_id);
         }
       }
@@ -2066,7 +2069,7 @@ void PipelineManager::Run() {
       // INV-PAD-PRODUCER-002: Audio uses same rational accumulator as content.
       int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
       int64_t next_total =
-          ((audio_ticks_emitted + 1) * sr * ctx_->fps_den) / ctx_->fps_num;
+          ((audio_ticks_emitted + 1) * sr * ctx_->fps.den) / ctx_->fps.num;
       int pad_samples_this_tick =
           static_cast<int>(next_total - audio_buffer_samples_emitted);
 
@@ -2107,7 +2110,7 @@ void PipelineManager::Run() {
     // Exact per-tick sample count via rational arithmetic (drift-free).
     int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
     int64_t next_total =
-        ((audio_ticks_emitted + 1) * sr * ctx_->fps_den) / ctx_->fps_num;
+        ((audio_ticks_emitted + 1) * sr * ctx_->fps.den) / ctx_->fps.num;
     int samples_this_tick =
         static_cast<int>(next_total - audio_buffer_samples_emitted);
 
@@ -2515,7 +2518,7 @@ void PipelineManager::Run() {
         // INV-VIDEO-LOOKAHEAD-001: Start fill thread with loaded producer.
         video_buffer_->StartFilling(
             live_tp(), audio_buffer_.get(),
-            live_tp()->GetInputFPS(), ctx_->fps,
+            DeriveRationalFPS(live_tp()->GetInputFPS()), ctx_->fps,
             &ctx_->stop_requested);
 
         // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
@@ -2546,7 +2549,7 @@ void PipelineManager::Run() {
               0, seg0.asset_uri,
               static_cast<int64_t>(std::ceil(
                   static_cast<double>(seg0.segment_duration_ms) /
-                  static_cast<double>(clock.FrameDurationMs()))),
+                  static_cast<double>(clock->FrameDurationMs()))),
               seg0.segment_type, seg0.event_id);
         }
 
@@ -2773,7 +2776,7 @@ void PipelineManager::Run() {
 }
 
 void PipelineManager::SetPreloaderDelayHook(
-    std::function<void()> hook) {
+    std::function<void(const std::atomic<bool>&)> hook) {
   seam_preparer_->SetDelayHook(std::move(hook));
 }
 
@@ -2828,8 +2831,8 @@ FedBlock PipelineManager::MakeSyntheticSegmentBlock(
 void PipelineManager::ComputeSegmentSeamFrames() {
   segment_seam_frames_.clear();
   current_segment_index_ = 0;
-  const int64_t fps_num = ctx_->fps_num;
-  const int64_t fps_den = ctx_->fps_den;
+  const int64_t fps_num = ctx_->fps.num;
+  const int64_t fps_den = ctx_->fps.den;
   int64_t denom = fps_den * 1000;
   for (const auto& boundary : live_boundaries_) {
     int64_t ct_ms = boundary.end_ct_ms;
@@ -2923,11 +2926,11 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
   int64_t headroom_frames = (seam_frame_val != INT64_MAX && seam_frame_val > session_frame_index)
       ? (seam_frame_val - session_frame_index)
       : 0;
-  int64_t headroom_ms = (headroom_frames > 0 && ctx_->fps_num > 0)
-      ? (headroom_frames * 1000 * ctx_->fps_den) / ctx_->fps_num
+  int64_t headroom_ms = (headroom_frames > 0 && ctx_->fps.num > 0)
+      ? (headroom_frames * 1000 * ctx_->fps.den) / ctx_->fps.num
       : 0;
-  int64_t required_frames_from_ms = (kMinSegmentPrepHeadroomMs * ctx_->fps_num + 1000 * ctx_->fps_den - 1)
-      / (1000 * ctx_->fps_den);
+  int64_t required_frames_from_ms = (kMinSegmentPrepHeadroomMs * ctx_->fps.num + 1000 * ctx_->fps.den - 1)
+      / (1000 * ctx_->fps.den);
   int64_t required_headroom_frames = std::max(
       static_cast<int64_t>(kMinSegmentPrepHeadroomFrames),
       required_frames_from_ms);
@@ -3024,7 +3027,7 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int32_t to_seg, int64_t sessio
   int seg_live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
   segment_b_video_buffer_->StartFilling(
       AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
-      AsTickProducer(segment_b_producer_.get())->GetInputFPS(), ctx_->fps,
+      DeriveRationalFPS(AsTickProducer(segment_b_producer_.get())->GetInputFPS()), ctx_->fps,
       &ctx_->stop_requested);
   if (audio_buffer_ && seg_live_audio_before >= 0) {
     int seg_live_audio_after = audio_buffer_->DepthMs();
@@ -3162,7 +3165,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     swap_branch = "SWAP_B_TO_A";
   } else {
     // INV-SEAM-SEG-007: MISS — create B (only), then move B into A slots.
-    segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+    segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
     segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
     const auto& bcfg = ctx_->buffer_config;
@@ -3175,7 +3178,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
         buffer::kHouseAudioChannels, a_low);
     segment_b_video_buffer_->StartFilling(
         AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
-        0.0, ctx_->fps, &ctx_->stop_requested);
+        FPS_30, ctx_->fps, &ctx_->stop_requested);
     video_buffer_ = std::move(segment_b_video_buffer_);
     audio_buffer_ = std::move(segment_b_audio_buffer_);
     live_ = std::move(segment_b_producer_);
@@ -3223,7 +3226,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     int pad_a_low = pad_bcfg.audio_low_water_ms > 0
         ? pad_bcfg.audio_low_water_ms
         : std::max(1, pad_a_target / 3);
-    pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps_num, ctx_->fps_den);
+    pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
     pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
     pad_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
@@ -3231,7 +3234,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
         buffer::kHouseAudioChannels, pad_a_low);
     pad_b_video_buffer_->StartFilling(
         AsTickProducer(pad_b_producer_.get()), pad_b_audio_buffer_.get(),
-        0.0, ctx_->fps, &ctx_->stop_requested);
+        FPS_30, ctx_->fps, &ctx_->stop_requested);
   }
 
   // Step 5: Arm next segment prep.

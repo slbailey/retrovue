@@ -24,6 +24,7 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
+#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
@@ -96,7 +97,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
     });
     ctx_->width = 640;
     ctx_->height = 480;
-    ctx_->fps = 30.0;
+    ctx_->fps = DeriveRationalFPS(30.0);
     test_ts_ = test_infra::MakeTestTimeSource();
   }
 
@@ -146,7 +147,9 @@ class PlaybackTraceContractTest : public ::testing::Test {
       proofs_.push_back(p);
     };
     return std::make_unique<PipelineManager>(
-        ctx_.get(), std::move(callbacks), test_ts_);
+        ctx_.get(), std::move(callbacks), test_ts_,
+        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        PipelineManagerOptions{0});
   }
 
   bool WaitForBlocksCompleted(int count, int timeout_ms = 10000) {
@@ -396,8 +399,11 @@ TEST_F(PlaybackTraceContractTest, DISABLED_SLOW_PaddedTransitionStatus) {
   // With kBootGuardMs=3000 and duration=5000, block A's fence is at
   // ~8s from session start.  Preloader arms before bootstrap (~0s).
   // Delay of 12s → preloader finishes at ~12s, well past the ~8s fence.
-  engine_->SetPreloaderDelayHook([]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(kPreloaderMs));
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable delay (kPreloaderMs) — check cancel every 10ms
+    for (int i = 0; i < kPreloaderMs / 10 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
 
   // Block A: scheduled after bootstrap.

@@ -36,7 +36,7 @@ struct SeamRequest {
   int64_t seam_frame;        // Session frame where result is needed
   int width;
   int height;
-  double fps;
+  RationalFps fps;
   int min_audio_prime_ms;
   // Logging context
   std::string parent_block_id;
@@ -78,7 +78,7 @@ struct SeamResultIdentity {
 // results via TakeSegmentResult() / TakeBlockResult().
 class SeamPreparer {
  public:
-  using DelayHookFn = std::function<void()>;
+  using DelayHookFn = std::function<void(const std::atomic<bool>&)>;
 
   SeamPreparer();
   ~SeamPreparer();

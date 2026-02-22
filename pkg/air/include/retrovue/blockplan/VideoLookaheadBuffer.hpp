@@ -85,6 +85,10 @@ class VideoLookaheadBuffer {
   // TryGetFrame calls in the fill thread — no special handling needed.
   void StartFilling(ITickProducer* producer,
                     AudioLookaheadBuffer* audio_buffer,
+                    RationalFps input_fps, RationalFps output_fps,
+                    std::atomic<bool>* stop_signal);
+  void StartFilling(ITickProducer* producer,
+                    AudioLookaheadBuffer* audio_buffer,
                     double input_fps, double output_fps,
                     std::atomic<bool>* stop_signal);
 
@@ -245,8 +249,8 @@ class VideoLookaheadBuffer {
   ITickProducer* producer_ = nullptr;
   AudioLookaheadBuffer* audio_buffer_ = nullptr;
   std::atomic<bool>* stop_signal_ = nullptr;
-  double input_fps_ = 0.0;
-  double output_fps_ = 0.0;
+  RationalFps input_fps_ = FPS_30;
+  RationalFps output_fps_ = FPS_30;
   ResampleMode resample_mode_ = ResampleMode::OFF;
   int64_t drop_step_ = 1;
 

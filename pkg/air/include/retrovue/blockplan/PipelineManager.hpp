@@ -37,6 +37,7 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
 #include "time/ITimeSource.hpp"
+#include "retrovue/blockplan/IOutputClock.hpp"
 
 // Forward declarations
 namespace retrovue::playout_sinks::mpegts {
@@ -66,6 +67,11 @@ struct BlockActivationContext {
   int64_t timeline_frame_index;  // channel-monotonic tick at block activation
   int64_t block_fence_tick;      // precomputed fence tick (channel-monotonic)
   int64_t utc_ms;                // wall clock at activation
+};
+
+// Explicit configuration; no policy from injected dependencies.
+struct PipelineManagerOptions {
+  int bootstrap_gate_timeout_ms = 2000;
 };
 
 class PipelineManager : public IPlayoutExecutionEngine {
@@ -109,7 +115,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   PipelineManager(BlockPlanSessionContext* ctx,
                   Callbacks callbacks,
-                  std::shared_ptr<ITimeSource> time_source = nullptr);
+                  std::shared_ptr<ITimeSource> time_source = nullptr,
+                  std::shared_ptr<IOutputClock> output_clock = nullptr,
+                  PipelineManagerOptions options = {});
   ~PipelineManager() override;
 
   // IPlayoutExecutionEngine
@@ -123,7 +131,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   std::string GenerateMetricsText() const;
 
   // P3.2: Test-only - forward delay hook to internal ProducerPreloader.
-  void SetPreloaderDelayHook(std::function<void()> hook);
+  void SetPreloaderDelayHook(std::function<void(const std::atomic<bool>&)> hook);
 
   // INV-SEAM-AUDIO-001 / INV-SEAM-GATE-001 helper:
   // While segment swap is deferred, live tick consumption must stay on the
@@ -139,6 +147,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
  private:
   std::shared_ptr<ITimeSource> time_source_;
+  std::shared_ptr<IOutputClock> output_clock_;
+  PipelineManagerOptions options_;
 
   void Run();
 

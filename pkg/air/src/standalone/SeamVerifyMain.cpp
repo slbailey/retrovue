@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
   ctx.fd = fd;
   ctx.width = 640;
   ctx.height = 480;
-  ctx.fps = 30.0;
+  ctx.fps = DeriveRationalFPS(30.0);
 
   // Tracking state
   std::mutex mu;
