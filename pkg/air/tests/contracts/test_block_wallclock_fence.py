@@ -1013,7 +1013,9 @@ class TestRationalCadenceLongRun:
         block = FedBlock(
             block_id="cadence-23976-30",
             start_utc_ms=epoch,
-            end_utc_ms=epoch + 60_000,
+            # 3000 output ticks @ 30fps span exactly 100s; keep block long enough
+            # to measure cadence rather than end-of-block exhaustion effects.
+            end_utc_ms=epoch + 100_000,
             input_fps=23.976,
             total_content_frames=30_000,
         )
@@ -1023,9 +1025,12 @@ class TestRationalCadenceLongRun:
         decodes = sum(1 for e in window if e.source == "decode")
         repeats = sum(1 for e in window if e.source == "repeat")
 
-        # Expected ratio 24000/30000 = 0.8 exactly.
-        assert decodes == 2400
-        assert repeats == 600
+        # 23.976 is 24000/1001. Against 30fps output, decode probability is:
+        #   (24000/1001) / 30 = 800/1001
+        # Over a 3000-tick window, expected decodes are 3000*(800/1001)=2397.602…
+        # The deterministic cadence integrator yields 2398 decodes and 602 repeats.
+        assert decodes == 2398
+        assert repeats == 602
 
     def test_ten_minute_no_accumulated_error_23976_to_30(self):
         epoch = 3_000_000
