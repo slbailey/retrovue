@@ -84,7 +84,7 @@ class PacingInvariantContractTest : public BaseContractTest {
       buffer::Frame frame;
       frame.metadata.pts = i * frame_duration_us;
       frame.metadata.dts = i * frame_duration_us;
-      frame.metadata.duration = frame_duration_s;
+      frame.metadata.duration = static_cast<double>(frame_duration_us) / 1000000.0;
       frame.width = 1920;
       frame.height = 1080;
 

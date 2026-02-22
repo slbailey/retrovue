@@ -3,7 +3,7 @@ filler:
   duration_ms: 3650000
 
 format:
-  video: { width: 968, height: 720, frame_rate: "30/1" }
+  video: { width: 968, height: 720, frame_rate: "30000/1001" }
   audio: { sample_rate: 48000, channels: 2 }
   grid_minutes: 30
 

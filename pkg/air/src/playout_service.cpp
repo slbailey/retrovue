@@ -762,7 +762,7 @@ namespace retrovue
           blockplan_session_->width = format->video.width;
           blockplan_session_->height = format->video.height;
           const double parsed_fps = format->GetFrameRateAsDouble();
-          blockplan_session_->fps = blockplan::DeriveRationalFPS(parsed_fps > 0.0 ? parsed_fps : 30.0);
+          blockplan_session_->fps = blockplan::DeriveRationalFPS(parsed_fps > 0.0 ? parsed_fps : 29.97);
         } else {
           Logger::Error("[StartBlockPlanSession] Failed to parse program_format_json");
         }
