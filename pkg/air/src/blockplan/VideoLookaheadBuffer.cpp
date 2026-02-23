@@ -231,6 +231,10 @@ void VideoLookaheadBuffer::FillLoop() {
   }
 
   // --- Cadence setup: use ResampleMode from TickProducer (rational detection) ---
+  // Decode rate is bounded by source cadence (e.g. ~23.976 decodes/sec for 24fps assets).
+  // We do NOT chase output tick rate; TickLoop performs repeat-vs-advance and only pops
+  // on advance ticks, so buffer drain rate matches source cadence and FillLoop is not
+  // forced to decode at 30/sec for 24fps content.
   // INV-FPS-MAPPING: decode_budget / input_fps-derived budgeting ONLY when mode==CADENCE.
   // OFF and DROP must not use input_fps for decode gating; they decode every tick.
   bool cadence_active = (resample_mode_ == ResampleMode::CADENCE);

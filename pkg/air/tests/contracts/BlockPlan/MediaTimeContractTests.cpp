@@ -80,6 +80,9 @@ class FakeTickProducerDecoder : public ITickProducerDecoder {
   bool IsEOF() const override { return decode_count_ >= max_decodes_; }
   void SetInterruptFlags(const DecoderInterruptFlags&) override {}
   bool HasAudioStream() const override { return true; }
+  PumpResult PumpDecoderOnce(PumpMode) override {
+    return decode_count_ >= max_decodes_ ? PumpResult::kEof : PumpResult::kProgress;
+  }
 
  private:
   int width_;

@@ -262,9 +262,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
   static std::string GetBlockIdFromProducer(producers::IProducer* p);
 
   // --- VideoLookaheadBuffer: non-blocking video frame buffer ---
-  // Decoded video frames are pushed by a background fill thread;
-  // the tick loop pops one frame per tick.  Underflow = hard fault.
-  // Cadence (decode vs repeat) is resolved in the fill thread.
+  // Decoded video frames are pushed by a background fill thread at source cadence.
+  // The tick loop decides repeat vs advance per tick; only advance pops (TryPopFrame).
+  // Repeat ticks re-encode last_good_video_frame_ so FillLoop is not forced to match output tick rate.
   std::unique_ptr<VideoLookaheadBuffer> video_buffer_;
 
   // --- AudioLookaheadBuffer: broadcast-grade audio buffering ---
@@ -320,6 +320,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;
   std::optional<IncomingState> GetIncomingSegmentState(int32_t to_seg) const;
 
+  // Presentation cadence: set tick_cadence_enabled_ and Bresenham params from live block input FPS.
+  void InitTickCadenceForLiveBlock();
+
   // Static helper: build synthetic single-segment FedBlock for segment prep.
   static FedBlock MakeSyntheticSegmentBlock(
       const FedBlock& parent, int32_t seg_idx,
@@ -350,6 +353,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool degraded_take_active_ = false;
   buffer::Frame last_good_video_frame_;
   bool has_last_good_video_frame_ = false;
+  // Presentation cadence for upsampling (e.g., 24→30): repeat-vs-advance decision (TickLoop only).
+  bool tick_cadence_enabled_ = false;
+  int64_t tick_cadence_budget_num_ = 0;   // Bresenham accumulator
+  int64_t tick_cadence_budget_den_ = 1;    // Threshold to advance
+  int64_t tick_cadence_increment_ = 0;     // Amount to add per tick
   // Fingerprint context for held frame (no-unintentional-black: H must match last A content).
   uint32_t last_good_y_crc32_ = 0;
   std::string last_good_asset_uri_;

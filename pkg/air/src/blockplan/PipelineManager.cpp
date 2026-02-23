@@ -947,6 +947,8 @@ void PipelineManager::Run() {
       }
     }
 
+    InitTickCadenceForLiveBlock();
+
     // ====================================================================
     // INV-AUDIO-PRIME-002: Hard gate — do not start tick loop until
     // AudioLookaheadBuffer depth >= kMinAudioPrimeMs.
@@ -1393,7 +1395,36 @@ void PipelineManager::Run() {
     // the frame is guaranteed to still be in the deque when TryPopFrame runs.
     const bool a_was_primed = (!take_b && v_src) ? v_src->IsPrimed() : false;
 
-    if (v_src && v_src->TryPopFrame(vbf)) {
+    // ========================================================================
+    // Presentation cadence: repeat-vs-advance (TickLoop only)
+    // Repeat ticks must NOT call TryPopFrame — re-encode last_good_video_frame_
+    // so FillLoop is not forced to match output tick rate (e.g. 24fps → ~24 decodes/sec).
+    // ========================================================================
+    bool should_advance_video = true;
+    bool is_cadence_repeat = false;
+
+    if (tick_cadence_enabled_ && !take_b && v_src) {
+      tick_cadence_budget_num_ += tick_cadence_increment_;
+      if (tick_cadence_budget_num_ >= tick_cadence_budget_den_) {
+        tick_cadence_budget_num_ -= tick_cadence_budget_den_;
+        should_advance_video = true;
+      } else {
+        should_advance_video = false;
+        is_cadence_repeat = true;
+      }
+    }
+
+    // Explicit repeat path first: on repeat ticks we do NOT call TryPopFrame().
+    if (is_cadence_repeat) {
+      if (has_last_good_video_frame_) {
+        session_encoder->encodeFrame(last_good_video_frame_, video_pts_90k);
+        is_pad = false;
+        take_source_char = 'R';
+      } else {
+        is_pad = true;
+        take_source_char = 'P';
+      }
+    } else if (should_advance_video && v_src && v_src->TryPopFrame(vbf)) {
       session_encoder->encodeFrame(vbf.video, video_pts_90k);
       is_pad = false;
       take_source_char = take_b ? 'B' : 'A';
@@ -1412,7 +1443,7 @@ void PipelineManager::Run() {
       }
       if (take_b) {
         committed_b_frame_this_tick = true;
-        degraded_take_active_ = false;  // Exiting degraded: B frame committed.
+        degraded_take_active_ = false;
       }
     } else if (take_b) {
       // B not primed or empty at fence — PADDED_GAP.
@@ -1724,6 +1755,7 @@ void PipelineManager::Run() {
               AsTickProducer(live_.get()), audio_buffer_.get(),
               AsTickProducer(live_.get())->GetInputRationalFps(), ctx_->fps,
               &ctx_->stop_requested);
+          InitTickCadenceForLiveBlock();
         }
       }
 
@@ -2532,6 +2564,7 @@ void PipelineManager::Run() {
             live_tp(), audio_buffer_.get(),
             live_tp()->GetInputRationalFps(), ctx_->fps,
             &ctx_->stop_requested);
+        InitTickCadenceForLiveBlock();
 
         // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
         block_activation_frame_ = session_frame_index;
@@ -2839,6 +2872,44 @@ FedBlock PipelineManager::MakeSyntheticSegmentBlock(
   assert(synth.segments.size() == 1 &&
          "MakeSyntheticSegmentBlock: result must have exactly 1 segment");
   return synth;
+}
+
+// =============================================================================
+// InitTickCadenceForLiveBlock — set tick_cadence_* from live block input FPS
+// Call after StartFilling when the live block has just been set (first block or post-rotation).
+// =============================================================================
+
+void PipelineManager::InitTickCadenceForLiveBlock() {
+  ITickProducer* tp = AsTickProducer(live_.get());
+  RationalFps input_fps = tp->GetInputRationalFps();
+  RationalFps output_fps = ctx_->fps;
+
+  bool is_upsampling = (static_cast<int64_t>(input_fps.num) * output_fps.den) <
+                      (static_cast<int64_t>(output_fps.num) * input_fps.den);
+
+  if (is_upsampling && input_fps.num > 0 && input_fps.den > 0 &&
+      output_fps.num > 0 && output_fps.den > 0) {
+    tick_cadence_enabled_ = true;
+    tick_cadence_budget_num_ = 0;
+    tick_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * input_fps.den;
+    tick_cadence_increment_ = static_cast<int64_t>(input_fps.num) * output_fps.den;
+
+    { std::ostringstream oss;
+      oss << "[PipelineManager] TICK_CADENCE_INIT"
+          << " input_fps=" << input_fps.num << "/" << input_fps.den
+          << " output_fps=" << output_fps.num << "/" << output_fps.den
+          << " increment=" << tick_cadence_increment_
+          << " threshold=" << tick_cadence_budget_den_;
+      Logger::Info(oss.str()); }
+  } else {
+    tick_cadence_enabled_ = false;
+    { std::ostringstream oss;
+      oss << "[PipelineManager] TICK_CADENCE_DISABLED"
+          << " is_upsampling=" << is_upsampling
+          << " input_fps=" << input_fps.num << "/" << input_fps.den
+          << " output_fps=" << output_fps.num << "/" << output_fps.den;
+      Logger::Info(oss.str()); }
+  }
 }
 
 // =============================================================================

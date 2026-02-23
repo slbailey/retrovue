@@ -27,6 +27,7 @@ class FFmpegDecoderAdapter : public ITickProducerDecoder {
   bool IsEOF() const override;
   void SetInterruptFlags(const DecoderInterruptFlags& flags) override;
   bool HasAudioStream() const override;
+  blockplan::PumpResult PumpDecoderOnce(blockplan::PumpMode mode = blockplan::PumpMode::kNormal) override;
 
  private:
   std::unique_ptr<decode::FFmpegDecoder> impl_;
