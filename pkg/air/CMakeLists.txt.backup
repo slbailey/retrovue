@@ -302,7 +302,6 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/PrimitiveInvariants/SinkLivenessContractTests.cpp
   # INV-P8-PRODUCER-CONTINUITY: Producer handoff continuity contract tests
   tests/contracts/ProducerContinuity/ProducerContinuityContractTests.cpp
-  tests/contracts/test_inv_audio_pts_house_clock_001.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp
@@ -402,7 +401,6 @@ add_executable(blockplan_contract_tests
   tests/contracts/test_inv_execution_continuous_output_001.cpp
   tests/contracts/test_inv_fps_resample_drift.cpp
   tests/contracts/test_inv_no_float_fps_timebase_001.cpp
-  
   tests/blockplan/test_segment_aware_playback_proof.cpp
 )
 

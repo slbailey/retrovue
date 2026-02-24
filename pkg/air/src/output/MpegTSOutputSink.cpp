@@ -62,6 +62,20 @@ MpegTSOutputSink::MpegTSOutputSink(
       stop_requested_(false) {
 }
 
+// Test seam: constructor with injected encoder
+MpegTSOutputSink::MpegTSOutputSink(
+    int fd,
+    const playout_sinks::mpegts::MpegTSPlayoutSinkConfig& config,
+    std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder,
+    const std::string& name)
+    : fd_(fd),
+      config_(config),
+      name_(name),
+      status_(SinkStatus::kIdle),
+      stop_requested_(false),
+      encoder_(std::move(encoder)) {
+}
+
 MpegTSOutputSink::~MpegTSOutputSink() {
   Stop();
 }
@@ -142,7 +156,10 @@ bool MpegTSOutputSink::Start() {
   });
 
   // Create and open encoder pipeline
-  encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config_);
+  // Test seam: if encoder was injected via constructor, use it; otherwise create new one
+  if (!encoder_) {
+    encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config_);
+  }
   if (!encoder_->open(config_, this, &MpegTSOutputSink::WriteToFdCallback)) {
     SetStatus(SinkStatus::kError, "Failed to open encoder pipeline");
     encoder_.reset();

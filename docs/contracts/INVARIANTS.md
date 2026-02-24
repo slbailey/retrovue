@@ -91,6 +91,7 @@ When `session_frame_index >= fence_tick`, the following outcomes MUST be achieve
 **Observable Invariants:**
 - At tick N where `N >= fence_tick`: active owner = B
 - At tick N where `N < fence_tick`: active owner = A
+- **Active owner is defined solely by** `session_frame_index >= fence_tick` (not by B's load completion). Thus in the fallback fence path (sync drain: pop, AssignBlock, install B), B is already active owner for that tick; emitting BlockStarted(B) during that tick is correct.
 - Budget decremented for active owner only
 - BlockStarted(B) emitted between tick where `N = fence_tick` and `N = fence_tick + 1`
 
@@ -539,6 +540,7 @@ In all modes (OFF, DROP, CADENCE), output video PTS MUST advance by exactly one 
 **Owner:** PipelineManager, MpegTSOutputSink, EncoderPipeline  
 **Phase:** Every audio frame encoded / muxed  
 **Depends on:** Clock Law (Layer 0), LAW-OUTPUT-LIVENESS, INV-FPS-TICK-PTS  
+**Related:** INV-AUDIO-LIVENESS (audio servicing; this invariant governs PTS source only)  
 **Status:** Active
 
 Audio PTS used for encoding and transport MUST be derived from the session's **house sample clock**, not from decoder/content PTS.
