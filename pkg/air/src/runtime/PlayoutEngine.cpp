@@ -22,6 +22,7 @@
 #include "retrovue/runtime/TimingLoop.h"
 #include "retrovue/runtime/PlayoutControl.h"
 #include "retrovue/telemetry/MetricsExporter.h"
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/timing/TimelineController.h"
 
@@ -235,6 +236,8 @@ EngineResult PlayoutEngine::StartChannel(
 
     // Create control state machine
     state->control = std::make_unique<PlayoutControl>();
+    state->control->SetSessionOutputFps(
+        retrovue::blockplan::DeriveRationalFPS(state->program_format.GetFrameRateAsDouble()));
 
     // Phase 9.0: Create OutputBus (contract-compliant, no control plane dependency)
     state->output_bus = std::make_unique<output::OutputBus>();

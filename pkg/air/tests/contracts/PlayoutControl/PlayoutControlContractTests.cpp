@@ -7,6 +7,7 @@
 #include "retrovue/runtime/ProducerBus.h"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/file/FileProducer.h"
+#include "retrovue/blockplan/RationalFps.hpp"
 #include "timing/TestMasterClock.h"
 
 namespace retrovue::tests::contracts {
@@ -328,6 +329,84 @@ TEST_F(PlayoutControlContractTest, CTL_005_ProducerSwitchingSeamlessness) {
   EXPECT_NE(live2_after.producer, nullptr);
   // Note: live1.producer is now invalid (moved), so we check live2 instead
   EXPECT_TRUE(live2_after.producer->isRunning()) << "New live producer should be running";
+}
+
+// INV-FPS-RESAMPLE / INV-FPS-TICK-PTS: PTS step on seamless switch must use session/house
+// RationalFps, not producer (FileProducer) FPS. This test fails if PlayoutControl reads
+// producer fps for the PTS step.
+TEST_F(PlayoutControlContractTest, PlayoutControlPtsStepUsesSessionFpsNotProducer) {
+  using retrovue::blockplan::RationalFps;
+
+  runtime::PlayoutControl controller;
+  buffer::FrameRingBuffer buffer(60);
+  auto clock = std::make_shared<retrovue::timing::TestMasterClock>();
+  clock->SetEpochUtcUs(1'700'000'000'000'000LL);
+
+  // Session output FPS: 30000/1001 (~29.97). One tick = 33366 µs.
+  const RationalFps session_fps(30000, 1001);
+  const int64_t session_tick_us = session_fps.FrameDurationUs();
+  ASSERT_EQ(session_tick_us, 33366) << "30000/1001 tick must be 33366 µs";
+
+  controller.SetSessionOutputFps(session_fps);
+
+  // Producer factory with *mismatched* target FPS (24/1). If PlayoutControl used producer
+  // FPS for PTS step, step would be 41666 µs; we require session step 33366 µs.
+  const RationalFps producer_fps(24, 1);
+  const int64_t producer_tick_us = producer_fps.FrameDurationUs();
+  ASSERT_EQ(producer_tick_us, 41666) << "24/1 tick = 41666 µs (must differ from session)";
+
+  controller.setProducerFactory(
+      [](const std::string& path, const std::string& asset_id,
+         buffer::FrameRingBuffer& rb, std::shared_ptr<retrovue::timing::MasterClock> clk,
+         int64_t start_offset_ms, int64_t hard_stop_time_ms)
+          -> std::unique_ptr<retrovue::producers::IProducer> {
+        producers::file::ProducerConfig config;
+        config.asset_uri = path;
+        config.target_width = 1920;
+        config.target_height = 1080;
+        config.target_fps = 24.0;  // Mismatched vs session 30000/1001
+        config.stub_mode = true;
+        config.start_offset_ms = start_offset_ms;
+        config.hard_stop_time_ms = hard_stop_time_ms;
+        return std::make_unique<producers::file::FileProducer>(
+            config, rb, clk, nullptr);
+      });
+
+  // Load first asset and activate (no PTS step assertion on first activation).
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "test://asset1.mp4", "asset-1", buffer, clock));
+  auto* preview1 = dynamic_cast<producers::file::FileProducer*>(
+      controller.getPreviewBus().producer.get());
+  if (preview1) {
+    int attempts = 0;
+    while (!preview1->IsShadowDecodeReady() && attempts < 50) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      ++attempts;
+    }
+  }
+  ASSERT_TRUE(controller.activatePreviewAsLive());
+
+  // Load second asset and activate. This path uses PTS step from session, not producer.
+  ASSERT_TRUE(controller.loadPreviewAsset(
+      "test://asset2.mp4", "asset-2", buffer, clock));
+  auto* preview2 = dynamic_cast<producers::file::FileProducer*>(
+      controller.getPreviewBus().producer.get());
+  if (preview2) {
+    int attempts = 0;
+    while (!preview2->IsShadowDecodeReady() && attempts < 50) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      ++attempts;
+    }
+  }
+  ASSERT_TRUE(controller.activatePreviewAsLive());
+
+  // Authority: step must be session tick (30000/1001), not producer (24/1).
+  const int64_t step_us = controller.LastPtsStepUsForTest();
+  EXPECT_EQ(step_us, session_tick_us)
+      << "PTS step must use session FPS (33366 µs for 30000/1001), not producer; got "
+      << step_us << " (producer 24/1 would give " << producer_tick_us << ")";
+  EXPECT_NE(step_us, producer_tick_us)
+      << "PTS step must not use producer FPS for output tick cadence";
 }
 
 }  // namespace retrovue::tests::contracts

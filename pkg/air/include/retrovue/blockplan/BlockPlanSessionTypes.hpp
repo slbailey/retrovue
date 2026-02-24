@@ -137,7 +137,7 @@ enum class ResampleMode {
 };
 
 struct BufferConfig {
-  int video_target_depth_frames = 0;  // 0 = auto: max(1, fps * 0.5)
+  int video_target_depth_frames = 0;  // 0 = auto: max(1, fps) (~1s headroom)
   int video_low_water_frames = 0;     // 0 = auto: max(1, target / 3)
   int audio_target_depth_ms = 1000;
   int audio_low_water_ms = 0;         // 0 = auto: max(1, target / 3)

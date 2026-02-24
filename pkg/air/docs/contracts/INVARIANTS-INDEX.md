@@ -31,7 +31,7 @@ concern. No domain substitutes for another.
 
 | Domain | Concern | Contracts |
 |--------|---------|-----------|
-| **Channel Clock** | Tick cadence, guaranteed output, monotonic enforcement | Clock Law, INV-TICK-GUARANTEED-OUTPUT, INV-TICK-DEADLINE-DISCIPLINE-001, INV-TICK-MONOTONIC-UTC-ANCHOR-001, MasterClockContract |
+| **Channel Clock** | Tick cadence, guaranteed output, monotonic enforcement | Clock Law, INV-TICK-GUARANTEED-OUTPUT, INV-TICK-DEADLINE-DISCIPLINE-001, INV-TICK-MONOTONIC-UTC-ANCHOR-001, INV-EXECUTION-CONTINUOUS-OUTPUT-001, MasterClockContract |
 | **Seam Continuity Engine** | Decoder overlap, clock isolation, readiness, swap, fallback observability | SeamContinuityEngine (INV-SEAM-*), SegmentContinuityContract (OUT-SEG-*) |
 | **Program Block Authority** | Fence-driven block lifecycle, editorial boundaries, frame budget | ProgramBlockAuthorityContract (OUT-BLOCK-*), INV-BLOCK-WALLFENCE-*, INV-FRAME-BUDGET-* |
 | **Content Engine** | Decoder lifecycle, buffer fill, priming, decode decoupling | INV-BLOCK-LOOKAHEAD-PRIMING, INV-LOOKAHEAD-BUFFER-AUTHORITY, FileProducerContract |
@@ -171,6 +171,7 @@ Decoded media time governs **intra-block** segment transitions and CT tracking. 
 | **INV-AIR-MEDIA-TIME-004** | Cadence independence — output FPS does not affect media time tracking | `TickProducer` | Semantic |
 | **INV-AIR-MEDIA-TIME-005** | Pad is never primary — padding only when decoded media time exceeds block end | `TickProducer` | Semantic |
 | **INV-FPS-RESAMPLE** | Output tick grid and block CT from rational (fps_num, fps_den); no round(1e6/fps) accumulation, no int(1000/fps) advancement. Contract: [INV-FPS-RESAMPLE.md](semantics/INV-FPS-RESAMPLE.md). Tests: FR-001–FR-005, MediaTimeContractTests. | FileProducer, TickProducer | Semantic |
+| **INV-NO-FLOAT-FPS-TIMEBASE-001** | Runtime code MUST NOT compute frame/tick duration via 1e6/fps, round(1e6/fps), or similar float-derived formulas; use RationalFps only. Exceptions: tests/helpers explicitly labeled. Contract: [INV-NO-FLOAT-FPS-TIMEBASE-001.md](INV-NO-FLOAT-FPS-TIMEBASE-001.md). Test: test_inv_no_float_fps_timebase_001. | All runtime (src, include) | Semantic |
 | **INV-FPS-MAPPING** | Source→output frame authority: input≠output MUST use OFF (exact rational equality), DROP (integer step), or CADENCE (rational accumulator). 60→30/120→30 DROP; 23.976→30 CADENCE; 30→30 OFF. No float/epsilon, no default OFF. Contract: [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md). | TickProducer, VideoLookaheadBuffer | Semantic |
 | **INV-TICK-AUTHORITY-001** | Returned video PTS delta and video.metadata.duration MUST equal exactly one output tick (OFF/DROP/CADENCE). Input frame duration must never leak into output. Contract: [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md). | TickProducer | Semantic |
 
@@ -212,6 +213,17 @@ Per-block frame counter derived from fence range. Budget reaching 0 at fence tic
 | **INV-FRAME-BUDGET-006** | Segment exhaustion does not cause block completion; only fence tick ends a block | `PipelineManager` / `TickProducer` | Coordination (Broadcast-Grade) |
 | **INV-FRAME-BUDGET-007** | No negative frame budget — violation is proof of bug | `PipelineManager` | Coordination (Broadcast-Grade) |
 
+#### Preroll Ownership Authority (INV-PREROLL-OWNERSHIP-AUTHORITY)
+
+Single source of truth for "next block at fence"; preroll arming aligned with fence swap. See [INV-PREROLL-OWNERSHIP-AUTHORITY.md](INV-PREROLL-OWNERSHIP-AUTHORITY.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **OUT-PREROLL-001** | Committed successor block id is set when TakeBlockResult assigns preview_, not when queue is popped | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **OUT-PREROLL-002** | Expected next block (ownership stamp) set only at TakeBlockResult; cleared after B→A rotation | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **OUT-PREROLL-003** | Mismatch at fence: fail closed, single structured log (expected_next_block_id, candidate_block_id); playout continues with session block | `PipelineManager` | Diagnostic |
+| **OUT-PREROLL-004** | Plan queue MUST NOT be used to derive expected block at fence | `PipelineManager` | Coordination (Broadcast-Grade) |
+
 #### Lookahead Priming Invariants (Latency Authority)
 
 Zero-decode-latency priming at block boundaries. See [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md).
@@ -226,6 +238,17 @@ Zero-decode-latency priming at block boundaries. See [INV-BLOCK-LOOKAHEAD-PRIMIN
 | **INV-BLOCK-PRIME-006** | Priming is event-driven — executes after AssignBlock, no polling or timers | `ProducerPreloader` | Coordination |
 | **INV-BLOCK-PRIME-007** | Primed frame metadata integrity — PTS, audio, asset_uri match normal decode | `TickProducer` | Coordination |
 | **INV-AUDIO-PRIME-002** | Primed frame must carry ≥1 audio packet when asset has audio; ready for seam not declared until audio depth threshold satisfied. Contract: [INV-AUDIO-PRIME-002.md](semantics/INV-AUDIO-PRIME-002.md). | `TickProducer` / `VideoLookaheadBuffer` | Coordination |
+
+### Deterministic Underflow and Tick Observability (INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY)
+
+Underflow as controlled transition; tick lateness observable. See [INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY.md](INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **OUT-UNDERFLOW-001** | When depth ≤ low_water, deterministic freeze/pad policy; no stall spiral | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **OUT-UNDERFLOW-002** | UNDERFLOW log includes low_water, target, depth_at_event, optionally lateness_ms/p95 | `PipelineManager` / `VideoLookaheadBuffer` | Diagnostic |
+| **OUT-TICK-OBS-001** | Tick lateness observable (per-tick lateness_ms, TICK_GAP with gap_ms/lateness_ms/phase) | `PipelineManager` | Diagnostic |
+| **OUT-TICK-OBS-002** | No nondeterministic sleeps; MasterClock-driven timing | `PipelineManager` | Coordination (Broadcast-Grade) |
 
 ### Lookahead Buffer Authority Invariants (Decode Decoupling)
 
@@ -244,6 +267,7 @@ These invariants ensure that tick progression remains wall-clock anchored so tha
 |----|----------|-------|------|
 | **INV-TICK-DEADLINE-DISCIPLINE-001** | Hard deadline discipline: each tick anchored to session epoch; late ticks emit fallback, no catch-up bursts, no drift. Contract: [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) | `PipelineManager` | Coordination (Broadcast-Grade) |
 | **INV-TICK-MONOTONIC-UTC-ANCHOR-001** | Monotonic clock enforcement for tick deadlines; UTC remains schedule authority but enforcement uses monotonic time to resist NTP/system-time steps. Contract: [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) | `PipelineManager` | Coordination (Broadcast-Grade) |
+| **INV-EXECUTION-CONTINUOUS-OUTPUT-001** | Session runs in continuous_output; tick deadlines anchored to session epoch + rational output FPS; no segment/block/decoder lifecycle event may shift tick schedule; underflow may repeat/black but tick schedule fixed; frame-selection cadence may refresh, tick cadence fixed by session RationalFps. Contract: [INV-EXECUTION-CONTINUOUS-OUTPUT-001.md](INV-EXECUTION-CONTINUOUS-OUTPUT-001.md) | `PipelineManager` | Semantic (Broadcast-Grade) |
 
 **Overlap note:** INV-P8-003 defines **timeline continuity** (no gaps in CT). INV-P8-OUTPUT-001 defines **emission continuity** (output explicitly flushed and delivered in bounded time). Both are required; they address different continuities.
 
@@ -334,13 +358,13 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | **Component contracts** | [README.md](semantics/README.md) |
 | **Broadcast-grade output** (unconditional emission) | [INV-TICK-GUARANTEED-OUTPUT.md](INV-TICK-GUARANTEED-OUTPUT.md) · [INV-SINK-NO-IMPLICIT-EOF.md](INV-SINK-NO-IMPLICIT-EOF.md) · [INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md](INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT.md) |
 | **Block boundary model** (fence, budget, priming) | [INV-BLOCK-WALLCLOCK-FENCE-001.md](INV-BLOCK-WALLCLOCK-FENCE-001.md) · [INV-BLOCK-FRAME-BUDGET-AUTHORITY.md](INV-BLOCK-FRAME-BUDGET-AUTHORITY.md) · [INV-BLOCK-LOOKAHEAD-PRIMING.md](INV-BLOCK-LOOKAHEAD-PRIMING.md) |
-| **Tick deadline enforcement** (deadline discipline, monotonic anchor) | [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) · [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) |
+| **Tick deadline enforcement** (deadline discipline, monotonic anchor, continuous output) | [INV-TICK-DEADLINE-DISCIPLINE-001.md](INV-TICK-DEADLINE-DISCIPLINE-001.md) · [INV-TICK-MONOTONIC-UTC-ANCHOR-001.md](INV-TICK-MONOTONIC-UTC-ANCHOR-001.md) · [INV-EXECUTION-CONTINUOUS-OUTPUT-001.md](INV-EXECUTION-CONTINUOUS-OUTPUT-001.md) |
 | **Lookahead buffer authority** (decode decoupling, underflow semantics) | [INV-LOOKAHEAD-BUFFER-AUTHORITY.md](INV-LOOKAHEAD-BUFFER-AUTHORITY.md) |
 | **Segment continuity** (decoder transition correctness, fallback KPI) | [SegmentContinuityContract.md](semantics/SegmentContinuityContract.md) |
 | **Seam continuity engine** (clock isolation, decoder overlap, mechanical equivalence) | [SeamContinuityEngine.md](semantics/SeamContinuityEngine.md) |
 | **Program block authority** (fence ownership, block lifecycle) | [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md) |
 | **Build / codec rules** | [build.md](coordination/build.md) |
 | **Architecture reference** | [AirArchitectureReference.md](semantics/AirArchitectureReference.md) |
-| **Timing authority** (tick grid, FPS resample, frame mapping, audio prime) | [TIMING-AUTHORITY-OVERVIEW.md](semantics/TIMING-AUTHORITY-OVERVIEW.md) · [INV-FPS-RESAMPLE.md](semantics/INV-FPS-RESAMPLE.md) · [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md) · [INV-AUDIO-PRIME-002.md](semantics/INV-AUDIO-PRIME-002.md) |
+| **Timing authority** (tick grid, FPS resample, frame mapping, audio prime) | [TIMING-AUTHORITY-OVERVIEW.md](semantics/TIMING-AUTHORITY-OVERVIEW.md) · [INV-FPS-RESAMPLE.md](semantics/INV-FPS-RESAMPLE.md) · [INV-NO-FLOAT-FPS-TIMEBASE-001.md](INV-NO-FLOAT-FPS-TIMEBASE-001.md) · [INV-FPS-MAPPING.md](semantics/INV-FPS-MAPPING.md) · [INV-AUDIO-PRIME-002.md](semantics/INV-AUDIO-PRIME-002.md) |
 
 Canonical contract documents take precedence over this index. When in doubt, the contract wins.

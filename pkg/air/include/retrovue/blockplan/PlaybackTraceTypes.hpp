@@ -348,17 +348,16 @@ struct BlockPlaybackProof {
   bool no_overlaps = true;
 };
 
-// Build intent from a FedBlock.  frame_duration_ms comes from the engine's
-// OutputClock (e.g., 33 for 30fps).
+// Build intent from a FedBlock.  Session output FPS (house format) is the
+// single authority; use RationalFps (fps_num/fps_den). No frame_duration_ms.
 inline BlockPlaybackIntent BuildIntent(const FedBlock& block,
-                                        int64_t frame_duration_ms) {
+                                       const RationalFps& session_fps) {
   BlockPlaybackIntent intent;
   intent.block_id = block.block_id;
   intent.expected_duration_ms = block.end_utc_ms - block.start_utc_ms;
-  const RationalFps block_fps(frame_duration_ms > 0 ? 1000 : 0,
-                              frame_duration_ms > 0 ? frame_duration_ms : 1);
-  intent.expected_frames = block_fps.FramesFromDurationCeilMs(
-      intent.expected_duration_ms);
+  intent.expected_frames = session_fps.IsValid()
+      ? session_fps.FramesFromDurationCeilMs(intent.expected_duration_ms)
+      : 0;
   for (const auto& seg : block.segments) {
     intent.expected_asset_uris.push_back(seg.asset_uri);
   }
@@ -429,14 +428,14 @@ inline PlaybackProofVerdict DetermineBlockVerdictFromSegments(
   return worst;
 }
 
-// Build a complete proof record (segment-aware).
+// Build a complete proof record (segment-aware). Session FPS is the authority.
 inline BlockPlaybackProof BuildPlaybackProof(
     const FedBlock& block,
     const BlockPlaybackSummary& summary,
-    int64_t frame_duration_ms,
+    const RationalFps& session_fps,
     const std::vector<SegmentProofRecord>& segment_proofs = {}) {
   BlockPlaybackProof proof;
-  proof.wanted = BuildIntent(block, frame_duration_ms);
+  proof.wanted = BuildIntent(block, session_fps);
   proof.showed = summary;
   proof.segment_proofs = segment_proofs;
 

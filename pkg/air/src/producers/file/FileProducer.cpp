@@ -2579,6 +2579,11 @@ namespace retrovue::producers::file
     return next_pts + frame_interval_us_ + pts_offset_us_;
   }
 
+  int64_t FileProducer::GetInputFrameDurationUs() const
+  {
+    return config_.target_fps.IsValid() ? config_.target_fps.FrameDurationUs() : 0;
+  }
+
   void FileProducer::AlignPTS(int64_t target_pts)
   {
     // Phase 7: Idempotent - only align once

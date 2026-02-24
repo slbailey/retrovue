@@ -17,6 +17,7 @@
 #include "retrovue/runtime/ProducerBus.h"
 #include "retrovue/runtime/ProgramFormat.h"
 #include "retrovue/producers/black/BlackFrameProducer.h"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 namespace retrovue {
 namespace buffer {
@@ -202,6 +203,12 @@ class PlayoutControl {
   //
   // ============================================================================
 
+  // Sets the session/house output FPS (INV-FPS-RESAMPLE, INV-FPS-TICK-PTS).
+  // PTS step on seamless switch uses this, not producer FPS. Call when session
+  // format is established (e.g. StartChannel). If never set, one-tick duration
+  // falls back to house default (FPS_30) when session fps invalid.
+  void SetSessionOutputFps(retrovue::blockplan::RationalFps fps);
+
   // Configures the fallback producer with the program format.
   // Must be called before fallback can be entered.
   void ConfigureFallbackProducer(const ProgramFormat& format,
@@ -245,6 +252,10 @@ class PlayoutControl {
   // May return nullptr if fallback is not configured or not active.
   [[nodiscard]] producers::black::BlackFrameProducer* GetFallbackProducer() const;
 
+  // Test-only: last PTS step (µs) used in activatePreviewAsLive for seamless switch.
+  // Used by PlayoutControlPtsStepUsesSessionFpsNotProducer to assert session FPS authority.
+  [[nodiscard]] int64_t LastPtsStepUsForTest() const { return last_pts_step_us_; }
+
  private:
   void TransitionLocked(RuntimePhase to, int64_t event_utc_us);
   void RecordTransitionLocked(RuntimePhase from, RuntimePhase to);
@@ -287,6 +298,12 @@ class PlayoutControl {
 
   // Sink attachment tracking (Phase 9.0: OutputBus/OutputSink)
   bool sink_attached_ = false;
+
+  // Session/house output FPS (INV-FPS-RESAMPLE). Authority for PTS step on switch.
+  retrovue::blockplan::RationalFps session_output_fps_{0, 1};
+
+  // Set in activatePreviewAsLive; read by LastPtsStepUsForTest() for contract tests.
+  mutable int64_t last_pts_step_us_ = 0;
 
   // BlackFrameProducer fallback state
   std::unique_ptr<producers::black::BlackFrameProducer> fallback_producer_;

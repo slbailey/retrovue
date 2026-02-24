@@ -111,6 +111,12 @@ class PipelineManager : public IPlayoutExecutionEngine {
     // P3.3b: Playback proof — wanted vs showed comparison.
     // Fired at fence, after on_block_summary.
     std::function<void(const BlockPlaybackProof&)> on_playback_proof;
+
+    // Optional: frame-selection cadence refresh after segment swap (test/observability).
+    // Invoked when repeat-vs-advance policy is reinitialized from new live source FPS.
+    // Parameters: old_source_fps, new_source_fps, output_fps, mode ("UPSAMPLE" or "DISABLED").
+    std::function<void(RationalFps old_source_fps, RationalFps new_source_fps,
+                       RationalFps output_fps, const std::string& mode)> on_frame_selection_cadence_refresh;
   };
 
   PipelineManager(BlockPlanSessionContext* ctx,
@@ -320,8 +326,12 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;
   std::optional<IncomingState> GetIncomingSegmentState(int32_t to_seg) const;
 
-  // Presentation cadence: set tick_cadence_enabled_ and Bresenham params from live block input FPS.
-  void InitTickCadenceForLiveBlock();
+  // Frame-selection cadence: set frame_selection_cadence_enabled_ and Bresenham params from live block input FPS.
+  // Tick grid is fixed by session output FPS (house format); this only updates repeat-vs-advance policy.
+  void InitFrameSelectionCadenceForLiveBlock();
+
+  // After segment swap: refresh frame-selection cadence from current LIVE source FPS (preserves duration).
+  void RefreshFrameSelectionCadenceFromLiveSource(const char* reason);
 
   // Static helper: build synthetic single-segment FedBlock for segment prep.
   static FedBlock MakeSyntheticSegmentBlock(
@@ -353,11 +363,12 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool degraded_take_active_ = false;
   buffer::Frame last_good_video_frame_;
   bool has_last_good_video_frame_ = false;
-  // Presentation cadence for upsampling (e.g., 24→30): repeat-vs-advance decision (TickLoop only).
-  bool tick_cadence_enabled_ = false;
-  int64_t tick_cadence_budget_num_ = 0;   // Bresenham accumulator
-  int64_t tick_cadence_budget_den_ = 1;    // Threshold to advance
-  int64_t tick_cadence_increment_ = 0;     // Amount to add per tick
+  // Frame-selection cadence (repeat-vs-advance) for upsampling (e.g., 24→30). TickLoop only.
+  bool frame_selection_cadence_enabled_ = false;
+  int64_t frame_selection_cadence_budget_num_ = 0;   // Bresenham accumulator
+  int64_t frame_selection_cadence_budget_den_ = 1;   // Threshold to advance
+  int64_t frame_selection_cadence_increment_ = 0;   // Amount to add per tick
+  RationalFps last_source_fps_{0, 1};      // Last live source FPS (for refresh-on-segment-swap).
   // Fingerprint context for held frame (no-unintentional-black: H must match last A content).
   uint32_t last_good_y_crc32_ = 0;
   std::string last_good_asset_uri_;
