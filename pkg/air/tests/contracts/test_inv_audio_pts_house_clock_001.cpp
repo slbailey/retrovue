@@ -100,66 +100,96 @@ TEST(INV_AUDIO_PTS_HOUSE_CLOCK_001, MpegTSOutputSink_AudioPTS_IgnoresContentPTS_
   // Give sink time to start mux loop
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   
-  // Create 3 audio frames with deliberately wrong/non-monotonic pts_us
+  // =========================================================================
+  // CRITICAL: Add dummy video frame to drive mux loop
+  // =========================================================================
+  // Mux loop is video-driven. Audio drains only when video frame is dequeued.
+  // Video PTS defines cutoff: audio_frame.pts_us <= video_frame.metadata.pts
+  // =========================================================================
+  
+  Frame video_frame;
+  video_frame.metadata.pts = 1'000'000;   // 1 second in microseconds
+  video_frame.metadata.dts = 1'000'000;
+  video_frame.metadata.duration = 1.0 / 30.0;
+  video_frame.width = 640;
+  video_frame.height = 480;
+  // Allocate minimal YUV420 data (not actually used by FakeEncoder)
+  size_t yuv_size = video_frame.width * video_frame.height * 3 / 2;
+  video_frame.data.resize(yuv_size, 0);
+  
+  sink->ConsumeVideo(video_frame);
+  
+  // =========================================================================
+  // Create 3 audio frames with garbage/non-monotonic pts_us
+  // =========================================================================
+  // These pts_us values are GARBAGE and should be IGNORED.
+  // Expected behavior: encoded PTS is monotonic and sample-based.
+  // Adjusted to be <= video PTS (1'000'000) for mux loop gating.
+  // =========================================================================
+  
   constexpr int nb_samples_per_frame = 1024;
-  constexpr int sample_rate = 48000;
-  constexpr int channels = 2;
   
   std::vector<AudioFrame> frames(3);
   
-  // Frame 1: pts_us = 1'000'000 (1 second) - GARBAGE
+  // Frame 1: pts_us = 500'000 (0.5 sec) - GARBAGE but <= video PTS
   frames[0].nb_samples = nb_samples_per_frame;
-  frames[0].sample_rate = sample_rate;
-  frames[0].channels = channels;
-  frames[0].pts_us = 1'000'000;
-  frames[0].data.resize(nb_samples_per_frame * channels * sizeof(int16_t), 0);
+  frames[0].sample_rate = 48000;  // 48000
+  frames[0].channels = 2;       // 2
+  frames[0].pts_us = 500'000;  // GARBAGE VALUE (should be ignored)
+  frames[0].data.resize(nb_samples_per_frame * frames[0].channels * sizeof(int16_t), 0);
   
-  // Frame 2: pts_us = 100 (NON-MONOTONIC! earlier than frame 1) - GARBAGE
+  // Frame 2: pts_us = 100 (NON-MONOTONIC! Way earlier than frame 1)
   frames[1].nb_samples = nb_samples_per_frame;
-  frames[1].sample_rate = sample_rate;
-  frames[1].channels = channels;
-  frames[1].pts_us = 100;
-  frames[1].data.resize(nb_samples_per_frame * channels * sizeof(int16_t), 0);
+  frames[1].sample_rate = 48000;
+  frames[1].channels = 2;
+  frames[1].pts_us = 100;  // GARBAGE VALUE (should be ignored)
+  frames[1].data.resize(nb_samples_per_frame * frames[1].channels * sizeof(int16_t), 0);
   
-  // Frame 3: pts_us = 50'000'000 (50 seconds - huge jump) - GARBAGE
+  // Frame 3: pts_us = 900'000 (0.9 sec - another jump)
   frames[2].nb_samples = nb_samples_per_frame;
-  frames[2].sample_rate = sample_rate;
-  frames[2].channels = channels;
-  frames[2].pts_us = 50'000'000;
-  frames[2].data.resize(nb_samples_per_frame * channels * sizeof(int16_t), 0);
+  frames[2].sample_rate = 48000;
+  frames[2].channels = 2;
+  frames[2].pts_us = 900'000;  // GARBAGE VALUE (should be ignored)
+  frames[2].data.resize(nb_samples_per_frame * frames[2].channels * sizeof(int16_t), 0);
   
-  // Push frames to sink
+  // Push audio frames to sink
   for (const auto& frame : frames) {
     sink->ConsumeAudio(frame);
   }
   
-  // Give mux loop time to process
-  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  // Give mux loop time to process video + audio
+  // Video dequeue will trigger audio drain
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
   
   // Stop sink
   sink->Stop();
   sink.reset();
   close(write_fd);
   
+  // =========================================================================
   // Verify captured PTS values
+  // =========================================================================
+  
   const auto& pts_values = fake_encoder_ptr->captured_audio_pts90k;
   
   ASSERT_GE(pts_values.size(), 3u) 
-      << "Expected at least 3 audio frames to be encoded";
+      << "Expected at least 3 audio frames to be encoded. "
+      << "Got: " << pts_values.size()
+      << " (if 0, mux loop may not be processing audio)";
   
-  // 1. Verify monotonicity (strictly increasing)
+  // 1️⃣ Verify monotonicity (strictly increasing)
   for (size_t i = 1; i < pts_values.size(); ++i) {
     EXPECT_GT(pts_values[i], pts_values[i - 1])
         << "Audio PTS must be strictly increasing. "
         << "PTS[" << i - 1 << "] = " << pts_values[i - 1] << ", "
         << "PTS[" << i << "] = " << pts_values[i]
-        << " (FAILS if using audio_frame.pts_us which is non-monotonic)";
+        << " (FAILS if using audio_frame.pts_us which is non-monotonic: 500000, 100, 900000)";
   }
   
-  // 2. Verify PTS deltas match sample-based calculation
+  // 2️⃣ Verify PTS deltas match sample-based calculation
   // Expected delta: (nb_samples * 90000) / sample_rate
   // For 1024 samples at 48kHz: (1024 * 90000) / 48000 = 1920
-  int64_t expected_delta_90k = (nb_samples_per_frame * 90000) / sample_rate;
+  int64_t expected_delta_90k = (nb_samples_per_frame * 90000) / 48000;
   
   for (size_t i = 1; i < std::min(pts_values.size(), size_t(3)); ++i) {
     int64_t actual_delta = pts_values[i] - pts_values[i - 1];
@@ -168,29 +198,29 @@ TEST(INV_AUDIO_PTS_HOUSE_CLOCK_001, MpegTSOutputSink_AudioPTS_IgnoresContentPTS_
         << "Audio PTS delta must match sample-based calculation. "
         << "Expected: " << expected_delta_90k << ", "
         << "Actual: " << actual_delta
-        << " (FAILS if using audio_frame.pts_us)";
+        << " (FAILS if using audio_frame.pts_us - deltas would be inconsistent)";
   }
   
-  // 3. Verify PTS does NOT match transformed content pts_us
+  // 3️⃣ Verify PTS does NOT match transformed content pts_us
   // If sink is using pts_us, we'd see:
-  //   frame[0]: (1'000'000 * 90) / 1000 = 90'000
+  //   frame[0]: (500'000 * 90) / 1000 = 45'000
   //   frame[1]: (100 * 90) / 1000 = 9
-  //   frame[2]: (50'000'000 * 90) / 1000 = 4'500'000
+  //   frame[2]: (900'000 * 90) / 1000 = 81'000
   
   if (pts_values.size() >= 2) {
-    int64_t wrong_pts_0 = (frames[0].pts_us * 90) / 1000;
-    int64_t wrong_pts_1 = (frames[1].pts_us * 90) / 1000;
+    int64_t wrong_pts_0 = (frames[0].pts_us * 90) / 1000;  // 45000
+    int64_t wrong_pts_1 = (frames[1].pts_us * 90) / 1000;  // 9
     
-    // If using pts_us, frame[1] PTS would be 9, way smaller than frame[0]'s 90000
-    // The delta would be negative: 9 - 90000 = -89991
+    // If using pts_us, frame[1] PTS would be 9, way smaller than frame[0]'s 45000
+    // The delta would be negative: 9 - 45000 = -44991
     int64_t delta_0_1 = pts_values[1] - pts_values[0];
-    int64_t wrong_delta = wrong_pts_1 - wrong_pts_0;  // -89991
+    int64_t wrong_delta = wrong_pts_1 - wrong_pts_0;  // -44991
     
     EXPECT_NE(delta_0_1, wrong_delta)
         << "Audio PTS delta MUST NOT match content pts_us delta. "
         << "Sample-based delta: ~" << expected_delta_90k << ", "
         << "If using pts_us delta would be: " << wrong_delta
-        << " (negative because pts_us is non-monotonic)";
+        << " (negative because pts_us is non-monotonic: 500000, 100, 900000)";
     
     // Explicitly check frame[1] is NOT the wrong value
     EXPECT_NE(pts_values[1], wrong_pts_1)
@@ -199,7 +229,9 @@ TEST(INV_AUDIO_PTS_HOUSE_CLOCK_001, MpegTSOutputSink_AudioPTS_IgnoresContentPTS_
         << "This FAILS if using audio_frame.pts_us.";
   }
   
+  // =========================================================================
   // Summary: This test FAILS if MpegTSOutputSink uses audio_frame.pts_us
   // It PASSES only when using sample clock for PTS derivation.
+  // =========================================================================
 }
 
