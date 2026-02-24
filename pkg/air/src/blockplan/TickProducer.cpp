@@ -40,6 +40,16 @@ int64_t TickProducer::CtUs(int64_t k) const {
   return (k * 1000000 * output_fps_.den) / output_fps_.num;
 }
 
+int64_t TickProducer::InputFramePeriodMs() const {
+  if (input_fps_num_ <= 0 || input_fps_den_ <= 0) {
+    return 33;  // Fallback when input FPS not yet set (e.g. before decoder open).
+  }
+  // Compute period in µs (rational integer: 1e6 * den / num), then round to nearest ms.
+  // Avoids truncation bias for fractional FPS (e.g. 60000/1001 → 16683 µs → 17 ms rounded).
+  const int64_t period_us = (1'000'000LL * input_fps_den_) / input_fps_num_;
+  return (period_us + 500) / 1000;
+}
+
 // =============================================================================
 // UpdateResampleMode — OFF / DROP / CADENCE from rational input vs output FPS.
 // Uses 128-bit intermediates to avoid overflow. No floats, no epsilon.
@@ -301,7 +311,7 @@ void TickProducer::PrimeFirstFrame() {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
+  next_frame_offset_ms_ = decoded_pts_ms + InputFramePeriodMs();
 
   primed_frame_ = FrameData{
       std::move(video_frame),
@@ -591,7 +601,7 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
   }
 
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
+  next_frame_offset_ms_ = decoded_pts_ms + InputFramePeriodMs();
 
   FrameData result{
       std::move(video_frame),

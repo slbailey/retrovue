@@ -191,6 +191,9 @@ class TickProducer : public producers::IProducer,
   int64_t CtUs(int64_t k) const;
   // One output frame period in ms (for next_frame_offset look-ahead and display).
   int64_t FramePeriodMs() const { return output_fps_.num > 0 ? (1000 * output_fps_.den) / output_fps_.num : 33; }
+  // One input (source) frame period in ms. Uses rational input_fps_num_/input_fps_den_, computed
+  // in µs then rounded to nearest ms (e.g. 60000/1001 → ~16.683ms → 17ms). Fallback 33 if invalid.
+  int64_t InputFramePeriodMs() const;
 
   // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
   // Audio vector contains only this frame's own decoded audio (0-2 frames).
