@@ -186,6 +186,11 @@ namespace retrovue::producers::file
     // Returns the PTS that the next decoded frame will have.
     int64_t GetNextPTS() const;
 
+    // Returns one *input* frame duration in µs from this producer's target_fps config.
+    // Input fps may affect frame-selection cadence only; never use for output tick cadence
+    // or PTS step (INV-FPS-RESAMPLE, INV-FPS-TICK-PTS). Use session/house RationalFps for that.
+    int64_t GetInputFrameDurationUs() const;
+
     // Aligns PTS to continue from a target PTS (for seamless switching).
     // Sets the PTS offset so that the next frame will have target_pts.
     // Idempotent: only aligns once, subsequent calls are no-ops.

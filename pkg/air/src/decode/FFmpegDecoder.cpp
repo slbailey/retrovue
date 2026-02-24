@@ -448,10 +448,14 @@ int FFmpegDecoder::GetVideoHeight() const {
 
 blockplan::RationalFps FFmpegDecoder::GetVideoRationalFps() const {
   if (!format_ctx_ || video_stream_index_ < 0) return blockplan::RationalFps{0,1};
-  
+
   AVStream* stream = format_ctx_->streams[video_stream_index_];
+  // Prefer avg_frame_rate (true average), else r_frame_rate (container/codec hint).
+  // Do not overwrite source fps with output fps; invalid = UNKNOWN, keep prior cadence.
   AVRational fps = stream->avg_frame_rate;
-  
+  if (fps.num <= 0 || fps.den <= 0) {
+    fps = stream->r_frame_rate;
+  }
   if (fps.num <= 0 || fps.den <= 0) return blockplan::RationalFps{0,1};
   return blockplan::RationalFps{fps.num, fps.den};
 }

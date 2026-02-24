@@ -5,6 +5,7 @@
 
 #include "retrovue/decode/FrameProducer.h"
 #include "retrovue/decode/FFmpegDecoder.h"
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -65,8 +66,15 @@ FrameProducer::FrameProducer(const ProducerConfig& config,
       teardown_requested_(false),
       drain_timeout_(std::chrono::milliseconds(0)),
       stub_pts_counter_(0),
-      frame_interval_us_(static_cast<int64_t>(
-          std::max(1.0, std::round(1'000'000.0 / config_.target_fps)))),
+      frame_interval_us_([&]() {
+        // INV-FPS-RESAMPLE: rational tick duration, no round(1e6/fps).
+        retrovue::blockplan::RationalFps fps_r =
+            retrovue::blockplan::DeriveRationalFPS(config_.target_fps);
+        if (!fps_r.IsValid()) {
+          fps_r = retrovue::blockplan::FPS_30;
+        }
+        return std::max(int64_t{1}, fps_r.FrameDurationUs());
+      }()),
       next_stub_deadline_utc_(0) {
 }
 

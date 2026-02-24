@@ -18,6 +18,8 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/telemetry/MetricsExporter.h"
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 static bool NoPcrPacing() {
   static bool checked = false;
@@ -398,6 +400,19 @@ void MpegTSOutputSink::MuxLoop() {
   // buffer health checks, and diagnostic checks.
   // =========================================================================
 
+  // One-tick duration from session rational (INV-FPS-RESAMPLE). Prefer fps_num/fps_den when set.
+  retrovue::blockplan::RationalFps session_fps(0, 1);
+  if (config_.fps_num > 0 && config_.fps_den > 0) {
+    session_fps = retrovue::blockplan::RationalFps(config_.fps_num, config_.fps_den);
+  }
+  if (!session_fps.IsValid()) {
+    session_fps = retrovue::blockplan::DeriveRationalFPS(config_.target_fps);
+  }
+  if (!session_fps.IsValid()) {
+    session_fps = retrovue::blockplan::FPS_30;
+  }
+  const int64_t frame_duration_us = session_fps.FrameDurationUs();
+
   // Pre-allocate black fallback frame ONCE (no allocation in hot path)
   buffer::Frame prealloc_black_frame;
   {
@@ -405,7 +420,7 @@ void MpegTSOutputSink::MuxLoop() {
     prealloc_black_frame.height = config_.target_height;
     prealloc_black_frame.metadata.pts = 0;  // Will be set per-emit
     prealloc_black_frame.metadata.dts = 0;
-    prealloc_black_frame.metadata.duration = 1.0 / config_.target_fps;
+    prealloc_black_frame.metadata.duration = session_fps.FrameDurationSec();
     prealloc_black_frame.metadata.asset_uri = "fallback://black";
     prealloc_black_frame.metadata.has_ct = true;
 
@@ -422,8 +437,6 @@ void MpegTSOutputSink::MuxLoop() {
   int64_t fallback_frame_count = 0;
   int64_t last_fallback_pts_us = 0;
   bool in_fallback_mode = false;
-
-  const int64_t frame_duration_us = static_cast<int64_t>(1'000'000.0 / config_.target_fps);
 
   // =========================================================================
   // INV-FALLBACK-001: Upstream starvation detection

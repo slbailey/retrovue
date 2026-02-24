@@ -69,7 +69,8 @@ using retrovue::util::Logger;
 static constexpr int kMinAudioPrimeMs = 500;
 // Segment swap gate: minimum incoming buffer depth before swapping (avoids async fill race).
 static constexpr int kMinSegmentSwapAudioMs = 500;
-static constexpr int kMinSegmentSwapVideoFrames = 1;
+// At least 2 frames so one can be popped while fill thread keeps the buffer fed (reduces flicker).
+static constexpr int kMinSegmentSwapVideoFrames = 2;
 
 // B-chain fill: minimum lead time (frames/ms) so segment prep reaches target depth before seam.
 static constexpr int kMinSegmentPrepHeadroomMs = 250;
@@ -760,10 +761,10 @@ void PipelineManager::Run() {
 
   // INV-VIDEO-LOOKAHEAD-001: Create video lookahead buffer.
   // Background fill thread decodes ahead; tick loop pops one frame per tick.
-  // Target depth: ~500ms at output FPS (e.g. 15 frames at 30fps).
+  // Target depth: ~1s at output FPS (e.g. 30 frames at 30fps) for headroom when decode ~= consumption.
   int video_target_depth = bcfg.video_target_depth_frames > 0
       ? bcfg.video_target_depth_frames
-      : std::max(1, static_cast<int>((ctx_->fps.num / 2) / (ctx_->fps.den > 0 ? ctx_->fps.den : 1)));
+      : std::max(1, static_cast<int>(ctx_->fps.num / (ctx_->fps.den > 0 ? ctx_->fps.den : 1)));
   int video_low_water = bcfg.video_low_water_frames > 0
       ? bcfg.video_low_water_frames
       : std::max(1, video_target_depth / 3);
@@ -936,18 +937,17 @@ void PipelineManager::Run() {
     }
 
     // Begin segment proof tracking for first segment.
+    // INV-FPS-RESAMPLE / INV-BLOCK-WALLCLOCK-FENCE-001: segment frame count from
+    // rational fps_num/fps_den only (ceil(seg_duration_ms * fps_num / (fps_den * 1000))).
     if (!live_parent_block_.segments.empty()) {
       const auto& seg0 = live_parent_block_.segments[0];
       {
-        int64_t frame_ms = clock->FrameDurationMs();
-        int64_t seg_frames = (frame_ms > 0)
-            ? (seg0.segment_duration_ms + frame_ms - 1) / frame_ms
-            : 0;
+        const int64_t seg_frames = ctx_->fps.FramesFromDurationCeilMs(seg0.segment_duration_ms);
         block_acc.BeginSegment(0, seg0.asset_uri, seg_frames, seg0.segment_type, seg0.event_id);
       }
     }
 
-    InitTickCadenceForLiveBlock();
+    InitFrameSelectionCadenceForLiveBlock();
 
     // ====================================================================
     // INV-AUDIO-PRIME-002: Hard gate — do not start tick loop until
@@ -1180,9 +1180,12 @@ void PipelineManager::Run() {
     }
 
     if (!preview_ && seam_preparer_->HasBlockResult()) {
-      int64_t headroom_ms = (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index)
-          ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock->FrameDurationMs())
-          : -1;
+      // Rational ms from frame delta (INV-FPS-RESAMPLE): no FrameDurationMs().
+      int64_t headroom_ms = -1;
+      if (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index && ctx_->fps.IsValid()) {
+        const int64_t delta_frames = block_fence_frame_ - session_frame_index;
+        headroom_ms = (delta_frames * 1000 * ctx_->fps.den) / ctx_->fps.num;
+      }
       preview_ = TryTakePreviewProducer(headroom_ms);
       if (preview_) {
         auto* ptp = AsTickProducer(preview_.get());
@@ -1307,7 +1310,13 @@ void PipelineManager::Run() {
     if (take_b && preview_video_buffer_) {
       v_src = preview_video_buffer_.get();        // Block swap: B buffers
     } else if (take_segment && segment_b_video_buffer_) {
-      v_src = segment_b_video_buffer_.get();  // Segment seam path (video may pre-roll on B)
+      // Only take from segment B when it has at least one frame; otherwise keep
+      // taking from A (or hold) to avoid one-frame flicker (black or wrong frame).
+      if (segment_b_video_buffer_->IsPrimed() && segment_b_video_buffer_->DepthFrames() > 0) {
+        v_src = segment_b_video_buffer_.get();
+      } else {
+        v_src = video_buffer_.get();  // Defer to B until B is ready
+      }
     } else if (take_b) {
       v_src = preview_video_buffer_.get();         // Block swap: may be null
     } else {
@@ -1396,17 +1405,18 @@ void PipelineManager::Run() {
     const bool a_was_primed = (!take_b && v_src) ? v_src->IsPrimed() : false;
 
     // ========================================================================
-    // Presentation cadence: repeat-vs-advance (TickLoop only)
+    // Frame-selection cadence: repeat-vs-advance (TickLoop only). Tick grid is
+    // fixed by session output FPS; this block only decides advance vs repeat.
     // Repeat ticks must NOT call TryPopFrame — re-encode last_good_video_frame_
     // so FillLoop is not forced to match output tick rate (e.g. 24fps → ~24 decodes/sec).
     // ========================================================================
     bool should_advance_video = true;
     bool is_cadence_repeat = false;
 
-    if (tick_cadence_enabled_ && !take_b && v_src) {
-      tick_cadence_budget_num_ += tick_cadence_increment_;
-      if (tick_cadence_budget_num_ >= tick_cadence_budget_den_) {
-        tick_cadence_budget_num_ -= tick_cadence_budget_den_;
+    if (frame_selection_cadence_enabled_ && !take_b && v_src) {
+      frame_selection_cadence_budget_num_ += frame_selection_cadence_increment_;
+      if (frame_selection_cadence_budget_num_ >= frame_selection_cadence_budget_den_) {
+        frame_selection_cadence_budget_num_ -= frame_selection_cadence_budget_den_;
         should_advance_video = true;
       } else {
         should_advance_video = false;
@@ -1469,9 +1479,11 @@ void PipelineManager::Run() {
         if (entering_degraded) {
           degraded_entered_frame_index_ = session_frame_index;
           degraded_escalated_to_standby_ = false;
-          int64_t headroom_ms = (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index)
-              ? static_cast<int64_t>((block_fence_frame_ - session_frame_index) * clock->FrameDurationMs())
-              : -1;
+          int64_t headroom_ms = -1;
+          if (block_fence_frame_ != INT64_MAX && block_fence_frame_ > session_frame_index && ctx_->fps.IsValid()) {
+            const int64_t delta_frames = block_fence_frame_ - session_frame_index;
+            headroom_ms = (delta_frames * 1000 * ctx_->fps.den) / ctx_->fps.num;
+          }
           { std::ostringstream oss;
             oss << "[PipelineManager] INV-FENCE-TAKE-READY-001 VIOLATION DEGRADED_TAKE_MODE"
                 << " tick=" << session_frame_index
@@ -1483,8 +1495,12 @@ void PipelineManager::Run() {
         }
         degraded_take_active_ = true;
         // Bounded escalation: after HOLD_MAX_MS switch to standby (slot 'S') — continuous output, no tick skip.
-        const int64_t degraded_elapsed_ms = (session_frame_index - degraded_entered_frame_index_) *
-            static_cast<int64_t>(clock->FrameDurationMs());
+        // Rational ms from frame delta (INV-FPS-RESAMPLE).
+        int64_t degraded_elapsed_ms = 0;
+        if (ctx_->fps.IsValid()) {
+          const int64_t delta_frames = session_frame_index - degraded_entered_frame_index_;
+          degraded_elapsed_ms = (delta_frames * 1000 * ctx_->fps.den) / ctx_->fps.num;
+        }
         if (degraded_elapsed_ms >= kDegradedHoldMaxMs) {
           degraded_escalated_to_standby_ = true;
         }
@@ -1511,12 +1527,20 @@ void PipelineManager::Run() {
             << " decoder_returned_empty=" << (preview_ && AsTickProducer(preview_.get())->HasDecoder() && v_src && !v_src->IsPrimed() ? "likely" : "n/a");
         Logger::Info(oss.str()); }
       }
+    } else if (take_segment && has_last_good_video_frame_) {
+      // Segment seam: segment B buffer temporarily empty (e.g. single frame drained).
+      // Hold last displayed frame to avoid flicker between content and black pad.
+      session_encoder->encodeFrame(last_good_video_frame_, video_pts_90k);
+      is_pad = false;
+      take_source_char = 'H';  // Hold at segment seam
     } else if (a_was_primed) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
       { std::ostringstream oss;
         oss << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
             << " frame=" << session_frame_index
             << " buffer_depth=" << v_src->DepthFrames()
+            << " low_water=" << v_src->LowWaterFrames()
+            << " target=" << v_src->TargetDepthFrames()
             << " total_pushed=" << v_src->TotalFramesPushed()
             << " total_popped=" << v_src->TotalFramesPopped();
         Logger::Error(oss.str()); }
@@ -1673,7 +1697,7 @@ void PipelineManager::Run() {
         auto summary = block_acc.Finalize();
         ct_at_fence_ms = summary.last_block_ct_ms;
         auto proof = BuildPlaybackProof(
-            outgoing_block, summary, clock->FrameDurationMs(),
+            outgoing_block, summary, ctx_->fps,
             block_acc.GetSegmentProofs());
         outgoing_summary = std::move(summary);
         outgoing_proof = std::move(proof);
@@ -1739,9 +1763,22 @@ void PipelineManager::Run() {
         // If swapped via fallback, create fresh A buffers and start fill.
         // Outgoing buffers are moved out; do not reuse them.
         if (swapped) {
+          int fallback_video_target = 15;
+          int fallback_video_low = 5;
+          if (outgoing_video_buffer) {
+            fallback_video_target = outgoing_video_buffer->TargetDepthFrames();
+            fallback_video_low = outgoing_video_buffer->LowWaterFrames();
+          } else {
+            const auto& vcfg = ctx_->buffer_config;
+            fallback_video_target = vcfg.video_target_depth_frames > 0
+                ? vcfg.video_target_depth_frames
+                : std::max(1, static_cast<int>(ctx_->fps.num / (ctx_->fps.den > 0 ? ctx_->fps.den : 1)));
+            fallback_video_low = vcfg.video_low_water_frames > 0
+                ? vcfg.video_low_water_frames
+                : std::max(1, fallback_video_target / 3);
+          }
           video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
-              outgoing_video_buffer ? outgoing_video_buffer->TargetDepthFrames() : 15,
-              outgoing_video_buffer ? outgoing_video_buffer->LowWaterFrames() : 5);
+              fallback_video_target, fallback_video_low);
           video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
           const auto& fbcfg = ctx_->buffer_config;
           int fa_target = fbcfg.audio_target_depth_ms;
@@ -1755,18 +1792,24 @@ void PipelineManager::Run() {
               AsTickProducer(live_.get()), audio_buffer_.get(),
               AsTickProducer(live_.get())->GetInputRationalFps(), ctx_->fps,
               &ctx_->stop_requested);
-          InitTickCadenceForLiveBlock();
+          InitFrameSelectionCadenceForLiveBlock();
         }
       }
 
       if (!swapped) {
         // No B available — PADDED_GAP.
         live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
-        // Fresh buffers — outgoing buffers will die with the deferred fill thread.
-        video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
+        // Fresh buffers — use same video target/low as session start.
+        const auto& gbcfg = ctx_->buffer_config;
+        int gap_video_target = gbcfg.video_target_depth_frames > 0
+            ? gbcfg.video_target_depth_frames
+            : std::max(1, static_cast<int>(ctx_->fps.num / (ctx_->fps.den > 0 ? ctx_->fps.den : 1)));
+        int gap_video_low = gbcfg.video_low_water_frames > 0
+            ? gbcfg.video_low_water_frames
+            : std::max(1, gap_video_target / 3);
+        video_buffer_ = std::make_unique<VideoLookaheadBuffer>(gap_video_target, gap_video_low);
         video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
         {
-          const auto& gbcfg = ctx_->buffer_config;
           int ga_target = gbcfg.audio_target_depth_ms;
           int ga_low = gbcfg.audio_low_water_ms > 0
               ? gbcfg.audio_low_water_ms
@@ -1831,14 +1874,11 @@ void PipelineManager::Run() {
           callbacks_.on_segment_start(-1, 0, live_parent_block_, session_frame_index);
         }
 
-        // Begin segment proof tracking for first segment.
+        // Begin segment proof tracking for first segment (rational frame count).
         if (!live_parent_block_.segments.empty()) {
           const auto& seg0 = live_parent_block_.segments[0];
           {
-            int64_t frame_ms = clock->FrameDurationMs();
-            int64_t seg_frames = (frame_ms > 0)
-                ? (seg0.segment_duration_ms + frame_ms - 1) / frame_ms
-                : 0;
+            const int64_t seg_frames = ctx_->fps.FramesFromDurationCeilMs(seg0.segment_duration_ms);
             block_acc.BeginSegment(0, seg0.asset_uri, seg_frames, seg0.segment_type, seg0.event_id);
           }
         }
@@ -2060,6 +2100,10 @@ void PipelineManager::Run() {
 
         PerformSegmentSwap(session_frame_index);
 
+        // Cadence refresh: new LIVE segment may have different source FPS; reinit tick
+        // cadence so duration is preserved (e.g. 23.976→30 upsample after 30→30 segment).
+        RefreshFrameSelectionCadenceFromLiveSource("segment_swap");
+
         // INV-SEAM-AUDIO-001: only after commit may tick loop consume segment-B audio.
         segment_swap_committed = true;
         a_src = SelectAudioSourceForTick(
@@ -2075,14 +2119,12 @@ void PipelineManager::Run() {
               << " live_audio_depth_ms=" << (a_src ? a_src->DepthMs() : -1);
           Logger::Info(oss.str()); }
 
-        // Begin segment proof tracking for the new segment.
+        // Begin segment proof tracking for the new segment (rational frame count).
         if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
           const auto& seg = live_parent_block_.segments[current_segment_index_];
+          const int64_t seg_frames = ctx_->fps.FramesFromDurationCeilMs(seg.segment_duration_ms);
           block_acc.BeginSegment(
-              current_segment_index_, seg.asset_uri,
-              (clock->FrameDurationMs() > 0)
-                  ? (seg.segment_duration_ms + clock->FrameDurationMs() - 1) / clock->FrameDurationMs()
-                  : 0,
+              current_segment_index_, seg.asset_uri, seg_frames,
               seg.segment_type, seg.event_id);
         }
       }
@@ -2564,7 +2606,7 @@ void PipelineManager::Run() {
             live_tp(), audio_buffer_.get(),
             live_tp()->GetInputRationalFps(), ctx_->fps,
             &ctx_->stop_requested);
-        InitTickCadenceForLiveBlock();
+        InitFrameSelectionCadenceForLiveBlock();
 
         // INV-SEAM-SEG: Block activation — extract boundaries and compute segment seam frames.
         block_activation_frame_ = session_frame_index;
@@ -2587,14 +2629,11 @@ void PipelineManager::Run() {
           callbacks_.on_segment_start(-1, 0, live_parent_block_, session_frame_index);
         }
 
-        // Begin segment proof tracking for first segment.
+        // Begin segment proof tracking for first segment (rational frame count).
         if (!live_parent_block_.segments.empty()) {
           const auto& seg0 = live_parent_block_.segments[0];
           {
-            int64_t frame_ms = clock->FrameDurationMs();
-            int64_t seg_frames = (frame_ms > 0)
-                ? (seg0.segment_duration_ms + frame_ms - 1) / frame_ms
-                : 0;
+            const int64_t seg_frames = ctx_->fps.FramesFromDurationCeilMs(seg0.segment_duration_ms);
             block_acc.BeginSegment(0, seg0.asset_uri, seg_frames, seg0.segment_type, seg0.event_id);
           }
         }
@@ -2875,40 +2914,97 @@ FedBlock PipelineManager::MakeSyntheticSegmentBlock(
 }
 
 // =============================================================================
-// InitTickCadenceForLiveBlock — set tick_cadence_* from live block input FPS
-// Call after StartFilling when the live block has just been set (first block or post-rotation).
+// InitFrameSelectionCadenceForLiveBlock — set frame_selection_cadence_* from live block input FPS.
+// Tick grid is fixed by session output FPS (house format). This function only updates
+// repeat-vs-advance policy (frame-selection cadence). Call after StartFilling when the
+// live block has just been set (first block or post-rotation).
 // =============================================================================
 
-void PipelineManager::InitTickCadenceForLiveBlock() {
+void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
   ITickProducer* tp = AsTickProducer(live_.get());
   RationalFps input_fps = tp->GetInputRationalFps();
   RationalFps output_fps = ctx_->fps;
+
+  last_source_fps_ = input_fps;
 
   bool is_upsampling = (static_cast<int64_t>(input_fps.num) * output_fps.den) <
                       (static_cast<int64_t>(output_fps.num) * input_fps.den);
 
   if (is_upsampling && input_fps.num > 0 && input_fps.den > 0 &&
       output_fps.num > 0 && output_fps.den > 0) {
-    tick_cadence_enabled_ = true;
-    tick_cadence_budget_num_ = 0;
-    tick_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * input_fps.den;
-    tick_cadence_increment_ = static_cast<int64_t>(input_fps.num) * output_fps.den;
+    frame_selection_cadence_enabled_ = true;
+    frame_selection_cadence_budget_num_ = 0;
+    frame_selection_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * input_fps.den;
+    frame_selection_cadence_increment_ = static_cast<int64_t>(input_fps.num) * output_fps.den;
 
     { std::ostringstream oss;
-      oss << "[PipelineManager] TICK_CADENCE_INIT"
+      oss << "[PipelineManager] FRAME_SELECTION_CADENCE_INIT"
           << " input_fps=" << input_fps.num << "/" << input_fps.den
           << " output_fps=" << output_fps.num << "/" << output_fps.den
-          << " increment=" << tick_cadence_increment_
-          << " threshold=" << tick_cadence_budget_den_;
+          << " increment=" << frame_selection_cadence_increment_
+          << " threshold=" << frame_selection_cadence_budget_den_;
       Logger::Info(oss.str()); }
   } else {
-    tick_cadence_enabled_ = false;
+    frame_selection_cadence_enabled_ = false;
     { std::ostringstream oss;
-      oss << "[PipelineManager] TICK_CADENCE_DISABLED"
+      oss << "[PipelineManager] FRAME_SELECTION_CADENCE_DISABLED"
           << " is_upsampling=" << is_upsampling
           << " input_fps=" << input_fps.num << "/" << input_fps.den
           << " output_fps=" << output_fps.num << "/" << output_fps.den;
       Logger::Info(oss.str()); }
+  }
+}
+
+// =============================================================================
+// RefreshFrameSelectionCadenceFromLiveSource — after segment swap, reinit
+// repeat-vs-advance policy from new LIVE source FPS so duration is preserved (no speed-up).
+// Tick grid is fixed by session output FPS; this only updates frame-selection cadence.
+// =============================================================================
+
+void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* reason) {
+  ITickProducer* tp = AsTickProducer(live_.get());
+  RationalFps new_fps = tp->GetInputRationalFps();
+  RationalFps output_fps = ctx_->fps;
+
+  if (new_fps.num <= 0 || new_fps.den <= 0) {
+    { std::ostringstream oss;
+      oss << "[PipelineManager] FRAME_SELECTION_CADENCE_REFRESH reason=" << reason
+          << " source_fps=UNKNOWN (invalid) keeping_prior_policy";
+      Logger::Info(oss.str()); }
+    return;
+  }
+
+  if (new_fps == last_source_fps_) {
+    return;  // No change, no log.
+  }
+
+  RationalFps old_fps = last_source_fps_;
+  last_source_fps_ = new_fps;
+
+  bool is_upsampling = (static_cast<int64_t>(new_fps.num) * output_fps.den) <
+                      (static_cast<int64_t>(output_fps.num) * new_fps.den);
+
+  const char* mode = is_upsampling ? "UPSAMPLE" : "DISABLED";
+
+  if (is_upsampling && output_fps.num > 0 && output_fps.den > 0) {
+    frame_selection_cadence_enabled_ = true;
+    frame_selection_cadence_budget_num_ = 0;
+    frame_selection_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * new_fps.den;
+    frame_selection_cadence_increment_ = static_cast<int64_t>(new_fps.num) * output_fps.den;
+  } else {
+    frame_selection_cadence_enabled_ = false;
+  }
+
+  { std::ostringstream oss;
+    oss << "[PipelineManager] FRAME_SELECTION_CADENCE_REFRESH reason=" << reason
+        << " old_source_fps=" << old_fps.num << "/" << old_fps.den
+        << " new_source_fps=" << new_fps.num << "/" << new_fps.den
+        << " output_fps=" << output_fps.num << "/" << output_fps.den
+        << " mode=" << mode;
+    Logger::Info(oss.str()); }
+
+  if (callbacks_.on_frame_selection_cadence_refresh) {
+    callbacks_.on_frame_selection_cadence_refresh(old_fps, new_fps, output_fps, mode);
   }
 }
 

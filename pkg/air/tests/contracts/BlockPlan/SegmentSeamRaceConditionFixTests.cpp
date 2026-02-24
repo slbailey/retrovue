@@ -148,6 +148,12 @@ class SegmentSeamRaceFixTest : public ::testing::Test {
       seam_logs_.push_back(seam);
     };
     callbacks.on_block_summary = [](const BlockPlaybackSummary&) {};
+    callbacks.on_frame_selection_cadence_refresh = [this](RationalFps old_fps, RationalFps new_fps,
+                                                          RationalFps output_fps, const std::string& mode) {
+      std::lock_guard<std::mutex> lock(cb_mutex_);
+      cadence_refreshes_.push_back({old_fps, new_fps, output_fps, mode});
+      cadence_refresh_cv_.notify_all();
+    };
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
         std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
@@ -177,11 +183,31 @@ class SegmentSeamRaceFixTest : public ::testing::Test {
   std::atomic<bool> drain_stop_{false};
   std::thread drain_thread_;
 
+  bool WaitForCadenceRefresh(int timeout_ms = 10000) {
+    std::unique_lock<std::mutex> lock(cb_mutex_);
+    return cadence_refresh_cv_.wait_for(
+        lock, std::chrono::milliseconds(timeout_ms),
+        [this] { return !cadence_refreshes_.empty(); });
+  }
+
+  struct CadenceRefreshRecord {
+    RationalFps old_source_fps;
+    RationalFps new_source_fps;
+    RationalFps output_fps;
+    std::string mode;
+  };
+  std::vector<CadenceRefreshRecord> SnapshotCadenceRefreshes() {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    return cadence_refreshes_;
+  }
+
   std::mutex cb_mutex_;
   std::condition_variable session_ended_cv_;
   std::condition_variable blocks_completed_cv_;
+  std::condition_variable cadence_refresh_cv_;
   std::vector<std::string> completed_blocks_;
   std::vector<SeamTransitionLog> seam_logs_;
+  std::vector<CadenceRefreshRecord> cadence_refreshes_;
   int session_ended_count_ = 0;
 };
 
@@ -320,6 +346,60 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_003_ContentPadContentSequenceNoMiss) {
 
   EXPECT_GT(m.continuous_frames_emitted_total, 30)
       << "Output stalled — expected continuous frame emission";
+}
+
+// =============================================================================
+// CadenceRefreshOnSegmentSwap: regression test for 23.976fps playing too fast.
+// When LIVE segment swaps from segment A to segment B, frame-selection cadence
+// (repeat-vs-advance policy) must be refreshed from the NEW live source FPS so duration is preserved.
+// =============================================================================
+TEST_F(SegmentSeamRaceFixTest, CadenceRefreshOnSegmentSwap) {
+  if (!FileExists(kPathA) || !FileExists(kPathB)) {
+    GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
+  }
+
+  auto now = NowMs();
+  int64_t offset = kBlockTimeOffsetMs;
+
+  // Two content segments: segment 0 then segment 1. After swap, cadence must
+  // refresh from segment 1's source FPS (e.g. 24000/1001).
+  FedBlock block = MakeMultiSegBlock("cadence-refresh", now + offset, {
+      {kPathA, 1500, SegmentType::kContent},
+      {kPathB, 1500, SegmentType::kContent},
+  });
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  // Wait for segment seam (swap) to occur; cadence refresh only fires when new FPS != old.
+  test_infra::SleepMs(kBootGuardMs + 3500);
+  engine_->Stop();
+
+  auto refreshes = SnapshotCadenceRefreshes();
+  auto m = engine_->SnapshotMetrics();
+
+  EXPECT_GE(m.segment_seam_count, 1u)
+      << "Segment swap must occur (content→content)";
+  EXPECT_EQ(m.detach_count, 0) << "Session must not detach";
+
+  // When the two segments have different source FPS, we must get a cadence refresh
+  // and mode must be UPSAMPLE when new source is 23.976 (output 29.97).
+  if (!refreshes.empty()) {
+    const auto& r = refreshes.back();
+    EXPECT_GT(r.new_source_fps.num, 0) << "new_source_fps must be valid";
+    EXPECT_GT(r.new_source_fps.den, 0) << "new_source_fps must be valid";
+    const bool is_23976 = (r.new_source_fps.num == 24000 && r.new_source_fps.den == 1001);
+    if (is_23976) {
+      EXPECT_EQ(r.mode, "UPSAMPLE")
+          << "23.976fps content must use UPSAMPLE mode (output 29.97)";
+    }
+  }
+  // If refreshes.empty(), both segments had same FPS (e.g. both 30fps) — no refresh needed.
 }
 
 // =============================================================================

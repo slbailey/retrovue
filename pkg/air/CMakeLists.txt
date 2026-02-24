@@ -277,6 +277,7 @@ target_include_directories(retrovue_air
 # ---- Contract tests (Phase 6A.0: PlayoutEngine + control surface) ----
 add_executable(contracts_playoutengine_tests
   tests/contracts/PlayoutEngine/PlayoutEngineContractTests.cpp
+  tests/contracts/PlayoutControl/PlayoutControlContractTests.cpp
   tests/contracts/OutputSwitching/OutputSwitchingContractTests.cpp
   tests/contracts/Phase815FileProducerTests.cpp
   tests/contracts/Phase84PersistentMpegTsMuxTests.cpp
@@ -397,6 +398,9 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamRaceConditionFixTests.cpp
   tests/contracts/BlockPlan/DegradedTakeModeContractTests.cpp
+  tests/contracts/test_inv_execution_continuous_output_001.cpp
+  tests/contracts/test_inv_fps_resample_drift.cpp
+  tests/contracts/test_inv_no_float_fps_timebase_001.cpp
   tests/blockplan/test_segment_aware_playback_proof.cpp
 )
 
