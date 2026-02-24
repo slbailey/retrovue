@@ -68,11 +68,32 @@ The fence tick is an absolute session frame index representing the first tick of
 - Content time, decoder EOF, runtime clock reads: NEVER timing authority for fence
 - B readiness does NOT influence fence value (priming is latency optimization only)
 
+
+**Fence Swap Atomic Sequencing:**
+
+When `session_frame_index >= fence_tick`, the following outcomes MUST be achieved atomically:
+
+**MUST:**
+1. **Ownership Snapshot:** Determine active owner for this tick (A or B) based on fence comparison
+2. **Source Selection:** Select frame source from active owner's buffers
+3. **Frame Emission:** Emit exactly one frame attributed to active owner
+4. **Budget Accounting:** Decrement active owner's budget (if owner exists)
+5. **Index Advancement:** Increment `session_frame_index` atomically with budget decrement
+6. **Ownership Transition:** When B becomes active owner (at or after fence), `BlockStarted(B)` MUST be emitted exactly once
+
 **MUST NOT:**
-- Delay fence tick based on B's buffer state
-- Skip fence evaluation based on decode progress
-- Recompute fence after initial calculation
-- Treat B unready as fence violation (emit fallback instead)
+- Use session_frame_index value that changes mid-tick (snapshot required)
+- Decrement budget of non-active block
+- Skip frame emission for any tick
+- Emit BlockStarted multiple times for same block
+- Delay fence evaluation based on B readiness
+
+**Observable Invariants:**
+- At tick N where `N >= fence_tick`: active owner = B
+- At tick N where `N < fence_tick`: active owner = A
+- Budget decremented for active owner only
+- BlockStarted(B) emitted between tick where `N = fence_tick` and `N = fence_tick + 1`
+
 ---
 
 ### INV-BLOCK-FRAME-BUDGET-AUTHORITY: Frame Budget as Counting Authority
@@ -125,6 +146,40 @@ Core SHOULD never feed blocks with `end_utc_ms <= session_epoch_utc_ms + (sessio
 6. **Budget Does Not Gate Output:** System emits frames regardless of budget value
 
 7. **Budget Diagnostic:** Budget convergence verification; mismatch indicates accounting error, not timing error
+
+**Budget Initialization Invariants:**
+
+When a block becomes active owner at tick N, the following MUST be true:
+
+**State Invariants:**
+- Block's `fence_tick` is immutable (computed once, never recomputed)
+- Block's initial `remaining_block_frames = fence_tick - N` (where N = `session_frame_index` when block becomes active)
+- Budget MUST be positive: `remaining_block_frames > 0` at initialization
+- Budget MUST be initialized before any decrement occurs for ticks where this block is active owner
+
+**Per-Tick Invariants:**
+- Budget decrements if and only if block is active owner for that tick
+- Budget never decrements for block that is not active owner
+- Budget and index update atomically (no partial state)
+
+**Convergence Invariant:**
+- At all times: `remaining_block_frames = fence_tick - session_frame_index` (for active block)
+- At fence tick: `remaining_block_frames = 0` exactly
+
+**Off-By-One Prevention:**
+Budget mismatch at fence indicates violation of initialization or atomicity → recovery per Finding 1.2 (fence wins, recompute budget).
+
+**NON-NORMATIVE EXPLANATION (Off-By-One Prevention Table):**
+
+| Event | session_frame_index | remaining_block_frames | Notes |
+|-------|---------------------|------------------------|-------|
+| Block assigned | N | fence_tick - N | Initialization |
+| First frame emit | N | fence_tick - N | Before decrement |
+| After first emit | N+1 | fence_tick - (N+1) | After decrement + index increment |
+| ... | ... | ... | Invariant holds |
+| Last frame emit | fence_tick - 1 | 1 | Before decrement |
+| After last emit | fence_tick | 0 | Budget exhausted |
+| Swap check | fence_tick | 0 | `>= fence_tick` → swap |
 
 **Budget Convergence Proof (Mathematical):**
 
