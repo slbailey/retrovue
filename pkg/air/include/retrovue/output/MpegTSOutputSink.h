@@ -166,6 +166,8 @@ class MpegTSOutputSink : public IOutputSink {
   // =========================================================================
   std::atomic<uint64_t> video_frames_dropped_{0};
   std::atomic<uint64_t> audio_frames_dropped_{0};
+  // INV-AUDIO-PTS-HOUSE-CLOCK-001: Sample-based audio PTS derivation
+  int64_t audio_samples_emitted_{0};
 
   // =========================================================================
   // INV-FALLBACK-001: Upstream starvation detection

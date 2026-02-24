@@ -1156,8 +1156,10 @@ void MpegTSOutputSink::MuxLoop() {
           audio_emit_count++;
           audio_batch++;
 
-          const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
+          // INV-AUDIO-PTS-HOUSE-CLOCK-001: Derive PTS from sample clock, not content pts_us
+          const int64_t audio_pts90k = (audio_samples_emitted_ * 90000) / buffer::kHouseAudioSampleRate;
           encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
+          audio_samples_emitted_ += audio_frame.nb_samples;
 
           // INV-P9-AUDIO-LIVENESS: Log when audio stream goes live (first audio packet after header)
           if (audio_emit_count == 1) {
