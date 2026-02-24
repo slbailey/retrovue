@@ -50,9 +50,13 @@ The fence tick is an absolute session frame index representing the first tick of
 **B Not Ready at Fence Tick MUST:**
 - NOT delay swap (fence is immutable)
 - Emit fallback (freeze A's last committed frame OR pad)
-- Attribute fallback to Block B (`block_id = B.block_id`)
+- Attribute fallback to Block B with metadata:
+  - `block_id = B.block_id`
+  - `segment_uuid = null`
+  - `asset_uuid = null`
+  - `segment_type = PAD` or `FALLBACK`
+  - `is_pad = true`
 - Decrement B's `remaining_block_frames`
-- Set `segment_uuid = null` for fallback frames
 
 **Fence Immutability MUST:**
 - Compute fence_tick once at block load: `fence_tick = (delta_ms * fps_num + fps_den * 1000 - 1) / (fps_den * 1000)`
@@ -80,6 +84,26 @@ The block frame budget MUST be computed as:
 ```
 remaining_block_frames = fence_tick - block_start_tick
 ```
+
+**Stale Block Handling:**
+
+If block is stale (`end_utc_ms <= now_utc_ms` or computed `fence_tick <= session_frame_index`):
+
+**MUST:**
+- NOT fatal (preserve output continuity)
+- NOT emit that stale block's content
+- Advance to next block whose `fence_tick` is in the future
+- Log VIOLATION with diagnostic details (block_id, end_utc_ms, session_epoch, fence_tick, session_frame_index)
+
+**Recovery Outcome:**
+System continues with next valid block or emits fallback (freeze/pad) until valid block available.
+
+**NON-NORMATIVE GUIDANCE (Implementation Options):**
+
+Recommended: Option A (skip) for normal operation, Option B (clamp) for JIP.
+
+**Core Input Contract (non-enforced):**
+Core SHOULD never feed blocks with `end_utc_ms <= session_epoch_utc_ms + (session_frame_index * fps_den * 1000 / fps_num)`. PipelineManager handles violations defensively.
 
 **Key Rules:**
 **Key Rules:**
@@ -216,15 +240,38 @@ AIR MUST decouple all decode operations from the tick emission thread. Decode ru
 **Phase:** Every fence tick  
 **Depends on:** OUT-BLOCK-005, INV-BLOCK-WALLFENCE-001, INV-RUNWAY-MIN-001
 
-When fence fires and preview block NOT ready, AND queue non-empty:
-1. Pop block from queue
-2. Emit BlockStarted (credit to Core)
-3. Synchronously load via AssignBlock()
-4. Install as live producer
-5. Start buffer filling
+**Fence Tick Fallback Ownership:**
 
-This path is unconditional (no feature flag).
+When `session_frame_index >= fence_tick`:
 
+1. **Ownership:** Block B owns all frames at `fence_tick` and beyond, regardless of readiness
+
+2. **B Not Ready, Queue Non-Empty:**
+   - Pop block from queue (synchronous, no async preload)
+   - Emit `BlockStarted` event (credit to Core)
+   - Call `AssignBlock()` (synchronous load, may take >1 tick)
+   - Install as live producer in slot B
+   - Start buffer filling (async, background thread)
+   - If still not ready after load: emit fallback attributed to B
+
+3. **B Not Ready, Queue Empty:**
+   - Emit fallback (freeze A's last committed frame OR pad)
+   - Attribution: `block_id = B.block_id` (or null if B slot empty)
+   - Budget: B's `remaining_block_frames` decrements (if B exists)
+
+4. **Fallback Frame Metadata:**
+   - `block_id`: B's block_id (or null if B slot empty)
+   - `segment_uuid`: null (fallback has no segment identity)
+   - `asset_uuid`: null (fallback has no asset)
+   - `segment_type`: PAD or FALLBACK
+   - `is_pad`: true
+
+**Synchronous Queue Drain MUST:**
+- Occur within tick deadline budget (pop + load + install)
+- NOT delay subsequent ticks (late tick still emits fallback)
+- NOT skip fence comparison (fence always evaluates)
+
+**Unconditional Path:** Queue drain is unconditional (no feature flag, no config gate).
 ---
 
 ### INV-FENCE-TAKE-READY-001: Fence Take Readiness and DEGRADED_TAKE_MODE
@@ -526,14 +573,47 @@ Gate measurements taken on buffer not being drained by live consumer unless comm
 **Phase:** All phases after first frame  
 **Priority:** ABOVE all other invariants
 
-**Fallback Chain:**
-1. Real frame (dequeue from video queue)
-2. Freeze (re-emit last frame)
-3. Black (pre-allocated black frame)
+**Per-Tick Execution Sequence:**
 
-No conditional, timing check, or diagnostic can prevent emission.
+Each output tick MUST execute the following atomic sequence:
 
-**Philosophy:** CONTINUITY > CORRECTNESS. Dead air is regulatory violation. Wrong frame is production issue.
+**Step 1: Source Selection**
+- Evaluate fence swap condition (`session_frame_index >= fence_tick`)
+- Determine active block (A or B)
+- Select frame source priority: REAL → FREEZE → BLACK
+- Selection MUST occur before buffer access
+
+**Step 2: Frame Retrieval**
+- REAL: Pop from video buffer (if available)
+- FREEZE: Copy `last_committed_frame` (from memory)
+- BLACK: Use preallocated black frame
+- Retrieval is deterministic (no failure path)
+
+**Step 3: Commitment**
+- Update `last_committed_frame = retrieved_frame`
+- Enables FREEZE fallback for next tick
+
+**Step 4: Atomic State Update**
+- If active block exists: `active_block->remaining_block_frames--`
+- `session_frame_index++`
+- Both MUST update together (no partial state)
+
+**Step 5: Sink Handoff**
+- Hand off frame to sink for muxing/emission
+- Handoff is unconditional (guaranteed output)
+- No success/failure semantics (sink MUST accept)
+
+**Atomicity Guarantee:**
+Steps 1-5 execute atomically per tick. No interleaving with other ticks. No failure path that skips sink handoff.
+
+**MUST NOT:**
+- Select source after buffer access (TOCTOU race)
+- Skip commitment step (breaks FREEZE fallback)
+- Partially update budget/index (atomic violation)
+- Condition sink handoff on any check (violates guaranteed output)
+- Treat sink handoff as having failure path
+
+**NON-NORMATIVE EXAMPLE:**
 
 ---
 
