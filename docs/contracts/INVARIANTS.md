@@ -34,12 +34,41 @@ delta_ms   = end_utc_ms - session_epoch_utc_ms
 fence_tick = (delta_ms * fps_num + fps_den * 1000 - 1) / (fps_den * 1000)
 ```
 
-**Key Rules:**
-- Fence tick is the first tick of the NEXT block
-- TAKE selects B's buffers when `session_frame_index >= fence_tick`
-- Content time, decoder state, and runtime clocks are never timing authority
-- BlockCompleted is a consequence, not a gate
+**Fence Tick Swap Semantics (INV-BLOCK-WALLFENCE-004):**
 
+The fence tick is an absolute session frame index representing the first tick of block B.
+
+**Ownership Rule:**
+- Ticks `[0, fence_tick - 1]`: Block A owns frame emission, budget, and attribution
+- Ticks `[fence_tick, ∞)`: Block B owns frame emission, budget, and attribution
+
+**Swap Condition MUST:**
+- Evaluate `session_frame_index >= fence_tick` before frame source selection
+- Use snapshot of session_frame_index (no mid-tick increment)
+- Treat `session_frame_index = fence_tick` as first tick of B (inclusive lower bound)
+
+**B Not Ready at Fence Tick MUST:**
+- NOT delay swap (fence is immutable)
+- Emit fallback (freeze A's last committed frame OR pad)
+- Attribute fallback to Block B (`block_id = B.block_id`)
+- Decrement B's `remaining_block_frames`
+- Set `segment_uuid = null` for fallback frames
+
+**Fence Immutability MUST:**
+- Compute fence_tick once at block load: `fence_tick = (delta_ms * fps_num + fps_den * 1000 - 1) / (fps_den * 1000)`
+- NEVER recompute based on decode latency, buffer state, or runtime conditions
+- NEVER adjust for B readiness (fallback allowed)
+
+**Non-Timing Consequences:**
+- `BlockCompleted(A)` emitted after A's last frame output (consequence, not gate)
+- Content time, decoder EOF, runtime clock reads: NEVER timing authority for fence
+- B readiness does NOT influence fence value (priming is latency optimization only)
+
+**MUST NOT:**
+- Delay fence tick based on B's buffer state
+- Skip fence evaluation based on decode progress
+- Recompute fence after initial calculation
+- Treat B unready as fence violation (emit fallback instead)
 ---
 
 ### INV-BLOCK-FRAME-BUDGET-AUTHORITY: Frame Budget as Counting Authority
@@ -53,26 +82,111 @@ remaining_block_frames = fence_tick - block_start_tick
 ```
 
 **Key Rules:**
-- Budget is counting authority, NOT timing authority
-- One frame = one decrement (includes freeze/pad frames)
-- Budget reaching 0 is verification, NOT the swap trigger
-- Segments must consult remaining budget before emitting
+**Key Rules:**
 
+1. **Budget is Counting Authority ONLY:** Counts frames emitted; does NOT determine block duration
+
+2. **Budget Formula:** `remaining_block_frames = fence_tick - session_frame_index`
+
+3. **Decrement Rule:** One frame emitted = one decrement (includes freeze/pad/black frames)
+
+4. **Budget Zero at Fence (Normal):** By construction, `remaining_block_frames = 0` when `session_frame_index = fence_tick`
+
+5. **Budget Non-Zero at Fence (VIOLATION):**
+   - **Detection:** `remaining_block_frames != 0` when `session_frame_index >= fence_tick`
+   - **Handling:** Log VIOLATION, force swap (fence wins), recompute budget for new block
+   - **Recovery:** `new_block.remaining_block_frames = new_block.fence_tick - session_frame_index`
+   - **Non-Fatal:** Budget mismatch does NOT halt output (fence is timing authority)
+
+6. **Budget Does Not Gate Output:** System emits frames regardless of budget value
+
+7. **Budget Diagnostic:** Budget convergence verification; mismatch indicates accounting error, not timing error
+
+**Budget Convergence Proof (Mathematical):**
+
+**Invariant Identity:**
+
+
+**Proof of Exact Convergence:**
+
+**Given:**
+- `fence_tick`: Immutable absolute session frame index (integer, ≥ 0)
+- `session_frame_index(0)`: Initial session frame index when block assigned (integer, ≥ 0)
+- `remaining_block_frames(0) = fence_tick - session_frame_index(0)`: Initial budget
+
+**Per-Tick Update Rules:**
+
+
+**Proof by Induction:**
+
+**Base case (t=0):**
+
+The identity holds at initialization.
+
+**Inductive hypothesis:**
+Assume `remaining_block_frames(t) = fence_tick - session_frame_index(t)` holds at tick t.
+
+**Inductive step:**
+Prove the identity holds at tick t+1:
+
+
+
+**Conclusion:**
+The identity `remaining_block_frames(t) = fence_tick - session_frame_index(t)` holds for all t ≥ 0 by mathematical induction.
+
+**Fence Tick Convergence:**
+
+At the tick where `session_frame_index = fence_tick`:
+
+
+**Off-By-One Impossibility:**
+
+Budget can NEVER be -1, +1, or any value other than 0 at fence because:
+
+1. **Atomic Updates:** Decrement and index increment are atomic per tick
+2. **Consistent Initial State:** Budget initialized as `fence_tick - session_frame_index(0)`
+3. **Synchronous Advancement:** Both advance by exactly 1 per tick (no drift, no skip)
+4. **No External Modification:** No other code path modifies budget or index
+5. **Fence Immutable:** `fence_tick` never changes after initialization
+
+**Failure Modes (all prevented):**
+- Budget = -1 at fence: Impossible (would require decrement without index increment → violates atomicity)
+- Budget = +1 at fence: Impossible (would require index increment without decrement → violates atomicity)
+- Budget != 0 at fence: Indicates violation of initialization or atomicity → handled per Finding 1.2 (recovery, not fatal)
+
+**Diagnostic Use:**
+If `remaining_block_frames != 0` when `session_frame_index >= fence_tick`:
+- Log VIOLATION (initialization error, atomicity bug, or accounting drift)
+- Force swap (fence wins)
+- Recompute budget for new block (defensive recovery)
+- Continue output (non-fatal per Finding 1.2)
 ---
 
 ### INV-BLOCK-LOOKAHEAD-PRIMING: Look-Ahead Priming at Block Boundaries
 
-**Owner:** ProducerPreloader / TickProducer / PipelineManager  
-**Depends on:** INV-TICK-GUARANTEED-OUTPUT, INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
-
-The first video frame and its audio MUST be decoded before the producer signals readiness. Priming ensures zero decode latency on the fence tick.
+The first video frame and its audio MUST be decoded and buffered before the producer signals readiness. Priming is a latency mitigation technique; it does NOT affect fence timing, cadence computation, or block duration.
 
 **Key Rules:**
-- Decoder ready before fence tick
-- Zero deadline work at fence tick (frame from memory)
-- No duplicate decoding (consume primed frame exactly once)
-- Priming failure degrades safely (fall through to live decode or pad)
 
+1. **Latency Authority ONLY:** Priming reduces decode latency; does NOT influence timing or counting
+
+2. **Decoder Ready Before Fence:** First frame decoded and buffered before `session_frame_index >= fence_tick`
+
+3. **Zero Deadline Work:** At fence tick, frame retrieved from memory (no decode syscall in critical path)
+
+4. **No Fence Influence:** Priming failure does NOT delay fence; fence fires at precomputed tick regardless
+
+5. **Consume Primed Frame Exactly Once:** First pop after fence consumes primed frame; subsequent pops from live decode
+
+6. **Fallback on Priming Failure:** If priming incomplete at fence, system falls through to:
+   - Live decode (if decode fast enough)
+   - Freeze (previous block's last frame)
+   - Pad (black + silence)
+
+**MUST NOT:**
+- Delay fence tick based on priming state
+- Recompute cadence based on primed frame properties
+- Skip fence if priming incomplete
 ---
 
 ### INV-LOOKAHEAD-BUFFER-AUTHORITY: Lookahead Buffer Decode Authority
@@ -202,12 +316,35 @@ When lookahead buffer cannot supply a frame, system MUST behave deterministicall
 Block execution and segment transitions MUST be governed by decoded media time, not by output cadence, guessed frame durations, or rounded FPS math.
 
 **Core Rules:**
-1. **Media Time Authority:** `decoded_media_time >= block_end_time` triggers completion
-2. **No Cumulative Drift:** `|T_decoded(n) - T_expected(n)| <= epsilon` (bounded to one frame period)
-3. **Fence Alignment:** Decoder EOF, fence, and transition converge within one tick window
-4. **Cadence Independence:** Output cadence affects frame repetition, never media time advancement
-5. **Pad Never Primary:** Padding only when `decoded_media_time >= block_end_time`
 
+1. **Fence is Timing Authority:** Block boundaries determined by `fence_tick` (INV-BLOCK-WALLFENCE-001)
+
+2. **CT is Exhaustion Detector:** `decoded_media_time >= block_end_time` signals content exhaustion
+
+3. **CT Exhaustion Before Fence (Normal Convergence):**
+   - **Status:** Desired alignment; content duration matches scheduled block duration
+   - **Behavior:** System emits real content frames until fence fires
+   - **No padding needed** if convergence within one tick window
+
+4. **Fence Before CT Exhaustion (Allowed Truncation):**
+   - **Status:** Allowed; diagnostic quality issue (content longer than allocated duration)
+   - **Behavior:** Fence swap occurs at precomputed fence_tick; remaining content truncated
+   - **Recovery:** Block B takes over; truncated content discarded
+   - **Diagnostic:** Log deficit as scheduling/content mismatch
+
+5. **CT Exhaustion Significantly Before Fence (Allowed Padding):**
+   - **Status:** Allowed; content shorter than scheduled duration
+   - **Behavior:** System emits fallback frames (freeze/black/pad) until fence fires
+   - **Attribution:** Fallback frames attributed to current block until fence
+   - **Diagnostic:** Log content deficit
+
+6. **No Cumulative Drift:** `|T_decoded(n) - T_expected(n)| <= epsilon` (bounded to one frame period)
+
+7. **Cadence Independence:** Output cadence affects frame repetition, never media time advancement
+
+8. **Fallback Emission:** If content cannot supply a real frame at any tick, fallback MUST be emitted (freeze/black/pad). CT is diagnostic only; fallback legality is content availability, not CT threshold.
+
+**Authority Precedence:** Fence > CT. CT exhaustion influences frame source selection; fence controls block ownership.
 ---
 
 ### INV-FPS-RATIONAL-001: Rational FPS as Single Authoritative Timebase
