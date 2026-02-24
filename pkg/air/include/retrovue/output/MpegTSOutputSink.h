@@ -56,6 +56,12 @@ class MpegTSOutputSink : public IOutputSink {
                    const playout_sinks::mpegts::MpegTSPlayoutSinkConfig& config,
                    const std::string& name = "MpegTSOutputSink");
 
+
+  // Test seam: constructor with injected encoder for testing PTS authority
+  MpegTSOutputSink(int fd,
+                   const playout_sinks::mpegts::MpegTSPlayoutSinkConfig& config,
+                   std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder,
+                   const std::string& name = "MpegTSOutputSink");
   ~MpegTSOutputSink() override;
 
   // Disable copy and move
