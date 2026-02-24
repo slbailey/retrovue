@@ -107,6 +107,26 @@ Functional but compensatory.
 
 ---
 
+#### Incident: Post-fence video lookahead underflow (2026-02-22)
+
+**Log:** `pkg/air/logs/cheers-24-7-air.log`
+
+**Observed:**
+
+1. **PREROLL_OWNERSHIP_VIOLATION** at fence tick 4161: expected next block `blk-e35a0f020482`, actual `blk-1f042ade1207` (session block_b). Preroll had armed fed blocks; the block actually taken was the session’s initial block_b — a queue vs session ordering mismatch (diagnostic only; correct block was played).
+2. **TICK_GAP** from ~tick 5168: inter-frame gaps 50–603 ms (tick loop or system late).
+3. **INV-VIDEO-LOOKAHEAD-001: UNDERFLOW** at frame 5942: `buffer_depth=0`, `total_pushed=1781`, `total_popped=1781`. Post-fence buffer was filled by the fill thread for block `blk-1f042ade1207`; exactly 1781 frames were pushed and consumed (~59 s at 30 fps). Decode ran at ~real-time, so the buffer never built headroom; a small stall drained it and triggered underflow.
+
+**Hypothesis:** Decode rate matched consumption (no headroom). With default lookahead depth ~0.5 s (15 frames), any brief stall (TICK_GAP) led to underflow.
+
+**Mitigations applied:**
+
+- Default video lookahead target depth increased from ~0.5 s to ~1 s at output FPS (e.g. 30 frames at 30 fps) so decode can build headroom when it barely keeps up.
+- UNDERFLOW log extended with `low_water` and `target` for diagnostics.
+- Post-fence buffer creation (fallback swap and PADDED_GAP) uses the same config as session start so headroom is consistent.
+
+---
+
 ### Phase 2 – <span style="color:#61afef">Structural Audio/Video Decoupling</span> <small>(In Progress)</small>
 
 #### Phase 2A – <b>Packet-Level Decode Control</b>
