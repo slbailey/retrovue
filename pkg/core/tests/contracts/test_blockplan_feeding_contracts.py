@@ -36,7 +36,11 @@ from unittest.mock import MagicMock, Mock, patch, call
 
 import pytest
 
+from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+
+# MasterClock for BlockPlanProducer (strict clock authority; matches wall clock in tests).
+_TEST_CLOCK = MasterClock()
 
 import sys as _sys
 import os as _os
@@ -1294,7 +1298,7 @@ class TestQueueFullRetry:
             configuration={},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [
@@ -1414,7 +1418,7 @@ class TestQueueFullRetry:
             configuration={},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [
@@ -1520,7 +1524,7 @@ class TestQueueFullRetry:
             configuration={},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [{"asset_path": "assets/A.mp4", "duration_ms": 3000}]
@@ -1590,7 +1594,7 @@ class TestQueueFullRetry:
             configuration={},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         # Simulate a pending block
@@ -1653,7 +1657,7 @@ def _make_producer_with_mock_session(
         configuration=cfg,
         channel_config=None,
         schedule_service=svc,
-        clock=None,
+        clock=_TEST_CLOCK,
     )
 
     feed_log: list[tuple[str, bool]] = []
@@ -2047,7 +2051,7 @@ class TestRunwayComputation:
             configuration={},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         # Zero delivered → 0 runway
@@ -2085,7 +2089,7 @@ class TestReadyByDeadlineComputation:
             configuration={"preload_budget_ms": 10_000},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         block = MockBlockPlan(
@@ -2103,7 +2107,7 @@ class TestReadyByDeadlineComputation:
             configuration={"preload_budget_ms": 5_000},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         block = MockBlockPlan(
@@ -2559,7 +2563,7 @@ class TestFeedAheadReasonClassification:
         handler = logging.Handler()
         handler.emit = lambda record: log_records.append(record)
         producer._logger.addHandler(handler)
-        producer._logger.setLevel(logging.INFO)
+        producer._logger.setLevel(logging.DEBUG)
 
         try:
             producer._feed_ahead()
@@ -2606,7 +2610,7 @@ class TestFeedAheadReasonClassification:
         handler = logging.Handler()
         handler.emit = lambda record: log_records.append(record)
         producer._logger.addHandler(handler)
-        producer._logger.setLevel(logging.INFO)
+        producer._logger.setLevel(logging.DEBUG)
 
         try:
             producer._feed_ahead()
@@ -2652,7 +2656,7 @@ class TestFeedAheadReasonClassification:
         handler = logging.Handler()
         handler.emit = lambda record: log_records.append(record)
         producer._logger.addHandler(handler)
-        producer._logger.setLevel(logging.INFO)
+        producer._logger.setLevel(logging.DEBUG)
 
         try:
             producer._feed_ahead()
@@ -2681,7 +2685,7 @@ class TestCleanupResetsDeadlineState:
             configuration={},
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         # Mutate state
@@ -2836,7 +2840,7 @@ class TestMissAnnotationRecorded:
             },
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [
@@ -2917,7 +2921,7 @@ class TestMissAnnotationNotRecordedOnTime:
             },
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [
@@ -2984,7 +2988,7 @@ class TestMissLatenessMetric:
             },
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [
@@ -3061,7 +3065,7 @@ class TestLateJoinStabilization:
             },
             channel_config=None,
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         playout_plan = [
@@ -3304,7 +3308,7 @@ class TestCreditInitialization:
         producer = BlockPlanProducer(
             channel_id="credit-cleanup-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
         producer._feed_credits = 2
         producer._consecutive_feed_errors = 5
@@ -3357,7 +3361,7 @@ class TestCreditIncrementOnBlockComplete:
         producer = BlockPlanProducer(
             channel_id="cap-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
         producer._feed_credits = producer._queue_depth
 
@@ -3558,7 +3562,7 @@ class TestErrorBackoffEscalation:
         producer = BlockPlanProducer(
             channel_id="backoff-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
 
         from retrovue.runtime.playout_session import BlockPlan
@@ -3634,7 +3638,7 @@ class TestErrorVsQueueFullDistinction:
         producer = BlockPlanProducer(
             channel_id="distinction-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
 
         # Mock session returning QUEUE_FULL
@@ -3678,7 +3682,7 @@ class TestFeedResultIntegration:
         producer = BlockPlanProducer(
             channel_id="result-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
 
         class AccSession:
@@ -3709,7 +3713,7 @@ class TestFeedResultIntegration:
         producer = BlockPlanProducer(
             channel_id="result-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
 
         class QFSession:
@@ -3738,7 +3742,7 @@ class TestFeedResultIntegration:
         producer = BlockPlanProducer(
             channel_id="result-test",
             configuration={},
-            channel_config=None, schedule_service=svc, clock=None,
+            channel_config=None, schedule_service=svc, clock=_TEST_CLOCK,
         )
 
         class ErrSession:

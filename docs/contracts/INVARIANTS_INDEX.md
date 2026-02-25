@@ -120,6 +120,14 @@ CANONICAL_RULE_LEDGER.md          <- Single source of truth (authoritative)
 | INV-P8-SWITCH-TIMING | AIR execution timing tolerance |
 | INV-AUDIO-SAMPLE-CONTINUITY-001 | Audio continuity |
 
+### PAD Seam (Big Boy Broadcast Ready)
+
+**Location:** [INVARIANTS.md](./INVARIANTS.md) § INV-PAD-SEAM-AUDIO-READY
+
+| Rule Family | Description |
+|-------------|-------------|
+| INV-PAD-SEAM-AUDIO-READY | PAD segment audio source non-null, routable, silence pushed before fence; no FENCE_AUDIO_PAD at segment-swap-to-PAD. **Must never be weakened.** |
+
 *Note: Boundary lifecycle and Protocol invariants moved to [BOUNDARY_LIFECYCLE.md](../../pkg/core/docs/contracts/lifecycle/BOUNDARY_LIFECYCLE.md)*
 
 ### Phase 9 Bootstrap

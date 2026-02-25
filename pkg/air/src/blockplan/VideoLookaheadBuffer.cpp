@@ -301,17 +301,14 @@ void VideoLookaheadBuffer::FillLoop() {
          !fill_stop_.load(std::memory_order_acquire) &&
          !(stop_signal && stop_signal->load(std::memory_order_acquire))) {
 
-    // INV-BUFFER-HYSTERESIS-001: Two-path depth control.
+    // INV-P10-PIPELINE-FLOW-CONTROL: Strict slot-based gating (no hysteresis).
     //
-    // FILLING path (steady_filling_ == true): The fill thread must decode
-    // as fast as possible to build headroom.  Acquiring mutex_ per-frame
-    // to evaluate the condvar predicate contends with TryPopFrame on every
-    // tick, throttling the fill thread to ~consumption rate and preventing
-    // depth from climbing.  Instead, read depth under a brief lock, check
-    // the high-water cap, and proceed without parking.
+    // FILLING path (steady_filling_ == true): Read depth under a brief lock.
+    // Park when depth >= target_depth_frames_ (no 2×/4× high-water).
     //
-    // PARKED path (steady_filling_ == false): Block on space_cv_ until a
-    // pop drops depth to low_water, or a boost/burst condition fires.
+    // PARKED path (steady_filling_ == false): Block on space_cv_ until
+    // depth < target (one slot free) or audio burst fires. notify_one per
+    // TryPopFrame() allows exactly one decode cycle when at boundary.
     //
     // Bootstrap phase always uses the condvar path (needs audio-gated
     // parking logic).
@@ -322,10 +319,9 @@ void VideoLookaheadBuffer::FillLoop() {
     // depth reaches the gate threshold, bounded by bootstrap_cap.
     //
     // INV-TICK-GUARANTEED-OUTPUT: Audio burst-fill mode.
-    // After a segment transition, audio buffer may be critically low while
-    // video buffer is full (hold-last frames).  Allow decoding even when
-    // video exceeds its normal target so audio can rebuild headroom.
-    // Bounded by 4× video target to prevent unbounded growth.
+    // When audio is critically low, predicate may return true even when
+    // depth >= target (up to burst_cap), so decode can resume without
+    // draining to <= target.
     {
       bool is_bootstrap = fill_phase_.load(std::memory_order_relaxed) ==
           static_cast<int>(FillPhase::kBootstrap);
@@ -333,22 +329,18 @@ void VideoLookaheadBuffer::FillLoop() {
       bool skip_wait = false;
 
       if (!is_bootstrap && filling_now) {
-        // FILLING path: brief lock for depth check + high-water cap.
-        // No condvar park — decode at full speed.
+        // FILLING path: park when depth >= target (strict slot-based).
         int depth;
         {
           std::lock_guard<std::mutex> lock(mutex_);
           depth = static_cast<int>(frames_.size());
         }
-        int high_water = audio_boost_.load(std::memory_order_relaxed)
-            ? target_depth_frames_ * 4
-            : target_depth_frames_ * 2;
-        if (depth >= high_water) {
-          // Reached high water — transition to PARKED.
+        if (depth >= target_depth_frames_) {
+          // At or above target — transition to PARKED.
           steady_filling_.store(false, std::memory_order_relaxed);
           // Fall through to the condvar path below so we park properly.
         } else {
-          // Below high water — skip condvar, proceed to decode.
+          // Below target — skip condvar, proceed to decode.
           skip_wait = true;
         }
       }
@@ -378,13 +370,14 @@ void VideoLookaheadBuffer::FillLoop() {
               return false;
             }
 
-            // STEADY phase (PARKED): wait until low water or burst trigger.
-            if (depth <= target_depth_frames_) {
+            // STEADY phase (PARKED): resume when depth < target (slot free).
+            // Strict slot-based: one pop → one wake → one decode cycle at boundary.
+            if (depth < target_depth_frames_) {
               steady_filling_.store(true, std::memory_order_relaxed);
               return true;
             }
 
-            // Audio burst: proceed past high water when audio is critically low.
+            // Audio burst: resume when audio critically low (need not drain to target).
             if (audio_buffer && audio_buffer->DepthMs() < audio_burst_threshold_ms_) {
               int burst_cap = target_depth_frames_ * 4;
               return depth < burst_cap;
@@ -416,9 +409,27 @@ void VideoLookaheadBuffer::FillLoop() {
         }
 #endif
       }
+      // Temporary debug: once per second — video depth, steady_filling_, parked vs decoding.
+      {
+        static auto last_fill_log = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_fill_log).count() >= 1000) {
+          last_fill_log = now;
+          int depth;
+          { std::lock_guard<std::mutex> lock(mutex_); depth = static_cast<int>(frames_.size()); }
+          bool filling = steady_filling_.load(std::memory_order_relaxed);
+          const char* state = skip_wait ? "decoding" : "parked";
+          std::ostringstream oss;
+          oss << "[FillLoop:" << buffer_label_ << "] DBG_VIDEO_DEPTH"
+              << " depth=" << depth
+              << " steady_filling=" << (filling ? "true" : "false")
+              << " state=" << state;
+          Logger::Info(oss.str());
+        }
+      }
     }
 
-    // INV-BUFFER-HYSTERESIS-001: Re-check stop after hysteresis decision.
+    // Re-check stop after depth/condvar decision.
     if (fill_stop_.load(std::memory_order_acquire) ||
         (stop_signal && stop_signal->load(std::memory_order_acquire))) {
       exit_reason = fill_stop_.load(std::memory_order_acquire)

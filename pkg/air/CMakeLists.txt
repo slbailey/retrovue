@@ -222,9 +222,50 @@ set(AIR_CORE_SOURCES
   src/util/Logger.cpp
 )
 
+# Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
+# Use: cmake ... -DRETROVUE_DEBUG_PAD_EMIT=ON
+option(RETROVUE_DEBUG_PAD_EMIT "Log PAD activation and audio emit diagnostics (FENCE_AUDIO_PAD)" OFF)
+
+# Build/version stamp for PipelineManager session logs (impossible to run old binary unnoticed).
+set(RETROVUE_GIT_COMMIT "unknown")
+set(RETROVUE_GIT_BRANCH "unknown")
+find_package(Git QUIET)
+if(Git_FOUND)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+    OUTPUT_VARIABLE RETROVUE_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    ERROR_QUIET
+  )
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" rev-parse --abbrev-ref HEAD
+    OUTPUT_VARIABLE RETROVUE_GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    ERROR_QUIET
+  )
+endif()
+if(NOT RETROVUE_GIT_COMMIT OR RETROVUE_GIT_COMMIT STREQUAL "")
+  set(RETROVUE_GIT_COMMIT "nogit")
+endif()
+if(NOT RETROVUE_GIT_BRANCH OR RETROVUE_GIT_BRANCH STREQUAL "")
+  set(RETROVUE_GIT_BRANCH "nobranch")
+endif()
+string(TIMESTAMP RETROVUE_BUILD_TIMESTAMP "%Y-%m-%dT%H:%M:%S" UTC)
+
 add_library(retrovue_air_core ${AIR_CORE_SOURCES})
 
-target_compile_definitions(retrovue_air_core PUBLIC RETROVUE_FFMPEG_AVAILABLE)
+target_compile_definitions(retrovue_air_core
+  PUBLIC RETROVUE_FFMPEG_AVAILABLE
+  PRIVATE
+    "RETROVUE_BUILD_GIT_COMMIT=\"${RETROVUE_GIT_COMMIT}\""
+    "RETROVUE_BUILD_GIT_BRANCH=\"${RETROVUE_GIT_BRANCH}\""
+    "RETROVUE_BUILD_TIMESTAMP=\"${RETROVUE_BUILD_TIMESTAMP}\""
+)
+if(RETROVUE_DEBUG_PAD_EMIT)
+  target_compile_definitions(retrovue_air_core PRIVATE RETROVUE_DEBUG_PAD_EMIT)
+endif()
 target_include_directories(retrovue_air_core PUBLIC "${FFMPEG_INCLUDE_DIR}")
 target_include_directories(retrovue_air_core
   PUBLIC
@@ -399,6 +440,10 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamRaceConditionFixTests.cpp
   tests/contracts/BlockPlan/DegradedTakeModeContractTests.cpp
+  tests/contracts/BlockPlan/PipelineManagerPadFenceAudioContractTests.cpp
+  tests/contracts/BlockPlan/PipelineManagerPadFenceAudio60fpsReproContractTests.cpp
+  tests/contracts/BlockPlan/PipelineManagerPadFenceAudioSwapReproContractTests.cpp
+  tests/contracts/BlockPlan/PipelineManagerSegmentSwapPadFenceContractTests.cpp
   tests/contracts/test_inv_execution_continuous_output_001.cpp
   tests/contracts/test_inv_fps_resample_drift.cpp
   tests/contracts/test_inv_no_float_fps_timebase_001.cpp
@@ -431,6 +476,9 @@ add_test(
   NAME BlockPlanContracts
   COMMAND blockplan_contract_tests
 )
+# Default build uses real wall-clock (5s blocks, 3s boot); full suite can take 15–30+ min.
+# For fast runs: cmake ... -DRETROVUE_FAST_TEST=1. Safety net: kill if still running after 15 min.
+set_tests_properties(BlockPlanContracts PROPERTIES TIMEOUT 900)
 
 # ---- BlockPlan Slow Contract Tests ----
 # Runs the DISABLED_SLOW_* tests from the same binary.

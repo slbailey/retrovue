@@ -211,7 +211,7 @@ Specifically, a segment seam swap and a block seam swap execute the same code pa
 6. Arm prep for the subsequent source (segment N+2, or next block).
 
 The only difference between a segment seam and a block seam is post-swap dispatch:
-- Segment seam: increment `current_segment_index_`, recompute `next_seam_frame_` from cached `segment_seam_frames_[i]`, arm segment prep.
+- Segment seam: increment `current_segment_index_`, recompute `next_seam_frame_` from cached `planned_segment_seam_frames_[i]`, arm segment prep.
 - Block seam: execute existing block rotation (finalize outgoing block, emit block completion, recompute segment seam frames for the new block), arm block prep.
 
 The swap primitive itself — buffer pointer swap + fill thread lifecycle — is context-blind.

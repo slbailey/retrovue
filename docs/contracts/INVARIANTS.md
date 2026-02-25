@@ -785,6 +785,31 @@ PadProducer is first-class source participating in TAKE source selection. Produc
 
 ---
 
+### INV-PAD-SEAM-AUDIO-READY: PAD Segment Audio Source and Fence Readiness
+
+**Status:** Big Boy Broadcast Ready — must never be weakened in future refactors.  
+**Owner:** PipelineManager  
+**Phase:** Every tick where the active segment type is PAD (segment-swap-to-PAD, slot A/B, shadow promotion, any path using PerformSegmentSwap)  
+**Depends on:** INV-PAD-PRODUCER, fence/emit path semantics  
+
+When the **active segment type** is **PAD**, the audio source for that tick **MUST**:
+
+1. **Be non-null** — effective audio source pointer MUST NOT be null.
+2. **Be routable to a concrete AudioBuffer** — MUST resolve to a real AudioLookaheadBuffer used for emission (e.g. live buffer after segment swap).
+3. **Have at least one tick-worth of silence available before fence evaluation** — PAD silence MUST be pushed into the emission buffer before the fence/emit path evaluates.
+4. **Not rely on IsPrimed() when PAD silence was injected that tick** — if silence was pushed in the same tick (e.g. segment-swap-to-PAD), the emit path MUST NOT require IsPrimed(); treat “PAD segment + silence pushed this tick” as sufficient.
+5. **Never trigger FENCE_AUDIO_PAD during segment-swap-to-PAD** — the branch that logs `WARNING FENCE_AUDIO_PAD: audio not primed` MUST NOT be taken when the active segment is PAD.
+
+**Authority:** Segment type (active segment for the tick) is the authority for “this tick is PAD”; MUST NOT rely solely on the decision classifier (e.g. `decision == kPad`), which may lag at the seam.
+
+**Scope:** Applies to segment swaps (CONTENT→PAD, CONTENT→CONTENT→PAD, multi-slot), slot A/B activation, shadow decode promotion, any PerformSegmentSwap path, 30fps and 60fps. Does NOT apply to decoder starvation, intentional underflow tests, or audio-disable modes.
+
+**Failure signature:** Any occurrence of `WARNING FENCE_AUDIO_PAD: audio not primed`; any tick in a PAD segment where `a_src == nullptr`; any PAD segment window where silence is not pushed before fence evaluation.
+
+**Contract test:** `pkg/air/tests/contracts/BlockPlan/PipelineManagerSegmentSwapPadFenceContractTests.cpp` — `SegmentSwapToPad_NoFenceAudioPad` enforces this invariant.
+
+---
+
 ### INV-NO-FLOAT-FPS-TIMEBASE-001: No Floating FPS Timebase in Runtime
 
 **Owner:** All runtime code under pkg/air/src and pkg/air/include

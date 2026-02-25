@@ -411,6 +411,7 @@ class ChannelManager:
         """
         self.channel_id = channel_id
         self.clock = clock
+        assert self.clock is not None, "ChannelManager requires a MasterClock"
         self.schedule_service = schedule_service
         self.program_director = program_director
         self._loop: asyncio.AbstractEventLoop | None = event_loop
@@ -1703,6 +1704,7 @@ class BlockPlanProducer(Producer):
                     channel_id_int=self.channel_config.channel_id_int,
                     ts_socket_path=self._socket_path,
                     program_format=self._program_format,
+                    clock=self.clock,
                     on_block_complete=self._on_block_complete,
                     on_session_end=self._on_session_end,
                     on_block_started=self._on_block_started,
@@ -2149,7 +2151,7 @@ class BlockPlanProducer(Producer):
                 self._queue_depth - self._feed_credits
             )
 
-        now_utc_ms = int(time.time() * 1000)
+        now_utc_ms = int(self.clock.now_utc().timestamp() * 1000)
 
         # Pre-evaluate next block deadline BEFORE the credit gate.
         # This records when _feed_ahead first noticed the upcoming block
@@ -2312,7 +2314,7 @@ class BlockPlanProducer(Producer):
         """How many ms of delivered content remain ahead of current UTC."""
         if self._max_delivered_end_utc_ms == 0:
             return 0
-        current_utc_ms = int(time.time() * 1000)
+        current_utc_ms = int(self.clock.now_utc().timestamp() * 1000)
         return max(0, self._max_delivered_end_utc_ms - current_utc_ms)
 
     def _compute_ready_by_ms(self, block: "BlockPlan") -> int:
@@ -2330,7 +2332,7 @@ class BlockPlanProducer(Producer):
         annotation = _AsRunAnnotation(
             annotation_type="missed_ready_by",
             block_id=block_id,
-            timestamp_utc_ms=int(time.time() * 1000),
+            timestamp_utc_ms=int(self.clock.now_utc().timestamp() * 1000),
             metadata={"lateness_ms": lateness_ms},
         )
         self._asrun_annotations.append(annotation)
