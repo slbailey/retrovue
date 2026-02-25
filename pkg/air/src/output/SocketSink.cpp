@@ -5,6 +5,7 @@
 // Copyright (c) 2025 RetroVue
 
 #include "retrovue/output/SocketSink.h"
+#include "retrovue/output/SinkDiagnostics.h"
 
 #include <cerrno>
 #include <cstring>
@@ -21,8 +22,13 @@
 
 namespace retrovue::output {
 
+namespace {
+static std::atomic<uint64_t> g_sink_generation{0};
+}
+
 SocketSink::SocketSink(int fd, const std::string& name, size_t buffer_capacity)
-    : fd_(fd), name_(name), buffer_capacity_(buffer_capacity) {
+    : fd_(fd), name_(name), buffer_capacity_(buffer_capacity),
+      sink_generation_(g_sink_generation.fetch_add(1, std::memory_order_relaxed)) {
   // =========================================================================
   // INV-SOCKET-NONBLOCK: Debug assertion to verify fd is non-blocking.
   // The caller (MpegTSOutputSink) MUST set O_NONBLOCK before constructing.
@@ -70,10 +76,10 @@ void SocketSink::DetachSlowConsumer(const std::string& reason) {
   queue_cv_.notify_all();
   drain_cv_.notify_all();  // Unblock WaitAndConsumeBytes
 
-  // Close FD immediately to unblock writer thread if in poll()
+  // Close FD immediately to unblock writer thread if in poll() (Hook B)
   if (fd_ >= 0) {
     ::shutdown(fd_, SHUT_RDWR);
-    ::close(fd_);
+    CLOSE_FD(fd_, "DetachSlowConsumer", static_cast<int64_t>(sink_generation_));
     fd_ = -1;
   }
 
@@ -261,7 +267,12 @@ void SocketSink::WriterThreadLoop() {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
           continue;  // Retry
         }
-        // Real error
+        // Real error — Hook A: first write failure diagnostic; Hook C: detach to stop spiral
+        if (errno == EPIPE) {
+          LogFirstWriteFailure(OutputKind::kSocket, fd_, this, sink_generation_, "writer_thread pid=n/a");
+          DetachSlowConsumer("send() EPIPE");
+          break;  // Exit inner loop; outer loop will see writer_stop_ and exit
+        }
         uint64_t err_count = write_errors_.fetch_add(1, std::memory_order_relaxed);
         if ((err_count & 0xFF) == 0) {
           std::cerr << "[SocketSink:" << name_ << "] send() error: "
@@ -317,11 +328,30 @@ void SocketSink::Close() {
     writer_thread_.join();
   }
 
-  // Actually close the socket FD
+  // Actually close the socket FD (Hook B)
   if (fd_ >= 0) {
     ::shutdown(fd_, SHUT_WR);  // Signal EOF to peer
-    ::close(fd_);              // Release the FD
+    CLOSE_FD(fd_, "Close", static_cast<int64_t>(sink_generation_));
     fd_ = -1;
+  }
+}
+
+void SocketSink::ForceDetachAndClose(const std::string& reason) {
+  bool expected = false;
+  if (!detached_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    return;  // Already detached
+  }
+  closed_.store(true, std::memory_order_release);
+  writer_stop_.store(true, std::memory_order_release);
+  queue_cv_.notify_all();
+  drain_cv_.notify_all();
+  if (fd_ >= 0) {
+    ::shutdown(fd_, SHUT_RDWR);
+    CLOSE_FD(fd_, reason.c_str(), static_cast<int64_t>(sink_generation_));
+    fd_ = -1;
+  }
+  if (detach_callback_) {
+    detach_callback_(reason);
   }
 }
 

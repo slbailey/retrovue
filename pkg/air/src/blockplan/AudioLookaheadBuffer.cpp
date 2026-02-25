@@ -167,7 +167,7 @@ int AudioLookaheadBuffer::DepthMs() const {
       oss << "[AudioBuffer] DBG_AUDIO_DEPTH"
           << " total_samples_in_buffer=" << total_samples_in_buffer_
           << " depth_ms=" << depth_ms;
-      Logger::Info(oss.str());
+      Logger::Debug(oss.str());
     }
   }
   return depth_ms;

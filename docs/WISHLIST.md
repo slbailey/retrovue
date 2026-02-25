@@ -134,3 +134,72 @@ Ideas and desired improvements. Not yet committed to roadmaps or contracts.
 
 ---
 
+- **Independent Audio Servicing Pipeline (Broadcast-Grade)** *(Phase 2 / Phase 8+; design doc / wishlist. Not immediately required to ship; canonical “real broadcast” endpoint.)*
+
+  **Problem:** Current architecture couples audio production to video decode progress. When video buffering backpressures decode, audio can starve, causing `AUDIO_UNDERFLOW_SILENCE`, stutter, slow-motion perception, and PCR/PTS instability. Audio is effectively a side effect of video decode rather than an independently serviced stream.
+
+  **Goals:**
+  - Decouple audio production from video decode so that audio is never starved by video backpressure.
+  - Maintain a dedicated **AudioLookaheadBuffer** target depth via continuous demux/decode/resample independent of video buffer fullness.
+  - Allow video decode to be independently throttled; audio is protected by its own watermarks and backpressure rules.
+  - Enforce explicit policies for mixed-FPS and DROP/CADENCE: video frame selection may drop/repeat; audio must reflect continuous media time and house clock pacing.
+
+  **Non-goals:**
+  - Do not change Core’s ownership of schedule intent, segment boundaries, or playout plans; Core still drives what is “live” and when seams occur.
+  - Do not remove or bypass the existing PAD A/B architecture; the audio pipeline must integrate with seam readiness and segment swaps.
+  - Do not introduce a second “editorial” timeline; audio and video remain on the same house clock and media-time basis, with servicing decoupled, not semantics.
+
+  **Proposed design:**
+
+  1. **Dedicated AudioService**
+     - Demuxes, decodes, and resamples audio **continuously** to maintain `AudioLookaheadBuffer` at a configurable target depth.
+     - Owns its own pull from the source (e.g. same asset/container as video, but separate read/decode path) so that backpressure on video decode does not block audio fill.
+     - Watermarks: refill when depth falls below low watermark; optional high watermark to avoid unbounded buffering. Backpressure rules apply only to the audio path (e.g. do not advance demux past a safe lead over video if we need A/V sync; see dual-clock below).
+
+  2. **Video decode independence**
+     - Video decode can be throttled (e.g. when downstream is slow) without reducing audio decode rate. AudioService runs on its own thread/task and is not gated by “next video frame” availability.
+     - Sync discipline: audio and video are aligned on **house clock** and **media time** at defined sync points (e.g. segment start, seam); during steady state, audio pacing is driven by house clock, and video frame selection (DROP/DUPLICATE/CADENCE) is driven by output fps and availability. Audio never “waits” for video decode to produce the next frame.
+
+  3. **Mixed-FPS and DROP/CADENCE policy**
+     - **Video:** Frame selection may drop or repeat frames (e.g. 60→29.97 DROP, 23.976→29.97 DUPLICATE) per existing or future cadence engine. Video PTS reflects selected output frames.
+     - **Audio:** Must reflect **continuous** media time and house clock pacing: no artificial gaps or repeats that would cause audible stutter or drift. Resampling handles rate conversion; audio buffer is consumed at a rate determined by house clock (and optionally PCR), not by video frame ticks.
+
+  4. **API sketches (conceptual)**
+     - `AudioService::Start(asset_or_demux_handle, output_format, target_depth_ms, low_watermark_ms)` — start continuous fill against `AudioLookaheadBuffer`.
+     - `AudioService::Stop()` / `AudioService::SwitchSource(next_asset_or_handle)` — for seam and segment boundaries.
+     - `AudioService::GetDepthMs()`, `AudioService::WaitForMinDepth(min_ms, timeout)` — for readiness and integration with seam logic (e.g. PAD_B priming).
+     - Optional: `AudioService::SetHouseClock(clock)` or equivalent so pacing is explicit and testable.
+     - Buffer/consumer side: existing (or extended) `AudioLookaheadBuffer` remains the contract boundary; AudioService is the sole producer for that buffer during a segment.
+
+  5. **Interaction with TickProducer / FFmpegDecoder**
+     - **TickProducer:** Continues to drive “output” time (house clock, frame ticks). It does **not** drive audio decode; it drives when audio is **consumed** (e.g. when we emit samples to the mux). AudioService runs asynchronously and keeps the buffer full; TickProducer (or mux stage) pulls from `AudioLookaheadBuffer` at playout time.
+     - **FFmpegDecoder:** Today it may do both video and audio decode in one pipeline. Under this design, either:
+       - **Option A:** FFmpegDecoder remains the video decoder; a separate **audio-only** demux/decode path (e.g. dedicated AVFormatContext/AVCodecContext for audio, or a separate “audio decoder” instance reading from the same or a split demux) feeds AudioService. Demux may be shared (with careful thread-safety) or split (e.g. pre-demux copy of audio stream).  
+       - **Option B:** FFmpegDecoder exposes an “audio only” mode or a dedicated AudioDecoder that is invoked by AudioService on its own thread; video decode path is separate and can be throttled without blocking this path.
+     - Contract: AudioService never blocks on “next video frame”; FFmpegDecoder (video) and AudioService (audio) do not share a single blocking decode loop.
+
+  6. **Seams (PAD/content) and dual-clock drift**
+     - **On seam (segment swap, PAD ↔ content):** AudioService must switch source (new segment or PAD). Sync point: at the seam, we define a new common anchor (e.g. house clock time T, media time M). AudioService drains or flushes as per segment-end policy, then starts filling from the new source; consumer (mux/TickProducer) continues to consume at house clock rate so there is no “pause” in wall-clock time. Any small gap is handled by documented policy (e.g. silence insertion, or hold last sample for one segment boundary only).
+     - **Avoiding dual-clock drift:** There is only **one** authoritative clock for output: the house clock (and PCR if used). Audio **pacing** (consumption from AudioLookaheadBuffer) is driven by that clock. Audio **production** (decode/resample into the buffer) is driven by “keep buffer at target depth” and must not run on a different long-term rate. So: production runs “as fast as needed” to keep depth, consumption runs at house clock rate; we avoid drift by (1) not having a separate “audio clock” and (2) aligning to house clock at seams and optionally at periodic sync points. No second PLL or clock domain for audio.
+
+  **Invariants / Contracts (candidate):**
+  - **INV-AUDIO-001:** Audio consumption rate is determined only by house clock (and PCR if applicable); no rate derived from video frame ticks.
+  - **INV-AUDIO-002:** AudioService maintains `AudioLookaheadBuffer` depth between configured low and high watermarks during steady state; underflow (depth below minimum required for playout) is a failure mode that must be observable and recoverable.
+  - **INV-AUDIO-003:** At segment seam, audio and video share the same sync anchor (house time + media time); no independent “audio timeline” that can drift from video.
+  - **INV-AUDIO-004:** Video frame selection (DROP/CADENCE) does not alter audio sample emission; audio reflects continuous media time and house-clock pacing.
+
+  **Observability:**
+  - **Metrics:** Audio buffer depth (min/max/current), underflow count, refill latency, source switch latency at seams, resampler input/output rates.
+  - **Logging:** Segment start/end for audio source, depth at seam, underflow events (with reason: backpressure vs decode lag vs source switch), and any sync correction applied.
+  - **Alerts:** When depth remains below low watermark for longer than a threshold, or when underflow occurs (e.g. `AUDIO_UNDERFLOW_SILENCE` replacement with structured event + counter).
+
+  **Rollout steps (conceptual):**
+  1. **Design and contract:** Document AudioService API and invariants in AIR contracts; define buffer ownership and seam handoff with existing PAD/SeamScheduler.
+  2. **Audio-only demux/decode path:** Implement or isolate an audio-only path (Option A or B above) that can run without blocking on video decode; unit tests with synthetic sources.
+  3. **AudioService component:** Implement AudioService that fills `AudioLookaheadBuffer` from the audio-only path; integrate with existing buffer and watermarks; no change yet to TickProducer/FFmpegDecoder coupling in production.
+  4. **Decouple consumption:** Ensure TickProducer/mux consumes audio from buffer at house clock rate only; remove any implicit coupling where audio “waits” on video decode.
+  5. **Seam integration:** On segment swap, drive AudioService source switch and sync anchor; validate no dual-clock drift and no underflow at seams (tests + staging).
+  6. **Observability and hardening:** Add metrics, logging, and recovery policies; replace legacy underflow handling with structured events; document rollout and rollback.
+
+---
+

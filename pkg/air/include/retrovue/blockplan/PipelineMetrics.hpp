@@ -70,6 +70,10 @@ struct PipelineMetrics {
   int64_t decode_latency_p95_us = 0;
   int64_t decode_latency_mean_us = 0;
 
+  // ---- INV-AUDIO-LIVENESS-001 diagnostics (audio-first decode under backpressure) ----
+  int64_t decode_continued_for_audio_while_video_full = 0;
+  int64_t decode_parked_video_full_audio_low = 0;
+
   // ---- Video Refill Rate ----
   double video_refill_rate_fps = 0.0;
 

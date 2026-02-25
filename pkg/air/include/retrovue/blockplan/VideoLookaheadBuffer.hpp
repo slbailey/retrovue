@@ -196,6 +196,10 @@ class VideoLookaheadBuffer {
   struct RefillRate { int64_t frames = 0; int64_t elapsed_us = 0; };
   RefillRate GetRefillRate() const;
 
+  // INV-AUDIO-LIVENESS-001 diagnostics: audio-first decode under backpressure (counters only).
+  int64_t DecodeContinuedForAudioWhileVideoFull() const;
+  int64_t DecodeParkedVideoFullAudioLow() const;
+
   // --- Lifecycle ---
 
   // Stop fill thread (if running), clear buffer and counters.
@@ -263,6 +267,10 @@ class VideoLookaheadBuffer {
 
   // Fill start time for refill rate computation.
   std::chrono::steady_clock::time_point fill_start_time_{};
+
+  // INV-AUDIO-LIVENESS-001 diagnostics (not invariants): audio-first decode under backpressure.
+  std::atomic<int64_t> decode_continued_for_audio_while_video_full_{0};
+  std::atomic<int64_t> decode_parked_video_full_audio_low_{0};
 };
 
 }  // namespace retrovue::blockplan

@@ -4,6 +4,7 @@
 // Copyright (c) 2025 RetroVue
 
 #include "retrovue/output/MpegTSOutputSink.h"
+#include "retrovue/output/SinkDiagnostics.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -1333,16 +1334,19 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     // INV-TS-CONTINUITY: Track last successful TS write for null packet injection
     sink->MarkTsWritten();
   } else {
-    // Sink closed or detached (slow consumer)
+    // Sink closed or detached (slow consumer) — Hook A + Hook C
     sink->dbg_bytes_dropped_.fetch_add(
         static_cast<uint64_t>(buf_size), std::memory_order_relaxed);
 
-    // Check if sink was detached (slow consumer)
-    if (sink->socket_sink_->IsDetached()) {
-      // Sink detached - return error to stop FFmpeg output
-      // Channel continues; future consumers can attach
-      return -1;
+    if (!sink->socket_sink_->IsDetached()) {
+      output::LogFirstWriteFailure(output::OutputKind::kSocket,
+                                  sink->socket_sink_->GetFd(),
+                                  sink->socket_sink_.get(),
+                                  sink->socket_sink_->GetSinkGeneration(),
+                                  "n/a");
+      sink->socket_sink_->ForceDetachAndClose("WriteToFdCallback: sink full or closed");
     }
+    return -1;
   }
 
   // INV-P9-BOOT-LIVENESS: Log when first decodable TS packet is emitted after sink attach

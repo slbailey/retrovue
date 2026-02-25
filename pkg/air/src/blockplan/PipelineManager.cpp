@@ -35,6 +35,7 @@
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/output/SocketSink.h"
+#include "retrovue/output/SinkDiagnostics.h"
 #include "retrovue/util/Logger.hpp"
 #include "time/SystemTimeSource.hpp"
 
@@ -565,7 +566,7 @@ void PipelineManager::Run() {
   int flags = fcntl(sink_fd, F_GETFL, 0);
   if (flags < 0 || fcntl(sink_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
     Logger::Error("[PipelineManager] fcntl(O_NONBLOCK) failed");
-    ::close(sink_fd);
+    CLOSE_FD(sink_fd, "fcntl(O_NONBLOCK) failed", -1);
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
       callbacks_.on_session_ended("nonblock_failed", 0);
@@ -658,7 +659,13 @@ void PipelineManager::Run() {
       wctx->bytes_written += buf_size;
       return buf_size;
     }
-    // Timed out or closed — signal broken pipe to FFmpeg.
+    // Timed out or closed — Hook A: first write failure diagnostic; Hook C: detach to stop spiral
+    output::LogFirstWriteFailure(output::OutputKind::kSocket,
+                                wctx->sink->GetFd(),
+                                wctx->sink,
+                                wctx->sink->GetSinkGeneration(),
+                                "n/a");
+    wctx->sink->ForceDetachAndClose("write_frame failed: EPIPE (timeout or closed)");
     return AVERROR(EPIPE);
   };
 
@@ -1165,6 +1172,8 @@ void PipelineManager::Run() {
 
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
+    // Hook A: set thread-local tick/block so write callback can log on first EPIPE
+    output::SetTickContext(session_frame_index, live_parent_block_.block_id);
     // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
     // Real clock: sleep until deadline. Deterministic clock: no-op (instant advance).
     auto deadline = clock->DeadlineFor(session_frame_index);
@@ -2299,7 +2308,7 @@ void PipelineManager::Run() {
               << " pad_dest=" << (pad_dest ? "non-null" : "null")
               << " depth_ms_after_push=" << (pad_dest ? pad_dest->DepthMs() : -1)
               << " silence_pushed=" << (pad_dest ? "yes" : "no");
-          Logger::Info(oss.str()); }
+          Logger::Debug(oss.str()); }
 #endif
 
         if (past_fence) {
@@ -2318,7 +2327,7 @@ void PipelineManager::Run() {
     // Segment-swap-to-PAD: when active segment is PAD, push PAD silence into live buffer
     // so we never hit FENCE_AUDIO_PAD (decision can lag so we don't rely on kPad/kStandby).
     if (seam_tick_pad_this_tick && active_segment_is_pad) {
-      { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " before_post_switch_pad_injection"; Logger::Info(oss.str()); }
+      { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " before_post_switch_pad_injection"; Logger::Debug(oss.str()); }
     }
     if (active_segment_is_pad && audio_buffer_ && !silence_pushed_this_tick) {
       int64_t sr_pad = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
@@ -2339,7 +2348,7 @@ void PipelineManager::Run() {
       current_consecutive_fallback_ticks++;
     }
     if (seam_tick_pad_this_tick && active_segment_is_pad) {
-      { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " after_post_switch_pad_injection"; Logger::Info(oss.str()); }
+      { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " after_post_switch_pad_injection"; Logger::Debug(oss.str()); }
     }
 
     // ==================================================================
@@ -2373,7 +2382,7 @@ void PipelineManager::Run() {
           << " a_emit_primed=" << (a_emit ? a_emit->IsPrimed() : false)
           << " a_emit_depth_ms=" << (a_emit ? a_emit->DepthMs() : -1)
           << " silence_pushed_this_tick=" << (silence_pushed_this_tick ? "yes" : "no");
-      Logger::Info(oss.str()); }
+      Logger::Debug(oss.str()); }
 #endif
 
     if (using_degraded_held_this_tick) {
@@ -2395,7 +2404,7 @@ void PipelineManager::Run() {
       current_consecutive_fallback_ticks++;
     } else if (a_emit && (a_emit->IsPrimed() || IsPadDecision(decision) || active_segment_is_pad)) {
       if (seam_tick_pad_this_tick && active_segment_is_pad) {
-        { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " before_TryPopSamples"; Logger::Info(oss.str()); }
+        { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " before_TryPopSamples"; Logger::Debug(oss.str()); }
       }
       // DEBUG SEAM: prove which buffer is popped on seam tick (temporary, no logic change).
       {
@@ -2417,12 +2426,12 @@ void PipelineManager::Run() {
             << " a_emit_depth_ms=" << a_emit->DepthMs()
             << " a_emit_is_primed=" << a_emit->IsPrimed()
             << " samples_this_tick=" << samples_this_tick;
-        Logger::Info(oss.str());
+        Logger::Debug(oss.str());
       }
       buffer::AudioFrame audio_out;
       if (a_emit->TryPopSamples(samples_this_tick, audio_out)) {
         if (seam_tick_pad_this_tick && active_segment_is_pad) {
-          { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " TryPopSamples_success"; Logger::Info(oss.str()); }
+          { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " TryPopSamples_success"; Logger::Debug(oss.str()); }
         }
         session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, IsPadDecision(decision));
         audio_samples_emitted += samples_this_tick;
@@ -2451,7 +2460,7 @@ void PipelineManager::Run() {
                 << " tick=" << session_frame_index
                 << " a_emit=" << static_cast<void*>(a_emit)
                 << " depth_at_underflow=" << a_emit->DepthMs();
-            Logger::Info(oss.str()); }
+            Logger::Debug(oss.str()); }
 
           static constexpr int kChannels = buffer::kHouseAudioChannels;
           static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
@@ -2475,7 +2484,7 @@ void PipelineManager::Run() {
         }
     } else {
       if (seam_tick_pad_this_tick && active_segment_is_pad) {
-        { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " FENCE_AUDIO_PAD_branch_entered"; Logger::Info(oss.str()); }
+        { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " FENCE_AUDIO_PAD_branch_entered"; Logger::Debug(oss.str()); }
       }
       // SAFETY NET: No audio source or buffer not primed (and not a PAD tick
       // that just pushed).  Emit inline silence to prevent A/V drift.
@@ -2513,7 +2522,7 @@ void PipelineManager::Run() {
             << " a_src_null=" << (a_src == nullptr)
             << " silence_enqueued_before_fence=" << (silence_pushed_this_tick ? "yes" : "no")
             << " tick=" << session_frame_index;
-        Logger::Info(oss.str()); }
+        Logger::Debug(oss.str()); }
 #endif
       // OUT-SEG-005b: Fence pad silence = fallback tick.
       current_consecutive_fallback_ticks++;
@@ -2595,7 +2604,7 @@ void PipelineManager::Run() {
             << " audio_source=" << audio_source
             << " audio_buf_depth_ms=" << audio_buffer_->DepthMs()
             << " video_buf_depth=" << video_buffer_->DepthFrames();
-        Logger::Info(oss.str()); }
+        Logger::Debug(oss.str()); }
     }
 
     // SEAM_PROOF_FIRST_FRAME: Log when first non-pad frame from the incoming
@@ -2661,6 +2670,10 @@ void PipelineManager::Run() {
           metrics_.video_buffer_frames_popped = video_buffer_->TotalFramesPopped();
           metrics_.decode_latency_p95_us = video_buffer_->DecodeLatencyP95Us();
           metrics_.decode_latency_mean_us = video_buffer_->DecodeLatencyMeanUs();
+          metrics_.decode_continued_for_audio_while_video_full =
+              video_buffer_->DecodeContinuedForAudioWhileVideoFull();
+          metrics_.decode_parked_video_full_audio_low =
+              video_buffer_->DecodeParkedVideoFullAudioLow();
           {
             auto r = video_buffer_->GetRefillRate();
             metrics_.video_refill_rate_fps = (r.elapsed_us > 0)
@@ -2708,7 +2721,7 @@ void PipelineManager::Run() {
           oss << " sink=" << socket_sink->GetCurrentBufferSize()
               << "/" << socket_sink->GetBufferCapacity();
         }
-        Logger::Info(oss.str()); }
+        Logger::Debug(oss.str()); }
 
       // Low-water warnings (throttled to heartbeat interval).
       if (video_buffer_ && video_buffer_->IsBelowLowWater()) {
@@ -3143,6 +3156,10 @@ void PipelineManager::Run() {
       metrics_.video_buffer_frames_popped = video_buffer_->TotalFramesPopped();
       metrics_.decode_latency_p95_us = video_buffer_->DecodeLatencyP95Us();
       metrics_.decode_latency_mean_us = video_buffer_->DecodeLatencyMeanUs();
+      metrics_.decode_continued_for_audio_while_video_full =
+          video_buffer_->DecodeContinuedForAudioWhileVideoFull();
+      metrics_.decode_parked_video_full_audio_low =
+          video_buffer_->DecodeParkedVideoFullAudioLow();
       {
         auto r = video_buffer_->GetRefillRate();
         metrics_.video_refill_rate_fps = (r.elapsed_us > 0)

@@ -490,6 +490,58 @@ TEST(LookaheadContract, CombinedStall_BothBuffersSustainOutput) {
 }
 
 // =============================================================================
+// INV-AUDIO-LIVENESS-001: Audio-first decode under backpressure
+//
+// When video buffer is at capacity, decode MUST continue if audio is below
+// low-water so that audio is serviced (video frames dropped). Ensures no
+// AUDIO_UNDERFLOW_SILENCE from mixed-FPS (e.g. 60fps→29.97) where video fills
+// and would otherwise park and starve audio.
+// =============================================================================
+
+TEST(LookaheadContract, INV_AUDIO_LIVENESS_001_AudioServicedWhenVideoFull) {
+  constexpr int kVideoTargetDepth = 5;
+  constexpr int kAudioTargetMs = 1000;
+  constexpr int kAudioLowWaterMs = 200;
+  constexpr int kTicksAudioOnly = 80;   // ~2.7s at 30fps
+  constexpr int kSamplesPerTick = 1600;  // 30fps @ 48kHz
+
+  VideoLookaheadBuffer vbuf(kVideoTargetDepth);
+  AudioLookaheadBuffer abuf(kAudioTargetMs, buffer::kHouseAudioSampleRate,
+                            buffer::kHouseAudioChannels, kAudioLowWaterMs, 800);
+  ThreadTrackingProducer prod(64, 48, 30.0, 500, "a.mp4");
+  std::atomic<bool> stop{false};
+
+  vbuf.StartFilling(&prod, &abuf, FPS_30, FPS_30, &stop);
+
+  // Wait until video buffer reaches target so fill thread would normally park.
+  ASSERT_TRUE(WaitFor([&] { return vbuf.DepthFrames() >= kVideoTargetDepth; },
+                     std::chrono::milliseconds(2000)))
+      << "Video buffer must reach target depth";
+
+  // Consume ONLY audio at output tick rate (no video pop). Video stays full,
+  // so without audio-first gating the fill thread would stay parked and audio
+  // would underflow. With the fix, fill thread continues decoding for audio
+  // and drops video frames.
+  int underflows = 0;
+  for (int t = 0; t < kTicksAudioOnly; t++) {
+    buffer::AudioFrame af;
+    if (abuf.IsPrimed() && !abuf.TryPopSamples(kSamplesPerTick, af))
+      underflows++;
+    std::this_thread::sleep_for(std::chrono::milliseconds(33));
+  }
+
+  vbuf.StopFilling(false);
+
+  EXPECT_EQ(abuf.UnderflowCount(), 0)
+      << "INV-AUDIO-LIVENESS-001: Audio must not underflow when video is full "
+         "and audio is below low-water (decode continues for audio, drops video)";
+  EXPECT_GT(vbuf.DecodeContinuedForAudioWhileVideoFull(), 0)
+      << "Fill thread must have continued decode for audio while video full";
+  // Video may drop frames; audio depth should stay near target or at least above 1 tick.
+  EXPECT_GE(abuf.DepthMs(), 0) << "Audio depth observable";
+}
+
+// =============================================================================
 // SECTION 3 — UNDERFLOW IS HARD FAULT
 //
 // INV-VIDEO-LOOKAHEAD-001 R3 / INV-AUDIO-LOOKAHEAD-001 R2

@@ -8,6 +8,7 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -766,11 +767,12 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       int write_ret = av_write_frame(format_ctx_, packet_);
       // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Flush after EVERY write, not just at end
       avio_flush(format_ctx_->pb);
-      if (write_ret < 0) {
+      if (write_ret < 0 && write_ret != AVERROR(EPIPE)) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE];
         av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
         std::cerr << "[EncoderPipeline] write_frame failed: " << errbuf << std::endl;
       }
+      // EPIPE: already logged once by sink (Hook A); avoid spam (Hook C)
     }
     return true;
   }
@@ -1109,7 +1111,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         if (write_ret == AVERROR(EAGAIN)) {
           break;
         }
-        if (write_ret < 0) {
+        if (write_ret < 0 && write_ret != AVERROR(EPIPE)) {
           char write_errbuf[AV_ERROR_MAX_STRING_SIZE];
           av_strerror(write_ret, write_errbuf, AV_ERROR_MAX_STRING_SIZE);
           std::cerr << "[EncoderPipeline] Error writing drained packet: " << write_errbuf << std::endl;
@@ -1197,9 +1199,11 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       break;
     }
     if (write_ret < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      std::cerr << "[EncoderPipeline] Error writing packet: " << errbuf << std::endl;
+      if (write_ret != AVERROR(EPIPE)) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        std::cerr << "[EncoderPipeline] Error writing packet: " << errbuf << std::endl;
+      }
       continue;
     }
   }
@@ -1248,7 +1252,7 @@ void EncoderPipeline::close() {
         // av_write_frame takes ownership and unrefs the packet.
         int write_ret = av_write_frame(format_ctx_, packet_);
         avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
-        if (write_ret < 0 && write_ret != AVERROR(EAGAIN)) {
+        if (write_ret < 0 && write_ret != AVERROR(EAGAIN) && write_ret != AVERROR(EPIPE)) {
           char errbuf[AV_ERROR_MAX_STRING_SIZE];
           av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
           std::cerr << "[EncoderPipeline] Error writing flushed packet: " << errbuf << std::endl;
@@ -1766,7 +1770,7 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
 
       int mux_ret = av_write_frame(format_ctx_, packet_);
       avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
-      if (mux_ret < 0) {
+      if (mux_ret < 0 && mux_ret != AVERROR(EPIPE)) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE];
         av_strerror(mux_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
         std::cerr << "[EncoderPipeline] Error muxing audio packet: " << errbuf << std::endl;

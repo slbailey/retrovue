@@ -105,6 +105,12 @@ class SocketSink {
   // Returns true if sink was detached due to slow consumer (buffer overflow)
   bool IsDetached() const { return detached_.load(std::memory_order_acquire); }
 
+  // Hook A / Hook C: diagnostics and EPIPE handling.
+  int GetFd() const { return fd_; }
+  uint64_t GetSinkGeneration() const { return sink_generation_; }
+  // Force detach and close from write path (e.g. first EPIPE) to stop death spiral.
+  void ForceDetachAndClose(const std::string& reason);
+
   // =========================================================================
   // DIAGNOSTICS & LIVENESS (INV-HONEST-LIVENESS-METRICS)
   // =========================================================================
@@ -150,6 +156,7 @@ class SocketSink {
   size_t buffer_capacity_;
   std::atomic<bool> closed_{false};
   std::atomic<bool> detached_{false};
+  uint64_t sink_generation_{0};  // Unique id for this sink instance (Hook A/B)
 
   // Bounded buffer queue (SS-002, SS-003)
   mutable std::mutex queue_mutex_;
