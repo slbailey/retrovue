@@ -301,10 +301,18 @@ void VideoLookaheadBuffer::FillLoop() {
          !fill_stop_.load(std::memory_order_acquire) &&
          !(stop_signal && stop_signal->load(std::memory_order_acquire))) {
 
+    // INV-AUDIO-LIVENESS-001: When we continue decode for audio while video full,
+    // we drop the video frame this cycle (do not enqueue); audio is still pushed.
+    bool drop_video_this_cycle = false;
+
     // INV-P10-PIPELINE-FLOW-CONTROL: Strict slot-based gating (no hysteresis).
     //
     // FILLING path (steady_filling_ == true): Read depth under a brief lock.
     // Park when depth >= target_depth_frames_ (no 2×/4× high-water).
+    //
+    // INV-AUDIO-LIVENESS-001: Audio-first decode under backpressure.
+    // When video is at capacity but audio is below low-water, do NOT park:
+    // continue decoding to service audio; push audio only, drop video frame.
     //
     // PARKED path (steady_filling_ == false): Block on space_cv_ until
     // depth < target (one slot free) or audio burst fires. notify_one per
@@ -330,15 +338,31 @@ void VideoLookaheadBuffer::FillLoop() {
 
       if (!is_bootstrap && filling_now) {
         // FILLING path: park when depth >= target (strict slot-based).
+        // INV-AUDIO-LIVENESS-001: unless audio is below low-water — then continue
+        // decoding for audio only (drop video frame this cycle).
         int depth;
         {
           std::lock_guard<std::mutex> lock(mutex_);
           depth = static_cast<int>(frames_.size());
         }
         if (depth >= target_depth_frames_) {
-          // At or above target — transition to PARKED.
-          steady_filling_.store(false, std::memory_order_relaxed);
-          // Fall through to the condvar path below so we park properly.
+          const int audio_depth_ms = audio_buffer ? audio_buffer->DepthMs() : 0;
+          const int audio_low_ms = audio_buffer ? audio_buffer->LowWaterMs() : 0;
+          const bool audio_below_low = (audio_buffer && audio_depth_ms < audio_low_ms);
+          if (audio_below_low) {
+            // Audio-first: do not park; continue decode to service audio; drop video.
+            skip_wait = true;
+            drop_video_this_cycle = true;
+          } else {
+            // At or above target, audio sufficient — transition to PARKED.
+            steady_filling_.store(false, std::memory_order_relaxed);
+            { std::ostringstream oss;
+              oss << "[FillLoop:" << buffer_label_ << "] PARK"
+                  << " video_depth_frames=" << depth
+                  << " audio_depth_ms=" << audio_depth_ms;
+              Logger::Debug(oss.str()); }
+            // Fall through to the condvar path below so we park properly.
+          }
         } else {
           // Below target — skip condvar, proceed to decode.
           skip_wait = true;
@@ -347,9 +371,13 @@ void VideoLookaheadBuffer::FillLoop() {
 
       if (!skip_wait) {
         // PARKED path (or bootstrap): block on condvar.
+        // INV-AUDIO-LIVENESS-001: Use a short timeout so we re-check the predicate
+        // (including audio < low_water) periodically; otherwise we only wake on
+        // TryPopFrame notify and would never service audio when consumer pops audio only.
+        constexpr auto kParkWaitTimeout = std::chrono::milliseconds(20);
         {
           std::unique_lock<std::mutex> lock(mutex_);
-          space_cv_.wait(lock, [this, stop_signal, audio_buffer] {
+          space_cv_.wait_for(lock, kParkWaitTimeout, [this, stop_signal, audio_buffer] {
             bool stopping = fill_stop_.load(std::memory_order_acquire) ||
                 (stop_signal && stop_signal->load(std::memory_order_acquire));
             if (stopping) return true;
@@ -374,6 +402,11 @@ void VideoLookaheadBuffer::FillLoop() {
             // Strict slot-based: one pop → one wake → one decode cycle at boundary.
             if (depth < target_depth_frames_) {
               steady_filling_.store(true, std::memory_order_relaxed);
+              { std::ostringstream oss;
+                oss << "[FillLoop:" << buffer_label_ << "] UNPARK"
+                    << " video_depth_frames=" << depth
+                    << " audio_depth_ms=" << (audio_buffer ? audio_buffer->DepthMs() : -1);
+                Logger::Debug(oss.str()); }
               return true;
             }
 
@@ -382,8 +415,24 @@ void VideoLookaheadBuffer::FillLoop() {
               int burst_cap = target_depth_frames_ * 4;
               return depth < burst_cap;
             }
+            // INV-AUDIO-LIVENESS-001: Wake to service audio when below low-water even if video full.
+            if (depth >= target_depth_frames_ && audio_buffer &&
+                audio_buffer->DepthMs() < audio_buffer->LowWaterMs()) {
+              steady_filling_.store(true, std::memory_order_relaxed);
+              return true;  // Decode this cycle; video frame will be dropped (set after wait).
+            }
             return false;
           });
+        }
+        // INV-AUDIO-LIVENESS-001: If we woke from wait and video is still full with audio low,
+        // this cycle we decode for audio only and drop the video frame.
+        if (!skip_wait && audio_buffer) {
+          int d;
+          { std::lock_guard<std::mutex> lock(mutex_); d = static_cast<int>(frames_.size()); }
+          const int a_ms = audio_buffer->DepthMs();
+          const int low_ms = audio_buffer->LowWaterMs();
+          if (d >= target_depth_frames_ && a_ms < low_ms)
+            drop_video_this_cycle = true;
         }
         if (fill_stop_.load(std::memory_order_acquire) ||
             (stop_signal && stop_signal->load(std::memory_order_acquire))) {
@@ -424,7 +473,7 @@ void VideoLookaheadBuffer::FillLoop() {
               << " depth=" << depth
               << " steady_filling=" << (filling ? "true" : "false")
               << " state=" << state;
-          Logger::Info(oss.str());
+          Logger::Debug(oss.str());
         }
       }
     }
@@ -529,8 +578,13 @@ void VideoLookaheadBuffer::FillLoop() {
       break;
     }
 
-    // Push to buffer — generation gate prevents stale-frame bleed.
-    {
+    // INV-AUDIO-LIVENESS-001: When video was full but we decoded for audio only,
+    // push audio (already done above) but do not enqueue video — drop frame to avoid unbounded growth.
+    if (drop_video_this_cycle) {
+      decode_continued_for_audio_while_video_full_.fetch_add(1, std::memory_order_relaxed);
+      // Skip frame push; primed_ and buffer depth unchanged.
+    } else {
+      // Push to buffer — generation gate prevents stale-frame bleed.
       std::lock_guard<std::mutex> lock(mutex_);
       if (fill_generation_ != my_gen) {
         exit_reason = "audio_gen_mismatch";
@@ -619,6 +673,8 @@ bool VideoLookaheadBuffer::IsPrimed() const {
 void VideoLookaheadBuffer::Reset() {
   StopFilling(false);
   steady_filling_.store(true, std::memory_order_relaxed);  // INV-BUFFER-HYSTERESIS-001
+  decode_continued_for_audio_while_video_full_.store(0, std::memory_order_relaxed);
+  decode_parked_video_full_audio_low_.store(0, std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(mutex_);
   frames_.clear();
   total_pushed_ = 0;
@@ -727,6 +783,14 @@ VideoLookaheadBuffer::RefillRate VideoLookaheadBuffer::GetRefillRate() const {
   auto elapsed = std::chrono::steady_clock::now() - fill_start_time_;
   int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
   return RefillRate{total_pushed_, elapsed_us > 0 ? elapsed_us : 0};
+}
+
+int64_t VideoLookaheadBuffer::DecodeContinuedForAudioWhileVideoFull() const {
+  return decode_continued_for_audio_while_video_full_.load(std::memory_order_relaxed);
+}
+
+int64_t VideoLookaheadBuffer::DecodeParkedVideoFullAudioLow() const {
+  return decode_parked_video_full_audio_low_.load(std::memory_order_relaxed);
 }
 
 }  // namespace retrovue::blockplan

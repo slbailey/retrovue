@@ -197,6 +197,7 @@ set(AIR_CORE_SOURCES
   src/playout_sinks/mpegts/PTSController.cpp
   # Phase 9.0: OutputBus/OutputSink architecture
   src/output/OutputBus.cpp
+  src/output/SinkDiagnostics.cpp
   src/output/MpegTSOutputSink.cpp
   src/output/SocketSink.cpp
   # BlockPlan asset probing (used by TickProducer)
