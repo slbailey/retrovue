@@ -88,6 +88,9 @@ struct PipelineMetrics {
   // ---- Consecutive Fallback KPI (OUT-SEG-005b) ----
   int64_t max_consecutive_audio_fallback_ticks = 0;  // Broadcast KPI: worst fallback burst
 
+  // ---- FENCE_AUDIO_PAD observability (contract tests: a_src==null at PAD tick) ----
+  int64_t fence_audio_pad_warning_count = 0;  // Ticks where WARNING FENCE_AUDIO_PAD was logged
+
   // ---- Encoder Lifetime ----
   int32_t encoder_open_count = 0;
   int32_t encoder_close_count = 0;

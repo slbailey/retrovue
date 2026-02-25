@@ -207,11 +207,13 @@ def main():
     receiver.start()
 
     # Create PlayoutSession
+    from retrovue.runtime.clock import MasterClock
     session = PlayoutSession(
         channel_id=channel_id,
         channel_id_int=channel_id_int,
         ts_socket_path=socket_path,
         program_format=program_format,
+        clock=MasterClock(),
         on_session_end=lambda reason: logger.info(f"Session ended: {reason}"),
     )
 

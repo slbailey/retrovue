@@ -18,7 +18,10 @@ from __future__ import annotations
 import pytest
 
 from retrovue.runtime.channel_manager import BlockPlanProducer
+from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+
+_TEST_CLOCK = MasterClock()
 
 import sys
 import os
@@ -43,7 +46,7 @@ def _make_producer(
     return BlockPlanProducer(
         channel_id=channel_id,
         schedule_service=svc,
-        clock=None,
+        clock=_TEST_CLOCK,
     )
 
 
@@ -213,7 +216,7 @@ class TestBlockTimingFromScheduleService:
         producer = BlockPlanProducer(
             channel_id="no-svc",
             schedule_service=None,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
         producer._next_block_start_ms = 0
         assert producer._resolve_plan_for_block() is None
@@ -300,7 +303,7 @@ class TestEndToEndThirtyMinuteBlockRegression:
         producer = BlockPlanProducer(
             channel_id="regression-30m",
             schedule_service=svc,
-            clock=None,
+            clock=_TEST_CLOCK,
         )
 
         # Join 10 minutes into the first 30-minute block
@@ -355,19 +358,19 @@ class TestMissingScheduleDataPolicy:
     """INV-BLOCKPLAN-HORIZON-MISS: Missing schedule data is a horizon failure, not execution panic."""
 
     def test_resolve_returns_none_when_no_service(self):
-        producer = BlockPlanProducer(channel_id="no-svc", schedule_service=None, clock=None)
+        producer = BlockPlanProducer(channel_id="no-svc", schedule_service=None, clock=_TEST_CLOCK)
         producer._next_block_start_ms = 0
         assert producer._resolve_plan_for_block() is None
 
     def test_resolve_at_returns_none_when_no_service(self):
-        producer = BlockPlanProducer(channel_id="no-svc", schedule_service=None, clock=None)
+        producer = BlockPlanProducer(channel_id="no-svc", schedule_service=None, clock=_TEST_CLOCK)
         assert producer._resolve_plan_for_block_at(12345) is None
 
     def test_feed_ahead_skips_on_none_no_crash(self):
         """When schedule data is missing, _feed_ahead skips without crashing."""
         from retrovue.runtime.channel_manager import _FeedState
 
-        producer = BlockPlanProducer(channel_id="gap-test", schedule_service=None, clock=None)
+        producer = BlockPlanProducer(channel_id="gap-test", schedule_service=None, clock=_TEST_CLOCK)
         producer._started = True
         producer._session_ended = False
         producer._feed_credits = 2

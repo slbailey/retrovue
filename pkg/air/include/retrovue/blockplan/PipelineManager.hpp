@@ -114,9 +114,19 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
     // Optional: frame-selection cadence refresh after segment swap (test/observability).
     // Invoked when repeat-vs-advance policy is reinitialized from new live source FPS.
-    // Parameters: old_source_fps, new_source_fps, output_fps, mode ("UPSAMPLE" or "DISABLED").
+    // Parameters: old_source_fps, new_source_fps, output_fps, mode ("ACTIVE" or "DISABLED").
     std::function<void(RationalFps old_source_fps, RationalFps new_source_fps,
                        RationalFps output_fps, const std::string& mode)> on_frame_selection_cadence_refresh;
+
+    // Optional: per-tick observability for PAD/fence audio contract tests (60fps repro).
+    // Invoked once per tick with: session_frame_index, decision ("pad"/"content"/"standby"),
+    // a_src_is_null, fence_audio_pad_warning_this_tick, pad_frame_emitted_this_tick.
+    std::function<void(int64_t, const char*, bool, bool, bool)> on_tick_pad_fence_observability;
+
+    // Optional: segment seam take (test/contract). Invoked after PerformSegmentSwap when we have
+    // re-based next_seam_frame_. Parameters: session_frame_index at swap, next_seam_frame_ after rebase.
+    // Used to assert next_seam_frame_ > session_frame_index (no past seam / no catch-up thrash).
+    std::function<void(int64_t session_frame_index, int64_t next_seam_frame)> on_segment_seam_take;
   };
 
   PipelineManager(BlockPlanSessionContext* ctx,
@@ -294,7 +304,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   FedBlock live_parent_block_;
   std::vector<SegmentBoundary> live_boundaries_;
   int32_t current_segment_index_ = 0;
-  std::vector<int64_t> segment_seam_frames_;  // One per segment boundary
+  std::vector<int64_t> planned_segment_seam_frames_;  // Plan boundaries at block activation; runtime swaps may rebase
 
   // Block activation frame — session_frame_index at the moment the block became active.
   // All segment seam frames are computed relative to this anchor.  No UTC math.
@@ -313,10 +323,16 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // Swap deferral: log at most once per seam frame (avoid spam).
   int64_t last_logged_defer_seam_frame_ = -1;
+  // SEAM_INVARIANT_VIOLATION: log at most once per block when we correct next_seam_frame_ (avoid spam).
+  std::string last_seam_invariant_violation_block_id_;
 
   // Segment seam private methods
   void ComputeSegmentSeamFrames();
   void UpdateNextSeamFrame();
+  // INV-SEAM-NEXT-FUTURE: Enforce next_seam_frame_ > session_frame_index in one place.
+  // Call after any code path that sets or updates next_seam_frame_/next_seam_type_.
+  // Corrects to a safe value and logs when violated (rate-limited once per block).
+  void EnforceNextSeamInvariant(int64_t session_frame_index, const char* reason);
   void ArmSegmentPrep(int64_t session_frame_index);
   // Ensures B (segment_b_*) is created and StartFilling for to_seg before eligibility gate.
   void EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index);
@@ -325,6 +341,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Segment seam eligibility gate: minimum readiness before swapping.
   bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;
   std::optional<IncomingState> GetIncomingSegmentState(int32_t to_seg) const;
+
+  // Deterministic PAD seam: block until pad_b_audio_buffer_ has >= kMinSegmentSwapAudioMs.
+  void PrimePadBForSeamOrDie(const char* reason);
 
   // Frame-selection cadence: set frame_selection_cadence_enabled_ and Bresenham params from live block input FPS.
   // Tick grid is fixed by session output FPS (house format); this only updates repeat-vs-advance policy.

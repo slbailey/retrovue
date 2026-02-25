@@ -156,7 +156,21 @@ bool AudioLookaheadBuffer::TryPopSamples(int samples_needed,
 int AudioLookaheadBuffer::DepthMs() const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (sample_rate_ <= 0) return 0;
-  return static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_);
+  int depth_ms = static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_);
+  // Temporary debug: once per second — total_samples_in_buffer_, depth_ms.
+  {
+    static auto last_depth_log = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_depth_log).count() >= 1000) {
+      last_depth_log = now;
+      std::ostringstream oss;
+      oss << "[AudioBuffer] DBG_AUDIO_DEPTH"
+          << " total_samples_in_buffer=" << total_samples_in_buffer_
+          << " depth_ms=" << depth_ms;
+      Logger::Info(oss.str());
+    }
+  }
+  return depth_ms;
 }
 
 int AudioLookaheadBuffer::DepthSamples() const {

@@ -48,6 +48,7 @@ using test_infra::kSegBlockMs;
 
 static const std::string kPathA = "/opt/retrovue/assets/SampleA.mp4";
 static const std::string kPathB = "/opt/retrovue/assets/SampleB.mp4";
+static const std::string kPath60fps = "/opt/retrovue/assets/Sample60fps.mp4";
 
 static bool FileExists(const std::string& path) {
   std::ifstream f(path);
@@ -388,15 +389,15 @@ TEST_F(SegmentSeamRaceFixTest, CadenceRefreshOnSegmentSwap) {
   EXPECT_EQ(m.detach_count, 0) << "Session must not detach";
 
   // When the two segments have different source FPS, we must get a cadence refresh
-  // and mode must be UPSAMPLE when new source is 23.976 (output 29.97).
+  // and mode must be ACTIVE (not DISABLED) when new source != output (e.g. 23.976 vs 29.97).
   if (!refreshes.empty()) {
     const auto& r = refreshes.back();
     EXPECT_GT(r.new_source_fps.num, 0) << "new_source_fps must be valid";
     EXPECT_GT(r.new_source_fps.den, 0) << "new_source_fps must be valid";
     const bool is_23976 = (r.new_source_fps.num == 24000 && r.new_source_fps.den == 1001);
     if (is_23976) {
-      EXPECT_EQ(r.mode, "UPSAMPLE")
-          << "23.976fps content must use UPSAMPLE mode (output 29.97)";
+      EXPECT_EQ(r.mode, "ACTIVE")
+          << "23.976fps content (output 29.97) must use ACTIVE cadence, not DISABLED";
     }
   }
   // If refreshes.empty(), both segments had same FPS (e.g. both 30fps) — no refresh needed.
@@ -692,6 +693,64 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_008_MissDoesNotStallFenceOrCorruptSeamSche
   // Continuous emission -- frames were produced through the MISS.
   EXPECT_GT(m.continuous_frames_emitted_total, 60)
       << "Output must continue through MISS via PAD fallback";
+}
+
+// =============================================================================
+// SegmentSwap29_97To60fpsCadenceActive: contract test for segment swap into 60fps.
+// When source_fps != output_fps after SEGMENT_SEAM_TAKE, cadence must be ACTIVE
+// (not DISABLED) so frame selection drops/chooses frames deterministically.
+// Asserts non-black / frame advancement by requiring continuous emission after swap.
+// =============================================================================
+TEST_F(SegmentSeamRaceFixTest, SegmentSwap29_97To60fpsCadenceActive) {
+  if (!FileExists(kPathA) || !FileExists(kPath60fps)) {
+    GTEST_SKIP() << "Assets not found: need " << kPathA << " and " << kPath60fps;
+  }
+
+  auto now = NowMs();
+  int64_t offset = kBlockTimeOffsetMs;
+
+  // 29.97 content → 60fps commercial segment (output house format 29.97).
+  FedBlock block = MakeMultiSegBlock("swap_2997_60", now + offset, {
+      {kPathA, 1500, SegmentType::kContent},
+      {kPath60fps, 1500, SegmentType::kContent},
+  });
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  test_infra::SleepMs(kBootGuardMs + 3500);
+  engine_->Stop();
+
+  auto refreshes = SnapshotCadenceRefreshes();
+  auto m = engine_->SnapshotMetrics();
+
+  EXPECT_GE(m.segment_seam_count, 1)
+      << "Segment swap must occur (29.97 content → 60fps content)";
+  EXPECT_EQ(m.detach_count, 0) << "Session must not detach after swap into 60fps";
+
+  // After swap into 60fps, cadence must be ACTIVE when new_source_fps != output_fps.
+  bool found_60fps_refresh = false;
+  for (const auto& r : refreshes) {
+    const bool is_60fps = (r.new_source_fps.num == 60 && r.new_source_fps.den == 1) ||
+                         (r.new_source_fps.num == 60000 && r.new_source_fps.den == 1001);
+    if (is_60fps) {
+      found_60fps_refresh = true;
+      EXPECT_EQ(r.mode, "ACTIVE")
+          << "When new_source_fps (60fps) != output_fps (29.97), cadence must be ACTIVE, not DISABLED";
+      break;
+    }
+  }
+  EXPECT_TRUE(found_60fps_refresh)
+      << "Expected at least one cadence refresh with 60fps source after segment swap";
+
+  // Output must present non-black / advancing frames: continuous emission after swap.
+  EXPECT_GT(m.continuous_frames_emitted_total, 60)
+      << "Video must advance after swap (no long black/repeat streak)";
 }
 
 
