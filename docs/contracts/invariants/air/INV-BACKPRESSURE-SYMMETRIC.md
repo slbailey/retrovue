@@ -1,4 +1,4 @@
-# INV-P10-BACKPRESSURE-SYMMETRIC
+# INV-BACKPRESSURE-SYMMETRIC
 
 ## Behavioral Guarantee
 Audio and video advance together; neither stream leads the other by more than one frame duration. When backpressure is applied, both streams are throttled symmetrically.

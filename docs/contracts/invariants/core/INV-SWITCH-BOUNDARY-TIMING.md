@@ -1,4 +1,4 @@
-# INV-P8-SWITCH-BOUNDARY-TIMING
+# INV-SWITCH-BOUNDARY-TIMING
 
 ## Behavioral Guarantee
 A producer/source switch MUST complete no later than one frame duration after the declared schedule boundary.
@@ -7,7 +7,7 @@ A producer/source switch MUST complete no later than one frame duration after th
 - Core declares the authoritative boundary timestamp.
 - AIR executes the switch relative to that boundary.
 
-## Measurement
+## Boundary / Constraint
 Switch completion time is measured against the declared boundary timestamp.
 Frame duration is defined by the active output FPS.
 

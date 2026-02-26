@@ -1,4 +1,4 @@
-# INV-P9-NO-DEADLOCK
+# INV-SINK-NO-DEADLOCK
 
 ## Behavioral Guarantee
 System MUST NOT enter circular wait. Forward progress must be possible without requiring a terminal state to break the cycle.

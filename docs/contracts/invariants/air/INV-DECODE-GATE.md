@@ -1,4 +1,4 @@
-# RULE-P10-DECODE-GATE
+# INV-DECODE-GATE
 
 ## Behavioral Guarantee
 Decode is **admitted** only when buffer has capacity (at least one slot free). The admission condition is binary: capacity present or not. No hysteresis — resume condition MUST equal admission condition (one slot free).

@@ -3,8 +3,11 @@
 ## Behavioral Guarantee
 First decodable TS MUST be emitted within a defined bound after attach (e.g. 500ms from PCR-pace timing initialization). Output becomes decodable within that window.
 
-## Boundary / Authority Model
-Sink is responsible for emission. Timing initialization defines the start of the window. No extension of the bound without contract change.
+## Authority Model
+Sink is responsible for emission. Timing initialization defines the start of the window.
+
+## Boundary / Constraint
+No extension of the bound without contract change.
 
 ## Violation
 No decodable TS emitted within the allowed time after attach. MUST be logged; treat as liveness failure.
