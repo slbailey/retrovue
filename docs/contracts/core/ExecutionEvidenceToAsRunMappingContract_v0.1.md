@@ -2,7 +2,7 @@
 
 **Classification:** Contract (Core Execution Bridge)  
 **Owner:** ChannelManager (Execution Recording Integration)  
-**Enforcement Phase:** During Playout  
+**Enforcement:** During Playout  
 **Created:** 2026-02-13  
 **Status:** Proposed
 

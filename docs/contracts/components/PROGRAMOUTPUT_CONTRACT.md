@@ -217,17 +217,6 @@ while (!emit_succeeded) {
 
 ---
 
-## 6. Relationship to Phases
-
-| Phase | Relationship |
-|-------|-------------|
-| Phase 8 (Coordination) | Consumes segment ownership from TimelineController |
-| Phase 9 (Bootstrap) | Enables bootstrap routing; silence injection is sink's job, not ProgramOutput's |
-| Phase 10 (Flow Control) | Operates under PCR-paced mux; subject to INV-P10-SINK-GATE for dequeue |
-| Core | Emits regardless of LIVE state; LIVE is Core's decision |
-
----
-
 ## 7. Derivation Notes
 
 | This Contract | Derives From | Relationship |

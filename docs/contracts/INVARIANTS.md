@@ -23,7 +23,6 @@ Individual INV-* files have been archived; this is the canonical reference.
 ### INV-BLOCK-WALLCLOCK-FENCE-001: Deterministic Block Fence from Rational Timebase
 
 **Owner:** PipelineManager  
-**Phase:** Every block boundary in a BlockPlan session  
 **Depends on:** INV-TICK-GUARANTEED-OUTPUT, LAW-OUTPUT-LIVENESS
 
 Block transitions in a BlockPlan session MUST be driven by a precomputed fence tick derived from the block's UTC schedule and the session's rational output frame rate. The fence tick is an absolute session frame index, computed once at block-load time and immutable thereafter.
@@ -170,6 +169,8 @@ When a block becomes active owner at tick N, the following MUST be true:
 **Off-By-One Prevention:**
 Budget mismatch at fence indicates violation of initialization or atomicity → recovery per Finding 1.2 (fence wins, recompute budget).
 
+**Contract test:** `pkg/air/tests/contracts/test_block_frame_budget.py` — existing tests enforce budget formula and convergence (INV-FRAME-BUDGET-002, INV-FRAME-BUDGET-003).
+
 **NON-NORMATIVE EXPLANATION (Off-By-One Prevention Table):**
 
 | Event | session_frame_index | remaining_block_frames | Notes |
@@ -272,7 +273,6 @@ The first video frame and its audio MUST be decoded and buffered before the prod
 ### INV-LOOKAHEAD-BUFFER-AUTHORITY: Lookahead Buffer Decode Authority
 
 **Owner:** PipelineManager, VideoLookaheadBuffer, AudioLookaheadBuffer  
-**Phase:** Every output tick
 
 AIR MUST decouple all decode operations from the tick emission thread. Decode runs on dedicated background fill threads.
 
@@ -293,7 +293,6 @@ AIR MUST decouple all decode operations from the tick emission thread. Decode ru
 ### INV-FENCE-FALLBACK-SYNC-001: Mandatory Synchronous Queue Drain at Fence
 
 **Owner:** PipelineManager  
-**Phase:** Every fence tick  
 **Depends on:** OUT-BLOCK-005, INV-BLOCK-WALLFENCE-001, INV-RUNWAY-MIN-001
 
 **Fence Tick Fallback Ownership:**
@@ -346,12 +345,13 @@ At fence tick, if next block's first segment is CONTENT, system must satisfy:
 - Exit when B primed and pop succeeds
 - After HOLD_MAX_MS (5s), escalate to standby (pad/slate)
 
+**Contract test:** `pkg/air/tests/contracts/BlockPlan/DegradedTakeModeContractTests.cpp` — existing tests enforce fence take readiness and DEGRADED_TAKE_MODE.
+
 ---
 
 ### INV-PREROLL-OWNERSHIP-AUTHORITY: Preroll Arming and Fence Swap Coherence
 
 **Owner:** PipelineManager  
-**Phase:** Every block boundary  
 **Depends on:** INV-BLOCK-WALLFENCE-001, INV-BLOCK-LOOKAHEAD-PRIMING
 
 Preroll arming authority MUST align with "next block" authority that fence swap uses. The committed successor block is the block in the B slot at TAKE time.
@@ -367,7 +367,6 @@ Preroll arming authority MUST align with "next block" authority that fence swap 
 ### INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY: Underflow Policy and Tick Lateness
 
 **Owner:** PipelineManager, VideoLookaheadBuffer  
-**Phase:** Every output tick  
 **Depends on:** INV-LOOKAHEAD-BUFFER-AUTHORITY, INV-TICK-DEADLINE-DISCIPLINE-001
 
 When lookahead buffer cannot supply a frame, system MUST behave deterministically: emit freeze/pad using deterministic policy. Underflow is controlled state transition with enriched observability.
@@ -380,7 +379,7 @@ When lookahead buffer cannot supply a frame, system MUST behave deterministicall
 
 ---
 
-### INV-P10-PIPELINE-FLOW-CONTROL: Phase 10 Flow Control Invariants
+### INV-P10-PIPELINE-FLOW-CONTROL
 
 **Owner:** All Producers, PipelineManager, VideoLookaheadBuffer, AudioLookaheadBuffer  
 **Status:** IMPLEMENTED
@@ -437,7 +436,6 @@ Output FPS and tick index define when we emit frames. They do not define where w
 ### INV-AIR-MEDIA-TIME: Media Time Authority Contract
 
 **Owner:** TickProducer  
-**Phase:** Runtime  
 **Depends on:** Time Concepts (AIR), INV-BLOCK-WALLCLOCK-FENCE-001, INV-FPS-TICK-PTS
 
 Block execution and segment transitions MUST be governed by decoded media time (media_ct_ms), not by output cadence, guessed frame durations, or rounded FPS math.
@@ -489,6 +487,8 @@ RationalFps is the ONLY authoritative representation of frame rate in the playou
 - `ToDouble()` in hot paths
 - Any floating literal in hot-path code (`1.0`, `1e6`, `1000.0`)
 
+**Contract tests:** `pkg/air/tests/contracts/BlockPlan/MediaTimeContractTests.cpp`; `pkg/air/tests/contracts/test_inv_fps_resample_drift.cpp` — existing tests enforce rational FPS and timebase.
+
 ---
 
 ### INV-FPS-MAPPING: Source→Output Frame Authority
@@ -514,6 +514,8 @@ if (in_num * out_den == out_num * in_den) → OFF
 else if ((in_num * out_den) % (out_num * in_den) == 0) → DROP
 else → CADENCE
 ```
+
+**Contract tests:** `pkg/air/tests/contracts/BlockPlan/MediaTimeContractTests.cpp` (INV-FPS-MAPPING, INV-FPS-TICK-PTS); `pkg/air/tests/contracts/test_inv_fps_resample_drift.cpp` — existing tests enforce source→output frame authority.
 
 ---
 
@@ -585,7 +587,6 @@ In all modes (OFF, DROP, CADENCE), output video PTS MUST advance by exactly one 
 ### INV-AUDIO-PTS-HOUSE-CLOCK-001: Audio PTS Owned by House Sample Clock
 
 **Owner:** PipelineManager, MpegTSOutputSink, EncoderPipeline  
-**Phase:** Every audio frame encoded / muxed  
 **Depends on:** Clock Law (Layer 0), LAW-OUTPUT-LIVENESS, INV-FPS-TICK-PTS  
 **Related:** INV-AUDIO-LIVENESS (audio servicing; this invariant governs PTS source only)  
 **Status:** Active
@@ -615,7 +616,6 @@ Audio PTS used for encoding and transport MUST be derived from the session's **h
 ### INV-AIR-SEGMENT-IDENTITY-AUTHORITY: UUID-Based Segment Identity
 
 **Owner:** PipelineManager / EvidenceEmitter / AsRunReconciler  
-**Phase:** Every AIR event emission
 
 Segment identity MUST be carried by UUID assigned at block feed time. `segment_index` is display-order only and MUST NOT be used as identity key.
 
@@ -645,6 +645,8 @@ Video saturation may block video enqueues but MUST NOT halt:
 **INV-AUDIO-LIVENESS-002:**  
 AUDIO_UNDERFLOW_SILENCE is transitional, NOT steady-state. Continuous silence injection across sustained CONTENT playback indicates liveness violation.
 
+**Contract tests:** `pkg/air/tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp` (INV_AUDIO_LIVENESS_001_AudioServicedWhenVideoFull); `pkg/air/tests/contracts/BlockPlan/P6_AudioLivenessNotBlockedByVideoBackpressure.cpp` — existing tests enforce INV-AUDIO-LIVENESS-001.
+
 ---
 
 ### INV-AUDIO-PRIME-002: Prime Frame Must Carry Audio
@@ -667,12 +669,13 @@ Tick loop MUST NOT consume from Segment-B audio buffer until `SEGMENT_TAKE_COMMI
 **INV-SEAM-GATE-001:**  
 Gate measurements taken on buffer not being drained by live consumer unless commit occurred.
 
+**Contract tests:** `pkg/air/tests/contracts/BlockPlan/SeamContinuityEngineContractTests.cpp`; `pkg/air/tests/contracts/BlockPlan/SegmentSeamRaceConditionFixTests.cpp` — existing tests enforce INV-SEAM-AUDIO-001 (tick loop does not consume Segment-B audio until commit).
+
 ---
 
 ### INV-SEG-SWAP-001: PerformSegmentSwap Requires Live A Armed
 
 **Owner:** PipelineManager  
-**Phase:** Segment seam (boundary/EOF/stop) when `PerformSegmentSwap` is invoked  
 **Classification:** CONTRACT (broadcast-grade)
 
 Segment seam take MUST only be scheduled/executed when live A is armed: `video_buffer_ && audio_buffer_ && live_`. Otherwise treat as startup / pad-only / degraded: the tick loop keeps emitting pad/freeze, but seam orchestration MUST NOT run and segment index MUST NOT advance.
@@ -690,7 +693,6 @@ Segment seam take MUST only be scheduled/executed when live A is armed: `video_b
 ### INV-TICK-GUARANTEED-OUTPUT: Every Tick Emits Exactly One Frame
 
 **Owner:** MpegTSOutputSink / MuxLoop  
-**Phase:** All phases after first frame  
 **Priority:** ABOVE all other invariants
 
 **Per-Tick Execution Sequence:**
@@ -735,12 +737,13 @@ Steps 1-5 execute atomically per tick. No interleaving with other ticks. No fail
 
 **NON-NORMATIVE EXAMPLE:**
 
+**Contract tests:** `pkg/air/tests/contracts/Phase9OutputBootstrapTests.cpp`; `pkg/air/tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp` — existing tests enforce every tick emits exactly one frame.
+
 ---
 
 ### INV-TICK-DEADLINE-DISCIPLINE-001: Hard Deadline Discipline for Output Ticks
 
 **Owner:** PipelineManager  
-**Phase:** Every output tick  
 **Depends on:** INV-TICK-GUARANTEED-OUTPUT, LAW-OUTPUT-LIVENESS
 
 Each output tick N is a hard scheduled deadline:
@@ -762,7 +765,6 @@ spt(N) = session_epoch_utc + N * fps_den / fps_num
 ### INV-SINK-NONBLOCKING-HANDOFF-001: Tick Thread Must Not Block on Sink I/O
 
 **Owner:** PipelineManager / SocketSink / MpegTSOutputSink  
-**Phase:** continuous_output (per-tick execution)  
 **Depends on:** INV-TICK-DEADLINE-DISCIPLINE-001, LAW-OUTPUT-LIVENESS
 
 **Rule:** In continuous_output, the per-tick execution thread MUST NOT block on any sink write operation. Sink handoff must be O(1) and non-blocking (enqueue/copy only). Any blocking I/O must occur on a separate egress worker thread.
@@ -783,7 +785,6 @@ spt(N) = session_epoch_utc + N * fps_den / fps_num
 ### INV-SINK-LOSS-NONFATAL-001: Sink Loss Must Not End Session
 
 **Owner:** PipelineManager / SocketSink / AVIO write callback  
-**Phase:** continuous_output (after slow-consumer detach or socket loss)  
 **Depends on:** INV-SINK-NONBLOCKING-HANDOFF-001
 
 **Rule:** Sink loss (detach, closed fd, EPIPE, buffer overflow) must NOT end the session. It only ends delivery to that sink. The tick loop MUST continue; the AVIO write callback MUST drop bytes (act as NullSink) instead of returning AVERROR(EPIPE) or otherwise causing FFmpeg/session to treat the failure as fatal.
@@ -800,7 +801,6 @@ spt(N) = session_epoch_utc + N * fps_den / fps_num
 ### INV-TICK-MONOTONIC-UTC-ANCHOR-001: Monotonic Deadline Enforcement
 
 **Owner:** PipelineManager  
-**Phase:** Every output tick  
 **Depends on:** Clock Law, INV-TICK-DEADLINE-DISCIPLINE-001
 
 Tick deadlines anchored to session UTC epoch, but implemented using monotonic clock to avoid NTP step breakage.
@@ -821,7 +821,6 @@ Late if: `now_mono_ns >= deadline_mono_ns(N)`
 ### INV-EXECUTION-CONTINUOUS-OUTPUT-001: Continuous Output Execution Model
 
 **Owner:** PipelineManager  
-**Phase:** Session lifetime (continuous_output mode)
 
 When execution_model=continuous_output, the session MUST satisfy:
 
@@ -836,7 +835,6 @@ When execution_model=continuous_output, the session MUST satisfy:
 ### INV-FILL-THREAD-LIFECYCLE-001: Fill Thread Must Be Stopped Exactly Once Per Start
 
 **Owner:** PipelineManager, VideoLookaheadBuffer  
-**Phase:** Every StartFilling call and corresponding teardown/rotation  
 **Depends on:** INV-LOOKAHEAD-BUFFER-AUTHORITY
 
 For every `StartFilling` call:
@@ -847,12 +845,13 @@ For every `StartFilling` call:
 
 **MUST NOT:** Leave a fill thread running after the buffer is moved or reset without calling StopFilling/StopFillingAsync, or fail to join a detached thread indefinitely.
 
+**Contract tests:** `pkg/air/tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp` (lifecycle, fill thread stop/join); `pkg/air/tests/contracts/test_block_lookahead_priming.py` — existing tests enforce this invariant.
+
 ---
 
 ### INV-BUFFER-INSTANCE-SINGULARITY: One Active Fill Thread Per Logical Slot
 
 **Owner:** PipelineManager  
-**Phase:** Session lifetime  
 **Depends on:** INV-FILL-THREAD-LIFECYCLE-001
 
 At any time:
@@ -867,7 +866,6 @@ At any time:
 ### INV-FILL-THREAD-LIFECYCLE-001: Fill Thread Lifecycle Authority (Stabilization)
 
 **Owner:** VideoLookaheadBuffer, PipelineManager  
-**Phase:** Every StartFilling / StopFilling / StopFillingAsync / destructor  
 **Purpose:** Hard lifecycle guards and violation logging for fill thread audit.
 
 For every call to `VideoLookaheadBuffer::StartFilling()`:
@@ -881,12 +879,13 @@ For every call to `VideoLookaheadBuffer::StartFilling()`:
 
 **Violation:** Log `FILL_THREAD_LIFECYCLE_VIOLATION` with reason and `this` pointer.
 
+**Contract tests:** (same as above) `pkg/air/tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp`; `pkg/air/tests/contracts/test_block_lookahead_priming.py` — existing tests enforce fill thread lifecycle authority.
+
 ---
 
 ### INV-BUFFER-INSTANCE-SINGULARITY-001: At Most One Active Fill Per Slot (Stabilization)
 
 **Owner:** PipelineManager, VideoLookaheadBuffer  
-**Phase:** Session lifetime  
 **Purpose:** Hard guards for buffer instance and fill thread cardinality.
 
 At any time:
@@ -901,7 +900,6 @@ At any time:
 ### INV-BOUNDED-MEMORY-GROWTH: Buffer Depths and RSS Must Converge
 
 **Owner:** VideoLookaheadBuffer, AudioLookaheadBuffer, PipelineManager  
-**Phase:** Steady state (after warmup)  
 **Depends on:** INV-P10-PIPELINE-FLOW-CONTROL, INV-VIDEO-BOUNDED (hard cap)
 
 Under steady state:
@@ -917,7 +915,6 @@ Under steady state:
 ### INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Decodable Output Within 500ms
 
 **Owner:** MpegTSOutputSink / ProgramOutput  
-**Phase:** From AttachStream success
 
 After `AttachStream` succeeds, AIR MUST emit decodable MPEG-TS within 500ms, using fallback video/audio if real content not yet available.
 
@@ -944,12 +941,13 @@ After `AttachStream` succeeds, sink MUST continue emitting TS packets until:
 - Segment boundaries
 - Content deficit
 
+**Contract tests:** `pkg/air/tests/contracts/Phase9SteadyStateSilenceTests.cpp`; `pkg/air/tests/contracts/PrimitiveInvariants/SinkLivenessContractTests.cpp` — existing tests enforce continuous output until explicit stop.
+
 ---
 
 ### INV-PAD-PRODUCER: Pad as First-Class TAKE-Selectable Source
 
 **Owner:** PipelineManager  
-**Phase:** Every output tick  
 **Depends on:** INV-TICK-GUARANTEED-OUTPUT, INV-BLOCK-WALLFENCE-001
 
 PadProducer is first-class source participating in TAKE source selection. Produces black video (ITU-R BT.601: Y=16, Cb=Cr=128) and silent audio in session program format, unconditionally.
@@ -973,7 +971,6 @@ PadProducer is first-class source participating in TAKE source selection. Produc
 
 **Status:** Big Boy Broadcast Ready — must never be weakened in future refactors.  
 **Owner:** PipelineManager  
-**Phase:** Every tick where the active segment type is PAD (segment-swap-to-PAD, slot A/B, shadow promotion, any path using PerformSegmentSwap)  
 **Depends on:** INV-PAD-PRODUCER, fence/emit path semantics  
 
 When the **active segment type** is **PAD**, the audio source for that tick **MUST**:
@@ -1030,55 +1027,8 @@ PTS correctness measured against MasterClock, not wall clock.
 
 ---
 
-## Cross-References and Dependencies
-
-### Dependency Graph (Key Relationships)
-
-```
-LAW-OUTPUT-LIVENESS
-    ├─→ INV-TICK-GUARANTEED-OUTPUT (parent)
-    │       ├─→ INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
-    │       ├─→ INV-SINK-NO-IMPLICIT-EOF
-    │       └─→ INV-PAD-PRODUCER (mechanism)
-    ├─→ INV-TICK-DEADLINE-DISCIPLINE-001
-    │       ├─→ INV-SINK-NONBLOCKING-HANDOFF-001 (tick thread never blocks on sink I/O)
-    │       ├─→ INV-TICK-MONOTONIC-UTC-ANCHOR-001
-    │       └─→ INV-EXECUTION-CONTINUOUS-OUTPUT-001
-    └─→ INV-BLOCK-WALLFENCE-001 (timing authority)
-            ├─→ INV-BLOCK-FRAME-BUDGET-AUTHORITY (counting)
-            ├─→ INV-BLOCK-LOOKAHEAD-PRIMING (latency)
-            ├─→ INV-FENCE-FALLBACK-SYNC-001
-            ├─→ INV-FENCE-TAKE-READY-001
-            └─→ INV-PREROLL-OWNERSHIP-AUTHORITY
-
-Clock Law
-    ├─→ INV-AIR-MEDIA-TIME (media time semantics)
-    ├─→ INV-FPS-RATIONAL-001 (timebase authority)
-    │       ├─→ INV-NO-FLOAT-FPS-TIMEBASE-001
-    │       ├─→ INV-FPS-RESAMPLE
-    │       ├─→ INV-FPS-MAPPING
-    │       ├─→ INV-FPS-TICK-PTS
-    │       └─→ INV-AUDIO-PTS-HOUSE-CLOCK-001
-    └─→ INV-TICK-MONOTONIC-UTC-ANCHOR-001
-
-INV-LOOKAHEAD-BUFFER-AUTHORITY
-    ├─→ INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY
-    ├─→ INV-FILL-THREAD-LIFECYCLE-001 (fill thread stop/join)
-    │       └─→ INV-BUFFER-INSTANCE-SINGULARITY (one fill per slot, no orphan fill)
-    └─→ INV-P10-PIPELINE-FLOW-CONTROL
-            ├─→ INV-AUDIO-LIVENESS
-            ├─→ INV-AUDIO-PRIME-002
-            ├─→ INV-SEAM-AUDIO-GATE
-            └─→ INV-BOUNDED-MEMORY-GROWTH (depths converge, RSS plateau)
-```
-
----
-
 ## Document History
 
 - **2026-02-23:** Initial consolidation of all INV-* files
 - Individual INV-* files archived to `/pkg/air/docs/archive/invariants/`
-- Source files consolidated from:
-  - `/pkg/air/docs/contracts/` (root level invariants)
-  - `/pkg/air/docs/contracts/coordination/` (coordination layer)
-  - `/pkg/air/docs/contracts/semantics/` (semantic layer)
+- Source files consolidated from `/pkg/air/docs/contracts/` (root level invariants)
