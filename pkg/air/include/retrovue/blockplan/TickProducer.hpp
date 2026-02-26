@@ -68,7 +68,9 @@ struct FrameData {
   std::vector<buffer::AudioFrame> audio;  // 0-2 frames
   // P3.2: Metadata for seam verification
   std::string asset_uri;
-  int64_t block_ct_ms = 0;  // CT before this frame's advance
+  // INV-AIR-MEDIA-TIME: PTS-derived media content time (ms), normalized to segment start.
+  // Must NOT be computed from output FPS or frame index. On repeat/hold/pad, do not advance.
+  int64_t block_ct_ms = 0;  // media_ct_ms: decoder PTS → ms; -1 or last value for pad/repeat
 };
 
 class TickProducer : public producers::IProducer,
@@ -169,7 +171,7 @@ class TickProducer : public producers::IProducer,
   std::vector<SegmentBoundary> boundaries_;
   int32_t current_segment_index_ = 0;
   int32_t logical_segment_index_ = 0;  // Parent block segment index (SetLogicalSegmentIndex)
-  int64_t block_ct_ms_ = 0;
+  int64_t block_ct_ms_ = 0;  // INV-AIR-MEDIA-TIME: PTS-derived only; not advanced on repeat/EOF/pad
 
   int width_;
   int height_;

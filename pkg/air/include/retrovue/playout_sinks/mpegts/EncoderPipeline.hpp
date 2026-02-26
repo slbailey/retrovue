@@ -219,7 +219,7 @@ class EncoderPipeline {
   bool output_timing_anchor_set_;
   int64_t output_timing_anchor_pts_;  // First packet's PTS (90kHz timebase)
   std::chrono::steady_clock::time_point output_timing_anchor_wall_;
-  bool output_timing_enabled_;  // P8-IO-001: Can disable during prebuffer
+  bool output_timing_enabled_;  // P8-IO-001: Egress pacing is in write_callback (deadline_mono_ns)
 #endif
 
   MpegTSPlayoutSinkConfig config_;
@@ -245,6 +245,14 @@ class EncoderPipeline {
   // =========================================================================
   void SetProducerCTAuthoritative(bool enabled);
 
+  // Egress pacer metrics (thread-safe snapshot; called from metrics snapshot).
+  struct EgressPacerMetrics {
+    int64_t pacer_sleep_ms_total = 0;
+    int64_t pacer_late_ms = 0;
+    int64_t pacer_max_late_ms = 0;
+    int64_t pacer_chunks_paced = 0;
+  };
+  void GetEgressPacerMetrics(EgressPacerMetrics& out) const;
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

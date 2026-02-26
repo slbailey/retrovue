@@ -38,6 +38,7 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
+#include <libavutil/mem.h>  // av_freep (for av_image_alloc buffer)
 #include <libavutil/log.h>  // For av_log_set_level
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
@@ -239,7 +240,13 @@ void FFmpegDecoder::Close() {
   }
 
   if (scaled_frame_) {
+    // scaled_frame_ buffer was allocated with av_image_alloc(); AVFrame does not own it.
+    // Free it before av_frame_free to avoid leaking ~(width*height*1.5) bytes per Close().
+    if (scaled_frame_->data[0]) {
+      av_freep(&scaled_frame_->data[0]);
+    }
     av_frame_free(&scaled_frame_);
+    scaled_frame_ = nullptr;
   }
 
   if (frame_) {

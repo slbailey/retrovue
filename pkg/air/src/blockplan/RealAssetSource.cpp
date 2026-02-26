@@ -61,7 +61,9 @@ bool RealAssetSource::ProbeAsset(const std::string& uri) {
   info.valid = true;
   assets_[uri] = info;
 
+#ifdef RETROVUE_DEBUG
   std::cout << "[RealAssetSource] Probed: " << uri << " (" << duration_ms << "ms)" << std::endl;
+#endif
   return true;
 #else
   (void)uri;

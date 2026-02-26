@@ -694,13 +694,8 @@ void PipelineManager::Run() {
         << "fps, open_ms=" << encoder_open_ms;
     Logger::Info(oss.str()); }
 
-  // Disable EncoderPipeline's internal output timing gate.
-  // Verified: GateOutputTiming() is purely a pacing sleep (media PTS vs wall
-  // clock).  PTS monotonicity is enforced separately by EnforceMonotonicDts().
-  // The tick loop provides authoritative pacing via OutputClock::WaitForFrame;
-  // GateOutputTiming would double-gate and add blocking sleep inside the
-  // AVIO write path — exactly what Bug B eliminates.
-  session_encoder->SetOutputTimingEnabled(false);
+  // Output timing left at encoder default (enabled). EncoderPipeline gates
+  // output by PTS vs wall clock when output_timing_enabled_ is true.
 
   // Disable EncoderPipeline's independent audio silence injection
   // (INV-P9-AUDIO-LIVENESS).  PipelineManager is the sole audio authority:
@@ -1237,7 +1232,8 @@ void PipelineManager::Run() {
         AsTickProducer(preview_.get())->GetState() == ITickProducer::State::kReady) {
       preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
           video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
-      preview_video_buffer_->SetBufferLabel("PREVIEW_AUDIO_BUFFER");
+      preview_video_buffer_->SetBufferLabel("PREVIEW_VIDEO_BUFFER");
+      preview_fill_stopped_after_prime_ = false;
       const auto& pcfg = ctx_->buffer_config;
       int pa_target = pcfg.audio_target_depth_ms;
       int pa_low = pcfg.audio_low_water_ms > 0
@@ -1271,6 +1267,19 @@ void PipelineManager::Run() {
             << " fence_tick=" << FormatFenceTick(block_fence_frame_)
             << " tick=" << session_frame_index
             << " headroom=" << (block_fence_frame_ - session_frame_index);
+        Logger::Info(oss.str()); }
+    }
+
+    // Seam-confidence-only: once preview has 500ms primed, stop the fill thread; keep buffered frames for TAKE.
+    if (preview_video_buffer_ && preview_video_buffer_->IsFilling()
+        && preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs
+        && preview_video_buffer_->IsPrimed() && !preview_fill_stopped_after_prime_) {
+      preview_video_buffer_->StopFilling(/*flush=*/false);
+      preview_fill_stopped_after_prime_ = true;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PREROLL_FILL_STOP"
+            << " depth_ms=" << preview_audio_prime_depth_ms_
+            << " reason=seam_confidence_500ms_primed";
         Logger::Info(oss.str()); }
     }
 

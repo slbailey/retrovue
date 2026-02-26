@@ -295,6 +295,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // After the TAKE (first tick >= fence_tick), B rotates into A.
   std::unique_ptr<VideoLookaheadBuffer> preview_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> preview_audio_buffer_;
+  // One-shot: after preview is primed (500ms), stop fill thread for seam-confidence-only; reset when creating new preview buffer.
+  bool preview_fill_stopped_after_prime_ = false;
 
   // --- Segment seam tracking (INV-SEAM-SEG) ---
   // Original multi-segment FedBlock, stored at block activation so that
@@ -323,6 +325,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // Swap deferral: log at most once per seam frame (avoid spam).
   int64_t last_logged_defer_seam_frame_ = -1;
+  // No double-take / re-entrancy: at most one segment swap per tick (no catch-up thrash).
+  // -1 = no take yet; after a take, last_seam_take_tick_ = session_frame_index at take.
+  int64_t last_seam_take_tick_ = -1;
+  // No PAD transition re-entry in same tick (or adjacent under lateness).
+  int64_t last_pad_tick_ = -1;
   // SEAM_INVARIANT_VIOLATION: log at most once per block when we correct next_seam_frame_ (avoid spam).
   std::string last_seam_invariant_violation_block_id_;
 
@@ -336,7 +343,12 @@ class PipelineManager : public IPlayoutExecutionEngine {
   void ArmSegmentPrep(int64_t session_frame_index);
   // Ensures B (segment_b_*) is created and StartFilling for to_seg before eligibility gate.
   void EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index);
+  // Segment POST-TAKE: swap B into A (content) or PAD transition; dispatches to PerformContentSwap_BtoA or PerformPadTransition.
   void PerformSegmentSwap(int64_t session_frame_index);
+  // Content/filler only: swap B into A, hand off ex-A to reaper. Never used for PAD.
+  void PerformContentSwap_BtoA(int64_t session_frame_index);
+  // PAD only: advance segment index and rebase; never touches live buffers.
+  void PerformPadTransition(int64_t session_frame_index);
 
   // Segment seam eligibility gate: minimum readiness before swapping.
   bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;

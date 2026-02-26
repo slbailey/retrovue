@@ -411,43 +411,60 @@ When lookahead buffer cannot supply a frame, system MUST behave deterministicall
 
 ## Semantic Layer Invariants
 
+### Time Concepts (AIR): media_ct_ms vs Tick Grid Time
+
+AIR uses two distinct time concepts. They MUST NOT be conflated.
+
+**media_ct_ms (Media Content Time):**
+- **Definition:** "How far into the current segment's content we are," in milliseconds.
+- **Source:** Derived from the decoded frame PTS (or best-effort timestamp), rescaled to milliseconds and normalized to the segment start.
+- **Canonical form:** media_ct_ms = floor(rescale_q(frame_pts, time_base, ms)) - media_origin_ms. PTS time_base is stream-specific (MPEG-TS, MP4, MKV, and FFmpeg stream time_base all vary); the invariant remains structurally true for arbitrary time_base. Implementations that currently receive PTS in µs use the special case time_base = 1/1000000.
+- **Use:** Exhaustion detection, content progress, diagnostics ("we are 12.3s into the ad").
+
+**Tick grid time (tick_time_us, tick_ct_ms):**
+- **Definition:** The output session's emission grid time derived from output tick index and session RationalFps.
+- **Use:** Emission schedule, fences, budgets, output PTS, mux pacing, and all "when do we emit" decisions.
+
+**Hard rule (MUST):**
+- media_ct_ms MUST be derived from decoder PTS (or best-effort timestamp).
+- media_ct_ms MUST NOT be computed from output FPS, output frame index, or any tick-grid function.
+
+**NON-NORMATIVE WHY:**  
+Output FPS and tick index define when we emit frames. They do not define where we are in the source media. DROP / CADENCE / repeat decisions must not redefine content position.
+
+---
+
 ### INV-AIR-MEDIA-TIME: Media Time Authority Contract
 
 **Owner:** TickProducer  
-**Phase:** Runtime
+**Phase:** Runtime  
+**Depends on:** Time Concepts (AIR), INV-BLOCK-WALLCLOCK-FENCE-001, INV-FPS-TICK-PTS
 
-Block execution and segment transitions MUST be governed by decoded media time, not by output cadence, guessed frame durations, or rounded FPS math.
+Block execution and segment transitions MUST be governed by decoded media time (media_ct_ms), not by output cadence, guessed frame durations, or rounded FPS math.
 
-**Core Rules:**
+**Media time derivation (MUST):**
+1. media_ct_ms MUST be derived from decoder PTS (or best-effort timestamp), rescaled to ms and normalized to segment start.
+2. media_ct_ms MUST NOT be computed from output FPS, output frame index, or tick-grid time (tick_time_us, tick_ct_ms).
 
-1. **Fence is Timing Authority:** Block boundaries determined by `fence_tick` (INV-BLOCK-WALLFENCE-001)
+**Cadence independence (MUST):**
+3. DROP / CADENCE / repeats determine which decoded frame is shown on a tick; they do NOT define media time.
+4. media_ct_ms for an emitted content frame MUST equal the chosen frame's decoded PTS-derived time (normalized).
+5. On repeat / hold / fallback (same frame emitted again or synthetic frame), media_ct_ms MUST NOT advance.
 
-2. **CT is Exhaustion Detector:** `decoded_media_time >= block_end_time` signals content exhaustion
+**Core rules:**
+6. **Fence is timing authority:** Block ownership and swaps are determined solely by fence_tick on the tick grid (INV-BLOCK-WALLCLOCK-FENCE-001). media_ct_ms MUST NOT influence fence timing.
+7. **Exhaustion uses media_ct_ms:** Content exhaustion and "how far into content" decisions MUST use media_ct_ms derived from decoded PTS, not tick-grid time.
+8. **Fence before exhaustion (allowed truncation):** Fence swap occurs at precomputed fence_tick; remaining content may be truncated. Diagnostic quality issue only.
+9. **Exhaustion before fence (allowed padding):** If content exhausts before fence, system emits fallback (freeze/pad) until fence fires. Attribution remains with current active block until fence.
+10. **No cumulative media-time drift (diagnostic):** Media-time reported via media_ct_ms MUST remain consistent with decoded PTS to within an epsilon bounded by one output tick window under normal operation.
 
-3. **CT Exhaustion Before Fence (Normal Convergence):**
-   - **Status:** Desired alignment; content duration matches scheduled block duration
-   - **Behavior:** System emits real content frames until fence fires
-   - **No padding needed** if convergence within one tick window
+**Authority precedence:**
+- Fence / tick grid time controls when ownership changes and when frames are emitted.
+- media_ct_ms controls content position and exhaustion only; it MUST NOT control fence timing or output PTS.
 
-4. **Fence Before CT Exhaustion (Allowed Truncation):**
-   - **Status:** Allowed; diagnostic quality issue (content longer than allocated duration)
-   - **Behavior:** Fence swap occurs at precomputed fence_tick; remaining content truncated
-   - **Recovery:** Block B takes over; truncated content discarded
-   - **Diagnostic:** Log deficit as scheduling/content mismatch
+**Guardrail (diagnostic):**
+- When the decoder reports EOF, if media_ct_ms is less than 80% of the current segment's probed duration, the implementation MUST log a VIOLATION under INV-AIR-MEDIA-TIME. This signature catches "CT derived from output fps / frame index" bugs (e.g. early segment exhaustion / "half duration" symptoms).
 
-5. **CT Exhaustion Significantly Before Fence (Allowed Padding):**
-   - **Status:** Allowed; content shorter than scheduled duration
-   - **Behavior:** System emits fallback frames (freeze/black/pad) until fence fires
-   - **Attribution:** Fallback frames attributed to current block until fence
-   - **Diagnostic:** Log content deficit
-
-6. **No Cumulative Drift:** `|T_decoded(n) - T_expected(n)| <= epsilon` (bounded to one frame period)
-
-7. **Cadence Independence:** Output cadence affects frame repetition, never media time advancement
-
-8. **Fallback Emission:** If content cannot supply a real frame at any tick, fallback MUST be emitted (freeze/black/pad). CT is diagnostic only; fallback legality is content availability, not CT threshold.
-
-**Authority Precedence:** Fence > CT. CT exhaustion influences frame source selection; fence controls block ownership.
 ---
 
 ### INV-FPS-RATIONAL-001: Rational FPS as Single Authoritative Timebase
@@ -502,22 +519,52 @@ else → CADENCE
 
 ### INV-FPS-RESAMPLE: FPS Resample Authority Contract
 
-**Owner:** FileProducer, TickProducer, OutputClock
+**Owner:** TickProducer, OutputClock, PipelineManager  
+**Related:** Time Concepts (AIR), INV-AIR-MEDIA-TIME, INV-FPS-TICK-PTS  
+**Status:** Broadcast-grade invariant
 
-Input media time, output session time, and resample rule are THREE SEPARATE AUTHORITIES.
+**Preamble (MUST):**  
+Media time MUST NOT be defined from output FPS, output frame index, or tick-grid functions.
 
-**Output Timing Formulas:**
-- Output tick time: `tick_time_us(n) = floor(n * 1_000_000 * fps_den / fps_num)`
-- Block CT: `ct_ms(k) = floor(k * 1000 * fps_den / fps_num)`
-- Use integer math, 128-bit intermediates if needed
+**Tick grid time (authoritative for emission)**
 
-**Outlawed Patterns:**
-- Tick grid from rounded interval + accumulation
-- Frame duration from `int(1000/fps)`
-- Any accumulated time using rounded steps
-- `+= frame_duration_ms` or `+= interval_us`
+**Output tick time:**
+- tick_time_us(n) = floor(n * 1_000_000 * fps_den / fps_num)
 
-**Resample Rule:** For output tick n, choose source frame covering `tick_time_us(n)`. Output PTS = tick time (grid), NOT source PTS.
+**Tick CT (grid diagnostic / convenience only):**
+- tick_ct_ms(n) = floor(n * 1000 * fps_den / fps_num)
+
+**Hard rule:** Tick grid time is NOT media time. It MUST NOT be used to represent "how far into content" or to drive exhaustion.
+
+**Media time (authoritative for content position)**
+
+**Media CT definition (MUST):**
+- media_ct_ms = floor(rescale_q(frame_pts, time_base, ms)) - media_origin_ms
+
+Where:
+- frame_pts is the decoded frame PTS (or best-effort timestamp)
+- time_base is the decoder/stream time base for that PTS
+- media_origin_ms is the normalized segment start time (e.g., first chosen frame's PTS-derived ms)
+
+**Hard rules:**
+- media_ct_ms MUST be derived from decoded PTS (or best-effort timestamp).
+- media_ct_ms MUST NOT be computed from output frame index, output FPS, tick_time_us, or tick_ct_ms.
+
+**Resample rule (unchanged principle):**
+- For output tick n, choose the source frame covering tick_time_us(n) (selection rule).
+- Output video PTS = tick-grid time (INV-FPS-TICK-PTS), NOT source PTS.
+- media_ct_ms for the emitted content frame is taken from the chosen frame's decoded PTS, not from n.
+
+**Outlawed patterns (expanded)**
+
+The following are FORBIDDEN for media time (media_ct_ms) computation:
+- media_ct_ms = floor(k * 1000 * fps_den / fps_num) where k is output frame index or any tick counter
+- any function of output FPS or output frame index used as media/content time
+- accumulated approximations such as media_ct_ms += frame_duration_ms or media_ct_ms += interval_us
+- any float/double timing in media time derivation
+
+**NON-NORMATIVE WHY:**  
+Exhaustion and "how far into content" must reflect decoded content. Output FPS and tick index vary by channel and emission policy; DROP/CADENCE must not redefine content position.
 
 ---
 
@@ -622,6 +669,22 @@ Gate measurements taken on buffer not being drained by live consumer unless comm
 
 ---
 
+### INV-SEG-SWAP-001: PerformSegmentSwap Requires Live A Armed
+
+**Owner:** PipelineManager  
+**Phase:** Segment seam (boundary/EOF/stop) when `PerformSegmentSwap` is invoked  
+**Classification:** CONTRACT (broadcast-grade)
+
+Segment seam take MUST only be scheduled/executed when live A is armed: `video_buffer_ && audio_buffer_ && live_`. Otherwise treat as startup / pad-only / degraded: the tick loop keeps emitting pad/freeze, but seam orchestration MUST NOT run and segment index MUST NOT advance.
+
+**Enforcement:** Immediately before Step 2 (move outgoing A), if any of `video_buffer_`, `audio_buffer_`, or `live_` is null, log once with `Logger::Error` as `SEGMENT_SWAP_WITHOUT_LIVE_A` with full state dump: `tick`, `from_segment`, `to_segment`, `to_type`, `swap_reason`, `video_buffer_null`, `audio_buffer_null`, `live_null`, `block_id`, `segment_b_video`, `pad_b_video`. Then return without mutating any buffer or producer slots. Step 2 MUST be null-safe (only move and call `StopFillingAsync` when `video_buffer_` is non-null); only enqueue ReapJob when there was an outgoing buffer.
+
+**No double-take / re-entrancy:** At most one segment swap per tick. Record `last_seam_take_tick_` when a take is committed (after the live-A gate). If `session_frame_index == last_seam_take_tick_` at entry, log `SEGMENT_SWAP_REFUSED reason=double_take_same_tick` and return. Reset `last_seam_take_tick_ = -1` on block activation (new block) so the first segment seam of the new block is allowed. This prevents catch-up thrash when lateness or rebase would otherwise allow a second take in the same tick.
+
+**Why:** Calling `outgoing_video_buffer->StopFillingAsync()` when `video_buffer_` was null (e.g. moved out by an earlier path or seam fired before A was armed) is undefined behavior and causes SIG11. This is a coordination/state invariant bug: the seam trigger assumed "live A exists" but the state machine allows a seam event when A is not armed. Hard-gating and null-safe Step 2 give deterministic behavior and a log proving the upstream violation. Double-take can occur under lateness (rebase still allows same-tick re-entry); the guard prevents it.
+
+---
+
 ## Execution Layer Invariants
 
 ### INV-TICK-GUARANTEED-OUTPUT: Every Tick Emits Exactly One Frame
@@ -692,6 +755,46 @@ spt(N) = session_epoch_utc + N * fps_den / fps_num
 4. Fence checks remain tick-index authoritative even when late
 5. Drift-proof anchoring (slow tick does NOT shift future tick deadlines)
 
+*Clarification:* Output emission MUST be paced to the session tick grid and MUST NOT be availability-driven or burst-driven. (This is implied by the requirements above; stated here for documentation clarity.)
+
+---
+
+### INV-SINK-NONBLOCKING-HANDOFF-001: Tick Thread Must Not Block on Sink I/O
+
+**Owner:** PipelineManager / SocketSink / MpegTSOutputSink  
+**Phase:** continuous_output (per-tick execution)  
+**Depends on:** INV-TICK-DEADLINE-DISCIPLINE-001, LAW-OUTPUT-LIVENESS
+
+**Rule:** In continuous_output, the per-tick execution thread MUST NOT block on any sink write operation. Sink handoff must be O(1) and non-blocking (enqueue/copy only). Any blocking I/O must occur on a separate egress worker thread.
+
+**Supports:**
+- INV-TICK-DEADLINE-DISCIPLINE-001 (no tick slip from I/O stalls)
+- LAW-OUTPUT-LIVENESS (relay slowness is a sink problem, not a clock problem)
+
+**Implementation:**
+- AVIO write callback only copies bytes into a bounded egress queue (byte-bounded, not chunk-bounded).
+- A dedicated egress writer thread drains the queue and performs send()/write() to the socket.
+- If the queue exceeds capacity: detach the sink (slow-consumer detach); session continues with output dropped (INV-SINK-LOSS-NONFATAL-001).
+
+**MUST NOT:** Block the tick thread in the AVIO callback (e.g. waiting on buffer space). Use non-blocking enqueue only; overflow triggers detach.
+
+---
+
+### INV-SINK-LOSS-NONFATAL-001: Sink Loss Must Not End Session
+
+**Owner:** PipelineManager / SocketSink / AVIO write callback  
+**Phase:** continuous_output (after slow-consumer detach or socket loss)  
+**Depends on:** INV-SINK-NONBLOCKING-HANDOFF-001
+
+**Rule:** Sink loss (detach, closed fd, EPIPE, buffer overflow) must NOT end the session. It only ends delivery to that sink. The tick loop MUST continue; the AVIO write callback MUST drop bytes (act as NullSink) instead of returning AVERROR(EPIPE) or otherwise causing FFmpeg/session to treat the failure as fatal.
+
+**Implementation:**
+- Detach callback MUST NOT set `stop_requested` (or otherwise cause Run() to exit).
+- AVIO write callback: when sink is detached or closed, or when TryConsumeBytes fails (overflow), return `buf_size` (drop bytes); MUST NOT return AVERROR(EPIPE).
+- Tick loop MUST NOT exit on `output_detached`; it continues, and subsequent writes are dropped.
+
+**MUST NOT:** Treat detach, EPIPE, or sink full as a session-fatal condition. Session ends only on explicit StopBlockPlanSession / stop_requested from control path.
+
 ---
 
 ### INV-TICK-MONOTONIC-UTC-ANCHOR-001: Monotonic Deadline Enforcement
@@ -727,6 +830,87 @@ When execution_model=continuous_output, the session MUST satisfy:
 3. No segment/block/decoder lifecycle event may shift tick schedule
 4. Underflow handling may repeat/black; tick schedule remains fixed
 5. Tick cadence (grid) fixed by session RationalFps; frame-selection cadence may refresh
+
+---
+
+### INV-FILL-THREAD-LIFECYCLE-001: Fill Thread Must Be Stopped Exactly Once Per Start
+
+**Owner:** PipelineManager, VideoLookaheadBuffer  
+**Phase:** Every StartFilling call and corresponding teardown/rotation  
+**Depends on:** INV-LOOKAHEAD-BUFFER-AUTHORITY
+
+For every `StartFilling` call:
+
+1. **Exactly one** `StopFilling` or `StopFillingAsync` MUST occur (before or when the buffer is discarded or rotated out).
+2. If `StopFillingAsync` is used, `DetachedFill.thread` MUST be joined within bounded time (e.g. via reaper or explicit join before producer/buffer destruction).
+3. No fill thread may outlive its owning `VideoLookaheadBuffer` instance. The buffer destructor calls `StopFilling(false)`; any path that moves or destroys the buffer MUST ensure the fill thread has been stopped (sync or async) and any detached thread joined before the producer or other resources used by that thread are destroyed.
+
+**MUST NOT:** Leave a fill thread running after the buffer is moved or reset without calling StopFilling/StopFillingAsync, or fail to join a detached thread indefinitely.
+
+---
+
+### INV-BUFFER-INSTANCE-SINGULARITY: One Active Fill Thread Per Logical Slot
+
+**Owner:** PipelineManager  
+**Phase:** Session lifetime  
+**Depends on:** INV-FILL-THREAD-LIFECYCLE-001
+
+At any time:
+
+1. At most one active fill thread per logical buffer slot (A, B, preview). No slot may have two buffers each running a fill thread.
+2. No buffer instance may exist unreachable (e.g. moved out, replaced, or orphaned) while still running a fill thread. Once a buffer is no longer the active slot (e.g. after B→A rotation or teardown), its fill thread MUST have been stopped before or as part of that transition.
+
+**MUST NOT:** Retain a pointer or ownership of a VideoLookaheadBuffer that is not the current slot and still has `IsFilling() == true` without that thread being in the process of stopping or already handed off for join.
+
+---
+
+### INV-FILL-THREAD-LIFECYCLE-001: Fill Thread Lifecycle Authority (Stabilization)
+
+**Owner:** VideoLookaheadBuffer, PipelineManager  
+**Phase:** Every StartFilling / StopFilling / StopFillingAsync / destructor  
+**Purpose:** Hard lifecycle guards and violation logging for fill thread audit.
+
+For every call to `VideoLookaheadBuffer::StartFilling()`:
+
+- **Exactly one** of the following MUST occur:
+  - `StopFilling()`, or
+  - `StopFillingAsync()` followed by a guaranteed join of the returned thread.
+- No fill thread may outlive its owning `VideoLookaheadBuffer` instance.
+- A buffer MUST NOT call `StartFilling()` if `fill_running_ == true`.
+- When a buffer is destroyed, `fill_running_` MUST be false.
+
+**Violation:** Log `FILL_THREAD_LIFECYCLE_VIOLATION` with reason and `this` pointer.
+
+---
+
+### INV-BUFFER-INSTANCE-SINGULARITY-001: At Most One Active Fill Per Slot (Stabilization)
+
+**Owner:** PipelineManager, VideoLookaheadBuffer  
+**Phase:** Session lifetime  
+**Purpose:** Hard guards for buffer instance and fill thread cardinality.
+
+At any time:
+
+- There MUST be at most one active fill thread per logical slot (A, B, preview).
+- A buffer instance must not become unreachable while `fill_running_ == true`.
+
+**Violation:** Log `BUFFER_INSTANCE_ORPHANED`.
+
+---
+
+### INV-BOUNDED-MEMORY-GROWTH: Buffer Depths and RSS Must Converge
+
+**Owner:** VideoLookaheadBuffer, AudioLookaheadBuffer, PipelineManager  
+**Phase:** Steady state (after warmup)  
+**Depends on:** INV-P10-PIPELINE-FLOW-CONTROL, INV-VIDEO-BOUNDED (hard cap)
+
+Under steady state:
+
+1. Sum of all buffer depths (video + audio, across all active slots) MUST converge. Depth may oscillate within bounds but MUST NOT grow without bound.
+2. Process RSS MUST plateau after warmup. Sustained growth in RSS indicates a violation (e.g. frames or buffers leaking).
+3. Growth beyond N frames without consumption (e.g. fill thread pushing while consumer is not popping, or unreachable buffer still filling) is a violation. Enforcement: hard cap on container size (INV-VIDEO-BOUNDED), slot-based gating so fill thread parks when depth ≥ target, and no orphaned fill threads (INV-FILL-THREAD-LIFECYCLE-001, INV-BUFFER-INSTANCE-SINGULARITY).
+
+**Detection:** Log or metric when depth exceeds target + margin for extended period; monitor RSS over long runs; treat unbounded depth or RSS growth as invariant violation.
 
 ---
 
@@ -857,6 +1041,7 @@ LAW-OUTPUT-LIVENESS
     │       ├─→ INV-SINK-NO-IMPLICIT-EOF
     │       └─→ INV-PAD-PRODUCER (mechanism)
     ├─→ INV-TICK-DEADLINE-DISCIPLINE-001
+    │       ├─→ INV-SINK-NONBLOCKING-HANDOFF-001 (tick thread never blocks on sink I/O)
     │       ├─→ INV-TICK-MONOTONIC-UTC-ANCHOR-001
     │       └─→ INV-EXECUTION-CONTINUOUS-OUTPUT-001
     └─→ INV-BLOCK-WALLFENCE-001 (timing authority)
@@ -878,10 +1063,13 @@ Clock Law
 
 INV-LOOKAHEAD-BUFFER-AUTHORITY
     ├─→ INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY
+    ├─→ INV-FILL-THREAD-LIFECYCLE-001 (fill thread stop/join)
+    │       └─→ INV-BUFFER-INSTANCE-SINGULARITY (one fill per slot, no orphan fill)
     └─→ INV-P10-PIPELINE-FLOW-CONTROL
             ├─→ INV-AUDIO-LIVENESS
             ├─→ INV-AUDIO-PRIME-002
-            └─→ INV-SEAM-AUDIO-GATE
+            ├─→ INV-SEAM-AUDIO-GATE
+            └─→ INV-BOUNDED-MEMORY-GROWTH (depths converge, RSS plateau)
 ```
 
 ---
