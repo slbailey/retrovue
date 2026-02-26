@@ -1,7 +1,7 @@
 # ProgramOutput Contract
 
 **Status:** Canonical
-**Layer:** 2.5 (between Phase 9 Bootstrap and Phase 10 Flow Control)
+**Layer:** 2.5 (frame selection and dispatch)
 **Scope:** Frame selection, emission dispatch, and non-blocking output guarantee
 **Authority:** Refines LAW-OUTPUT-LIVENESS; subordinate to Clock (LAW-CLOCK) and Timeline (LAW-TIMELINE)
 
@@ -88,7 +88,7 @@ ProgramOutput MUST NOT inspect, query, or depend on sink presence.
 - ProgramOutput emits to OutputBus unconditionally
 - If no sink is attached, OutputBus handles discard (legally)
 
-**Ownership clarification:** This invariant aligns with INV-P10-SINK-GATE, which gates **destructive dequeue**, not **emission logic**.
+**Ownership clarification:** This invariant aligns with INV-BUFFER-EQUILIBRIUM, which gates **destructive dequeue**, not **emission logic**.
 
 ---
 
@@ -104,7 +104,7 @@ ProgramOutput MUST NOT gate emission on:
 
 Readiness is someone else's problem. ProgramOutput emits on schedule, every time.
 
-**Exception:** INV-P10-SINK-GATE permits gating **destructive dequeue** (not emission) until routing target exists. This is buffer protection, not emission suppression.
+**Exception:** INV-BUFFER-EQUILIBRIUM permits gating **destructive dequeue** (not emission) until routing target exists. This is buffer protection, not emission suppression.
 
 ---
 
@@ -116,7 +116,7 @@ ProgramOutput MAY destructively dequeue frames from the active buffer only when:
 
 This prevents buffer drain before routing is established. It does NOT gate emission semantics.
 
-**Anchors:** INV-P10-SINK-GATE
+**Anchors:** INV-BUFFER-EQUILIBRIUM
 
 ---
 
@@ -133,7 +133,6 @@ Every emitted pad frame MUST be classified with a PadReason:
 | CONTENT_DEFICIT_FILL | EOF-to-boundary fill (normal, not violation) |
 | UNKNOWN | Fallback for unclassified cases (last resort) |
 
-**Anchors:** INV-P10-PAD-REASON (Layer 3 diagnostic)
 
 ---
 
@@ -162,7 +161,7 @@ CT is authoritative. If the expected frame doesn't exist or doesn't match, emit 
 |-----------------|---------------|
 | Detect underrun or overrun | FrameRingBuffer / Flow Control |
 | Decide switch timing | TimelineController / Core |
-| Inject silence | MpegTSOutputSink (Phase 9 bootstrap only) |
+| Inject silence | MpegTSOutputSink (bootstrap only) |
 | Negotiate formats | EncoderPipeline |
 | Interpret transport PTS | MpegTSOutputSink |
 | Wait for "better" frames | (nobody — forbidden) |
@@ -226,8 +225,7 @@ while (!emit_succeeded) {
 | PO-003 | LAW-OUTPUT-LIVENESS | **Refines** — pad semantics |
 | PO-004 | BROADCAST_CONSTITUTION §6 | **Refines** — sink irrelevance |
 | PO-005 | LAW-OUTPUT-LIVENESS | **Operationalizes** — no gating |
-| PO-006 | INV-P10-SINK-GATE | **Anchors** |
-| PO-007 | INV-P10-PAD-REASON | **Anchors** |
+| PO-006 | INV-BUFFER-EQUILIBRIUM | **Anchors** |
 | PO-008 | LAW-AUTHORITY-HIERARCHY | **Operationalizes** — clock wins |
 
 ---
@@ -250,5 +248,3 @@ while (!emit_succeeded) {
 - [BROADCAST_LAWS.md](../laws/BROADCAST_LAWS.md) — LAW-OUTPUT-LIVENESS, LAW-AUTHORITY-HIERARCHY
 - [BROADCAST_CONSTITUTION.MD](../../architecture/BROADCAST_CONSTITUTION.MD) — §5.2 ProgramOutput role
 - [CANONICAL_RUNTIME_DATAFLOW.MD](../../architecture/CANONICAL_RUNTIME_DATAFLOW.MD) — §3.4 FrameSelection
-- [PHASE10_FLOW_CONTROL.md](../coordination/PHASE10_FLOW_CONTROL.md) — INV-P10-SINK-GATE
-- [DIAGNOSTIC_INVARIANTS.md](../diagnostics/DIAGNOSTIC_INVARIANTS.md) — INV-P10-PAD-REASON

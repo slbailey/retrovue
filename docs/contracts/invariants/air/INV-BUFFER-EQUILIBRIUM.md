@@ -1,4 +1,4 @@
-# INV-P10-BUFFER-EQUILIBRIUM
+# INV-BUFFER-EQUILIBRIUM
 
 ## Behavioral Guarantee
 Buffer depth remains bounded and oscillates around target. Neither unbounded growth nor steady-state drain to zero is permitted.

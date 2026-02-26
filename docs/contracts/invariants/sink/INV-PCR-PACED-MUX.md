@@ -1,4 +1,4 @@
-# INV-P10-PCR-PACED-MUX
+# INV-PCR-PACED-MUX
 
 ## Behavioral Guarantee
 Emission is time-driven by wall clock / PCR. Frames are emitted when the output clock reaches scheduled presentation time, not when frames become available.

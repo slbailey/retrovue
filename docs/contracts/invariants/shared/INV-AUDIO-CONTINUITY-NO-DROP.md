@@ -5,7 +5,10 @@ Audio samples MUST NOT be discarded as a result of queue overflow, congestion, o
 
 Audio sample continuity MUST be preserved.
 
-## Allowed Resolution
+## Authority Model
+Audio path and backpressure design own this guarantee.
+
+## Boundary / Constraint
 Backpressure resolution mechanisms MUST NOT violate sample continuity.
 
 ## Violation

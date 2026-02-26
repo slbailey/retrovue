@@ -267,7 +267,7 @@ HTTP fan-out happens above this sink.
 | `TryConsumeBytes()` | ✅ Compliant | Non-blocking, uses MSG_DONTWAIT, drops on EAGAIN |
 | `Close()` | ✅ Compliant | Idempotent |
 
-**Phase 10 Compliance:** All legacy blocking methods have been removed. `WriteToFdCallback` uses `TryConsumeBytes()` exclusively. No escape hatches remain.
+**Compliance:** All legacy blocking methods have been removed. `WriteToFdCallback` uses `TryConsumeBytes()` exclusively. No escape hatches remain.
 
 ---
 
@@ -288,4 +288,3 @@ HTTP fan-out happens above this sink.
 - [OUTPUTBUS_CONTRACT.md](./OUTPUTBUS_CONTRACT.md) — Upstream: byte routing
 - [PROGRAMOUTPUT_CONTRACT.md](./PROGRAMOUTPUT_CONTRACT.md) — Upstream: frame selection
 - [BROADCAST_LAWS.md](../laws/BROADCAST_LAWS.md) — LAW-OUTPUT-LIVENESS
-- [PHASE10_FLOW_CONTROL.md](../coordination/PHASE10_FLOW_CONTROL.md) — Flow control context
