@@ -180,8 +180,8 @@ set(AIR_CORE_SOURCES
   src/runtime/PlayoutEngine.cpp
   src/runtime/ProgramFormat.cpp
   src/runtime/PlayoutControl.cpp
-  src/runtime/TimingLoop.cpp
   src/runtime/ProducerBus.cpp
+  src/runtime/TimingLoop.cpp
   src/buffer/FrameRingBuffer.cpp
   src/decode/FrameProducer.cpp
   src/decode/FFmpegDecoder.cpp
@@ -226,6 +226,11 @@ set(AIR_CORE_SOURCES
 # Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
 # Use: cmake ... -DRETROVUE_DEBUG_PAD_EMIT=ON
 option(RETROVUE_DEBUG_PAD_EMIT "Log PAD activation and audio emit diagnostics (FENCE_AUDIO_PAD)" OFF)
+
+# Optional: build with AddressSanitizer + UBSan and debug symbols (reproduction / leak hunt).
+# Use: cmake ... -DRETROVUE_SANITIZE=ON (and e.g. -DCMAKE_BUILD_TYPE=Debug)
+# Then run the same reproduction; ASan/UBSan will report leaks and undefined behaviour.
+option(RETROVUE_SANITIZE "Build with -fsanitize=address,undefined -fno-omit-frame-pointer -g" OFF)
 
 # Build/version stamp for PipelineManager session logs (impossible to run old binary unnoticed).
 set(RETROVUE_GIT_COMMIT "unknown")
@@ -297,6 +302,14 @@ target_link_options(retrovue_air_core PRIVATE
   "LINKER:-rpath,${X264_RPATH}"
   "LINKER:-rpath,${FFMPEG_RPATH}"
 )
+if(RETROVUE_SANITIZE)
+  target_compile_options(retrovue_air_core PRIVATE
+    -fsanitize=address,undefined
+    -fno-omit-frame-pointer
+    -g
+  )
+  target_link_options(retrovue_air_core PRIVATE -fsanitize=address,undefined)
+endif()
 
 # ---- gRPC server executable (Phase 8.0: AttachStream/DetachStream over UDS) ----
 add_executable(retrovue_air src/main.cpp)
@@ -309,6 +322,9 @@ target_link_options(retrovue_air PRIVATE
   "LINKER:-rpath,${X264_RPATH}"
   "LINKER:-rpath,${FFMPEG_RPATH}"
 )
+if(RETROVUE_SANITIZE)
+  target_link_options(retrovue_air PRIVATE -fsanitize=address,undefined)
+endif()
 target_include_directories(retrovue_air
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

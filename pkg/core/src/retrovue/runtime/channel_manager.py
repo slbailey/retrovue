@@ -836,20 +836,33 @@ class ChannelManager:
                 self.LINGER_SECONDS, self._linger_expire
             )
         else:
-            # No event loop — fall back to immediate teardown.
-            self._channel_state = "STOPPED"
-            self._stop_producer_if_idle()
+            # No event loop — do full teardown immediately (same as _linger_expire)
+            # so producer.stop() runs and AIR process is terminated.
+            self._logger.info(
+                "[channel %s] LINGER_SKIP (no event loop); stopping producer and tearing down",
+                self.channel_id,
+            )
+            if hasattr(self.program_director, "stop_channel"):
+                self.program_director.stop_channel(self.channel_id)
+            else:
+                self._channel_state = "STOPPED"
+                self._stop_producer_if_idle()
 
     def _linger_expire(self) -> None:
-        """Linger timer fired. Stop producer if still no viewers."""
+        """Linger timer fired. If still no viewers, stop producer and tear down (AIR exits after linger)."""
         self._linger_handle = None
         self._linger_deadline = None
         if self.runtime_state.viewer_count == 0:
             self._logger.info(
-                "[channel %s] LINGER_EXPIRED stopping producer", self.channel_id
+                "[channel %s] LINGER_EXPIRED (0 viewers); stopping producer and tearing down",
+                self.channel_id,
             )
-            self._channel_state = "STOPPED"
-            self._stop_producer_if_idle()
+            # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
+            if hasattr(self.program_director, "stop_channel"):
+                self.program_director.stop_channel(self.channel_id)
+            else:
+                self._channel_state = "STOPPED"
+                self._stop_producer_if_idle()
 
     def _cancel_linger(self) -> None:
         """Cancel any pending linger timer."""
@@ -1017,24 +1030,17 @@ class ChannelManager:
 
     def check_health(self) -> None:
         """Poll Producer health and update runtime_state. Includes segment supervisor loop for Phase 0."""
-        # Phase 8.5/8.6: Channel with zero viewers must not have an active producer. Suppress all
-        # restart logic (health, EOF handling, reconnect). Next viewer tune-in will start producer.
-        # Exception: during linger grace period, the producer stays alive awaiting a reconnect.
+        # Keep upstream (AIR) running even with zero viewers so VLC reconnect does not restart AIR.
         viewer_count = len(self.viewer_sessions)
+        self.runtime_state.viewer_count = viewer_count
         if viewer_count == 0 and self._linger_handle is None:
-            if self.active_producer is not None:
-                self._logger.debug(
-                    "Channel %s: zero viewers, stopping producer (no restarts)",
-                    self.channel_id,
-                )
-                self.active_producer.stop()
-                self.active_producer = None
-            self._channel_state = "STOPPED"
-            self.runtime_state.viewer_count = 0
-            self.runtime_state.producer_status = "stopped"
-            self.runtime_state.stream_endpoint = None
-            return
-        # When last viewer disconnected, ProgramDirector called StopChannel; do nothing until next viewer.
+            # Do NOT stop producer when 0 viewers; upstream stays connected for reconnect.
+            if self._channel_state == "STOPPED":
+                return
+            self._check_teardown_completion()
+            if self.active_producer is None:
+                return
+            # Fall through to update producer health (keep channel RUNNING)
         if self._channel_state == "STOPPED":
             return
         self._check_teardown_completion()

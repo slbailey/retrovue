@@ -7,6 +7,10 @@
 
 ---
 
+**DO NOT delete BlockPlan sources.** This checklist lists only **ProducerBus/legacy** components for retirement. The following are **BlockPlan** components and must **not** be deleted when following this checklist: `PipelineManager.cpp`, `AudioLookaheadBuffer.cpp`, `AudioLookaheadBuffer.hpp`, `SocketSink.h`, and any other file not explicitly listed in the tables below. See `pkg/air/docs/DELETED_FILES_INVESTIGATION.md` if these were ever removed by mistake.
+
+---
+
 ## 1. Contracts That Must Be Retired
 
 These contracts govern behavior that exists only on the ProducerBus execution path.

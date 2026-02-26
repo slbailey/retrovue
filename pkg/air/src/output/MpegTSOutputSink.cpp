@@ -168,15 +168,8 @@ bool MpegTSOutputSink::Start() {
     return false;
   }
 
-  // =========================================================================
-  // INV-BOOT-FAST-EMIT: Disable encoder timing during boot for immediate output
-  // =========================================================================
-  // Encoder timing (GateOutputTiming) is DISABLED at startup to ensure
-  // immediate TS emission. It will be disabled permanently once steady-state
-  // is entered (MuxLoop owns pacing authority).
-  // =========================================================================
-  encoder_->SetOutputTimingEnabled(false);
-  std::cout << "[MpegTSOutputSink] INV-BOOT-FAST-EMIT: Encoder output timing DISABLED for fast boot" << std::endl;
+  // Output timing left at encoder default (enabled). EncoderPipeline defaults
+  // output_timing_enabled_=true; pacing is applied in encode path when enabled.
 
   // =========================================================================
   // INV-P9-IMMEDIATE-OUTPUT: Keep audio liveness ENABLED at startup
@@ -856,17 +849,7 @@ void MpegTSOutputSink::MuxLoop() {
         // =====================================================================
         if (encoder_) {
           encoder_->SetProducerCTAuthoritative(true);
-          // ===================================================================
-          // INV-P9-STEADY-PACING: MuxLoop is now the sole timing authority
-          // ===================================================================
-          // CRITICAL: Disable encoder's GateOutputTiming to prevent conflicting
-          // timing gates. MuxLoop has wall_epoch set at first frame dequeue.
-          // GateOutputTiming has output_timing_anchor_wall_ set at first encode.
-          // These anchors differ, causing frames to pass MuxLoop (appear "late")
-          // but block in GateOutputTiming (appear "early") - resulting in
-          // multi-second TS emission gaps despite continuous frame input.
-          // ===================================================================
-          encoder_->SetOutputTimingEnabled(false);
+          // Output timing remains enabled (encoder default). No second disable.
         }
 
         // =====================================================================
@@ -1316,9 +1299,8 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     (void)w;  // Forensic only — ignore errors, never block
   }
 
-  // Emit bytes via SocketSink's bounded buffer + writer thread
-  // LAW-OUTPUT-LIVENESS: SocketSink detaches slow consumers on buffer overflow
-  // No packet drops; overflow triggers connection close
+  // INV-SINK-NONBLOCKING-HANDOFF-001: O(1) enqueue only; egress writer thread does send().
+  // LAW-OUTPUT-LIVENESS: SocketSink detaches slow consumers on buffer overflow.
   bool enqueued = sink->socket_sink_->TryConsumeBytes(
       reinterpret_cast<const uint8_t*>(buf),
       static_cast<size_t>(buf_size));

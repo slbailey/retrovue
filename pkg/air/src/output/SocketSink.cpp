@@ -52,6 +52,7 @@ SocketSink::SocketSink(int fd, const std::string& name, size_t buffer_capacity)
 }
 
 SocketSink::~SocketSink() {
+  std::cout << "[SocketSink:" << name_ << "] sink destroyed" << std::endl;
   Close();
 }
 
@@ -196,8 +197,16 @@ void SocketSink::OpenEmissionGate() {
 
 void SocketSink::WriterThreadLoop() {
   constexpr int kPollTimeoutMs = 100;  // Check for stop every 100ms
+  auto last_queue_log_time = std::chrono::steady_clock::now();
 
   while (!writer_stop_.load(std::memory_order_acquire)) {
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_queue_log_time >= std::chrono::seconds(1)) {
+      const size_t queue_bytes = GetCurrentBufferSize();
+      std::cout << "[SocketSink:" << name_ << "] queue_bytes=" << queue_bytes << std::endl;
+      last_queue_log_time = now;
+    }
+
     std::vector<uint8_t> packet;
 
     // Wait for data
@@ -312,23 +321,22 @@ void SocketSink::WriterThreadLoop() {
 }
 
 void SocketSink::Close() {
-  // Idempotent close
-  bool expected = false;
-  if (!closed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-    return;  // Already closed
-  }
+  // Idempotent close: only close FD once; always join writer thread so we never leak it
+  // when ForceDetachAndClose or DetachSlowConsumer ran first (they set closed_ but don't join).
+  const size_t queue_bytes = GetCurrentBufferSize();
+  const bool writer_thread_running = writer_thread_.joinable() && !writer_stop_.load(std::memory_order_acquire);
+  std::cout << "[SocketSink:" << name_ << "] teardown: queue_bytes=" << queue_bytes
+            << " writer_thread_running=" << (writer_thread_running ? "true" : "false") << std::endl;
 
-  // Signal writer thread to stop
+  closed_.store(true, std::memory_order_release);
   writer_stop_.store(true, std::memory_order_release);
   queue_cv_.notify_all();
   drain_cv_.notify_all();  // Unblock WaitAndConsumeBytes
 
-  // Wait for writer thread to finish
   if (writer_thread_.joinable()) {
     writer_thread_.join();
   }
 
-  // Actually close the socket FD (Hook B)
   if (fd_ >= 0) {
     ::shutdown(fd_, SHUT_WR);  // Signal EOF to peer
     CLOSE_FD(fd_, "Close", static_cast<int64_t>(sink_generation_));

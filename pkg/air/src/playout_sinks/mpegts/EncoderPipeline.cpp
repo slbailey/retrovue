@@ -74,7 +74,7 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       output_timing_anchor_set_(false),
       output_timing_anchor_pts_(0),
       output_timing_anchor_wall_(),
-      output_timing_enabled_(true),  // P8-IO-001: Enabled by default, disable during prebuffer
+      output_timing_enabled_(true),  // P8-IO-001: Egress pacing in write_callback (deadline_mono_ns)
       // INV-P9-AUDIO-LIVENESS: Deterministic silence generation state
       real_audio_received_(false),
       silence_injection_active_(false),
@@ -1361,6 +1361,9 @@ int EncoderPipeline::AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size) {
 
 int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
   if (!avio_write_callback_) return -1;
+  // Egress pacing is done in the write_callback (PipelineManager): do not complete
+  // TS write for tick N before deadline_mono_ns(N). Aligns to INV-TICK-DEADLINE-DISCIPLINE-001,
+  // INV-TICK-MONOTONIC-UTC-ANCHOR-001, INV-FPS-TICK-PTS (no drift).
   return avio_write_callback_(avio_opaque_, buf, buf_size);
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
@@ -2043,7 +2046,8 @@ void EncoderPipeline::SetOutputTimingEnabled(bool enabled) {
     // Reset anchor when re-enabling so timing starts fresh
     output_timing_anchor_set_ = false;
   }
-  std::cout << "[EncoderPipeline] Output timing " << (enabled ? "ENABLED" : "DISABLED") << std::endl;
+  std::cout << "[EncoderPipeline] Output timing "
+            << (enabled ? "ENABLED (wallclock paced)" : "DISABLED") << std::endl;
 #else
   (void)enabled;
 #endif
@@ -2083,6 +2087,15 @@ void EncoderPipeline::SetProducerCTAuthoritative(bool enabled) {
 #else
   (void)enabled;
 #endif
+}
+
+void EncoderPipeline::GetEgressPacerMetrics(EgressPacerMetrics& out) const {
+  // Egress pacer runs in PipelineManager write_callback (deadline_mono_ns); metrics from write_ctx.
+  out.pacer_sleep_ms_total = 0;
+  out.pacer_late_ms = 0;
+  out.pacer_max_late_ms = 0;
+  out.pacer_chunks_paced = 0;
+  (void)out;
 }
 
 }  // namespace retrovue::playout_sinks::mpegts
