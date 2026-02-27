@@ -81,6 +81,7 @@ class HorizonHealthReport:
     execution_compliant: bool
     next_block_compliant: bool
     coverage_compliant: bool
+    proactive_extension_triggered: bool
     evaluation_interval_seconds: int
     store_entry_count: int
 
@@ -138,6 +139,7 @@ class HorizonManager:
         programming_day_start_hour: int = 6,
         execution_store=None,  # Optional ExecutionWindowStore
         locked_window_ms: int = 0,
+        proactive_extend_threshold_ms: int = 0,
     ):
         self._schedule_manager = schedule_manager
         self._planning_pipeline = planning_pipeline
@@ -148,6 +150,7 @@ class HorizonManager:
         self._day_start_hour = programming_day_start_hour
         self._execution_store = execution_store
         self._locked_window_ms = locked_window_ms
+        self._proactive_extend_threshold_ms = proactive_extend_threshold_ms
         self._logger = logging.getLogger(__name__)
 
         # Internal state
@@ -157,6 +160,7 @@ class HorizonManager:
         self._next_block_compliant: bool = True
         self._coverage_compliant: bool = True
         self._seam_violations: list[SeamViolation] = []
+        self._proactive_extension_triggered: bool = False
 
         # Audit state
         self._extension_attempt_count: int = 0
@@ -218,6 +222,11 @@ class HorizonManager:
     def seam_violations(self) -> list[SeamViolation]:
         """Seam violations found during the most recent evaluation."""
         return list(self._seam_violations)
+
+    @property
+    def proactive_extension_triggered(self) -> bool:
+        """True if the most recent evaluate_once() triggered a proactive extension."""
+        return self._proactive_extension_triggered
 
     @property
     def extension_attempt_log(self) -> list[ExtensionAttempt]:
@@ -282,6 +291,7 @@ class HorizonManager:
             execution_compliant=exec_h >= self._min_execution_hours,
             next_block_compliant=self._next_block_compliant,
             coverage_compliant=self._coverage_compliant,
+            proactive_extension_triggered=self._proactive_extension_triggered,
             evaluation_interval_seconds=self._eval_interval_s,
             store_entry_count=store_count,
         )
@@ -299,6 +309,7 @@ class HorizonManager:
         now = self._clock.now_utc()
         now_ms = int(now.timestamp() * 1000)
         self._last_evaluation_utc_ms = now_ms
+        self._proactive_extension_triggered = False
 
         current_bd = self._broadcast_date_for(now)
 
@@ -327,6 +338,9 @@ class HorizonManager:
         # --- Seam contiguity (INV-HORIZON-CONTINUOUS-COVERAGE-001) ---
         if self._execution_store is not None:
             self._check_seam_contiguity()
+
+        # --- Proactive extension (INV-HORIZON-PROACTIVE-EXTEND-001) ---
+        self._check_proactive_extend(now_ms, current_bd)
 
         # --- Structured status log ---
         # Healthy + no extension = steady state → DEBUG (avoid log noise).
@@ -659,3 +673,87 @@ class HorizonManager:
 
         self._seam_violations = violations
         self._coverage_compliant = len(violations) == 0
+
+    def _check_proactive_extend(self, now_ms: int, current_bd: date) -> None:
+        """Proactive extension when remaining horizon crosses watermark (INV-HORIZON-PROACTIVE-EXTEND-001).
+
+        If proactive_extend_threshold_ms == 0, this check is disabled.
+        If remaining horizon > threshold, no action.
+        If remaining <= threshold, attempt a single extension.
+        """
+        if self._proactive_extend_threshold_ms <= 0:
+            return
+
+        remaining_ms = self._execution_window_end_utc_ms - now_ms
+        if remaining_ms > self._proactive_extend_threshold_ms:
+            return
+
+        # Remaining is at or below watermark — attempt one extension
+        self._proactive_extension_triggered = True
+
+        # Determine next broadcast date to extend
+        if self._execution_window_end_utc_ms > 0:
+            end_dt = datetime.fromtimestamp(
+                self._execution_window_end_utc_ms / 1000.0,
+                tz=timezone.utc,
+            )
+            next_date = self._broadcast_date_for(end_dt)
+            if self._day_end_utc_ms(next_date) <= self._execution_window_end_utc_ms:
+                next_date = next_date + timedelta(days=1)
+        else:
+            next_date = current_bd
+
+        window_end_before = self._execution_window_end_utc_ms
+        self._extension_attempt_count += 1
+        attempt_id = f"ext-{self._extension_attempt_count}"
+
+        self._logger.info(
+            "HorizonManager: proactive extension → %s "
+            "(remaining=%dms, threshold=%dms)",
+            next_date.isoformat(), remaining_ms,
+            self._proactive_extend_threshold_ms,
+        )
+
+        try:
+            result = self._planning_pipeline.extend_execution_day(next_date)
+        except Exception as exc:
+            error_code = getattr(exc, "error_code", str(exc))
+            attempt = ExtensionAttempt(
+                attempt_id=attempt_id,
+                now_utc_ms=now_ms,
+                window_end_before_ms=window_end_before,
+                window_end_after_ms=self._execution_window_end_utc_ms,
+                reason_code="CLOCK_WATERMARK",
+                triggered_by="SCHED_MGR_POLICY",
+                success=False,
+                error_code=error_code,
+            )
+            self._extension_attempt_log.append(attempt)
+            self._logger.warning(
+                "HorizonManager: proactive extension failed for %s: %s",
+                next_date.isoformat(), error_code,
+            )
+            return
+
+        # Ingest result
+        if isinstance(result, int):
+            end_ms = result
+        else:
+            end_ms = result.end_utc_ms
+            if self._execution_store is not None and hasattr(result, "entries"):
+                self._execution_store.add_entries(result.entries)
+
+        if end_ms > self._execution_window_end_utc_ms:
+            self._execution_window_end_utc_ms = end_ms
+
+        self._extension_success_count += 1
+        attempt = ExtensionAttempt(
+            attempt_id=attempt_id,
+            now_utc_ms=now_ms,
+            window_end_before_ms=window_end_before,
+            window_end_after_ms=self._execution_window_end_utc_ms,
+            reason_code="CLOCK_WATERMARK",
+            triggered_by="SCHED_MGR_POLICY",
+            success=True,
+        )
+        self._extension_attempt_log.append(attempt)
