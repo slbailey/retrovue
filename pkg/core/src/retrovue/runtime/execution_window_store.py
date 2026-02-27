@@ -100,8 +100,8 @@ class ExecutionWindowStore:
 
         Duplicate block_ids are silently ignored (idempotent).
 
-        Raises ValueError if any entry lacks playlist derivation
-        (INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001) when enforcement is enabled.
+        Raises ValueError if any entry lacks transmission log derivation
+        (INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001) when enforcement is enabled.
         Raises ValueError if any entry lacks schedule lineage
         (INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001).
         """
@@ -112,7 +112,7 @@ class ExecutionWindowStore:
                     and entry.transmission_log_ref is None
                 ):
                     raise ValueError(
-                        "INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED: "
+                        "INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001-VIOLATED: "
                         f"ExecutionEntry block_id={entry.block_id!r} has "
                         f"transmission_log_ref=None and is_operator_override=False. "
                         "Every execution artifact must be derived from a "
@@ -253,7 +253,7 @@ class ExecutionWindowStore:
     ) -> None:
         """Replace an existing entry by block_id, enforcing immutability guards.
 
-        Guards (INV-PLAYLOG-LOCKED-IMMUTABLE-001):
+        Guards (INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001):
         1. Past window: if existing entry's end_utc_ms <= now_utc_ms, the entry
            has already aired. Mutation is unconditionally rejected (no override).
         2. Locked without override: if existing entry is_locked and no
@@ -276,7 +276,7 @@ class ExecutionWindowStore:
             # Guard 1: past window — unconditional rejection
             if existing.end_utc_ms <= now_utc_ms:
                 raise ValueError(
-                    "INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED: "
+                    "INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED: "
                     f"ExecutionEntry block_id={block_id!r} is in the past "
                     f"window (end_utc_ms={existing.end_utc_ms} <= "
                     f"now_utc_ms={now_utc_ms}). "
@@ -288,7 +288,7 @@ class ExecutionWindowStore:
             # Guard 2: locked without override
             if existing.is_locked and override_record_id is None:
                 raise ValueError(
-                    "INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED: "
+                    "INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED: "
                     f"ExecutionEntry block_id={block_id!r} is locked. "
                     f"Window status: \"locked\". "
                     "Locked entries require an override_record_id for "
@@ -308,7 +308,7 @@ class ExecutionWindowStore:
 def validate_execution_entry_contiguity(entries: list[ExecutionEntry]) -> None:
     """Validate that ExecutionEntry sequence has no temporal gaps.
 
-    Raises ValueError with tag INV-PLAYLOG-NO-GAPS-001-VIOLATED if any
+    Raises ValueError with tag INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED if any
     consecutive pair has a gap (entries[i].end_utc_ms != entries[i+1].start_utc_ms).
 
     Empty or single-entry lists pass trivially.
@@ -322,7 +322,7 @@ def validate_execution_entry_contiguity(entries: list[ExecutionEntry]) -> None:
         next_entry = sorted_entries[i + 1]
         if current.end_utc_ms != next_entry.start_utc_ms:
             raise ValueError(
-                "INV-PLAYLOG-NO-GAPS-001-VIOLATED: "
+                "INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED: "
                 f"Gap detected in ExecutionEntry sequence for "
                 f"channel_id={current.channel_id!r}. "
                 f"Entry block_id={current.block_id!r} ends at "

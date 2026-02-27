@@ -1,4 +1,4 @@
-# INV-PLAYLOG-LOCKED-IMMUTABLE-001 — ExecutionEntry records in the locked execution window are immutable except via atomic override
+# INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 — ExecutionEntry records in the locked execution window are immutable except via atomic override
 
 Status: Invariant
 Authority Level: Runtime
@@ -33,8 +33,8 @@ Using FakeAdvancingClock: set clock to T. Create ExecutionEntry at [T+15m, T+45m
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlaylogLockedImmutable001` (PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003)
+- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryLockedImmutable001` (PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003)
 
 ## Enforcement Evidence
 
-`ExecutionWindowStore.replace_entry()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — enforces two immutability guards: (1) past-window entries (`end_utc_ms <= now_utc_ms`) are unconditionally rejected, (2) locked entries require an `override_record_id` for mutation. Raises `ValueError` with tag `INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED` and window status (`"past"` or `"locked"`) on violation.
+`ExecutionWindowStore.replace_entry()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — enforces two immutability guards: (1) past-window entries (`end_utc_ms <= now_utc_ms`) are unconditionally rejected, (2) locked entries require an `override_record_id` for mutation. Raises `ValueError` with tag `INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED` and window status (`"past"` or `"locked"`) on violation.

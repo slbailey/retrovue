@@ -6,7 +6,7 @@ Derived From: `LAW-ELIGIBILITY`, `LAW-CONTENT-AUTHORITY`
 
 ## Purpose
 
-Prevents ineligible content from entering the scheduling derivation chain. Once an ineligible asset propagates into ScheduleDay, it contaminates Playlist and PlaylogEvent, creating a `LAW-ELIGIBILITY` violation at every downstream layer. This invariant enforces the gate at the earliest resolution point.
+Prevents ineligible content from entering the scheduling derivation chain. Once an ineligible asset propagates into ScheduleDay, it contaminates Playlist and ExecutionEntry, creating a `LAW-ELIGIBILITY` violation at every downstream layer. This invariant enforces the gate at the earliest resolution point.
 
 ## Guarantee
 

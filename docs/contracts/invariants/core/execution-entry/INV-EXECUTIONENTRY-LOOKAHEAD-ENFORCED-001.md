@@ -1,4 +1,4 @@
-# INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 — ExecutionEntry window extension is triggered by clock progression, not consumer demand
+# INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 — ExecutionEntry window extension is triggered by clock progression, not consumer demand
 
 Status: Invariant
 Authority Level: Runtime

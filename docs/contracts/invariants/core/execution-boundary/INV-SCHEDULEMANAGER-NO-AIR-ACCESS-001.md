@@ -6,7 +6,7 @@ Derived From: `LAW-RUNTIME-AUTHORITY`, `LAW-CONTENT-AUTHORITY`
 
 ## Purpose
 
-AIR is the real-time playout engine. It owns frame timing, encoding, muxing, and transport. `LAW-RUNTIME-AUTHORITY` designates the PlaylogEvent / execution plan as the sole runtime authority — the data pipeline flows one way: planning produces execution artifacts, execution consumes them.
+AIR is the real-time playout engine. It owns frame timing, encoding, muxing, and transport. `LAW-RUNTIME-AUTHORITY` designates the ExecutionEntry / execution plan as the sole runtime authority — the data pipeline flows one way: planning produces execution artifacts, execution consumes them.
 
 If Schedule Manager were to communicate directly with AIR, it would bypass ChannelManager as the coordination layer and introduce a second, unmediated command path into the playout engine. This produces two failure modes:
 

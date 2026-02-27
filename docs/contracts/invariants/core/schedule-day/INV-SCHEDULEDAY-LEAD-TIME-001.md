@@ -6,7 +6,7 @@ Derived From: `LAW-DERIVATION`, `LAW-RUNTIME-AUTHORITY`
 
 ## Purpose
 
-Ensures the downstream derivation chain has sufficient lead time to function. Playlist generation and PlaylogEvent rolling-window extension both depend on a materialized ScheduleDay. If a ScheduleDay does not exist until close to its broadcast date, the chain `ScheduleDay → Playlist → PlaylogEvent` cannot maintain the lookahead depth required by `INV-PLAYLOG-LOOKAHEAD-001`, starving the runtime authority layer.
+Ensures the downstream derivation chain has sufficient lead time to function. Playlist generation and ExecutionEntry rolling-window extension both depend on a materialized ScheduleDay. If a ScheduleDay does not exist until close to its broadcast date, the chain `ScheduleDay → Playlist → ExecutionEntry` cannot maintain the lookahead depth required by `INV-EXECUTIONENTRY-LOOKAHEAD-001`, starving the runtime authority layer.
 
 The lead time is deployment-configurable (`min_schedule_day_lead_days`, default: **3**) to accommodate environments with different operational cadences. All comparisons must use the injected value; the literal value 3 must not appear in enforcement code or tests.
 

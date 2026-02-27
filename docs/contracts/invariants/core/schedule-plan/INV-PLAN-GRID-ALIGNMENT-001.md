@@ -6,7 +6,7 @@ Derived From: `LAW-GRID`
 
 ## Purpose
 
-Ensures that ScheduleDay generation produces grid-aligned slot times. A zone with an off-grid boundary propagates a misaligned time into ScheduleDay, Playlist, and PlaylogEvent — cascading a `LAW-GRID` violation through the entire derivation chain.
+Ensures that ScheduleDay generation produces grid-aligned slot times. A zone with an off-grid boundary propagates a misaligned time into ScheduleDay, Playlist, and ExecutionEntry — cascading a `LAW-GRID` violation through the entire derivation chain.
 
 ## Guarantee
 

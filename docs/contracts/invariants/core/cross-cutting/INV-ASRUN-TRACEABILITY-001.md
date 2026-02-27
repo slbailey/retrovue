@@ -12,12 +12,12 @@ Enforces `LAW-DERIVATION` at its terminus — the observed broadcast record. Wit
 
 Every AsRun entry must satisfy all of the following:
 
-1. References a PlaylogEvent (`playlog_event_id` is set).
-2. That PlaylogEvent references a Playlist entry.
+1. References a ExecutionEntry (`playlog_event_id` is set).
+2. That ExecutionEntry references a Playlist entry.
 3. That Playlist entry references a ScheduleDay.
 4. That ScheduleDay references a SchedulePlan (or carries `is_manual_override=true` with a superseded-record reference).
 
-AsRun entries created by operator override are exempt from conditions 2–4 but must still reference the PlaylogEvent override record that authorized the broadcast.
+AsRun entries created by operator override are exempt from conditions 2–4 but must still reference the ExecutionEntry override record that authorized the broadcast.
 
 ## Preconditions
 
@@ -25,7 +25,7 @@ AsRun entries created by operator override are exempt from conditions 2–4 but 
 
 ## Observability
 
-At AsRun record creation, the application layer must verify the PlaylogEvent reference is present and non-null. The full chain can be traversed via audit query:
+At AsRun record creation, the application layer must verify the ExecutionEntry reference is present and non-null. The full chain can be traversed via audit query:
 
 ```sql
 SELECT a.id, p.id, pl.id, sd.id, sp.id
@@ -41,11 +41,11 @@ Any row returned is a violation.
 
 ## Deterministic Testability
 
-Create an AsRun record without a `playlog_event_id`. Assert creation is rejected. Separately, create an AsRun record with a valid PlaylogEvent reference and trace the full chain; assert no link in the chain is null (unless manual override). No real-time waits required.
+Create an AsRun record without a `playlog_event_id`. Assert creation is rejected. Separately, create an AsRun record with a valid ExecutionEntry reference and trace the full chain; assert no link in the chain is null (unless manual override). No real-time waits required.
 
 ## Failure Semantics
 
-**Runtime fault** if the AsRun service failed to record the PlaylogEvent reference. **Operator fault** if a manual database intervention broke the chain post-hoc. Either way the record is a violation.
+**Runtime fault** if the AsRun service failed to record the ExecutionEntry reference. **Operator fault** if a manual database intervention broke the chain post-hoc. Either way the record is a violation.
 
 ## Required Tests
 

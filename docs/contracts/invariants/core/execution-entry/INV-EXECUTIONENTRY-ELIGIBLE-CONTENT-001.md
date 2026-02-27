@@ -1,4 +1,4 @@
-# INV-PLAYLOG-ELIGIBLE-CONTENT-001 — All assets in the active ExecutionEntry window must be eligible
+# INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 — All assets in the active ExecutionEntry window must be eligible
 
 Status: Invariant
 Authority Level: Runtime

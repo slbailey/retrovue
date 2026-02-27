@@ -10,7 +10,7 @@ Tests ONLY the following blocker invariants:
 
 Authoritative sources:
   - docs/contracts/laws/LAW-*.md
-  - docs/contracts/invariants/core/INV-*.md
+  - docs/contracts/invariants/core/**/INV-*.md
   - docs/contracts/TEST-MATRIX-SCHEDULING-CONSTITUTION.md
 
 Tests assert that enforcement exists. If enforcement is missing, tests fail.
@@ -2003,12 +2003,12 @@ class TestInvScheduledayNoGaps001:
 
 
 # =========================================================================
-# INV-PLAYLOG-NO-GAPS-001
+# INV-EXECUTIONENTRY-NO-GAPS-001
 # =========================================================================
 
 
-class TestInvPlaylogNoGaps001:
-    """INV-PLAYLOG-NO-GAPS-001
+class TestInvExecutionentryNoGaps001:
+    """INV-EXECUTIONENTRY-NO-GAPS-001
 
     The ExecutionEntry sequence for an active channel must be temporally
     contiguous with no gaps within the lookahead window. A gap represents
@@ -2020,16 +2020,16 @@ class TestInvPlaylogNoGaps001:
     Derived from: LAW-LIVENESS, LAW-RUNTIME-AUTHORITY.
     """
 
-    def test_inv_playlog_no_gaps_001_detect_gap(self, contract_clock):
-        """INV-PLAYLOG-NO-GAPS-001 -- negative (gap detected)
+    def test_inv_executionentry_no_gaps_001_detect_gap(self, contract_clock):
+        """INV-EXECUTIONENTRY-NO-GAPS-001 -- negative (gap detected)
 
-        Invariant: INV-PLAYLOG-NO-GAPS-001
+        Invariant: INV-EXECUTIONENTRY-NO-GAPS-001
         Derived law(s): LAW-LIVENESS, LAW-RUNTIME-AUTHORITY
         Failure class: Runtime
         Scenario: Construct ExecutionEntry sequence with a 10-minute gap
                   at [EPOCH+1h, EPOCH+1h10m]. Call
                   validate_execution_entry_contiguity(). Assert raises
-                  ValueError matching INV-PLAYLOG-NO-GAPS-001-VIOLATED.
+                  ValueError matching INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED.
                   Assert fault message includes gap boundaries and channel ID.
         """
         # Two contiguous blocks, then a 10-minute gap, then a third block.
@@ -2043,7 +2043,7 @@ class TestInvPlaylogNoGaps001:
             ),
         ]
 
-        with pytest.raises(ValueError, match="INV-PLAYLOG-NO-GAPS-001-VIOLATED") as exc_info:
+        with pytest.raises(ValueError, match="INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED") as exc_info:
             validate_execution_entry_contiguity(entries)
 
         msg = str(exc_info.value)
@@ -2054,10 +2054,10 @@ class TestInvPlaylogNoGaps001:
         assert str(gap_start) in msg, "Fault must include gap start boundary"
         assert str(gap_end) in msg, "Fault must include gap end boundary"
 
-    def test_inv_playlog_no_gaps_001_accept_contiguous(self, contract_clock):
-        """INV-PLAYLOG-NO-GAPS-001 -- positive (contiguous sequence)
+    def test_inv_executionentry_no_gaps_001_accept_contiguous(self, contract_clock):
+        """INV-EXECUTIONENTRY-NO-GAPS-001 -- positive (contiguous sequence)
 
-        Invariant: INV-PLAYLOG-NO-GAPS-001
+        Invariant: INV-EXECUTIONENTRY-NO-GAPS-001
         Derived law(s): LAW-LIVENESS, LAW-RUNTIME-AUTHORITY
         Failure class: N/A (positive path)
         Scenario: Construct contiguous ExecutionEntry sequence (4 consecutive
@@ -2073,12 +2073,12 @@ class TestInvPlaylogNoGaps001:
 
 
 # =========================================================================
-# INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+# INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001
 # =========================================================================
 
 
-class TestInvPlaylogDerivedFromPlaylist001:
-    """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+class TestInvExecutionentryDerivedFromTransmissionlog001:
+    """INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001
 
     Every ExecutionEntry must be traceable to a TransmissionLogEntry,
     except those created by an explicit recorded operator override.
@@ -2091,18 +2091,18 @@ class TestInvPlaylogDerivedFromPlaylist001:
     Derived from: LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY.
     """
 
-    def test_inv_playlog_derived_from_playlist_001_reject_unanchored(
+    def test_inv_executionentry_derived_from_transmissionlog_001_reject_unanchored(
         self, contract_clock
     ):
-        """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 -- negative (unanchored)
+        """INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 -- negative (unanchored)
 
-        Invariant: INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+        Invariant: INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001
         Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
         Failure class: Planning
         Scenario: Construct ExecutionEntry with transmission_log_ref=None and
                   is_operator_override=False. Submit to ExecutionWindowStore
                   with enforce_derivation_from_playlist=True. Assert raises
-                  ValueError matching INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED.
+                  ValueError matching INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001-VIOLATED.
         """
         store = ExecutionWindowStore(enforce_derivation_from_playlist=True)
         entry = _make_entry(
@@ -2113,21 +2113,21 @@ class TestInvPlaylogDerivedFromPlaylist001:
         )
 
         with pytest.raises(
-            ValueError, match="INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED"
+            ValueError, match="INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001-VIOLATED"
         ):
             store.add_entries([entry])
 
         assert len(store.get_all_entries()) == 0, (
-            "INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 VIOLATED: "
+            "INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 VIOLATED: "
             "Store accepted entry without playlist derivation."
         )
 
-    def test_inv_playlog_derived_from_playlist_001_accept_with_ref(
+    def test_inv_executionentry_derived_from_transmissionlog_001_accept_with_ref(
         self, contract_clock
     ):
-        """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 -- positive (with ref)
+        """INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 -- positive (with ref)
 
-        Invariant: INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+        Invariant: INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001
         Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
         Failure class: N/A (positive path)
         Scenario: Construct ExecutionEntry with transmission_log_ref="tl-001".
@@ -2144,12 +2144,12 @@ class TestInvPlaylogDerivedFromPlaylist001:
         store.add_entries([entry])
         assert len(store.get_all_entries()) == 1
 
-    def test_inv_playlog_derived_from_playlist_001_accept_override(
+    def test_inv_executionentry_derived_from_transmissionlog_001_accept_override(
         self, contract_clock
     ):
-        """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 -- positive (operator override)
+        """INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 -- positive (operator override)
 
-        Invariant: INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+        Invariant: INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001
         Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
         Failure class: N/A (positive path)
         Scenario: Construct ExecutionEntry with transmission_log_ref=None,
@@ -2169,12 +2169,12 @@ class TestInvPlaylogDerivedFromPlaylist001:
 
 
 # =========================================================================
-# INV-PLAYLOG-LOCKED-IMMUTABLE-001
+# INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001
 # =========================================================================
 
 
-class TestInvPlaylogLockedImmutable001:
-    """INV-PLAYLOG-LOCKED-IMMUTABLE-001
+class TestInvExecutionentryLockedImmutable001:
+    """INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001
 
     ExecutionEntry records in the locked execution window are immutable
     except via atomic override. Entries in the past window are immutable
@@ -2185,17 +2185,17 @@ class TestInvPlaylogLockedImmutable001:
     Derived from: LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY.
     """
 
-    def test_inv_playlog_locked_immutable_001_reject_locked_no_override(
+    def test_inv_executionentry_locked_immutable_001_reject_locked_no_override(
         self, contract_clock
     ):
-        """INV-PLAYLOG-LOCKED-IMMUTABLE-001 -- negative (locked, no override)
+        """INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 -- negative (locked, no override)
 
-        Invariant: INV-PLAYLOG-LOCKED-IMMUTABLE-001
+        Invariant: INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001
         Derived law(s): LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY
         Failure class: Runtime
         Scenario: Create locked ExecutionEntry at [EPOCH+15m, EPOCH+45m].
                   Call store.replace_entry() without override. Assert raises
-                  ValueError matching INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED.
+                  ValueError matching INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED.
                   Assert message includes window status "locked".
         """
         store = ExecutionWindowStore()
@@ -2214,7 +2214,7 @@ class TestInvPlaylogLockedImmutable001:
         )
 
         with pytest.raises(
-            ValueError, match="INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED"
+            ValueError, match="INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED"
         ) as exc_info:
             store.replace_entry(
                 entry.block_id, new_entry, now_utc_ms=EPOCH_MS
@@ -2224,18 +2224,18 @@ class TestInvPlaylogLockedImmutable001:
             "Fault message must include window status 'locked'"
         )
 
-    def test_inv_playlog_locked_immutable_001_reject_past_unconditional(
+    def test_inv_executionentry_locked_immutable_001_reject_past_unconditional(
         self, contract_clock
     ):
-        """INV-PLAYLOG-LOCKED-IMMUTABLE-001 -- negative (past, unconditional)
+        """INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 -- negative (past, unconditional)
 
-        Invariant: INV-PLAYLOG-LOCKED-IMMUTABLE-001
+        Invariant: INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001
         Derived law(s): LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY
         Failure class: Runtime
         Scenario: Create ExecutionEntry at [EPOCH+30m, EPOCH+60m]. Call
                   store.replace_entry() with now_utc_ms=EPOCH+2h (entry is
                   past) and override_record_id="or-1". Assert raises
-                  ValueError matching INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED.
+                  ValueError matching INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED.
                   Assert message includes window status "past".
         """
         store = ExecutionWindowStore()
@@ -2254,7 +2254,7 @@ class TestInvPlaylogLockedImmutable001:
 
         two_hours_ms = 2 * 60 * 60 * 1000
         with pytest.raises(
-            ValueError, match="INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED"
+            ValueError, match="INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001-VIOLATED"
         ) as exc_info:
             store.replace_entry(
                 entry.block_id,
@@ -2267,12 +2267,12 @@ class TestInvPlaylogLockedImmutable001:
             "Fault message must include window status 'past'"
         )
 
-    def test_inv_playlog_locked_immutable_001_accept_override(
+    def test_inv_executionentry_locked_immutable_001_accept_override(
         self, contract_clock
     ):
-        """INV-PLAYLOG-LOCKED-IMMUTABLE-001 -- positive (override accepted)
+        """INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 -- positive (override accepted)
 
-        Invariant: INV-PLAYLOG-LOCKED-IMMUTABLE-001
+        Invariant: INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001
         Derived law(s): LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY
         Failure class: N/A (positive path)
         Scenario: Create locked ExecutionEntry at [EPOCH+10m, EPOCH+40m].
@@ -2430,7 +2430,7 @@ class TestInvSchedulemanagerNoAirAccess001:
 
 
 # =========================================================================
-# INV-PLAYLIST-GRID-ALIGNMENT-001
+# INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
 # =========================================================================
 
 
@@ -2462,8 +2462,8 @@ def _make_tl(entries: list) -> "TransmissionLog":
     )
 
 
-class TestInvPlaylistGridAlignment001:
-    """INV-PLAYLIST-GRID-ALIGNMENT-001
+class TestInvTransmissionlogGridAlignment001:
+    """INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
 
     All TransmissionLogEntry start_time and end_time values must align
     to the channel's valid grid boundaries.  Off-grid boundaries produce
@@ -2473,19 +2473,19 @@ class TestInvPlaylistGridAlignment001:
     Derived from: LAW-GRID.
     """
 
-    def test_inv_playlist_grid_alignment_001_reject_off_grid(
+    def test_inv_transmissionlog_grid_alignment_001_reject_off_grid(
         self, contract_clock
     ):
-        """INV-PLAYLIST-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-001
+        """INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-001
 
-        Invariant: INV-PLAYLIST-GRID-ALIGNMENT-001
+        Invariant: INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
         Derived law(s): LAW-GRID
         Failure class: Planning
         Scenario: Construct a TransmissionLog with one entry whose
                   start_utc_ms corresponds to 18:15 (off-grid for 30-min
                   grid). Call validate_transmission_log_grid_alignment().
                   Assert raises ValueError matching
-                  INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED. Assert fault
+                  INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED. Assert fault
                   identifies the misaligned boundary.
         """
         from retrovue.runtime.transmission_log_validator import (
@@ -2503,7 +2503,7 @@ class TestInvPlaylistGridAlignment001:
         log = _make_tl([entry])
 
         with pytest.raises(
-            ValueError, match="INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED"
+            ValueError, match="INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED"
         ) as exc_info:
             validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
 
@@ -2512,12 +2512,12 @@ class TestInvPlaylistGridAlignment001:
             "Fault message must include the misaligned timestamp value"
         )
 
-    def test_inv_playlist_grid_alignment_001_accept_pds_rollover(
+    def test_inv_transmissionlog_grid_alignment_001_accept_pds_rollover(
         self, contract_clock
     ):
-        """INV-PLAYLIST-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-002
+        """INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-002
 
-        Invariant: INV-PLAYLIST-GRID-ALIGNMENT-001
+        Invariant: INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
         Derived law(s): LAW-GRID
         Failure class: N/A (positive path)
         Scenario: Construct a TransmissionLog with entry spanning
@@ -2542,12 +2542,12 @@ class TestInvPlaylistGridAlignment001:
         # Must not raise — both boundaries are grid-aligned
         validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
 
-    def test_inv_playlist_grid_alignment_001_accept_cross_midnight(
+    def test_inv_transmissionlog_grid_alignment_001_accept_cross_midnight(
         self, contract_clock
     ):
-        """INV-PLAYLIST-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-003
+        """INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-003
 
-        Invariant: INV-PLAYLIST-GRID-ALIGNMENT-001
+        Invariant: INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
         Derived law(s): LAW-GRID
         Failure class: N/A (positive path)
         Scenario: Construct two adjacent entries: A ends at 00:00:00,

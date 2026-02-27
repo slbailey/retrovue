@@ -6,7 +6,7 @@ Derived From: `LAW-DERIVATION`, `LAW-GRID`
 
 ## Purpose
 
-Preserves editorial intent across the derivation chain. A Program without declared breakpoints represents an indivisible editorial unit as authored in SchedulePlan. Cutting it mid-play in any derived artifact (ScheduleDay slot, Playlist entry, PlaylogEvent) constitutes a downstream layer reinterpreting upstream editorial truth — a direct violation of `LAW-DERIVATION`. The cut also produces an off-grid boundary (the cut point is not a grid boundary), violating `LAW-GRID`.
+Preserves editorial intent across the derivation chain. A Program without declared breakpoints represents an indivisible editorial unit as authored in SchedulePlan. Cutting it mid-play in any derived artifact (ScheduleDay slot, Playlist entry, ExecutionEntry) constitutes a downstream layer reinterpreting upstream editorial truth — a direct violation of `LAW-DERIVATION`. The cut also produces an off-grid boundary (the cut point is not a grid boundary), violating `LAW-GRID`.
 
 ## Guarantee
 

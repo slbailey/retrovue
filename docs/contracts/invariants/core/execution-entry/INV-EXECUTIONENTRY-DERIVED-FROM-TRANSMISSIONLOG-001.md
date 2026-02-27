@@ -1,4 +1,4 @@
-# INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 — Every ExecutionEntry must be traceable to a TransmissionLogEntry
+# INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 — Every ExecutionEntry must be traceable to a TransmissionLogEntry
 
 Status: Invariant
 Authority Level: Runtime
@@ -32,8 +32,8 @@ Attempt to create an ExecutionEntry without a TransmissionLogEntry reference and
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlaylogDerivedFromPlaylist001`
+- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryDerivedFromTransmissionlog001`
 
 ## Enforcement Evidence
 
-`ExecutionWindowStore.add_entries()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — when `enforce_derivation_from_playlist=True`, rejects any entry where `transmission_log_ref is None` and `is_operator_override is False` with tag `INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED`. Check runs before the schedule lineage check (fail fast).
+`ExecutionWindowStore.add_entries()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — when `enforce_derivation_from_playlist=True`, rejects any entry where `transmission_log_ref is None` and `is_operator_override is False` with tag `INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001-VIOLATED`. Check runs before the schedule lineage check (fail fast).

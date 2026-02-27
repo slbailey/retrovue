@@ -82,7 +82,7 @@ def validate_transmission_log_grid_alignment(
     grid boundary (i.e. is not divisible by grid_block_minutes * 60_000 ms).
 
     Invariant enforced:
-    - INV-PLAYLIST-GRID-ALIGNMENT-001: All TransmissionLogEntry boundaries
+    - INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001: All TransmissionLogEntry boundaries
       must align to the channel grid.
 
     Empty entry lists pass trivially.
@@ -98,7 +98,7 @@ def validate_transmission_log_grid_alignment(
                 floor_ms = (value_ms // grid_ms) * grid_ms
                 ceil_ms = floor_ms + grid_ms
                 raise ValueError(
-                    f"INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED: "
+                    f"INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED: "
                     f"entry[{i}] (block_id={entry.block_id}) "
                     f"{label}={value_ms} is not aligned to "
                     f"{grid_block_minutes}-minute grid. "
