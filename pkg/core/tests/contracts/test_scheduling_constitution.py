@@ -1490,6 +1490,181 @@ class TestInvScheduledayDerivationTraceable001:
 
 
 # =========================================================================
+# INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001
+# =========================================================================
+
+
+class TestInvScheduledaySeamNoOverlap001:
+    """INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001
+
+    If a ScheduleDay's last slot carries past the broadcast-day boundary,
+    the next ScheduleDay's first slot MUST NOT start before that carry-in
+    slot's end. Content MUST NOT be duplicated across the seam.
+
+    Enforcement lives in InMemoryResolvedStore.store() and force_replace(),
+    via validate_scheduleday_seam() called inside the lock when
+    programming_day_start_hour is set.
+
+    Derived from: LAW-GRID, LAW-DERIVATION.
+    """
+
+    def _make_slot(self, hour, minute, duration_seconds, label="slot"):
+        """Build a minimal ResolvedSlot."""
+        from retrovue.runtime.schedule_types import (
+            ProgramRef,
+            ProgramRefType,
+            ResolvedAsset,
+            ResolvedSlot,
+        )
+
+        return ResolvedSlot(
+            slot_time=time(hour, minute),
+            program_ref=ProgramRef(
+                ref_type=ProgramRefType.FILE, ref_id=f"{label}.ts"
+            ),
+            resolved_asset=ResolvedAsset(
+                file_path=f"/media/{label}.ts",
+                asset_id=f"asset-{label}",
+                content_duration_seconds=duration_seconds,
+            ),
+            duration_seconds=duration_seconds,
+            label=label,
+        )
+
+    def _make_resolved(self, contract_clock, slots, day_date=None):
+        """Build a ResolvedScheduleDay from explicit slots."""
+        from retrovue.runtime.schedule_types import (
+            ResolvedScheduleDay,
+            SequenceState,
+        )
+
+        return ResolvedScheduleDay(
+            programming_day_date=day_date or date(2026, 1, 1),
+            resolved_slots=slots,
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+        )
+
+    def test_inv_scheduleday_seam_no_overlap_001_reject_carry_in_overlap(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 -- negative
+
+        Invariant: INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001
+        Derived law(s): LAW-GRID, LAW-DERIVATION
+        Failure class: Planning
+        Scenario: Day N (Jan 1) last slot ends at 07:00 (1h past 06:00
+                  boundary). Day N+1 (Jan 2) first slot starts at 06:00.
+                  Overlap at [06:00→07:00]. store() must reject.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+
+        # Day N: two slots tiling 06:00→07:00+1d (25 hours).
+        # Slot A: 06:00→18:00 (12h), Slot B: 18:00→07:00+1d (13h carry-in).
+        day_n_slots = [
+            self._make_slot(6, 0, 43200, label="day-n-morning"),     # 06:00→18:00
+            self._make_slot(18, 0, 46800, label="day-n-overnight"),  # 18:00→07:00+1d
+        ]
+        day_n = self._make_resolved(
+            contract_clock, day_n_slots, day_date=date(2026, 1, 1)
+        )
+        store.store(CHANNEL_ID, day_n)
+
+        # Day N+1: first slot starts at 06:00 (overlaps carry-in until 07:00).
+        day_n1_slots = [
+            self._make_slot(6, 0, 43200, label="day-n1-morning"),     # 06:00→18:00
+            self._make_slot(18, 0, 43200, label="day-n1-overnight"),  # 18:00→06:00+1d
+        ]
+        day_n1 = self._make_resolved(
+            contract_clock, day_n1_slots, day_date=date(2026, 1, 2)
+        )
+
+        with pytest.raises(
+            ValueError, match="INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001"
+        ):
+            store.store(CHANNEL_ID, day_n1)
+
+    def test_inv_scheduleday_seam_no_overlap_001_accept_carry_in_honored(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 -- positive (carry-in honored)
+
+        Invariant: INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001
+        Derived law(s): LAW-GRID, LAW-DERIVATION
+        Failure class: N/A (positive path)
+        Scenario: Day N last slot ends at 07:00 (1h carry-in past 06:00).
+                  Day N+1 first slot starts at 07:00. Accepted.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+
+        # Day N: carry-in until 07:00.
+        day_n_slots = [
+            self._make_slot(6, 0, 43200, label="day-n-morning"),     # 06:00→18:00
+            self._make_slot(18, 0, 46800, label="day-n-overnight"),  # 18:00→07:00+1d
+        ]
+        day_n = self._make_resolved(
+            contract_clock, day_n_slots, day_date=date(2026, 1, 1)
+        )
+        store.store(CHANNEL_ID, day_n)
+
+        # Day N+1: first slot starts at 07:00, honoring carry-in.
+        day_n1_slots = [
+            self._make_slot(7, 0, 39600, label="day-n1-morning"),     # 07:00→18:00
+            self._make_slot(18, 0, 43200, label="day-n1-overnight"),  # 18:00→06:00+1d
+        ]
+        day_n1 = self._make_resolved(
+            contract_clock, day_n1_slots, day_date=date(2026, 1, 2)
+        )
+
+        # Should not raise — carry-in boundary is honored.
+        store.store(CHANNEL_ID, day_n1)
+        assert store.exists(CHANNEL_ID, date(2026, 1, 2))
+
+    def test_inv_scheduleday_seam_no_overlap_001_no_carry_in_independent(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 -- positive (no carry-in)
+
+        Invariant: INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001
+        Derived law(s): LAW-GRID, LAW-DERIVATION
+        Failure class: N/A (positive path)
+        Scenario: Day N ends exactly at 06:00 boundary. Day N+1 starts
+                  at 06:00. No carry-in, no overlap. Accepted.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+
+        # Day N: exactly tiles 06:00→06:00+1d (no carry-in).
+        day_n_slots = [
+            self._make_slot(6, 0, 43200, label="day-n-morning"),     # 06:00→18:00
+            self._make_slot(18, 0, 43200, label="day-n-overnight"),  # 18:00→06:00+1d
+        ]
+        day_n = self._make_resolved(
+            contract_clock, day_n_slots, day_date=date(2026, 1, 1)
+        )
+        store.store(CHANNEL_ID, day_n)
+
+        # Day N+1: starts at 06:00 boundary.
+        day_n1_slots = [
+            self._make_slot(6, 0, 43200, label="day-n1-morning"),     # 06:00→18:00
+            self._make_slot(18, 0, 43200, label="day-n1-overnight"),  # 18:00→06:00+1d
+        ]
+        day_n1 = self._make_resolved(
+            contract_clock, day_n1_slots, day_date=date(2026, 1, 2)
+        )
+
+        # Should not raise — no carry-in, days are independent.
+        store.store(CHANNEL_ID, day_n1)
+        assert store.exists(CHANNEL_ID, date(2026, 1, 2))
+
+
+# =========================================================================
 # INV-SCHEDULEDAY-NO-GAPS-001
 # =========================================================================
 
