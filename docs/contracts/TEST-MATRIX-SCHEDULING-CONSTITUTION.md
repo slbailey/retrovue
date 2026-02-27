@@ -125,6 +125,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-PLAN-FULL-COVERAGE-001 | 4 (gap reject + exact tile + pds≠00:00 reject + pds≠00:00 tile) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
 | INV-PLAN-NO-ZONE-OVERLAP-001 | 4 (overlap reject + day-filter pass + mutation-induced overlap + precedence) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
 | INV-PLAN-GRID-ALIGNMENT-001 | 7 (block start/duration/valid + zone end/start/duration/valid) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py`; `validate_block_assignment()` in `contracts.py` |
+| INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -147,6 +148,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAN-GRID-ALIGNMENT-001 | `TestInvPlanGridAlignment001` | `test_..._reject_off_grid_start`, `test_..._reject_off_grid_duration`, `test_..._valid_alignment`, `test_..._reject_off_grid_zone_end`, `test_..._reject_off_grid_zone_start`, `test_..._reject_off_grid_zone_duration`, `test_..._accept_aligned_zone` | PASS |
 | INV-SCHEDULEDAY-ONE-PER-DATE-001 | `TestInvScheduledayOnePerDate001` | `test_..._reject_duplicate_insert`, `test_..._allow_force_regen_atomic_replace`, `test_..._different_dates_independent` | PASS |
 | INV-SCHEDULEDAY-IMMUTABLE-001 | `TestInvScheduledayImmutable001` | `test_..._reject_in_place_slot_mutation`, `test_..._reject_plan_id_update`, `test_..._force_regen_creates_new_record`, `test_..._operator_override_creates_new_record` | PASS |
+| INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `TestInvScheduledayDerivationTraceable001` | `test_..._reject_unanchored`, `test_..._accept_with_plan_id`, `test_..._accept_manual_override` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -535,6 +537,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Attempt to insert a ScheduleDay record with `plan_id=NULL` and `is_manual_override=false` via the application layer. |
 | **Assertions** | Insert is rejected. No record is committed. Fault identifies missing derivation anchor. Fault class is "planning". |
 | **Failure Classification** | Planning |
+| **Status** | **PASS** |
 
 ---
 
@@ -549,6 +552,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Materialize SD-ORIG for (C, D). 2. Create an override ScheduleDay referencing SD-ORIG.ID. |
 | **Assertions** | Override record is accepted. `is_manual_override=true`. Superseded record reference is non-null and equals SD-ORIG.ID. Derivation chain traverses from override back to SD-ORIG. |
 | **Failure Classification** | N/A (positive path) |
+| **Status** | **PASS** |
 
 ---
 

@@ -157,6 +157,27 @@ def validate_scheduleday_contiguity(
         )
 
 
+def _enforce_derivation_traceability(resolved: ResolvedScheduleDay) -> None:
+    """Enforce INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001.
+
+    A ResolvedScheduleDay must satisfy one of:
+    1. plan_id is set (generated from a SchedulePlan), or
+    2. is_manual_override is True (operator override).
+
+    Raises:
+        ValueError: If neither condition is met.
+    """
+    if not resolved.is_manual_override and resolved.plan_id is None:
+        raise ValueError(
+            "INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001-VIOLATED: "
+            f"ResolvedScheduleDay for "
+            f"programming_day_date={resolved.programming_day_date!r} "
+            "has plan_id=None and is_manual_override=False. "
+            "Every ScheduleDay must trace to a generating SchedulePlan "
+            "or be an explicit operator override."
+        )
+
+
 class InMemoryResolvedStore(ResolvedScheduleStore):
     """
     In-memory implementation of ResolvedScheduleStore.
@@ -173,10 +194,12 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         self,
         execution_store: ExecutionWindowStore | None = None,
         programming_day_start_hour: int | None = None,
+        enforce_derivation_traceability: bool = False,
     ) -> None:
         self._resolved: dict[str, dict[date, ResolvedScheduleDay]] = {}
         self._execution_store = execution_store
         self._programming_day_start_hour = programming_day_start_hour
+        self._enforce_derivation_traceability = enforce_derivation_traceability
         self._lock = threading.Lock()
 
     def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
@@ -198,6 +221,8 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         """
         if self._programming_day_start_hour is not None:
             validate_scheduleday_contiguity(resolved, self._programming_day_start_hour)
+        if self._enforce_derivation_traceability:
+            _enforce_derivation_traceability(resolved)
         with self._lock:
             if channel_id not in self._resolved:
                 self._resolved[channel_id] = {}
@@ -225,6 +250,8 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         """
         if self._programming_day_start_hour is not None:
             validate_scheduleday_contiguity(resolved, self._programming_day_start_hour)
+        if self._enforce_derivation_traceability:
+            _enforce_derivation_traceability(resolved)
         with self._lock:
             channel_days = self._resolved.get(channel_id, {})
             if resolved.programming_day_date not in channel_days:

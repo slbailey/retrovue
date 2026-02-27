@@ -1356,6 +1356,140 @@ class TestInvScheduledayImmutable001:
 
 
 # =========================================================================
+# INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001
+# =========================================================================
+
+
+class TestInvScheduledayDerivationTraceable001:
+    """INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001
+
+    Every ScheduleDay must trace to its generating SchedulePlan (plan_id)
+    or be an explicit operator override (is_manual_override=True with
+    supersedes_id). A ScheduleDay with plan_id=None and
+    is_manual_override=False is constitutionally unanchored.
+
+    Enforcement lives in InMemoryResolvedStore.store() and force_replace(),
+    via _enforce_derivation_traceability() called before commit when
+    enforce_derivation_traceability=True.
+
+    Derived from: LAW-DERIVATION, LAW-CONTENT-AUTHORITY.
+    """
+
+    def test_inv_scheduleday_derivation_traceable_001_reject_unanchored(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 -- negative
+
+        Invariant: INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001
+        Derived law(s): LAW-DERIVATION, LAW-CONTENT-AUTHORITY
+        Failure class: Planning
+        Scenario: ResolvedScheduleDay with plan_id=None,
+                  is_manual_override=False. store() rejects with
+                  invariant tag.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+        from retrovue.runtime.schedule_types import ResolvedScheduleDay, SequenceState
+
+        store = InMemoryResolvedStore(enforce_derivation_traceability=True)
+
+        unanchored = ResolvedScheduleDay(
+            programming_day_date=date(2026, 1, 1),
+            resolved_slots=[],
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+            plan_id=None,
+            is_manual_override=False,
+        )
+
+        with pytest.raises(
+            ValueError, match="INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001"
+        ):
+            store.store(CHANNEL_ID, unanchored)
+
+        # Store must remain empty after rejection.
+        assert not store.exists(CHANNEL_ID, date(2026, 1, 1)), (
+            "INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 VIOLATED: "
+            "Store accepted an unanchored ScheduleDay."
+        )
+
+    def test_inv_scheduleday_derivation_traceable_001_accept_with_plan_id(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 -- positive (plan_id)
+
+        Invariant: INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001
+        Derived law(s): LAW-DERIVATION, LAW-CONTENT-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: ResolvedScheduleDay with plan_id="plan-001".
+                  store() accepts.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+        from retrovue.runtime.schedule_types import ResolvedScheduleDay, SequenceState
+
+        store = InMemoryResolvedStore(enforce_derivation_traceability=True)
+
+        anchored = ResolvedScheduleDay(
+            programming_day_date=date(2026, 1, 1),
+            resolved_slots=[],
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+            plan_id="plan-001",
+        )
+
+        # Should not raise — plan_id provides derivation anchor.
+        store.store(CHANNEL_ID, anchored)
+        assert store.exists(CHANNEL_ID, date(2026, 1, 1))
+
+    def test_inv_scheduleday_derivation_traceable_001_accept_manual_override(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 -- positive (manual override)
+
+        Invariant: INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001
+        Derived law(s): LAW-DERIVATION, LAW-CONTENT-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: ResolvedScheduleDay with is_manual_override=True,
+                  supersedes_id set, plan_id=None.
+                  operator_override() accepts.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+        from retrovue.runtime.schedule_types import ResolvedScheduleDay, SequenceState
+
+        store = InMemoryResolvedStore(enforce_derivation_traceability=True)
+
+        # First store an original record to override.
+        original = ResolvedScheduleDay(
+            programming_day_date=date(2026, 1, 1),
+            resolved_slots=[],
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+            plan_id="plan-001",
+        )
+        store.store(CHANNEL_ID, original)
+
+        # Build an override record with plan_id=None but is_manual_override=True.
+        contract_clock.advance_ms(1000)
+        override = ResolvedScheduleDay(
+            programming_day_date=date(2026, 1, 1),
+            resolved_slots=[],
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+            plan_id=None,
+            is_manual_override=True,
+            supersedes_id=id(original),
+        )
+
+        # operator_override() should accept — manual override is a valid anchor.
+        result = store.operator_override(CHANNEL_ID, override)
+        assert result.is_manual_override is True
+        assert result.supersedes_id is not None
+
+
+# =========================================================================
 # INV-SCHEDULEDAY-NO-GAPS-001
 # =========================================================================
 
