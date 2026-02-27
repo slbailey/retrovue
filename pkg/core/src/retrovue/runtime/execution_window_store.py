@@ -221,3 +221,36 @@ class ExecutionWindowStore:
                     entry.is_locked = True
                     count += 1
         return count
+
+
+# ---------------------------------------------------------------------------
+# Standalone validation functions
+# ---------------------------------------------------------------------------
+
+
+def validate_execution_entry_contiguity(entries: list[ExecutionEntry]) -> None:
+    """Validate that ExecutionEntry sequence has no temporal gaps.
+
+    Raises ValueError with tag INV-PLAYLOG-NO-GAPS-001-VIOLATED if any
+    consecutive pair has a gap (entries[i].end_utc_ms != entries[i+1].start_utc_ms).
+
+    Empty or single-entry lists pass trivially.
+    """
+    if len(entries) <= 1:
+        return
+
+    sorted_entries = sorted(entries, key=lambda e: e.start_utc_ms)
+    for i in range(len(sorted_entries) - 1):
+        current = sorted_entries[i]
+        next_entry = sorted_entries[i + 1]
+        if current.end_utc_ms != next_entry.start_utc_ms:
+            raise ValueError(
+                "INV-PLAYLOG-NO-GAPS-001-VIOLATED: "
+                f"Gap detected in ExecutionEntry sequence for "
+                f"channel_id={current.channel_id!r}. "
+                f"Entry block_id={current.block_id!r} ends at "
+                f"{current.end_utc_ms} but next entry "
+                f"block_id={next_entry.block_id!r} starts at "
+                f"{next_entry.start_utc_ms}. "
+                f"Gap: [{current.end_utc_ms}, {next_entry.start_utc_ms}]."
+            )

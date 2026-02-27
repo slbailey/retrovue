@@ -27,6 +27,7 @@ from retrovue.runtime.asrun_logger import AsRunEvent, AsRunLogger
 from retrovue.runtime.execution_window_store import (
     ExecutionEntry,
     ExecutionWindowStore,
+    validate_execution_entry_contiguity,
 )
 
 # Constitutional epoch per test matrix
@@ -1999,3 +2000,73 @@ class TestInvScheduledayNoGaps001:
         assert store.exists(CHANNEL_ID, date(2026, 1, 1))
         retrieved = store.get(CHANNEL_ID, date(2026, 1, 1))
         assert retrieved is sd
+
+
+# =========================================================================
+# INV-PLAYLOG-NO-GAPS-001
+# =========================================================================
+
+
+class TestInvPlaylogNoGaps001:
+    """INV-PLAYLOG-NO-GAPS-001
+
+    The ExecutionEntry sequence for an active channel must be temporally
+    contiguous with no gaps within the lookahead window. A gap represents
+    a window of time for which no execution authority exists.
+
+    Enforcement: validate_execution_entry_contiguity() standalone function
+    in execution_window_store.py.
+
+    Derived from: LAW-LIVENESS, LAW-RUNTIME-AUTHORITY.
+    """
+
+    def test_inv_playlog_no_gaps_001_detect_gap(self, contract_clock):
+        """INV-PLAYLOG-NO-GAPS-001 -- negative (gap detected)
+
+        Invariant: INV-PLAYLOG-NO-GAPS-001
+        Derived law(s): LAW-LIVENESS, LAW-RUNTIME-AUTHORITY
+        Failure class: Runtime
+        Scenario: Construct ExecutionEntry sequence with a 10-minute gap
+                  at [EPOCH+1h, EPOCH+1h10m]. Call
+                  validate_execution_entry_contiguity(). Assert raises
+                  ValueError matching INV-PLAYLOG-NO-GAPS-001-VIOLATED.
+                  Assert fault message includes gap boundaries and channel ID.
+        """
+        # Two contiguous blocks, then a 10-minute gap, then a third block.
+        entries = [
+            _make_entry(block_index=0, start_offset_ms=0),                     # [EPOCH, EPOCH+30m]
+            _make_entry(block_index=1, start_offset_ms=GRID_BLOCK_MS),         # [EPOCH+30m, EPOCH+1h]
+            # Gap: [EPOCH+1h, EPOCH+1h10m]
+            _make_entry(
+                block_index=2,
+                start_offset_ms=GRID_BLOCK_MS * 2 + 10 * 60 * 1000,           # EPOCH+1h10m
+            ),
+        ]
+
+        with pytest.raises(ValueError, match="INV-PLAYLOG-NO-GAPS-001-VIOLATED") as exc_info:
+            validate_execution_entry_contiguity(entries)
+
+        msg = str(exc_info.value)
+        assert CHANNEL_ID in msg, "Fault must include channel_id"
+        # Gap boundaries: end of block 1 and start of block 2
+        gap_start = EPOCH_MS + GRID_BLOCK_MS * 2
+        gap_end = EPOCH_MS + GRID_BLOCK_MS * 2 + 10 * 60 * 1000
+        assert str(gap_start) in msg, "Fault must include gap start boundary"
+        assert str(gap_end) in msg, "Fault must include gap end boundary"
+
+    def test_inv_playlog_no_gaps_001_accept_contiguous(self, contract_clock):
+        """INV-PLAYLOG-NO-GAPS-001 -- positive (contiguous sequence)
+
+        Invariant: INV-PLAYLOG-NO-GAPS-001
+        Derived law(s): LAW-LIVENESS, LAW-RUNTIME-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: Construct contiguous ExecutionEntry sequence (4 consecutive
+                  30-min blocks). Call validate_execution_entry_contiguity().
+                  Assert no exception.
+        """
+        entries = [
+            _make_entry(block_index=i, start_offset_ms=i * GRID_BLOCK_MS)
+            for i in range(4)
+        ]
+        # Must not raise — entries are contiguous.
+        validate_execution_entry_contiguity(entries)
