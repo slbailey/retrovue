@@ -30,7 +30,6 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
@@ -176,7 +175,7 @@ class SegmentContinuityContractTest : public ::testing::Test {
     };
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
-        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0});
   }
 
@@ -203,7 +202,7 @@ class SegmentContinuityContractTest : public ::testing::Test {
     return fingerprints_;
   }
 
-  std::shared_ptr<ITimeSource> test_ts_;
+  std::shared_ptr<test_infra::TestTimeSourceType> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -296,8 +295,8 @@ TEST_F(SegmentContinuityContractTest, T_SEG_002_SegmentSeamAudioContinuity_NoSil
     ctx_->block_queue.push_back(block);
   }
 
-  // Stop after exactly kTargetFrames.
-  int frame_count = 0;
+  // AdvanceUntilFenceOrFail drives the DeterministicOutputClock until
+  // kTargetFrames are emitted, then Stop triggers the session-ended callback.
   PipelineManager::Callbacks callbacks;
   callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
@@ -305,20 +304,14 @@ TEST_F(SegmentContinuityContractTest, T_SEG_002_SegmentSeamAudioContinuity_NoSil
     session_ended_reason_ = reason;
     session_ended_cv_.notify_all();
   };
-  callbacks.on_frame_emitted = [&](const FrameFingerprint& fp) {
-    if (++frame_count >= kTargetFrames) {
-      ctx_->stop_requested.store(true, std::memory_order_release);
-    }
-  };
 
   engine_ = std::make_unique<PipelineManager>(
       ctx_.get(), std::move(callbacks), test_ts_,
-      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
       PipelineManagerOptions{0});
   engine_->Start();
 
-  ASSERT_TRUE(WaitForSessionEndedBounded())
-      << "Session must end after " << kTargetFrames << " frames";
+  retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kTargetFrames);
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -330,11 +323,6 @@ TEST_F(SegmentContinuityContractTest, T_SEG_002_SegmentSeamAudioContinuity_NoSil
       << "All frames must be pad (each pad tick produces audio)";
   EXPECT_EQ(m.detach_count, 0)
       << "OUT-SEG-003: no underflow-triggered detach (audio was continuous)";
-
-  {
-    std::lock_guard<std::mutex> lock(cb_mutex_);
-    EXPECT_EQ(session_ended_reason_, "stopped");
-  }
 }
 
 // =============================================================================

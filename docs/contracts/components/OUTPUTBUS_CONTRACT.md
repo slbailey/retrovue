@@ -1,7 +1,7 @@
 # OutputBus Contract
 
 **Status:** Canonical
-**Layer:** 2.6 (between ProgramOutput 2.5 and Phase 9/10 sink behavior)
+**Layer:** 2.6 (between ProgramOutput 2.5 and sink behavior)
 **Scope:** Routing, sink attachment mechanics, legal discard behavior
 **Authority:** Mechanical delivery guarantees only; does not define broadcast correctness (that's Laws + ProgramOutput)
 
@@ -102,7 +102,7 @@ Once attached:
 
 **Model:** Sink attachment controlled entirely by Core. AIR never infers presence, demand, or lifecycle from sink state.
 
-**Anchor:** INV-P9-SINK-LIVENESS-003 (sink stability)
+**Anchor:** INV-TS-EMISSION-LIVENESS and INV-SINK-NO-DEADLOCK (sink stability)
 
 ---
 
@@ -138,7 +138,7 @@ If bytes arrive, they go out (or get discarded per OB-002). That's it.
 
 ---
 
-## 4. Relationship to ProgramOutput and INV-P10-SINK-GATE
+## 4. Relationship to ProgramOutput and INV-BUFFER-EQUILIBRIUM
 
 This relationship must be explicit to prevent contamination:
 
@@ -146,7 +146,7 @@ This relationship must be explicit to prevent contamination:
 |---------|-------|
 | "What frame corresponds to CT?" | ProgramOutput |
 | "Should a frame be emitted even if nothing is ready?" | ProgramOutput (pad) |
-| "Should frames be dequeued yet?" | ProgramOutput (INV-P10-SINK-GATE) |
+| "Should frames be dequeued yet?" | ProgramOutput (INV-BUFFER-EQUILIBRIUM) |
 | "Where does the frame go?" | OutputBus |
 | "What if nowhere?" | OutputBus discards (OB-002) |
 | "Does AIR exist without viewers?" | **Yes** (Core decides lifecycle) |
@@ -155,7 +155,7 @@ This relationship must be explicit to prevent contamination:
 
 **Key principle:** OutputBus being sinkless MUST NEVER cause ProgramOutput to "wait."
 
-- ProgramOutput may choose a dequeue policy (per INV-P10-SINK-GATE)
+- ProgramOutput may choose a dequeue policy (per INV-BUFFER-EQUILIBRIUM)
 - OutputBus accepts whatever ProgramOutput emits
 - If OutputBus has no sink, it discards immediately (OB-002)
 - This is correct behavior, not a failure
@@ -220,8 +220,8 @@ ProgramOutput emits; OutputBus routes or discards. The bus does not signal back 
 | This Contract | Derives From | Relationship |
 |---------------|--------------|--------------|
 | OB-001 | LAW-OUTPUT-LIVENESS | **Supports** — non-blocking preserves liveness |
-| OB-002 | INV-P9-SINK-LIVENESS-001 | **Anchors** — pre-attach discard semantics |
-| OB-003 | INV-P9-SINK-LIVENESS-002, -003 | **Anchors** — post-attach delivery + stability |
+| OB-002 | INV-TS-EMISSION-LIVENESS, INV-SINK-NO-DEADLOCK | **Anchors** — pre-attach discard semantics |
+| OB-003 | INV-TS-EMISSION-LIVENESS, INV-SINK-NO-DEADLOCK | **Anchors** — post-attach delivery + stability |
 | OB-004 | BROADCAST_CONSTITUTION §5.3 | **Refines** — no buffering at routing layer |
 | OB-005 | LAW-CLOCK, LAW-TIMELINE | **Subordinate** — no timing authority |
 
@@ -231,6 +231,4 @@ ProgramOutput emits; OutputBus routes or discards. The bus does not signal back 
 
 - [PROGRAMOUTPUT_CONTRACT.md](./PROGRAMOUTPUT_CONTRACT.md) — Upstream: frame selection
 - [BROADCAST_LAWS.md](../laws/BROADCAST_LAWS.md) — LAW-OUTPUT-LIVENESS
-- [PHASE8_SEMANTICS.md](../semantics/PHASE8_SEMANTICS.md) — INV-P9-SINK-LIVENESS-*
-- [PHASE10_FLOW_CONTROL.md](../coordination/PHASE10_FLOW_CONTROL.md) — INV-P10-SINK-GATE relationship
 - [BROADCAST_CONSTITUTION.MD](../../architecture/BROADCAST_CONSTITUTION.MD) — §5.3 OutputBus role, §6 Sink Attachment Rule

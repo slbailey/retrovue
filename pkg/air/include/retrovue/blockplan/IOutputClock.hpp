@@ -1,7 +1,7 @@
 // Repository: Retrovue-playout
 // Component: Output Clock Interface
-// Purpose: Dependency inversion for frame pacing — RealClock (production) vs
-//          DeterministicClock (tests). Fence computation, budget, PTS unchanged.
+// Purpose: Dependency inversion for frame pacing. Fence computation, budget,
+//          PTS unchanged. OutputClock accepts a pluggable IWaitStrategy.
 // Copyright (c) 2025 RetroVue
 
 #ifndef RETROVUE_BLOCKPLAN_IOUTPUT_CLOCK_HPP_
@@ -13,8 +13,8 @@
 namespace retrovue::blockplan {
 
 // Abstract output clock: rational FPS, PTS, and optional pacing.
-// Production: RealOutputClock sleeps until deadline (real-time).
-// Tests: DeterministicOutputClock advances instantly (no sleep, no wait).
+// Production: OutputClock with RealtimeWaitStrategy (sleeps until deadline).
+// Tests: OutputClock with DeterministicWaitStrategy (no sleep, instant advance).
 class IOutputClock {
  public:
   virtual ~IOutputClock() = default;

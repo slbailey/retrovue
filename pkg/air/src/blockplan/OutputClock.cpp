@@ -6,16 +6,17 @@
 
 #include "retrovue/blockplan/OutputClock.hpp"
 
-#include <thread>
-
 namespace retrovue::blockplan {
 
 static constexpr int64_t kNanosPerSecond = 1'000'000'000;
 
-OutputClock::OutputClock(int64_t fps_num, int64_t fps_den)
+OutputClock::OutputClock(int64_t fps_num, int64_t fps_den,
+                         std::unique_ptr<IWaitStrategy> wait_strategy)
     : fps_{fps_num, fps_den},
       frame_duration_ms_(fps_.FrameDurationMs()),
-      frame_duration_90k_(((90000LL * fps_.den) + (fps_.num / 2)) / fps_.num) {}
+      frame_duration_90k_(((90000LL * fps_.den) + (fps_.num / 2)) / fps_.num),
+      wait_strategy_(wait_strategy ? std::move(wait_strategy)
+                                   : std::make_unique<RealtimeWaitStrategy>()) {}
 
 void OutputClock::Start() {
   // INV-TICK-MONOTONIC-UTC-ANCHOR-001 R1: Monotonic epoch capture.
@@ -48,7 +49,7 @@ std::chrono::nanoseconds OutputClock::DeadlineOffsetNs(
 std::chrono::steady_clock::time_point OutputClock::WaitForFrame(
     int64_t session_frame_index) {
   auto deadline = session_start_ + DeadlineOffsetNs(session_frame_index);
-  std::this_thread::sleep_until(deadline);
+  wait_strategy_->WaitUntil(deadline);
   return std::chrono::steady_clock::now();
 }
 

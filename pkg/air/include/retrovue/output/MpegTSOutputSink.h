@@ -56,6 +56,12 @@ class MpegTSOutputSink : public IOutputSink {
                    const playout_sinks::mpegts::MpegTSPlayoutSinkConfig& config,
                    const std::string& name = "MpegTSOutputSink");
 
+
+  // Test seam: constructor with injected encoder for testing PTS authority
+  MpegTSOutputSink(int fd,
+                   const playout_sinks::mpegts::MpegTSPlayoutSinkConfig& config,
+                   std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder,
+                   const std::string& name = "MpegTSOutputSink");
   ~MpegTSOutputSink() override;
 
   // Disable copy and move
@@ -160,6 +166,8 @@ class MpegTSOutputSink : public IOutputSink {
   // =========================================================================
   std::atomic<uint64_t> video_frames_dropped_{0};
   std::atomic<uint64_t> audio_frames_dropped_{0};
+  // INV-AUDIO-PTS-HOUSE-CLOCK-001: Sample-based audio PTS derivation
+  int64_t audio_samples_emitted_{0};
 
   // =========================================================================
   // INV-FALLBACK-001: Upstream starvation detection

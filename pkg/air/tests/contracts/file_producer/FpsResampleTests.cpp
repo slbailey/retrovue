@@ -86,7 +86,7 @@ protected:
   {
     std::vector<buffer::Frame> frames;
     int64_t target_tick_us = static_cast<int64_t>(
-        std::round(1'000'000.0 / config_.target_fps));
+        static_cast<int64_t>(config_.target_fps.FrameDurationUs()));
     int64_t run_duration_us = num_target_ticks * target_tick_us;
 
     // Start producer

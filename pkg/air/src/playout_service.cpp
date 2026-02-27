@@ -26,6 +26,7 @@
 #include "retrovue/output/IOutputSink.h"
 #include "retrovue/output/MpegTSOutputSink.h"
 #include "retrovue/output/OutputBus.h"
+#include "retrovue/output/SinkDiagnostics.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/renderer/ProgramOutput.h"
@@ -134,7 +135,7 @@ namespace retrovue
           if (state->fd >= 0)
           {
 #if defined(__linux__) || defined(__APPLE__)
-            close(state->fd);
+            CLOSE_FD(state->fd, "StopChannel/stream teardown", -1);
 #endif
           }
         }
@@ -537,11 +538,11 @@ namespace retrovue
         state->hello_thread.join();
       }
 
-      // Close FD
+      // Close FD (Hook B)
       if (state->fd >= 0)
       {
 #if defined(__linux__) || defined(__APPLE__)
-        close(state->fd);
+        CLOSE_FD(state->fd, "DetachStream", -1);
 #endif
         state->fd = -1;
       }
@@ -602,7 +603,7 @@ namespace retrovue
       addr.sun_family = AF_UNIX;
       if (endpoint.size() >= sizeof(addr.sun_path))
       {
-        close(fd);
+        CLOSE_FD(fd, "AttachStream endpoint path too long", -1);
         response->set_success(false);
         response->set_message("Endpoint path too long");
         return grpc::Status::OK;
@@ -614,7 +615,7 @@ namespace retrovue
       if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), len) < 0)
       {
         int e = errno;
-        close(fd);
+        CLOSE_FD(fd, "AttachStream connect() failed", -1);
         response->set_success(false);
         response->set_message("connect() failed: " + std::string(strerror(e)));
         return grpc::Status::OK;
@@ -762,7 +763,7 @@ namespace retrovue
           blockplan_session_->width = format->video.width;
           blockplan_session_->height = format->video.height;
           const double parsed_fps = format->GetFrameRateAsDouble();
-          blockplan_session_->fps = blockplan::DeriveRationalFPS(parsed_fps > 0.0 ? parsed_fps : 30.0);
+          blockplan_session_->fps = blockplan::DeriveRationalFPS(parsed_fps > 0.0 ? parsed_fps : 29.97);
         } else {
           Logger::Error("[StartBlockPlanSession] Failed to parse program_format_json");
         }

@@ -249,6 +249,8 @@ class _ExecutionHorizonExtender:
                 start_utc_ms=start_ms,
                 end_utc_ms=end_ms,
                 segments=segments,
+                channel_id=self._channel_id,
+                programming_day_date=broadcast_date,
             ))
 
             current += timedelta(minutes=grid_minutes)
@@ -1555,34 +1557,18 @@ class ProgramDirector:
             manager: Any,
             fanout: Optional[Any],
         ) -> None:
-            """Phase 8.5/8.7: Unsubscribe viewer and tear down channel when last subscriber leaves. Idempotent."""
-            to_stop = None
+            """
+            Unsubscribe viewer and update viewer count. Idempotent.
+            Does NOT stop channel or upstream when last subscriber leaves:
+            upstream (AIR UDS) stays connected so VLC reconnect does not restart AIR.
+            """
             with self._fanout_lock:
                 if fanout:
-                    fanout.unsubscribe(session_id)
-                if channel_id in self._fanout_buffers:
-                    f = self._fanout_buffers[channel_id]
-                    if f.get_subscriber_count() == 0:
-                        self._fanout_buffers.pop(channel_id, None)
-                        to_stop = f
+                    fanout.unsubscribe(session_id, reason="disconnect")
             try:
                 manager.tune_out(session_id)
             except Exception as e:
                 self._logger.debug("tune_out on cleanup: %s", e)
-            if to_stop:
-                # INV-TEARDOWN-NONBLOCK: Per-session lifecycle teardown must not block
-                # the asyncio event loop (which would starve other channels' streams).
-                import threading as _td
-                def _bg_teardown(cid=channel_id, f=to_stop):
-                    try:
-                        self.stop_channel(cid)
-                    except Exception as e:
-                        self._logger.warning("Error in bg stop_channel for %s: %s", cid, e)
-                    try:
-                        f.stop()
-                    except Exception as e:
-                        self._logger.warning("Error in bg fanout.stop for %s: %s", cid, e)
-                _td.Thread(target=_bg_teardown, daemon=True).start()
 
         async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
             """When client disconnects, ASGI receive() returns; run cleanup so viewer_count and teardown run (Phase 8.7)."""

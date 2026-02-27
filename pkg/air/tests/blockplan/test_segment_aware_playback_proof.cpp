@@ -16,6 +16,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -49,10 +50,9 @@ static FedBlock MakeMultiSegmentBlock(
   return block;
 }
 
-static int64_t FramesForDuration(int64_t duration_ms, int64_t frame_duration_ms) {
-  return static_cast<int64_t>(
-      std::ceil(static_cast<double>(duration_ms) /
-                static_cast<double>(frame_duration_ms)));
+// Rational frame count (INV-FPS-RESAMPLE): session FPS is authority.
+static int64_t FramesForDurationMs(int64_t duration_ms, const RationalFps& session_fps) {
+  return session_fps.IsValid() ? session_fps.FramesFromDurationCeilMs(duration_ms) : 0;
 }
 
 // =============================================================================
@@ -64,8 +64,9 @@ TEST(SegmentAwareProofTest, SingleSegmentMatchesBlockProof) {
       {"/test/movie.mp4", 3000, SegmentType::kContent},
   });
 
-  const int64_t frame_dur_ms = 33;
-  const int64_t expected_frames = FramesForDuration(3000, frame_dur_ms);
+  const RationalFps session_fps(30, 1);
+  const int64_t expected_frames = FramesForDurationMs(3000, session_fps);
+  const int64_t frame_dur_ms = 33;  // for CT accumulation display only
 
   // Simulate accumulation
   BlockAccumulator acc;
@@ -78,7 +79,7 @@ TEST(SegmentAwareProofTest, SingleSegmentMatchesBlockProof) {
   }
 
   auto summary = acc.Finalize();
-  auto proof = BuildPlaybackProof(block, summary, frame_dur_ms,
+  auto proof = BuildPlaybackProof(block, summary, session_fps,
                                    acc.GetSegmentProofs());
 
   // Single segment → 1 segment proof
@@ -107,10 +108,11 @@ TEST(SegmentAwareProofTest, MultiSegmentPerSegmentVerdicts) {
       {"/test/promo.mp4", 500, SegmentType::kContent},
   });
 
+  const RationalFps session_fps(30, 1);
   const int64_t frame_dur_ms = 33;
-  const int64_t frames_0 = FramesForDuration(2000, frame_dur_ms);
-  const int64_t frames_1 = FramesForDuration(1000, frame_dur_ms);
-  const int64_t frames_2 = FramesForDuration(500, frame_dur_ms);
+  const int64_t frames_0 = FramesForDurationMs(2000, session_fps);
+  const int64_t frames_1 = FramesForDurationMs(1000, session_fps);
+  const int64_t frames_2 = FramesForDurationMs(500, session_fps);
 
   BlockAccumulator acc;
   acc.Reset("multi-seg");
@@ -140,7 +142,7 @@ TEST(SegmentAwareProofTest, MultiSegmentPerSegmentVerdicts) {
   }
 
   auto summary = acc.Finalize();
-  auto proof = BuildPlaybackProof(block, summary, frame_dur_ms,
+  auto proof = BuildPlaybackProof(block, summary, session_fps,
                                    acc.GetSegmentProofs());
 
   ASSERT_EQ(proof.segment_proofs.size(), 3u);
@@ -239,9 +241,10 @@ TEST(SegmentAwareProofTest, FrameBudgetIntegrity) {
       {"/test/b.mp4", 1000, SegmentType::kContent},
   });
 
+  const RationalFps session_fps(30, 1);
   const int64_t frame_dur_ms = 33;
-  const int64_t frames_a = FramesForDuration(2000, frame_dur_ms);
-  const int64_t frames_b = FramesForDuration(1000, frame_dur_ms);
+  const int64_t frames_a = FramesForDurationMs(2000, session_fps);
+  const int64_t frames_b = FramesForDurationMs(1000, session_fps);
 
   BlockAccumulator acc;
   acc.Reset("budget-check");
@@ -260,7 +263,7 @@ TEST(SegmentAwareProofTest, FrameBudgetIntegrity) {
   }
 
   auto summary = acc.Finalize();
-  auto proof = BuildPlaybackProof(block, summary, frame_dur_ms,
+  auto proof = BuildPlaybackProof(block, summary, session_fps,
                                    acc.GetSegmentProofs());
 
   // Sum of segment frames == block total
@@ -279,7 +282,7 @@ TEST(SegmentAwareProofTest, FrameBudgetIntegrity) {
   // Now test mismatch: manually create a proof with wrong segment counts
   std::vector<SegmentProofRecord> bad_proofs = proof.segment_proofs;
   bad_proofs[0].actual_frame_count += 5;  // inflate by 5
-  auto bad_proof = BuildPlaybackProof(block, summary, frame_dur_ms, bad_proofs);
+  auto bad_proof = BuildPlaybackProof(block, summary, session_fps, bad_proofs);
   EXPECT_FALSE(bad_proof.frame_budget_match)
       << "Inflated segment count must trigger budget mismatch";
 }
@@ -334,7 +337,8 @@ TEST(SegmentAwareProofTest, GapAndOverlapDetection) {
     summary.frames_emitted = 60;
     summary.pad_frames = 0;
 
-    auto proof = BuildPlaybackProof(block, summary, 33, {seg0, seg1});
+    const RationalFps session_fps(30, 1);
+    auto proof = BuildPlaybackProof(block, summary, session_fps, {seg0, seg1});
     EXPECT_FALSE(proof.no_gaps) << "Frame 30 missing between segments → gap detected";
     EXPECT_TRUE(proof.no_overlaps) << "No overlap in this case";
   }
@@ -385,7 +389,8 @@ TEST(SegmentAwareProofTest, GapAndOverlapDetection) {
     summary.frames_emitted = 60;
     summary.pad_frames = 0;
 
-    auto proof = BuildPlaybackProof(block, summary, 33, {seg0, seg1});
+    const RationalFps session_fps(30, 1);
+    auto proof = BuildPlaybackProof(block, summary, session_fps, {seg0, seg1});
     EXPECT_TRUE(proof.no_gaps) << "No gap in this case";
     EXPECT_FALSE(proof.no_overlaps) << "Frame 29 shared → overlap detected";
   }
@@ -428,7 +433,8 @@ TEST(SegmentAwareProofTest, GapAndOverlapDetection) {
     summary.frames_emitted = 60;
     summary.pad_frames = 0;
 
-    auto proof = BuildPlaybackProof(block, summary, 33, {seg0, seg1});
+    const RationalFps session_fps(30, 1);
+    auto proof = BuildPlaybackProof(block, summary, session_fps, {seg0, seg1});
     EXPECT_TRUE(proof.no_gaps) << "Contiguous segments must have no gaps";
     EXPECT_TRUE(proof.no_overlaps) << "Contiguous segments must have no overlaps";
   }

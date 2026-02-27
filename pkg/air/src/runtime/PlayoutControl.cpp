@@ -511,22 +511,24 @@ namespace retrovue::runtime
     }
 
     // Seamless Switch Algorithm (FileProducer):
-    // 1. Get last PTS from live producer
+    // 1. Get last PTS from live producer. One-tick duration from session/house FPS only
+    //    (INV-FPS-RESAMPLE, INV-FPS-TICK-PTS). Never use producer FPS for output PTS step.
     int64_t last_live_pts = 0;
-    int64_t frame_duration_us = 0;
+    int64_t frame_duration_us = session_output_fps_.IsValid()
+        ? session_output_fps_.FrameDurationUs()
+        : retrovue::blockplan::FPS_30.FrameDurationUs();
     if (liveBus.loaded && liveBus.producer && liveBus.producer->isRunning())
     {
       auto* live_video_producer = dynamic_cast<producers::file::FileProducer*>(liveBus.producer.get());
       if (live_video_producer)
       {
         last_live_pts = live_video_producer->GetNextPTS();
-        // Calculate frame duration (assuming 30fps for now, should get from producer config)
-        frame_duration_us = 33'366; // ~30fps in microseconds
         std::cout << "[PlayoutControl] Live producer last PTS: " << last_live_pts << std::endl;
       }
     }
 
     // 2. Align preview producer PTS to continue from live
+    last_pts_step_us_ = frame_duration_us;  // observable for contract tests
     int64_t target_pts = last_live_pts + frame_duration_us;
     preview_video_producer->AlignPTS(target_pts);
     std::cout << "[PlayoutControl] Aligned preview PTS to: " << target_pts << std::endl;
@@ -616,6 +618,12 @@ namespace retrovue::runtime
   }
 
   // BlackFrameProducer fallback support
+
+  void PlayoutControl::SetSessionOutputFps(retrovue::blockplan::RationalFps fps)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    session_output_fps_ = fps;
+  }
 
   void PlayoutControl::ConfigureFallbackProducer(const ProgramFormat& format,
                                                  buffer::FrameRingBuffer& buffer,

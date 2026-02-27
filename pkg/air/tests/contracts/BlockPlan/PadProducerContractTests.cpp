@@ -179,5 +179,57 @@ TEST(PadProducerContract, AssetUriIsSentinel) {
   EXPECT_STREQ(PadProducer::kAssetUri, "internal://pad");
 }
 
+// =============================================================================
+// PAD primes audio before emission: audio is primed before first video frame.
+// PadProducer has no start() — it is ready after construction. No decoder.
+// =============================================================================
+
+TEST(PadProducerContract, AudioIsPrimedBeforeFirstVideoFrame) {
+  PadProducer pp(640, 480, 30, 1);
+
+  // PadProducer has no start(); construction is the only init. No decoder.
+  // Before requesting any video frame: assert "audio depth" > 0 in the sense
+  // of "at least one frame's worth of silence is available".
+  const int max_samples = pp.MaxSamplesPerFrame();
+  ASSERT_GT(max_samples, 0) << "PadProducer must expose at least one sample per frame (audio depth > 0)";
+
+  buffer::AudioFrame& silence = pp.SilenceTemplate();
+  const size_t min_bytes = static_cast<size_t>(max_samples) *
+                          static_cast<size_t>(buffer::kHouseAudioChannels) *
+                          sizeof(int16_t);
+  ASSERT_GE(silence.data.size(), min_bytes)
+      << "At least one silent audio packet must be available (pre-primed, not lazy)";
+
+  // All samples must be silent (pre-filled zeros).
+  for (size_t i = 0; i < silence.data.size(); i++) {
+    ASSERT_EQ(silence.data[i], 0) << "PadProducer audio must be pre-primed silence (byte " << i << ")";
+  }
+
+  // Request first video frame.
+  const buffer::Frame& video = pp.VideoFrame();
+  ASSERT_FALSE(video.data.empty()) << "First video frame must be available";
+
+  // Audio PTS <= video PTS. PadProducer does not set video metadata.pts (stays 0);
+  // SilenceTemplate().pts_us is 0. So 0 <= 0. Pipeline stamps real PTS when emitting.
+  const int64_t audio_pts_us = silence.pts_us;
+  const int64_t video_pts = video.metadata.pts;
+  EXPECT_LE(audio_pts_us, video_pts)
+      << "Audio PTS must be <= video PTS (PadProducer: both 0; pipeline enforces ordering)";
+
+  // Audio PTS monotonic across at least 3 "logical" frames: PadProducer returns
+  // the same pre-allocated buffer every time (no lazy generation). Three calls
+  // must return the same buffer; pipeline assigns monotonic PTS when emitting.
+  const buffer::AudioFrame* p1 = &pp.SilenceTemplate();
+  const buffer::AudioFrame* p2 = &pp.SilenceTemplate();
+  const buffer::AudioFrame* p3 = &pp.SilenceTemplate();
+  EXPECT_EQ(p1, p2) << "Silence must be pre-primed (same buffer every call, not lazily generated)";
+  EXPECT_EQ(p2, p3) << "Silence must be pre-primed (same buffer every call, not lazily generated)";
+  EXPECT_GE(pp.MaxSamplesPerFrame(), 1) << "At least one audio frame's worth of samples";
+
+  // No "audio not primed" state: from construction we have silence ready and
+  // never need a decoder. PadProducer has no decoder (it is a data source only).
+  EXPECT_TRUE(silence.IsHouseFormat()) << "House format required for emission";
+}
+
 }  // namespace
 }  // namespace retrovue::blockplan::testing

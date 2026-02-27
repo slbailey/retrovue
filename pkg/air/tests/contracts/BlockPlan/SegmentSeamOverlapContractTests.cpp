@@ -147,11 +147,11 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -343,7 +343,7 @@ class SegmentSeamOverlapContractTest : public ::testing::Test {
       summaries_.push_back(summary);
     };
     return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks),
-        nullptr, std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        nullptr, test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den),
         PipelineManagerOptions{0});
   }
 

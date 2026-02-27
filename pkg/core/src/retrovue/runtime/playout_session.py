@@ -8,7 +8,7 @@ playout without ChannelManager needing to reason about segments, preload timing,
 or switching. All that logic is delegated to the AIR executor.
 
 Usage:
-    session = PlayoutSession(channel_id, channel_config, ts_socket_path)
+    session = PlayoutSession(channel_id, channel_id_int, ts_socket_path, program_format, clock)
     session.start(join_utc_ms)
     session.seed(block_a, block_b)
     session.feed(block_c)  # Call when slot available
@@ -36,6 +36,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import grpc
+
+from retrovue.runtime.clock import MasterClock
 
 
 class FeedResult(Enum):
@@ -205,6 +207,7 @@ class PlayoutSession:
         channel_id_int: int,
         ts_socket_path: Path,
         program_format: dict[str, Any],
+        clock: MasterClock,
         air_binary_path: Optional[Path] = None,
         on_block_complete: Optional[Callable[[str], None]] = None,
         on_session_end: Optional[Callable[[str], None]] = None,
@@ -219,6 +222,7 @@ class PlayoutSession:
             channel_id_int: Integer channel ID for AIR
             ts_socket_path: UDS socket path where AIR writes TS bytes
             program_format: Video/audio format config (width, height, fps, etc.)
+            clock: MasterClock for authoritative time (e.g. block-completed logging)
             air_binary_path: Path to retrovue_air binary (auto-detected if None)
             on_block_complete: Callback when a block completes (receives block_id)
             on_session_end: Callback when session ends (receives reason)
@@ -229,6 +233,8 @@ class PlayoutSession:
         self.channel_id_int = channel_id_int
         self.ts_socket_path = ts_socket_path
         self.program_format = program_format
+        self.clock = clock
+        assert self.clock is not None, "PlayoutSession requires a MasterClock"
         self.air_binary_path = air_binary_path or self._find_air_binary()
         self.on_block_complete = on_block_complete
         self.on_session_end = on_session_end
@@ -380,7 +386,7 @@ class PlayoutSession:
 
                     if event.HasField("block_completed"):
                         completed = event.block_completed
-                        now_ms = int(time.time() * 1000)
+                        now_ms = int(self.clock.now_utc().timestamp() * 1000)
                         delta_ms = now_ms - completed.block_end_utc_ms
                         logger.info(
                             f"[PlayoutSession:{self.channel_id}] BlockCompleted: "

@@ -187,7 +187,7 @@ namespace
       }
       last_pts = frame.metadata.pts;
       ASSERT_LE(frame.metadata.dts, frame.metadata.pts);
-      ASSERT_NEAR(frame.metadata.duration, 1.0 / config.target_fps, 0.001);
+      ASSERT_NEAR(frame.metadata.duration, config.target_fps.FrameDurationSec(), 0.001);
       ASSERT_EQ(frame.metadata.asset_uri, config.asset_uri);
       ASSERT_EQ(frame.width, config.target_width);
       ASSERT_EQ(frame.height, config.target_height);

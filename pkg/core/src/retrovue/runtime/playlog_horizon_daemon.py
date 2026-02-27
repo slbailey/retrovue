@@ -28,6 +28,10 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+# Log INV-PLAYLOG-HORIZON-002 at WARNING only on first consecutive zero; later repeats at DEBUG.
+# When Tier 1 has no next-day blocks (e.g. compile not run yet), 0 blocks filled every tick.
+PLAYLOG_HORIZON_002_WARN_ON_FIRST_ONLY = True
+
 
 @dataclass
 class PlaylogHealthReport:
@@ -139,7 +143,13 @@ class PlaylogHorizonDaemon:
                 self._farthest_end_utc_ms / 1000.0, tz=timezone.utc
             ) if self._farthest_end_utc_ms > 0 else None
             now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
-            logger.warning(
+            # WARNING only on first occurrence; subsequent repeats at DEBUG to avoid flood.
+            log_fn = (
+                logger.warning
+                if (PLAYLOG_HORIZON_002_WARN_ON_FIRST_ONLY and self._consecutive_zero_fills == 1)
+                else logger.debug
+            )
+            log_fn(
                 "PlaylogHorizon[%s]: INV-PLAYLOG-HORIZON-002 VIOLATION: "
                 "depth=%.1fh < target=%.1fh but 0 blocks filled "
                 "(consecutive_zeros=%d, frontier=%s, now=%s, "

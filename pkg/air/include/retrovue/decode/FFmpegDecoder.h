@@ -14,6 +14,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/blockplan/RationalFps.hpp"
+#include "retrovue/blockplan/ITickProducerDecoder.hpp"  // Phase 2: PumpMode, PumpResult
 
 // Forward declarations for FFmpeg types (avoids pulling in FFmpeg headers here)
 struct AVFormatContext;
@@ -150,6 +151,15 @@ class FFmpegDecoder {
   double GetVideoDuration() const;
 
   // True if the asset has an audio stream (for INV-AUDIO-PRIME-002 / priming logs).
+
+  // ========================================================================
+  // Phase 2: Lossless audio servicing under backpressure
+  // ========================================================================
+
+  // Advance demux/decode by one packet without consuming video output.
+  // Returns PumpResult indicating progress, backpressure, EOF, or error.
+  // Used by DrainAudioOnly() to service audio while video buffer is full.
+  blockplan::PumpResult PumpDecoderOnce(blockplan::PumpMode mode = blockplan::PumpMode::kNormal);
   bool HasAudioStream() const { return audio_stream_index_ >= 0; }
 
  private:
@@ -220,6 +230,50 @@ class FFmpegDecoder {
   buffer::Frame pending_frame_;
 
   // Phase 8.9: Queue for audio frames decoded during video packet processing
+
+  // ========================================================================
+  // Phase 2: PumpDecoderOnce support - lossless backpressure
+  // ========================================================================
+
+  // RAII types for safe ownership
+  using AVFramePtr = std::unique_ptr<AVFrame, void(*)(AVFrame*)>;
+  using AVPacketPtr = std::unique_ptr<AVPacket, void(*)(AVPacket*)>;
+
+  // Deferred video packet FIFO for lossless backpressure
+  std::queue<AVPacketPtr> deferred_video_packets_;
+  static constexpr size_t kMaxDeferredVideoPackets = 120;  // ~2-4 seconds
+
+  // Pending decoded video frames queue
+  std::queue<AVFramePtr> pending_video_frames_;
+  static constexpr size_t kMaxPendingVideoFrames = 30;
+  static constexpr size_t kMaxPendingAudioFrames = 120;  // Match upstream buffer depth
+
+  // Stashed frame when pending queue is full (no frames dropped)
+  AVFramePtr stashed_video_frame_;
+  bool has_stashed_video_frame_{false};
+
+  // EOF flush phase state
+  bool demux_eof_reached_{false};
+  bool video_codec_flushed_{false};
+  bool audio_codec_flushed_{false};
+
+  // Scratch frame for PumpDecoderOnce (reused, not allocated per call)
+  AVFrame* pump_scratch_frame_{nullptr};
+
+  // Debug counters for soak testing
+  size_t pending_video_max_depth_{0};
+  size_t deferred_video_max_depth_{0};
+  uint64_t pump_calls_audio_only_{0};
+  uint64_t pump_backpressure_hits_{0};
+  uint64_t audio_frames_harvested_in_audio_only_{0};
+
+  // Helpers for PumpDecoderOnce
+  AVFramePtr MakeFrame();
+  AVPacketPtr MakePacket(AVPacket* pkt);
+  void EnqueueScratchToPending();
+  void DrainVideoFrames(int& frames_drained);
+  void DrainAudioFrames(int& frames_drained);
+
   std::queue<buffer::AudioFrame> pending_audio_frames_;
 };
 

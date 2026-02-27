@@ -16,13 +16,99 @@ from __future__ import annotations
 
 import logging
 import os
+import select
 import socket
 import threading
 import time
 from pathlib import Path
 from queue import Empty, Full, Queue
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Optional, Protocol
 
+from .ts_ring_buffer import DEFAULT_RING_BUFFER_MAX_BYTES, TsRingBuffer
+
+# Config from env (bytes-based client buffer; default ~2–4 s at ~2.5 Mbit/s TS)
+def _client_buffer_bytes() -> int:
+    val = os.environ.get("HTTP_CLIENT_BUFFER_BYTES")
+    if val is not None:
+        try:
+            return max(64 * 1024, int(val))
+        except ValueError:
+            pass
+    return 2_000_000
+
+
+def _ring_buffer_bytes() -> int:
+    val = os.environ.get("HTTP_RING_BUFFER_BYTES")
+    if val is not None:
+        try:
+            return max(64 * 1024, int(val))
+        except ValueError:
+            pass
+    return DEFAULT_RING_BUFFER_MAX_BYTES
+
+
+class BytesBoundedQueue:
+    """
+    Thread-safe queue with a byte-size cap. When full, oldest chunks are dropped.
+    Used for per-client TS buffers so backpressure is per-client only.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max_bytes = max(64 * 1024, max_bytes)
+        self._lock = threading.Lock()
+        self._chunks: list[bytes] = []
+        self._current_bytes = 0
+        self._not_empty = threading.Condition(self._lock)
+        self._closed = False
+
+    def put_nowait(self, chunk: bytes) -> bool:
+        """Enqueue chunk; drop oldest if over cap. Returns True if any chunk was dropped. Accepts b'' as EOF."""
+        if self._closed:
+            return False
+        had_eviction = False
+        with self._lock:
+            if self._closed:
+                return False
+            while self._chunks and self._current_bytes + len(chunk) > self._max_bytes:
+                old = self._chunks.pop(0)
+                self._current_bytes -= len(old)
+                had_eviction = True
+            self._chunks.append(chunk)
+            self._current_bytes += len(chunk)
+            self._not_empty.notify()
+        return had_eviction
+
+    def get(self, timeout: Optional[float] = None) -> Optional[bytes]:
+        """Block until a chunk is available or timeout. Returns None if closed or timeout."""
+        with self._not_empty:
+            while not self._closed and not self._chunks:
+                if timeout is not None:
+                    if not self._not_empty.wait(timeout=timeout):
+                        raise Empty
+                else:
+                    self._not_empty.wait()
+            if self._closed:
+                return None
+            if not self._chunks:
+                raise Empty
+            chunk = self._chunks.pop(0)
+            self._current_bytes -= len(chunk)
+            return chunk
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._not_empty.notify_all()
+
+    @property
+    def current_bytes(self) -> int:
+        with self._lock:
+            return self._current_bytes
+
+    @property
+    def current_chunk_count(self) -> int:
+        with self._lock:
+            return len(self._chunks)
 
 _logger = logging.getLogger(__name__)
 
@@ -52,16 +138,34 @@ RECV_GAP_WARN_COUNT: int = 10  # Minimum gaps before warning (prevents noise)
 # Keeps backpressure bounded while tolerating brief network/CPU stalls.
 SLOW_CLIENT_PUT_TIMEOUT_S: float = 3.0
 
+# Backpressure when ring buffer exceeds this bytes: drop oldest (Policy A) or disconnect client (Policy B).
+BACKPRESSURE_SLOW_THRESHOLD_S: float = 5.0
+# Policy: "drop_oldest" = drop oldest TS from buffer and continue; "disconnect" = close HTTP client only.
+BackpressurePolicy = Literal["drop_oldest", "disconnect"]
+DEFAULT_BACKPRESSURE_POLICY: BackpressurePolicy = "drop_oldest"
+
+# Upstream reader select timeout: short so we react quickly; 50 ms max.
+UPSTREAM_POLL_TIMEOUT_S: float = 0.05
+# Log WARNING when upstream loop iteration exceeds this (indicates jitter/blocking).
+UPSTREAM_LOOP_SPIKE_MS: float = 50.0
+
+# Throttle BACKPRESSURE logs per client (avoid flood when one client is consistently slow).
+BACKPRESSURE_LOG_INTERVAL_S: float = 5.0
+
 
 class TsSource(Protocol):
     """Protocol for TS data source (UDS or fake for tests)."""
 
     def read(self, size: int) -> bytes:
-        """Read TS data (blocks until data available)."""
+        """Read TS data (blocks until data available, or non-blocking)."""
         ...
 
     def close(self) -> None:
         """Close the source."""
+        ...
+
+    def get_socket(self) -> Optional[socket.socket]:
+        """Return the underlying socket for select(), or None (e.g. fake source)."""
         ...
 
 
@@ -114,7 +218,13 @@ class UdsTsSource:
             except Exception as e:
                 _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
 
-            _logger.info("Connected to UDS socket: %s", self.socket_path)
+            # Non-blocking so upstream reader never blocks indefinitely; use select for readiness.
+            self.sock.setblocking(False)
+            _logger.info(
+                "[HTTP] UPSTREAM_CONNECTED fd=%s path=%s",
+                self.sock.fileno() if self.sock else None,
+                self.socket_path,
+            )
             return True
         except (OSError, socket.error) as e:
             _logger.warning("Failed to connect to UDS socket %s: %s", self.socket_path, e)
@@ -128,26 +238,32 @@ class UdsTsSource:
             return False
 
     def read(self, size: int) -> bytes:
-        """Read TS data from socket."""
+        """Read TS data from socket (non-blocking; call when select says readable)."""
         if not self.sock or not self._connected:
             raise IOError("Not connected to UDS socket")
         try:
             data = self.sock.recv(size)
             if not data:  # EOF
                 _logger.warning(
-                    "UDS socket closed by playout engine (EOF) for %s",
+                    "[HTTP] UPSTREAM_DISCONNECTED reason=EOF path=%s",
                     self.socket_path,
                 )
                 self._connected = False
                 return b""
             return data
+        except BlockingIOError:
+            return b""  # EAGAIN; caller uses select, so rare
         except (OSError, socket.error) as e:
-            _logger.error("UDS socket read error: %s", e)
+            err = getattr(e, "errno", None)
+            _logger.warning(
+                "[HTTP] UPSTREAM_DISCONNECTED errno=%s error=%s path=%s",
+                err, e, self.socket_path,
+            )
             self._connected = False
             raise IOError(f"UDS read error: {e}") from e
 
     def close(self) -> None:
-        """Close the UDS socket."""
+        """Close the UDS socket. Only called on explicit channel stop or fatal error."""
         self._connected = False
         if self.sock:
             try:
@@ -160,6 +276,9 @@ class UdsTsSource:
                 pass
             self.sock = None
         _logger.info("Closed UDS socket: %s", self.socket_path)
+
+    def get_socket(self) -> Optional[socket.socket]:
+        return self.sock if self._connected else None
 
     @property
     def is_connected(self) -> bool:
@@ -200,20 +319,33 @@ class SocketTsSource:
         except Exception as e:
             _logger.warning("[AUDIT-BUF] Could not read socket buffer sizes: %s", e)
 
+        # Non-blocking so upstream reader uses select; downstream never blocks upstream.
+        sock.setblocking(False)
+        _logger.info("[HTTP] UPSTREAM_CONNECTED fd=%s (socket from Air)", sock.fileno())
+
+    def get_socket(self) -> Optional[socket.socket]:
+        return self.sock if self._connected else None
+
     def read(self, size: int) -> bytes:
         if not self.sock or not self._connected:
             raise IOError("Socket not connected")
         try:
             data = self.sock.recv(size)
             if not data:
+                _logger.info("[HTTP] UPSTREAM_DISCONNECTED reason=EOF (Air closed)")
                 self._connected = False
                 return b""
             return data
+        except BlockingIOError:
+            return b""
         except (OSError, socket.error) as e:
+            err = getattr(e, "errno", None)
+            _logger.warning("[HTTP] UPSTREAM_DISCONNECTED errno=%s error=%s", err, e)
             self._connected = False
             raise IOError(f"Socket read error: {e}") from e
 
     def close(self) -> None:
+        """Close the socket. Only on explicit stop or fatal error; never due to downstream."""
         self._connected = False
         if self.sock:
             try:
@@ -256,13 +388,17 @@ class FakeTsSource:
         """Mark source as closed."""
         self._closed = True
 
+    def get_socket(self) -> Optional[socket.socket]:
+        return None
+
 
 class ChannelStream:
     """
-    Per-channel TS stream consumer with fan-out to HTTP clients.
+    Per-channel TS stream: upstream (AIR UDS) → ring buffer → downstream (HTTP clients).
 
-    Exactly one UDS reader per channel. Multiple HTTP clients subscribe
-    to receive TS chunks via queues.
+    Decoupled design: upstream reader never blocks on downstream. Downstream
+    behavior (VLC stall/disconnect) never closes upstream. Upstream only closes
+    on AIR disconnect or explicit channel stop.
     """
 
     def __init__(
@@ -271,6 +407,10 @@ class ChannelStream:
         socket_path: str | Path | None = None,
         ts_source_factory: Callable[[], TsSource] | None = None,
         hls_manager: Any | None = None,
+        *,
+        ring_buffer_max_bytes: int | None = None,
+        client_buffer_max_bytes: int | None = None,
+        backpressure_policy: BackpressurePolicy = DEFAULT_BACKPRESSURE_POLICY,
     ):
         """
         Initialize ChannelStream for a channel.
@@ -280,18 +420,46 @@ class ChannelStream:
             socket_path: UDS socket path (if None, uses ts_source_factory)
             ts_source_factory: Factory for creating TS source (for tests)
             hls_manager: Optional HLSManager to tee TS data for HLS output
+            ring_buffer_max_bytes: Max ring buffer size (default: HTTP_RING_BUFFER_BYTES or 8MB)
+            client_buffer_max_bytes: Per-client queue byte cap (default: HTTP_CLIENT_BUFFER_BYTES or 2MB)
+            backpressure_policy: "drop_oldest" (preferred for live) or "disconnect"
         """
         self.channel_id = channel_id
         self.socket_path = Path(socket_path) if socket_path else None
         self.ts_source_factory = ts_source_factory
         self.hls_manager = hls_manager
+        self._backpressure_policy = backpressure_policy
+        self._client_buffer_max_bytes = (
+            client_buffer_max_bytes
+            if client_buffer_max_bytes is not None
+            else _client_buffer_bytes()
+        )
+        ring_bytes = (
+            ring_buffer_max_bytes
+            if ring_buffer_max_bytes is not None
+            else _ring_buffer_bytes()
+        )
 
-        # Active subscribers (client_id -> queue)
-        self.subscribers: dict[str, Queue[bytes]] = {}
+        self._logger = logging.getLogger(f"{__name__}.{channel_id}")
+
+        # Bounded ring buffer: upstream pushes, fanout consumes. Downstream never blocks upstream.
+        def _on_ring_drop(dropped: int) -> None:
+            self._logger.warning(
+                "[HTTP] BACKPRESSURE drop_oldest bytes=%d channel=%s",
+                dropped, self.channel_id,
+            )
+        self._ring_buffer = TsRingBuffer(
+            max_bytes=ring_bytes,
+            on_drop=_on_ring_drop,
+        )
+
+        # Active subscribers (client_id -> bytes-bounded queue)
+        self.subscribers: dict[str, BytesBoundedQueue] = {}
         self.subscribers_lock = threading.Lock()
 
-        # Reader thread
+        # Upstream reader thread (UDS → ring buffer) and fanout thread (ring buffer → clients)
         self.reader_thread: threading.Thread | None = None
+        self._fanout_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._stopped = False
 
@@ -304,8 +472,9 @@ class ChannelStream:
 
         # Debug: log first 16 bytes once per connection to verify TS sync 0x47
         self._first_chunk_logged = False
-
-        self._logger = logging.getLogger(f"{__name__}.{channel_id}")
+        # Throttle BACKPRESSURE logs per client_id
+        self._backpressure_log_last: dict[str, float] = {}
+        self._backpressure_log_lock = threading.Lock()
 
     def get_socket_path(self) -> Path:
         """Get the UDS socket path for this channel."""
@@ -373,225 +542,145 @@ class ChannelStream:
 
         return False
 
-    def _reader_loop(self) -> None:
-        """Background thread loop that reads TS data and fans out to subscribers."""
-        global _AUDIT_T0, _AUDIT_T1, _AUDIT_T2, _AUDIT_FIRST_RECV_DONE
+    def _upstream_reader_loop(self) -> None:
+        """
+        Component A: Upstream reader. Only select(), read(), ring_buffer.put().
+        No fanout locks, minimal logging, no heavy work or large allocations.
+        Loop duration logged per iteration; WARNING if > 50 ms (spike).
+        """
+        self._logger.debug(
+            "[HTTP] Upstream reader started for channel %s", self.channel_id
+        )
+        chunk_size = 188 * 10  # 10 TS packets
 
-        self._logger.debug("ChannelStream reader loop started for channel %s", self.channel_id)
-        chunk_size = 188 * 10  # Read 10 TS packets at a time (188 bytes each)
-
-        # AUDIT: Track inter-recv gaps for steady-state analysis (telemetry only)
-        # These metrics are NOT correctness signals - see RECV_GAP_WARN_* constants.
-        _last_recv_return_ns: int | None = None
-        _max_inter_recv_gap_ns: int = 0
-        _count_gaps_over_threshold: int = 0
-        _local_first_recv_done = False
-        _local_first_fanout_done = False
-
+        # Only log spike when truly slow: > 3× poll timeout, or did read and > 50 ms
+        spike_threshold_long_ms = 3 * (UPSTREAM_POLL_TIMEOUT_S * 1000)
         while not self._stop_event.is_set():
-            # Connect if needed (initial connection only - no reconnect after streaming starts)
-            if not self.ts_source:
-                if not self._connect_with_backoff():
-                    # Phase 8.7: if initial connection fails, don't keep retrying forever
-                    self._logger.info(
-                        "Initial UDS connection failed for channel %s, stopping",
-                        self.channel_id,
-                    )
-                    break
-
-            # Check if source is connected (for UDS)
-            # Phase 8.7: no reconnect loops - if disconnected after initial connect, stop
-            if isinstance(self.ts_source, UdsTsSource) and not self.ts_source.is_connected:
-                self._logger.warning(
-                    "UDS source disconnected for channel %s, stopping (no reconnect per Phase 8.7)",
-                    self.channel_id,
-                )
-                break
-
-            # AUDIT: T1 - Record timestamp immediately before first recv
-            if not _local_first_recv_done:
-                with _AUDIT_LOCK:
-                    if not _AUDIT_FIRST_RECV_DONE:
-                        _AUDIT_T1 = time.monotonic_ns()
-                        t0_val = _AUDIT_T0 or 0
-                        self._logger.debug(
-                            "[AUDIT-T1] First recv() ENTERING at %d ns (T0→T1 = %.2f ms) for channel %s",
-                            _AUDIT_T1, (_AUDIT_T1 - t0_val) / 1e6, self.channel_id
-                        )
-
-            # Read TS chunk
+            t_start = time.monotonic_ns()
+            bytes_read_this_iter = 0
             try:
-                _recv_enter_ns = time.monotonic_ns()
-                chunk = self.ts_source.read(chunk_size)
-                _recv_exit_ns = time.monotonic_ns()
-
-                if not chunk:
-                    # EOF or disconnect: playout engine closed the write side.
-                    # Phase 8.7: no reconnect loops - stop reader.
-                    self._logger.warning(
-                        "TS source EOF for channel %s, stopping reader (no reconnect per Phase 8.7)",
-                        self.channel_id,
-                    )
+                if not self.ts_source:
+                    if not self._connect_with_backoff():
+                        self._logger.info(
+                            "Initial UDS connection failed for channel %s, stopping",
+                            self.channel_id,
+                        )
+                        break
+                if isinstance(
+                    self.ts_source, UdsTsSource
+                ) and not self.ts_source.is_connected:
                     break
 
-                # AUDIT: T2 - Record timestamp when first recv returns data
-                if not _local_first_recv_done:
-                    with _AUDIT_LOCK:
-                        if not _AUDIT_FIRST_RECV_DONE:
-                            _AUDIT_T2 = _recv_exit_ns
-                            _AUDIT_FIRST_RECV_DONE = True
-                            t0_val = _AUDIT_T0 or 0
-                            t1_val = _AUDIT_T1 or 0
-                            self._logger.debug(
-                                "[AUDIT-T2] First recv() RETURNED DATA at %d ns "
-                                "(T1→T2 = %.2f ms, T0→T2 = %.2f ms, %d bytes) for channel %s",
-                                _AUDIT_T2,
-                                (_AUDIT_T2 - t1_val) / 1e6,
-                                (_AUDIT_T2 - t0_val) / 1e6,
-                                len(chunk),
-                                self.channel_id
-                            )
-                    _local_first_recv_done = True
-
-                # AUDIT: Track inter-recv gaps (telemetry only, not correctness)
-                # See RECV_GAP_WARN_* constants for policy documentation.
-                if _last_recv_return_ns is not None:
-                    gap_ns = _recv_exit_ns - _last_recv_return_ns
-                    if gap_ns > _max_inter_recv_gap_ns:
-                        _max_inter_recv_gap_ns = gap_ns
-                    threshold_ns = RECV_GAP_WARN_THRESHOLD_MS * 1_000_000
-                    if gap_ns > threshold_ns:
-                        _count_gaps_over_threshold += 1
-                _last_recv_return_ns = _recv_exit_ns
-
-                # FIRST-ON-AIR: Verify first byte is 0x47 (MPEG-TS sync byte)
-                if not self._first_chunk_logged and len(chunk) >= 16:
-                    first_byte = chunk[0]
-                    is_valid_ts = first_byte == 0x47
-                    if is_valid_ts:
-                        # Compute T0→T2 latency for the concise on-air line
-                        _onair_latency_ms = None
-                        with _AUDIT_LOCK:
-                            if _AUDIT_T0 is not None and _AUDIT_T2 is not None:
-                                _onair_latency_ms = (_AUDIT_T2 - _AUDIT_T0) / 1e6
-                        if _onair_latency_ms is not None:
-                            self._logger.info(
-                                "[%s] On-air in %.0fms (sync OK)",
-                                self.channel_id, _onair_latency_ms,
-                            )
-                        else:
-                            self._logger.info(
-                                "[%s] On-air (sync OK, %d bytes)",
-                                self.channel_id, len(chunk),
-                            )
-                        self._logger.debug(
-                            "FIRST-ON-AIR: Channel %s: TS hex: %s (%d bytes)",
-                            self.channel_id, chunk[:16].hex(), len(chunk),
+                sock = self.ts_source.get_socket() if self.ts_source else None
+                if sock:
+                    try:
+                        r, _, _ = select.select(
+                            [sock], [], [], UPSTREAM_POLL_TIMEOUT_S
                         )
-                    else:
-                        self._logger.error(
-                            "FIRST-ON-AIR: Channel %s: Invalid TS stream! "
-                            "Expected 0x47 sync byte, got 0x%02x (%d bytes): %s",
-                            self.channel_id,
-                            first_byte,
-                            len(chunk),
-                            chunk[:16].hex(),
-                        )
-                    self._first_chunk_logged = True
+                        if not r:
+                            continue
+                    except (OSError, ValueError):
+                        continue
+
+                # Re-check after select: stop() may have set ts_source to None during shutdown
+                if not self.ts_source:
+                    break
+                chunk = self.ts_source.read(chunk_size)
+                bytes_read_this_iter = len(chunk)
+                if not chunk:
+                    break
+                self._ring_buffer.put(chunk)
             except IOError as e:
-                # Phase 8.7: no reconnect loops - read error means stop
                 self._logger.warning(
-                    "TS read error for channel %s: %s, stopping (no reconnect per Phase 8.7)",
-                    self.channel_id,
+                    "[HTTP] UPSTREAM_DISCONNECTED reason=read_error error=%s",
                     e,
                 )
                 break
-
-            # Tee to HLS segmenter (zero-copy, no extra FFmpeg process)
-            if self.hls_manager is not None:
-                try:
-                    self.hls_manager.feed(self.channel_id, chunk)
-                except Exception:
-                    pass  # HLS feed must never break the main stream
-
-            # Fan-out to all subscribers with bounded-latency backpressure.
-            # Snapshot under lock, then release so blocking put() doesn't
-            # prevent subscribe/unsubscribe.
-            with self.subscribers_lock:
-                subscribers_snapshot = list(self.subscribers.items())
-
-            slow_clients: list[str] = []
-            for client_id, client_queue in subscribers_snapshot:
-                try:
-                    # Blocking put with timeout.  If the client can drain one
-                    # chunk within SLOW_CLIENT_PUT_TIMEOUT_S it stays; otherwise
-                    # it is evicted.  While blocked, recv() stalls → UDS recv
-                    # buffer fills → kernel back-pressures AIR's send() →
-                    # SocketSink fills → WaitAndConsumeBytes blocks the tick thread.
-                    client_queue.put(chunk, timeout=SLOW_CLIENT_PUT_TIMEOUT_S)
-                    if not _local_first_fanout_done:
-                        _local_first_fanout_done = True
-                except Full:
-                    slow_clients.append(client_id)
-                except Exception:
+            finally:
+                duration_ms = (time.monotonic_ns() - t_start) / 1e6
+                self._logger.debug(
+                    "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f",
+                    duration_ms,
+                )
+                is_spike = (
+                    duration_ms > spike_threshold_long_ms
+                    or (bytes_read_this_iter > 0 and duration_ms > UPSTREAM_LOOP_SPIKE_MS)
+                )
+                if is_spike:
                     self._logger.warning(
-                        "Unexpected fanout error for client %s", client_id, exc_info=True
+                        "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f (spike >%.0fms)",
+                        duration_ms,
+                        UPSTREAM_LOOP_SPIKE_MS,
                     )
 
-            # Evict slow clients outside the iteration.
-            if slow_clients:
-                with self.subscribers_lock:
-                    for client_id in slow_clients:
-                        evicted_queue = self.subscribers.pop(client_id, None)
-                        if evicted_queue is not None:
-                            # Drain one slot to make room for EOF signal.
-                            try:
-                                evicted_queue.get_nowait()
-                            except Empty:
-                                pass
-                            try:
-                                evicted_queue.put_nowait(b"")  # EOF
-                            except Full:
-                                pass  # Client will timeout naturally
-                        self._logger.warning(
-                            "[channel %s] evicted slow client %s "
-                            "(queue full >%.1fs)",
-                            self.channel_id,
-                            client_id,
-                            SLOW_CLIENT_PUT_TIMEOUT_S,
-                        )
-
-        # AUDIT: Log recv-gap telemetry at session exit
-        # This is informational only - recv gaps are NOT correctness signals.
-        max_gap_ms = _max_inter_recv_gap_ns / 1e6
-        if _max_inter_recv_gap_ns > 0:
-            self._logger.debug(
-                "[AUDIT-EXIT] Max inter-recv gap was %.2f ms (gaps>%dms: %d) for channel %s",
-                max_gap_ms, RECV_GAP_WARN_THRESHOLD_MS, _count_gaps_over_threshold,
-                self.channel_id
-            )
-        # Emit ONE warning per session if pattern suggests systemic issue
-        if _count_gaps_over_threshold >= RECV_GAP_WARN_COUNT:
-            self._logger.warning(
-                "[AUDIT-GAP-SUMMARY] Channel %s had %d recv gaps exceeding %dms "
-                "(max=%.2fms). This is telemetry, not a correctness violation.",
-                self.channel_id, _count_gaps_over_threshold,
-                RECV_GAP_WARN_THRESHOLD_MS, max_gap_ms
-            )
-
-        # Cleanup
+        self._ring_buffer.close()
         if self.ts_source:
             try:
                 self.ts_source.close()
             except Exception:
                 pass
             self.ts_source = None
-
         self._stopped = True
-        self._logger.debug("ChannelStream reader loop stopped for channel %s", self.channel_id)
+        self._logger.debug(
+            "[HTTP] Upstream reader stopped for channel %s", self.channel_id
+        )
+
+    def _fanout_loop(self) -> None:
+        """
+        Component B: Fanout. Consume from ring buffer, put to each client queue.
+        Slow clients: put_nowait; on Full apply backpressure policy (drop or disconnect).
+        Never closes upstream. Runs regardless of subscriber count: with 0 clients we
+        still get() from the ring buffer (draining it) and discard; upstream never blocks.
+        """
+        while not self._stop_event.is_set():
+            chunk = self._ring_buffer.get(timeout=UPSTREAM_POLL_TIMEOUT_S)
+            if chunk is None:
+                continue
+            if self.hls_manager is not None:
+                try:
+                    self.hls_manager.feed(self.channel_id, chunk)
+                except Exception:
+                    pass
+            with self.subscribers_lock:
+                subscribers_snapshot = list(self.subscribers.items())
+            # With 0 subscribers we still consumed one chunk (drain); nothing to put.
+            to_remove: list[str] = []
+            for client_id, client_queue in subscribers_snapshot:
+                had_eviction = client_queue.put_nowait(chunk)
+                if had_eviction:
+                    now = time.monotonic()
+                    do_log = False
+                    with self._backpressure_log_lock:
+                        last = self._backpressure_log_last.get(client_id, 0.0)
+                        if now - last >= BACKPRESSURE_LOG_INTERVAL_S:
+                            self._backpressure_log_last[client_id] = now
+                            do_log = True
+                    if do_log:
+                        qb = client_queue.current_bytes
+                        qc = client_queue.current_chunk_count
+                        # Optional: ~2.5 Mbit/s TS -> ms ≈ bytes * 8 / 2.5e6 * 1000
+                        est_ms = int(qb * 8 / 2_500_000 * 1000) if qb else 0
+                        self._logger.warning(
+                            "[HTTP] BACKPRESSURE client_queue_bytes=%d client_queue_chunks=%d "
+                            "action=drop estimated_client_buffer_ms=%d client_id=%s",
+                            qb, qc, est_ms, client_id,
+                        )
+                    if self._backpressure_policy == "disconnect":
+                        to_remove.append(client_id)
+            for cid in to_remove:
+                with self.subscribers_lock:
+                    q = self.subscribers.pop(cid, None)
+                if q is not None:
+                    try:
+                        q.put_nowait(b"")
+                    except Full:
+                        pass
+        self._logger.debug(
+            "[HTTP] Fanout loop stopped for channel %s", self.channel_id
+        )
 
     def start(self) -> None:
-        """Start the UDS reader thread."""
+        """Start upstream reader thread and fanout thread."""
         global _AUDIT_T0, _AUDIT_T1, _AUDIT_T2, _AUDIT_FIRST_RECV_DONE
 
         if self.reader_thread is not None and self.reader_thread.is_alive():
@@ -600,30 +689,42 @@ class ChannelStream:
         self._stop_event.clear()
         self._stopped = False
 
-        # AUDIT: Reset state for new session and record T0
         with _AUDIT_LOCK:
             _AUDIT_T0 = time.monotonic_ns()
             _AUDIT_T1 = None
             _AUDIT_T2 = None
             _AUDIT_FIRST_RECV_DONE = False
-        self._logger.debug("[AUDIT-T0] Reader thread spawning at %d ns for channel %s",
-                         _AUDIT_T0, self.channel_id)
+        self._logger.debug(
+            "[AUDIT-T0] Reader thread spawning at %d ns for channel %s",
+            _AUDIT_T0, self.channel_id,
+        )
 
         self.reader_thread = threading.Thread(
-            target=self._reader_loop, name=f"ChannelStream-{self.channel_id}", daemon=True
+            target=self._upstream_reader_loop,
+            name=f"ChannelStream-upstream-{self.channel_id}",
+            daemon=True,
         )
         self.reader_thread.start()
-        self._logger.debug("ChannelStream started for channel %s", self.channel_id)
+        self._fanout_thread = threading.Thread(
+            target=self._fanout_loop,
+            name=f"ChannelStream-fanout-{self.channel_id}",
+            daemon=True,
+        )
+        self._fanout_thread.start()
+        self._logger.debug("ChannelStream started (upstream+fanout) for channel %s", self.channel_id)
 
     def stop(self) -> None:
-        """Stop the UDS reader thread and clean up (Phase 8.5/8.7: no ongoing work when no viewers). No wait for external I/O."""
+        """
+        Stop upstream and fanout threads. Close UDS only on explicit stop
+        (e.g. channel teardown). Never called merely because last subscriber left.
+        """
         if self._stopped:
             return
 
-        self._logger.debug("[teardown] stopping reader loop for channel %s", self.channel_id)
+        self._logger.debug("[teardown] stopping upstream+fanout for channel %s", self.channel_id)
         self._stop_event.set()
+        self._ring_buffer.close()
 
-        # Close source first so reader thread unblocks from read() and can exit
         if self.ts_source:
             try:
                 self.ts_source.close()
@@ -631,12 +732,19 @@ class ChannelStream:
                 pass
             self.ts_source = None
 
-        if self.reader_thread and self.reader_thread.is_alive():
-            self.reader_thread.join(timeout=5.0)
-            if self.reader_thread.is_alive():
-                self._logger.warning("ChannelStream reader thread did not stop cleanly for channel %s", self.channel_id)
+        for th, name in [
+            (self.reader_thread, "upstream"),
+            (self._fanout_thread, "fanout"),
+        ]:
+            if th and th.is_alive():
+                th.join(timeout=5.0)
+                if th.is_alive():
+                    self._logger.warning(
+                        "ChannelStream %s thread did not stop cleanly for channel %s",
+                        name, self.channel_id,
+                    )
+        self._fanout_thread = None
 
-        # Clear all subscribers and signal EOF
         with self.subscribers_lock:
             for queue in self.subscribers.values():
                 try:
@@ -648,54 +756,47 @@ class ChannelStream:
         self._stopped = True
         self._logger.debug("ChannelStream stopped for channel %s", self.channel_id)
 
-    def subscribe(self, client_id: str, queue_size: int = 15) -> Queue[bytes]:
+    def subscribe(self, client_id: str) -> BytesBoundedQueue:
         """
         Subscribe a new HTTP client to receive TS chunks.
 
         Args:
             client_id: Unique identifier for this client
-            queue_size: Maximum queue size (default: 15 chunks ≈ 100 ms at ~284.6 KB/s)
 
         Returns:
-            Queue that will receive TS chunks
+            Bytes-bounded queue that will receive TS chunks (byte cap from config).
         """
-        queue: Queue[bytes] = Queue(maxsize=queue_size)
+        queue = BytesBoundedQueue(max_bytes=self._client_buffer_max_bytes)
 
         with self.subscribers_lock:
             self.subscribers[client_id] = queue
+            subscriber_count = len(self.subscribers)
 
-        subscriber_count = len(self.subscribers)
         self._logger.info(
-            "[channel %s] subscribers: %d (client %s connected)",
-            self.channel_id,
-            subscriber_count,
-            client_id,
+            "[HTTP] CLIENT_CONNECTED id=%s channel=%s subscribers=%d",
+            client_id, self.channel_id, subscriber_count,
         )
 
-        # Start reader if not already running
         if not self.reader_thread or not self.reader_thread.is_alive():
             self.start()
 
         return queue
 
-    def unsubscribe(self, client_id: str) -> None:
-        """Unsubscribe an HTTP client."""
+    def unsubscribe(self, client_id: str, reason: str = "disconnect") -> None:
+        """
+        Unsubscribe an HTTP client. Does NOT stop upstream or close UDS when
+        last subscriber leaves; upstream survives for reconnect.
+        """
         with self.subscribers_lock:
             removed = self.subscribers.pop(client_id, None)
             subscriber_count = len(self.subscribers)
 
         if removed is not None:
             self._logger.info(
-                "[channel %s] subscribers: %d (client %s disconnected)",
-                self.channel_id,
-                subscriber_count,
-                client_id,
+                "[HTTP] CLIENT_DISCONNECTED id=%s reason=%s channel=%s subscribers=%d",
+                client_id, reason, self.channel_id, subscriber_count,
             )
-
-        # Phase 8.5: when last subscriber leaves, stop reader so no ongoing work until next tune-in
-        # Check regardless of whether client was found (it may have been evicted by reader thread)
-        if subscriber_count == 0:
-            self.stop()
+        # Do NOT call self.stop() when subscriber_count == 0. Upstream stays alive.
 
     def get_subscriber_count(self) -> int:
         """Get current number of active subscribers."""
@@ -709,6 +810,14 @@ class ChannelStream:
             and self.reader_thread.is_alive()
             and not self._stopped
         )
+
+    def get_ring_buffer_metrics(self) -> dict[str, int]:
+        """Ring buffer metrics: current_bytes, dropped_bytes, high_water_mark."""
+        return {
+            "current_bytes": self._ring_buffer.current_bytes,
+            "dropped_bytes": self._ring_buffer.dropped_bytes,
+            "high_water_mark": self._ring_buffer.high_water_mark,
+        }
 
 
 def generate_ts_stream(client_queue: Queue[bytes]) -> Any:
