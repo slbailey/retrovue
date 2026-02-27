@@ -168,6 +168,55 @@ def validate_scheduleday_contiguity(
         )
 
 
+def check_scheduleday_lead_time(
+    resolved_store: ResolvedScheduleStore,
+    channel_id: str,
+    target_date: date,
+    now_utc: datetime,
+    min_lead_days: int,
+    programming_day_start_hour: int = 6,
+) -> None:
+    """Check that a ScheduleDay exists with sufficient lead time.
+
+    INV-SCHEDULEDAY-LEAD-TIME-001: A ScheduleDay for broadcast date D must
+    be materialized no later than D - min_lead_days calendar days.
+
+    Args:
+        resolved_store: The store to check for materialized ScheduleDays.
+        channel_id: The channel to check.
+        target_date: The broadcast date D to verify.
+        now_utc: Current UTC time (from clock).
+        min_lead_days: Minimum lead time in calendar days (injected, not hardcoded).
+        programming_day_start_hour: Broadcast day start hour.
+
+    Raises:
+        ValueError: If the deadline has passed and no ScheduleDay exists,
+            with INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED tag.
+    """
+    deadline = datetime.combine(
+        target_date - timedelta(days=min_lead_days),
+        time(programming_day_start_hour, 0),
+        tzinfo=timezone.utc,
+    )
+
+    if now_utc <= deadline:
+        # Deadline has not passed yet; no violation.
+        return
+
+    if resolved_store.exists(channel_id, target_date):
+        # ScheduleDay exists; lead time satisfied.
+        return
+
+    raise ValueError(
+        "INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED: "
+        f"No ScheduleDay exists for channel_id={channel_id!r}, "
+        f"target_date={target_date!r}. "
+        f"Deadline was {deadline.isoformat()} "
+        f"(min_schedule_day_lead_days={min_lead_days}). "
+        f"Current time is {now_utc.isoformat()}, which is past the deadline."
+    )
+
+
 def _enforce_derivation_traceability(resolved: ResolvedScheduleDay) -> None:
     """Enforce INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001.
 

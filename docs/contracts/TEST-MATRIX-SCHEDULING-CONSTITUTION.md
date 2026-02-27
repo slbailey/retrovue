@@ -127,6 +127,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-PLAN-GRID-ALIGNMENT-001 | 7 (block start/duration/valid + zone end/start/duration/valid) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py`; `validate_block_assignment()` in `contracts.py` |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | 3 (carry-in overlap reject + carry-in honored accept + no carry-in accept) | **PASS** | `validate_scheduleday_seam()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
+| INV-SCHEDULEDAY-LEAD-TIME-001 | 3 (missing at deadline + materialized before deadline + parameterized N=5) | **PASS** | `check_scheduleday_lead_time()` standalone function in `schedule_manager_service.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -151,6 +152,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-IMMUTABLE-001 | `TestInvScheduledayImmutable001` | `test_..._reject_in_place_slot_mutation`, `test_..._reject_plan_id_update`, `test_..._force_regen_creates_new_record`, `test_..._operator_override_creates_new_record` | PASS |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `TestInvScheduledayDerivationTraceable001` | `test_..._reject_unanchored`, `test_..._accept_with_plan_id`, `test_..._accept_manual_override` | PASS |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | `TestInvScheduledaySeamNoOverlap001` | `test_..._reject_carry_in_overlap`, `test_..._accept_carry_in_honored`, `test_..._no_carry_in_independent` | PASS |
+| INV-SCHEDULEDAY-LEAD-TIME-001 | `TestInvScheduledayLeadTime001` | `test_..._reject_missing_at_deadline`, `test_..._accept_materialized_before_deadline`, `test_..._parameterized_not_hardcoded` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -512,6 +514,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Ensure no ScheduleDay exists for date D. 2. Trigger HorizonManager evaluation at D-2. |
 | **Assertions** | HorizonManager raises a lead-time violation. Violation record includes channel ID and the missing date D. HorizonManager triggers emergency generation or escalates. Fault class is "planning". |
 | **Failure Classification** | Planning |
+| **Status** | **PASS** |
 
 ---
 
@@ -526,6 +529,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Trigger ScheduleDay generation at D-4. 2. Advance clock to D-2. 3. Trigger HorizonManager evaluation. |
 | **Assertions** | No lead-time violation is raised. HorizonManager health report shows (C, D) as compliant. |
 | **Failure Classification** | N/A (positive path) |
+| **Status** | **PASS** |
 
 ---
 
