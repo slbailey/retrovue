@@ -8,7 +8,8 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Zone
+from ..domain.entities import Channel, Zone
+from .zone_coverage_check import validate_zone_plan_integrity
 
 # Valid day filter values
 VALID_DAYS = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
@@ -232,6 +233,24 @@ def update_zone(
         zone.dst_policy = None
     elif dst_policy is not None:
         zone.dst_policy = _validate_dst_policy(dst_policy)
+
+    # INV-PLAN-NO-ZONE-OVERLAP-001 / INV-PLAN-FULL-COVERAGE-001 enforcement.
+    # Validate the post-update candidate zone against all siblings.
+    # Migration note: existing plans may violate these invariants — editing
+    # them will fail until coverage/overlap issues are corrected.
+    sibling_zones = (
+        db.query(Zone)
+        .filter(Zone.plan_id == zone.plan_id)
+        .filter(Zone.id != zone.id)
+        .all()
+    )
+    candidate_zones = list(sibling_zones) + [zone]
+    channel = db.query(Channel).filter(Channel.id == zone.plan.channel_id).first()
+    pds = channel.programming_day_start if channel else dt_time(0, 0)
+    grid = channel.grid_block_minutes if channel else None
+    validate_zone_plan_integrity(
+        candidate_zones, programming_day_start=pds, grid_block_minutes=grid
+    )
 
     db.commit()
     db.refresh(zone)

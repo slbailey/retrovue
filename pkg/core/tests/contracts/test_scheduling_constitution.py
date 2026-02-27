@@ -459,3 +459,501 @@ class TestInvAsrunImmutable001:
         assert event.start_time_utc == EPOCH
         assert event.segment_type == "content"
         assert event.broadcast_day == "2026-01-01"
+
+
+# =========================================================================
+# INV-PLAN-GRID-ALIGNMENT-001
+# =========================================================================
+
+
+class _StubChannel:
+    def __init__(self, grid_block_minutes=30, block_start_offsets_minutes=None):
+        self.grid_block_minutes = grid_block_minutes
+        self.block_start_offsets_minutes = block_start_offsets_minutes or [0]
+
+
+class _StubAssignment:
+    def __init__(
+        self,
+        id="test-assign",
+        start_time="06:00",
+        duration=30,
+        content_type="asset",
+        content_ref="asset-001",
+    ):
+        self.id = id
+        self.start_time = start_time
+        self.duration = duration
+        self.content_type = content_type
+        self.content_ref = content_ref
+
+
+class TestInvPlanGridAlignment001:
+    """INV-PLAN-GRID-ALIGNMENT-001
+
+    All plan elements must align to channel grid boundaries.
+    Duration must be a multiple of grid_block_minutes.
+    Start time must fall on a valid grid offset.
+
+    Enforcement lives in validate_block_assignment() in
+    retrovue.core.scheduling.contracts.
+
+    Derived from: LAW-CONTENT-AUTHORITY.
+    """
+
+    def test_inv_plan_grid_alignment_001_reject_off_grid_start(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- negative (start time)
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-CONTENT-AUTHORITY
+        Failure class: Planning
+        Scenario: start_time="06:15" on a 30-minute grid with offset [0].
+                  Must be rejected with BlockAssignmentValidationError
+                  carrying the invariant name.
+        """
+        from retrovue.core.scheduling.contracts import validate_block_assignment
+        from retrovue.core.scheduling.exceptions import BlockAssignmentValidationError
+
+        channel = _StubChannel(grid_block_minutes=30, block_start_offsets_minutes=[0])
+        assignment = _StubAssignment(start_time="06:15", duration=30)
+
+        with pytest.raises(BlockAssignmentValidationError) as exc_info:
+            validate_block_assignment(assignment, channel=channel)
+
+        assert "INV-PLAN-GRID-ALIGNMENT-001" in str(exc_info.value), (
+            "INV-PLAN-GRID-ALIGNMENT-001 VIOLATED: "
+            "off-grid start_time was rejected but the violation message "
+            "does not carry the constitutional invariant name."
+        )
+
+    def test_inv_plan_grid_alignment_001_reject_off_grid_duration(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- negative (duration)
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-CONTENT-AUTHORITY
+        Failure class: Planning
+        Scenario: duration=25 on a 30-minute grid.
+                  Must be rejected with BlockAssignmentValidationError
+                  carrying the invariant name.
+        """
+        from retrovue.core.scheduling.contracts import validate_block_assignment
+        from retrovue.core.scheduling.exceptions import BlockAssignmentValidationError
+
+        channel = _StubChannel(grid_block_minutes=30, block_start_offsets_minutes=[0])
+        assignment = _StubAssignment(start_time="06:00", duration=25)
+
+        with pytest.raises(BlockAssignmentValidationError) as exc_info:
+            validate_block_assignment(assignment, channel=channel)
+
+        assert "INV-PLAN-GRID-ALIGNMENT-001" in str(exc_info.value), (
+            "INV-PLAN-GRID-ALIGNMENT-001 VIOLATED: "
+            "off-grid duration was rejected but the violation message "
+            "does not carry the constitutional invariant name."
+        )
+
+    def test_inv_plan_grid_alignment_001_valid_alignment(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- positive
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-CONTENT-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: start_time="06:00", duration=30 on a 30-minute grid
+                  with offset [0]. Must pass without exception.
+        """
+        from retrovue.core.scheduling.contracts import validate_block_assignment
+
+        channel = _StubChannel(grid_block_minutes=30, block_start_offsets_minutes=[0])
+        assignment = _StubAssignment(start_time="06:00", duration=30)
+
+        # Should not raise
+        validate_block_assignment(assignment, channel=channel)
+
+    def test_inv_plan_grid_alignment_001_reject_off_grid_zone_end(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- negative (zone end_time)
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: Planning
+        Scenario: Zone end_time=17:59 on a 30-minute grid.
+                  17:59 is not a multiple of 30 minutes from midnight.
+                  Must raise ValueError carrying the invariant name.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zone = _StubZone(name="Bad", start_time="06:00", end_time="17:59")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity([zone], grid_block_minutes=30)
+
+        assert "INV-PLAN-GRID-ALIGNMENT-001" in str(exc_info.value), (
+            "INV-PLAN-GRID-ALIGNMENT-001 VIOLATED: "
+            "off-grid zone end_time was not detected."
+        )
+
+    def test_inv_plan_grid_alignment_001_reject_off_grid_zone_start(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- negative (zone start_time)
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: Planning
+        Scenario: Zone start_time=06:15 on a 30-minute grid.
+                  Must raise ValueError carrying the invariant name.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zone = _StubZone(name="Bad", start_time="06:15", end_time="18:00")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity([zone], grid_block_minutes=30)
+
+        assert "INV-PLAN-GRID-ALIGNMENT-001" in str(exc_info.value), (
+            "INV-PLAN-GRID-ALIGNMENT-001 VIOLATED: "
+            "off-grid zone start_time was not detected."
+        )
+
+    def test_inv_plan_grid_alignment_001_reject_off_grid_zone_duration(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- negative (zone duration)
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: Planning
+        Scenario: Zone [06:00-06:45] on a 30-minute grid.
+                  Both boundaries are grid-aligned (0 and 45 min past
+                  the hour — wait, 45 is not a multiple of 30).
+                  Actually 06:45 → 405 min, 405 % 30 = 15 ≠ 0.
+                  So end_time itself is off-grid and caught first.
+                  Use [06:00-07:15] instead: 06:00=360 (ok), 07:15=435 (435%30=15 ≠ 0).
+                  Must raise for off-grid end.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zone = _StubZone(name="Bad", start_time="06:00", end_time="07:15")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity([zone], grid_block_minutes=30)
+
+        assert "INV-PLAN-GRID-ALIGNMENT-001" in str(exc_info.value)
+
+    def test_inv_plan_grid_alignment_001_accept_aligned_zone(self):
+        """INV-PLAN-GRID-ALIGNMENT-001 -- positive (zone boundaries)
+
+        Invariant: INV-PLAN-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: N/A (positive path)
+        Scenario: Zone [06:00-18:00] on a 30-minute grid.
+                  Start, end, and duration all aligned. Must pass.
+                  (Coverage check will still fire — provide full tiling.)
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zones = [
+            _StubZone(name="Day", start_time="06:00", end_time="18:00"),
+            _StubZone(name="Night", start_time="18:00", end_time="24:00"),
+            _StubZone(name="Early", start_time="00:00", end_time="06:00"),
+        ]
+
+        # Should not raise — all grid-aligned and full coverage.
+        validate_zone_plan_integrity(zones, grid_block_minutes=30)
+
+
+# =========================================================================
+# INV-PLAN-NO-ZONE-OVERLAP-001
+# =========================================================================
+
+
+class _StubZone:
+    """Lightweight stand-in for a Zone entity (no DB required)."""
+
+    def __init__(
+        self,
+        name: str = "zone",
+        start_time: str = "00:00",
+        end_time: str = "24:00",
+        day_filters: list[str] | None = None,
+        enabled: bool = True,
+    ):
+        from datetime import time as dt_time
+
+        self.name = name
+        self.enabled = enabled
+        self.day_filters = day_filters
+
+        _EOD = dt_time(23, 59, 59, 999999)
+
+        def _parse(t: str) -> dt_time:
+            if t in ("24:00", "24:00:00"):
+                return _EOD
+            parts = t.split(":")
+            return dt_time(int(parts[0]), int(parts[1]), 0)
+
+        self.start_time = _parse(start_time)
+        self.end_time = _parse(end_time)
+
+
+class TestInvPlanNoZoneOverlap001:
+    """INV-PLAN-NO-ZONE-OVERLAP-001
+
+    No two active zones within the same SchedulePlan may have overlapping
+    time windows, after considering day-of-week filters.
+
+    Enforcement lives in validate_zone_plan_integrity() called by
+    zone_add and zone_update.
+
+    Derived from: LAW-CONTENT-AUTHORITY, LAW-GRID.
+    """
+
+    def test_inv_plan_no_zone_overlap_001_reject_overlapping_zones(self):
+        """INV-PLAN-NO-ZONE-OVERLAP-001 -- negative
+
+        Invariant: INV-PLAN-NO-ZONE-OVERLAP-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: Planning
+        Scenario: Two zones on the same days with overlapping windows.
+                  Zone A: 06:00-18:00, Zone B: 16:00-24:00 (overlap 16:00-18:00).
+                  Must raise ValueError carrying the invariant name.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zones = [
+            _StubZone(name="Morning", start_time="06:00", end_time="18:00"),
+            _StubZone(name="Evening", start_time="16:00", end_time="24:00"),
+        ]
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity(zones)
+
+        assert "INV-PLAN-NO-ZONE-OVERLAP-001" in str(exc_info.value), (
+            "INV-PLAN-NO-ZONE-OVERLAP-001 VIOLATED: "
+            "overlapping zones were rejected but the violation message "
+            "does not carry the constitutional invariant name."
+        )
+
+    def test_inv_plan_no_zone_overlap_001_allow_mutually_exclusive_days(self):
+        """INV-PLAN-NO-ZONE-OVERLAP-001 -- positive (day filter exclusion)
+
+        Invariant: INV-PLAN-NO-ZONE-OVERLAP-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: N/A (positive path)
+        Scenario: Two zones with the same time window but mutually exclusive
+                  day filters (Mon-Fri vs Sat-Sun). They tile all 7 days
+                  with full coverage. Must pass without exception.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zones = [
+            _StubZone(
+                name="Weekday",
+                start_time="00:00",
+                end_time="24:00",
+                day_filters=["MON", "TUE", "WED", "THU", "FRI"],
+            ),
+            _StubZone(
+                name="Weekend",
+                start_time="00:00",
+                end_time="24:00",
+                day_filters=["SAT", "SUN"],
+            ),
+        ]
+
+        # Should not raise — day filters are mutually exclusive and
+        # each day has full coverage.
+        validate_zone_plan_integrity(zones)
+
+    def test_inv_plan_no_zone_overlap_001_reject_mutation_induced_overlap(self):
+        """INV-PLAN-NO-ZONE-OVERLAP-001 -- negative (mutation path)
+
+        Invariant: INV-PLAN-NO-ZONE-OVERLAP-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: Planning
+        Scenario: Simulates zone_update.  Three zones tile the day cleanly:
+                    A [00:00-08:00], B [08:00-20:00], C [20:00-24:00].
+                  Zone A is mutated from [00:00-08:00] → [00:00-10:00],
+                  creating a 2-hour overlap with B [08:00-10:00].
+                  The candidate list is built the same way zone_update does:
+                    siblings (excluding A) + mutated A.
+                  Must raise ValueError carrying the invariant name.
+        """
+        from datetime import time as dt_time
+
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        # Original clean tiling
+        zone_a = _StubZone(name="A", start_time="00:00", end_time="08:00")
+        zone_b = _StubZone(name="B", start_time="08:00", end_time="20:00")
+        zone_c = _StubZone(name="C", start_time="20:00", end_time="24:00")
+
+        # Sanity: original tiling is clean
+        validate_zone_plan_integrity([zone_a, zone_b, zone_c])
+
+        # Mutate A in-place (same as zone_update does before validation)
+        zone_a.end_time = dt_time(10, 0, 0)
+
+        # Build candidate list the way zone_update does:
+        # siblings (B, C) + mutated A
+        siblings = [zone_b, zone_c]
+        candidate_zones = siblings + [zone_a]
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity(candidate_zones)
+
+        assert "INV-PLAN-NO-ZONE-OVERLAP-001" in str(exc_info.value), (
+            "INV-PLAN-NO-ZONE-OVERLAP-001 VIOLATED: "
+            "post-mutation overlap was not detected. "
+            "zone_update must validate the mutated zone against siblings."
+        )
+
+    def test_inv_plan_no_zone_overlap_001_precedence_over_gap(self):
+        """INV-PLAN-NO-ZONE-OVERLAP-001 -- precedence
+
+        Invariant: INV-PLAN-NO-ZONE-OVERLAP-001 (primary),
+                   INV-PLAN-FULL-COVERAGE-001 (secondary)
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: Planning
+        Scenario: Both overlap AND gap exist simultaneously:
+                    A [06:00-12:00], B [11:00-15:00], C [16:00-24:00],
+                    D [00:00-06:00].
+                  Overlap: A/B at [11:00-12:00].
+                  Gap: [15:00-16:00].
+                  validate_zone_plan_integrity must report the overlap
+                  (INV-PLAN-NO-ZONE-OVERLAP-001) not the gap.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zones = [
+            _StubZone(name="A", start_time="06:00", end_time="12:00"),
+            _StubZone(name="B", start_time="11:00", end_time="15:00"),
+            _StubZone(name="C", start_time="16:00", end_time="24:00"),
+            _StubZone(name="D", start_time="00:00", end_time="06:00"),
+        ]
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity(zones)
+
+        msg = str(exc_info.value)
+        assert "INV-PLAN-NO-ZONE-OVERLAP-001" in msg, (
+            "When both overlap and gap exist, overlap must be reported first. "
+            f"Got: {msg}"
+        )
+        assert "INV-PLAN-FULL-COVERAGE-001" not in msg, (
+            "Gap error must not mask the overlap error. "
+            f"Got: {msg}"
+        )
+
+
+# =========================================================================
+# INV-PLAN-FULL-COVERAGE-001
+# =========================================================================
+
+
+class TestInvPlanFullCoverage001:
+    """INV-PLAN-FULL-COVERAGE-001
+
+    An active SchedulePlan's zones must collectively cover the full broadcast
+    day [00:00, 24:00] with no temporal gaps.
+
+    Enforcement lives in validate_zone_plan_integrity() called by
+    zone_add and zone_update.
+
+    Derived from: LAW-CONTENT-AUTHORITY, LAW-GRID.
+    """
+
+    def test_inv_plan_full_coverage_001_reject_gap(self):
+        """INV-PLAN-FULL-COVERAGE-001 -- negative
+
+        Invariant: INV-PLAN-FULL-COVERAGE-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: Planning
+        Scenario: Zones covering [00:00-18:00] and [20:00-24:00] leave a gap
+                  at [18:00-20:00]. Must raise ValueError with the invariant name.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zones = [
+            _StubZone(name="Day", start_time="00:00", end_time="18:00"),
+            _StubZone(name="Night", start_time="20:00", end_time="24:00"),
+        ]
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity(zones)
+
+        assert "INV-PLAN-FULL-COVERAGE-001" in str(exc_info.value), (
+            "INV-PLAN-FULL-COVERAGE-001 VIOLATED: "
+            "gap in zone coverage was rejected but the violation message "
+            "does not carry the constitutional invariant name."
+        )
+
+    def test_inv_plan_full_coverage_001_accept_exact_tile(self):
+        """INV-PLAN-FULL-COVERAGE-001 -- positive
+
+        Invariant: INV-PLAN-FULL-COVERAGE-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: N/A (positive path)
+        Scenario: Three zones that tile the broadcast day exactly:
+                  [00:00-06:00], [06:00-18:00], [18:00-24:00].
+                  Must pass without exception.
+        """
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        zones = [
+            _StubZone(name="Overnight", start_time="00:00", end_time="06:00"),
+            _StubZone(name="Daytime", start_time="06:00", end_time="18:00"),
+            _StubZone(name="Evening", start_time="18:00", end_time="24:00"),
+        ]
+
+        # Should not raise — zones tile the full broadcast day.
+        validate_zone_plan_integrity(zones)
+
+    def test_inv_plan_full_coverage_001_reject_gap_with_pds_0600(self):
+        """INV-PLAN-FULL-COVERAGE-001 -- negative (programming_day_start=06:00)
+
+        Invariant: INV-PLAN-FULL-COVERAGE-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: Planning
+        Scenario: programming_day_start=06:00. Broadcast day spans 06:00→06:00.
+                  Two zones: [06:00-22:00] and [00:00-04:00].
+                  Gap exists at [22:00-00:00] and [04:00-06:00] (wall clock),
+                  i.e. hours 16-18 and 22-24 of the broadcast day are uncovered.
+                  Must raise ValueError with the invariant name.
+        """
+        from datetime import time as dt_time
+
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        pds = dt_time(6, 0)
+        zones = [
+            _StubZone(name="Daytime", start_time="06:00", end_time="22:00"),
+            _StubZone(name="LateNight", start_time="00:00", end_time="04:00"),
+        ]
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_zone_plan_integrity(zones, programming_day_start=pds)
+
+        assert "INV-PLAN-FULL-COVERAGE-001" in str(exc_info.value), (
+            "INV-PLAN-FULL-COVERAGE-001 VIOLATED: "
+            "gap across midnight boundary with pds=06:00 was not detected."
+        )
+
+    def test_inv_plan_full_coverage_001_accept_tile_with_pds_0600(self):
+        """INV-PLAN-FULL-COVERAGE-001 -- positive (programming_day_start=06:00)
+
+        Invariant: INV-PLAN-FULL-COVERAGE-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID
+        Failure class: N/A (positive path)
+        Scenario: programming_day_start=06:00. Broadcast day spans 06:00→06:00.
+                  Three zones tile the full 24 hours across midnight:
+                    [06:00-18:00], [18:00-24:00], [00:00-06:00].
+                  Must pass without exception.
+        """
+        from datetime import time as dt_time
+
+        from retrovue.usecases.zone_coverage_check import validate_zone_plan_integrity
+
+        pds = dt_time(6, 0)
+        zones = [
+            _StubZone(name="Daytime", start_time="06:00", end_time="18:00"),
+            _StubZone(name="Evening", start_time="18:00", end_time="24:00"),
+            _StubZone(name="Overnight", start_time="00:00", end_time="06:00"),
+        ]
+
+        # Should not raise — zones tile 06:00→18:00→24:00/00:00→06:00 = full day.
+        validate_zone_plan_integrity(zones, programming_day_start=pds)
