@@ -6,7 +6,7 @@ Derived From: `LAW-RUNTIME-AUTHORITY`, `LAW-DERIVATION`
 
 ## Purpose
 
-EPG data is a viewer-facing representation derived from ScheduleDay. It is produced for display purposes and is not an execution artifact. `LAW-RUNTIME-AUTHORITY` designates PlaylogEvent (the execution plan / Transmission Log) as the sole runtime authority for what plays now. Using EPG data to make playout decisions introduces a second, unaccountable authority — one that is derived, potentially stale, and not subject to the immutability and lock-window guarantees that apply to the execution plan.
+EPG data is a viewer-facing representation derived from ScheduleDay. It is produced for display purposes and is not an execution artifact. `LAW-RUNTIME-AUTHORITY` designates ExecutionEntry (the execution plan / Transmission Log) as the sole runtime authority for what plays now. Using EPG data to make playout decisions introduces a second, unaccountable authority — one that is derived, potentially stale, and not subject to the immutability and lock-window guarantees that apply to the execution plan.
 
 EPG may contain program titles, timecodes, and metadata that partially overlap with execution plan data. That overlap is coincidental. EPG is never the ground truth for segment boundaries, asset paths, or playback offsets.
 
@@ -26,7 +26,7 @@ EPG data MUST NOT be read by ChannelManager for:
 - Filling gaps in the execution plan.
 - Validating or repairing execution plan content.
 
-The execution plan (PlaylogEvent / Transmission Log entries in ExecutionWindowStore) is the sole input to playout logic.
+The execution plan (ExecutionEntry / Transmission Log entries in ExecutionWindowStore) is the sole input to playout logic.
 
 ## Preconditions
 

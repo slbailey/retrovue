@@ -1,4 +1,4 @@
-# INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 — ExecutionEntry timestamps must be aligned to MasterClock
+# INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 — ExecutionEntry timestamps must be aligned to MasterClock
 
 Status: Invariant
 Authority Level: Runtime

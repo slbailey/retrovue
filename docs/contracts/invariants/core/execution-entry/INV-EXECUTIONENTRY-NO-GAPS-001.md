@@ -1,4 +1,4 @@
-# INV-PLAYLOG-NO-GAPS-001 — ExecutionEntry sequence must have no temporal gaps within the lookahead window
+# INV-EXECUTIONENTRY-NO-GAPS-001 — ExecutionEntry sequence must have no temporal gaps within the lookahead window
 
 Status: Invariant
 Authority Level: Runtime
@@ -17,7 +17,7 @@ A gap is defined as any interval within the lookahead window not covered by at l
 ## Preconditions
 
 - Channel has at least one active viewer.
-- The lookahead window has been populated (see `INV-PLAYLOG-LOOKAHEAD-001`).
+- The lookahead window has been populated (see `INV-EXECUTIONENTRY-LOOKAHEAD-001`).
 
 ## Observability
 
@@ -33,8 +33,8 @@ Construct an ExecutionEntry sequence with a deliberate 10-minute gap at a known 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlaylogNoGaps001`
+- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryNoGaps001`
 
 ## Enforcement Evidence
 
-`validate_execution_entry_contiguity()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — standalone validation function. Sorts entries by `start_utc_ms`, checks each consecutive pair for `entries[i].end_utc_ms == entries[i+1].start_utc_ms`. Raises `ValueError` with tag `INV-PLAYLOG-NO-GAPS-001-VIOLATED` on gap detection, including gap boundaries and channel ID.
+`validate_execution_entry_contiguity()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — standalone validation function. Sorts entries by `start_utc_ms`, checks each consecutive pair for `entries[i].end_utc_ms == entries[i+1].start_utc_ms`. Raises `ValueError` with tag `INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED` on gap detection, including gap boundaries and channel ID.

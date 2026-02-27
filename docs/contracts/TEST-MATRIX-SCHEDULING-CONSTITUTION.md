@@ -4,7 +4,7 @@
 
 **Authoritative inputs:**
 - `docs/contracts/laws/LAW-*.md` (6 laws)
-- `docs/contracts/invariants/core/INV-*.md` (invariants)
+- `docs/contracts/invariants/core/**/INV-*.md` (invariants)
 - `docs/contracts/HOUSE-STYLE.md`
 
 **Permitted laws (exhaustive):** `LAW-ELIGIBILITY` · `LAW-GRID` · `LAW-CONTENT-AUTHORITY` · `LAW-DERIVATION` · `LAW-RUNTIME-AUTHORITY` · `LAW-IMMUTABILITY`
@@ -128,11 +128,11 @@ These invariants have structural enforcement in production code and passing cont
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | 3 (carry-in overlap reject + carry-in honored accept + no carry-in accept) | **PASS** | `validate_scheduleday_seam()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | 3 (missing at deadline + materialized before deadline + parameterized N=5) | **PASS** | `check_scheduleday_lead_time()` standalone function in `schedule_manager_service.py` |
-| INV-PLAYLOG-NO-GAPS-001 | 2 (gap detected + contiguous accepted) | **PASS** | `validate_execution_entry_contiguity()` standalone function in `execution_window_store.py` |
-| INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | 3 (unanchored reject + ref accept + override accept) | **PASS** | `ExecutionWindowStore.add_entries()` with `enforce_derivation_from_playlist=True` |
-| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
+| INV-EXECUTIONENTRY-NO-GAPS-001 | 2 (gap detected + contiguous accepted) | **PASS** | `validate_execution_entry_contiguity()` standalone function in `execution_window_store.py` |
+| INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | 3 (unanchored reject + ref accept + override accept) | **PASS** | `ExecutionWindowStore.add_entries()` with `enforce_derivation_from_playlist=True` |
+| INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | 2 (AST import check + attribute inspection) | **PASS** | Structural: no AIR imports in `schedule_manager.py` / `schedule_manager_service.py`; tests verify via AST inspection |
-| INV-PLAYLIST-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
+| INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -158,11 +158,11 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `TestInvScheduledayDerivationTraceable001` | `test_..._reject_unanchored`, `test_..._accept_with_plan_id`, `test_..._accept_manual_override` | PASS |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | `TestInvScheduledaySeamNoOverlap001` | `test_..._reject_carry_in_overlap`, `test_..._accept_carry_in_honored`, `test_..._no_carry_in_independent` | PASS |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | `TestInvScheduledayLeadTime001` | `test_..._reject_missing_at_deadline`, `test_..._accept_materialized_before_deadline`, `test_..._parameterized_not_hardcoded` | PASS |
-| INV-PLAYLOG-NO-GAPS-001 | `TestInvPlaylogNoGaps001` | `test_..._detect_gap`, `test_..._accept_contiguous` | PASS |
-| INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | `TestInvPlaylogDerivedFromPlaylist001` | `test_..._reject_unanchored`, `test_..._accept_with_ref`, `test_..._accept_override` | PASS |
-| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | `TestInvPlaylogLockedImmutable001` | `test_..._reject_locked_no_override`, `test_..._reject_past_unconditional`, `test_..._accept_override` | PASS |
+| INV-EXECUTIONENTRY-NO-GAPS-001 | `TestInvExecutionentryNoGaps001` | `test_..._detect_gap`, `test_..._accept_contiguous` | PASS |
+| INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | `TestInvExecutionentryDerivedFromTransmissionlog001` | `test_..._reject_unanchored`, `test_..._accept_with_ref`, `test_..._accept_override` | PASS |
+| INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | `TestInvExecutionentryLockedImmutable001` | `test_..._reject_locked_no_override`, `test_..._reject_past_unconditional`, `test_..._accept_override` | PASS |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | `TestInvSchedulemanagerNoAirAccess001` | `test_..._no_air_imports`, `test_..._no_air_attributes` | PASS |
-| INV-PLAYLIST-GRID-ALIGNMENT-001 | `TestInvPlaylistGridAlignment001` | `test_..._reject_off_grid`, `test_..._accept_pds_rollover`, `test_..._accept_cross_midnight` | PASS |
+| INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | `TestInvTransmissionlogGridAlignment001` | `test_..._reject_off_grid`, `test_..._accept_pds_rollover`, `test_..._accept_cross_midnight` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -178,15 +178,15 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-LEAD-TIME-001 | SCHED-DAY-007, SCHED-DAY-008 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | SCHED-DAY-009, SCHED-DAY-010 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | SCHED-DAY-011, SCHED-DAY-012 | ResolvedScheduleDay |
-| INV-PLAYLOG-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | ExecutionEntry |
-| INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | ExecutionEntry |
-| INV-PLAYLOG-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | ExecutionEntry |
-| INV-PLAYLOG-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | ExecutionEntry |
-| INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | PLAYLOG-008, PLAYLOG-009 | ExecutionEntry |
-| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | ExecutionEntry |
+| INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | ExecutionEntry |
+| INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | ExecutionEntry |
+| INV-EXECUTIONENTRY-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | ExecutionEntry |
+| INV-EXECUTIONENTRY-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | ExecutionEntry |
+| INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | PLAYLOG-008, PLAYLOG-009 | ExecutionEntry |
+| INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | ExecutionEntry |
 | INV-NO-FOREIGN-CONTENT-001 | CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003 | Cross-cutting |
-| INV-PLAYLIST-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | TransmissionLog |
-| INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
+| INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | TransmissionLog |
+| INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
 | INV-NO-MID-PROGRAM-CUT-001 | CROSS-001, CROSS-002 | Cross-cutting |
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | ARCH-BOUNDARY-001, ARCH-BOUNDARY-002 | Cross-cutting |
@@ -582,7 +582,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-ELIGIBLE-CONTENT-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 |
 | **Derived Law(s)** | LAW-ELIGIBILITY, LAW-DERIVATION |
 | **Scenario** | An ExecutionEntry exists referencing an asset that has since had its approval revoked. Rolling-window extension detects and replaces the entry. |
 | **Clock Setup** | Clock set to EPOCH. Advance to T=EPOCH+1h to trigger window extension covering the affected entry. |
@@ -596,7 +596,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | ExecutionEntry generation is run with a known deterministic clock value. Output timestamps must match clock-derived offsets from the TransmissionLogEntry. |
 | **Clock Setup** | Clock set to EPOCH. |
@@ -610,7 +610,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | Two generation runs with different injected clock values produce timestamps differing by the exact clock delta. |
 | **Clock Setup** | Run A: clock at EPOCH. Run B: clock at EPOCH+24h. |
@@ -624,7 +624,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOOKAHEAD-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | ExecutionEntry sequence depth falls below `min_execution_hours`. HorizonManager detects the shortfall and extends. |
 | **Clock Setup** | Clock set to T=EPOCH. ExecutionEntry sequence extends to EPOCH + `min_execution_hours` - 10min. |
@@ -638,7 +638,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOOKAHEAD-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | ExecutionEntry sequence ends exactly at T + `min_execution_hours`. No shortfall. No violation raised. |
 | **Clock Setup** | Clock set to T=EPOCH. ExecutionEntry sequence ends at EPOCH + `min_execution_hours`. |
@@ -652,7 +652,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-NO-GAPS-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | ExecutionEntry sequence has a 10-minute gap within the lookahead window. Continuity validation detects it. |
 | **Clock Setup** | Clock set to EPOCH. |
@@ -666,7 +666,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION |
 | **Scenario** | A ResolvedScheduleDay was committed with a coverage gap. The resulting TransmissionLog has no entries for that window. The ExecutionEntry gap is traceable to the TransmissionLog gap, which is traceable to the ResolvedScheduleDay gap. |
 | **Clock Setup** | Clock set to EPOCH. |
@@ -680,7 +680,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 |
 | **Derived Law(s)** | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | **Scenario** | Code attempts to create an ExecutionEntry with no TransmissionLogEntry reference and no operator override record. The application layer rejects it. |
 | **Clock Setup** | Clock set to EPOCH. No advancement needed. |
@@ -694,7 +694,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 |
 | **Derived Law(s)** | LAW-DERIVATION, LAW-IMMUTABILITY |
 | **Scenario** | An operator creates an emergency override ExecutionEntry. It has no TransmissionLogEntry reference but carries a valid override record. It is accepted. |
 | **Clock Setup** | Clock set to EPOCH. No advancement needed. |
@@ -712,7 +712,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
 | **Scenario** | An ExecutionEntry within the locked execution window is targeted for in-place mutation. No override record exists. The application layer rejects it. |
 | **Clock Setup** | Clock set to EPOCH. Lock window: [EPOCH, EPOCH + `lock_window_depth`]. ExecutionEntry at [EPOCH+15m, EPOCH+45m] is within the lock window. |
@@ -726,7 +726,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY |
 | **Scenario** | An ExecutionEntry that has already been broadcast (its `end_utc_ms` is in the past) is targeted for mutation. Even with a valid override record, the mutation is rejected. Past-window entries are immutable without exception. |
 | **Clock Setup** | Clock set to EPOCH + 2h (so EPOCH+30m to EPOCH+60m is in the past). |
@@ -740,7 +740,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
 | **Scenario** | An operator performs a valid emergency override of a locked ExecutionEntry. The override record is persisted first; the ExecutionEntry update follows atomically. |
 | **Clock Setup** | Clock set to EPOCH. Lock window: [EPOCH, EPOCH + `lock_window_depth`]. ExecutionEntry at [EPOCH+10m, EPOCH+40m]. |
@@ -758,7 +758,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
+| **Invariant(s)** | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
 | **Scenario** | TransmissionLog generation produces an entry with `start_time=18:15` against a 30-minute grid. Validation detects and rejects the off-grid boundary. |
 | **Clock Setup** | Clock set to EPOCH. Channel: `TestChannel` (30-min grid). |
@@ -772,7 +772,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
+| **Invariant(s)** | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
 | **Scenario** | A TransmissionLogEntry spans the `programming_day_start` boundary (e.g., 05:30 to 06:30 where `programming_day_start=06:00`). Both `start_time` and `end_time` must align to grid boundaries. The `programming_day_start` itself is a valid grid boundary. |
 | **Clock Setup** | Clock set to EPOCH - 30min. Channel: `TestChannel` with `programming_day_start="06:00"` and `grid_block_minutes=30`. |
@@ -786,7 +786,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
+| **Invariant(s)** | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
 | **Scenario** | Two adjacent TransmissionLogEntries span across calendar midnight. The first entry ends at 00:00:00 and the second starts at 00:00:00. No gap exists at the midnight boundary. |
 | **Clock Setup** | Clock set to EPOCH with `programming_day_start="06:00"`. Calendar midnight is internal to the broadcast day. |
@@ -924,7 +924,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
+| **Invariant(s)** | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
 | **Scenario** | A TransmissionLogEntry straddles calendar midnight. The midnight boundary itself is a valid grid point (given a 30-minute grid aligned to hour 0). No fractional minutes appear at 00:00:00. |
 | **Clock Setup** | Clock at EPOCH. Channel `TestChannel` with `programming_day_start="06:00"`. Calendar midnight (00:00) is mid-broadcast-day. |
@@ -938,7 +938,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 |
+| **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
 | **Scenario** | A zone declared as [22:00, 02:00] spans calendar midnight. Both the pre-midnight boundary (22:00) and the post-midnight boundary (02:00) must be grid-aligned. The zone must produce TransmissionLogEntries with no sub-grid boundaries anywhere in the midnight-spanning window. |
 | **Clock Setup** | Clock at EPOCH. Channel `TestChannel` with `grid_block_minutes=30`. |
@@ -952,7 +952,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-NO-MID-PROGRAM-CUT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 |
+| **Invariant(s)** | INV-NO-MID-PROGRAM-CUT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID, LAW-DERIVATION |
 | **Scenario** | A `LongformCrossDayAsset` starts at `programming_day_start - 60min` and runs 120 minutes, crossing the programming-day boundary. The program must not be cut at the boundary. Its start (carry-in) is at the prior broadcast day's grid; its end must be grid-aligned in the new day. |
 | **Clock Setup** | Clock at EPOCH - 60min. Channel `TestChannel` with `programming_day_start="06:00"`, `grid_block_minutes=30`. |
@@ -970,7 +970,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | FakeAdvancingClock advances continuously without any playout consumer activity. HorizonManager monitors the clock and triggers extension when depth falls below `min_execution_hours`. No consumer request initiates the extension. |
 | **Clock Setup** | Clock starts at EPOCH. ExecutionEntry sequence initially extends to EPOCH + `min_execution_hours`. No consumer activity simulated. |
@@ -984,7 +984,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | ExecutionEntry sequence already extends beyond `min_execution_hours` from current clock time. HorizonManager evaluation confirms no extension is needed. No redundant extension cycle is triggered. |
 | **Clock Setup** | Clock set to EPOCH. ExecutionEntry sequence extends to EPOCH + `min_execution_hours` + 1h (excess depth). |
@@ -1002,7 +1002,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001, INV-ASRUN-TRACEABILITY-001 |
+| **Invariant(s)** | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001, INV-ASRUN-TRACEABILITY-001 |
 | **Derived Law(s)** | LAW-DERIVATION |
 | **Scenario** | A complete scheduling cycle is executed from plan creation through AsRun. Every artifact in the chain carries a non-null reference to its upstream authority. |
 | **Clock Setup** | Clock starts at D-4 (EPOCH). Advance to D-3 (ResolvedScheduleDay), to D-1 (ExecutionEntry population), to D+0h30m (AsRun). |
@@ -1016,7 +1016,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-PLAYLOG-ELIGIBLE-CONTENT-001 |
+| **Invariant(s)** | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 |
 | **Derived Law(s)** | LAW-ELIGIBILITY |
 | **Scenario** | An asset is eligible at plan creation and ResolvedScheduleDay generation. Between ResolvedScheduleDay generation and ExecutionEntry window extension, its approval is revoked. The ExecutionEntry layer must detect this. The ResolvedScheduleDay is not retroactively altered (immutable). |
 | **Clock Setup** | Clock at D-4 (plan), D-3 (ResolvedScheduleDay), D-1 (revocation), D (ExecutionEntry extension). |
@@ -1030,7 +1030,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
+| **Invariant(s)** | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY, LAW-DERIVATION |
 | **Scenario** | A force-regeneration is applied to a ResolvedScheduleDay during active broadcast. This scenario explicitly validates four immutability zones: (A) locked window entries are unchanged, (B) past window entries are unchanged, (C) future window entries may be replaced, (D) the transition at the lock boundary is atomic. |
 | **Clock Setup** | Clock at D+1h (active broadcast). Locked window: [D, D + `lock_window_depth`]. Past window: before D. Future window: beyond D + `lock_window_depth`. |
@@ -1044,7 +1044,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | The execution layer's content schedule is sourced exclusively from ExecutionEntry. Mutating the underlying TransmissionLogEntry after ExecutionEntries are generated does not alter the active playout plan. |
 | **Clock Setup** | Clock at D+0h30m (active window). |
@@ -1058,7 +1058,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-PLAYLOG-NO-GAPS-001 |
+| **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-EXECUTIONENTRY-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-GRID |
 | **Scenario** | A plan with an off-grid zone boundary (bypassing enforcement via developer override) cascades faults through ResolvedScheduleDay, TransmissionLog, and ExecutionEntry. Each layer independently detects and reports the violation. |
 | **Clock Setup** | Clock at D-4. |
@@ -1072,7 +1072,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
+| **Invariant(s)** | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY |
 | **Scenario** | An operator override for an ExecutionEntry is applied. The override record is persisted before the ExecutionEntry is updated. No window exists where the override content is active without a backing override record. |
 | **Clock Setup** | Clock at D+0h45m (lock window active). |
@@ -1086,7 +1086,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 | Field | Value |
 |---|---|
-| **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-001, INV-PLAYLOG-NO-GAPS-001, INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 |
+| **Invariant(s)** | INV-EXECUTIONENTRY-LOOKAHEAD-001, INV-EXECUTIONENTRY-NO-GAPS-001, INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | The clock advances in 30-minute increments over a simulated 4-hour period. At each step, the lookahead depth is evaluated. Extensions are triggered by clock progression (not consumer demand) when depth falls below `min_execution_hours`. The sequence must remain gap-free throughout. |
 | **Clock Setup** | Clock starts at EPOCH. ExecutionEntry sequence initially extends to EPOCH + `min_execution_hours`. Advance in 30-minute increments, 8 steps total (simulating 4 hours of broadcast time). |
@@ -1111,9 +1111,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | BLOCKER-007 | INV-ASRUN-IMMUTABLE-001 | LAW-IMMUTABILITY | AsRunEvent valid creation persists correctly | **PASS** |
 | ARCH-BOUNDARY-001 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | ScheduleManager source files contain no AIR imports (AST check) | **PASS** |
 | ARCH-BOUNDARY-002 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | ScheduleManager __init__ has no AIR type annotations | **PASS** |
-| PLAYLIST-GRID-001 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary (18:15) rejected | **PASS** |
-| PLAYLIST-GRID-002 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Entry crossing programming_day_start rollover accepted | **PASS** |
-| PLAYLIST-GRID-003 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight adjacent entries with no micro-gap accepted | **PASS** |
+| PLAYLIST-GRID-001 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary (18:15) rejected | **PASS** |
+| PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Entry crossing programming_day_start rollover accepted | **PASS** |
+| PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight adjacent entries with no micro-gap accepted | **PASS** |
 
 ### Full Matrix (Aspirational)
 
@@ -1137,21 +1137,21 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | SCHED-DAY-008 | INV-SCHEDULEDAY-LEAD-TIME-001 | LAW-DERIVATION | ScheduleDay at D-4 satisfies lead time |
 | SCHED-DAY-009 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | LAW-DERIVATION, LAW-CONTENT-AUTHORITY | Unanchored ScheduleDay rejected |
 | SCHED-DAY-010 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ScheduleDay references superseded record |
-| PLAYLOG-001 | INV-PLAYLOG-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Ineligible asset replaced at window extension |
-| PLAYLOG-002 | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | ExecutionEntry timestamps match injected clock |
-| PLAYLOG-003 | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Different injected clocks produce different timestamps |
-| PLAYLOG-004 | INV-PLAYLOG-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Lookahead shortfall (< min_execution_hours) triggers extension |
-| PLAYLOG-005 | INV-PLAYLOG-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Depth at exactly min_execution_hours is compliant |
-| PLAYLOG-006 | INV-PLAYLOG-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY | Gap in ExecutionEntry sequence detected and faulted |
-| PLAYLOG-007 | INV-PLAYLOG-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION | ExecutionEntry gap traced to upstream ResolvedScheduleDay gap |
-| PLAYLOG-008 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | Unanchored ExecutionEntry rejected |
-| PLAYLOG-009 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ExecutionEntry accepted without TransmissionLogEntry ref |
-| PLAYLOG-IMMUT-001 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked ExecutionEntry mutation without override rejected |
-| PLAYLOG-IMMUT-002 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window ExecutionEntry mutation rejected unconditionally |
-| PLAYLOG-IMMUT-003 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Valid atomic override inside locked window accepted |
-| PLAYLIST-GRID-001 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary rejected |
-| PLAYLIST-GRID-002 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover alignment passes |
-| PLAYLIST-GRID-003 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight entry has no hidden micro-gap |
+| PLAYLOG-001 | INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Ineligible asset replaced at window extension |
+| PLAYLOG-002 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | ExecutionEntry timestamps match injected clock |
+| PLAYLOG-003 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Different injected clocks produce different timestamps |
+| PLAYLOG-004 | INV-EXECUTIONENTRY-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Lookahead shortfall (< min_execution_hours) triggers extension |
+| PLAYLOG-005 | INV-EXECUTIONENTRY-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Depth at exactly min_execution_hours is compliant |
+| PLAYLOG-006 | INV-EXECUTIONENTRY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY | Gap in ExecutionEntry sequence detected and faulted |
+| PLAYLOG-007 | INV-EXECUTIONENTRY-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION | ExecutionEntry gap traced to upstream ResolvedScheduleDay gap |
+| PLAYLOG-008 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | Unanchored ExecutionEntry rejected |
+| PLAYLOG-009 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ExecutionEntry accepted without TransmissionLogEntry ref |
+| PLAYLOG-IMMUT-001 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked ExecutionEntry mutation without override rejected |
+| PLAYLOG-IMMUT-002 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window ExecutionEntry mutation rejected unconditionally |
+| PLAYLOG-IMMUT-003 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Valid atomic override inside locked window accepted |
+| PLAYLIST-GRID-001 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary rejected |
+| PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover alignment passes |
+| PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight entry has no hidden micro-gap |
 | CROSS-001 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | Breakpoint-free program not cut in TransmissionLog |
 | CROSS-002 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | 120-min longform spans 4 blocks without mid-cut |
 | CROSS-003 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | AsRun without ExecutionEntry ref rejected |
@@ -1160,28 +1160,28 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | CROSS-FOREIGN-002 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | TransmissionLogEntry with foreign asset rejected |
 | CROSS-FOREIGN-003 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | ExecutionEntry with foreign asset rejected |
 | GRID-STRESS-001 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-GRID | programming_day_start rollover produces aligned boundary |
-| GRID-STRESS-002 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Calendar midnight produces no fractional-minute boundary |
-| GRID-STRESS-003 | INV-PLAN-GRID-ALIGNMENT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Zone spanning midnight has aligned boundaries on both sides |
-| GRID-STRESS-004 | INV-NO-MID-PROGRAM-CUT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID, LAW-DERIVATION | Longform spanning programming_day_start produces no off-grid fence |
-| HORIZON-001 | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Extension triggered by clock progression only |
-| HORIZON-002 | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | No extension when depth >= min_execution_hours |
-| CONST-001 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001, INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full derivation chain integrity Plan→ResolvedScheduleDay→TransmissionLog→ExecutionEntry→AsRun |
-| CONST-002 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-PLAYLOG-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY | Eligibility change mid-cycle propagation |
-| CONST-003 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-IMMUTABILITY, LAW-DERIVATION | Immutability cascade: locked / past / future / atomic boundary |
-| CONST-004 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-RUNTIME-AUTHORITY | Planning artifacts do not drive playout directly |
-| CONST-005 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-PLAYLOG-NO-GAPS-001 | LAW-GRID | Off-grid fault cascades independently at every layer |
-| CONST-006 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Override record persisted before override artifact |
-| CONST-007 | INV-PLAYLOG-LOOKAHEAD-001, INV-PLAYLOG-NO-GAPS-001, INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Lookahead gap-free over 4h deterministic clock run |
-| CROSSDAY-001 | INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | PlaylogEvent spanning 06:00 boundary persists as single record |
-| CROSSDAY-002 | INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | AsRun record not duplicated for cross-boundary PlaylogEvent |
-| CROSSDAY-003 | INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-IMMUTABILITY | Day-close operation does not mutate committed cross-boundary PlaylogEvent |
-| CROSSDAY-004 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for ending day references source PlaylogEvent ID |
-| CROSSDAY-005 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for starting day references same source PlaylogEvent ID |
+| GRID-STRESS-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Calendar midnight produces no fractional-minute boundary |
+| GRID-STRESS-003 | INV-PLAN-GRID-ALIGNMENT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Zone spanning midnight has aligned boundaries on both sides |
+| GRID-STRESS-004 | INV-NO-MID-PROGRAM-CUT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID, LAW-DERIVATION | Longform spanning programming_day_start produces no off-grid fence |
+| HORIZON-001 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Extension triggered by clock progression only |
+| HORIZON-002 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | No extension when depth >= min_execution_hours |
+| CONST-001 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001, INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full derivation chain integrity Plan→ResolvedScheduleDay→TransmissionLog→ExecutionEntry→AsRun |
+| CONST-002 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY | Eligibility change mid-cycle propagation |
+| CONST-003 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-IMMUTABILITY, LAW-DERIVATION | Immutability cascade: locked / past / future / atomic boundary |
+| CONST-004 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-RUNTIME-AUTHORITY | Planning artifacts do not drive playout directly |
+| CONST-005 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-EXECUTIONENTRY-NO-GAPS-001 | LAW-GRID | Off-grid fault cascades independently at every layer |
+| CONST-006 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Override record persisted before override artifact |
+| CONST-007 | INV-EXECUTIONENTRY-LOOKAHEAD-001, INV-EXECUTIONENTRY-NO-GAPS-001, INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Lookahead gap-free over 4h deterministic clock run |
+| CROSSDAY-001 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | ExecutionEntry spanning 06:00 boundary persists as single record |
+| CROSSDAY-002 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | AsRun record not duplicated for cross-boundary ExecutionEntry |
+| CROSSDAY-003 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-IMMUTABILITY | Day-close operation does not mutate committed cross-boundary ExecutionEntry |
+| CROSSDAY-004 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for ending day references source ExecutionEntry ID |
+| CROSSDAY-005 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for starting day references same source ExecutionEntry ID |
 | CROSSDAY-006 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION | Projection row with null source record ID rejected |
 | CROSSDAY-007 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION | Projection row interval not subset of source record interval rejected |
 | CROSSDAY-008 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday slot starting at 06:00 rejected when Monday carry-in ends at 07:00 |
 | CROSSDAY-009 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday first slot correctly opens at carry-in end_utc |
 | CROSSDAY-010 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-DERIVATION | Carry-in slot ID appears only in Monday ScheduleDay, not duplicated in Tuesday |
-| CROSSDAY-011 | INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Single PlaylogEvent returned for every instant within cross-boundary interval |
-| CROSSDAY-012 | INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Two PlaylogEvents covering overlapping 06:00–06:30 interval rejected |
-| CROSSDAY-013 | INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001, INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | Boundary event does not produce dual authority at DAY_BOUNDARY instant |
+| CROSSDAY-011 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Single ExecutionEntry returned for every instant within cross-boundary interval |
+| CROSSDAY-012 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Two ExecutionEntrys covering overlapping 06:00–06:30 interval rejected |
+| CROSSDAY-013 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001, INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | Boundary event does not produce dual authority at DAY_BOUNDARY instant |

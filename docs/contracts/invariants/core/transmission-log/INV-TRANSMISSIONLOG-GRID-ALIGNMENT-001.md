@@ -1,4 +1,4 @@
-# INV-PLAYLIST-GRID-ALIGNMENT-001 — TransmissionLogEntry boundaries must align to the channel grid
+# INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 — TransmissionLogEntry boundaries must align to the channel grid
 
 Status: Invariant
 Authority Level: Planning
@@ -38,11 +38,11 @@ Generate a TransmissionLogEntry with `start_time=18:15` against a 30-minute grid
 ## Enforcement Evidence
 
 **Enforcement function:**
-- `validate_transmission_log_grid_alignment(log, grid_block_minutes)` in `pkg/core/src/retrovue/runtime/transmission_log_validator.py` — For each entry, checks `start_utc_ms % (grid_block_minutes * 60_000) == 0` and `end_utc_ms % (grid_block_minutes * 60_000) == 0`. On violation: raises `ValueError` with tag `INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED`, the misaligned value, and nearest valid grid boundaries (floor and ceil). Empty entry lists pass trivially.
+- `validate_transmission_log_grid_alignment(log, grid_block_minutes)` in `pkg/core/src/retrovue/runtime/transmission_log_validator.py` — For each entry, checks `start_utc_ms % (grid_block_minutes * 60_000) == 0` and `end_utc_ms % (grid_block_minutes * 60_000) == 0`. On violation: raises `ValueError` with tag `INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED`, the misaligned value, and nearest valid grid boundaries (floor and ceil). Empty entry lists pass trivially.
 
 **Tests:**
-- PLAYLIST-GRID-001 (`test_inv_playlist_grid_alignment_001_reject_off_grid`): Entry at 18:15 on 30-min grid rejected; fault identifies misaligned boundary.
-- PLAYLIST-GRID-002 (`test_inv_playlist_grid_alignment_001_accept_pds_rollover`): Entry spanning [05:30, 06:30] crossing `programming_day_start=06:00` accepted — both boundaries grid-aligned.
-- PLAYLIST-GRID-003 (`test_inv_playlist_grid_alignment_001_accept_cross_midnight`): Two adjacent entries meeting at midnight accepted — no micro-gap, both boundaries grid-aligned.
+- PLAYLIST-GRID-001 (`test_inv_transmissionlog_grid_alignment_001_reject_off_grid`): Entry at 18:15 on 30-min grid rejected; fault identifies misaligned boundary.
+- PLAYLIST-GRID-002 (`test_inv_transmissionlog_grid_alignment_001_accept_pds_rollover`): Entry spanning [05:30, 06:30] crossing `programming_day_start=06:00` accepted — both boundaries grid-aligned.
+- PLAYLIST-GRID-003 (`test_inv_transmissionlog_grid_alignment_001_accept_cross_midnight`): Two adjacent entries meeting at midnight accepted — no micro-gap, both boundaries grid-aligned.
 
 **Carry-in exception:** Deferred. `TransmissionLogEntry` has no `carry_in` flag yet. The basic grid check covers the three test matrix cases. Carry-in handling will be added when the carry-in system is built.

@@ -1,4 +1,4 @@
-# INV-PLAYLOG-LOOKAHEAD-001 — ExecutionEntry window must extend at least 3 hours ahead of current time
+# INV-EXECUTIONENTRY-LOOKAHEAD-001 — ExecutionEntry window must extend at least 3 hours ahead of current time
 
 Status: Invariant
 Authority Level: Runtime

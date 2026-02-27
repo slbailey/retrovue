@@ -14,7 +14,7 @@ No artifact at any layer may reference an asset that cannot be traced to the ups
 
 - A ScheduleDay slot MUST NOT reference an asset that was not present in the zones of the generating SchedulePlan.
 - A Playlist entry MUST NOT reference an asset that was not present in the ScheduleDay from which it was derived.
-- A PlaylogEvent MUST NOT reference an asset that was not present in the Playlist entry from which it was derived.
+- A ExecutionEntry MUST NOT reference an asset that was not present in the Playlist entry from which it was derived.
 
 The only exception at any layer is a recorded operator override, which must explicitly authorize the substitution.
 
@@ -32,7 +32,7 @@ At each layer: inject an asset reference that is absent from the upstream author
 
 ## Failure Semantics
 
-**Planning fault** if the injection occurred during ScheduleDay or Playlist generation (indicates a logic error in the generation service). **Runtime fault** if the injection occurred during PlaylogEvent generation or rolling-window extension.
+**Planning fault** if the injection occurred during ScheduleDay or Playlist generation (indicates a logic error in the generation service). **Runtime fault** if the injection occurred during ExecutionEntry generation or rolling-window extension.
 
 ## Required Tests
 

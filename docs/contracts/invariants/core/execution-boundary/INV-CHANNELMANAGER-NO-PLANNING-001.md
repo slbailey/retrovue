@@ -6,7 +6,7 @@ Derived From: `LAW-RUNTIME-AUTHORITY`, `LAW-CONTENT-AUTHORITY`
 
 ## Purpose
 
-Enforces the hard boundary between the execution layer and the planning layer. `LAW-RUNTIME-AUTHORITY` establishes PlaylogEvent as the sole runtime authority for what plays now. `LAW-CONTENT-AUTHORITY` establishes SchedulePlan as the sole editorial authority. Both laws are violated if ChannelManager reaches back into the planning stack at runtime — whether by querying the Asset Library, triggering episode resolution, building Playlists, computing block boundaries, or requesting Playlog extension on demand.
+Enforces the hard boundary between the execution layer and the planning layer. `LAW-RUNTIME-AUTHORITY` establishes ExecutionEntry as the sole runtime authority for what plays now. `LAW-CONTENT-AUTHORITY` establishes SchedulePlan as the sole editorial authority. Both laws are violated if ChannelManager reaches back into the planning stack at runtime — whether by querying the Asset Library, triggering episode resolution, building Playlists, computing block boundaries, or requesting Playlog extension on demand.
 
 If this boundary is not invariant-protected, any planning gap at execution time creates pressure for ChannelManager to compensate. That compensation is the mechanism by which planning failures become silent and unattributable. The failure must surface as a planning fault, not disappear into runtime improvisation.
 
@@ -18,7 +18,7 @@ ChannelManager MUST NOT, at any point during an active playout session:
 
 1. Query the Asset Library for asset metadata, paths, or eligibility.
 2. Trigger or request episode resolution or program selection.
-3. Build, extend, or modify a Playlist or PlaylogEvent sequence.
+3. Build, extend, or modify a Playlist or ExecutionEntry sequence.
 4. Perform schedule math (block boundary computation, grid alignment, zone lookup).
 5. Request Playlog or horizon extension in response to content consumption.
 6. Interpret EPG data as a source of playout decisions.
