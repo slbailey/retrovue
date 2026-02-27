@@ -57,9 +57,9 @@ def test_channel_config_accepts_schedule_source_phase3():
     assert_schedule_source_valid(config)  # must not raise
 
 
-def test_valid_schedule_sources_is_phase3():
-    """Only blockplan schedule source is valid (phase3)."""
-    assert valid_schedule_sources() == ("phase3",)
+def test_valid_schedule_sources_includes_phase3_and_dsl():
+    """Valid schedule sources include phase3 (blockplan) and dsl; preserve flexibility."""
+    assert set(valid_schedule_sources()) == {"phase3", "dsl"}
 
 
 # =============================================================================

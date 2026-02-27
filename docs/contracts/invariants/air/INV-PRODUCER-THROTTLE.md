@@ -13,7 +13,8 @@ When capacity is unavailable, producer MUST block or yield. Producer MUST NOT co
 When capacity is unavailable, producer continues generating or enqueueing frames (ignoring denial).
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` (decode gate / buffer full blocks producer)
+- `pkg/air/tests/contracts/Phase9SymmetricBackpressureTests.cpp`
 
 ## Enforcement Evidence
 TODO

@@ -23,6 +23,8 @@
 #include "time/ITimeSource.hpp"
 #include "time/SystemTimeSource.hpp"
 #include "DeterministicTimeSource.hpp"
+#include "retrovue/blockplan/OutputClock.hpp"
+#include "DeterministicWaitStrategy.hpp"
 
 namespace retrovue::blockplan::test_infra {
 
@@ -31,6 +33,15 @@ namespace retrovue::blockplan::test_infra {
 inline constexpr bool kFastMode = true;
 #else
 inline constexpr bool kFastMode = false;
+#endif
+
+// Concrete time-source type visible to test fixtures.
+// Fast mode: DeterministicTimeSource (allows AdvanceNs from DeterministicWaitStrategy).
+// Default:   SystemTimeSource (real wall clock).
+#ifdef RETROVUE_FAST_TEST
+using TestTimeSourceType = DeterministicTimeSource;
+#else
+using TestTimeSourceType = SystemTimeSource;
 #endif
 
 // ---- Duration constants ----
@@ -71,12 +82,12 @@ inline constexpr int64_t kBlockTimeOffsetMs = kFastMode ? 0 : kBootGuardMs;
 // ---- Time source factory ----
 // Fast mode:  DeterministicTimeSource at a fixed epoch (1 billion ms ≈ Jan 2001).
 // Default:    SystemTimeSource (real wall clock).
-inline std::shared_ptr<ITimeSource> MakeTestTimeSource() {
-  if constexpr (kFastMode) {
+inline std::shared_ptr<TestTimeSourceType> MakeTestTimeSource() {
+#ifdef RETROVUE_FAST_TEST
     return std::make_shared<DeterministicTimeSource>(1'000'000'000LL);
-  } else {
+#else
     return std::make_shared<SystemTimeSource>();
-  }
+#endif
 }
 
 // ---- Timestamp helpers ----
@@ -93,10 +104,37 @@ inline int64_t WallNowMs() {
 }
 
 // ---- Sleep helper ----
-// Always a real sleep (engine runs in real time regardless of mode).
-// Callers pass scaled values based on kFastMode constants.
+// Prefer AdvanceUntilFence(engine, FenceTickAt30fps(ms)) over SleepMs when the test
+// has access to PipelineManager — then the test advances by frame count, not wall time.
+// SleepMs is for tests that cannot use the tick driver (e.g. no engine, or waiting on
+// external process). In fast deterministic mode, reduce SleepMs usage; gate long soak
+// tests behind RETROVUE_SOAK_TESTS or SOAK label.
 inline void SleepMs(int64_t ms) {
   std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+// ---- Fence tick (for AdvanceUntilFence) ----
+// At 30 fps, duration_ms yields this many frames. Use with test_utils::AdvanceUntilFence
+// to wait until the pipeline has emitted that many frames (no fixed sleep).
+inline int64_t FenceTickAt30fps(int64_t duration_ms) {
+  return (duration_ms * 30 + 999) / 1000;
+}
+
+// ---- Deterministic OutputClock factory ----
+// Returns an OutputClock with DeterministicWaitStrategy (advances virtual time, no sleep).
+// Replaces the former DeterministicOutputClock class — same frame math, no code duplication.
+// When ts is provided in fast mode, DeterministicWaitStrategy advances ts by exactly one
+// frame duration per tick — no wall-clock sleep, no cumulative drift.
+inline std::shared_ptr<IOutputClock> MakeTestOutputClock(
+    int64_t fps_num, int64_t fps_den,
+    [[maybe_unused]] std::shared_ptr<TestTimeSourceType> ts = nullptr) {
+#ifdef RETROVUE_FAST_TEST
+  if (ts) {
+    return std::make_shared<OutputClock>(fps_num, fps_den,
+        std::make_unique<DeterministicWaitStrategy>(ts));
+  }
+#endif
+  return std::make_shared<OutputClock>(fps_num, fps_den);
 }
 
 }  // namespace retrovue::blockplan::test_infra

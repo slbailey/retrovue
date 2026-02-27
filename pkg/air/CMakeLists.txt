@@ -433,6 +433,7 @@ add_test(
   NAME DeterministicHarnessContracts
   COMMAND deterministic_harness_tests
 )
+set_tests_properties(DeterministicHarnessContracts PROPERTIES LABELS "contract")
 
 # ---- BlockPlan Contract Tests (Section 7) ----
 # Tests for docs/architecture/proposals/BlockLevelPlayoutAutonomy.md
@@ -441,7 +442,6 @@ add_executable(blockplan_contract_tests
   # (removed in 497a9d6). Object was stale-cached; exposed by clean rebuild.
   tests/blockplan/test_segment_transitions.cpp
   tests/test_utils/deterministic_tick_driver.cpp
-  tests/test_utils/DeterministicOutputClock.cpp
   tests/contracts/BlockPlan/PTSContinuityContractTests.cpp
   tests/contracts/BlockPlan/ExecutionEngineGuardrailTests.cpp
   tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
@@ -484,26 +484,52 @@ target_include_directories(blockplan_contract_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_utils
 )
 
-# Optional: build with -DRETROVUE_FAST_TEST=1 for short-duration deterministic tests.
+# Fast deterministic contract mode: no long real-time sleeps; AdvanceUntilFence / FenceTickAt30fps.
+# CI and local dev should use -DRETROVUE_FAST_TEST=1 (recommended default for contract tests).
+option(RETROVUE_FAST_TEST "Build contract tests in fast deterministic mode (short blocks, no long sleeps)" ON)
 if(RETROVUE_FAST_TEST)
   target_compile_definitions(blockplan_contract_tests PRIVATE RETROVUE_FAST_TEST)
+endif()
+
+# Sanitizer build for blockplan_contract_tests only (memory corruption / UAF debugging).
+# Build: cmake -DRETROVUE_SANITIZE_TESTS=ON ... then cmake --build ... --target blockplan_contract_tests
+option(RETROVUE_SANITIZE_TESTS "Build blockplan_contract_tests with ASan+UBSan (tests only)" OFF)
+if(RETROVUE_SANITIZE_TESTS)
+  target_compile_options(blockplan_contract_tests PRIVATE
+    -fsanitize=address,undefined
+    -fno-omit-frame-pointer
+    -g
+  )
+  target_link_options(blockplan_contract_tests PRIVATE
+    -fsanitize=address,undefined
+  )
 endif()
 
 add_test(
   NAME BlockPlanContracts
   COMMAND blockplan_contract_tests
 )
-# Default build uses real wall-clock (5s blocks, 3s boot); full suite can take 15–30+ min.
-# For fast runs: cmake ... -DRETROVUE_FAST_TEST=1. Safety net: kill if still running after 15 min.
-set_tests_properties(BlockPlanContracts PROPERTIES TIMEOUT 900)
-
-# ---- BlockPlan Slow Contract Tests ----
-# Runs the DISABLED_SLOW_* tests from the same binary.
-# These are long-running real-media or multi-swap tests moved out of the fast suite.
-add_test(
-  NAME BlockPlanSlowContracts
-  COMMAND blockplan_contract_tests --gtest_also_run_disabled_tests --gtest_filter=*SLOW_*
+set_tests_properties(BlockPlanContracts PROPERTIES
+  TIMEOUT 900
+  LABELS "contract"
 )
+# Without RETROVUE_FAST_TEST, real wall-clock (5s blocks, 3s boot) can take 15–30+ min.
+# Fast deterministic counterpart: BlockPlanContracts (same binary, RETROVUE_FAST_TEST=1) validates
+# the same invariants via AdvanceUntilFence / FenceTickAt30fps; soak runs DISABLED_SLOW_* with real media.
+
+# ---- BlockPlan SOAK tests (nightly only; excluded from CI) ----
+# Long-running real-media / multi-swap tests. Label "soak" only — CI runs ctest -L contract.
+option(RETROVUE_SOAK_TESTS "Add soak tests (long runs; nightly only)" OFF)
+if(RETROVUE_SOAK_TESTS)
+  add_test(
+    NAME BlockPlanSlowContracts
+    COMMAND blockplan_contract_tests --gtest_also_run_disabled_tests --gtest_filter=*SLOW_*
+  )
+  set_tests_properties(BlockPlanSlowContracts PROPERTIES
+    LABELS "soak"
+    TIMEOUT 1800
+  )
+endif()
 
 # ---- AudioLookaheadBuffer Contract Tests (INV-AUDIO-LOOKAHEAD-001) ----
 add_executable(audio_lookahead_tests
@@ -527,6 +553,7 @@ add_test(
   NAME AudioLookaheadContracts
   COMMAND audio_lookahead_tests
 )
+set_tests_properties(AudioLookaheadContracts PROPERTIES LABELS "contract")
 
 # ---- VideoLookaheadBuffer Contract Tests (INV-VIDEO-LOOKAHEAD-001) ----
 add_executable(video_lookahead_tests
@@ -550,6 +577,7 @@ add_test(
   NAME VideoLookaheadContracts
   COMMAND video_lookahead_tests
 )
+set_tests_properties(VideoLookaheadContracts PROPERTIES LABELS "contract")
 
 # ---- Lookahead Buffer Contract Tests (INV-VIDEO-LOOKAHEAD-001 + INV-AUDIO-LOOKAHEAD-001) ----
 # Enforces: tick-thread-never-decodes, underflow-is-hard-fault, fence-tick precision.
@@ -574,6 +602,7 @@ add_test(
   NAME LookaheadBufferContracts
   COMMAND lookahead_contract_tests
 )
+set_tests_properties(LookaheadBufferContracts PROPERTIES LABELS "contract")
 
 # ---- BufferConfig Contract Tests (configurable depths, low-water, decode latency) ----
 add_executable(buffer_config_tests
@@ -597,6 +626,7 @@ add_test(
   NAME BufferConfigContracts
   COMMAND buffer_config_tests
 )
+set_tests_properties(BufferConfigContracts PROPERTIES LABELS "contract")
 
 # ---- INV-FPS-RATIONAL-001: Rational timebase integrity (math + hot-path scan) ----
 add_executable(rational_timebase_integrity_tests
@@ -620,6 +650,7 @@ add_test(
   NAME RationalTimebaseIntegrity
   COMMAND rational_timebase_integrity_tests
 )
+set_tests_properties(RationalTimebaseIntegrity PROPERTIES LABELS "contract")
 
 # ---- Evidence Spool Contract Tests (AirExecutionEvidenceSpoolContract_v0.1) ----
 add_executable(evidence_spool_tests
@@ -643,6 +674,7 @@ add_test(
   NAME EvidenceSpoolContracts
   COMMAND evidence_spool_tests
 )
+set_tests_properties(EvidenceSpoolContracts PROPERTIES LABELS "contract")
 
 # ---- Media Time Contract Tests (INV-AIR-MEDIA-TIME-001..005) ----
 # Deterministic tests verifying PTS-anchored media time tracking.
@@ -673,6 +705,7 @@ add_test(
   NAME MediaTimeContracts
   COMMAND mediatime_contract_tests
 )
+set_tests_properties(MediaTimeContracts PROPERTIES LABELS "contract")
 
 # ---- Architectural Guardrail: No As-Run Artifacts from AIR ----
 # Core is the sole as-run authority. AIR emits evidence via EvidenceEmitter only.
@@ -684,6 +717,7 @@ target_include_directories(no_asrun_guardrail_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME NoAsRunArtifactGuardrail COMMAND no_asrun_guardrail_test)
+set_tests_properties(NoAsRunArtifactGuardrail PROPERTIES LABELS "contract")
 
 # ---- RationalFps Hot-Path Guard ----
 # Prevent regression to fps-double step math in blockplan hot path.
@@ -691,6 +725,7 @@ add_test(
   NAME RationalFpsHotPathGuard
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_rationalfps_hotpath.sh
 )
+set_tests_properties(RationalFpsHotPathGuard PROPERTIES LABELS "contract")
 
 # ---- P3.2: Seam Verify Standalone Harness ----
 # Standalone binary for real-media boundary verification using PipelineManager.

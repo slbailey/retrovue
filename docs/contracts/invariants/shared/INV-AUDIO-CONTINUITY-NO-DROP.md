@@ -15,7 +15,8 @@ Backpressure resolution mechanisms MUST NOT violate sample continuity.
 Any audio sample loss attributable to overflow or backpressure MUST be logged as a contract violation.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase11AudioContinuityTests.cpp`
+- `pkg/air/tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp` (AudioUnderflow_ReturnsFalse_NoSilenceInjected)
 
 ## Enforcement Evidence
 TODO

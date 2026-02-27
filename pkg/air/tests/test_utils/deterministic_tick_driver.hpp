@@ -8,6 +8,7 @@
 #ifndef RETROVUE_TESTS_TEST_UTILS_DETERMINISTIC_TICK_DRIVER_HPP_
 #define RETROVUE_TESTS_TEST_UTILS_DETERMINISTIC_TICK_DRIVER_HPP_
 
+#include <chrono>
 #include <cstdint>
 #include <thread>
 
@@ -37,9 +38,15 @@ bool AdvanceUntilFence(PipelineManager* engine, int64_t fence_tick);
 // Use when fence must be reached for the test to be valid.
 void AdvanceUntilFenceOrFail(PipelineManager* engine, int64_t fence_tick);
 
-// Bounded wait for an arbitrary predicate (e.g. buffer depth). Polls up to
-// max_steps times (yield each iteration). Returns true if pred() became true
-// within max_steps; false otherwise. No wall clock, no sleep.
+// Bounded wait for an arbitrary predicate (e.g. buffer depth). Polls until
+// pred() is true or timeout_ms wall clock expires (whichever first).
+// Returns true if pred() became true; false otherwise.
+//
+// The wall-clock deadline is the effective bound. sleep_for(100us) between
+// polls prevents burning through max_steps before the engine can complete
+// real I/O (decoder open, prime, fill). This is safe even in FAST_TEST mode:
+// the DeterministicWaitStrategy advances virtual time (no sleep) in the tick loop,
+// but the engine still needs real wall time for file I/O and thread startup.
 template <typename Pred>
 inline bool WaitForBounded(Pred pred, int64_t max_steps,
                            int64_t timeout_ms = 5000) {
@@ -47,7 +54,6 @@ inline bool WaitForBounded(Pred pred, int64_t max_steps,
                   std::chrono::milliseconds(timeout_ms);
   for (int64_t i = 0; i < max_steps; ++i) {
     if (pred()) return true;
-    // Yield + short sleep to allow background threads (delay hooks) to progress
     std::this_thread::sleep_for(std::chrono::microseconds(100));
     if (std::chrono::steady_clock::now() > deadline) return false;
   }

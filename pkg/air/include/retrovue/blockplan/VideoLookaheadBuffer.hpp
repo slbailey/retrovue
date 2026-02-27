@@ -249,7 +249,7 @@ class VideoLookaheadBuffer {
   std::thread fill_thread_;
   std::atomic<bool> fill_stop_{false};
   bool fill_running_ = false;
-  uint64_t fill_generation_ = 0;  // Monotonic; bumped at StopFillingAsync/StartFilling
+  std::atomic<uint64_t> fill_generation_{0};  // Monotonic; bumped at StopFillingAsync/StartFilling (atomic so tick path can bump without taking mutex_)
 
   // Fill thread parameters (set by StartFilling, read by FillLoop).
   ITickProducer* producer_ = nullptr;

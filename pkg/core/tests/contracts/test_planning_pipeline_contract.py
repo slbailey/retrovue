@@ -549,7 +549,24 @@ class TestStage5_TransmissionLog:
         assert bp["channel_id"] == 1
         assert bp["start_utc_ms"] == entry.start_utc_ms
         assert bp["end_utc_ms"] == entry.end_utc_ms
-        assert bp["segments"] == entry.segments
+        assert len(bp["segments"]) == len(entry.segments)
+        # Original segment fields must be preserved
+        for original, transformed in zip(entry.segments, bp["segments"]):
+            # All original keys must still exist and match
+            for key, value in original.items():
+                assert key in transformed
+                assert transformed[key] == value
+
+            # segment_uuid must exist and be non-empty
+            assert "segment_uuid" in transformed
+            assert transformed["segment_uuid"]
+
+            # asset_uuid rules:
+            if transformed.get("segment_type", "").lower() == "pad":
+                assert transformed["asset_uuid"] is None
+            else:
+                assert "asset_uuid" in transformed
+                assert transformed["asset_uuid"] is not None
 
 
 # =============================================================================

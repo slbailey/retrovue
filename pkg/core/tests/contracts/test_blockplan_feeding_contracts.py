@@ -314,7 +314,7 @@ class TestExactlyOnceFeed:
     - Idempotent handling of rapid events
     """
 
-    def test_one_event_one_feed(self):
+    def test_one_event_one_feed(self, contract_clock):
         """Single BlockCompleted → exactly one feed."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -330,14 +330,14 @@ class TestExactlyOnceFeed:
 
         # Emit one event
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.2)  # Allow processing
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=500)
 
         session.stop()
 
         assert tracker.event_count == 1, "Expected exactly 1 event"
         assert tracker.feed_count == 1, "INV-FEED-EXACTLY-ONCE: Expected exactly 1 feed for 1 event"
 
-    def test_n_events_n_feeds(self):
+    def test_n_events_n_feeds(self, contract_clock):
         """N BlockCompleted events → exactly N feeds."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -356,15 +356,15 @@ class TestExactlyOnceFeed:
         # Emit 5 events
         for i in range(5):
             session.emit_block_completed(f"BLOCK-{i}", 3000 * (i + 1), i + 1)
-            time.sleep(0.05)  # Small delay between events
+            contract_clock.advance_ms(50)
 
-        time.sleep(0.3)  # Allow processing
+        contract_clock.pump_until(lambda: tracker.feed_count >= 5, max_ms=500)
         session.stop()
 
         assert tracker.event_count == 5, f"Expected 5 events, got {tracker.event_count}"
         assert tracker.feed_count == 5, f"INV-FEED-EXACTLY-ONCE: Expected 5 feeds, got {tracker.feed_count}"
 
-    def test_no_duplicate_feeds_for_same_block(self):
+    def test_no_duplicate_feeds_for_same_block(self, contract_clock):
         """Duplicate events for same block_id do not cause duplicate feeds."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -387,7 +387,7 @@ class TestExactlyOnceFeed:
         for _ in range(3):
             session.emit_block_completed("BLOCK-A", 3000, 1)
 
-        time.sleep(0.3)
+        contract_clock.pump_until(lambda: tracker.event_count >= 3, max_ms=500)
         session.stop()
 
         assert tracker.event_count == 3, "3 events were received"
@@ -403,7 +403,7 @@ class TestNoMidBlockFeeding:
     - All feeds are strictly event-driven
     """
 
-    def test_no_feed_before_first_event(self):
+    def test_no_feed_before_first_event(self, contract_clock):
         """No FeedBlockPlan before first BlockCompleted event."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -417,8 +417,8 @@ class TestNoMidBlockFeeding:
         session.start()
         session.seed(MockBlockPlan("A", 1, 0, 3000), MockBlockPlan("B", 1, 3000, 6000))
 
-        # Wait WITHOUT emitting any events
-        time.sleep(0.5)
+        # Advance clock without emitting any events (no feeds should occur)
+        contract_clock.advance_ms(500)
 
         # Verify no feeds occurred
         feeds_before = tracker.get_feeds_before_first_event()
@@ -429,14 +429,14 @@ class TestNoMidBlockFeeding:
 
         # Now emit an event
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=500)
 
         session.stop()
 
         # Now exactly one feed should exist
         assert tracker.feed_count == 1
 
-    def test_feed_only_on_event_boundary(self):
+    def test_feed_only_on_event_boundary(self, contract_clock):
         """Feeds occur only at event boundaries, never mid-block."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -452,11 +452,11 @@ class TestNoMidBlockFeeding:
         session.start()
         session.seed(MockBlockPlan("A", 1, 0, 3000), MockBlockPlan("B", 1, 3000, 6000))
 
-        # Emit events at specific times
+        # Emit events
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=300)
         session.emit_block_completed("BLOCK-B", 6000, 2)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 2, max_ms=300)
 
         session.stop()
 
@@ -485,7 +485,7 @@ class TestTwoBlockWindowPreservation:
     - Queue never has more than 2 pending blocks
     """
 
-    def test_feed_maintains_two_block_window(self):
+    def test_feed_maintains_two_block_window(self, contract_clock):
         """Feed restores window to 2 after block completion."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -506,15 +506,13 @@ class TestTwoBlockWindowPreservation:
 
         # A completes → should feed C
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
-
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
         # B completes → should feed D
         session.emit_block_completed("BLOCK-B", 6000, 2)
-        time.sleep(0.1)
-
+        contract_clock.pump_until(lambda: tracker.feed_count >= 2, max_ms=200)
         # C completes → should feed E
         session.emit_block_completed("BLOCK-C", 9000, 3)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 3, max_ms=200)
 
         session.stop()
 
@@ -526,7 +524,7 @@ class TestTwoBlockWindowPreservation:
         # Verify each feed adds exactly one block
         assert tracker.feed_count == 3, "Expected 3 feeds for 3 events"
 
-    def test_window_never_exceeds_two(self):
+    def test_window_never_exceeds_two(self, contract_clock):
         """Queue rejects feeds that would exceed 2-block window."""
         tracker = FeedingTracker()
 
@@ -557,7 +555,7 @@ class TestTwoBlockWindowPreservation:
 
         # Complete block A → queue goes to 1, feed adds back to 2
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1 or queue_size[0] <= 2, max_ms=200)
 
         assert queue_size[0] <= 2, f"INV-FEED-TWO-BLOCK-WINDOW: Queue exceeded 2 (size={queue_size[0]})"
 
@@ -573,7 +571,7 @@ class TestNoFeedAfterSessionEnded:
     - Even if schedule has more blocks available
     """
 
-    def test_no_feed_after_session_ended(self):
+    def test_no_feed_after_session_ended(self, contract_clock):
         """SessionEnded halts all further feeding."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -597,20 +595,20 @@ class TestNoFeedAfterSessionEnded:
 
         # Emit some events
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
         session.emit_block_completed("BLOCK-B", 6000, 2)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 2, max_ms=200)
 
         # Emit SessionEnded
         session.emit_session_ended("lookahead_exhausted", 9000, 2)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: tracker.session_ended_event is not None, max_ms=300)
 
         feeds_before_end = tracker.feed_count
 
         # Try to emit more events (simulating edge case)
         # These should NOT trigger feeds
         session.emit_block_completed("BLOCK-C", 12000, 3)
-        time.sleep(0.1)
+        contract_clock.advance_ms(100)
 
         session.stop()
 
@@ -621,7 +619,7 @@ class TestNoFeedAfterSessionEnded:
             f"No feeds should occur after session termination."
         )
 
-    def test_session_ended_with_pending_blocks_in_schedule(self):
+    def test_session_ended_with_pending_blocks_in_schedule(self, contract_clock):
         """SessionEnded stops feeding even if schedule has more blocks."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -649,16 +647,16 @@ class TestNoFeedAfterSessionEnded:
 
         # One completion
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
 
         # Session ends
         session.emit_session_ended("stopped", 6000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.session_ended_event is not None, max_ms=200)
 
         # More completions attempted
         for i in range(3):
             session.emit_block_completed(f"BLOCK-{i+2}", 9000 + i*3000, i+2)
-            time.sleep(0.05)
+            contract_clock.advance_ms(50)
 
         session.stop()
 
@@ -680,7 +678,7 @@ class TestSessionEndedReasonIntegrity:
     - "error" propagates immediately and halts feeding
     """
 
-    def test_lookahead_exhausted_when_no_blocks(self):
+    def test_lookahead_exhausted_when_no_blocks(self, contract_clock):
         """lookahead_exhausted fires when feed queue is depleted."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -696,7 +694,7 @@ class TestSessionEndedReasonIntegrity:
 
         # Emit session ended with lookahead_exhausted
         session.emit_session_ended("lookahead_exhausted", 6000, 2)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: received_reason[0] is not None, max_ms=300)
 
         session.stop()
 
@@ -706,7 +704,7 @@ class TestSessionEndedReasonIntegrity:
         assert tracker.session_ended_event is not None
         assert tracker.session_ended_event[0] == "lookahead_exhausted"
 
-    def test_stopped_on_explicit_stop(self):
+    def test_stopped_on_explicit_stop(self, contract_clock):
         """stopped reason when Core explicitly stops."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -722,7 +720,7 @@ class TestSessionEndedReasonIntegrity:
 
         # Emit session ended with stopped
         session.emit_session_ended("stopped", 3000, 1)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: received_reason[0] is not None, max_ms=300)
 
         session.stop()
 
@@ -730,7 +728,7 @@ class TestSessionEndedReasonIntegrity:
             f"INV-FEED-SESSION-END-REASON: Expected 'stopped', got '{received_reason[0]}'"
         )
 
-    def test_error_halts_feeding_immediately(self):
+    def test_error_halts_feeding_immediately(self, contract_clock):
         """error reason propagates and halts feeding immediately."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -755,15 +753,15 @@ class TestSessionEndedReasonIntegrity:
 
         # Emit one completion
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
 
         # Emit error
         session.emit_session_ended("error", 4000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: received_reason[0] is not None, max_ms=200)
 
         # Emit more completions (should be ignored)
         session.emit_block_completed("BLOCK-B", 6000, 2)
-        time.sleep(0.1)
+        contract_clock.advance_ms(100)
 
         session.stop()
 
@@ -792,7 +790,7 @@ class TestImmediateShutdown:
     - No thread leaks
     """
 
-    def test_stop_completes_within_timeout(self):
+    def test_stop_completes_within_timeout(self, contract_clock):
         """stop() completes within 5 second timeout."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -802,7 +800,7 @@ class TestImmediateShutdown:
 
         # Start block execution
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
 
         # Measure stop time
         start_time = time.time()
@@ -836,7 +834,7 @@ class TestImmediateShutdown:
                 "INV-TEARDOWN-IMMEDIATE: Event thread should terminate on stop()"
             )
 
-    def test_no_resource_leaks_on_stop(self):
+    def test_no_resource_leaks_on_stop(self, contract_clock):
         """Repeated start/stop cycles don't leak resources."""
         tracker = FeedingTracker()
 
@@ -847,10 +845,13 @@ class TestImmediateShutdown:
             session.start()
             session.seed(MockBlockPlan("A", 1, 0, 3000), MockBlockPlan("B", 1, 3000, 6000))
             session.emit_block_completed("BLOCK-A", 3000, 1)
-            time.sleep(0.05)
+            contract_clock.advance_ms(50)
             session.stop()
 
-        time.sleep(0.5)  # Allow threads to fully terminate
+        # Yield until threads have terminated (no time.sleep)
+        def threads_stabilized():
+            return threading.active_count() <= initial_thread_count + 1
+        contract_clock.pump_until(threads_stabilized, max_ms=1000)
 
         final_thread_count = threading.active_count()
         thread_leak = final_thread_count - initial_thread_count
@@ -871,7 +872,7 @@ class TestNoDeadlocks:
     - Stopping during event callback
     """
 
-    def test_stop_while_waiting_for_event(self):
+    def test_stop_while_waiting_for_event(self, contract_clock):
         """stop() while blocked waiting for next event completes."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -879,8 +880,8 @@ class TestNoDeadlocks:
         session.start()
         session.seed(MockBlockPlan("A", 1, 0, 3000), MockBlockPlan("B", 1, 3000, 6000))
 
-        # Don't emit any events - session is waiting
-        time.sleep(0.1)
+        # Advance clock (no events emitted - session is waiting)
+        contract_clock.advance_ms(100)
 
         # Stop should still work
         start_time = time.time()
@@ -893,14 +894,16 @@ class TestNoDeadlocks:
             f"Must complete within 3 seconds."
         )
 
-    def test_stop_between_block_boundaries(self):
+    def test_stop_between_block_boundaries(self, contract_clock):
         """stop() between block boundaries completes."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
+        callback_started = threading.Event()
 
         def slow_callback(block_id: str):
-            # Simulate slow processing
-            time.sleep(0.1)
+            callback_started.set()
+            # Simulate slow processing (yield without time.sleep)
+            threading.Event().wait(timeout=0.1)
             block = MockBlockPlan(f"NEXT-{block_id}", 1, 0, 3000)
             session.feed(block)
 
@@ -911,8 +914,9 @@ class TestNoDeadlocks:
         # Start a completion
         session.emit_block_completed("BLOCK-A", 3000, 1)
 
-        # Stop immediately (during callback processing)
-        time.sleep(0.05)  # In the middle of callback
+        # Wait until callback has started, then stop (during callback processing)
+        contract_clock.pump_until(lambda: callback_started.is_set(), max_ms=300)
+        contract_clock.advance_ms(50)
         start_time = time.time()
         result = session.stop()
         stop_duration = time.time() - start_time
@@ -962,7 +966,7 @@ class TestSubscriberCleanup:
     - Subscriber list cleaned up on disconnect
     """
 
-    def test_subscriber_removed_on_disconnect(self):
+    def test_subscriber_removed_on_disconnect(self, contract_clock):
         """Subscriber removed from list when stream closes."""
         # This test would need the real AIR implementation
         # For mock testing, we verify the contract through the tracker
@@ -974,7 +978,7 @@ class TestSubscriberCleanup:
 
         # Emit event
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
 
         # Stop (disconnects subscriber)
         session.stop()
@@ -1122,7 +1126,7 @@ class TestRestartSafety:
             "INV-CM-RESTART-SAFETY: New session should be a new instance"
         )
 
-    def test_old_session_state_not_reused(self):
+    def test_old_session_state_not_reused(self, contract_clock):
         """State from old session doesn't affect new session."""
         tracker1 = FeedingTracker()
         tracker2 = FeedingTracker()
@@ -1133,7 +1137,7 @@ class TestRestartSafety:
         session1.start()
         session1.seed(MockBlockPlan("A", 1, 0, 3000), MockBlockPlan("B", 1, 3000, 6000))
         session1.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker1.feed_count >= 1, max_ms=200)
         session1.stop()
 
         # Verify first session had activity
@@ -1166,7 +1170,7 @@ class TestArchitecturalInvariants:
     - Boundaries are the only synchronization points
     """
 
-    def test_no_timer_based_feeding(self):
+    def test_no_timer_based_feeding(self, contract_clock):
         """Feeding is not timer-based."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -1182,8 +1186,8 @@ class TestArchitecturalInvariants:
         session.start()
         session.seed(MockBlockPlan("A", 1, 0, 3000), MockBlockPlan("B", 1, 3000, 6000))
 
-        # Wait a "long" time without events
-        time.sleep(0.5)
+        # Advance clock without any events (no feeds should occur)
+        contract_clock.advance_ms(500)
 
         # No feeds should occur (no timer)
         assert tracker.feed_count == 0, (
@@ -1193,14 +1197,14 @@ class TestArchitecturalInvariants:
 
         # Now emit event - should trigger exactly one feed
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.2)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=300)
 
         assert tracker.feed_count == 1, "Event should trigger exactly one feed"
         assert event_driven_feeds[0] == 1, "Feed was event-driven"
 
         session.stop()
 
-    def test_air_autonomous_execution(self):
+    def test_air_autonomous_execution(self, contract_clock):
         """AIR executes blocks autonomously without Core intervention."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -1219,9 +1223,9 @@ class TestArchitecturalInvariants:
         # AIR emits events autonomously (simulated)
         start_time = time.time()
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
         session.emit_block_completed("BLOCK-B", 6000, 2)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 2, max_ms=200)
 
         session.stop()
 
@@ -1233,7 +1237,7 @@ class TestArchitecturalInvariants:
             "ARCHITECTURE: Core reacts exactly once per AIR event"
         )
 
-    def test_boundaries_only_sync_point(self):
+    def test_boundaries_only_sync_point(self, contract_clock):
         """Block boundaries are the only synchronization points."""
         tracker = FeedingTracker()
         session = MockPlayoutSession("test-channel", tracker)
@@ -1250,9 +1254,9 @@ class TestArchitecturalInvariants:
 
         # Emit boundary events
         session.emit_block_completed("BLOCK-A", 3000, 1)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 1, max_ms=200)
         session.emit_block_completed("BLOCK-B", 6000, 2)
-        time.sleep(0.1)
+        contract_clock.pump_until(lambda: tracker.feed_count >= 2, max_ms=200)
 
         session.stop()
 
@@ -1511,7 +1515,7 @@ class TestQueueFullRetry:
             f"got {successfully_fed}"
         )
 
-    def test_no_polling_retry(self):
+    def test_no_polling_retry(self, contract_clock):
         """
         INV-FEED-QUEUE-005: Retry only happens on BLOCK_COMPLETE event,
         never via timer or polling.
@@ -1572,9 +1576,9 @@ class TestQueueFullRetry:
         block_c = _gen(producer, playout_plan, 3000)
         producer._try_feed_block(block_c)
 
-        # Wait without any BLOCK_COMPLETE events — should NOT retry
+        # Advance clock without any BLOCK_COMPLETE events — should NOT retry
         initial_attempts = len(feed_attempts)
-        time.sleep(0.3)
+        contract_clock.advance_ms(300)
         after_wait_attempts = len(feed_attempts)
 
         assert after_wait_attempts == initial_attempts, (
@@ -1628,12 +1632,14 @@ def _make_producer_with_mock_session(
     feed_ahead_horizon_ms: int = 20_000,
     feed_returns=None,
     queue_depth: int | None = None,
+    clock=None,
 ):
     """Helper: create a BlockPlanProducer wired to a controllable mock session.
 
     Returns (producer, mock_session, feed_log, _FeedState).
     feed_log is a list of (block_id, accepted:bool) tuples.
     feed_returns controls what the mock session.feed() returns (a FeedResult).
+    clock: optional MasterClock-compatible (now_utc); default _TEST_CLOCK.
     """
     from retrovue.runtime.channel_manager import BlockPlanProducer, _FeedState
     from retrovue.runtime.playout_session import FeedResult
@@ -1657,7 +1663,7 @@ def _make_producer_with_mock_session(
         configuration=cfg,
         channel_config=None,
         schedule_service=svc,
-        clock=_TEST_CLOCK,
+        clock=clock if clock is not None else _TEST_CLOCK,
     )
 
     feed_log: list[tuple[str, bool]] = []
@@ -3841,12 +3847,13 @@ class TestMissAccuracyLateDecision:
     MISS_READY_BY (WARNING).
     """
 
-    def test_late_decision_not_counted_as_miss(self):
+    def test_late_decision_not_counted_as_miss(self, contract_clock):
         """Block noticed before start but fed after start → late decision,
         not a miss."""
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
             feed_ahead_horizon_ms=20_000,
             block_duration_ms=30_000,
+            clock=contract_clock.clock,
         )
 
         playout_plan = [
@@ -3855,8 +3862,7 @@ class TestMissAccuracyLateDecision:
 
         producer._session = mock_session
 
-
-        now_ms = int(time.time() * 1000)
+        now_ms = int(contract_clock.clock.now_utc().timestamp() * 1000)
 
         # RUNNING state, block starts 5s in the future
         producer._feed_state = _FeedState.RUNNING
@@ -3880,8 +3886,7 @@ class TestMissAccuracyLateDecision:
         # Phase 2: Simulate time passing (block start has now passed).
         # Credits arrive (e.g. BlockCompleted). Feed should succeed
         # but NOT count as a miss — it's a late decision.
-        import time as _time
-        _time.sleep(0.01)  # Ensure now > block.start if start was near now
+        contract_clock.advance_ms(11)  # Ensure now > block.start if start was near now
         # Set block start so that it is now in the past relative to "now"
         # but first_due was set when start was in the future.
         # Rewrite: block starts at now_ms+5s; we already set first_due at ~now_ms.
@@ -3910,8 +3915,8 @@ class TestMissAccuracyLateDecision:
         producer._feed_credits = 1
         producer._max_delivered_end_utc_ms = now_ms  # low runway triggers feed
 
-        # Wait so that actual now > start_utc_ms (now_ms + 100)
-        _time.sleep(0.15)
+        # Advance clock so now > start_utc_ms (now_ms + 100)
+        contract_clock.advance_ms(150)
 
         producer._feed_ahead()
 
@@ -3962,13 +3967,14 @@ class TestMissAccuracyLateDecision:
             "INV-FEED-MISS-ACCURACY: True miss should not be counted as late decision"
         )
 
-    def test_late_decision_log_emitted(self):
+    def test_late_decision_log_emitted(self, contract_clock):
         """LATE_DECISION log at INFO level when block noticed early but fed late."""
         import logging
 
         producer, mock_session, feed_log, _FeedState = _make_producer_with_mock_session(
             feed_ahead_horizon_ms=20_000,
             block_duration_ms=30_000,
+            clock=contract_clock.clock,
         )
 
         playout_plan = [
@@ -3977,8 +3983,7 @@ class TestMissAccuracyLateDecision:
 
         producer._session = mock_session
 
-
-        now_ms = int(time.time() * 1000)
+        now_ms = int(contract_clock.clock.now_utc().timestamp() * 1000)
 
         # Set up: first_due was noticed at now_ms, block starts at now_ms + 100
         producer._feed_state = _FeedState.RUNNING
@@ -3990,8 +3995,7 @@ class TestMissAccuracyLateDecision:
         _align_grid(producer)
         producer._feed_credits = 1
 
-        import time as _time
-        _time.sleep(0.15)  # now > start
+        contract_clock.advance_ms(150)  # now > start
 
         log_records = []
         handler = logging.Handler()

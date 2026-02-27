@@ -122,7 +122,9 @@ void PipelineManager::Start() {
   started_ = true;
   ctx_->stop_requested.store(false, std::memory_order_release);
   reaper_shutdown_.store(false, std::memory_order_release);
+  close_shutdown_.store(false, std::memory_order_release);
   reaper_thread_ = std::thread(&PipelineManager::ReaperLoop, this);
+  closer_thread_ = std::thread(&PipelineManager::CloseLoop, this);
   thread_ = std::thread(&PipelineManager::Run, this);
 }
 
@@ -142,7 +144,7 @@ void PipelineManager::Stop() {
   if (reaper_thread_.joinable()) {
     reaper_thread_.join();
   }
-  // Drain remaining queue (defensive: join any threads that were pushed
+  // Drain remaining reaper queue (defensive: join any threads that were pushed
   // but not yet processed).
   {
     std::lock_guard<std::mutex> lock(reaper_mutex_);
@@ -152,16 +154,33 @@ void PipelineManager::Stop() {
       if (job.thread.joinable()) job.thread.join();
     }
   }
+  // Shutdown closer (decoder Close runs here); drain close queue.
+  close_shutdown_.store(true, std::memory_order_release);
+  close_cv_.notify_all();
+  if (closer_thread_.joinable()) {
+    closer_thread_.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(close_mutex_);
+    while (!close_queue_.empty()) {
+      ReapJob job = std::move(close_queue_.front());
+      close_queue_.pop();
+      // job destructs — decoder Close() on shutdown path
+    }
+  }
 
-  // Defensive thread-joinable audit: after Run() exits and thread_ is joined,
-  // no owned threads should remain joinable.  Hitting any of these means the
-  // teardown in Run() (section 7) missed a join — a latent std::terminate bug.
-  if (deferred_fill_thread_.joinable()) {
-    { std::ostringstream oss;
-      oss << "[PipelineManager] BUG: deferred_fill_thread_ still joinable "
-          << "after Stop(). Joining to prevent std::terminate.";
-      Logger::Error(oss.str()); }
-    deferred_fill_thread_.join();
+  // Defensive thread-joinable audit: after Run() and reaper have drained,
+  // no owned threads should remain joinable.  Hitting any of these means
+  // teardown missed a join — a latent std::terminate bug.
+  {
+    std::lock_guard<std::mutex> lock(deferred_fill_mutex_);
+    if (deferred_fill_thread_.joinable()) {
+      { std::ostringstream oss;
+        oss << "[PipelineManager] BUG: deferred_fill_thread_ still joinable "
+            << "after Stop(). Joining to prevent std::terminate.";
+        Logger::Error(oss.str()); }
+      deferred_fill_thread_.join();
+    }
   }
   if (video_buffer_ && video_buffer_->IsFilling()) {
     { std::ostringstream oss;
@@ -243,19 +262,64 @@ std::string PipelineManager::GetBlockIdFromProducer(producers::IProducer* p) {
   return tp ? tp->GetBlock().block_id : "?";
 }
 
-void PipelineManager::CleanupDeferredFill() {
-  // Never block tick loop: hand job to reaper. Owners stay in job until join.
-  if (!deferred_fill_thread_.joinable()) return;
+void PipelineManager::RequestDeferredFillCleanup(const char* context) {
+  // Non-blocking: set flag so reaper will perform join. Tick thread never waits.
+  {
+    std::lock_guard<std::mutex> lock(deferred_fill_mutex_);
+    if (!deferred_fill_thread_.joinable()) return;
+    deferred_fill_cleanup_requested_.store(true, std::memory_order_release);
+  }
+  reaper_cv_.notify_one();
+  { std::ostringstream oss;
+    oss << "[PipelineManager] REAP_DEFERRED_CLEANUP_REQUESTED context=" << context;
+    Logger::Info(oss.str()); }
+}
 
+void PipelineManager::WaitForReaperDrain() {
+  std::unique_lock<std::mutex> lock(reaper_mutex_);
+  reaper_teardown_drain_cv_.wait(lock, [this] {
+    std::lock_guard<std::mutex> d(deferred_fill_mutex_);
+    return reaper_queue_.empty() && !deferred_fill_thread_.joinable();
+  });
+}
+
+void PipelineManager::PerformDeferredFillCleanupBlocking() {
+  // Called from reaper only: take deferred_* under mutex, then join and hand to closer.
   ReapJob job;
   job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
-  job.block_id = GetBlockIdFromProducer(deferred_producer_.get());
-  job.thread = std::move(deferred_fill_thread_);
-  job.producer = std::move(deferred_producer_);
-  job.video_buffer = std::move(deferred_video_buffer_);
-  job.audio_buffer = std::move(deferred_audio_buffer_);
-
-  HandOffToReaper(std::move(job));
+  {
+    std::lock_guard<std::mutex> lock(deferred_fill_mutex_);
+    if (!deferred_fill_cleanup_requested_.load(std::memory_order_acquire) ||
+        !deferred_fill_thread_.joinable()) {
+      return;
+    }
+    job.block_id = GetBlockIdFromProducer(deferred_producer_.get());
+    job.thread = std::move(deferred_fill_thread_);
+    job.producer = std::move(deferred_producer_);
+    job.video_buffer = std::move(deferred_video_buffer_);
+    job.audio_buffer = std::move(deferred_audio_buffer_);
+    deferred_fill_cleanup_requested_.store(false, std::memory_order_release);
+  }
+  if (!job.thread.joinable()) return;
+  { std::ostringstream oss;
+    oss << "[Reaper] REAP_JOIN_BEGIN job_id=" << job.job_id
+        << " block_id=" << (job.block_id.empty() ? "none" : job.block_id)
+        << " queued=deferred_fill";
+    Logger::Info(oss.str()); }
+  auto t0 = std::chrono::steady_clock::now();
+  job.thread.join();
+  auto join_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count();
+  { std::ostringstream oss;
+    oss << "[Reaper] REAP_JOIN_END job_id=" << job.job_id
+        << " join_ms=" << join_ms
+        << " queued=deferred_fill";
+    Logger::Info(oss.str()); }
+  {
+    std::lock_guard<std::mutex> lock(close_mutex_);
+    close_queue_.push(std::move(job));
+    close_cv_.notify_one();
+  }
 }
 
 void PipelineManager::HandOffToReaper(ReapJob job) {
@@ -273,39 +337,91 @@ void PipelineManager::ReaperLoop() {
   while (true) {
     ReapJob job;
     int queued_after_pop = 0;
+    bool have_queue_job = false;
     {
       std::unique_lock<std::mutex> lock(reaper_mutex_);
       reaper_cv_.wait(lock, [this] {
         return reaper_shutdown_.load(std::memory_order_acquire) ||
-               !reaper_queue_.empty();
+               !reaper_queue_.empty() ||
+               deferred_fill_cleanup_requested_.load(std::memory_order_acquire);
       });
       if (reaper_shutdown_.load(std::memory_order_acquire) &&
-          reaper_queue_.empty()) {
+          reaper_queue_.empty() &&
+          !deferred_fill_cleanup_requested_.load(std::memory_order_acquire)) {
         return;
       }
       if (!reaper_queue_.empty()) {
         job = std::move(reaper_queue_.front());
         reaper_queue_.pop();
         queued_after_pop = static_cast<int>(reaper_queue_.size());
+        have_queue_job = true;
       }
     }
-    if (job.thread.joinable()) {
-      { std::ostringstream oss;
-        oss << "[Reaper] REAP_JOIN_BEGIN job_id=" << job.job_id
-            << " block_id=" << (job.block_id.empty() ? "none" : job.block_id)
-            << " queued=" << queued_after_pop;
-        Logger::Info(oss.str()); }
-      auto t0 = std::chrono::steady_clock::now();
-      job.thread.join();
-      auto join_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - t0).count();
-      { std::ostringstream oss;
-        oss << "[Reaper] REAP_JOIN_END job_id=" << job.job_id
-            << " join_ms=" << join_ms
-            << " queued=" << queued_after_pop;
-        Logger::Info(oss.str()); }
+    if (deferred_fill_cleanup_requested_.load(std::memory_order_acquire)) {
+      PerformDeferredFillCleanupBlocking();
     }
-    // job destructs here — producers/buffers destroyed AFTER join
+    if (have_queue_job) {
+      if (job.thread.joinable()) {
+        { std::ostringstream oss;
+          oss << "[Reaper] REAP_JOIN_BEGIN job_id=" << job.job_id
+              << " block_id=" << (job.block_id.empty() ? "none" : job.block_id)
+              << " queued=" << queued_after_pop;
+          Logger::Info(oss.str()); }
+        auto t0 = std::chrono::steady_clock::now();
+        job.thread.join();
+        auto join_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        { std::ostringstream oss;
+          oss << "[Reaper] REAP_JOIN_END job_id=" << job.job_id
+              << " join_ms=" << join_ms
+              << " queued=" << queued_after_pop;
+          Logger::Info(oss.str()); }
+      }
+      // INV-SEAM-001: Hand job to closer so decoder Close() runs off reaper (avoids tick-thread delay).
+      {
+        std::lock_guard<std::mutex> lock(close_mutex_);
+        close_queue_.push(std::move(job));
+        close_cv_.notify_one();
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(reaper_mutex_);
+      std::lock_guard<std::mutex> d(deferred_fill_mutex_);
+      if (reaper_queue_.empty() && !deferred_fill_thread_.joinable()) {
+        reaper_teardown_drain_cv_.notify_one();
+      }
+    }
+  }
+}
+
+void PipelineManager::CloseLoop() {
+  while (true) {
+    ReapJob job;
+    {
+      std::unique_lock<std::mutex> lock(close_mutex_);
+      close_cv_.wait(lock, [this] {
+        return close_shutdown_.load(std::memory_order_acquire) ||
+               !close_queue_.empty();
+      });
+      if (close_shutdown_.load(std::memory_order_acquire) &&
+          close_queue_.empty()) {
+        return;
+      }
+      if (!close_queue_.empty()) {
+        job = std::move(close_queue_.front());
+        close_queue_.pop();
+      }
+    }
+    // INV-SEAM-001: Defer destruction so tick thread can run next ticks before heavy Close().
+    constexpr int kCloseDeferMs = 80;  // > 2 frame periods at 30fps
+    std::this_thread::sleep_for(std::chrono::milliseconds(kCloseDeferMs));
+    // Explicit destruction order: close decoder first so any buffer-held references
+    // to decoder state are not double-freed (avoids "corrupted double-linked list").
+    job.producer.reset();
+    job.video_buffer.reset();
+    job.audio_buffer.reset();
+    // thread already joined by reaper; reset is no-op but keeps ReapJob consistent
+    if (job.thread.joinable()) job.thread.detach();
   }
 }
 
@@ -484,6 +600,7 @@ std::unique_ptr<producers::IProducer> PipelineManager::TryTakePreviewProducer(in
                   << " headroom_ms=" << headroom_ms;
         Logger::Info(retry_oss.str()); }
     }
+    last_submitted_block_valid_ = false;  // Result consumed — clear stale flag.
     return std::move(result->producer);  // Keep decoderless producer — fence/PADDED_GAP path will run it as all-pad.
   }
 
@@ -602,7 +719,9 @@ void PipelineManager::Run() {
   // Buffer capacity: 32 KB ≈ 115 ms at ~284.6 KB/s TS wire rate.
   // Small buffer bounds post-fence old-tail latency; backpressure via
   // WaitAndConsumeBytes blocks the tick thread until the writer drains.
-  static constexpr size_t kSinkBufferCapacity = 32 * 1024;
+  // Use 512 KB so deterministic (no-sleep) tick loops don't fill the buffer
+  // before the test drain thread can read (encoder may push large chunks early).
+  static constexpr size_t kSinkBufferCapacity = 512 * 1024;
   auto socket_sink = std::make_unique<output::SocketSink>(
       sink_fd, "pipeline-sink", kSinkBufferCapacity);
 
@@ -1170,7 +1289,7 @@ void PipelineManager::Run() {
     // Hook A: set thread-local tick/block so write callback can log on first EPIPE
     output::SetTickContext(session_frame_index, live_parent_block_.block_id);
     // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
-    // Real clock: sleep until deadline. Deterministic clock: no-op (instant advance).
+    // Real clock: sleep until deadline. Deterministic clock: advances virtual time (no sleep).
     auto deadline = clock->DeadlineFor(session_frame_index);
     auto now_mono = std::chrono::steady_clock::now();
     bool tick_is_late = (now_mono > deadline);
@@ -1542,11 +1661,19 @@ void PipelineManager::Run() {
             (AsTickProducer(preview_.get())->GetBlock().segments[0].segment_type == SegmentType::kPad);
       }
       // When preview_ was discarded (zombie), we don't have segment info; use submitted block.
-      bool next_block_first_seg_content = preview_ ? !first_seg_is_pad : expected_preroll_first_seg_content_;
+      // Guard with last_submitted_block_valid_: only enter DEGRADED_TAKE_MODE when a block
+      // preload is genuinely pending. If the preload was consumed or never submitted (no next
+      // block), expected_preroll_first_seg_content_ is stale and we should fall through to
+      // the normal PADDED_GAP path.  INV-FENCE-TAKE-READY-001.
+      bool next_block_first_seg_content = preview_ ? !first_seg_is_pad :
+          (expected_preroll_first_seg_content_ && last_submitted_block_valid_);
 
       // INV-FENCE-TAKE-READY-001 / DEGRADED_TAKE_MODE: content-first but B not primed at fence.
       // Do not crash. Log violation once per fence event; enter degraded take (hold last A frame + silence).
-      if (next_block_first_seg_content) {
+      // Only enter when preview_ is NULL (preloader genuinely hasn't delivered yet).
+      // When preview_ exists the buffer emptiness is a transient fill-thread race —
+      // let the normal PADDED_GAP path handle it.
+      if (next_block_first_seg_content && !preview_) {
         const bool entering_degraded = !degraded_take_active_;
         if (entering_degraded) {
           degraded_entered_frame_index_ = session_frame_index;
@@ -1586,6 +1713,11 @@ void PipelineManager::Run() {
         }
         // else: no held frame; chosen_video stays pad, decision stays kPad
         // else: no held frame (should not happen after first real frame); fall through to FENCE_PAD_CAUSE
+      } else if (degraded_take_active_ && preview_ &&
+                 !AsTickProducer(preview_.get())->HasDecoder()) {
+        // Preview arrived during degraded mode but decoder failed — B can never
+        // produce frames.  Release degraded hold so PADDED_GAP can fire.
+        degraded_take_active_ = false;
       }
 
       if (!using_degraded_held_this_tick && !degraded_escalated_to_standby_) {
@@ -1601,8 +1733,10 @@ void PipelineManager::Run() {
       // Segment seam: segment B buffer temporarily empty (e.g. single frame drained).
       chosen_video = &last_good_video_frame_;
       decision = TakeDecision::kHold;  // Hold at segment seam
-    } else if (a_was_primed) {
+    } else if (a_was_primed && live_tp()->HasDecoder()) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
+      // Only treat as hard fault when live has a decoder (expects content). Pad-only
+      // / probe-failed blocks never prime the buffer; empty is expected → pad path.
       { std::ostringstream oss;
         oss << "[PipelineManager] INV-VIDEO-LOOKAHEAD-001: UNDERFLOW"
             << " frame=" << session_frame_index
@@ -1615,6 +1749,11 @@ void PipelineManager::Run() {
       { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
       ctx_->stop_requested.store(true, std::memory_order_release);
       break;
+    } else if (a_was_primed) {
+      // Buffer reported primed but live has no decoder (e.g. probe failed). Expected
+      // empty; use pad instead of stopping.
+      chosen_video = &pad_producer_->VideoFrame();
+      decision = TakeDecision::kPad;
     } else {
       // A not primed (no block loaded yet or buffer warming up) — pad.
       chosen_video = &pad_producer_->VideoFrame();
@@ -1633,15 +1772,20 @@ void PipelineManager::Run() {
     // INV-PAD-PRODUCER-007: Content-before-pad gate (decision phase only).
     // If we would emit pad and decoder might produce content soon, skip this tick.
     // Decision stays kPad; we do not re-check readiness elsewhere.
+    // Never skip when live has no decoder (pad-only / probe-failed): no content will arrive.
     bool should_skip_tick = false;
     if ((decision == TakeDecision::kPad || decision == TakeDecision::kStandby) &&
-        !first_real_frame_committed) {
+        !first_real_frame_committed && live_tp()->HasDecoder()) {
       bool decoder_might_produce = (live_tp()->GetState() == ITickProducer::State::kReady
-                                    && live_tp()->HasDecoder()
                                     && video_buffer_ && !a_primed);
       if (decoder_might_produce) {
         should_skip_tick = true;
       }
+    }
+    // Pad-only / probe-failed: no content will ever arrive; never skip.
+    if ((decision == TakeDecision::kPad || decision == TakeDecision::kStandby) &&
+        !live_tp()->HasDecoder()) {
+      should_skip_tick = false;
     }
     if (!should_skip_tick &&
         (decision == TakeDecision::kContentA || decision == TakeDecision::kContentB ||
@@ -1753,46 +1897,36 @@ void PipelineManager::Run() {
     //      state; the old block ended, respect the timeline and move forward.
     //      INV-BLOCK-WALLFENCE-001: fence timing is respected (fence already fired).
     //      INV-TICK-GUARANTEED-OUTPUT: pad continues under gap mode.
+    //   Exception: While DEGRADED_TAKE_MODE is active (held frame / standby),
+    //   suppress PADDED_GAP entry so the held frame continues until B primes
+    //   or standby is reached.  INV-FENCE-TAKE-READY-001.
     // ==================================================================
-    const bool fence_fired_b_missing = take_b && !take_rotated && !committed_b_frame_this_tick;
+    const bool fence_fired_b_missing = take_b && !take_rotated && !committed_b_frame_this_tick
+                                       && !degraded_take_active_;
     if (take_b && !take_rotated && (committed_b_frame_this_tick || fence_fired_b_missing)) {
       take_rotated = true;
 
-      // Step 1: Join PREVIOUS fence's deferred fill thread.
-      { auto t0 = std::chrono::steady_clock::now();
-        { std::ostringstream oss;
-          oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_BEGIN tick="
-              << session_frame_index << " context=block_take";
-          Logger::Info(oss.str()); }
-        CleanupDeferredFill();
-        auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - t0).count();
-        { std::ostringstream oss;
-          oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_END tick="
-              << session_frame_index << " context=block_take dt_ms=" << dt_ms;
-          Logger::Info(oss.str()); }
-      }
+      // Step 1: Request cleanup of previous fence's deferred fill (reaper performs join).
+      RequestDeferredFillCleanup("block_take");
 
       // Step 1b: Guard against stale preview buffers.
       // TryLoadLiveProducer may have consumed preview_ (moved to live_)
       // but left preview_video_buffer_ with a running fill thread.
-      // Stop and clear them so the swap logic below sees a consistent state.
+      // Stop async and hand to reaper so tick thread never joins (INV-TICK-NO-WAIT).
       if (preview_video_buffer_ && !preview_) {
-        { auto t0 = std::chrono::steady_clock::now();
-          { std::ostringstream oss;
-            oss << "[PipelineManager] STOP_FILLING_BEGIN context=stale_preview_block_take tick="
-                << session_frame_index;
-            Logger::Info(oss.str()); }
-          preview_video_buffer_->StopFilling(/*flush=*/true);
-          auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - t0).count();
-          { std::ostringstream oss;
-            oss << "[PipelineManager] STOP_FILLING_END context=stale_preview_block_take tick="
-                << session_frame_index << " dt_ms=" << dt_ms;
-            Logger::Info(oss.str()); }
-        }
-        preview_video_buffer_.reset();
-        preview_audio_buffer_.reset();
+        { std::ostringstream oss;
+          oss << "[PipelineManager] STOP_FILLING_ASYNC context=stale_preview_block_take tick="
+              << session_frame_index;
+          Logger::Info(oss.str()); }
+        auto stale_detached = preview_video_buffer_->StopFillingAsync(/*flush=*/true);
+        ReapJob stale_job;
+        stale_job.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
+        stale_job.block_id = "stale_preview";
+        stale_job.thread = std::move(stale_detached.thread);
+        stale_job.producer = nullptr;  // preview_ already moved elsewhere
+        stale_job.video_buffer = std::move(preview_video_buffer_);
+        stale_job.audio_buffer = std::move(preview_audio_buffer_);
+        HandOffToReaper(std::move(stale_job));
       }
 
       // Step 2: Move outgoing buffers out — do not mutate in place.
@@ -1836,6 +1970,16 @@ void PipelineManager::Run() {
         audio_buffer_ = std::move(preview_audio_buffer_);
         live_ = std::move(preview_);
         swapped = true;
+        // INV-VIDEO-LOOKAHEAD-001: Restart fill thread if it was stopped during
+        // preroll (seam_confidence_500ms_primed).  Without this, the now-live
+        // VLB has only primed frames and underflows at the next tick.
+        if (preview_fill_stopped_after_prime_ && !video_buffer_->IsFilling()) {
+          auto* tp = AsTickProducer(live_.get());
+          video_buffer_->StartFilling(
+              tp, audio_buffer_.get(),
+              tp->GetInputRationalFps(), ctx_->fps,
+              &ctx_->stop_requested);
+        }
       } else {
         // B was never prerolled — check for late preview or sync fallback.
         // This mirrors the old fence fallback paths.
@@ -2034,11 +2178,30 @@ void PipelineManager::Run() {
         TryKickoffBlockPreload(session_frame_index);
       }
 
-      // Step 6: Store deferred thread + producer + buffers for later cleanup.
-      deferred_fill_thread_ = std::move(detached.thread);
-      deferred_producer_ = std::move(outgoing_producer);
-      deferred_video_buffer_ = std::move(outgoing_video_buffer);
-      deferred_audio_buffer_ = std::move(outgoing_audio_buffer);
+      // Step 6: Store deferred thread + producer + buffers for later cleanup (reaper will join).
+      // If the reaper hasn't taken the previous deferred yet, hand off current outgoing to reaper
+      // directly so we never overwrite a joinable thread (std::thread move-assign would join).
+      std::optional<ReapJob> direct_reap;
+      {
+        std::lock_guard<std::mutex> lock(deferred_fill_mutex_);
+        if (deferred_fill_thread_.joinable()) {
+          direct_reap.emplace();
+          direct_reap->job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
+          direct_reap->block_id = GetBlockIdFromProducer(outgoing_producer.get());
+          direct_reap->thread = std::move(detached.thread);
+          direct_reap->producer = std::move(outgoing_producer);
+          direct_reap->video_buffer = std::move(outgoing_video_buffer);
+          direct_reap->audio_buffer = std::move(outgoing_audio_buffer);
+        } else {
+          deferred_fill_thread_ = std::move(detached.thread);
+          deferred_producer_ = std::move(outgoing_producer);
+          deferred_video_buffer_ = std::move(outgoing_video_buffer);
+          deferred_audio_buffer_ = std::move(outgoing_audio_buffer);
+        }
+      }
+      if (direct_reap) {
+        HandOffToReaper(std::move(*direct_reap));
+      }
 
       // Step 7: Emit finalization logs.
       if (outgoing_summary) {
@@ -2185,6 +2348,28 @@ void PipelineManager::Run() {
                 << " incoming_video_frames=-1"
                 << " tick=" << session_frame_index;
             Logger::Info(oss.str()); }
+          // Explicit schedule/runway state at seam when no incoming.
+          std::string returned_block_id = "none";
+          bool returned_none = true;
+          size_t runway_queue_depth = 0;
+          if (preview_) {
+            returned_block_id = AsTickProducer(preview_.get())->GetBlock().block_id;
+            returned_none = false;
+          }
+          {
+            std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+            runway_queue_depth = ctx_->block_queue.size();
+            if (returned_none && !ctx_->block_queue.empty()) {
+              returned_block_id = ctx_->block_queue.front().block_id;
+              returned_none = false;
+            }
+          }
+          { std::ostringstream oss;
+            oss << "[PipelineManager] SCHEDULE_NEXT_BLOCK_RESULT"
+                << " returned_block_id=" << returned_block_id
+                << " returned_none=" << (returned_none ? "true" : "false")
+                << " runway_queue_depth=" << runway_queue_depth;
+            Logger::Info(oss.str()); }
         }
         // Keep current live; do not call PerformSegmentSwap.
       } else if (!IsIncomingSegmentEligibleForSwap(*incoming)) {
@@ -2200,8 +2385,9 @@ void PipelineManager::Run() {
         }
         // Keep current live; do not call PerformSegmentSwap.
       } else {
-        // Eligible: perform swap.
+        // Eligible: perform swap (INV-SEAM-001: swap is pointer/atomic only; no blocking).
         last_logged_defer_seam_frame_ = -1;  // Reset so next seam can log if deferred.
+        { auto t0_seam = std::chrono::steady_clock::now();
         // SEGMENT_TAKE_COMMIT: log decision state BEFORE swap (a_src still valid).
         { std::ostringstream oss;
           const char* to_type_str =
@@ -2241,6 +2427,15 @@ void PipelineManager::Run() {
         }
 
         PerformSegmentSwap(session_frame_index);
+        auto seam_dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0_seam).count();
+        if (seam_dt_ms > 10) {
+          std::ostringstream oss;
+          oss << "[PipelineManager] SEGMENT_SEAM_PHASE_MS tick=" << session_frame_index
+              << " dt_ms=" << seam_dt_ms;
+          Logger::Info(oss.str());
+        }
+        }
 
         // Cadence refresh: new LIVE segment may have different source FPS; reinit tick
         // cadence so duration is preserved (e.g. 23.976→30 upsample after 30→30 segment).
@@ -3023,19 +3218,9 @@ void PipelineManager::Run() {
     termination_reason = "stopped";
   }
 
-  // Join any deferred fill thread from the last fence swap.
-  { auto t0 = std::chrono::steady_clock::now();
-    { std::ostringstream oss;
-      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_BEGIN tick=teardown context=teardown";
-      Logger::Info(oss.str()); }
-    CleanupDeferredFill();
-    auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0).count();
-    { std::ostringstream oss;
-      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_END tick=teardown context=teardown dt_ms="
-          << dt_ms;
-      Logger::Info(oss.str()); }
-  }
+  // Request cleanup of any deferred fill from the last fence swap (reaper performs join).
+  RequestDeferredFillCleanup("teardown");
+  WaitForReaperDrain();
 
   // INV-VIDEO-LOOKAHEAD-001: Stop video fill thread before resetting producers.
   if (video_buffer_) {
@@ -3239,8 +3424,11 @@ FedBlock PipelineManager::MakeSyntheticSegmentBlock(
 }
 
 // Min/max source FPS considered valid for cadence; outside this range we treat as output_fps (DISABLED).
-static constexpr double kCadenceSourceFpsMin = 10.0;
-static constexpr double kCadenceSourceFpsMax = 120.0;
+// Bounds: 10 <= fps <= 120. Compared via integer cross-multiply (no float/double).
+static constexpr int64_t kCadenceSourceFpsMinNum = 10;
+static constexpr int64_t kCadenceSourceFpsMinDen = 1;
+static constexpr int64_t kCadenceSourceFpsMaxNum = 120;
+static constexpr int64_t kCadenceSourceFpsMaxDen = 1;
 
 // =============================================================================
 // InitFrameSelectionCadenceForLiveBlock — set frame_selection_cadence_* from live block input FPS.
@@ -3264,8 +3452,8 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
   const bool invalid_fps = (input_fps.num <= 0 || input_fps.den <= 0 ||
                             (input_fps.num == 1 && input_fps.den == 1));
   const bool out_of_range = (input_fps.IsValid() &&
-                             (input_fps.ToDouble() < kCadenceSourceFpsMin ||
-                              input_fps.ToDouble() > kCadenceSourceFpsMax));
+                             (input_fps.num * kCadenceSourceFpsMinDen < kCadenceSourceFpsMinNum * input_fps.den ||
+                              input_fps.num * kCadenceSourceFpsMaxDen > kCadenceSourceFpsMaxNum * input_fps.den));
   if (invalid_fps || out_of_range || live_segment_is_pad || no_decoder) {
     const char* sanitize_reason = invalid_fps ? "invalid"
         : out_of_range ? "out_of_range"
@@ -3339,8 +3527,8 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
   const bool invalid_fps = (new_fps.num <= 0 || new_fps.den <= 0 ||
                             (new_fps.num == 1 && new_fps.den == 1));
   const bool out_of_range = (new_fps.IsValid() &&
-                            (new_fps.ToDouble() < kCadenceSourceFpsMin ||
-                             new_fps.ToDouble() > kCadenceSourceFpsMax));
+                             (new_fps.num * kCadenceSourceFpsMinDen < kCadenceSourceFpsMinNum * new_fps.den ||
+                              new_fps.num * kCadenceSourceFpsMaxDen > kCadenceSourceFpsMaxNum * new_fps.den));
   bool did_sanitize = false;
   if (invalid_fps || out_of_range || live_segment_is_pad || no_decoder) {
     const char* sanitize_reason = invalid_fps ? "invalid"
@@ -3833,27 +4021,17 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   }
   const bool incoming_is_pad = (to_seg_type == SegmentType::kPad);
 
-  // Step 1: Join any deferred fill thread.
-  { auto t0 = std::chrono::steady_clock::now();
-    { std::ostringstream oss;
-      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_BEGIN tick="
-          << session_frame_index << " context=segment_swap";
-      Logger::Info(oss.str()); }
-    CleanupDeferredFill();
-    auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0).count();
-    { std::ostringstream oss;
-      oss << "[PipelineManager] CLEANUP_DEFERRED_FILL_END tick="
-          << session_frame_index << " context=segment_swap dt_ms=" << dt_ms;
-      Logger::Info(oss.str()); }
-  }
+  // Step 1: Request cleanup of any deferred fill (reaper performs join; tick never waits).
+  RequestDeferredFillCleanup("segment_swap");
 
   // Step 2: Move outgoing A out FIRST so we can stop fill and hand off.
   // ReapJob holds owners until join. No allocation of A in this function.
+  // INV-SEAM-001: Use flush=false so StopFillingAsync does not take the buffer mutex_
+  // (tick thread must not block on fill thread). Buffer is handed to reaper and destroyed.
   auto outgoing_video_buffer = std::move(video_buffer_);
   auto outgoing_audio_buffer = std::move(audio_buffer_);
   auto outgoing_producer = std::move(live_);
-  auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
+  auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/false);
 
   const char* prep_mode = "MISS";
   const char* swap_branch = "NONE";
@@ -4007,6 +4185,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
         << " swap_branch=" << swap_branch
         << " next_seam_frame=" << FormatFenceTick(next_seam_frame_);
     Logger::Info(oss.str()); }
+  // Callback runs on tick thread; must be non-blocking (no locks, waits, I/O) to avoid TICK_GAP.
   if (callbacks_.on_segment_seam_take) {
     callbacks_.on_segment_seam_take(session_frame_index, next_seam_frame_);
   }

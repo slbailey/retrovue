@@ -4,16 +4,19 @@
 // Contract Reference: PlayoutAuthorityContract.md
 // Copyright (c) 2025 RetroVue
 //
-// OutputClock = RealOutputClock: sleeps to absolute wall-clock deadlines.
-// For deterministic tests, inject DeterministicOutputClock instead (no sleep).
+// OutputClock = RealOutputClock: computes frame deadlines via rational math.
+// Sleeping is delegated to an injected IWaitStrategy (default: RealtimeWaitStrategy).
+// For deterministic tests, inject DeterministicWaitStrategy (advances virtual time, no sleep).
 
 #ifndef RETROVUE_BLOCKPLAN_OUTPUT_CLOCK_HPP_
 #define RETROVUE_BLOCKPLAN_OUTPUT_CLOCK_HPP_
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 
 #include "retrovue/blockplan/IOutputClock.hpp"
+#include "retrovue/blockplan/IWaitStrategy.hpp"
 #include "retrovue/blockplan/RationalFps.hpp"
 
 namespace retrovue::blockplan {
@@ -21,7 +24,9 @@ namespace retrovue::blockplan {
 class OutputClock : public IOutputClock {
  public:
   // Construct with rational FPS (fps_num/fps_den).
-  OutputClock(int64_t fps_num, int64_t fps_den);
+  // Optional wait_strategy: nullptr → RealtimeWaitStrategy (production default).
+  OutputClock(int64_t fps_num, int64_t fps_den,
+              std::unique_ptr<IWaitStrategy> wait_strategy = nullptr);
 
   void Start() override;
   int64_t FrameIndexToPts90k(int64_t session_frame_index) const override;
@@ -48,6 +53,8 @@ class OutputClock : public IOutputClock {
   // INV-TICK-MONOTONIC-UTC-ANCHOR-001: UTC epoch captured alongside
   // monotonic epoch at Start().  Used for fence math (schedule authority).
   int64_t session_epoch_utc_ms_ = 0;
+
+  std::unique_ptr<IWaitStrategy> wait_strategy_;
 };
 
 }  // namespace retrovue::blockplan

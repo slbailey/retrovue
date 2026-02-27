@@ -13,7 +13,8 @@ A/V delta MUST remain ≤ one frame duration at all times. When one stream is bl
 A/V delta exceeds one frame duration; one stream decoding while the other is blocked.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` (TEST_INV_P10_BACKPRESSURE_SYMMETRIC_NoAudioDrops)
+- `pkg/air/tests/contracts/Phase9SymmetricBackpressureTests.cpp`
 
 ## Enforcement Evidence
 TODO

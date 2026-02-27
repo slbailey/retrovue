@@ -13,7 +13,8 @@ Control-plane MUST be emitted on schedule regardless of media. Media wait loop M
 Mux waiting indefinitely for media without emitting control-plane; control-plane emission blocked by media starvation. MUST be logged.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase9OutputBootstrapTests.cpp` (TS emission within bound; mux does not wait indefinitely)
+- `pkg/air/tests/contracts/PrimitiveInvariants/SinkLivenessContractTests.cpp`
 
 ## Enforcement Evidence
 TODO

@@ -13,7 +13,7 @@ No configuration or steady-state condition may result in all participants waitin
 No forward progress without terminal state; circular wait detected.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` (TEST_INV_SWITCH_READINESS_002_WriteBarrierNoDeadlock)
 
 ## Enforcement Evidence
 TODO

@@ -15,7 +15,8 @@ Frame duration is defined by the active output FPS.
 If switch completion time exceeds boundary + one frame duration, a violation MUST be logged.
 
 ## Required Tests
-TODO
+- `pkg/core/tests/contracts/test_inv_switch_boundary_timing.py` (Core declares boundary in protocol)
+- `pkg/air/tests/contracts/DeadlineSwitchTests.cpp` (AIR executes switch within one frame of boundary)
 
 ## Enforcement Evidence
 TODO
