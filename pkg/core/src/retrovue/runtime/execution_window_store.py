@@ -17,7 +17,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -105,11 +105,15 @@ class ExecutionWindowStore:
         self,
         *,
         enforce_derivation_from_playlist: bool = False,
+        clock_fn: Callable[[], int] | None = None,
+        locked_window_ms: int | None = None,
     ) -> None:
         self._entries: list[ExecutionEntry] = []
         self._lock = threading.Lock()
         self._enforce_derivation_from_playlist = enforce_derivation_from_playlist
         self._max_generation_id: int = 0
+        self._clock_fn = clock_fn
+        self._locked_window_ms = locked_window_ms
 
     # ------------------------------------------------------------------
     # Write (HorizonManager)
@@ -264,6 +268,15 @@ class ExecutionWindowStore:
         return count
 
     # ------------------------------------------------------------------
+    # Locked-window helper (INV-HORIZON-LOCKED-IMMUTABLE-001)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _locked_window_end_ms(now_ms: int, locked_window_ms: int) -> int:
+        """Return the exclusive upper bound of the locked window."""
+        return now_ms + locked_window_ms
+
+    # ------------------------------------------------------------------
     # Atomic publish (INV-HORIZON-ATOMIC-PUBLISH-001)
     # ------------------------------------------------------------------
 
@@ -320,6 +333,29 @@ class ExecutionWindowStore:
         - Existing entries in the range are removed and replaced atomically.
         """
         with self._lock:
+            # Guard: reject publish overlapping locked window
+            # (INV-HORIZON-LOCKED-IMMUTABLE-001)
+            if (
+                self._clock_fn is not None
+                and self._locked_window_ms is not None
+                and self._locked_window_ms > 0
+                and not operator_override
+            ):
+                now_ms = self._clock_fn()
+                locked_end = self._locked_window_end_ms(
+                    now_ms, self._locked_window_ms,
+                )
+                # Half-open overlap: [range_start, range_end) ∩ [now, locked_end)
+                if range_start_ms < locked_end and range_end_ms > now_ms:
+                    return PublishResult(
+                        ok=False,
+                        published_generation_id=generation_id,
+                        error_code=(
+                            "INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED: "
+                            "locked window"
+                        ),
+                    )
+
             # Reject non-monotonic generation_id
             if generation_id <= self._max_generation_id:
                 return PublishResult(

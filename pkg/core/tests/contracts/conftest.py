@@ -41,6 +41,10 @@ class FakeAdvancingClock:
         with self._lock:
             return datetime.fromtimestamp(self._ms / 1000.0, tz=timezone.utc)
 
+    def now_utc_ms(self) -> int:
+        with self._lock:
+            return self._ms
+
     def advance(self, delta_ms: int) -> None:
         with self._lock:
             self._ms += delta_ms
@@ -55,6 +59,10 @@ class ContractClockFixture:
     """Fixture providing a fake clock and helpers. Do not use time.sleep in contract tests."""
 
     clock: FakeAdvancingClock
+
+    def now_utc_ms(self) -> int:
+        """Return current clock time in epoch milliseconds."""
+        return self.clock.now_utc_ms()
 
     def advance_ms(self, n: int) -> None:
         """Advance the clock by n milliseconds (deterministic)."""

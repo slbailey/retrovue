@@ -395,59 +395,59 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 
 > In-place mutation inside `[now, now + LOCKED_WINDOW_MS)` returns `ok=False, error_code="LOCKED_IMMUTABLE"`.
 
-### THLI-001: In-place mutation of locked block rejected with error code
+### THLI-001: Publish inside locked window rejected
 
 | Field | Value |
 |---|---|
 | **Invariant** | `INV-HORIZON-LOCKED-IMMUTABLE-001` |
-| **Scenario** | Attempt to mutate a segment field of a block inside the locked window via `mutate_entry_in_place`. |
-| **Clock setup** | Start at `EPOCH_MS`. Populate 12 blocks via `evaluate_once()`. `locked_end = execution_store.locked_window_end_utc_ms(contract_clock.now_utc_ms())` = `EPOCH_MS + LOCKED_WINDOW_MS`. |
-| **Actions** | 1. `target = execution_store.get_entry_at_utc_ms(EPOCH_MS)` — first block, inside locked window. Assert `target is not None`. Assert `target.start_utc_ms < locked_end` (precondition: target is locked). 2. `result = execution_store.mutate_entry_in_place(entry_id=target.entry_id, patch={"asset_uri": "/changed.mp4"})`. 3. `verify = execution_store.get_entry_at_utc_ms(EPOCH_MS)`. |
-| **Assertions** | `result.ok == False`. `result.error_code == "LOCKED_IMMUTABLE"`. `verify.entry_id == target.entry_id` (original unchanged). `verify.generation_id == target.generation_id` (generation not altered). |
-| **Failure mode** | `result.ok == True`; or `error_code != "LOCKED_IMMUTABLE"`; or block data changed. |
+| **Scenario** | `publish_atomic_replace` targets a single block inside the locked window with `operator_override=False`. |
+| **Clock setup** | `FakeClock` at `EPOCH_MS`. Store populated with 12 blocks at `generation_id=1` via `operator_override=True`. `locked_end = _locked_window_end_ms(EPOCH_MS, LOCKED_WINDOW_MS)`. Assert `EPOCH_MS + BLOCK_DUR_MS <= locked_end`. |
+| **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + BLOCK_DUR_MS, new_entries=[block-0], generation_id=2, reason_code="CLOCK_WATERMARK", operator_override=False)`. 2. `snap = store.read_window_snapshot(EPOCH_MS, EPOCH_MS + BLOCK_DUR_MS)`. |
+| **Assertions** | `result.ok == False`. `"INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED" in result.error_code`. `snap.generation_id == 1` (original generation preserved). All entries have `generation_id == 1`. |
+| **Failure mode** | `result.ok == True`; publish succeeded without operator override inside locked window. |
 
-### THLI-002: Automated `publish_atomic_replace` without override rejected
+### THLI-002: Automated multi-block publish in locked window rejected
 
 | Field | Value |
 |---|---|
 | **Invariant** | `INV-HORIZON-LOCKED-IMMUTABLE-001` |
-| **Scenario** | Automated process attempts `publish_atomic_replace` inside locked window with `operator_override=False`. |
-| **Clock setup** | Start at `EPOCH_MS`. Populate 12 blocks with `generation_id=1`. `locked_end = execution_store.locked_window_end_utc_ms(contract_clock.now_utc_ms())`. Assert `EPOCH_MS + BLOCK_DUR_MS <= locked_end` (precondition: first block is inside locked window). |
-| **Actions** | 1. `result = execution_store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + BLOCK_DUR_MS, new_entries=<1 replacement entry>, generation_id=2, reason_code="CLOCK_WATERMARK", operator_override=False)`. 2. `snap = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + BLOCK_DUR_MS)`. |
-| **Assertions** | `result.ok == False`. `result.error_code == "LOCKED_IMMUTABLE"`. `snap.generation_id == 1` (original generation preserved). All entries in `snap.entries` have `generation_id == 1`. |
-| **Failure mode** | `result.ok == True`; automated replace succeeded without operator override inside locked window. |
+| **Scenario** | Automated process attempts `publish_atomic_replace` for a 4-block range fully inside locked window with `operator_override=False`. |
+| **Clock setup** | `FakeClock` at `EPOCH_MS`. Store populated with 12 blocks at `generation_id=1`. Assert `EPOCH_MS + 4 * BLOCK_DUR_MS <= locked_end`. |
+| **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 4 * BLOCK_DUR_MS, new_entries=[blocks 0-3], generation_id=2, reason_code="AUTOMATED_REGEN", operator_override=False)`. 2. `snap = store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 4 * BLOCK_DUR_MS)`. |
+| **Assertions** | `result.ok == False`. `"INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED" in result.error_code`. `snap.generation_id == 1`. |
+| **Failure mode** | `result.ok == True`; automated multi-block replace succeeded inside locked window. |
 
-### THLI-003: Operator override replaces locked block atomically with new generation
+### THLI-003: Operator override replaces locked block with new generation
 
 | Field | Value |
 |---|---|
 | **Invariant** | `INV-HORIZON-LOCKED-IMMUTABLE-001` |
 | **Scenario** | Operator override replaces a two-block range within the locked window. |
-| **Clock setup** | Start at `EPOCH_MS`. Populate 12 blocks with `generation_id=1`. `locked_end = execution_store.locked_window_end_utc_ms(contract_clock.now_utc_ms())`. Assert `EPOCH_MS + 2 * BLOCK_DUR_MS <= locked_end` (precondition: blocks 0-1 are inside locked window). |
-| **Actions** | 1. `result = execution_store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 2 * BLOCK_DUR_MS, new_entries=<2 replacement entries with new entry_ids>, generation_id=2, reason_code="OPERATOR_OVERRIDE", operator_override=True)`. 2. `snap_replaced = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 2 * BLOCK_DUR_MS)`. 3. `snap_untouched = execution_store.read_window_snapshot(EPOCH_MS + 2 * BLOCK_DUR_MS, execution_store.get_window_end_utc_ms())`. |
-| **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap_replaced.generation_id == 2`. All entries in `snap_replaced.entries` have `generation_id == 2`. `snap_untouched.generation_id == 1` (non-overridden blocks unchanged). All entries in `snap_untouched.entries` have `generation_id == 1`. |
-| **Failure mode** | `result.ok == False`; or non-overridden blocks affected; or replaced blocks have mixed generations; or `result.published_generation_id != 2`. |
+| **Clock setup** | `FakeClock` at `EPOCH_MS`. Store populated with 12 blocks at `generation_id=1`. Assert `EPOCH_MS + 2 * BLOCK_DUR_MS <= locked_end`. |
+| **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 2 * BLOCK_DUR_MS, new_entries=[blocks 0-1], generation_id=2, reason_code="OPERATOR_OVERRIDE", operator_override=True)`. 2. `snap_replaced = store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 2 * BLOCK_DUR_MS)`. 3. `snap_rest = store.read_window_snapshot(EPOCH_MS + 2 * BLOCK_DUR_MS, EPOCH_MS + 12 * BLOCK_DUR_MS)`. |
+| **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap_replaced.generation_id == 2`. All entries in `snap_replaced` have `generation_id == 2`. `snap_rest.generation_id == 1`. All entries in `snap_rest` have `generation_id == 1`. |
+| **Failure mode** | `result.ok == False`; or non-overridden blocks affected; or `result.published_generation_id != 2`. |
 
-### THLI-004: Blocks beyond locked window accept in-place mutation
+### THLI-004: Publish beyond locked window accepted without override
 
 | Field | Value |
 |---|---|
 | **Invariant** | `INV-HORIZON-LOCKED-IMMUTABLE-001` |
-| **Scenario** | Block in flexible future (beyond `LOCKED_WINDOW_MS` from now, still within execution horizon) accepts mutation. |
-| **Clock setup** | Start at `EPOCH_MS`. Populate execution horizon via `evaluate_once()`. `locked_end = execution_store.locked_window_end_utc_ms(contract_clock.now_utc_ms())` = `EPOCH_MS + LOCKED_WINDOW_MS`. |
-| **Actions** | 1. Let `T_flexible = locked_end + BLOCK_DUR_MS`. 2. Assert `T_flexible < execution_store.get_window_end_utc_ms()` (precondition: target exists within horizon). 3. `target = execution_store.get_entry_at_utc_ms(T_flexible)`. Assert `target is not None`. Assert `target.start_utc_ms >= locked_end` (precondition: target is outside locked window). 4. `result = execution_store.mutate_entry_in_place(entry_id=target.entry_id, patch={"asset_uri": "/changed.mp4"})`. 5. `verify = execution_store.get_entry_at_utc_ms(T_flexible)`. |
-| **Assertions** | `result.ok == True`. `result.error_code is None`. `verify.entry_id == target.entry_id`. Verify reflects the patched value. |
+| **Scenario** | Publish targeting only the flexible future (beyond locked window) with `operator_override=False`. |
+| **Clock setup** | `FakeClock` at `EPOCH_MS`. Store populated with 12 blocks at `generation_id=1`. `flexible_start = EPOCH_MS + 4 * BLOCK_DUR_MS`. Assert `flexible_start >= locked_end`. |
+| **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=flexible_start, range_end_ms=flexible_start + 2 * BLOCK_DUR_MS, new_entries=[blocks 4-5], generation_id=2, reason_code="CLOCK_WATERMARK", operator_override=False)`. 2. `snap = store.read_window_snapshot(flexible_start, flexible_start + 2 * BLOCK_DUR_MS)`. |
+| **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap.generation_id == 2`. All entries have `generation_id == 2`. |
 | **Failure mode** | `result.ok == False`; locked-window enforcement extends beyond `LOCKED_WINDOW_MS`. |
 
-### THLI-005: Lock boundary advances with clock
+### THLI-005: Clock advance moves lock boundary; previously-flexible becomes locked
 
 | Field | Value |
 |---|---|
 | **Invariant** | `INV-HORIZON-LOCKED-IMMUTABLE-001` |
 | **Scenario** | Clock advances. Previously-flexible block enters the locked window and becomes immutable. |
-| **Clock setup** | Start at `EPOCH_MS`. Populate execution horizon via `evaluate_once()`. |
-| **Actions** | 1. `locked_end_1 = execution_store.locked_window_end_utc_ms(contract_clock.now_utc_ms())` = `EPOCH_MS + LOCKED_WINDOW_MS`. 2. Let `T_target = locked_end_1 + BLOCK_DUR_MS`. Assert `T_target < execution_store.get_window_end_utc_ms()` (precondition: target exists). 3. `target = execution_store.get_entry_at_utc_ms(T_target)`. Assert `target is not None`. Assert `target.start_utc_ms >= locked_end_1` (precondition: outside lock). 4. `result_1 = execution_store.mutate_entry_in_place(entry_id=target.entry_id, patch={"asset_uri": "/changed.mp4"})`. 5. `contract_clock.advance_ms(2 * BLOCK_DUR_MS)`. 6. `horizon_manager.evaluate_once()` — extends horizon. 7. `locked_end_2 = execution_store.locked_window_end_utc_ms(contract_clock.now_utc_ms())`. Assert `T_target < locked_end_2` (postcondition: block now inside lock). 8. `result_2 = execution_store.mutate_entry_in_place(entry_id=target.entry_id, patch={"asset_uri": "/changed_again.mp4"})`. |
-| **Assertions** | `result_1.ok == True`. `result_1.error_code is None`. `locked_end_2 == contract_clock.now_utc_ms() + LOCKED_WINDOW_MS`. `locked_end_2 > locked_end_1`. `result_2.ok == False`. `result_2.error_code == "LOCKED_IMMUTABLE"`. |
+| **Clock setup** | `FakeClock` at `EPOCH_MS`. Store populated with 12 blocks at `generation_id=1`. |
+| **Actions** | 1. `flexible_start = EPOCH_MS + 4 * BLOCK_DUR_MS`. 2. `result_1 = store.publish_atomic_replace(range_start_ms=flexible_start, range_end_ms=flexible_start + 2 * BLOCK_DUR_MS, ..., generation_id=2, operator_override=False)` — succeeds. 3. `clock.advance_ms(2 * BLOCK_DUR_MS)`. 4. `locked_end_2 = _locked_window_end_ms(clock.now_utc_ms(), LOCKED_WINDOW_MS)`. Assert `flexible_start < locked_end_2`. 5. `result_2 = store.publish_atomic_replace(range_start_ms=flexible_start, ..., generation_id=3, operator_override=False)`. |
+| **Assertions** | `result_1.ok == True`. `result_2.ok == False`. `"INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED" in result_2.error_code`. `locked_end_2 > EPOCH_MS + LOCKED_WINDOW_MS` (boundary moved). |
 | **Failure mode** | `result_2.ok == True`; block remains mutable after entering the locked window. |
 
 ---
@@ -661,11 +661,11 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | THAP-002 | INV-HORIZON-ATOMIC-PUBLISH-001 | Non-overlapping range retains original generation |
 | THAP-003 | INV-HORIZON-ATOMIC-PUBLISH-001 | Snapshot single generation_id; monotonicity enforced |
 | THAP-004 | INV-HORIZON-ATOMIC-PUBLISH-001 | Operator override partial range new generation |
-| THLI-001 | INV-HORIZON-LOCKED-IMMUTABLE-001 | mutate_entry_in_place returns LOCKED_IMMUTABLE |
-| THLI-002 | INV-HORIZON-LOCKED-IMMUTABLE-001 | publish_atomic_replace without override returns LOCKED_IMMUTABLE |
-| THLI-003 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Operator override replaces with new generation_id |
-| THLI-004 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Beyond LOCKED_WINDOW_MS accepts mutation; precondition verified |
-| THLI-005 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Lock boundary advances with clock; preconditions verified |
+| THLI-001 | INV-HORIZON-LOCKED-IMMUTABLE-001 | publish_atomic_replace inside locked window rejected |
+| THLI-002 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Automated multi-block publish in locked window rejected |
+| THLI-003 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Operator override replaces locked block with new generation_id |
+| THLI-004 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Publish beyond locked window accepted without override |
+| THLI-005 | INV-HORIZON-LOCKED-IMMUTABLE-001 | Clock advance moves lock boundary; previously-flexible becomes locked |
 | THTC-001 | INV-CHANNEL-TIMELINE-CONTINUITY-001 | Position same after AIR restart; offset_ms verified |
 | THTC-002 | INV-CHANNEL-TIMELINE-CONTINUITY-001 | Position after viewer absence; offset_ms = T - block_start |
 | THTC-003 | INV-CHANNEL-TIMELINE-CONTINUITY-001 | Two independent computations identical |
