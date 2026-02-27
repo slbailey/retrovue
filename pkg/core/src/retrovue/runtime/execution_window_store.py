@@ -47,6 +47,8 @@ class ExecutionEntry:
     channel_id: str = ""
     programming_day_date: date | None = None
     is_locked: bool = True
+    transmission_log_ref: str | None = None
+    is_operator_override: bool = False
 
 
 @dataclass
@@ -80,9 +82,14 @@ class ExecutionWindowStore:
         get_all_entries()
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        enforce_derivation_from_playlist: bool = False,
+    ) -> None:
         self._entries: list[ExecutionEntry] = []
         self._lock = threading.Lock()
+        self._enforce_derivation_from_playlist = enforce_derivation_from_playlist
 
     # ------------------------------------------------------------------
     # Write (HorizonManager)
@@ -93,10 +100,24 @@ class ExecutionWindowStore:
 
         Duplicate block_ids are silently ignored (idempotent).
 
+        Raises ValueError if any entry lacks playlist derivation
+        (INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001) when enforcement is enabled.
         Raises ValueError if any entry lacks schedule lineage
         (INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001).
         """
         for entry in entries:
+            if self._enforce_derivation_from_playlist:
+                if (
+                    not entry.is_operator_override
+                    and entry.transmission_log_ref is None
+                ):
+                    raise ValueError(
+                        "INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED: "
+                        f"ExecutionEntry block_id={entry.block_id!r} has "
+                        f"transmission_log_ref=None and is_operator_override=False. "
+                        "Every execution artifact must be derived from a "
+                        "TransmissionLogEntry or be an explicit operator override."
+                    )
             if not entry.channel_id or entry.programming_day_date is None:
                 raise ValueError(
                     "INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001-VIOLATED: "
