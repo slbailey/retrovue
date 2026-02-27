@@ -25,14 +25,19 @@ Broadcast Day Behavior:
   "everything that aired on 2025-10-24 broadcast day" and get the correct partial segment.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class AsRunEvent:
-    """Record of what actually aired"""
+    """Record of what actually aired.
+
+    Frozen (immutable) per INV-ASRUN-IMMUTABLE-001: AsRun records must
+    not be mutated after creation.  State transitions (e.g. recording
+    end time) produce new instances via dataclasses.replace().
+    """
 
     event_id: str
     channel_id: str
@@ -133,13 +138,20 @@ class AsRunLogger:
         self.events.append(event)
         return event_id
 
-    def log_playout_end(self, event_id: str, end_time_utc: datetime) -> None:
+    def log_playout_end(self, event_id: str, end_time_utc: datetime) -> AsRunEvent | None:
         """
         Log the end of a playout event.
+
+        INV-ASRUN-IMMUTABLE-001: The original AsRunEvent is not mutated.
+        A new frozen instance with the updated end time replaces it in
+        the events list.
 
         Args:
             event_id: Event ID from log_playout_start
             end_time_utc: When playback ended (UTC, timezone-aware)
+
+        Returns:
+            The new AsRunEvent instance, or None if event_id not found.
 
         Raises:
             ValueError if end_time_utc is naive
@@ -147,12 +159,16 @@ class AsRunLogger:
         if end_time_utc.tzinfo is None:
             raise ValueError("datetime must be timezone-aware")
 
-        # Find the event and update it
-        for event in self.events:
+        for i, event in enumerate(self.events):
             if event.event_id == event_id:
-                event.end_time_utc = end_time_utc
-                event.duration_seconds = (end_time_utc - event.start_time_utc).total_seconds()
-                break
+                updated = replace(
+                    event,
+                    end_time_utc=end_time_utc,
+                    duration_seconds=(end_time_utc - event.start_time_utc).total_seconds(),
+                )
+                self.events[i] = updated
+                return updated
+        return None
 
     def log_broadcast_day_rollover(self, channel_id: str, rollover_time_utc: datetime) -> None:
         """

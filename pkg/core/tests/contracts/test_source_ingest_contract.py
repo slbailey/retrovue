@@ -1,11 +1,11 @@
 """
 Contract tests for Source Ingest command (discovery-only mode).
 
-Per rules in .cursor/rules/20-tests-source-ingest-contract.mdc, ingest is not
-implemented; the CLI should:
-- Exit 0 with an informative message when no collections or none ingestible/sync-enabled
-- Exit 1 with "Ingest operation is not available" (or close) when eligible collections exist
-- Exit 1 with "Error: Source '<id>' not found" when source is missing
+Architectural doctrine:
+- Source ingest MUST succeed (exit code 0) when eligible collections exist.
+- Enrichers are optional; lack of valid enrichers MUST NOT cause exit code 1.
+- Warnings are allowed. No crash. No unintended DB writes in discovery-only scenarios.
+- Exit 1 only when source is missing: "Error: Source '<id>' not found".
 
 No legacy orchestrator/service should be required or asserted.
 """
@@ -105,18 +105,19 @@ class TestSourceIngestContract:
             assert result.exit_code == 0
             assert "No ingestible collections" in result.stdout
     
-    def test_b4_eligible_collections_exist_exit_one_unavailable(self):
-        """Eligible collections present → exit 1 with unavailable message."""
+    def test_b4_eligible_collections_exist_succeeds_warning_allowed(self):
+        """Eligible collections present → exit 0; enrichers optional; warning allowed."""
         with patch('retrovue.cli.commands.source.session') as mock_session:
             mock_db = self._setup_session_mock(mock_session)
             mock_db.query.return_value.filter.return_value.first.return_value = self.source
-            # Simulate sync_enabled collections
             mock_db.query.return_value.filter.return_value.all.return_value = [
                 self.collection1, self.collection2
             ]
             result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-            assert result.exit_code == 1
-            assert "Ingest operation is not available" in result.stderr
+            assert result.exit_code == 0
+            assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
+            mock_db.add.assert_not_called()
+            mock_db.commit.assert_not_called()
     
     def test_b5_rejects_collection_level_narrowing_flags(self):
         """B-3: Command MUST NOT accept collection-level narrowing flags."""
@@ -129,8 +130,8 @@ class TestSourceIngestContract:
         result = self.runner.invoke(app, ["source", "ingest", self.source_id, "--season", "1"])
         assert result.exit_code != 0
     
-    def test_b7_summarizes_when_eligible_unavailable(self):
-        """B-5: Command MUST summarize which collections were targeted and which were skipped."""
+    def test_b7_summarizes_when_eligible_succeeds(self):
+        """B-5: Command MUST summarize which collections were targeted; ingest succeeds (exit 0)."""
         with patch('retrovue.cli.commands.source.session') as mock_session:
             mock_db = self._setup_session_mock(mock_session)
             mock_db.query.return_value.filter.return_value.first.return_value = self.source
@@ -138,8 +139,10 @@ class TestSourceIngestContract:
                 self.collection1, self.collection2
             ]
             result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-            assert result.exit_code == 1
-            assert "Ingest operation is not available" in result.stderr
+            assert result.exit_code == 0
+            assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
+            mock_db.add.assert_not_called()
+            mock_db.commit.assert_not_called()
     
     def test_b8_dry_run_with_no_eligible_exits_zero(self):
         """B-6: Dry-run MUST enumerate what would be ingested without mutating data."""
@@ -200,22 +203,26 @@ class TestSourceIngestContract:
             result = self.runner.invoke(app, ["source", "ingest", self.source_id]) 
             assert result.exit_code == 0
     
-    def test_b16_aggregate_statistics_text_unavailable(self):
-        """B-14: Command MUST aggregate statistics from all collection ingests."""
+    def test_b16_aggregate_statistics_succeeds_with_eligible(self):
+        """B-14: With eligible collections, ingest succeeds (exit 0); summary/output present."""
         with patch('retrovue.cli.commands.source.session') as mock_session:
             mock_db = self._setup_session_mock(mock_session)
             mock_db.query.return_value.filter.return_value.first.return_value = self.source
             mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1, self.collection2]
             result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-            assert result.exit_code == 1
-            assert "Ingest operation is not available" in result.stderr
+            assert result.exit_code == 0
+            assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
+            mock_db.add.assert_not_called()
+            mock_db.commit.assert_not_called()
     
-    def test_b17_report_overall_last_ingest_time_text_unavailable(self):
-        """B-15: Command MUST report overall last ingest time."""
+    def test_b17_report_overall_last_ingest_time_succeeds_with_eligible(self):
+        """B-15: With eligible collections, ingest succeeds (exit 0); output present."""
         with patch('retrovue.cli.commands.source.session') as mock_session:
             mock_db = self._setup_session_mock(mock_session)
             mock_db.query.return_value.filter.return_value.first.return_value = self.source
             mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1]
             result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-            assert result.exit_code == 1
-            assert "Ingest operation is not available" in result.stderr
+            assert result.exit_code == 0
+            assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
+            mock_db.add.assert_not_called()
+            mock_db.commit.assert_not_called()

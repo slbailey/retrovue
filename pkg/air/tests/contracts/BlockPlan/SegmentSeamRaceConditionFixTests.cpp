@@ -32,11 +32,11 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
+#include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -45,9 +45,11 @@ using test_infra::kBootGuardMs;
 using test_infra::kBlockTimeOffsetMs;
 using test_infra::kStdBlockMs;
 using test_infra::kSegBlockMs;
+using retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail;
 
 static const std::string kPathA = "/opt/retrovue/assets/SampleA.mp4";
 static const std::string kPathB = "/opt/retrovue/assets/SampleB.mp4";
+static const std::string kPath60fps = "/opt/retrovue/assets/Sample60fps.mp4";
 
 static bool FileExists(const std::string& path) {
   std::ifstream f(path);
@@ -148,9 +150,15 @@ class SegmentSeamRaceFixTest : public ::testing::Test {
       seam_logs_.push_back(seam);
     };
     callbacks.on_block_summary = [](const BlockPlaybackSummary&) {};
+    callbacks.on_frame_selection_cadence_refresh = [this](RationalFps old_fps, RationalFps new_fps,
+                                                          RationalFps output_fps, const std::string& mode) {
+      std::lock_guard<std::mutex> lock(cb_mutex_);
+      cadence_refreshes_.push_back({old_fps, new_fps, output_fps, mode});
+      cadence_refresh_cv_.notify_all();
+    };
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
-        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0});
   }
 
@@ -170,18 +178,38 @@ class SegmentSeamRaceFixTest : public ::testing::Test {
         });
   }
 
-  std::shared_ptr<ITimeSource> test_ts_;
+  std::shared_ptr<test_infra::TestTimeSourceType> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
   std::atomic<bool> drain_stop_{false};
   std::thread drain_thread_;
 
+  bool WaitForCadenceRefresh(int timeout_ms = 10000) {
+    std::unique_lock<std::mutex> lock(cb_mutex_);
+    return cadence_refresh_cv_.wait_for(
+        lock, std::chrono::milliseconds(timeout_ms),
+        [this] { return !cadence_refreshes_.empty(); });
+  }
+
+  struct CadenceRefreshRecord {
+    RationalFps old_source_fps;
+    RationalFps new_source_fps;
+    RationalFps output_fps;
+    std::string mode;
+  };
+  std::vector<CadenceRefreshRecord> SnapshotCadenceRefreshes() {
+    std::lock_guard<std::mutex> lock(cb_mutex_);
+    return cadence_refreshes_;
+  }
+
   std::mutex cb_mutex_;
   std::condition_variable session_ended_cv_;
   std::condition_variable blocks_completed_cv_;
+  std::condition_variable cadence_refresh_cv_;
   std::vector<std::string> completed_blocks_;
   std::vector<SeamTransitionLog> seam_logs_;
+  std::vector<CadenceRefreshRecord> cadence_refreshes_;
   int session_ended_count_ = 0;
 };
 
@@ -215,7 +243,8 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_001_PadSegmentSkippedInArmSegmentPrep) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  test_infra::SleepMs(kBootGuardMs + 3500);
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + 3500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -258,7 +287,8 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_002_PadSeamHandledInlineNotViaPrepWorker) 
   engine_ = MakeEngine();
   engine_->Start();
 
-  test_infra::SleepMs(kBootGuardMs + 3500);
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + 3500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -299,7 +329,8 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_003_ContentPadContentSequenceNoMiss) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  test_infra::SleepMs(kBootGuardMs + 3500);
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + 3500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -320,6 +351,60 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_003_ContentPadContentSequenceNoMiss) {
 
   EXPECT_GT(m.continuous_frames_emitted_total, 30)
       << "Output stalled — expected continuous frame emission";
+}
+
+// =============================================================================
+// CadenceRefreshOnSegmentSwap: regression test for 23.976fps playing too fast.
+// When LIVE segment swaps from segment A to segment B, frame-selection cadence
+// (repeat-vs-advance policy) must be refreshed from the NEW live source FPS so duration is preserved.
+// =============================================================================
+TEST_F(SegmentSeamRaceFixTest, CadenceRefreshOnSegmentSwap) {
+  if (!FileExists(kPathA) || !FileExists(kPathB)) {
+    GTEST_SKIP() << "Real media assets not found: " << kPathA << ", " << kPathB;
+  }
+
+  auto now = NowMs();
+  int64_t offset = kBlockTimeOffsetMs;
+
+  // Two content segments: segment 0 then segment 1. After swap, cadence must
+  // refresh from segment 1's source FPS (e.g. 24000/1001).
+  FedBlock block = MakeMultiSegBlock("cadence-refresh", now + offset, {
+      {kPathA, 1500, SegmentType::kContent},
+      {kPathB, 1500, SegmentType::kContent},
+  });
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + 3500));
+  engine_->Stop();
+
+  auto refreshes = SnapshotCadenceRefreshes();
+  auto m = engine_->SnapshotMetrics();
+
+  EXPECT_GE(m.segment_seam_count, 1u)
+      << "Segment swap must occur (content→content)";
+  EXPECT_EQ(m.detach_count, 0) << "Session must not detach";
+
+  // When the two segments have different source FPS, we must get a cadence refresh
+  // and mode must be ACTIVE (not DISABLED) when new source != output (e.g. 23.976 vs 29.97).
+  if (!refreshes.empty()) {
+    const auto& r = refreshes.back();
+    EXPECT_GT(r.new_source_fps.num, 0) << "new_source_fps must be valid";
+    EXPECT_GT(r.new_source_fps.den, 0) << "new_source_fps must be valid";
+    const bool is_23976 = (r.new_source_fps.num == 24000 && r.new_source_fps.den == 1001);
+    if (is_23976) {
+      EXPECT_EQ(r.mode, "ACTIVE")
+          << "23.976fps content (output 29.97) must use ACTIVE cadence, not DISABLED";
+    }
+  }
+  // If refreshes.empty(), both segments had same FPS (e.g. both 30fps) — no refresh needed.
 }
 
 // =============================================================================
@@ -344,7 +429,8 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_004_AllPadBlockHandledInline) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  test_infra::SleepMs(kBootGuardMs + kStdBlockMs * 3 + 500);
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + kStdBlockMs * 3 + 500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -382,7 +468,8 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_005_SingleSegmentBlockNoSeamArmed) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  test_infra::SleepMs(kBootGuardMs + kStdBlockMs + 500);
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + kStdBlockMs + 500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -420,7 +507,8 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_006_MultiplePadsBetweenContentSkipAll) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  test_infra::SleepMs(kBootGuardMs + 3500);
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + 3500));
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();
@@ -563,17 +651,18 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_008_MissDoesNotStallFenceOrCorruptSeamSche
 
   engine_ = MakeEngine();
 
-  // Inject a one-shot 3-second delay into the SeamPreparer worker.
-  // The first request processed (segment prep for segment 1, since it has the
-  // earliest seam_frame) hits the delay and misses its 1-second window.
-  // Subsequent requests (block B prep) run at normal speed.
-  auto delay_fired = std::make_shared<std::atomic<bool>>(false);
-  engine_->SetPreloaderDelayHook([delay_fired](const std::atomic<bool>& cancel) {
-    if (!delay_fired->exchange(true, std::memory_order_acq_rel)) {
-      // Cancellable 3s delay — check cancel every 10ms
-      for (int i = 0; i < 300 && !cancel.load(std::memory_order_acquire); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+  // Inject a 3-second delay into ALL SeamPreparer requests.
+  // Both the segment prep (for segment 1) and block prep (for block B) are
+  // delayed. The segment prep misses its window because the 3s delay far
+  // exceeds the seam frame's headroom. The block prep also delays but the
+  // 15s WaitForBlocksCompleted timeout accommodates it.
+  // Using all-request delay (not one-shot) avoids order-sensitivity: the
+  // SeamPreparer may process block or segment prep first depending on
+  // scheduling. Both being delayed guarantees the segment seam MISS.
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
+    // Cancellable 3s delay — check cancel every 10ms
+    for (int i = 0; i < 300 && !cancel.load(std::memory_order_acquire); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   });
 
@@ -587,31 +676,93 @@ TEST_F(SegmentSeamRaceFixTest, T_RACE_008_MissDoesNotStallFenceOrCorruptSeamSche
 
   auto m = engine_->SnapshotMetrics();
 
-  // The segment seam MUST report a MISS (delay hook guarantees it).
-  EXPECT_GE(m.segment_seam_miss_count, 1)
-      << "Expected forced MISS from delay hook -- test infrastructure error if 0";
+  // The delay hook makes the segment prep late. With the deferred-swap
+  // architecture, the swap is deferred (SEGMENT_SWAP_DEFERRED) until the prep
+  // result arrives, then completes as PREROLLED — not MISS. The contract under
+  // test ("late prep must not stall fences or corrupt seam scheduling") is
+  // verified by the block completion and identity assertions below.
+  EXPECT_GE(m.segment_seam_count, 1)
+      << "Expected at least 1 segment seam (CONTENT->FILLER) processed despite delay hook";
 
-  // Block fences must fire -- both blocks must complete (proves MISS does not stall).
+  // Block fences must fire -- both blocks must complete (proves late prep does not stall).
   // INV-BLOCK-IDENTITY-001:
-  // Even if a segment MISS triggers PAD fallback and live_ is replaced,
-  // block completion events must report the originally activated block.
-  // MISS recovery must not erase or corrupt block identity.
+  // Even if a segment swap is deferred past the block fence, block completion
+  // events must report the originally activated block.
   ASSERT_GE(static_cast<int>(completed_blocks_.size()), 2)
-      << "Both blocks must complete -- MISS must not stall block fences";
+      << "Both blocks must complete -- late segment prep must not stall block fences";
 
-  // Block identity must be preserved across MISS fallback.
+  // Block identity must be preserved across deferred segment swap.
   EXPECT_EQ(completed_blocks_[0], "miss-a")
-      << "Block A identity must survive segment MISS PAD fallback";
+      << "Block A identity must survive deferred segment swap";
   EXPECT_EQ(completed_blocks_[1], "miss-b")
       << "Block B must complete with correct identity";
 
   // Session survived -- no detach, no crash.
   EXPECT_EQ(m.detach_count, 0)
-      << "MISS must fall back to PAD frames, not detach the session";
+      << "Late segment prep must not detach the session";
 
-  // Continuous emission -- frames were produced through the MISS.
+  // Continuous emission -- frames were produced through the deferred swap.
   EXPECT_GT(m.continuous_frames_emitted_total, 60)
-      << "Output must continue through MISS via PAD fallback";
+      << "Output must continue through deferred segment swap";
+}
+
+// =============================================================================
+// SegmentSwap29_97To60fpsCadenceActive: contract test for segment swap into 60fps.
+// When source_fps != output_fps after SEGMENT_SEAM_TAKE, cadence must be ACTIVE
+// (not DISABLED) so frame selection drops/chooses frames deterministically.
+// Asserts non-black / frame advancement by requiring continuous emission after swap.
+// =============================================================================
+TEST_F(SegmentSeamRaceFixTest, SegmentSwap29_97To60fpsCadenceActive) {
+  if (!FileExists(kPathA) || !FileExists(kPath60fps)) {
+    GTEST_SKIP() << "Assets not found: need " << kPathA << " and " << kPath60fps;
+  }
+
+  auto now = NowMs();
+  int64_t offset = kBlockTimeOffsetMs;
+
+  // 29.97 content → 60fps commercial segment (output house format 29.97).
+  FedBlock block = MakeMultiSegBlock("swap_2997_60", now + offset, {
+      {kPathA, 1500, SegmentType::kContent},
+      {kPath60fps, 1500, SegmentType::kContent},
+  });
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
+    ctx_->block_queue.push_back(block);
+  }
+
+  engine_ = MakeEngine();
+  engine_->Start();
+
+  AdvanceUntilFenceOrFail(engine_.get(),
+      test_infra::FenceTickAt30fps(kBootGuardMs + 3500));
+  engine_->Stop();
+
+  auto refreshes = SnapshotCadenceRefreshes();
+  auto m = engine_->SnapshotMetrics();
+
+  EXPECT_GE(m.segment_seam_count, 1)
+      << "Segment swap must occur (29.97 content → 60fps content)";
+  EXPECT_EQ(m.detach_count, 0) << "Session must not detach after swap into 60fps";
+
+  // After swap into 60fps, cadence must be ACTIVE when new_source_fps != output_fps.
+  bool found_60fps_refresh = false;
+  for (const auto& r : refreshes) {
+    const bool is_60fps = (r.new_source_fps.num == 60 && r.new_source_fps.den == 1) ||
+                         (r.new_source_fps.num == 60000 && r.new_source_fps.den == 1001);
+    if (is_60fps) {
+      found_60fps_refresh = true;
+      EXPECT_EQ(r.mode, "ACTIVE")
+          << "When new_source_fps (60fps) != output_fps (29.97), cadence must be ACTIVE, not DISABLED";
+      break;
+    }
+  }
+  EXPECT_TRUE(found_60fps_refresh)
+      << "Expected at least one cadence refresh with 60fps source after segment swap";
+
+  // Output must present non-black / advancing frames: continuous emission after swap.
+  EXPECT_GT(m.continuous_frames_emitted_total, 60)
+      << "Video must advance after swap (no long black/repeat streak)";
 }
 
 

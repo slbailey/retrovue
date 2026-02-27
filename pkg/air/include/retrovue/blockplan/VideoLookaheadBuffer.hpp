@@ -110,8 +110,14 @@ class VideoLookaheadBuffer {
 
   // --- Observability ---
 
-  // Current buffer depth in frames.
+  // Current buffer depth in frames (container size). INV-VIDEO-BOUNDED: must be <= HardCapFrames().
   int DepthFrames() const;
+
+  // Hard cap in frames. Invariant: frames_.size() <= HardCapFrames() (enforced on push).
+  int HardCapFrames() const { return hard_cap_frames_; }
+
+  // Frames dropped because container would exceed hard cap (enforced on push).
+  int64_t DropsTotal() const;
 
   // Number of underflow events (TryPopFrame returned false).
   int64_t UnderflowCount() const;
@@ -196,6 +202,10 @@ class VideoLookaheadBuffer {
   struct RefillRate { int64_t frames = 0; int64_t elapsed_us = 0; };
   RefillRate GetRefillRate() const;
 
+  // INV-AUDIO-LIVENESS-001 diagnostics: audio-first decode under backpressure (counters only).
+  int64_t DecodeContinuedForAudioWhileVideoFull() const;
+  int64_t DecodeParkedVideoFullAudioLow() const;
+
   // --- Lifecycle ---
 
   // Stop fill thread (if running), clear buffer and counters.
@@ -239,7 +249,7 @@ class VideoLookaheadBuffer {
   std::thread fill_thread_;
   std::atomic<bool> fill_stop_{false};
   bool fill_running_ = false;
-  uint64_t fill_generation_ = 0;  // Monotonic; bumped at StopFillingAsync/StartFilling
+  std::atomic<uint64_t> fill_generation_{0};  // Monotonic; bumped at StopFillingAsync/StartFilling (atomic so tick path can bump without taking mutex_)
 
   // Fill thread parameters (set by StartFilling, read by FillLoop).
   ITickProducer* producer_ = nullptr;
@@ -253,8 +263,16 @@ class VideoLookaheadBuffer {
   // Metrics (under mutex_).
   int64_t total_pushed_ = 0;
   int64_t total_popped_ = 0;
+  int64_t drops_total_ = 0;  // INV-VIDEO-BOUNDED: dropped to enforce hard cap
   int64_t underflow_count_ = 0;
   bool primed_ = false;
+
+  // INV-VIDEO-BOUNDED: Strict upper bound on frames_.size(). Enforced on every push.
+  static int ComputeHardCap(int target_depth_frames) {
+    const int from_target = (target_depth_frames > 0) ? target_depth_frames * 4 : 60;
+    return std::max(from_target, 200);
+  }
+  int hard_cap_frames_;
 
   // Decode latency ring buffer (under mutex_).
   std::array<int64_t, kLatencyRingSize> decode_latency_us_{};
@@ -263,6 +281,15 @@ class VideoLookaheadBuffer {
 
   // Fill start time for refill rate computation.
   std::chrono::steady_clock::time_point fill_start_time_{};
+
+  // Per-instance MEM_WATCHDOG rate-limit: 1Hz or when depth/state changes significantly.
+  mutable std::chrono::steady_clock::time_point last_fill_log_{};
+  mutable int last_watchdog_depth_{-1};
+  mutable std::string last_watchdog_state_{};
+
+  // INV-AUDIO-LIVENESS-001 diagnostics (not invariants): audio-first decode under backpressure.
+  std::atomic<int64_t> decode_continued_for_audio_while_video_full_{0};
+  std::atomic<int64_t> decode_parked_video_full_audio_low_{0};
 };
 
 }  // namespace retrovue::blockplan

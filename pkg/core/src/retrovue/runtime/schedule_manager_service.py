@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.execution_window_store import ExecutionWindowStore
 from retrovue.runtime.horizon_config import HorizonNoScheduleDataError
 from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.schedule_types import (
@@ -72,16 +73,301 @@ class InMemorySequenceStore(SequenceStateStore):
             self._positions[channel_id][program_id] = index
 
 
+def validate_scheduleday_contiguity(
+    resolved: ResolvedScheduleDay,
+    programming_day_start_hour: int,
+    effective_start: datetime | None = None,
+) -> None:
+    """Validate that resolved slots tile the full broadcast day with no gaps or overlaps.
+
+    INV-SCHEDULEDAY-NO-GAPS-001: A materialized ScheduleDay must provide
+    continuous, gap-free coverage from programming_day_start to
+    programming_day_start + 24h.
+
+    Args:
+        resolved: The ResolvedScheduleDay to validate.
+        programming_day_start_hour: Broadcast day start hour.
+        effective_start: If set, overrides broadcast_start for first-slot
+            validation. Used when a preceding day's carry-in pushes the
+            effective start of coverage past the nominal boundary.
+
+    Raises:
+        ValueError: If any gap or overlap is detected, with
+            INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED tag.
+    """
+    day = resolved.programming_day_date
+    pds_time = time(programming_day_start_hour, 0)
+    broadcast_start = datetime.combine(day, pds_time, tzinfo=timezone.utc)
+    broadcast_end = broadcast_start + timedelta(hours=24)
+    actual_start = effective_start if effective_start is not None else broadcast_start
+
+    if not resolved.resolved_slots:
+        raise ValueError(
+            "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+            f"ResolvedScheduleDay for {day!r} has no slots. "
+            f"Broadcast day [{broadcast_start}→{broadcast_end}] is entirely uncovered."
+        )
+
+    # Compute absolute (start, end) for each slot.
+    def _slot_start(slot):
+        base = datetime.combine(day, slot.slot_time, tzinfo=timezone.utc)
+        if slot.slot_time.hour < programming_day_start_hour:
+            base += timedelta(days=1)
+        return base
+
+    intervals = []
+    for slot in resolved.resolved_slots:
+        start = _slot_start(slot)
+        end = start + timedelta(seconds=slot.duration_seconds)
+        intervals.append((start, end, slot))
+
+    # Sort by start time.
+    intervals.sort(key=lambda x: x[0])
+
+    # Check first slot starts at expected start (broadcast_start or carry-in end).
+    first_start = intervals[0][0]
+    if first_start != actual_start:
+        raise ValueError(
+            "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+            f"First slot starts at {first_start}, but broadcast day "
+            f"starts at {actual_start}. "
+            f"Gap: [{actual_start}→{first_start}]."
+        )
+
+    # Check contiguity: each slot's end must equal next slot's start.
+    for i in range(len(intervals) - 1):
+        current_end = intervals[i][1]
+        next_start = intervals[i + 1][0]
+        if current_end < next_start:
+            raise ValueError(
+                "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+                f"Gap between slot '{intervals[i][2].label}' ending at "
+                f"{current_end} and slot '{intervals[i + 1][2].label}' "
+                f"starting at {next_start}. "
+                f"Gap: [{current_end}→{next_start}]."
+            )
+        if current_end > next_start:
+            raise ValueError(
+                "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+                f"Overlap between slot '{intervals[i][2].label}' ending at "
+                f"{current_end} and slot '{intervals[i + 1][2].label}' "
+                f"starting at {next_start}. "
+                f"Overlap: [{next_start}→{current_end}]."
+            )
+
+    # Check last slot covers the broadcast day end.
+    # last_end >= broadcast_end is valid (carry-in past boundary is allowed).
+    # last_end < broadcast_end is a gap at the end of the broadcast day.
+    last_end = intervals[-1][1]
+    if last_end < broadcast_end:
+        raise ValueError(
+            "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+            f"Last slot ends at {last_end}, but broadcast day "
+            f"ends at {broadcast_end}. "
+            f"Gap: [{last_end}→{broadcast_end}]."
+        )
+
+
+def check_scheduleday_lead_time(
+    resolved_store: ResolvedScheduleStore,
+    channel_id: str,
+    target_date: date,
+    now_utc: datetime,
+    min_lead_days: int,
+    programming_day_start_hour: int = 6,
+) -> None:
+    """Check that a ScheduleDay exists with sufficient lead time.
+
+    INV-SCHEDULEDAY-LEAD-TIME-001: A ScheduleDay for broadcast date D must
+    be materialized no later than D - min_lead_days calendar days.
+
+    Args:
+        resolved_store: The store to check for materialized ScheduleDays.
+        channel_id: The channel to check.
+        target_date: The broadcast date D to verify.
+        now_utc: Current UTC time (from clock).
+        min_lead_days: Minimum lead time in calendar days (injected, not hardcoded).
+        programming_day_start_hour: Broadcast day start hour.
+
+    Raises:
+        ValueError: If the deadline has passed and no ScheduleDay exists,
+            with INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED tag.
+    """
+    deadline = datetime.combine(
+        target_date - timedelta(days=min_lead_days),
+        time(programming_day_start_hour, 0),
+        tzinfo=timezone.utc,
+    )
+
+    if now_utc <= deadline:
+        # Deadline has not passed yet; no violation.
+        return
+
+    if resolved_store.exists(channel_id, target_date):
+        # ScheduleDay exists; lead time satisfied.
+        return
+
+    raise ValueError(
+        "INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED: "
+        f"No ScheduleDay exists for channel_id={channel_id!r}, "
+        f"target_date={target_date!r}. "
+        f"Deadline was {deadline.isoformat()} "
+        f"(min_schedule_day_lead_days={min_lead_days}). "
+        f"Current time is {now_utc.isoformat()}, which is past the deadline."
+    )
+
+
+def _enforce_derivation_traceability(resolved: ResolvedScheduleDay) -> None:
+    """Enforce INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001.
+
+    A ResolvedScheduleDay must satisfy one of:
+    1. plan_id is set (generated from a SchedulePlan), or
+    2. is_manual_override is True (operator override).
+
+    Raises:
+        ValueError: If neither condition is met.
+    """
+    if not resolved.is_manual_override and resolved.plan_id is None:
+        raise ValueError(
+            "INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001-VIOLATED: "
+            f"ResolvedScheduleDay for "
+            f"programming_day_date={resolved.programming_day_date!r} "
+            "has plan_id=None and is_manual_override=False. "
+            "Every ScheduleDay must trace to a generating SchedulePlan "
+            "or be an explicit operator override."
+        )
+
+
+def validate_scheduleday_seam(
+    new_day: ResolvedScheduleDay,
+    preceding_day: ResolvedScheduleDay | None,
+    programming_day_start_hour: int,
+) -> None:
+    """Validate that the seam between consecutive ScheduleDays has no overlap.
+
+    INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001: If the preceding day's last slot
+    extends past the broadcast-day boundary, the new day's first slot MUST
+    NOT start before that carry-in slot's end.
+
+    Args:
+        new_day: The ResolvedScheduleDay being stored.
+        preceding_day: The preceding day's ResolvedScheduleDay, or None.
+        programming_day_start_hour: Broadcast day start hour (e.g. 6).
+
+    Raises:
+        ValueError: If carry-in overlap is detected.
+    """
+    if preceding_day is None:
+        return
+    if not preceding_day.resolved_slots:
+        return
+    if not new_day.resolved_slots:
+        return
+
+    pds_time = time(programming_day_start_hour, 0)
+    boundary = datetime.combine(
+        new_day.programming_day_date, pds_time, tzinfo=timezone.utc
+    )
+
+    # Compute absolute end of preceding day's last slot.
+    prev_slots = sorted(
+        preceding_day.resolved_slots,
+        key=lambda s: (s.slot_time.hour, s.slot_time.minute),
+    )
+
+    def _slot_abs_end(slot, day_date):
+        base = datetime.combine(day_date, slot.slot_time, tzinfo=timezone.utc)
+        if slot.slot_time < pds_time:
+            base += timedelta(days=1)
+        return base + timedelta(seconds=slot.duration_seconds)
+
+    last_slot = prev_slots[-1]
+    carry_in_end = _slot_abs_end(last_slot, preceding_day.programming_day_date)
+
+    # If the preceding day ends at or before the boundary, no carry-in.
+    if carry_in_end <= boundary:
+        return
+
+    # Carry-in exists. Check new day's first slot.
+    new_slots = sorted(
+        new_day.resolved_slots,
+        key=lambda s: (s.slot_time.hour, s.slot_time.minute),
+    )
+    first_slot = new_slots[0]
+    first_slot_start = datetime.combine(
+        new_day.programming_day_date, first_slot.slot_time, tzinfo=timezone.utc
+    )
+    if first_slot.slot_time < pds_time:
+        first_slot_start += timedelta(days=1)
+
+    if first_slot_start < carry_in_end:
+        raise ValueError(
+            "INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001-VIOLATED: "
+            f"Preceding day ({preceding_day.programming_day_date}) last slot "
+            f"carries in until {carry_in_end.isoformat()}, but new day "
+            f"({new_day.programming_day_date}) first slot starts at "
+            f"{first_slot_start.isoformat()}. "
+            f"Overlap: [{first_slot_start.isoformat()}→{carry_in_end.isoformat()}]."
+        )
+
+
+def _compute_effective_start(
+    preceding_day: ResolvedScheduleDay | None,
+    new_day_date: date,
+    programming_day_start_hour: int,
+) -> datetime | None:
+    """Compute the effective start time for a new day considering carry-in.
+
+    If the preceding day's last slot carries past the broadcast-day boundary,
+    the effective start is the carry-in end. Otherwise returns None (use
+    default broadcast_start).
+    """
+    if preceding_day is None or not preceding_day.resolved_slots:
+        return None
+
+    pds_time = time(programming_day_start_hour, 0)
+    boundary = datetime.combine(new_day_date, pds_time, tzinfo=timezone.utc)
+
+    prev_slots = sorted(
+        preceding_day.resolved_slots,
+        key=lambda s: (s.slot_time.hour, s.slot_time.minute),
+    )
+    last_slot = prev_slots[-1]
+    base = datetime.combine(
+        preceding_day.programming_day_date, last_slot.slot_time,
+        tzinfo=timezone.utc,
+    )
+    if last_slot.slot_time < pds_time:
+        base += timedelta(days=1)
+    carry_in_end = base + timedelta(seconds=last_slot.duration_seconds)
+
+    if carry_in_end > boundary:
+        return carry_in_end
+    return None
+
+
 class InMemoryResolvedStore(ResolvedScheduleStore):
     """
     In-memory implementation of ResolvedScheduleStore.
 
     Stores resolved schedule days. Lost on process restart.
     For production, use a persistent store.
+
+    When constructed with an ``execution_store``, delete() enforces
+    INV-DERIVATION-ANCHOR-PROTECTED-001: a ScheduleDay that has
+    downstream ExecutionEntries may not be removed.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        execution_store: ExecutionWindowStore | None = None,
+        programming_day_start_hour: int | None = None,
+        enforce_derivation_traceability: bool = False,
+    ) -> None:
         self._resolved: dict[str, dict[date, ResolvedScheduleDay]] = {}
+        self._execution_store = execution_store
+        self._programming_day_start_hour = programming_day_start_hour
+        self._enforce_derivation_traceability = enforce_derivation_traceability
         self._lock = threading.Lock()
 
     def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
@@ -91,17 +377,181 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
             return channel_days.get(programming_day_date)
 
     def store(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
-        """Store a resolved schedule day. Must be idempotent."""
+        """Store a resolved schedule day.
+
+        INV-SCHEDULEDAY-ONE-PER-DATE-001: If a record already exists for
+        (channel_id, programming_day_date), the insert is rejected.
+        Use force_replace() for atomic regeneration.
+
+        Raises:
+            ValueError: If a ScheduleDay already exists for this (channel, date),
+                or if slot contiguity validation fails.
+        """
+        if self._enforce_derivation_traceability:
+            _enforce_derivation_traceability(resolved)
         with self._lock:
             if channel_id not in self._resolved:
                 self._resolved[channel_id] = {}
+            if resolved.programming_day_date in self._resolved[channel_id]:
+                raise ValueError(
+                    "INV-SCHEDULEDAY-ONE-PER-DATE-001-VIOLATED: "
+                    f"ResolvedScheduleDay already exists for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={resolved.programming_day_date!r}. "
+                    "Duplicate insertion is forbidden. "
+                    "Use force_replace() for atomic regeneration."
+                )
+            if self._programming_day_start_hour is not None:
+                prev_date = resolved.programming_day_date - timedelta(days=1)
+                preceding = self._resolved.get(channel_id, {}).get(prev_date)
+                validate_scheduleday_seam(
+                    resolved, preceding, self._programming_day_start_hour
+                )
+                effective_start = _compute_effective_start(
+                    preceding, resolved.programming_day_date,
+                    self._programming_day_start_hour,
+                )
+                validate_scheduleday_contiguity(
+                    resolved, self._programming_day_start_hour,
+                    effective_start=effective_start,
+                )
             self._resolved[channel_id][resolved.programming_day_date] = resolved
+
+    def force_replace(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
+        """Atomically replace an existing ResolvedScheduleDay.
+
+        INV-SCHEDULEDAY-ONE-PER-DATE-001: Replacement is atomic — the old
+        record is removed and the new record is installed in a single
+        critical section. At no point are zero records visible.
+
+        Raises:
+            ValueError: If no existing record to replace, or if slot
+                contiguity validation fails.
+        """
+        if self._enforce_derivation_traceability:
+            _enforce_derivation_traceability(resolved)
+        with self._lock:
+            channel_days = self._resolved.get(channel_id, {})
+            if resolved.programming_day_date not in channel_days:
+                raise ValueError(
+                    f"force_replace(): No existing ResolvedScheduleDay for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={resolved.programming_day_date!r}. "
+                    "Nothing to replace."
+                )
+            if self._programming_day_start_hour is not None:
+                prev_date = resolved.programming_day_date - timedelta(days=1)
+                preceding = channel_days.get(prev_date)
+                validate_scheduleday_seam(
+                    resolved, preceding, self._programming_day_start_hour
+                )
+                effective_start = _compute_effective_start(
+                    preceding, resolved.programming_day_date,
+                    self._programming_day_start_hour,
+                )
+                validate_scheduleday_contiguity(
+                    resolved, self._programming_day_start_hour,
+                    effective_start=effective_start,
+                )
+            channel_days[resolved.programming_day_date] = resolved
 
     def exists(self, channel_id: str, programming_day_date: date) -> bool:
         """Check if a day has already been resolved."""
         with self._lock:
             channel_days = self._resolved.get(channel_id, {})
             return programming_day_date in channel_days
+
+    def delete(self, channel_id: str, programming_day_date: date) -> None:
+        """Remove a resolved schedule day.
+
+        INV-DERIVATION-ANCHOR-PROTECTED-001: If an ExecutionWindowStore
+        is configured and contains entries derived from this
+        (channel_id, programming_day_date), deletion is refused.
+        Removing a schedule anchor while execution artifacts still
+        reference it severs the constitutional derivation chain.
+
+        Raises:
+            ValueError: If downstream execution artifacts exist.
+        """
+        if self._execution_store is not None:
+            if self._execution_store.has_entries_for(channel_id, programming_day_date):
+                raise ValueError(
+                    "INV-DERIVATION-ANCHOR-PROTECTED-001-VIOLATED: "
+                    f"Cannot delete ResolvedScheduleDay for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={programming_day_date!r}. "
+                    "Downstream ExecutionEntries still reference this "
+                    "schedule anchor. Removing it would sever the "
+                    "constitutional derivation chain."
+                )
+        with self._lock:
+            channel_days = self._resolved.get(channel_id, {})
+            channel_days.pop(programming_day_date, None)
+
+    def update(
+        self, channel_id: str, programming_day_date: date, fields: dict
+    ) -> None:
+        """INV-SCHEDULEDAY-IMMUTABLE-001: In-place mutation is unconditionally
+        prohibited. This method always raises.
+
+        Use force_replace() for atomic regeneration or operator_override()
+        for operator-initiated changes.
+
+        Raises:
+            ValueError: Always — in-place mutation is forbidden.
+        """
+        raise ValueError(
+            "INV-SCHEDULEDAY-IMMUTABLE-001-VIOLATED: "
+            f"In-place update of ResolvedScheduleDay for "
+            f"channel_id={channel_id!r}, "
+            f"programming_day_date={programming_day_date!r} "
+            f"is unconditionally prohibited. "
+            f"Attempted to modify fields: {sorted(fields.keys())}. "
+            "Use force_replace() for atomic regeneration or "
+            "operator_override() for operator-initiated changes."
+        )
+
+    def operator_override(
+        self, channel_id: str, resolved: ResolvedScheduleDay
+    ) -> ResolvedScheduleDay:
+        """Create an operator override for an existing ResolvedScheduleDay.
+
+        INV-SCHEDULEDAY-IMMUTABLE-001: The original record is never mutated.
+        A new record is created with is_manual_override=True and
+        supersedes_id pointing to the original. The new record atomically
+        replaces the original as the authoritative record.
+
+        Raises:
+            ValueError: If no existing record to override.
+
+        Returns:
+            The new override ResolvedScheduleDay.
+        """
+        with self._lock:
+            channel_days = self._resolved.get(channel_id, {})
+            original = channel_days.get(resolved.programming_day_date)
+            if original is None:
+                raise ValueError(
+                    f"operator_override(): No existing ResolvedScheduleDay for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={resolved.programming_day_date!r}. "
+                    "Nothing to override."
+                )
+
+            # Create override record with metadata linking to superseded.
+            override = ResolvedScheduleDay(
+                programming_day_date=resolved.programming_day_date,
+                resolved_slots=resolved.resolved_slots,
+                resolution_timestamp=resolved.resolution_timestamp,
+                sequence_state=resolved.sequence_state,
+                program_events=resolved.program_events,
+                is_manual_override=True,
+                supersedes_id=id(original),
+            )
+
+            # Atomic swap: original is replaced, not mutated.
+            channel_days[resolved.programming_day_date] = override
+            return override
 
 
 # ----------------------------------------------------------------------

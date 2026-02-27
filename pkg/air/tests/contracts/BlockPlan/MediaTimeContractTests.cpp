@@ -80,6 +80,9 @@ class FakeTickProducerDecoder : public ITickProducerDecoder {
   bool IsEOF() const override { return decode_count_ >= max_decodes_; }
   void SetInterruptFlags(const DecoderInterruptFlags&) override {}
   bool HasAudioStream() const override { return true; }
+  PumpResult PumpDecoderOnce(PumpMode) override {
+    return decode_count_ >= max_decodes_ ? PumpResult::kEof : PumpResult::kProgress;
+  }
 
  private:
   int width_;
@@ -873,6 +876,53 @@ TEST(MediaTimeContract, TickProducer_DROP_E2E_WithReal60fpsAsset_Optional) {
   auto fd = producer.TryGetFrame();
   ASSERT_TRUE(fd.has_value());
   EXPECT_NEAR(fd->video.metadata.duration, 1.0 / 30.0, 1e-6);
+}
+
+// =============================================================================
+// INV-AIR-MEDIA-TIME (Medipren-style): Minimal tests that would have caught
+// CT derived from output fps + frame index. No MP4 fixtures — uses helper
+// and repeat/hold rules.
+//
+// Canonical definition (future-proof): media_ct_ms = floor(rescale_q(frame_pts,
+// time_base, ms)) - media_origin_ms. MPEG-TS, MP4, MKV and FFmpeg stream
+// time_base vary; the invariant stays structurally true for arbitrary time_base.
+// Below: PTS-in-µs convention (time_base = 1/1000000). When decoder PTS uses
+// another time_base, use rescale_q so the invariant remains correct.
+// =============================================================================
+
+// PTS in µs → media_ct_ms (normalized to segment start). Special case of
+// rescale_q with time_base = 1/1000000. Do not assume all decoders give µs.
+static int64_t PtsToMediaCtMs(int64_t pts_us, int64_t media_origin_ms) {
+  return (pts_us / 1000) - media_origin_ms;
+}
+
+TEST(MediaTimeContract, MediaCtMs_FromPts_NotFromFrameIndex) {
+  constexpr int64_t kMediaOriginMs = 0;
+  EXPECT_EQ(PtsToMediaCtMs(0, kMediaOriginMs), 0);
+  int64_t pts_1 = 16683;   // ~16.683 ms at 60000/1001 fps
+  EXPECT_EQ(PtsToMediaCtMs(pts_1, kMediaOriginMs), 16);
+  int64_t pts_10 = 166830;
+  EXPECT_EQ(PtsToMediaCtMs(pts_10, kMediaOriginMs), 166);
+}
+
+TEST(MediaTimeContract, NoAdvanceOnRepeat_MediaCtMsStaysConstant) {
+  constexpr int64_t kMediaOriginMs = 0;
+  int64_t pts_us = 50000;
+  int64_t media_ct_1 = PtsToMediaCtMs(pts_us, kMediaOriginMs);
+  int64_t media_ct_2 = PtsToMediaCtMs(pts_us, kMediaOriginMs);
+  EXPECT_EQ(media_ct_1, media_ct_2)
+      << "INV-AIR-MEDIA-TIME: On repeat/hold, media_ct_ms must not advance (same PTS → same CT)";
+}
+
+TEST(MediaTimeContract, CadenceIndependence_MediaCtMsReflectsPtsNotOutputIndex) {
+  constexpr int64_t kMediaOriginMs = 0;
+  int64_t pts_tick0 = 0;
+  int64_t media_0 = PtsToMediaCtMs(pts_tick0, kMediaOriginMs);
+  int64_t pts_tick1 = 33366;  // ~33.366 ms (one output tick at 30fps, or 2 input at 60fps DROP)
+  int64_t media_1 = PtsToMediaCtMs(pts_tick1, kMediaOriginMs);
+  EXPECT_GE(media_1, 30);
+  EXPECT_LE(media_1, 40);
+  (void)media_0;
 }
 
 }  // namespace

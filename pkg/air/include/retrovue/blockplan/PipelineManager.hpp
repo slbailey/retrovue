@@ -111,6 +111,24 @@ class PipelineManager : public IPlayoutExecutionEngine {
     // P3.3b: Playback proof — wanted vs showed comparison.
     // Fired at fence, after on_block_summary.
     std::function<void(const BlockPlaybackProof&)> on_playback_proof;
+
+    // Optional: frame-selection cadence refresh after segment swap (test/observability).
+    // Invoked when repeat-vs-advance policy is reinitialized from new live source FPS.
+    // Parameters: old_source_fps, new_source_fps, output_fps, mode ("ACTIVE" or "DISABLED").
+    std::function<void(RationalFps old_source_fps, RationalFps new_source_fps,
+                       RationalFps output_fps, const std::string& mode)> on_frame_selection_cadence_refresh;
+
+    // Optional: per-tick observability for PAD/fence audio contract tests (60fps repro).
+    // Invoked once per tick with: session_frame_index, decision ("pad"/"content"/"standby"),
+    // a_src_is_null, fence_audio_pad_warning_this_tick, pad_frame_emitted_this_tick.
+    std::function<void(int64_t, const char*, bool, bool, bool)> on_tick_pad_fence_observability;
+
+    // Optional: segment seam take (test/contract). Invoked after PerformSegmentSwap when we have
+    // re-based next_seam_frame_. Parameters: session_frame_index at swap, next_seam_frame_ after rebase.
+    // Used to assert next_seam_frame_ > session_frame_index (no past seam / no catch-up thrash).
+    // CONTRACT: Must be non-blocking — runs on tick thread. No locks, waits, or I/O; else TICK_GAP.
+    // For heavy work, post (session_frame_index, next_seam_frame) to caller's async queue and process off-thread.
+    std::function<void(int64_t session_frame_index, int64_t next_seam_frame)> on_segment_seam_take;
   };
 
   PipelineManager(BlockPlanSessionContext* ctx,
@@ -234,22 +252,28 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Deferred fill thread and producer from async stop at fence.
   // The old fill thread may still be decoding when B rotates into A.
   // The old producer must stay alive until the old fill thread exits.
-  // Threads are handed to the reaper for non-blocking join (never block tick loop).
+  // Tick thread never join()s: only requests cleanup. Reaper performs join.
+  std::mutex deferred_fill_mutex_;
   std::thread deferred_fill_thread_;
   std::unique_ptr<producers::IProducer> deferred_producer_;
   std::unique_ptr<VideoLookaheadBuffer> deferred_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> deferred_audio_buffer_;
-  void CleanupDeferredFill();  // Non-blocking: hands off to reaper
+  std::atomic<bool> deferred_fill_cleanup_requested_{false};
+  void RequestDeferredFillCleanup(const char* context);  // Non-blocking: set flag, notify reaper
+  void PerformDeferredFillCleanupBlocking();  // Reaper only: take deferred_*, join, push to closer
 
   // Reaper thread: joins deferred fill threads off the tick loop.
   // ReapJob holds thread + owners so objects stay alive until join completes.
+  // Destruction order: producer first (decoder Close), then buffers, then thread.
+  // Buffers may hold decoder-derived frame data; closing decoder first avoids
+  // double-free / corrupted heap (glibc "corrupted double-linked list").
   struct ReapJob {
     int64_t job_id = 0;
     std::string block_id;  // Diagnostic: block at handoff
     std::thread thread;
-    std::unique_ptr<producers::IProducer> producer;
     std::unique_ptr<VideoLookaheadBuffer> video_buffer;
     std::unique_ptr<AudioLookaheadBuffer> audio_buffer;
+    std::unique_ptr<producers::IProducer> producer;
   };
   std::atomic<int64_t> reap_job_id_{0};
   std::thread reaper_thread_;
@@ -257,14 +281,25 @@ class PipelineManager : public IPlayoutExecutionEngine {
   std::condition_variable reaper_cv_;
   std::queue<ReapJob> reaper_queue_;
   std::atomic<bool> reaper_shutdown_{false};
+  std::condition_variable reaper_teardown_drain_cv_;
   void ReaperLoop();
   void HandOffToReaper(ReapJob job);
+  void WaitForReaperDrain();
+
+  // INV-SEAM-001: Decoder close (in producer destructor) runs off the reaper so tick thread
+  // is never delayed by FFmpeg teardown. Reaper joins fill thread then hands job to closer.
+  std::queue<ReapJob> close_queue_;
+  std::mutex close_mutex_;
+  std::condition_variable close_cv_;
+  std::thread closer_thread_;
+  std::atomic<bool> close_shutdown_{false};
+  void CloseLoop();
   static std::string GetBlockIdFromProducer(producers::IProducer* p);
 
   // --- VideoLookaheadBuffer: non-blocking video frame buffer ---
-  // Decoded video frames are pushed by a background fill thread;
-  // the tick loop pops one frame per tick.  Underflow = hard fault.
-  // Cadence (decode vs repeat) is resolved in the fill thread.
+  // Decoded video frames are pushed by a background fill thread at source cadence.
+  // The tick loop decides repeat vs advance per tick; only advance pops (TryPopFrame).
+  // Repeat ticks re-encode last_good_video_frame_ so FillLoop is not forced to match output tick rate.
   std::unique_ptr<VideoLookaheadBuffer> video_buffer_;
 
   // --- AudioLookaheadBuffer: broadcast-grade audio buffering ---
@@ -279,6 +314,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // After the TAKE (first tick >= fence_tick), B rotates into A.
   std::unique_ptr<VideoLookaheadBuffer> preview_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> preview_audio_buffer_;
+  // One-shot: after preview is primed (500ms), stop fill thread for seam-confidence-only; reset when creating new preview buffer.
+  bool preview_fill_stopped_after_prime_ = false;
 
   // --- Segment seam tracking (INV-SEAM-SEG) ---
   // Original multi-segment FedBlock, stored at block activation so that
@@ -288,7 +325,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   FedBlock live_parent_block_;
   std::vector<SegmentBoundary> live_boundaries_;
   int32_t current_segment_index_ = 0;
-  std::vector<int64_t> segment_seam_frames_;  // One per segment boundary
+  std::vector<int64_t> planned_segment_seam_frames_;  // Plan boundaries at block activation; runtime swaps may rebase
 
   // Block activation frame — session_frame_index at the moment the block became active.
   // All segment seam frames are computed relative to this anchor.  No UTC math.
@@ -307,18 +344,44 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // Swap deferral: log at most once per seam frame (avoid spam).
   int64_t last_logged_defer_seam_frame_ = -1;
+  // No double-take / re-entrancy: at most one segment swap per tick (no catch-up thrash).
+  // -1 = no take yet; after a take, last_seam_take_tick_ = session_frame_index at take.
+  int64_t last_seam_take_tick_ = -1;
+  // No PAD transition re-entry in same tick (or adjacent under lateness).
+  int64_t last_pad_tick_ = -1;
+  // SEAM_INVARIANT_VIOLATION: log at most once per block when we correct next_seam_frame_ (avoid spam).
+  std::string last_seam_invariant_violation_block_id_;
 
   // Segment seam private methods
   void ComputeSegmentSeamFrames();
   void UpdateNextSeamFrame();
+  // INV-SEAM-NEXT-FUTURE: Enforce next_seam_frame_ > session_frame_index in one place.
+  // Call after any code path that sets or updates next_seam_frame_/next_seam_type_.
+  // Corrects to a safe value and logs when violated (rate-limited once per block).
+  void EnforceNextSeamInvariant(int64_t session_frame_index, const char* reason);
   void ArmSegmentPrep(int64_t session_frame_index);
   // Ensures B (segment_b_*) is created and StartFilling for to_seg before eligibility gate.
   void EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index);
+  // Segment POST-TAKE: swap B into A (content) or PAD transition; dispatches to PerformContentSwap_BtoA or PerformPadTransition.
   void PerformSegmentSwap(int64_t session_frame_index);
+  // Content/filler only: swap B into A, hand off ex-A to reaper. Never used for PAD.
+  void PerformContentSwap_BtoA(int64_t session_frame_index);
+  // PAD only: advance segment index and rebase; never touches live buffers.
+  void PerformPadTransition(int64_t session_frame_index);
 
   // Segment seam eligibility gate: minimum readiness before swapping.
   bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;
   std::optional<IncomingState> GetIncomingSegmentState(int32_t to_seg) const;
+
+  // Deterministic PAD seam: block until pad_b_audio_buffer_ has >= kMinSegmentSwapAudioMs.
+  void PrimePadBForSeamOrDie(const char* reason);
+
+  // Frame-selection cadence: set frame_selection_cadence_enabled_ and Bresenham params from live block input FPS.
+  // Tick grid is fixed by session output FPS (house format); this only updates repeat-vs-advance policy.
+  void InitFrameSelectionCadenceForLiveBlock();
+
+  // After segment swap: refresh frame-selection cadence from current LIVE source FPS (preserves duration).
+  void RefreshFrameSelectionCadenceFromLiveSource(const char* reason);
 
   // Static helper: build synthetic single-segment FedBlock for segment prep.
   static FedBlock MakeSyntheticSegmentBlock(
@@ -350,6 +413,12 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool degraded_take_active_ = false;
   buffer::Frame last_good_video_frame_;
   bool has_last_good_video_frame_ = false;
+  // Frame-selection cadence (repeat-vs-advance) for upsampling (e.g., 24→30). TickLoop only.
+  bool frame_selection_cadence_enabled_ = false;
+  int64_t frame_selection_cadence_budget_num_ = 0;   // Bresenham accumulator
+  int64_t frame_selection_cadence_budget_den_ = 1;   // Threshold to advance
+  int64_t frame_selection_cadence_increment_ = 0;   // Amount to add per tick
+  RationalFps last_source_fps_{0, 1};      // Last live source FPS (for refresh-on-segment-swap).
   // Fingerprint context for held frame (no-unintentional-black: H must match last A content).
   uint32_t last_good_y_crc32_ = 0;
   std::string last_good_asset_uri_;

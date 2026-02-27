@@ -40,4 +40,8 @@ bool FFmpegDecoderAdapter::HasAudioStream() const {
   return impl_->HasAudioStream();
 }
 
+blockplan::PumpResult FFmpegDecoderAdapter::PumpDecoderOnce(blockplan::PumpMode mode) {
+  return impl_->PumpDecoderOnce(mode);
+}
+
 }  // namespace retrovue::blockplan

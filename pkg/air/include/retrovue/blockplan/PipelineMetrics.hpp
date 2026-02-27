@@ -70,6 +70,10 @@ struct PipelineMetrics {
   int64_t decode_latency_p95_us = 0;
   int64_t decode_latency_mean_us = 0;
 
+  // ---- INV-AUDIO-LIVENESS-001 diagnostics (audio-first decode under backpressure) ----
+  int64_t decode_continued_for_audio_while_video_full = 0;
+  int64_t decode_parked_video_full_audio_low = 0;
+
   // ---- Video Refill Rate ----
   double video_refill_rate_fps = 0.0;
 
@@ -88,10 +92,19 @@ struct PipelineMetrics {
   // ---- Consecutive Fallback KPI (OUT-SEG-005b) ----
   int64_t max_consecutive_audio_fallback_ticks = 0;  // Broadcast KPI: worst fallback burst
 
+  // ---- FENCE_AUDIO_PAD observability (contract tests: a_src==null at PAD tick) ----
+  int64_t fence_audio_pad_warning_count = 0;  // Ticks where WARNING FENCE_AUDIO_PAD was logged
+
   // ---- Encoder Lifetime ----
   int32_t encoder_open_count = 0;
   int32_t encoder_close_count = 0;
   int64_t encoder_open_ms = 0;
+
+  // ---- Egress pacer (wallclock-paced TS emission) ----
+  int64_t pacer_sleep_ms_total = 0;
+  int64_t pacer_late_ms = 0;
+  int64_t pacer_max_late_ms = 0;
+  int64_t pacer_chunks_paced = 0;
 
   // ---- Channel ----
   int32_t channel_id = 0;
@@ -320,6 +333,24 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_encoder_open_ms gauge\n";
     oss << "air_continuous_encoder_open_ms{channel=\"" << ch << "\"} "
         << encoder_open_ms << "\n";
+
+    // Egress pacer
+    oss << "\n# HELP air_continuous_pacer_sleep_ms_total Egress pacer total sleep (ms)\n";
+    oss << "# TYPE air_continuous_pacer_sleep_ms_total counter\n";
+    oss << "air_continuous_pacer_sleep_ms_total{channel=\"" << ch << "\"} "
+        << pacer_sleep_ms_total << "\n";
+    oss << "\n# HELP air_continuous_pacer_late_ms Egress pacer current late (ms)\n";
+    oss << "# TYPE air_continuous_pacer_late_ms gauge\n";
+    oss << "air_continuous_pacer_late_ms{channel=\"" << ch << "\"} "
+        << pacer_late_ms << "\n";
+    oss << "\n# HELP air_continuous_pacer_max_late_ms Egress pacer max late (ms)\n";
+    oss << "# TYPE air_continuous_pacer_max_late_ms gauge\n";
+    oss << "air_continuous_pacer_max_late_ms{channel=\"" << ch << "\"} "
+        << pacer_max_late_ms << "\n";
+    oss << "\n# HELP air_continuous_pacer_chunks_paced Egress pacer chunks paced\n";
+    oss << "# TYPE air_continuous_pacer_chunks_paced counter\n";
+    oss << "air_continuous_pacer_chunks_paced{channel=\"" << ch << "\"} "
+        << pacer_chunks_paced << "\n";
 
     return oss.str();
   }

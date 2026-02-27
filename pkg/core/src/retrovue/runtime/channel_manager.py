@@ -411,6 +411,7 @@ class ChannelManager:
         """
         self.channel_id = channel_id
         self.clock = clock
+        assert self.clock is not None, "ChannelManager requires a MasterClock"
         self.schedule_service = schedule_service
         self.program_director = program_director
         self._loop: asyncio.AbstractEventLoop | None = event_loop
@@ -835,20 +836,33 @@ class ChannelManager:
                 self.LINGER_SECONDS, self._linger_expire
             )
         else:
-            # No event loop — fall back to immediate teardown.
-            self._channel_state = "STOPPED"
-            self._stop_producer_if_idle()
+            # No event loop — do full teardown immediately (same as _linger_expire)
+            # so producer.stop() runs and AIR process is terminated.
+            self._logger.info(
+                "[channel %s] LINGER_SKIP (no event loop); stopping producer and tearing down",
+                self.channel_id,
+            )
+            if hasattr(self.program_director, "stop_channel"):
+                self.program_director.stop_channel(self.channel_id)
+            else:
+                self._channel_state = "STOPPED"
+                self._stop_producer_if_idle()
 
     def _linger_expire(self) -> None:
-        """Linger timer fired. Stop producer if still no viewers."""
+        """Linger timer fired. If still no viewers, stop producer and tear down (AIR exits after linger)."""
         self._linger_handle = None
         self._linger_deadline = None
         if self.runtime_state.viewer_count == 0:
             self._logger.info(
-                "[channel %s] LINGER_EXPIRED stopping producer", self.channel_id
+                "[channel %s] LINGER_EXPIRED (0 viewers); stopping producer and tearing down",
+                self.channel_id,
             )
-            self._channel_state = "STOPPED"
-            self._stop_producer_if_idle()
+            # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
+            if hasattr(self.program_director, "stop_channel"):
+                self.program_director.stop_channel(self.channel_id)
+            else:
+                self._channel_state = "STOPPED"
+                self._stop_producer_if_idle()
 
     def _cancel_linger(self) -> None:
         """Cancel any pending linger timer."""
@@ -1016,24 +1030,17 @@ class ChannelManager:
 
     def check_health(self) -> None:
         """Poll Producer health and update runtime_state. Includes segment supervisor loop for Phase 0."""
-        # Phase 8.5/8.6: Channel with zero viewers must not have an active producer. Suppress all
-        # restart logic (health, EOF handling, reconnect). Next viewer tune-in will start producer.
-        # Exception: during linger grace period, the producer stays alive awaiting a reconnect.
+        # Keep upstream (AIR) running even with zero viewers so VLC reconnect does not restart AIR.
         viewer_count = len(self.viewer_sessions)
+        self.runtime_state.viewer_count = viewer_count
         if viewer_count == 0 and self._linger_handle is None:
-            if self.active_producer is not None:
-                self._logger.debug(
-                    "Channel %s: zero viewers, stopping producer (no restarts)",
-                    self.channel_id,
-                )
-                self.active_producer.stop()
-                self.active_producer = None
-            self._channel_state = "STOPPED"
-            self.runtime_state.viewer_count = 0
-            self.runtime_state.producer_status = "stopped"
-            self.runtime_state.stream_endpoint = None
-            return
-        # When last viewer disconnected, ProgramDirector called StopChannel; do nothing until next viewer.
+            # Do NOT stop producer when 0 viewers; upstream stays connected for reconnect.
+            if self._channel_state == "STOPPED":
+                return
+            self._check_teardown_completion()
+            if self.active_producer is None:
+                return
+            # Fall through to update producer health (keep channel RUNNING)
         if self._channel_state == "STOPPED":
             return
         self._check_teardown_completion()
@@ -1703,6 +1710,7 @@ class BlockPlanProducer(Producer):
                     channel_id_int=self.channel_config.channel_id_int,
                     ts_socket_path=self._socket_path,
                     program_format=self._program_format,
+                    clock=self.clock,
                     on_block_complete=self._on_block_complete,
                     on_session_end=self._on_session_end,
                     on_block_started=self._on_block_started,
@@ -2149,7 +2157,7 @@ class BlockPlanProducer(Producer):
                 self._queue_depth - self._feed_credits
             )
 
-        now_utc_ms = int(time.time() * 1000)
+        now_utc_ms = int(self.clock.now_utc().timestamp() * 1000)
 
         # Pre-evaluate next block deadline BEFORE the credit gate.
         # This records when _feed_ahead first noticed the upcoming block
@@ -2312,7 +2320,7 @@ class BlockPlanProducer(Producer):
         """How many ms of delivered content remain ahead of current UTC."""
         if self._max_delivered_end_utc_ms == 0:
             return 0
-        current_utc_ms = int(time.time() * 1000)
+        current_utc_ms = int(self.clock.now_utc().timestamp() * 1000)
         return max(0, self._max_delivered_end_utc_ms - current_utc_ms)
 
     def _compute_ready_by_ms(self, block: "BlockPlan") -> int:
@@ -2330,7 +2338,7 @@ class BlockPlanProducer(Producer):
         annotation = _AsRunAnnotation(
             annotation_type="missed_ready_by",
             block_id=block_id,
-            timestamp_utc_ms=int(time.time() * 1000),
+            timestamp_utc_ms=int(self.clock.now_utc().timestamp() * 1000),
             metadata={"lateness_ms": lateness_ms},
         )
         self._asrun_annotations.append(annotation)

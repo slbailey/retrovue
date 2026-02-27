@@ -3,7 +3,12 @@
 // Purpose: Main entry point for the RetroVue playout engine.
 // Copyright (c) 2025 RetroVue
 
+#include <signal.h>
+#include <execinfo.h>
+#include <unistd.h>
+
 #include <chrono>
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -19,6 +24,14 @@
 #include "retrovue/timing/MasterClock.h"
 
 namespace {
+
+void crash_handler(int sig) {
+  void* array[50];
+  size_t size = backtrace(array, 50);
+  std::fprintf(stderr, "FATAL SIGNAL %d\n", sig);
+  backtrace_symbols_fd(array, static_cast<int>(size), STDERR_FILENO);
+  _exit(1);
+}
 
 // Parse command-line arguments
 struct ServerConfig {
@@ -125,6 +138,11 @@ void RunServer(const ServerConfig& config) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  signal(SIGSEGV, crash_handler);
+  signal(SIGABRT, crash_handler);
+  signal(SIGILL, crash_handler);
+  signal(SIGFPE, crash_handler);
+
   try {
     ServerConfig config = ParseArgs(argc, argv);
     RunServer(config);

@@ -107,7 +107,7 @@ struct RationalFps {
 constexpr RationalFps FPS_23976{24000, 1001};
 constexpr RationalFps FPS_2997{30000, 1001};
 constexpr RationalFps FPS_5994{60000, 1001};
-constexpr RationalFps FPS_30{30, 1};
+constexpr RationalFps FPS_30{30000, 1001};
 constexpr RationalFps FPS_60{60, 1};
 constexpr RationalFps FPS_24{24, 1};
 constexpr RationalFps FPS_25{25, 1};

@@ -2,7 +2,7 @@
 
 **Classification:** Contract (Core Artifact)  
 **Owner:** Core Planning / HorizonManager  
-**Enforcement Phase:** Schedule Lock  
+**Enforcement:** Schedule Lock  
 **Created:** 2026-02-13  
 **Status:** Proposed
 

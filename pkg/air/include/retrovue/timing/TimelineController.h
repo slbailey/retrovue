@@ -12,6 +12,9 @@
 #include <mutex>
 #include <optional>
 
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
+
 namespace retrovue::timing {
 
 class MasterClock;
@@ -81,10 +84,14 @@ struct TimelineConfig {
   int64_t catch_up_limit_us = 5'000'000; // Max CT lag before session restart (5s)
   int64_t frame_period_us = 33'333;     // Frame period (1/fps in microseconds)
 
-  // Derive from fps
+  // Derive from fps (INV-FPS-RESAMPLE: use rational one-tick duration, not 1e6/fps).
   static TimelineConfig FromFps(double fps, int target_depth = 5, int max_depth = 30) {
     TimelineConfig cfg;
-    cfg.frame_period_us = static_cast<int64_t>(1'000'000.0 / fps);
+    auto rfps = retrovue::blockplan::DeriveRationalFPS(fps);
+    if (!rfps.IsValid()) {
+      rfps = retrovue::blockplan::FPS_30;
+    }
+    cfg.frame_period_us = rfps.FrameDurationUs();
     cfg.tolerance_us = cfg.frame_period_us;
     cfg.late_threshold_us = std::min(static_cast<int64_t>(500'000), static_cast<int64_t>(target_depth) * cfg.frame_period_us);
     cfg.early_threshold_us = static_cast<int64_t>(max_depth) * cfg.frame_period_us;

@@ -120,6 +120,31 @@ inline RationalFps DeriveRationalFPS(double fps) {
   return RationalFps{static_cast<int64_t>(fps + 0.5), 1};
 }
 
+// Normalize and snap to a standard broadcast rate when within tolerance.
+// Avoids unstable/garbage fractions from decoders (e.g. 6372000/212521 → 30000/1001).
+// Use for cadence comparison so 30000/1001 and 29.97 approximations resolve to same rational.
+inline RationalFps SnapToStandardRationalFps(RationalFps fps) {
+  if (!fps.IsValid()) return fps;
+  const double d = fps.ToDouble();
+  struct Entry { double approx; int64_t num; int64_t den; };
+  static constexpr Entry kTable[] = {
+    {23.976, 24000, 1001},
+    {24.0,   24,    1},
+    {25.0,   25,    1},
+    {29.97,  30000, 1001},
+    {30.0,   30,    1},
+    {50.0,   50,    1},
+    {59.94,  60000, 1001},
+    {60.0,   60,    1},
+  };
+  for (const auto& e : kTable) {
+    if (std::abs(d - e.approx) < 0.01) {
+      return RationalFps{e.num, e.den};
+    }
+  }
+  return fps;  // Already normalized by RationalFps ctor; return as-is for non-standard rates.
+}
+
 inline void DeriveRationalFPS(double fps, int64_t& fps_num, int64_t& fps_den) {
   const auto rational = DeriveRationalFPS(fps);
   fps_num = rational.num;
@@ -137,7 +162,7 @@ enum class ResampleMode {
 };
 
 struct BufferConfig {
-  int video_target_depth_frames = 0;  // 0 = auto: max(1, fps * 0.5)
+  int video_target_depth_frames = 0;  // 0 = auto: max(1, fps) (~1s headroom)
   int video_low_water_frames = 0;     // 0 = auto: max(1, target / 3)
   int audio_target_depth_ms = 1000;
   int audio_low_water_ms = 0;         // 0 = auto: max(1, target / 3)

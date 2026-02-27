@@ -24,7 +24,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
@@ -79,8 +78,21 @@ class TestChannelManagerContract:
             json.dump(schedule_data, f)
         return schedule_file
 
-    def _start_server(self, schedule_dir: str | None = None, port: int | None = None) -> subprocess.Popen:
-        """Start ProgramDirector (channel-manager start) as subprocess."""
+    def _server_ready(self) -> bool:
+        """True if GET /channels returns 200 (server is up)."""
+        try:
+            r = requests.get(f"http://localhost:{self.port}/channels", timeout=1)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def _start_server(
+        self,
+        contract_clock,
+        schedule_dir: str | None = None,
+        port: int | None = None,
+    ) -> subprocess.Popen:
+        """Start ProgramDirector (channel-manager start) as subprocess. Uses contract_clock to wait for ready (no time.sleep)."""
         cmd = [sys.executable, "-m", "retrovue.cli.main", "channel-manager", "start"]
         if schedule_dir:
             cmd.extend(["--schedule-dir", schedule_dir])
@@ -103,8 +115,7 @@ class TestChannelManagerContract:
             cwd=str(Path(__file__).resolve().parent.parent.parent),
         )
         
-        # Wait a moment for server to start
-        time.sleep(1.5)
+        contract_clock.pump_until(lambda: self._server_ready(), max_ms=5000)
         return process
 
     def test_channel_manager_help_flag_exits_zero(self):
@@ -115,7 +126,7 @@ class TestChannelManagerContract:
         assert result.exit_code == 0
         assert "channel-manager" in result.stdout.lower()
 
-    def test_channel_manager_channellist_m3u_endpoint(self):
+    def test_channel_manager_channellist_m3u_endpoint(self, contract_clock):
         """
         Contract: ProgramDirector (channel-manager start) MUST serve channel discovery.
         Uses GET /channels (JSON); channels appear after first tune-in (registry is on-demand).
@@ -124,12 +135,10 @@ class TestChannelManagerContract:
         self._create_schedule_json("retro1", [])
         self._create_schedule_json("retro2", [])
         
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
-            # Wait for server to be ready (poll GET /channels; ProgramDirector exposes it)
-            time.sleep(1.5)
             response = requests.get(f"http://localhost:{self.port}/channels", timeout=5)
             assert response.status_code == 200, f"GET /channels returned {response.status_code}"
             data = response.json()
@@ -140,7 +149,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_channel_ts_endpoint_exists(self):
+    def test_channel_manager_channel_ts_endpoint_exists(self, contract_clock):
         """
         Contract: ChannelManager MUST serve GET /channel/<id>.ts for MPEG-TS streams.
         """
@@ -158,13 +167,10 @@ class TestChannelManagerContract:
         }]
         self._create_schedule_json("retro1", schedule_items)
 
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
 
         try:
-            # Wait for server to be ready
-            time.sleep(1)
-
             # Make request to channel endpoint (triggers playout; in test mode FakeTsSource, no Air spawned)
             response = requests.get(
                 f"http://localhost:{self.port}/channel/retro1.ts",
@@ -182,7 +188,7 @@ class TestChannelManagerContract:
                 server.kill()
                 server.wait()
 
-    def test_channel_manager_client_refcount_spawns_air(self):
+    def test_channel_manager_client_refcount_spawns_air(self, contract_clock):
         """
         Contract: When client_count transitions 0→1, ChannelManager spawns Air (or uses FakeTsSource in test mode).
         ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
@@ -203,7 +209,7 @@ class TestChannelManagerContract:
         
         # Note: Can't patch in subprocess, but we can verify behavior via HTTP responses
         # For now, just verify server accepts connection and returns 200
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -215,15 +221,14 @@ class TestChannelManagerContract:
             )
             assert response1.status_code == 200
             
-            # Wait a bit for playout coordination
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
         finally:
             response1.close()
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_client_refcount_kills_air(self):
+    def test_channel_manager_client_refcount_kills_air(self, contract_clock):
         """
         Contract: When client_count drops to 0, ChannelManager terminates Air (or stops FakeTsSource in test mode).
         ChannelManager spawns and terminates Air; it does NOT spawn or terminate ProgramDirector or retrovue.
@@ -243,7 +248,7 @@ class TestChannelManagerContract:
         self._create_schedule_json("retro1", schedule_items)
         
         # Note: Can't patch in subprocess, but we can verify behavior via HTTP responses
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -255,11 +260,11 @@ class TestChannelManagerContract:
             )
             assert response.status_code == 200
             
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Client disconnects (refcount 1→0)
             response.close()
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Verify server still responds (playout stop is internal)
             # For now, just verify connection/disconnection works
@@ -269,7 +274,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_active_item_selection(self):
+    def test_channel_manager_active_item_selection(self, contract_clock):
         """
         Contract: ChannelManager MUST select active ScheduleItem based on current time.
         Active item: start_time_utc ≤ now < start_time_utc + duration_seconds
@@ -300,7 +305,7 @@ class TestChannelManagerContract:
         self._create_schedule_json("retro1", schedule_items)
         
         # Note: Can't patch in subprocess, but we can verify HTTP behavior
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -312,7 +317,7 @@ class TestChannelManagerContract:
             )
             assert response.status_code == 200
             
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Verify server responds (active item selection is internal)
             # The correct item should be selected based on current time
@@ -323,7 +328,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_overlapping_items_selects_earliest(self):
+    def test_channel_manager_overlapping_items_selects_earliest(self, contract_clock):
         """
         Contract: If multiple items are active, ChannelManager MUST select earliest start_time_utc.
         """
@@ -353,7 +358,7 @@ class TestChannelManagerContract:
         self._create_schedule_json("retro1", schedule_items)
         
         # Note: Can't patch in subprocess, but we can verify HTTP behavior
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -364,7 +369,7 @@ class TestChannelManagerContract:
             )
             assert response.status_code == 200
             
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Verify server responds (earliest item selection is internal)
             # The earliest start_time_utc should be selected
@@ -375,7 +380,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_playout_request_mapping(self):
+    def test_channel_manager_playout_request_mapping(self, contract_clock):
         """
         Contract: ChannelManager MUST map ScheduleItem → PlayoutRequest correctly.
         - asset_path → asset_path
@@ -403,7 +408,7 @@ class TestChannelManagerContract:
         
         # Note: Can't patch in subprocess, but we can verify HTTP behavior
         # PlayoutRequest mapping is tested implicitly through successful server response
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -414,7 +419,7 @@ class TestChannelManagerContract:
             )
             assert response.status_code == 200
             
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Verify server responds (PlayoutRequest mapping is internal)
             # Mapping is tested via contract documentation and code review
@@ -425,7 +430,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_playout_request_sent_via_stdin(self):
+    def test_channel_manager_playout_request_sent_via_stdin(self, contract_clock):
         """
         Contract: ChannelManager sends PlayoutRequest as JSON (e.g. via stdin) to the Air process it spawned.
         ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
@@ -446,7 +451,7 @@ class TestChannelManagerContract:
         
         # Note: Can't patch in subprocess, but we can verify HTTP behavior
         # stdin handling is tested via code review and usecase tests
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -457,7 +462,7 @@ class TestChannelManagerContract:
             )
             assert response.status_code == 200
             
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Verify server responds (stdin handling is internal to usecase)
             # Stdin behavior is verified in usecase implementation
@@ -468,7 +473,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_air_lifecycle_single_instance(self):
+    def test_channel_manager_air_lifecycle_single_instance(self, contract_clock):
         """
         Contract: Each channel has at most one Air process at a time (spawned by ChannelManager).
         ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
@@ -488,7 +493,7 @@ class TestChannelManagerContract:
         self._create_schedule_json("retro1", schedule_items)
         
         # Note: Can't patch in subprocess, but we can verify HTTP behavior
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
@@ -499,7 +504,7 @@ class TestChannelManagerContract:
                 stream=True
             )
             assert response1.status_code == 200
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Second client connects (same playout, just increment refcount)
             response2 = requests.get(
@@ -508,7 +513,7 @@ class TestChannelManagerContract:
                 stream=True
             )
             assert response2.status_code == 200
-            time.sleep(0.5)
+            contract_clock.pump_until(lambda: False, max_ms=500)
             
             # Both clients share same stream (single playout per channel)
             # This is verified by both getting 200 responses
@@ -520,18 +525,18 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_missing_schedule_json_error(self):
+    def test_channel_manager_missing_schedule_json_error(self, contract_clock):
         """
         Contract: If schedule.json is missing, ChannelManager MUST log error and not start playout for that channel.
         ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
         """
         # Don't create schedule.json file
         
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
-            time.sleep(1)
+            contract_clock.pump_until(lambda: False, max_ms=1000)
             
             # Server should still be running, but channel should not work
             response = requests.get(
@@ -546,7 +551,7 @@ class TestChannelManagerContract:
             server.terminate()
             server.wait(timeout=5)
 
-    def test_channel_manager_malformed_schedule_json_error(self):
+    def test_channel_manager_malformed_schedule_json_error(self, contract_clock):
         """
         Contract: If schedule.json is malformed, ChannelManager MUST log error and not start playout for that channel.
         ChannelManager spawns Air; it does NOT spawn ProgramDirector or retrovue.
@@ -556,11 +561,11 @@ class TestChannelManagerContract:
         with open(schedule_file, "w") as f:
             f.write("{ invalid json }")
         
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:
-            time.sleep(1)
+            contract_clock.pump_until(lambda: False, max_ms=1000)
             
             response = requests.get(
                 f"http://localhost:{self.port}/channel/retro1.ts",
@@ -579,7 +584,7 @@ class TestChannelManagerContract:
                 server.kill()
                 server.wait()
 
-    def test_channel_manager_no_active_item_error(self):
+    def test_channel_manager_no_active_item_error(self, contract_clock):
         """
         Contract: If no ScheduleItem is active (schedule gap), ChannelManager MUST log error.
         """
@@ -609,7 +614,7 @@ class TestChannelManagerContract:
         self._create_schedule_json("retro1", schedule_items)
         
         # Note: Can't patch in subprocess, but we can verify HTTP behavior
-        server = self._start_server(schedule_dir=str(self.schedule_dir), port=self.port)
+        server = self._start_server(contract_clock, schedule_dir=str(self.schedule_dir), port=self.port)
         self.server_process = server
         
         try:

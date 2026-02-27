@@ -19,3 +19,4 @@ match:
   - Bad: `retrovue.content_manager.source_service.SourceService`
 - Do **not** introduce DB-destructive behavior (truncate / drop) inside contract tests. Contract tests should assume an **isolated test database** (e.g. `RETROVUE_DATABASE_URL` pointing to `*_test`).
 - Keep assertions **specific** to the command being tested — don’t assert on unrelated side effects (like background discovery) unless the contract says the command does that.
+- **No `time.sleep()` in contract tests.** Use the `contract_clock` fixture (`advance_ms(n)`, `pump_until(predicate, max_ms)`) for deterministic stepping. CI fails if `time.sleep(` or `_time.sleep(` appears in `tests/contracts/**/*.py`.

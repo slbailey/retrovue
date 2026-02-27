@@ -24,7 +24,6 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
@@ -148,7 +147,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
     };
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
-        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0});
   }
 
@@ -162,7 +161,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
-  std::shared_ptr<ITimeSource> test_ts_;
+  std::shared_ptr<test_infra::TestTimeSourceType> test_ts_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
   std::atomic<bool> drain_stop_{false};
@@ -389,9 +388,16 @@ TEST_F(PlaybackTraceContractTest, SeamlessTransitionStatus) {
 
 // =============================================================================
 // TRACE-007: PaddedTransitionStatus
-// Delay preloader by 2s. Queue 2 short blocks. Verify seam status is PADDED.
+// Delay preloader past block A's fence. Queue 2 blocks. Verify seam is PADDED.
+//
+// DISABLED: DEGRADED_TAKE_MODE (INV-FENCE-TAKE-READY-001) now holds the last
+// good A frame at the fence instead of entering PADDED_GAP.  The rotation path
+// (line ~2291 of PipelineManager.cpp) unconditionally logs seamless=true for
+// any swap that succeeds, even after a degraded hold.  To re-enable, the
+// engine must track pad frames emitted during degraded mode and set
+// SeamTransitionLog::seamless = false when non-zero.
 // =============================================================================
-TEST_F(PlaybackTraceContractTest, DISABLED_SLOW_PaddedTransitionStatus) {
+TEST_F(PlaybackTraceContractTest, DISABLED_PaddedTransitionStatus) {
   engine_ = MakeEngine();
 
   // Preloader delay must exceed the wall-clock time from preroll arm to
@@ -423,7 +429,7 @@ TEST_F(PlaybackTraceContractTest, DISABLED_SLOW_PaddedTransitionStatus) {
 
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 35000))
+  ASSERT_TRUE(WaitForBlocksCompleted(2, 15000))
       << "Both blocks must eventually complete";
 
   engine_->Stop();
@@ -671,13 +677,14 @@ TEST_F(PlaybackTraceContractTest, IntentMatchesFedBlock) {
   FedBlock block = MakeSyntheticBlock("proof-intent", 3000, "/assets/test.mp4");
   block.segments[0].asset_start_offset_ms = 5000;
 
-  // At 30fps, frame_duration_ms = 33, expected_frames = ceil(3000/33) = 91
-  auto intent = BuildIntent(block, 33);
+  // Session FPS 30/1 (house format): expected_frames = ceil(3000*30/1000) = 90
+  const RationalFps session_fps(30, 1);
+  auto intent = BuildIntent(block, session_fps);
 
   EXPECT_EQ(intent.block_id, "proof-intent");
   EXPECT_EQ(intent.expected_duration_ms, 3000);
-  EXPECT_EQ(intent.expected_frames, 91)
-      << "ceil(3000/33) = 91";
+  EXPECT_EQ(intent.expected_frames, 90)
+      << "rational: FramesFromDurationCeilMs(3000) for 30/1 = 90";
   ASSERT_EQ(intent.expected_asset_uris.size(), 1u);
   EXPECT_EQ(intent.expected_asset_uris[0], "/assets/test.mp4");
   EXPECT_EQ(intent.expected_start_offset_ms, 5000);
@@ -800,12 +807,10 @@ TEST_F(PlaybackTraceContractTest, ProofWantedFramesMatchesFence) {
 
   std::lock_guard<std::mutex> lock(proof_mutex_);
   ASSERT_EQ(proofs_.size(), 1u);
-  // BuildIntent uses ms-quantized frame_duration_ms (33 for 30fps):
-  //   ceil(kShortBlockMs/33).  Default: ceil(1000/33)=31.  Fast: ceil(200/33)=7.
-  const int64_t expected_wanted = static_cast<int64_t>(
-      std::ceil(static_cast<double>(kShortBlockMs) / 33.0));
+  // BuildIntent uses session RationalFps: expected_frames = FramesFromDurationCeilMs(duration).
+  const int64_t expected_wanted = ctx_->fps.FramesFromDurationCeilMs(kShortBlockMs);
   EXPECT_EQ(proofs_[0].wanted.expected_frames, expected_wanted)
-      << "BuildIntent uses ceil(duration/frame_duration_ms)";
+      << "BuildIntent uses rational FramesFromDurationCeilMs(kShortBlockMs)";
   // Engine fence uses ceil((block.end_utc_ms - fence_epoch) * fps / 1000).
   // Default: fence_epoch lags block.start by ~1s → frames > 30.
   // Fast:    fence_epoch == block.start (DTS) → frames == ceil(duration*30/1000).

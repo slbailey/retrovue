@@ -141,7 +141,7 @@ class YamlChannelConfigProvider:
         program_format = ProgramFormat(
             video_width=video.get("width", 1280),
             video_height=video.get("height", 720),
-            frame_rate=video.get("frame_rate", "30/1"),
+            frame_rate=video.get("frame_rate", "30000/1001"),
             audio_sample_rate=audio.get("sample_rate", 48000),
             audio_channels=audio.get("channels", 2),
         )

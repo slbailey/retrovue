@@ -68,7 +68,9 @@ struct FrameData {
   std::vector<buffer::AudioFrame> audio;  // 0-2 frames
   // P3.2: Metadata for seam verification
   std::string asset_uri;
-  int64_t block_ct_ms = 0;  // CT before this frame's advance
+  // INV-AIR-MEDIA-TIME: PTS-derived media content time (ms), normalized to segment start.
+  // Must NOT be computed from output FPS or frame index. On repeat/hold/pad, do not advance.
+  int64_t block_ct_ms = 0;  // media_ct_ms: decoder PTS → ms; -1 or last value for pad/repeat
 };
 
 class TickProducer : public producers::IProducer,
@@ -169,7 +171,7 @@ class TickProducer : public producers::IProducer,
   std::vector<SegmentBoundary> boundaries_;
   int32_t current_segment_index_ = 0;
   int32_t logical_segment_index_ = 0;  // Parent block segment index (SetLogicalSegmentIndex)
-  int64_t block_ct_ms_ = 0;
+  int64_t block_ct_ms_ = 0;  // INV-AIR-MEDIA-TIME: PTS-derived only; not advanced on repeat/EOF/pad
 
   int width_;
   int height_;
@@ -191,6 +193,9 @@ class TickProducer : public producers::IProducer,
   int64_t CtUs(int64_t k) const;
   // One output frame period in ms (for next_frame_offset look-ahead and display).
   int64_t FramePeriodMs() const { return output_fps_.num > 0 ? (1000 * output_fps_.den) / output_fps_.num : 33; }
+  // One input (source) frame period in ms. Uses rational input_fps_num_/input_fps_den_, computed
+  // in µs then rounded to nearest ms (e.g. 60000/1001 → ~16.683ms → 17ms). Fallback 33 if invalid.
+  int64_t InputFramePeriodMs() const;
 
   // INV-BLOCK-PRIME-001: Held first frame from PrimeFirstFrame().
   // Audio vector contains only this frame's own decoded audio (0-2 frames).

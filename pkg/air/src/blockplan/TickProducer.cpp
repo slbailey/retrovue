@@ -40,6 +40,16 @@ int64_t TickProducer::CtUs(int64_t k) const {
   return (k * 1000000 * output_fps_.den) / output_fps_.num;
 }
 
+int64_t TickProducer::InputFramePeriodMs() const {
+  if (input_fps_num_ <= 0 || input_fps_den_ <= 0) {
+    return 33;  // Fallback when input FPS not yet set (e.g. before decoder open).
+  }
+  // Compute period in µs (rational integer: 1e6 * den / num), then round to nearest ms.
+  // Avoids truncation bias for fractional FPS (e.g. 60000/1001 → 16683 µs → 17 ms rounded).
+  const int64_t period_us = (1'000'000LL * input_fps_den_) / input_fps_num_;
+  return (period_us + 500) / 1000;
+}
+
 // =============================================================================
 // UpdateResampleMode — OFF / DROP / CADENCE from rational input vs output FPS.
 // Uses 128-bit intermediates to avoid overflow. No floats, no epsilon.
@@ -301,7 +311,7 @@ void TickProducer::PrimeFirstFrame() {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
+  next_frame_offset_ms_ = decoded_pts_ms + InputFramePeriodMs();
 
   primed_frame_ = FrameData{
       std::move(video_frame),
@@ -425,20 +435,22 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     return std::nullopt;
   }
 
-  // INV-BLOCK-PRIME-002: return primed frame without decode
+  // INV-BLOCK-PRIME-002: return primed frame without decode.
+  // INV-AIR-MEDIA-TIME: media_ct_ms must not advance on repeat — keep last PTS-derived value.
   if (primed_frame_.has_value()) {
     auto frame = std::move(*primed_frame_);
     primed_frame_.reset();
-    block_ct_ms_ = CtMs(frame_index_);
+    block_ct_ms_ = frame.block_ct_ms;  // PTS-derived from PrimeFirstFrame; do not use CtMs(frame_index_)
     frame_index_++;
     return frame;
   }
 
-  // INV-AUDIO-PRIME-001: return buffered frames from PrimeFirstTick
+  // INV-AUDIO-PRIME-001: return buffered frames from PrimeFirstTick.
+  // INV-AIR-MEDIA-TIME: same — media from decoded PTS, not tick index.
   if (!buffered_frames_.empty()) {
     auto frame = std::move(buffered_frames_.front());
     buffered_frames_.pop_front();
-    block_ct_ms_ = CtMs(frame_index_);
+    block_ct_ms_ = frame.block_ct_ms;
     frame_index_++;
     return frame;
   }
@@ -546,16 +558,30 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
   }
 
   if (!decoder_ok_) {
-    if (advance_output_state) {
-      block_ct_ms_ = CtMs(frame_index_);
-      frame_index_++;
-    }
+    // INV-AIR-MEDIA-TIME: On no decoder, do not advance media_ct_ms (repeat/fallback).
+    if (advance_output_state) frame_index_++;
     return std::nullopt;
   }
 
   buffer::Frame video_frame;
   if (!decoder_->DecodeFrameToBuffer(video_frame)) {
     if (decoder_->IsEOF()) {
+      // INV-AIR-MEDIA-TIME guardrail: EOF with media position < 80% of segment duration = violation.
+      int64_t segment_duration_ms = 0;
+      if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
+        const auto& b = boundaries_[current_segment_index_];
+        segment_duration_ms = b.end_ct_ms - b.start_ct_ms;
+      }
+      if (segment_duration_ms > 0 && block_ct_ms_ >= 0 &&
+          block_ct_ms_ < (segment_duration_ms * 80) / 100) {
+        std::cout << "[TickProducer] VIOLATION INV-AIR-MEDIA-TIME: decoder EOF with media_ct_ms ("
+                  << block_ct_ms_ << "ms) < 80% of segment duration (" << segment_duration_ms
+                  << "ms) — possible CT-from-tick-index bug (e.g. Medipren)"
+                  << " segment_index=" << current_segment_index_
+                  << " asset_uri=" << current_asset_uri_
+                  << " block_id=" << block_.block_id
+                  << std::endl;
+      }
       std::cout << "[TickProducer] SEGMENT_EOF"
                 << " segment_index=" << current_segment_index_
                 << " asset_uri=" << current_asset_uri_
@@ -564,10 +590,8 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
                 << std::endl;
       decoder_ok_ = false;
     }
-    if (advance_output_state) {
-      block_ct_ms_ = CtMs(frame_index_);
-      frame_index_++;
-    }
+    // INV-AIR-MEDIA-TIME: On decode failure/EOF, do not advance media_ct_ms.
+    if (advance_output_state) frame_index_++;
     return std::nullopt;
   }
 
@@ -591,7 +615,10 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
   }
 
   int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
-  next_frame_offset_ms_ = decoded_pts_ms + FramePeriodMs();
+  next_frame_offset_ms_ = decoded_pts_ms + InputFramePeriodMs();
+
+  // INV-AIR-MEDIA-TIME: media_ct_ms from decoded PTS only; do not use CtMs(frame_index_).
+  block_ct_ms_ = ct_before;
 
   FrameData result{
       std::move(video_frame),
@@ -632,10 +659,7 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
     }
   }
 
-  if (advance_output_state) {
-    block_ct_ms_ = CtMs(frame_index_);
-    frame_index_++;
-  }
+  if (advance_output_state) frame_index_++;
   return result;
 }
 
@@ -684,8 +708,8 @@ std::optional<FrameData> TickProducer::GeneratePadFrame() {
       static_cast<size_t>(buffer::kHouseAudioChannels) *
       sizeof(int16_t), 0);
 
-  int64_t ct_before = CtMs(frame_index_);
-  block_ct_ms_ = CtMs(frame_index_);
+  // INV-AIR-MEDIA-TIME: Pad/fallback — media_ct_ms must not advance; use last known (or 0).
+  int64_t ct_before = block_ct_ms_ >= 0 ? block_ct_ms_ : 0;
   frame_index_++;
 
   return FrameData{

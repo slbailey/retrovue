@@ -165,22 +165,96 @@ TEST(RationalTimebaseIntegrity, OutputClock_UsesCanonicalHelpers) {
 #define RETROVUE_BLOCKPLAN_SRC_DIR ""
 #endif
 
-static bool isWordBoundary(const std::string& s, size_t pos, size_t len) {
-  return (pos == 0 || !std::isalnum(static_cast<unsigned char>(s[pos - 1]))) &&
-         (pos + len >= s.size() || !std::isalnum(static_cast<unsigned char>(s[pos + len])));
+// C++ identifier character (alnum + underscore); used so "double_start" is not flagged.
+static bool isIdentifierChar(unsigned char c) {
+  return std::isalnum(c) || c == '_';
 }
 
-static const std::regex kFloatLiteralRe(R"(\d+\.\d+([eE][+-]?\d+)?|\d+[eE][+-]?\d+)");
+static bool isWordBoundary(const std::string& s, size_t pos, size_t len) {
+  return (pos == 0 || !isIdentifierChar(static_cast<unsigned char>(s[pos - 1]))) &&
+         (pos + len >= s.size() || !isIdentifierChar(static_cast<unsigned char>(s[pos + len])));
+}
+
+// Strip string literals, char literals, and comments so we only scan code (avoids false
+// positives from "double" in strings or comments). Returns a string of the same length
+// with literal/comment content replaced by spaces.
+static std::string stripLiteralsAndComments(const std::string& line) {
+  std::string out;
+  out.reserve(line.size());
+  enum State { NONE, IN_DOUBLE_QUOTE, IN_SINGLE_QUOTE, IN_LINE_COMMENT, IN_BLOCK_COMMENT };
+  State state = NONE;
+  bool escape = false;
+  for (size_t i = 0; i < line.size(); ++i) {
+    char c = line[i];
+    char prev = (i > 0) ? line[i - 1] : '\0';
+    if (state == IN_LINE_COMMENT) {
+      out += ' ';
+      continue;
+    }
+    if (state == IN_BLOCK_COMMENT) {
+      out += ' ';
+      if (prev == '*' && c == '/') state = NONE;
+      continue;
+    }
+    if (state == IN_DOUBLE_QUOTE || state == IN_SINGLE_QUOTE) {
+      if (!escape && c == (state == IN_DOUBLE_QUOTE ? '"' : '\''))
+        state = NONE;
+      else if (c == '\\' && !escape)
+        escape = true;
+      else
+        escape = false;
+      out += ' ';
+      continue;
+    }
+    if (c == '"') {
+      state = IN_DOUBLE_QUOTE;
+      out += ' ';
+      continue;
+    }
+    if (c == '\'') {
+      state = IN_SINGLE_QUOTE;
+      out += ' ';
+      continue;
+    }
+    if (c == '/' && i + 1 < line.size()) {
+      if (line[i + 1] == '/') {
+        state = IN_LINE_COMMENT;
+        out += ' ';
+        ++i;
+        out += ' ';
+        continue;
+      }
+      if (line[i + 1] == '*') {
+        state = IN_BLOCK_COMMENT;
+        out += ' ';
+        ++i;
+        out += ' ';
+        continue;
+      }
+    }
+    out += c;
+  }
+  return out;
+}
+
+// Standalone type keywords and floating literals (including .0). Applied to stripped line.
+static const std::regex kFloatLiteralRe(
+    R"(\d+\.\d+([eE][+-]?\d+)?|\d+[eE][+-]?\d+|\.\d+([eE][+-]?\d+)?)");
 
 static bool hasForbiddenPattern(const std::string& line) {
-  auto pos = line.find("double");
-  if (pos != std::string::npos && isWordBoundary(line, pos, 6)) return true;
-  pos = line.find("float");
-  if (pos != std::string::npos && isWordBoundary(line, pos, 5)) return true;
-  if (line.find("ToDouble(") != std::string::npos ||
-      line.find("ToDouble (") != std::string::npos) return true;
-  if (line.find("duration<double>") != std::string::npos) return true;
-  if (std::regex_search(line, kFloatLiteralRe)) return true;
+  const std::string s = stripLiteralsAndComments(line);
+  // Standalone "double" type (not in identifiers like double_start or in strings).
+  auto pos = s.find("double");
+  if (pos != std::string::npos && isWordBoundary(s, pos, 6)) return true;
+  // Standalone "float" type.
+  pos = s.find("float");
+  if (pos != std::string::npos && isWordBoundary(s, pos, 5)) return true;
+  // ToDouble( or ToDouble (
+  if (s.find("ToDouble(") != std::string::npos || s.find("ToDouble (") != std::string::npos)
+    return true;
+  // duration<double> and similar are covered by standalone "double" on stripped line.
+  // Floating literals: 10.0, .0, 1e10, etc.
+  if (std::regex_search(s, kFloatLiteralRe)) return true;
   return false;
 }
 

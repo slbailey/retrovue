@@ -8,6 +8,8 @@
 #include <chrono>
 #include <iostream>
 
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"  // SnapToStandardRationalFps
+
 namespace {
 
 // Opaque for interrupt callback — layout matches FFmpegDecoder::InterruptFlags.
@@ -35,10 +37,21 @@ extern "C" {
 #include <libavutil/samplefmt.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
+#include <libavutil/frame.h>
+#include <libavutil/mem.h>  // av_freep (for av_image_alloc buffer)
 #include <libavutil/log.h>  // For av_log_set_level
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 }
+
+namespace {
+
+// Deleter for AVFramePtr (av_frame_free takes AVFrame**).
+void FreeAVFrame(AVFrame* f) {
+  av_frame_free(&f);
+}
+
+}  // namespace
 
 namespace retrovue::decode {
 
@@ -54,11 +67,21 @@ FFmpegDecoder::FFmpegDecoder(const DecoderConfig& config)
       eof_reached_(false),
       start_time_(0),
       time_base_(0.0),
-      first_keyframe_seen_(false) {
+      first_keyframe_seen_(false),
+      stashed_video_frame_(nullptr, FreeAVFrame) {
+  pump_scratch_frame_ = av_frame_alloc();
+  if (!pump_scratch_frame_) {
+    std::cerr << "[FFmpegDecoder] Failed to allocate pump scratch frame\n";
+  }
 }
 
 FFmpegDecoder::~FFmpegDecoder() {
   Close();
+
+  // Phase 2: Free pump scratch frame (only in destructor)
+  if (pump_scratch_frame_) {
+    av_frame_free(&pump_scratch_frame_);
+  }
 }
 
 bool FFmpegDecoder::Open() {
@@ -217,7 +240,13 @@ void FFmpegDecoder::Close() {
   }
 
   if (scaled_frame_) {
+    // scaled_frame_ buffer was allocated with av_image_alloc(); AVFrame does not own it.
+    // Free it before av_frame_free to avoid leaking ~(width*height*1.5) bytes per Close().
+    if (scaled_frame_->data[0]) {
+      av_freep(&scaled_frame_->data[0]);
+    }
     av_frame_free(&scaled_frame_);
+    scaled_frame_ = nullptr;
   }
 
   if (frame_) {
@@ -247,6 +276,32 @@ void FFmpegDecoder::Close() {
   if (format_ctx_) {
     avformat_close_input(&format_ctx_);
   }
+
+  // Phase 2: Clear stashed video frame
+  stashed_video_frame_.reset();
+  has_stashed_video_frame_ = false;
+
+  // Phase 2: Free deferred video packets (RAII handles av_packet_free)
+  while (!deferred_video_packets_.empty()) {
+    deferred_video_packets_.pop();
+  }
+
+  // Phase 2: Free pending video frames (RAII handles av_frame_free)
+  while (!pending_video_frames_.empty()) {
+    pending_video_frames_.pop();
+  }
+
+  // Phase 2: Reset EOF flush state
+  demux_eof_reached_ = false;
+  video_codec_flushed_ = false;
+  audio_codec_flushed_ = false;
+
+  // Phase 2: Reset debug counters (for clean soak metrics)
+  pending_video_max_depth_ = 0;
+  deferred_video_max_depth_ = 0;
+  pump_calls_audio_only_ = 0;
+  pump_backpressure_hits_ = 0;
+  audio_frames_harvested_in_audio_only_ = 0;
 
   // Fix B safety: drain pending audio queue to prevent unbounded growth
   // across Close()/reopen cycles.
@@ -305,6 +360,17 @@ bool FFmpegDecoder::SeekToMs(int64_t position_ms) {
   eof_reached_ = false;
   audio_eof_reached_ = false;
   first_keyframe_seen_ = false;
+
+  // Phase 2: Reset EOF flush state and queues so pump runs in normal mode after seek
+  demux_eof_reached_ = false;
+  video_codec_flushed_ = false;
+  audio_codec_flushed_ = false;
+  stashed_video_frame_.reset();
+  has_stashed_video_frame_ = false;
+  while (!deferred_video_packets_.empty())
+    deferred_video_packets_.pop();
+  while (!pending_video_frames_.empty())
+    pending_video_frames_.pop();
 
   // Clear pending audio frames
   while (!pending_audio_frames_.empty()) {
@@ -390,13 +456,15 @@ int FFmpegDecoder::GetVideoHeight() const {
 }
 
 blockplan::RationalFps FFmpegDecoder::GetVideoRationalFps() const {
-  if (!format_ctx_ || video_stream_index_ < 0) return blockplan::RationalFps{0,1};
-  
+  if (!format_ctx_ || video_stream_index_ < 0) return blockplan::RationalFps{0, 1};
+
   AVStream* stream = format_ctx_->streams[video_stream_index_];
-  AVRational fps = stream->avg_frame_rate;
-  
-  if (fps.num <= 0 || fps.den <= 0) return blockplan::RationalFps{0,1};
-  return blockplan::RationalFps{fps.num, fps.den};
+  // Use r_frame_rate for cadence (container/codec nominal rate). avg_frame_rate is for
+  // diagnostics only and is not authoritative for cadence math.
+  AVRational fps = stream->r_frame_rate;
+  if (fps.num <= 0 || fps.den <= 0) return blockplan::RationalFps{0, 1};
+  blockplan::RationalFps normalized(static_cast<int64_t>(fps.num), static_cast<int64_t>(fps.den));
+  return blockplan::SnapToStandardRationalFps(normalized);
 }
 
 double FFmpegDecoder::GetVideoDuration() const {
@@ -963,6 +1031,337 @@ void FFmpegDecoder::UpdateStats(double decode_time_ms) {
   if (stats_.average_decode_time_ms > 0.0) {
     stats_.current_fps = 1000.0 / stats_.average_decode_time_ms;
   }
+}
+
+
+// ============================================================================
+// Phase 2: PumpDecoderOnce support - helper functions
+// ============================================================================
+
+FFmpegDecoder::AVFramePtr FFmpegDecoder::MakeFrame() {
+  return AVFramePtr(av_frame_alloc(), FreeAVFrame);
+}
+
+FFmpegDecoder::AVPacketPtr FFmpegDecoder::MakePacket(AVPacket* pkt) {
+  return AVPacketPtr(pkt, [](AVPacket* p) { av_packet_free(&p); });
+}
+
+void FFmpegDecoder::EnqueueScratchToPending() {
+  auto f = MakeFrame();
+  av_frame_move_ref(f.get(), pump_scratch_frame_);
+  pending_video_frames_.push(std::move(f));
+
+  if (pending_video_frames_.size() > pending_video_max_depth_)
+    pending_video_max_depth_ = pending_video_frames_.size();
+}
+
+void FFmpegDecoder::DrainVideoFrames(int& frames_drained) {
+  frames_drained = 0;
+
+  // Release stashed frame first
+  if (has_stashed_video_frame_) {
+    if (pending_video_frames_.size() < kMaxPendingVideoFrames) {
+      pending_video_frames_.push(std::move(stashed_video_frame_));
+      has_stashed_video_frame_ = false;
+      frames_drained++;
+
+      if (pending_video_frames_.size() > pending_video_max_depth_)
+        pending_video_max_depth_ = pending_video_frames_.size();
+    } else {
+      return;
+    }
+  }
+
+  while (true) {
+    int ret = avcodec_receive_frame(codec_ctx_, pump_scratch_frame_);
+
+    if (ret == AVERROR(EAGAIN)) break;
+    if (ret == AVERROR_EOF) {
+      video_codec_flushed_ = true;
+      break;
+    }
+    if (ret < 0) {
+      stats_.decode_errors++;
+      break;
+    }
+
+    if (pending_video_frames_.size() < kMaxPendingVideoFrames) {
+      EnqueueScratchToPending();
+      frames_drained++;
+    } else {
+      auto f = MakeFrame();
+      av_frame_move_ref(f.get(), pump_scratch_frame_);
+      stashed_video_frame_ = std::move(f);
+      has_stashed_video_frame_ = true;
+      break;
+    }
+  }
+}
+
+void FFmpegDecoder::DrainAudioFrames(int& frames_drained) {
+  frames_drained = 0;
+
+  if (!audio_codec_ctx_) return;
+
+  while (true) {
+    int ret = avcodec_receive_frame(audio_codec_ctx_, audio_frame_);
+
+    if (ret == AVERROR(EAGAIN)) break;
+    if (ret == AVERROR_EOF) {
+      audio_codec_flushed_ = true;
+      break;
+    }
+    if (ret < 0) break;
+
+    buffer::AudioFrame converted;
+    if (ConvertAudioFrame(audio_frame_, converted)) {
+      if (pending_audio_frames_.size() < kMaxPendingAudioFrames) {
+        pending_audio_frames_.push(std::move(converted));
+        frames_drained++;
+      }
+    }
+
+    av_frame_unref(audio_frame_);
+  }
+}
+
+// ============================================================================
+// Phase 2: PumpDecoderOnce - lossless packet-level backpressure + EOF flush
+// ============================================================================
+
+blockplan::PumpResult FFmpegDecoder::PumpDecoderOnce(blockplan::PumpMode mode) {
+  using blockplan::PumpMode;
+  using blockplan::PumpResult;
+
+  if (mode == PumpMode::kAudioOnlyService) {
+    pump_calls_audio_only_++;
+  }
+
+  // ========================= EOF FLUSH MODE ==============================
+
+  if (demux_eof_reached_) {
+
+    // Drain deferred packets first
+    if (!deferred_video_packets_.empty()) {
+      if (pending_video_frames_.size() >= kMaxPendingVideoFrames) {
+        pump_backpressure_hits_++;
+        return PumpResult::kBackpressured;
+      }
+
+      AVPacketPtr pkt = std::move(deferred_video_packets_.front());
+      deferred_video_packets_.pop();
+
+      int ret = avcodec_send_packet(codec_ctx_, pkt.get());
+      if (ret == AVERROR(EAGAIN)) {
+        int drained = 0;
+        DrainVideoFrames(drained);
+        ret = avcodec_send_packet(codec_ctx_, pkt.get());
+      }
+
+      if (ret < 0 && ret != AVERROR(EAGAIN)) {
+        stats_.decode_errors++;
+        return PumpResult::kError;
+      }
+
+      if (ret == AVERROR(EAGAIN)) {
+        pump_backpressure_hits_++;
+        return PumpResult::kBackpressured;
+      }
+
+      int drained = 0;
+      DrainVideoFrames(drained);
+      return PumpResult::kProgress;
+    }
+
+    // Flush video codec
+    if (!video_codec_flushed_) {
+      int ret = avcodec_send_packet(codec_ctx_, nullptr);
+      if (ret == AVERROR(EAGAIN)) {
+        int drained = 0;
+        DrainVideoFrames(drained);
+        ret = avcodec_send_packet(codec_ctx_, nullptr);
+      }
+
+      int drained = 0;
+      DrainVideoFrames(drained);
+
+      if (drained > 0) {
+        return PumpResult::kProgress;
+      }
+    }
+
+    // Flush audio codec
+    if (audio_codec_ctx_ && !audio_codec_flushed_) {
+      int ret = avcodec_send_packet(audio_codec_ctx_, nullptr);
+      if (ret == AVERROR(EAGAIN)) {
+        int drained = 0;
+        DrainAudioFrames(drained);
+        ret = avcodec_send_packet(audio_codec_ctx_, nullptr);
+      }
+
+      int drained = 0;
+      DrainAudioFrames(drained);
+
+      if (drained > 0) {
+        if (mode == PumpMode::kAudioOnlyService) {
+          audio_frames_harvested_in_audio_only_ += drained;
+        }
+        return PumpResult::kProgress;
+      }
+    }
+
+    // Done when everything is exhausted
+    if (deferred_video_packets_.empty() &&
+        !has_stashed_video_frame_ &&
+        pending_video_frames_.empty() &&
+        video_codec_flushed_ &&
+        audio_codec_flushed_) {
+      eof_reached_ = true;
+      audio_eof_reached_ = true;
+      return PumpResult::kEof;
+    }
+
+    return PumpResult::kProgress;
+  }
+
+  // ========================= NORMAL MODE ==============================
+
+  // Step 1: In normal mode, drain deferred video packets first
+  if (mode == PumpMode::kNormal && !deferred_video_packets_.empty()) {
+    if (pending_video_frames_.size() >= kMaxPendingVideoFrames) {
+      pump_backpressure_hits_++;
+      return PumpResult::kBackpressured;
+    }
+
+    AVPacketPtr pkt = std::move(deferred_video_packets_.front());
+    deferred_video_packets_.pop();
+
+    int ret = avcodec_send_packet(codec_ctx_, pkt.get());
+    if (ret == AVERROR(EAGAIN)) {
+      int drained = 0;
+      DrainVideoFrames(drained);
+      ret = avcodec_send_packet(codec_ctx_, pkt.get());
+    }
+
+    if (ret < 0 && ret != AVERROR(EAGAIN)) {
+      stats_.decode_errors++;
+      return PumpResult::kError;
+    }
+
+    if (ret == AVERROR(EAGAIN)) {
+      pump_backpressure_hits_++;
+      return PumpResult::kBackpressured;
+    }
+
+    int drained = 0;
+    DrainVideoFrames(drained);
+    return PumpResult::kProgress;
+  }
+
+  // Step 2: Read one packet from demuxer
+  AVPacket* raw = av_packet_alloc();
+  int ret = av_read_frame(format_ctx_, raw);
+
+  if (ret == AVERROR_EOF) {
+    av_packet_free(&raw);
+    demux_eof_reached_ = true;
+    return PumpResult::kProgress;
+  }
+
+  if (ret < 0) {
+    av_packet_free(&raw);
+    stats_.decode_errors++;
+    return PumpResult::kError;
+  }
+
+  AVPacketPtr pkt = MakePacket(raw);
+
+  // Step 3: Audio packet
+  if (pkt->stream_index == audio_stream_index_ && audio_codec_ctx_) {
+    int send_ret = avcodec_send_packet(audio_codec_ctx_, pkt.get());
+    if (send_ret == AVERROR(EAGAIN)) {
+      int drained = 0;
+      DrainAudioFrames(drained);
+      send_ret = avcodec_send_packet(audio_codec_ctx_, pkt.get());
+    }
+
+    if (send_ret < 0 && send_ret != AVERROR(EAGAIN)) {
+      stats_.decode_errors++;
+      return PumpResult::kError;
+    }
+
+    if (send_ret == AVERROR(EAGAIN)) {
+      pump_backpressure_hits_++;
+      return PumpResult::kBackpressured;
+    }
+
+    int drained = 0;
+    DrainAudioFrames(drained);
+
+    if (mode == PumpMode::kAudioOnlyService) {
+      audio_frames_harvested_in_audio_only_ += drained;
+    }
+
+    return PumpResult::kProgress;
+  }
+
+  // Step 4: Video packet
+  if (pkt->stream_index == video_stream_index_) {
+
+    // 4a) Audio-only mode: defer video packets losslessly
+    if (mode == PumpMode::kAudioOnlyService) {
+      if (deferred_video_packets_.size() >= kMaxDeferredVideoPackets) {
+        pump_backpressure_hits_++;
+        return PumpResult::kBackpressured;
+      }
+      deferred_video_packets_.push(std::move(pkt));
+      if (deferred_video_packets_.size() > deferred_video_max_depth_)
+        deferred_video_max_depth_ = deferred_video_packets_.size();
+      if (deferred_video_packets_.size() >= (kMaxDeferredVideoPackets * 90) / 100) {
+        std::cerr << "[FFmpegDecoder] deferred video packets at 90% capacity ("
+                  << deferred_video_packets_.size() << "/" << kMaxDeferredVideoPackets
+                  << ")\n";
+      }
+      return PumpResult::kProgress;
+    }
+
+    // 4b) Normal mode: if pending full, defer losslessly
+    if (pending_video_frames_.size() >= kMaxPendingVideoFrames) {
+      if (deferred_video_packets_.size() >= kMaxDeferredVideoPackets) {
+        pump_backpressure_hits_++;
+        return PumpResult::kBackpressured;
+      }
+      deferred_video_packets_.push(std::move(pkt));
+      if (deferred_video_packets_.size() > deferred_video_max_depth_)
+        deferred_video_max_depth_ = deferred_video_packets_.size();
+      return PumpResult::kProgress;
+    }
+
+    // 4c) Decode video packet normally
+    int send_ret = avcodec_send_packet(codec_ctx_, pkt.get());
+    if (send_ret == AVERROR(EAGAIN)) {
+      int drained = 0;
+      DrainVideoFrames(drained);
+      send_ret = avcodec_send_packet(codec_ctx_, pkt.get());
+    }
+
+    if (send_ret < 0 && send_ret != AVERROR(EAGAIN)) {
+      stats_.decode_errors++;
+      return PumpResult::kError;
+    }
+
+    if (send_ret == AVERROR(EAGAIN)) {
+      pump_backpressure_hits_++;
+      return PumpResult::kBackpressured;
+    }
+
+    int drained = 0;
+    DrainVideoFrames(drained);
+    return PumpResult::kProgress;
+  }
+
+  // Step 5: Other streams (subtitles/data) skipped
+  return PumpResult::kProgress;
 }
 
 }  // namespace retrovue::decode

@@ -300,8 +300,9 @@ def validate_block_assignment(assignment: Any, plan: Any | None = None, channel:
                 # Validate duration is a multiple of grid_block_minutes
                 if duration % grid_block_minutes != 0:
                     violations.append(
-                        f"duration ({duration} minutes) must be a multiple of channel grid size "
-                        f"({grid_block_minutes} minutes)"
+                        f"INV-PLAN-GRID-ALIGNMENT-001-VIOLATED: "
+                        f"duration ({duration} minutes) is not a multiple of "
+                        f"grid_block_minutes ({grid_block_minutes})"
                     )
 
                 # Validate start_time aligns with grid boundaries
@@ -329,8 +330,10 @@ def validate_block_assignment(assignment: Any, plan: Any | None = None, channel:
                 if not aligns_with_grid:
                     offsets_str = ", ".join(str(o) for o in allowed_offsets)
                     violations.append(
-                        f"start_time ({start_time}) does not align with channel grid boundaries. "
-                        f"Grid size: {grid_block_minutes} minutes, allowed offsets: {offsets_str}"
+                        f"INV-PLAN-GRID-ALIGNMENT-001-VIOLATED: "
+                        f"start_time ({start_time}) does not align with "
+                        f"grid_block_minutes={grid_block_minutes}, "
+                        f"allowed offsets: [{offsets_str}]"
                     )
         except (ValueError, AttributeError):
             # If we can't parse or access channel properties, skip grid validation

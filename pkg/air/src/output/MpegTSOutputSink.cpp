@@ -4,6 +4,7 @@
 // Copyright (c) 2025 RetroVue
 
 #include "retrovue/output/MpegTSOutputSink.h"
+#include "retrovue/output/SinkDiagnostics.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -18,6 +19,8 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/telemetry/MetricsExporter.h"
+#include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/RationalFps.hpp"
 
 static bool NoPcrPacing() {
   static bool checked = false;
@@ -58,6 +61,20 @@ MpegTSOutputSink::MpegTSOutputSink(
       name_(name),
       status_(SinkStatus::kIdle),
       stop_requested_(false) {
+}
+
+// Test seam: constructor with injected encoder
+MpegTSOutputSink::MpegTSOutputSink(
+    int fd,
+    const playout_sinks::mpegts::MpegTSPlayoutSinkConfig& config,
+    std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder,
+    const std::string& name)
+    : fd_(fd),
+      config_(config),
+      name_(name),
+      status_(SinkStatus::kIdle),
+      stop_requested_(false),
+      encoder_(std::move(encoder)) {
 }
 
 MpegTSOutputSink::~MpegTSOutputSink() {
@@ -140,7 +157,10 @@ bool MpegTSOutputSink::Start() {
   });
 
   // Create and open encoder pipeline
-  encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config_);
+  // Test seam: if encoder was injected via constructor, use it; otherwise create new one
+  if (!encoder_) {
+    encoder_ = std::make_unique<playout_sinks::mpegts::EncoderPipeline>(config_);
+  }
   if (!encoder_->open(config_, this, &MpegTSOutputSink::WriteToFdCallback)) {
     SetStatus(SinkStatus::kError, "Failed to open encoder pipeline");
     encoder_.reset();
@@ -148,15 +168,8 @@ bool MpegTSOutputSink::Start() {
     return false;
   }
 
-  // =========================================================================
-  // INV-BOOT-FAST-EMIT: Disable encoder timing during boot for immediate output
-  // =========================================================================
-  // Encoder timing (GateOutputTiming) is DISABLED at startup to ensure
-  // immediate TS emission. It will be disabled permanently once steady-state
-  // is entered (MuxLoop owns pacing authority).
-  // =========================================================================
-  encoder_->SetOutputTimingEnabled(false);
-  std::cout << "[MpegTSOutputSink] INV-BOOT-FAST-EMIT: Encoder output timing DISABLED for fast boot" << std::endl;
+  // Output timing left at encoder default (enabled). EncoderPipeline defaults
+  // output_timing_enabled_=true; pacing is applied in encode path when enabled.
 
   // =========================================================================
   // INV-P9-IMMEDIATE-OUTPUT: Keep audio liveness ENABLED at startup
@@ -398,6 +411,19 @@ void MpegTSOutputSink::MuxLoop() {
   // buffer health checks, and diagnostic checks.
   // =========================================================================
 
+  // One-tick duration from session rational (INV-FPS-RESAMPLE). Prefer fps_num/fps_den when set.
+  retrovue::blockplan::RationalFps session_fps(0, 1);
+  if (config_.fps_num > 0 && config_.fps_den > 0) {
+    session_fps = retrovue::blockplan::RationalFps(config_.fps_num, config_.fps_den);
+  }
+  if (!session_fps.IsValid()) {
+    session_fps = retrovue::blockplan::DeriveRationalFPS(config_.target_fps);
+  }
+  if (!session_fps.IsValid()) {
+    session_fps = retrovue::blockplan::FPS_30;
+  }
+  const int64_t frame_duration_us = session_fps.FrameDurationUs();
+
   // Pre-allocate black fallback frame ONCE (no allocation in hot path)
   buffer::Frame prealloc_black_frame;
   {
@@ -405,7 +431,7 @@ void MpegTSOutputSink::MuxLoop() {
     prealloc_black_frame.height = config_.target_height;
     prealloc_black_frame.metadata.pts = 0;  // Will be set per-emit
     prealloc_black_frame.metadata.dts = 0;
-    prealloc_black_frame.metadata.duration = 1.0 / config_.target_fps;
+    prealloc_black_frame.metadata.duration = session_fps.FrameDurationSec();
     prealloc_black_frame.metadata.asset_uri = "fallback://black";
     prealloc_black_frame.metadata.has_ct = true;
 
@@ -422,8 +448,6 @@ void MpegTSOutputSink::MuxLoop() {
   int64_t fallback_frame_count = 0;
   int64_t last_fallback_pts_us = 0;
   bool in_fallback_mode = false;
-
-  const int64_t frame_duration_us = static_cast<int64_t>(1'000'000.0 / config_.target_fps);
 
   // =========================================================================
   // INV-FALLBACK-001: Upstream starvation detection
@@ -825,17 +849,7 @@ void MpegTSOutputSink::MuxLoop() {
         // =====================================================================
         if (encoder_) {
           encoder_->SetProducerCTAuthoritative(true);
-          // ===================================================================
-          // INV-P9-STEADY-PACING: MuxLoop is now the sole timing authority
-          // ===================================================================
-          // CRITICAL: Disable encoder's GateOutputTiming to prevent conflicting
-          // timing gates. MuxLoop has wall_epoch set at first frame dequeue.
-          // GateOutputTiming has output_timing_anchor_wall_ set at first encode.
-          // These anchors differ, causing frames to pass MuxLoop (appear "late")
-          // but block in GateOutputTiming (appear "early") - resulting in
-          // multi-second TS emission gaps despite continuous frame input.
-          // ===================================================================
-          encoder_->SetOutputTimingEnabled(false);
+          // Output timing remains enabled (encoder default). No second disable.
         }
 
         // =====================================================================
@@ -1126,8 +1140,10 @@ void MpegTSOutputSink::MuxLoop() {
           audio_emit_count++;
           audio_batch++;
 
-          const int64_t audio_pts90k = (audio_frame.pts_us * 90000) / 1'000'000;
+          // INV-AUDIO-PTS-HOUSE-CLOCK-001: Derive PTS from sample clock, not content pts_us
+          const int64_t audio_pts90k = (audio_samples_emitted_ * 90000) / buffer::kHouseAudioSampleRate;
           encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
+          audio_samples_emitted_ += audio_frame.nb_samples;
 
           // INV-P9-AUDIO-LIVENESS: Log when audio stream goes live (first audio packet after header)
           if (audio_emit_count == 1) {
@@ -1283,9 +1299,8 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     (void)w;  // Forensic only — ignore errors, never block
   }
 
-  // Emit bytes via SocketSink's bounded buffer + writer thread
-  // LAW-OUTPUT-LIVENESS: SocketSink detaches slow consumers on buffer overflow
-  // No packet drops; overflow triggers connection close
+  // INV-SINK-NONBLOCKING-HANDOFF-001: O(1) enqueue only; egress writer thread does send().
+  // LAW-OUTPUT-LIVENESS: SocketSink detaches slow consumers on buffer overflow.
   bool enqueued = sink->socket_sink_->TryConsumeBytes(
       reinterpret_cast<const uint8_t*>(buf),
       static_cast<size_t>(buf_size));
@@ -1301,16 +1316,19 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
     // INV-TS-CONTINUITY: Track last successful TS write for null packet injection
     sink->MarkTsWritten();
   } else {
-    // Sink closed or detached (slow consumer)
+    // Sink closed or detached (slow consumer) — Hook A + Hook C
     sink->dbg_bytes_dropped_.fetch_add(
         static_cast<uint64_t>(buf_size), std::memory_order_relaxed);
 
-    // Check if sink was detached (slow consumer)
-    if (sink->socket_sink_->IsDetached()) {
-      // Sink detached - return error to stop FFmpeg output
-      // Channel continues; future consumers can attach
-      return -1;
+    if (!sink->socket_sink_->IsDetached()) {
+      output::LogFirstWriteFailure(output::OutputKind::kSocket,
+                                  sink->socket_sink_->GetFd(),
+                                  sink->socket_sink_.get(),
+                                  sink->socket_sink_->GetSinkGeneration(),
+                                  "n/a");
+      sink->socket_sink_->ForceDetachAndClose("WriteToFdCallback: sink full or closed");
     }
+    return -1;
   }
 
   // INV-P9-BOOT-LIVENESS: Log when first decodable TS packet is emitted after sink attach

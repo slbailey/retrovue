@@ -1,8 +1,8 @@
 """
-Phase 8.5 — ChannelStream fan-out and teardown.
+Phase 8.5 — ChannelStream fan-out and decoupled upstream.
 
 - Multiple subscribers receive the same bytes (broadcast-style).
-- Last subscriber disconnect stops the reader (no ongoing work).
+- Last subscriber disconnect does NOT stop the reader; upstream stays alive for reconnect.
 """
 
 from __future__ import annotations
@@ -72,34 +72,28 @@ def test_channel_stream_multiple_subscribers_same_bytes():
         stream.stop()
 
 
-def test_channel_stream_last_subscriber_stops_reader():
-    """When last subscriber leaves, reader stops (Phase 8.5 teardown)."""
+def test_channel_stream_last_subscriber_does_not_stop_reader():
+    """When last subscriber leaves, reader stays running (upstream survives for reconnect)."""
     stream = ChannelStream("test", ts_source_factory=lambda: FakeTsSource(chunk_size=188 * 5))
     q = stream.subscribe("only")
     assert stream.is_running()
 
-    # Read a little then unsubscribe (reader will be stopped from unsubscribe)
     for _ in range(3):
         try:
             q.get(timeout=1.0)
         except Exception:
             break
     stream.unsubscribe("only")
-    # stop() is called from unsubscribe; wait for reader to exit (or explicit stop)
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and stream.is_running():
-        time.sleep(0.05)
-    if stream.is_running():
-        stream.stop()  # force stop if reader did not exit (e.g. test env timing)
-    assert not stream.is_running()
-
-    # New subscriber can connect and get data again (new reader)
-    q2 = stream.subscribe("new")
+    # Reader must still be running (no stop on last subscriber)
     assert stream.is_running()
+
+    # New subscriber gets data without restarting reader
+    q2 = stream.subscribe("new")
     chunk = q2.get(timeout=2.0)
     assert chunk and len(chunk) > 0
     stream.unsubscribe("new")
     stream.stop()
+    assert not stream.is_running()
 
 
 def test_generate_ts_stream_eof():

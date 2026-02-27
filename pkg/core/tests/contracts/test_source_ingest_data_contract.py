@@ -1,10 +1,10 @@
 """
 Data contract tests for Source Ingest (discovery-only mode).
 
-Per rules in .cursor/rules/20-tests-source-ingest-contract.mdc:
-- Do not call legacy orchestrator/service layers
-- No persistence occurs; discovery-only
-- Exit codes/messages are deterministic based on collection eligibility and source presence
+Architectural doctrine:
+- Source ingest MUST succeed (exit code 0) when eligible collections exist.
+- Enrichers are optional; lack of valid enrichers MUST NOT cause exit code 1.
+- No unintended DB writes in discovery-only scenarios.
 """
 
 import uuid
@@ -76,14 +76,14 @@ class TestSourceIngestDataContract:
         assert "No ingestible collections" in result.stdout
     
     @patch('retrovue.cli.commands.source.session')
-    def test_d3_eligible_collections_exit_one_unavailable(self, mock_session):
-        """Eligible collections exist -> exit 1, unavailable message, no DB writes."""
+    def test_d3_eligible_collections_succeed_no_db_writes(self, mock_session):
+        """Eligible collections exist -> exit 0, warning/output allowed, no DB writes."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1, self.collection2]
         result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-        assert result.exit_code == 1
-        assert "Ingest operation is not available" in result.stderr
+        assert result.exit_code == 0
+        assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
         mock_db.add.assert_not_called()
         mock_db.commit.assert_not_called()
     
@@ -106,13 +106,16 @@ class TestSourceIngestDataContract:
         mock_db.commit.assert_not_called()
     
     @patch('retrovue.cli.commands.source.session')
-    def test_d6_dry_run_with_eligible_still_unavailable_exit_one(self, mock_session):
+    def test_d6_dry_run_with_eligible_succeeds_no_writes(self, mock_session):
+        """Dry-run with eligible collections -> exit 0, no DB writes."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1]
-        result = self.runner.invoke(app, ["source", "ingest", self.source_id, "--dry-run"]) 
-        assert result.exit_code == 1
-        assert "Ingest operation is not available" in result.stderr
+        result = self.runner.invoke(app, ["source", "ingest", self.source_id, "--dry-run"])
+        assert result.exit_code == 0
+        assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output or "Would" in result.output
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
     
     # test-db flag is not part of current CLI; omit related data checks
     # test-db + dry-run precedence not applicable; flag not supported
@@ -124,11 +127,12 @@ class TestSourceIngestDataContract:
     
     @patch('retrovue.cli.commands.source.session')
     def test_d10_never_persists_in_discovery_only(self, mock_session):
+        """Discovery-only: exit 0 with eligible collections; no DB writes."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1]
         result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-        assert result.exit_code == 1
+        assert result.exit_code == 0
         mock_db.add.assert_not_called()
         mock_db.commit.assert_not_called()
     
@@ -143,38 +147,44 @@ class TestSourceIngestDataContract:
         assert "No ingestible collections" in result.stdout
     
     @patch('retrovue.cli.commands.source.session')
-    def test_d12_sync_enabled_ingestible_present_exit_one(self, mock_session):
+    def test_d12_sync_enabled_ingestible_present_succeeds(self, mock_session):
+        """Eligible collections present -> ingest succeeds (exit 0)."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1]
         result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-        assert result.exit_code == 1
+        assert result.exit_code == 0
+        assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
     
     # test-db with eligible collections not applicable; flag not supported
     # dry-run + test-db precedence not applicable; test-db not supported
     
     @patch('retrovue.cli.commands.source.session')
     def test_d15_no_source_level_records_created(self, mock_session):
+        """With eligible collections, exit 0; no unintended source-level DB writes."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1]
         result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-        assert result.exit_code == 1
+        assert result.exit_code == 0
         mock_db.add.assert_not_called()
     
     @patch('retrovue.cli.commands.source.session')
-    def test_d16_text_stats_not_reported_when_unavailable(self, mock_session):
+    def test_d16_text_stats_or_summary_present_when_eligible(self, mock_session):
+        """With eligible collections, exit 0; summary or ingest-related output present."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1, self.collection2]
         result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-        assert result.exit_code == 1
-        assert "Ingest operation is not available" in result.stderr
+        assert result.exit_code == 0
+        assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
     
     @patch('retrovue.cli.commands.source.session')
-    def test_d17_last_ingest_time_not_applicable(self, mock_session):
+    def test_d17_eligible_collections_succeed(self, mock_session):
+        """Eligible collections -> ingest succeeds (exit 0)."""
         mock_db = self._setup_session_mock(mock_session)
         mock_db.query.return_value.filter.return_value.first.return_value = self.source
         mock_db.query.return_value.filter.return_value.all.return_value = [self.collection1]
         result = self.runner.invoke(app, ["source", "ingest", self.source_id])
-        assert result.exit_code == 1
+        assert result.exit_code == 0
+        assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output

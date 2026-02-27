@@ -47,10 +47,18 @@ Source→output frame selection uses exactly one of three modes. Mode is chosen 
 
 ---
 
+## E. Naming: Tick Cadence vs Frame-Selection Cadence
+
+- **Tick cadence (tick grid):** When output ticks occur. Fixed by session output FPS (house format). Defined by INV-FPS-RESAMPLE and INV-TICK-DEADLINE-DISCIPLINE-001. Does not change on segment swap.
+- **Frame-selection cadence:** The repeat-vs-advance policy per tick (e.g. for 23.976→30 upsample: which ticks advance to the next source frame vs repeat the last). Refreshed when the live segment changes (new source FPS). Code symbols: `frame_selection_cadence_*`, `InitFrameSelectionCadenceForLiveBlock`, `RefreshFrameSelectionCadenceFromLiveSource`. Does not affect when ticks fire.
+
+---
+
 ## Index Quick Links
 
 | Topic        | Contract / doc |
 |-------------|----------------|
+| Tick cadence (grid) vs frame-selection cadence (repeat/advance) | This doc § E |
 | Tick grid, no rounded accumulation | INV-FPS-RESAMPLE |
 | OFF/DROP/CADENCE, rational only; output duration/PTS = one tick | INV-FPS-MAPPING, INV-TICK-AUTHORITY-001 |
 | Output PTS = tick grid | INV-FPS-TICK-PTS |

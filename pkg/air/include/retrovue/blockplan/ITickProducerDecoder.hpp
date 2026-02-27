@@ -20,6 +20,24 @@
 
 namespace retrovue::blockplan {
 
+// ============================================================================
+// Phase 2: Audio decoupling support
+// ============================================================================
+
+// Pump mode controls decoder behavior under backpressure
+enum class PumpMode {
+  kNormal,           // Decode both audio + video normally
+  kAudioOnlyService  // Decode audio, defer video packets (lossless)
+};
+
+// PumpResult separates backpressure from EOF/error
+enum class PumpResult {
+  kProgress,       // Made progress (packet read/decoded)
+  kBackpressured,  // Queues full, no progress possible right now
+  kEof,            // End of file reached
+  kError           // Hard error (decode/demux failure)
+};
+
 // Interrupt flags for decoder I/O (matches FFmpegDecoder::InterruptFlags).
 struct DecoderInterruptFlags {
   std::atomic<bool>* fill_stop = nullptr;
@@ -41,6 +59,10 @@ class ITickProducerDecoder {
   virtual void SetInterruptFlags(const DecoderInterruptFlags& flags) = 0;
   // True if the asset has an audio stream (for INV-AUDIO-PRIME-002 / priming logs).
   virtual bool HasAudioStream() const { return false; }
+
+  // Phase 2: Advance demux/decode by one packet without consuming video output.
+  // Used by DrainAudioOnly() to service audio while video buffer is full.
+  virtual PumpResult PumpDecoderOnce(PumpMode mode = PumpMode::kNormal) = 0;
 };
 
 }  // namespace retrovue::blockplan
