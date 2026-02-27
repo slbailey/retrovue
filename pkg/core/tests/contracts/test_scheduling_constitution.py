@@ -1490,6 +1490,161 @@ class TestInvScheduledayDerivationTraceable001:
 
 
 # =========================================================================
+# INV-SCHEDULEDAY-LEAD-TIME-001
+# =========================================================================
+
+
+class TestInvScheduledayLeadTime001:
+    """INV-SCHEDULEDAY-LEAD-TIME-001
+
+    A ScheduleDay for broadcast date D must be materialized no later than
+    D - min_schedule_day_lead_days calendar days. The lead time is
+    deployment-configurable (default 3); tests MUST NOT hardcode the
+    literal 3.
+
+    Enforcement is a standalone check function, not a store boundary.
+    Tests call check_scheduleday_lead_time() directly with injected
+    parameters.
+
+    Derived from: LAW-DERIVATION, LAW-RUNTIME-AUTHORITY.
+    """
+
+    def test_inv_scheduleday_lead_time_001_reject_missing_at_deadline(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-LEAD-TIME-001 -- negative
+
+        Invariant: INV-SCHEDULEDAY-LEAD-TIME-001
+        Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY
+        Failure class: Planning
+        Scenario: min_schedule_day_lead_days=N (N=3). Clock is past
+                  deadline (D-N). No ScheduleDay exists for target date D.
+                  Check raises violation with invariant tag and
+                  configured N.
+        """
+        from retrovue.runtime.schedule_manager_service import (
+            InMemoryResolvedStore,
+            check_scheduleday_lead_time,
+        )
+
+        store = InMemoryResolvedStore()
+        min_lead_days = 3
+        target = date(2026, 1, 10)
+
+        # Set clock past the deadline: D-N+1 day at broadcast start.
+        # Deadline is D-3 = Jan 7 at 06:00. Clock at Jan 8 06:00.
+        past_deadline = datetime(2026, 1, 8, 6, 0, 0, tzinfo=timezone.utc)
+
+        with pytest.raises(
+            ValueError, match="INV-SCHEDULEDAY-LEAD-TIME-001"
+        ) as exc_info:
+            check_scheduleday_lead_time(
+                resolved_store=store,
+                channel_id=CHANNEL_ID,
+                target_date=target,
+                now_utc=past_deadline,
+                min_lead_days=min_lead_days,
+            )
+
+        # Verify the configured N appears in the error, not a hardcoded value.
+        msg = str(exc_info.value)
+        assert f"min_schedule_day_lead_days={min_lead_days}" in msg
+
+    def test_inv_scheduleday_lead_time_001_accept_materialized_before_deadline(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-LEAD-TIME-001 -- positive
+
+        Invariant: INV-SCHEDULEDAY-LEAD-TIME-001
+        Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: ScheduleDay exists for target date D. Clock is past
+                  deadline. Check passes.
+        """
+        from retrovue.runtime.schedule_manager_service import (
+            InMemoryResolvedStore,
+            check_scheduleday_lead_time,
+        )
+        from retrovue.runtime.schedule_types import ResolvedScheduleDay, SequenceState
+
+        store = InMemoryResolvedStore()
+        min_lead_days = 3
+        target = date(2026, 1, 10)
+
+        # Materialize the ScheduleDay.
+        resolved = ResolvedScheduleDay(
+            programming_day_date=target,
+            resolved_slots=[],
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+        )
+        store.store(CHANNEL_ID, resolved)
+
+        # Clock past deadline.
+        past_deadline = datetime(2026, 1, 8, 6, 0, 0, tzinfo=timezone.utc)
+
+        # Should not raise — ScheduleDay exists.
+        check_scheduleday_lead_time(
+            resolved_store=store,
+            channel_id=CHANNEL_ID,
+            target_date=target,
+            now_utc=past_deadline,
+            min_lead_days=min_lead_days,
+        )
+
+    def test_inv_scheduleday_lead_time_001_parameterized_not_hardcoded(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-LEAD-TIME-001 -- parameterization
+
+        Invariant: INV-SCHEDULEDAY-LEAD-TIME-001
+        Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY
+        Failure class: Planning
+        Scenario: Use N=5 (not default 3). Verify check uses injected
+                  value. Clock at D-4 (past D-5 deadline). Check raises.
+                  Then verify D-6 (before deadline) does not raise.
+        """
+        from retrovue.runtime.schedule_manager_service import (
+            InMemoryResolvedStore,
+            check_scheduleday_lead_time,
+        )
+
+        store = InMemoryResolvedStore()
+        min_lead_days = 5
+        target = date(2026, 1, 15)
+
+        # Deadline is D-5 = Jan 10 at 06:00. Clock at Jan 11 06:00 (past).
+        past_deadline = datetime(2026, 1, 11, 6, 0, 0, tzinfo=timezone.utc)
+
+        with pytest.raises(
+            ValueError, match="INV-SCHEDULEDAY-LEAD-TIME-001"
+        ) as exc_info:
+            check_scheduleday_lead_time(
+                resolved_store=store,
+                channel_id=CHANNEL_ID,
+                target_date=target,
+                now_utc=past_deadline,
+                min_lead_days=min_lead_days,
+            )
+
+        # Verify the configured N=5 appears, not N=3.
+        msg = str(exc_info.value)
+        assert "min_schedule_day_lead_days=5" in msg
+        assert "min_schedule_day_lead_days=3" not in msg
+
+        # Before deadline (Jan 9 06:00, which is D-6): should not raise.
+        before_deadline = datetime(2026, 1, 9, 6, 0, 0, tzinfo=timezone.utc)
+        check_scheduleday_lead_time(
+            resolved_store=store,
+            channel_id=CHANNEL_ID,
+            target_date=target,
+            now_utc=before_deadline,
+            min_lead_days=min_lead_days,
+        )
+
+
+# =========================================================================
 # INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001
 # =========================================================================
 
