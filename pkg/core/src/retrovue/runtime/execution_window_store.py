@@ -49,6 +49,7 @@ class ExecutionEntry:
     is_locked: bool = True
     transmission_log_ref: str | None = None
     is_operator_override: bool = False
+    generation_id: int = 0
 
 
 @dataclass
@@ -61,6 +62,24 @@ class ExecutionDayResult:
     """
     end_utc_ms: int
     entries: list[ExecutionEntry]
+
+
+@dataclass
+class WindowSnapshot:
+    """Snapshot of entries within a queried time range.
+
+    All entries in a well-formed snapshot share a single generation_id.
+    """
+    generation_id: int
+    entries: list[ExecutionEntry]
+
+
+@dataclass
+class PublishResult:
+    """Result of an atomic publish operation."""
+    ok: bool
+    published_generation_id: int
+    error_code: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +109,7 @@ class ExecutionWindowStore:
         self._entries: list[ExecutionEntry] = []
         self._lock = threading.Lock()
         self._enforce_derivation_from_playlist = enforce_derivation_from_playlist
+        self._max_generation_id: int = 0
 
     # ------------------------------------------------------------------
     # Write (HorizonManager)
@@ -242,6 +262,104 @@ class ExecutionWindowStore:
                     entry.is_locked = True
                     count += 1
         return count
+
+    # ------------------------------------------------------------------
+    # Atomic publish (INV-HORIZON-ATOMIC-PUBLISH-001)
+    # ------------------------------------------------------------------
+
+    def read_window_snapshot(
+        self,
+        start_utc_ms: int,
+        end_utc_ms: int,
+    ) -> WindowSnapshot:
+        """Return a snapshot of entries overlapping [start_utc_ms, end_utc_ms).
+
+        All entries in a well-formed window share a single generation_id.
+        If entries with multiple generation_ids are observed, a warning is
+        logged and the max generation_id is returned.
+        """
+        with self._lock:
+            matching = [
+                e for e in self._entries
+                if e.start_utc_ms < end_utc_ms and e.end_utc_ms > start_utc_ms
+            ]
+            if not matching:
+                return WindowSnapshot(generation_id=0, entries=[])
+
+            gen_ids = {e.generation_id for e in matching}
+            if len(gen_ids) == 1:
+                gen_id = gen_ids.pop()
+            else:
+                gen_id = max(gen_ids)
+                logger.warning(
+                    "INV-HORIZON-ATOMIC-PUBLISH-001-OBSERVATION: "
+                    "Multiple generation_ids %s observed in range "
+                    "[%d, %d). Returning max=%d.",
+                    gen_ids,
+                    start_utc_ms,
+                    end_utc_ms,
+                    gen_id,
+                )
+            return WindowSnapshot(generation_id=gen_id, entries=list(matching))
+
+    def publish_atomic_replace(
+        self,
+        range_start_ms: int,
+        range_end_ms: int,
+        new_entries: list[ExecutionEntry],
+        generation_id: int,
+        reason_code: str,
+        *,
+        operator_override: bool = False,
+    ) -> PublishResult:
+        """Atomically replace entries in [range_start_ms, range_end_ms).
+
+        Enforces INV-HORIZON-ATOMIC-PUBLISH-001:
+        - generation_id must be strictly greater than any previously published.
+        - All new_entries are stamped with generation_id.
+        - Existing entries in the range are removed and replaced atomically.
+        """
+        with self._lock:
+            # Reject non-monotonic generation_id
+            if generation_id <= self._max_generation_id:
+                return PublishResult(
+                    ok=False,
+                    published_generation_id=generation_id,
+                    error_code=(
+                        "INV-HORIZON-ATOMIC-PUBLISH-001-VIOLATED: "
+                        f"generation_id={generation_id} is not greater than "
+                        f"max_generation_id={self._max_generation_id}. "
+                        f"reason_code={reason_code!r}."
+                    ),
+                )
+
+            # Stamp all entries
+            for e in new_entries:
+                e.generation_id = generation_id
+                if operator_override:
+                    e.is_operator_override = True
+
+            # Remove existing entries in range
+            self._entries = [
+                e for e in self._entries
+                if not (e.start_utc_ms < range_end_ms and e.end_utc_ms > range_start_ms)
+            ]
+
+            # Insert new entries and re-sort
+            self._entries.extend(new_entries)
+            self._entries.sort(key=lambda e: e.start_utc_ms)
+
+            # Update max generation
+            self._max_generation_id = generation_id
+
+            return PublishResult(
+                ok=True,
+                published_generation_id=generation_id,
+            )
+
+    # ------------------------------------------------------------------
+    # Single-entry mutation
+    # ------------------------------------------------------------------
 
     def replace_entry(
         self,

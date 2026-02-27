@@ -38,4 +38,10 @@ MUST be logged as planning fault with fields: `observed_generation_ids` (set), `
 
 ## Enforcement Evidence
 
-TODO
+`publish_atomic_replace()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — atomic publish method on `ExecutionWindowStore`. Under a single lock acquisition: rejects non-monotonic `generation_id` with `PublishResult(ok=False, error_code="INV-HORIZON-ATOMIC-PUBLISH-001-VIOLATED: ...")`, stamps all new entries with the provided `generation_id`, removes existing entries overlapping the publish range, inserts new entries, and updates `_max_generation_id`. Returns `PublishResult` with outcome.
+
+`read_window_snapshot()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — snapshot reader on `ExecutionWindowStore`. Under lock: collects entries overlapping `[start_utc_ms, end_utc_ms)`, verifies single `generation_id`. Logs `INV-HORIZON-ATOMIC-PUBLISH-001-OBSERVATION` warning if multiple generation_ids are observed.
+
+`generation_id` field on `ExecutionEntry` — integer field (default `0`) carrying the publish generation. Stamped by `publish_atomic_replace()`.
+
+Tests: `pkg/core/tests/contracts/test_inv_horizon_atomic_publish.py::TestInvHorizonAtomicPublish001` — THAP-001 (complete generation after publish), THAP-002 (non-overlapping range unaffected), THAP-003 (snapshot single-generation monotonicity), THAP-004 (operator override partial range).
