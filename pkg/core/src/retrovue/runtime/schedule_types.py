@@ -322,13 +322,15 @@ class Program:
     episodes: list[Episode]      # Ordered list of episodes
 
 
-@dataclass
+@dataclass(frozen=True)
 class ResolvedAsset:
     """
     A fully resolved asset ready for playout.
 
     Contains both the physical file path for playout and display metadata
     for EPG presentation. Created during EPG generation; immutable once created.
+
+    INV-SCHEDULEDAY-IMMUTABLE-001: frozen=True prevents field reassignment.
     """
     file_path: str                          # Physical file path for playout
     asset_id: str | None = None             # Asset ID if from catalog
@@ -338,13 +340,15 @@ class ResolvedAsset:
     content_duration_seconds: float = 0.0   # Actual duration of content
 
 
-@dataclass
+@dataclass(frozen=True)
 class ResolvedSlot:
     """
     A ScheduleSlot with its content fully resolved.
 
     Created during EPG generation. The resolved_asset is immutable
     once the EPG is published.
+
+    INV-SCHEDULEDAY-IMMUTABLE-001: frozen=True prevents field reassignment.
     """
     slot_time: time              # Grid-aligned time
     program_ref: ProgramRef      # Original reference (for display)
@@ -353,7 +357,7 @@ class ResolvedSlot:
     label: str = ""              # Display label
 
 
-@dataclass
+@dataclass(frozen=True)
 class SequenceState:
     """
     Snapshot of sequential program positions at resolution time.
@@ -363,12 +367,13 @@ class SequenceState:
     and debugging.
 
     INV-P3-004: State advances only at resolution time, never during playout.
+    INV-SCHEDULEDAY-IMMUTABLE-001: frozen=True prevents field reassignment.
     """
     positions: dict[str, int] = field(default_factory=dict)  # program_id -> episode_index
     as_of: datetime | None = None  # When this state was captured
 
 
-@dataclass
+@dataclass(frozen=True)
 class ProgramEvent:
     """A single scheduled airing — the canonical editorial unit.
 
@@ -377,6 +382,8 @@ class ProgramEvent:
     - Grid occupancy = block_span_count * grid_block_ms
     - start_utc_ms MUST align to grid block boundaries
     - Episode cursor advances once per ProgramEvent, not per block
+
+    INV-SCHEDULEDAY-IMMUTABLE-001: frozen=True prevents field reassignment.
     """
     id: str
     program_id: str
@@ -388,7 +395,7 @@ class ProgramEvent:
     resolved_asset: ResolvedAsset | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class ResolvedScheduleDay:
     """
     A ScheduleDay with all content resolved to specific assets.
@@ -399,12 +406,15 @@ class ResolvedScheduleDay:
 
     INV-P3-002: EPG Identity Immutability - once published, identities cannot change.
     INV-P3-008: Resolution Idempotence - same (channel, day) resolved at most once.
+    INV-SCHEDULEDAY-IMMUTABLE-001: frozen=True prevents field reassignment.
     """
     programming_day_date: date
     resolved_slots: list[ResolvedSlot]  # Per-block asset details (from segmentation)
     resolution_timestamp: datetime      # When this day was resolved
     sequence_state: SequenceState       # State snapshot at resolution time
     program_events: list[ProgramEvent] = field(default_factory=list)
+    is_manual_override: bool = False    # True if created by operator override
+    supersedes_id: int | None = None    # id() of superseded record, if override
 
 
 @dataclass
@@ -461,6 +471,9 @@ class ResolvedScheduleStore(Protocol):
 
     INV-P3-008: Resolution Idempotence - if a day is already resolved,
     return the existing resolution, do not re-resolve.
+
+    INV-SCHEDULEDAY-ONE-PER-DATE-001: store() rejects duplicates.
+    Use force_replace() for atomic regeneration.
     """
 
     def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
@@ -468,11 +481,27 @@ class ResolvedScheduleStore(Protocol):
         ...
 
     def store(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
-        """Store a resolved schedule day. Must be idempotent."""
+        """Store a resolved schedule day. Rejects if record already exists."""
         ...
 
     def exists(self, channel_id: str, programming_day_date: date) -> bool:
         """Check if a day has already been resolved."""
+        ...
+
+    def force_replace(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
+        """Atomically replace an existing ResolvedScheduleDay."""
+        ...
+
+    def update(
+        self, channel_id: str, programming_day_date: date, fields: dict
+    ) -> None:
+        """INV-SCHEDULEDAY-IMMUTABLE-001: Always rejects. In-place mutation forbidden."""
+        ...
+
+    def operator_override(
+        self, channel_id: str, resolved: ResolvedScheduleDay
+    ) -> ResolvedScheduleDay:
+        """Create an operator override record for an existing ScheduleDay."""
         ...
 
 

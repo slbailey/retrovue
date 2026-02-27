@@ -23,19 +23,9 @@ Every test in this matrix maps to at least one invariant. Every invariant is cov
 
 ### Derivation Chain
 
-The constitutional derivation chain has two representations:
-
-**Current implementation:**
 ```
-SchedulePlan → ResolvedScheduleDay → ExecutionEntry → AsRun
+SchedulePlan → ResolvedScheduleDay → TransmissionLog → ExecutionEntry → AsRun
 ```
-
-**Aspirational full chain:**
-```
-SchedulePlan → ScheduleDay → Playlist → PlaylogEvent → AsRun
-```
-
-Blocker tests validate against the current implementation. Test definitions in sections 5–6 reference the aspirational chain and will be implemented as the pipeline matures. Where the matrix references "Playlist" or "PlaylogEvent", these map to ExecutionEntry in the current codebase.
 
 ---
 
@@ -71,7 +61,7 @@ All tests operate under these constraints:
 
 ### 3.2 Lookahead Configuration
 
-`min_execution_hours`: deployment-configurable integer (default: `3`). Injected into all PlaylogService and HorizonManager instances under test. Tests MUST assert `depth >= min_execution_hours` rather than `depth >= 3`. Tests that stress the boundary use `min_execution_hours - epsilon` and `min_execution_hours + epsilon` (where `epsilon` is one grid block duration).
+`min_execution_hours`: deployment-configurable integer (default: `3`). Injected into all HorizonManager instances under test. Tests MUST assert `depth >= min_execution_hours` rather than `depth >= 3`. Tests that stress the boundary use `min_execution_hours - epsilon` and `min_execution_hours + epsilon` (where `epsilon` is one grid block duration).
 
 ### 3.3 Channel
 
@@ -104,7 +94,7 @@ Tests exercising grid-boundary edge cases (midnight wrap, programming-day rollov
 
 ### 3.6 Lock Window
 
-`lock_window_depth`: the period before `now_utc()` during which PlaylogEvent entries are considered locked. Injected via fixture; default `30 minutes`. Tests use `lock_window_depth` symbolically.
+`lock_window_depth`: the period before `now_utc()` during which ExecutionEntry records are considered locked. Injected via fixture; default `30 minutes`. Tests use `lock_window_depth` symbolically.
 
 ### 3.7 Observability Surfaces
 
@@ -115,8 +105,8 @@ All scheduling services under test must expose:
 | `result.violations` | `list[ViolationRecord]` | Invariant violations raised during operation |
 | `result.fault_class` | `str` | `"planning"` \| `"runtime"` \| `"operator"` |
 | `result.artifacts_produced` | `list` | Artifacts created during the operation |
-| `playlog_service.last_extension_reason_code` | `str` | Reason code of most recent extension: `"clock_progression"` expected |
-| `playlog_service.extension_attempt_count` | `int` | Total extension cycles since init |
+| `horizon_manager.last_extension_reason_code` | `str` | Reason code of most recent extension: `"clock_progression"` expected |
+| `horizon_manager.extension_attempt_count` | `int` | Total extension cycles since init |
 
 ---
 
@@ -155,6 +145,8 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAN-FULL-COVERAGE-001 | `TestInvPlanFullCoverage001` | `test_..._reject_gap`, `test_..._accept_exact_tile`, `test_..._reject_gap_with_pds_0600`, `test_..._accept_tile_with_pds_0600` | PASS |
 | INV-PLAN-NO-ZONE-OVERLAP-001 | `TestInvPlanNoZoneOverlap001` | `test_..._reject_overlapping_zones`, `test_..._allow_mutually_exclusive_days`, `test_..._reject_mutation_induced_overlap`, `test_..._precedence_over_gap` | PASS |
 | INV-PLAN-GRID-ALIGNMENT-001 | `TestInvPlanGridAlignment001` | `test_..._reject_off_grid_start`, `test_..._reject_off_grid_duration`, `test_..._valid_alignment`, `test_..._reject_off_grid_zone_end`, `test_..._reject_off_grid_zone_start`, `test_..._reject_off_grid_zone_duration`, `test_..._accept_aligned_zone` | PASS |
+| INV-SCHEDULEDAY-ONE-PER-DATE-001 | `TestInvScheduledayOnePerDate001` | `test_..._reject_duplicate_insert`, `test_..._allow_force_regen_atomic_replace`, `test_..._different_dates_independent` | PASS |
+| INV-SCHEDULEDAY-IMMUTABLE-001 | `TestInvScheduledayImmutable001` | `test_..._reject_in_place_slot_mutation`, `test_..._reject_plan_id_update`, `test_..._force_regen_creates_new_record`, `test_..._operator_override_creates_new_record` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -164,20 +156,20 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAN-NO-ZONE-OVERLAP-001 | SCHED-PLAN-003, SCHED-PLAN-004 | SchedulePlan |
 | INV-PLAN-GRID-ALIGNMENT-001 | SCHED-PLAN-005, SCHED-PLAN-006 | SchedulePlan |
 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | SCHED-PLAN-007, SCHED-PLAN-008 | SchedulePlan |
-| INV-SCHEDULEDAY-ONE-PER-DATE-001 | SCHED-DAY-001, SCHED-DAY-002 | ScheduleDay |
-| INV-SCHEDULEDAY-IMMUTABLE-001 | SCHED-DAY-003, SCHED-DAY-004 | ScheduleDay |
-| INV-SCHEDULEDAY-NO-GAPS-001 | SCHED-DAY-005, SCHED-DAY-006 | ScheduleDay |
-| INV-SCHEDULEDAY-LEAD-TIME-001 | SCHED-DAY-007, SCHED-DAY-008 | ScheduleDay |
-| INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | SCHED-DAY-009, SCHED-DAY-010 | ScheduleDay |
-| INV-PLAYLOG-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | PlaylogEvent |
-| INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | PlaylogEvent |
-| INV-PLAYLOG-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | PlaylogEvent |
-| INV-PLAYLOG-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | PlaylogEvent |
-| INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | PLAYLOG-008, PLAYLOG-009 | PlaylogEvent |
-| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | PlaylogEvent |
+| INV-SCHEDULEDAY-ONE-PER-DATE-001 | SCHED-DAY-001, SCHED-DAY-002 | ResolvedScheduleDay |
+| INV-SCHEDULEDAY-IMMUTABLE-001 | SCHED-DAY-003, SCHED-DAY-004 | ResolvedScheduleDay |
+| INV-SCHEDULEDAY-NO-GAPS-001 | SCHED-DAY-005, SCHED-DAY-006 | ResolvedScheduleDay |
+| INV-SCHEDULEDAY-LEAD-TIME-001 | SCHED-DAY-007, SCHED-DAY-008 | ResolvedScheduleDay |
+| INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | SCHED-DAY-009, SCHED-DAY-010 | ResolvedScheduleDay |
+| INV-PLAYLOG-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | ExecutionEntry |
+| INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | ExecutionEntry |
+| INV-PLAYLOG-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | ExecutionEntry |
+| INV-PLAYLOG-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | ExecutionEntry |
+| INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | PLAYLOG-008, PLAYLOG-009 | ExecutionEntry |
+| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | ExecutionEntry |
 | INV-NO-FOREIGN-CONTENT-001 | CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003 | Cross-cutting |
-| INV-PLAYLIST-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | Playlist |
-| INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | PlaylogEvent |
+| INV-PLAYLIST-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | TransmissionLog |
+| INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
 | INV-NO-MID-PROGRAM-CUT-001 | CROSS-001, CROSS-002 | Cross-cutting |
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 
@@ -425,6 +417,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Materialize ScheduleDay for (C, D). 2. Attempt to insert a second ScheduleDay for the same (C, D) via the application layer. |
 | **Assertions** | The second insert is rejected with a uniqueness fault. Exactly one ScheduleDay record exists for (C, D) after both attempts. Fault class is "planning". |
 | **Failure Classification** | Planning |
+| **Status** | **PASS** |
 
 ---
 
@@ -439,6 +432,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Materialize ScheduleDay SD-OLD for (C, D). Record its ID. 2. Trigger force-regeneration for (C, D). 3. Read (C, D) from the store immediately after. |
 | **Assertions** | Exactly one ScheduleDay record exists for (C, D). Its ID differs from SD-OLD.ID. No window during which zero records existed is observable from outside the transaction. Fault class: none (successful operation). |
 | **Failure Classification** | N/A (positive path) |
+| **Status** | **PASS** |
 
 ---
 
@@ -453,6 +447,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Materialize ScheduleDay for (C, D). 2. Attempt to update a slot's `start_utc` field via the application layer (not via force-regen). |
 | **Assertions** | The update is rejected before reaching the database. The original slot timing is unchanged after the attempt. Fault class is "runtime". |
 | **Failure Classification** | Runtime |
+| **Status** | **PASS** |
 
 ---
 
@@ -467,6 +462,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Materialize ScheduleDay SD-ORIG for (C, D). 2. Apply operator manual override targeting (C, D) with modified slot content. |
 | **Assertions** | A new ScheduleDay record SD-OVERRIDE exists with `is_manual_override=true`. SD-OVERRIDE references SD-ORIG.ID as the superseded record. SD-ORIG is preserved in the store. Only one ScheduleDay with `is_manual_override=false` exists for (C, D). |
 | **Failure Classification** | N/A (positive path) |
+| **Status** | **PASS** |
 
 ---
 
@@ -554,7 +550,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.4 PlaylogEvent Tests
+### 6.4 ExecutionEntry Tests
 
 ---
 
@@ -564,24 +560,24 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-ELIGIBLE-CONTENT-001 |
 | **Derived Law(s)** | LAW-ELIGIBILITY, LAW-DERIVATION |
-| **Scenario** | A PlaylogEvent entry exists referencing an asset that has since had its approval revoked. Rolling-window extension detects and replaces the entry. |
+| **Scenario** | An ExecutionEntry exists referencing an asset that has since had its approval revoked. Rolling-window extension detects and replaces the entry. |
 | **Clock Setup** | Clock set to EPOCH. Advance to T=EPOCH+1h to trigger window extension covering the affected entry. |
-| **Stimulus / Actions** | 1. Create Playlist entry for `EligibleAsset` at T+2h. Derive PlaylogEvent from it. 2. Revoke `EligibleAsset.approved_for_broadcast=false`. 3. Advance clock to EPOCH+1h. Trigger rolling-window extension. |
-| **Assertions** | PlaylogEvent entry at T+2h references filler, not the original asset. A violation record includes asset ID, channel ID, and reason `approved_for_broadcast=false`. Fault class is "runtime". |
+| **Stimulus / Actions** | 1. Create TransmissionLogEntry for `EligibleAsset` at T+2h. Derive ExecutionEntry from it. 2. Revoke `EligibleAsset.approved_for_broadcast=false`. 3. Advance clock to EPOCH+1h. Trigger rolling-window extension. |
+| **Assertions** | ExecutionEntry at T+2h references filler, not the original asset. A violation record includes asset ID, channel ID, and reason `approved_for_broadcast=false`. Fault class is "runtime". |
 | **Failure Classification** | Runtime |
 
 ---
 
-### PLAYLOG-002: PlaylogEvent timestamps match the injected clock
+### PLAYLOG-002: ExecutionEntry timestamps match the injected clock
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | PlaylogEvent generation is run with a known deterministic clock value. Output timestamps must match clock-derived offsets from the Playlist entry. |
+| **Scenario** | ExecutionEntry generation is run with a known deterministic clock value. Output timestamps must match clock-derived offsets from the TransmissionLogEntry. |
 | **Clock Setup** | Clock set to EPOCH. |
-| **Stimulus / Actions** | 1. Create Playlist entry with `start_time=EPOCH+30min`, `end_time=EPOCH+60min`. 2. Run PlaylogEvent generation with injected clock at EPOCH. |
-| **Assertions** | Generated PlaylogEvent has `start_utc=EPOCH+30min` and `end_utc=EPOCH+60min`. Timestamps are derived from the injected clock. |
+| **Stimulus / Actions** | 1. Create TransmissionLogEntry with `start_time=EPOCH+30min`, `end_time=EPOCH+60min`. 2. Run ExecutionEntry generation with injected clock at EPOCH. |
+| **Assertions** | Generated ExecutionEntry has `start_utc_ms=EPOCH+30min` and `end_utc_ms=EPOCH+60min`. Timestamps are derived from the injected clock. |
 | **Failure Classification** | N/A (positive path) |
 
 ---
@@ -594,7 +590,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | Two generation runs with different injected clock values produce timestamps differing by the exact clock delta. |
 | **Clock Setup** | Run A: clock at EPOCH. Run B: clock at EPOCH+24h. |
-| **Stimulus / Actions** | 1. Generate PlaylogEvent with clock at EPOCH. Record timestamps. 2. Generate equivalent PlaylogEvent with clock at EPOCH+24h. Record timestamps. |
+| **Stimulus / Actions** | 1. Generate ExecutionEntry with clock at EPOCH. Record timestamps. 2. Generate equivalent ExecutionEntry with clock at EPOCH+24h. Record timestamps. |
 | **Assertions** | Run B timestamps are exactly 24 hours later than Run A timestamps. No shared state between runs contaminates the result. |
 | **Failure Classification** | N/A (positive path) |
 
@@ -606,10 +602,10 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | PlaylogEvent sequence depth falls below `min_execution_hours`. PlaylogService detects the shortfall and extends. |
-| **Clock Setup** | Clock set to T=EPOCH. PlaylogEvent sequence extends to EPOCH + `min_execution_hours` - 10min. |
-| **Stimulus / Actions** | 1. Populate PlaylogEvent sequence ending at EPOCH + `min_execution_hours` - 10min. 2. Set clock to EPOCH. 3. Trigger PlaylogService lookahead evaluation. |
-| **Assertions** | PlaylogService detects shortfall (`depth < min_execution_hours`). Extension is triggered. After extension, sequence extends to at least EPOCH + `min_execution_hours` with no gaps. Violation record emitted with depth shortfall in minutes. Fault class is "runtime". |
+| **Scenario** | ExecutionEntry sequence depth falls below `min_execution_hours`. HorizonManager detects the shortfall and extends. |
+| **Clock Setup** | Clock set to T=EPOCH. ExecutionEntry sequence extends to EPOCH + `min_execution_hours` - 10min. |
+| **Stimulus / Actions** | 1. Populate ExecutionEntry sequence ending at EPOCH + `min_execution_hours` - 10min. 2. Set clock to EPOCH. 3. Trigger HorizonManager lookahead evaluation. |
+| **Assertions** | HorizonManager detects shortfall (`depth < min_execution_hours`). Extension is triggered. After extension, sequence extends to at least EPOCH + `min_execution_hours` with no gaps. Violation record emitted with depth shortfall in minutes. Fault class is "runtime". |
 | **Failure Classification** | Runtime |
 
 ---
@@ -620,98 +616,98 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | PlaylogEvent sequence ends exactly at T + `min_execution_hours`. No shortfall. No violation raised. |
-| **Clock Setup** | Clock set to T=EPOCH. PlaylogEvent sequence ends at EPOCH + `min_execution_hours`. |
-| **Stimulus / Actions** | 1. Populate PlaylogEvent sequence ending at EPOCH + `min_execution_hours`. 2. Trigger PlaylogService lookahead evaluation at EPOCH. |
+| **Scenario** | ExecutionEntry sequence ends exactly at T + `min_execution_hours`. No shortfall. No violation raised. |
+| **Clock Setup** | Clock set to T=EPOCH. ExecutionEntry sequence ends at EPOCH + `min_execution_hours`. |
+| **Stimulus / Actions** | 1. Populate ExecutionEntry sequence ending at EPOCH + `min_execution_hours`. 2. Trigger HorizonManager lookahead evaluation at EPOCH. |
 | **Assertions** | No lookahead violation is raised. Health report shows channel as compliant. |
 | **Failure Classification** | N/A (positive path) |
 
 ---
 
-### PLAYLOG-006: Temporal gap in PlaylogEvent sequence is detected
+### PLAYLOG-006: Temporal gap in ExecutionEntry sequence is detected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | PlaylogEvent sequence has a 10-minute gap within the lookahead window. Continuity validation detects it. |
+| **Scenario** | ExecutionEntry sequence has a 10-minute gap within the lookahead window. Continuity validation detects it. |
 | **Clock Setup** | Clock set to EPOCH. |
-| **Stimulus / Actions** | 1. Populate PlaylogEvent entries for [EPOCH, EPOCH+1h] and [EPOCH+1h10m, EPOCH+`min_execution_hours`] — leaving a 10-minute gap at [EPOCH+1h, EPOCH+1h10m]. 2. Trigger continuity validation. |
-| **Assertions** | Validation raises a gap fault identifying [EPOCH+1h, EPOCH+1h10m]. Fault includes channel ID and gap boundaries. PlaylogService attempts to fill the gap. No sequence with an unresolved gap is committed. Fault class is "runtime". |
+| **Stimulus / Actions** | 1. Populate ExecutionEntry records for [EPOCH, EPOCH+1h] and [EPOCH+1h10m, EPOCH+`min_execution_hours`] — leaving a 10-minute gap at [EPOCH+1h, EPOCH+1h10m]. 2. Trigger continuity validation. |
+| **Assertions** | Validation raises a gap fault identifying [EPOCH+1h, EPOCH+1h10m]. Fault includes channel ID and gap boundaries. HorizonManager attempts to fill the gap. No sequence with an unresolved gap is committed. Fault class is "runtime". |
 | **Failure Classification** | Runtime |
 
 ---
 
-### PLAYLOG-007: Gap in PlaylogEvent traces back to upstream ScheduleDay gap
+### PLAYLOG-007: Gap in ExecutionEntry traces back to upstream ResolvedScheduleDay gap
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION |
-| **Scenario** | A ScheduleDay was committed with a coverage gap. The resulting Playlist has no entries for that window. The PlaylogEvent gap is traceable to the Playlist gap, which is traceable to the ScheduleDay gap. |
+| **Scenario** | A ResolvedScheduleDay was committed with a coverage gap. The resulting TransmissionLog has no entries for that window. The ExecutionEntry gap is traceable to the TransmissionLog gap, which is traceable to the ResolvedScheduleDay gap. |
 | **Clock Setup** | Clock set to EPOCH. |
-| **Stimulus / Actions** | 1. Manually insert a ScheduleDay with a gap at [EPOCH+2h, EPOCH+2h30m]. 2. Generate Playlist from this ScheduleDay. 3. Generate PlaylogEvents from the Playlist. 4. Trigger continuity validation. |
-| **Assertions** | PlaylogEvent gap fault is raised. Traceability chain identifies: PlaylogEvent gap → Playlist gap → ScheduleDay gap. Fault class is "planning". |
+| **Stimulus / Actions** | 1. Manually insert a ResolvedScheduleDay with a gap at [EPOCH+2h, EPOCH+2h30m]. 2. Generate TransmissionLog from this ResolvedScheduleDay. 3. Generate ExecutionEntries from the TransmissionLog. 4. Trigger continuity validation. |
+| **Assertions** | ExecutionEntry gap fault is raised. Traceability chain identifies: ExecutionEntry gap → TransmissionLog gap → ResolvedScheduleDay gap. Fault class is "planning". |
 | **Failure Classification** | Planning |
 
 ---
 
-### PLAYLOG-008: PlaylogEvent without Playlist reference is rejected
+### PLAYLOG-008: ExecutionEntry without TransmissionLogEntry reference is rejected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
 | **Derived Law(s)** | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
-| **Scenario** | Code attempts to create a PlaylogEvent with no Playlist entry reference and no operator override record. The application layer rejects it. |
+| **Scenario** | Code attempts to create an ExecutionEntry with no TransmissionLogEntry reference and no operator override record. The application layer rejects it. |
 | **Clock Setup** | Clock set to EPOCH. No advancement needed. |
-| **Stimulus / Actions** | 1. Attempt to create a PlaylogEvent with `playlist_entry_id=NULL` and no override record. |
+| **Stimulus / Actions** | 1. Attempt to create an ExecutionEntry with `transmission_log_entry_id=NULL` and no override record. |
 | **Assertions** | Creation is rejected. No record is committed. Fault identifies the missing derivation anchor. Fault class is "planning". |
 | **Failure Classification** | Planning |
 
 ---
 
-### PLAYLOG-009: PlaylogEvent created by operator override is accepted without Playlist reference
+### PLAYLOG-009: ExecutionEntry created by operator override is accepted without TransmissionLogEntry reference
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
 | **Derived Law(s)** | LAW-DERIVATION, LAW-IMMUTABILITY |
-| **Scenario** | An operator creates an emergency override PlaylogEvent. It has no Playlist reference but carries a valid override record. It is accepted. |
+| **Scenario** | An operator creates an emergency override ExecutionEntry. It has no TransmissionLogEntry reference but carries a valid override record. It is accepted. |
 | **Clock Setup** | Clock set to EPOCH. No advancement needed. |
-| **Stimulus / Actions** | 1. Create an operator override record authorizing substitution for (channel C, window [EPOCH+1h, EPOCH+1h30m]). 2. Create a PlaylogEvent referencing the override record, with `playlist_entry_id=NULL`. |
-| **Assertions** | Creation is accepted. Override record reference is present and valid. PlaylogEvent is marked as an override. Derivation audit terminates at the override record (not a fault). |
+| **Stimulus / Actions** | 1. Create an operator override record authorizing substitution for (channel C, window [EPOCH+1h, EPOCH+1h30m]). 2. Create an ExecutionEntry referencing the override record, with `transmission_log_entry_id=NULL`. |
+| **Assertions** | Creation is accepted. Override record reference is present and valid. ExecutionEntry is marked as an override. Derivation audit terminates at the override record (not a fault). |
 | **Failure Classification** | N/A (positive path) |
 
 ---
 
-### 6.5 PlaylogEvent Lock Window Tests
+### 6.5 ExecutionEntry Lock Window Tests
 
 ---
 
-### PLAYLOG-IMMUT-001: Mutation of a locked PlaylogEvent without override record is rejected
+### PLAYLOG-IMMUT-001: Mutation of a locked ExecutionEntry without override record is rejected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
-| **Scenario** | A PlaylogEvent entry within the locked execution window is targeted for in-place mutation. No override record exists. The application layer rejects it. |
-| **Clock Setup** | Clock set to EPOCH. Lock window: [EPOCH, EPOCH + `lock_window_depth`]. PlaylogEvent at [EPOCH+15m, EPOCH+45m] is within the lock window. |
-| **Stimulus / Actions** | 1. Create PlaylogEvent PE at [EPOCH+15m, EPOCH+45m]. 2. Attempt in-place mutation of PE's asset reference without a prior override record. |
-| **Assertions** | Mutation is rejected before reaching the database. PE content is unchanged. Violation record includes PE ID, mutation type, window status `"locked"`, and fault class `"runtime"`. |
+| **Scenario** | An ExecutionEntry within the locked execution window is targeted for in-place mutation. No override record exists. The application layer rejects it. |
+| **Clock Setup** | Clock set to EPOCH. Lock window: [EPOCH, EPOCH + `lock_window_depth`]. ExecutionEntry at [EPOCH+15m, EPOCH+45m] is within the lock window. |
+| **Stimulus / Actions** | 1. Create ExecutionEntry EE at [EPOCH+15m, EPOCH+45m]. 2. Attempt in-place mutation of EE's asset reference without a prior override record. |
+| **Assertions** | Mutation is rejected before reaching the database. EE content is unchanged. Violation record includes EE ID, mutation type, window status `"locked"`, and fault class `"runtime"`. |
 | **Failure Classification** | Runtime |
 
 ---
 
-### PLAYLOG-IMMUT-002: Mutation of a past-window PlaylogEvent is rejected unconditionally
+### PLAYLOG-IMMUT-002: Mutation of a past-window ExecutionEntry is rejected unconditionally
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY |
-| **Scenario** | A PlaylogEvent entry that has already been broadcast (its `end_utc` is in the past) is targeted for mutation. Even with a valid override record, the mutation is rejected. Past-window entries are immutable without exception. |
+| **Scenario** | An ExecutionEntry that has already been broadcast (its `end_utc_ms` is in the past) is targeted for mutation. Even with a valid override record, the mutation is rejected. Past-window entries are immutable without exception. |
 | **Clock Setup** | Clock set to EPOCH + 2h (so EPOCH+30m to EPOCH+60m is in the past). |
-| **Stimulus / Actions** | 1. Create PlaylogEvent PE at [EPOCH+30m, EPOCH+60m]. 2. Advance clock to EPOCH+2h (PE is now in past window). 3. Create an operator override record for PE. 4. Attempt mutation of PE referencing the override record. |
-| **Assertions** | Mutation is rejected. Violation record includes PE ID, window status `"past"`, and fault class `"operator"`. Override record is present but does not exempt a past-window entry. |
+| **Stimulus / Actions** | 1. Create ExecutionEntry EE at [EPOCH+30m, EPOCH+60m]. 2. Advance clock to EPOCH+2h (EE is now in past window). 3. Create an operator override record for EE. 4. Attempt mutation of EE referencing the override record. |
+| **Assertions** | Mutation is rejected. Violation record includes EE ID, window status `"past"`, and fault class `"operator"`. Override record is present but does not exempt a past-window entry. |
 | **Failure Classification** | Operator |
 
 ---
@@ -722,27 +718,27 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
-| **Scenario** | An operator performs a valid emergency override of a locked PlaylogEvent. The override record is persisted first; the PlaylogEvent update follows atomically. |
-| **Clock Setup** | Clock set to EPOCH. Lock window: [EPOCH, EPOCH + `lock_window_depth`]. PlaylogEvent at [EPOCH+10m, EPOCH+40m]. |
-| **Stimulus / Actions** | 1. Create PlaylogEvent PE at [EPOCH+10m, EPOCH+40m]. 2. Persist operator override record OR-1 targeting PE. 3. Update PE's asset reference to reference the override content, linked to OR-1. |
-| **Assertions** | Override record OR-1 exists and is committed before PE is updated. PE update is accepted. PE's override record reference equals OR-1.ID. No window during which PE references new content without OR-1 being committed is observable. |
+| **Scenario** | An operator performs a valid emergency override of a locked ExecutionEntry. The override record is persisted first; the ExecutionEntry update follows atomically. |
+| **Clock Setup** | Clock set to EPOCH. Lock window: [EPOCH, EPOCH + `lock_window_depth`]. ExecutionEntry at [EPOCH+10m, EPOCH+40m]. |
+| **Stimulus / Actions** | 1. Create ExecutionEntry EE at [EPOCH+10m, EPOCH+40m]. 2. Persist operator override record OR-1 targeting EE. 3. Update EE's asset reference to reference the override content, linked to OR-1. |
+| **Assertions** | Override record OR-1 exists and is committed before EE is updated. EE update is accepted. EE's override record reference equals OR-1.ID. No window during which EE references new content without OR-1 being committed is observable. |
 | **Failure Classification** | N/A (positive path) |
 
 ---
 
-### 6.6 Playlist Grid Alignment Tests
+### 6.6 TransmissionLog Grid Alignment Tests
 
 ---
 
-### PLAYLIST-GRID-001: Off-grid Playlist entry boundary is rejected
+### PLAYLIST-GRID-001: Off-grid TransmissionLogEntry boundary is rejected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | Playlist generation produces an entry with `start_time=18:15` against a 30-minute grid. Validation detects and rejects the off-grid boundary. |
+| **Scenario** | TransmissionLog generation produces an entry with `start_time=18:15` against a 30-minute grid. Validation detects and rejects the off-grid boundary. |
 | **Clock Setup** | Clock set to EPOCH. Channel: `TestChannel` (30-min grid). |
-| **Stimulus / Actions** | 1. Manually construct a Playlist entry with `start_time=18:15`. 2. Trigger Playlist grid-alignment validation. |
+| **Stimulus / Actions** | 1. Manually construct a TransmissionLogEntry with `start_time=18:15`. 2. Trigger TransmissionLog grid-alignment validation. |
 | **Assertions** | Validation raises a grid-alignment fault. Fault identifies 18:15 as invalid. Nearest valid boundaries (18:00, 18:30) are reported. Entry is rejected. Fault class is "planning". |
 | **Failure Classification** | Planning |
 
@@ -754,9 +750,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | A Playlist entry spans the `programming_day_start` boundary (e.g., 05:30 to 06:30 where `programming_day_start=06:00`). Both `start_time` and `end_time` must align to grid boundaries. The `programming_day_start` itself is a valid grid boundary. |
+| **Scenario** | A TransmissionLogEntry spans the `programming_day_start` boundary (e.g., 05:30 to 06:30 where `programming_day_start=06:00`). Both `start_time` and `end_time` must align to grid boundaries. The `programming_day_start` itself is a valid grid boundary. |
 | **Clock Setup** | Clock set to EPOCH - 30min. Channel: `TestChannel` with `programming_day_start="06:00"` and `grid_block_minutes=30`. |
-| **Stimulus / Actions** | 1. Generate a Playlist entry spanning [05:30, 06:30] across the programming-day boundary. 2. Trigger validation. |
+| **Stimulus / Actions** | 1. Generate a TransmissionLogEntry spanning [05:30, 06:30] across the programming-day boundary. 2. Trigger validation. |
 | **Assertions** | Both 05:30 and 06:30 are valid grid boundaries (on a 30-minute grid relative to `programming_day_start`). Validation passes. No fractional minutes appear. No sub-grid boundary is produced at the rollover point. |
 | **Failure Classification** | N/A (positive path) |
 
@@ -768,9 +764,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | Two adjacent Playlist entries span across calendar midnight. The first entry ends at 00:00:00 and the second starts at 00:00:00. No gap exists at the midnight boundary. |
+| **Scenario** | Two adjacent TransmissionLogEntries span across calendar midnight. The first entry ends at 00:00:00 and the second starts at 00:00:00. No gap exists at the midnight boundary. |
 | **Clock Setup** | Clock set to EPOCH with `programming_day_start="06:00"`. Calendar midnight is internal to the broadcast day. |
-| **Stimulus / Actions** | 1. Construct Playlist entry A with `end_time=00:00:00` and entry B with `start_time=00:00:00`. 2. Assert B.start_time == A.end_time (exact equality). 3. Trigger continuity validation on the sequence. |
+| **Stimulus / Actions** | 1. Construct TransmissionLogEntry A with `end_time=00:00:00` and entry B with `start_time=00:00:00`. 2. Assert B.start_time == A.end_time (exact equality). 3. Trigger continuity validation on the sequence. |
 | **Assertions** | No micro-gap exists at the midnight boundary. No fractional millisecond difference between A.end_time and B.start_time. Continuity validation finds no gap. Both boundaries are grid-aligned. |
 | **Failure Classification** | N/A (positive path) |
 
@@ -780,16 +776,16 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### CROSS-001: Breakpoint-free program is not cut mid-play in the generated Playlist
+### CROSS-001: Breakpoint-free program is not cut mid-play in the generated TransmissionLog
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-NO-MID-PROGRAM-CUT-001 |
 | **Derived Law(s)** | LAW-DERIVATION, LAW-GRID |
-| **Scenario** | A `LongformAsset` (90 minutes, no breakpoints) is placed in a zone covering [18:00, 22:00] against a 30-minute grid. Playlist generation must not cut it mid-program. |
+| **Scenario** | A `LongformAsset` (90 minutes, no breakpoints) is placed in a zone covering [18:00, 22:00] against a 30-minute grid. TransmissionLog generation must not cut it mid-program. |
 | **Clock Setup** | Clock set to EPOCH. Broadcast date D. |
-| **Stimulus / Actions** | 1. Build a plan with a zone [18:00, 22:00] containing `LongformAsset` (90 minutes, `breakpoints=[]`). 2. Generate ScheduleDay and Playlist for date D. |
-| **Assertions** | Playlist contains no cut-point within the 90-minute program. The program consumes 3 whole 30-minute grid blocks [18:00–19:30]. No Playlist entry boundary falls inside the program's duration. |
+| **Stimulus / Actions** | 1. Build a plan with a zone [18:00, 22:00] containing `LongformAsset` (90 minutes, `breakpoints=[]`). 2. Generate ResolvedScheduleDay and TransmissionLog for date D. |
+| **Assertions** | TransmissionLog contains no cut-point within the 90-minute program. The program consumes 3 whole 30-minute grid blocks [18:00–19:30]. No TransmissionLogEntry boundary falls inside the program's duration. |
 | **Failure Classification** | Planning (if violated) |
 
 ---
@@ -800,24 +796,24 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-NO-MID-PROGRAM-CUT-001 |
 | **Derived Law(s)** | LAW-DERIVATION, LAW-GRID |
-| **Scenario** | A 120-minute `LongformAsset` with no breakpoints is placed in a zone covering [20:00, 24:00]. Playlist generation assigns it across 4 contiguous grid blocks. |
+| **Scenario** | A 120-minute `LongformAsset` with no breakpoints is placed in a zone covering [20:00, 24:00]. TransmissionLog generation assigns it across 4 contiguous grid blocks. |
 | **Clock Setup** | Clock set to EPOCH. Broadcast date D. Channel grid: 30-minute blocks. |
-| **Stimulus / Actions** | 1. Build a plan with a zone [20:00, 24:00] containing a 120-minute `LongformAsset` with `breakpoints=[]`. 2. Generate Playlist. |
-| **Assertions** | Playlist contains a single entry spanning [20:00, 00:00+24h]. No cut exists within the program boundary. Program consumes exactly 4 grid blocks. |
+| **Stimulus / Actions** | 1. Build a plan with a zone [20:00, 24:00] containing a 120-minute `LongformAsset` with `breakpoints=[]`. 2. Generate TransmissionLog. |
+| **Assertions** | TransmissionLog contains a single entry spanning [20:00, 00:00+24h]. No cut exists within the program boundary. Program consumes exactly 4 grid blocks. |
 | **Failure Classification** | Planning (if violated) |
 
 ---
 
-### CROSS-003: AsRun entry without PlaylogEvent reference is rejected
+### CROSS-003: AsRun entry without ExecutionEntry reference is rejected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-ASRUN-TRACEABILITY-001 |
 | **Derived Law(s)** | LAW-DERIVATION |
-| **Scenario** | An AsRun record is created with `playlog_event_id=NULL`. The application layer rejects it. |
+| **Scenario** | An AsRun record is created with `execution_entry_id=NULL`. The application layer rejects it. |
 | **Clock Setup** | Clock set to EPOCH. No advancement needed. |
-| **Stimulus / Actions** | 1. Attempt to create an AsRun record with `playlog_event_id=NULL`. |
-| **Assertions** | Creation is rejected. No record is committed. Fault identifies missing PlaylogEvent reference. Fault class is "runtime". |
+| **Stimulus / Actions** | 1. Attempt to create an AsRun record with `execution_entry_id=NULL`. |
+| **Assertions** | Creation is rejected. No record is committed. Fault identifies missing ExecutionEntry reference. Fault class is "runtime". |
 | **Failure Classification** | Runtime |
 
 ---
@@ -830,7 +826,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Derived Law(s)** | LAW-DERIVATION |
 | **Scenario** | A valid AsRun entry is created via the full constitutional chain. The complete chain from AsRun back to SchedulePlan is traversable. |
 | **Clock Setup** | Clock set to EPOCH. |
-| **Stimulus / Actions** | 1. Build plan SP. 2. Generate ScheduleDay SD (→ SP). 3. Generate Playlist PL entry (→ SD). 4. Generate PlaylogEvent PE (→ PL). 5. Create AsRun AR (→ PE). 6. Traverse: AR → PE → PL → SD → SP. |
+| **Stimulus / Actions** | 1. Build plan SP. 2. Generate ResolvedScheduleDay SD (→ SP). 3. Generate TransmissionLogEntry TLE (→ SD). 4. Generate ExecutionEntry EE (→ TLE). 5. Create AsRun AR (→ EE). 6. Traverse: AR → EE → TLE → SD → SP. |
 | **Assertions** | All five links are non-null. Chain terminates at SP without a broken node. Audit query returns no violation rows. |
 | **Failure Classification** | N/A (positive path) |
 
@@ -854,30 +850,30 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### CROSS-FOREIGN-002: Playlist entry referencing an asset absent from the source ScheduleDay is rejected
+### CROSS-FOREIGN-002: TransmissionLogEntry referencing an asset absent from the source ResolvedScheduleDay is rejected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-NO-FOREIGN-CONTENT-001 |
 | **Derived Law(s)** | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| **Scenario** | A `ForeignAsset` not present in the ScheduleDay is injected into a Playlist entry during Playlist generation. The Playlist layer detects it. |
+| **Scenario** | A `ForeignAsset` not present in the ResolvedScheduleDay is injected into a TransmissionLogEntry during TransmissionLog generation. The TransmissionLog layer detects it. |
 | **Clock Setup** | Clock set to EPOCH (broadcast date D). |
-| **Stimulus / Actions** | 1. Generate ScheduleDay SD with only `EligibleAsset`. 2. During Playlist generation from SD, inject a Playlist entry referencing `ForeignAsset` (simulating a generation logic error). 3. Trigger Playlist validation against SD. |
-| **Assertions** | Validation raises a foreign-content fault identifying `ForeignAsset` as absent from SD. The Playlist entry is rejected. Fault class is "planning". |
+| **Stimulus / Actions** | 1. Generate ResolvedScheduleDay SD with only `EligibleAsset`. 2. During TransmissionLog generation from SD, inject a TransmissionLogEntry referencing `ForeignAsset` (simulating a generation logic error). 3. Trigger TransmissionLog validation against SD. |
+| **Assertions** | Validation raises a foreign-content fault identifying `ForeignAsset` as absent from SD. The TransmissionLogEntry is rejected. Fault class is "planning". |
 | **Failure Classification** | Planning |
 
 ---
 
-### CROSS-FOREIGN-003: PlaylogEvent referencing an asset absent from the source Playlist is rejected
+### CROSS-FOREIGN-003: ExecutionEntry referencing an asset absent from the source TransmissionLog is rejected
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-NO-FOREIGN-CONTENT-001 |
 | **Derived Law(s)** | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| **Scenario** | A `ForeignAsset` not present in any Playlist entry is injected into a PlaylogEvent during rolling-window extension. The PlaylogEvent layer detects it. |
+| **Scenario** | A `ForeignAsset` not present in any TransmissionLogEntry is injected into an ExecutionEntry during rolling-window extension. The ExecutionEntry layer detects it. |
 | **Clock Setup** | Clock set to EPOCH. |
-| **Stimulus / Actions** | 1. Generate Playlist from ScheduleDay. Playlist contains only `EligibleAsset`. 2. During PlaylogEvent generation, inject an entry referencing `ForeignAsset` (not present in any Playlist entry, no override record). 3. Trigger PlaylogEvent derivation validation. |
-| **Assertions** | Validation raises a foreign-content fault. `ForeignAsset` ID is absent from the committed PlaylogEvent sequence. Fault record includes `ForeignAsset.id`, artifact type `PlaylogEvent`, and the Playlist entry set checked. Fault class is "runtime". |
+| **Stimulus / Actions** | 1. Generate TransmissionLog from ResolvedScheduleDay. TransmissionLog contains only `EligibleAsset`. 2. During ExecutionEntry generation, inject an entry referencing `ForeignAsset` (not present in any TransmissionLogEntry, no override record). 3. Trigger ExecutionEntry derivation validation. |
+| **Assertions** | Validation raises a foreign-content fault. `ForeignAsset` ID is absent from the committed ExecutionEntry sequence. Fault record includes `ForeignAsset.id`, artifact type `ExecutionEntry`, and the TransmissionLogEntry set checked. Fault class is "runtime". |
 | **Failure Classification** | Runtime |
 
 ---
@@ -886,15 +882,15 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### GRID-STRESS-001: programming_day_start boundary rollover produces grid-aligned ScheduleDay slots
+### GRID-STRESS-001: programming_day_start boundary rollover produces grid-aligned ResolvedScheduleDay slots
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | A plan spans the `programming_day_start` boundary. ScheduleDay generation produces slots that align precisely at the rollover point with no fractional minutes and no micro-gap. |
+| **Scenario** | A plan spans the `programming_day_start` boundary. ResolvedScheduleDay generation produces slots that align precisely at the rollover point with no fractional minutes and no micro-gap. |
 | **Clock Setup** | Clock at EPOCH. Channel: `TestChannel` with `programming_day_start="06:00"`, `grid_block_minutes=30`. |
-| **Stimulus / Actions** | 1. Build a plan with Zone A [04:00, 06:00] and Zone B [06:00, 08:00]. 2. Generate ScheduleDay. 3. Inspect slot boundaries around 06:00. |
+| **Stimulus / Actions** | 1. Build a plan with Zone A [04:00, 06:00] and Zone B [06:00, 08:00]. 2. Generate ResolvedScheduleDay. 3. Inspect slot boundaries around 06:00. |
 | **Assertions** | Zone A's last slot ends exactly at 06:00:00.000000. Zone B's first slot starts exactly at 06:00:00.000000. No fractional second difference exists between them. No micro-gap is present. Coverage validation passes. |
 | **Failure Classification** | Planning (if violated) |
 
@@ -906,9 +902,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLIST-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | A Playlist entry straddles calendar midnight. The midnight boundary itself is a valid grid point (given a 30-minute grid aligned to hour 0). No fractional minutes appear at 00:00:00. |
+| **Scenario** | A TransmissionLogEntry straddles calendar midnight. The midnight boundary itself is a valid grid point (given a 30-minute grid aligned to hour 0). No fractional minutes appear at 00:00:00. |
 | **Clock Setup** | Clock at EPOCH. Channel `TestChannel` with `programming_day_start="06:00"`. Calendar midnight (00:00) is mid-broadcast-day. |
-| **Stimulus / Actions** | 1. Generate a Playlist entry ending at 00:00:00 and a subsequent entry starting at 00:00:00. 2. Verify both timestamps. |
+| **Stimulus / Actions** | 1. Generate a TransmissionLogEntry ending at 00:00:00 and a subsequent entry starting at 00:00:00. 2. Verify both timestamps. |
 | **Assertions** | End time is exactly 00:00:00. Start time is exactly 00:00:00. No fractional milliseconds. No gap between entries. Both timestamps are valid grid boundaries on a 30-minute grid. |
 | **Failure Classification** | N/A (positive path) |
 
@@ -920,10 +916,10 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | A zone declared as [22:00, 02:00] spans calendar midnight. Both the pre-midnight boundary (22:00) and the post-midnight boundary (02:00) must be grid-aligned. The zone must produce Playlist entries with no sub-grid boundaries anywhere in the midnight-spanning window. |
+| **Scenario** | A zone declared as [22:00, 02:00] spans calendar midnight. Both the pre-midnight boundary (22:00) and the post-midnight boundary (02:00) must be grid-aligned. The zone must produce TransmissionLogEntries with no sub-grid boundaries anywhere in the midnight-spanning window. |
 | **Clock Setup** | Clock at EPOCH. Channel `TestChannel` with `grid_block_minutes=30`. |
-| **Stimulus / Actions** | 1. Define Zone [22:00, 02:00] (spans midnight). 2. Generate ScheduleDay and Playlist for the zone. 3. Inspect all Playlist entry boundaries within [22:00, 02:00]. |
-| **Assertions** | All Playlist entry boundaries within the zone are multiples of 30 minutes from any valid grid anchor. No boundary falls at a fractional minute. No boundary falls at a non-grid minute (e.g., 22:17). No micro-gap at 00:00. |
+| **Stimulus / Actions** | 1. Define Zone [22:00, 02:00] (spans midnight). 2. Generate ResolvedScheduleDay and TransmissionLog for the zone. 3. Inspect all TransmissionLogEntry boundaries within [22:00, 02:00]. |
+| **Assertions** | All TransmissionLogEntry boundaries within the zone are multiples of 30 minutes from any valid grid anchor. No boundary falls at a fractional minute. No boundary falls at a non-grid minute (e.g., 22:17). No micro-gap at 00:00. |
 | **Failure Classification** | Planning (if violated) |
 
 ---
@@ -936,7 +932,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Derived Law(s)** | LAW-GRID, LAW-DERIVATION |
 | **Scenario** | A `LongformCrossDayAsset` starts at `programming_day_start - 60min` and runs 120 minutes, crossing the programming-day boundary. The program must not be cut at the boundary. Its start (carry-in) is at the prior broadcast day's grid; its end must be grid-aligned in the new day. |
 | **Clock Setup** | Clock at EPOCH - 60min. Channel `TestChannel` with `programming_day_start="06:00"`, `grid_block_minutes=30`. |
-| **Stimulus / Actions** | 1. Schedule `LongformCrossDayAsset` starting at 05:00 (programming_day_start - 60min). 2. Generate ScheduleDay and Playlist for both broadcast days (Day-1 and Day-2). 3. Inspect Playlist entries spanning 05:00 to 07:00. |
+| **Stimulus / Actions** | 1. Schedule `LongformCrossDayAsset` starting at 05:00 (programming_day_start - 60min). 2. Generate ResolvedScheduleDay and TransmissionLog for both broadcast days (Day-1 and Day-2). 3. Inspect TransmissionLogEntries spanning 05:00 to 07:00. |
 | **Assertions** | No cut-point exists at 06:00 (programming_day_start). The program is represented as a contiguous entry (or a carry-in continuation) with no fence inside the program's duration. End time (07:00) is grid-aligned. No fractional boundaries in the Day-2 carry-in entry. |
 | **Failure Classification** | Planning (if violated) |
 
@@ -946,15 +942,15 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### HORIZON-001: PlaylogService extension is triggered by clock progression, not consumer demand
+### HORIZON-001: HorizonManager extension is triggered by clock progression, not consumer demand
 
 | Field | Value |
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | FakeAdvancingClock advances continuously without any playout consumer activity. PlaylogService monitors the clock and triggers extension when depth falls below `min_execution_hours`. No consumer request initiates the extension. |
-| **Clock Setup** | Clock starts at EPOCH. PlaylogEvent sequence initially extends to EPOCH + `min_execution_hours`. No consumer activity simulated. |
-| **Stimulus / Actions** | 1. Initialize PlaylogService with injected `FakeAdvancingClock` and `min_execution_hours`. 2. Advance clock by `1 grid block` increments, each time triggering PlaylogService evaluation — without simulating any consumer content requests. 3. Record extension reason code on each triggered extension. |
+| **Scenario** | FakeAdvancingClock advances continuously without any playout consumer activity. HorizonManager monitors the clock and triggers extension when depth falls below `min_execution_hours`. No consumer request initiates the extension. |
+| **Clock Setup** | Clock starts at EPOCH. ExecutionEntry sequence initially extends to EPOCH + `min_execution_hours`. No consumer activity simulated. |
+| **Stimulus / Actions** | 1. Initialize HorizonManager with injected `FakeAdvancingClock` and `min_execution_hours`. 2. Advance clock by `1 grid block` increments, each time triggering HorizonManager evaluation — without simulating any consumer content requests. 3. Record extension reason code on each triggered extension. |
 | **Assertions** | Extension is triggered when remaining depth falls below `min_execution_hours`. Extension reason code is `"clock_progression"` on every triggered extension. No extension reason code is `"consumer_demand"` or any variant. The extension count increases in proportion to clock advancement. |
 | **Failure Classification** | Runtime (if extension triggered by consumer demand) |
 
@@ -966,10 +962,10 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | PlaylogEvent sequence already extends beyond `min_execution_hours` from current clock time. PlaylogService evaluation confirms no extension is needed. No redundant extension cycle is triggered. |
-| **Clock Setup** | Clock set to EPOCH. PlaylogEvent sequence extends to EPOCH + `min_execution_hours` + 1h (excess depth). |
-| **Stimulus / Actions** | 1. Populate PlaylogEvent sequence to EPOCH + `min_execution_hours` + 1h. 2. Trigger PlaylogService evaluation at EPOCH. 3. Record extension attempt count before and after. |
-| **Assertions** | Extension attempt count does not increase after evaluation. No extension cycle fires. PlaylogService health report shows depth = `min_execution_hours + 1h`, status compliant. |
+| **Scenario** | ExecutionEntry sequence already extends beyond `min_execution_hours` from current clock time. HorizonManager evaluation confirms no extension is needed. No redundant extension cycle is triggered. |
+| **Clock Setup** | Clock set to EPOCH. ExecutionEntry sequence extends to EPOCH + `min_execution_hours` + 1h (excess depth). |
+| **Stimulus / Actions** | 1. Populate ExecutionEntry sequence to EPOCH + `min_execution_hours` + 1h. 2. Trigger HorizonManager evaluation at EPOCH. 3. Record extension attempt count before and after. |
+| **Assertions** | Extension attempt count does not increase after evaluation. No extension cycle fires. HorizonManager health report shows depth = `min_execution_hours + 1h`, status compliant. |
 | **Failure Classification** | N/A (positive path) |
 
 ---
@@ -985,9 +981,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Invariant(s)** | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001, INV-ASRUN-TRACEABILITY-001 |
 | **Derived Law(s)** | LAW-DERIVATION |
 | **Scenario** | A complete scheduling cycle is executed from plan creation through AsRun. Every artifact in the chain carries a non-null reference to its upstream authority. |
-| **Clock Setup** | Clock starts at D-4 (EPOCH). Advance to D-3 (ScheduleDay), to D-1 (PlaylogEvent population), to D+0h30m (AsRun). |
-| **Stimulus / Actions** | 1. Create SchedulePlan SP at D-4. 2. Generate ScheduleDay SD at D-3 (→ SP). 3. Generate Playlist PL from SD at D-1. 4. Generate PlaylogEvents PE from PL. 5. Advance to D+0h30m. Create AsRun AR (→ PE). 6. Traverse: AR → PE → PL → SD → SP. |
-| **Assertions** | All links are non-null. AR.playlog_event_id = PE.id. PE.playlist_entry_id = PL.id. PL.schedule_day_id = SD.id. SD.plan_id = SP.id. Audit query returns zero violation rows. |
+| **Clock Setup** | Clock starts at D-4 (EPOCH). Advance to D-3 (ResolvedScheduleDay), to D-1 (ExecutionEntry population), to D+0h30m (AsRun). |
+| **Stimulus / Actions** | 1. Create SchedulePlan SP at D-4. 2. Generate ResolvedScheduleDay SD at D-3 (→ SP). 3. Generate TransmissionLog TL from SD at D-1. 4. Generate ExecutionEntries EE from TL. 5. Advance to D+0h30m. Create AsRun AR (→ EE). 6. Traverse: AR → EE → TL → SD → SP. |
+| **Assertions** | All links are non-null. AR.execution_entry_id = EE.id. EE.transmission_log_entry_id = TL.id. TL.schedule_day_id = SD.id. SD.plan_id = SP.id. Audit query returns zero violation rows. |
 | **Failure Classification** | Planning if any derivation link is absent. |
 
 ---
@@ -998,11 +994,11 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-PLAYLOG-ELIGIBLE-CONTENT-001 |
 | **Derived Law(s)** | LAW-ELIGIBILITY |
-| **Scenario** | An asset is eligible at plan creation and ScheduleDay generation. Between ScheduleDay generation and PlaylogEvent window extension, its approval is revoked. The Playlog layer must detect this. The ScheduleDay is not retroactively altered (immutable). |
-| **Clock Setup** | Clock at D-4 (plan), D-3 (ScheduleDay), D-1 (revocation), D (Playlog extension). |
-| **Stimulus / Actions** | 1. Create plan with `EligibleAsset`. Generate ScheduleDay containing the asset. 2. Advance to D-1. Revoke `approved_for_broadcast=false`. 3. Advance to D. Trigger PlaylogEvent rolling-window extension for the asset's scheduled slot. |
-| **Assertions** | ScheduleDay is unchanged (immutable — still contains the originally eligible asset). PlaylogEvent extension replaces the now-ineligible entry with filler. Violation record emitted: fault class "runtime". The ScheduleDay layer receives no notification and performs no action. |
-| **Failure Classification** | Runtime (Playlog layer). |
+| **Scenario** | An asset is eligible at plan creation and ResolvedScheduleDay generation. Between ResolvedScheduleDay generation and ExecutionEntry window extension, its approval is revoked. The ExecutionEntry layer must detect this. The ResolvedScheduleDay is not retroactively altered (immutable). |
+| **Clock Setup** | Clock at D-4 (plan), D-3 (ResolvedScheduleDay), D-1 (revocation), D (ExecutionEntry extension). |
+| **Stimulus / Actions** | 1. Create plan with `EligibleAsset`. Generate ResolvedScheduleDay containing the asset. 2. Advance to D-1. Revoke `approved_for_broadcast=false`. 3. Advance to D. Trigger ExecutionEntry rolling-window extension for the asset's scheduled slot. |
+| **Assertions** | ResolvedScheduleDay is unchanged (immutable — still contains the originally eligible asset). ExecutionEntry extension replaces the now-ineligible entry with filler. Violation record emitted: fault class "runtime". The ResolvedScheduleDay layer receives no notification and performs no action. |
+| **Failure Classification** | Runtime (ExecutionEntry layer). |
 
 ---
 
@@ -1012,10 +1008,10 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY, LAW-DERIVATION |
-| **Scenario** | A force-regeneration is applied to a ScheduleDay during active broadcast. This scenario explicitly validates four immutability zones: (A) locked window entries are unchanged, (B) past window entries are unchanged, (C) future window entries may be replaced, (D) the transition at the lock boundary is atomic. |
+| **Scenario** | A force-regeneration is applied to a ResolvedScheduleDay during active broadcast. This scenario explicitly validates four immutability zones: (A) locked window entries are unchanged, (B) past window entries are unchanged, (C) future window entries may be replaced, (D) the transition at the lock boundary is atomic. |
 | **Clock Setup** | Clock at D+1h (active broadcast). Locked window: [D, D + `lock_window_depth`]. Past window: before D. Future window: beyond D + `lock_window_depth`. |
-| **Stimulus / Actions** | 1. Materialize ScheduleDay SD-OLD and generate PlaylogEvents PE-PAST (before D), PE-LOCKED (in lock window), PE-FUTURE (beyond lock window). 2. Trigger force-regeneration of SD-OLD → SD-NEW. 3. Generate new Playlist and PlaylogEvents from SD-NEW for the future window only. 4. Attempt to mutate PE-LOCKED and PE-PAST directly. Observe PE-FUTURE. |
-| **Assertions** | **(A) Locked window:** PE-LOCKED entries are unchanged after regeneration. Direct mutation of PE-LOCKED is rejected. **(B) Past window:** PE-PAST entries are unchanged. Direct mutation of PE-PAST is rejected unconditionally (no override exemption). **(C) Future window:** PE-FUTURE entries derived from SD-OLD may be replaced by new entries derived from SD-NEW. New entries for [D + `lock_window_depth`, D+6h] trace to SD-NEW (not SD-OLD). **(D) Lock boundary atomicity:** No window exists during which new future entries are visible before SD-NEW is fully committed. The transition at the lock boundary is a single atomic step. |
+| **Stimulus / Actions** | 1. Materialize ResolvedScheduleDay SD-OLD and generate ExecutionEntries EE-PAST (before D), EE-LOCKED (in lock window), EE-FUTURE (beyond lock window). 2. Trigger force-regeneration of SD-OLD → SD-NEW. 3. Generate new TransmissionLog and ExecutionEntries from SD-NEW for the future window only. 4. Attempt to mutate EE-LOCKED and EE-PAST directly. Observe EE-FUTURE. |
+| **Assertions** | **(A) Locked window:** EE-LOCKED entries are unchanged after regeneration. Direct mutation of EE-LOCKED is rejected. **(B) Past window:** EE-PAST entries are unchanged. Direct mutation of EE-PAST is rejected unconditionally (no override exemption). **(C) Future window:** EE-FUTURE entries derived from SD-OLD may be replaced by new entries derived from SD-NEW. New entries for [D + `lock_window_depth`, D+6h] trace to SD-NEW (not SD-OLD). **(D) Lock boundary atomicity:** No window exists during which new future entries are visible before SD-NEW is fully committed. The transition at the lock boundary is a single atomic step. |
 | **Failure Classification** | Runtime if locked/past entries are modified. Runtime if lock-boundary transition is non-atomic. |
 
 ---
@@ -1026,11 +1022,11 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
-| **Scenario** | The execution layer's content schedule is sourced exclusively from PlaylogEvent. Mutating the underlying Playlist entry after PlaylogEvents are generated does not alter the active playout plan. |
+| **Scenario** | The execution layer's content schedule is sourced exclusively from ExecutionEntry. Mutating the underlying TransmissionLogEntry after ExecutionEntries are generated does not alter the active playout plan. |
 | **Clock Setup** | Clock at D+0h30m (active window). |
-| **Stimulus / Actions** | 1. Generate PlaylogEvents PE for [D, D + `min_execution_hours`]. 2. Capture the content schedule visible to the execution layer. 3. Mutate the underlying Playlist entry's asset reference (simulating a post-derivation mutation). 4. Re-read the execution layer's content schedule. |
-| **Assertions** | Execution layer content schedule is unchanged after the Playlist mutation. It reflects PlaylogEvent content, not the mutated Playlist entry. PlaylogEvent record is the sole source driving execution. |
-| **Failure Classification** | Runtime if execution layer reads from Playlist directly. |
+| **Stimulus / Actions** | 1. Generate ExecutionEntries EE for [D, D + `min_execution_hours`]. 2. Capture the content schedule visible to the execution layer. 3. Mutate the underlying TransmissionLogEntry's asset reference (simulating a post-derivation mutation). 4. Re-read the execution layer's content schedule. |
+| **Assertions** | Execution layer content schedule is unchanged after the TransmissionLog mutation. It reflects ExecutionEntry content, not the mutated TransmissionLogEntry. ExecutionEntry record is the sole source driving execution. |
+| **Failure Classification** | Runtime if execution layer reads from TransmissionLog directly. |
 
 ---
 
@@ -1040,9 +1036,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-PLAYLOG-NO-GAPS-001 |
 | **Derived Law(s)** | LAW-GRID |
-| **Scenario** | A plan with an off-grid zone boundary (bypassing enforcement via developer override) cascades faults through ScheduleDay, Playlist, and PlaylogEvent. Each layer independently detects and reports the violation. |
+| **Scenario** | A plan with an off-grid zone boundary (bypassing enforcement via developer override) cascades faults through ResolvedScheduleDay, TransmissionLog, and ExecutionEntry. Each layer independently detects and reports the violation. |
 | **Clock Setup** | Clock at D-4. |
-| **Stimulus / Actions** | 1. Build plan using `empty=True` with Zone A having `start_time=18:15` (off-grid on 30-min grid). 2. Attempt ScheduleDay generation. Force past the fault if needed. 3. Attempt Playlist generation. Force past the fault if needed. 4. Attempt PlaylogEvent generation. |
+| **Stimulus / Actions** | 1. Build plan using `empty=True` with Zone A having `start_time=18:15` (off-grid on 30-min grid). 2. Attempt ResolvedScheduleDay generation. Force past the fault if needed. 3. Attempt TransmissionLog generation. Force past the fault if needed. 4. Attempt ExecutionEntry generation. |
 | **Assertions** | Each layer independently detects and reports the grid-alignment violation. Violations at each layer identify the originating off-grid boundary (18:15) and fault class "planning". No silent propagation of an off-grid boundary from one layer to the next. |
 | **Failure Classification** | Planning (at all layers — same root fault) |
 
@@ -1054,10 +1050,10 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|
 | **Invariant(s)** | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001 |
 | **Derived Law(s)** | LAW-IMMUTABILITY |
-| **Scenario** | An operator override for a PlaylogEvent is applied. The override record is persisted before the PlaylogEvent entry is updated. No window exists where the override content is active without a backing override record. |
+| **Scenario** | An operator override for an ExecutionEntry is applied. The override record is persisted before the ExecutionEntry is updated. No window exists where the override content is active without a backing override record. |
 | **Clock Setup** | Clock at D+0h45m (lock window active). |
-| **Stimulus / Actions** | 1. Generate PlaylogEvents for [D, D + `min_execution_hours`]. 2. Begin operator override targeting PE at [D+1h, D+1h30m]. 3. Persist override record OR-1 first. 4. Update PE to reference OR-1's content. 5. Query the store at each step. |
-| **Assertions** | At no point does PE reference override content without OR-1 being committed. Override record is committed first; PE update is committed second. If PE update fails, PE retains original content and OR-1 is rolled back or orphaned (but OR-1 must never be the sole committed record without a corresponding PE update). |
+| **Stimulus / Actions** | 1. Generate ExecutionEntries for [D, D + `min_execution_hours`]. 2. Begin operator override targeting EE at [D+1h, D+1h30m]. 3. Persist override record OR-1 first. 4. Update EE to reference OR-1's content. 5. Query the store at each step. |
+| **Assertions** | At no point does EE reference override content without OR-1 being committed. Override record is committed first; EE update is committed second. If EE update fails, EE retains original content and OR-1 is rolled back or orphaned (but OR-1 must never be the sole committed record without a corresponding EE update). |
 | **Failure Classification** | Runtime or Operator if the sequence is reversed or non-atomic. |
 
 ---
@@ -1069,8 +1065,8 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Invariant(s)** | INV-PLAYLOG-LOOKAHEAD-001, INV-PLAYLOG-NO-GAPS-001, INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 |
 | **Derived Law(s)** | LAW-RUNTIME-AUTHORITY |
 | **Scenario** | The clock advances in 30-minute increments over a simulated 4-hour period. At each step, the lookahead depth is evaluated. Extensions are triggered by clock progression (not consumer demand) when depth falls below `min_execution_hours`. The sequence must remain gap-free throughout. |
-| **Clock Setup** | Clock starts at EPOCH. PlaylogEvent sequence initially extends to EPOCH + `min_execution_hours`. Advance in 30-minute increments, 8 steps total (simulating 4 hours of broadcast time). |
-| **Stimulus / Actions** | For each 30-minute increment: 1. Advance clock by 30 minutes. 2. Trigger PlaylogService evaluation (no consumer demand simulated). 3. Assert depth >= `min_execution_hours`. 4. Assert no gaps in sequence. 5. Assert extension reason code is `"clock_progression"` if extension was triggered. |
+| **Clock Setup** | Clock starts at EPOCH. ExecutionEntry sequence initially extends to EPOCH + `min_execution_hours`. Advance in 30-minute increments, 8 steps total (simulating 4 hours of broadcast time). |
+| **Stimulus / Actions** | For each 30-minute increment: 1. Advance clock by 30 minutes. 2. Trigger HorizonManager evaluation (no consumer demand simulated). 3. Assert depth >= `min_execution_hours`. 4. Assert no gaps in sequence. 5. Assert extension reason code is `"clock_progression"` if extension was triggered. |
 | **Assertions** | After each of the 8 clock advances, depth remains >= `min_execution_hours`. No gaps appear at any point. All triggered extensions carry reason code `"clock_progression"`. No extension triggers with reason `"consumer_demand"`. Extension count equals or exceeds the number of 30-minute blocks consumed over 4 hours. No violation is raised at any step after extension completes. |
 | **Failure Classification** | Runtime if depth falls below threshold without extension. Runtime if extensions triggered by consumer demand. |
 
@@ -1113,34 +1109,34 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | SCHED-DAY-009 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | LAW-DERIVATION, LAW-CONTENT-AUTHORITY | Unanchored ScheduleDay rejected |
 | SCHED-DAY-010 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ScheduleDay references superseded record |
 | PLAYLOG-001 | INV-PLAYLOG-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Ineligible asset replaced at window extension |
-| PLAYLOG-002 | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Timestamps match injected clock |
+| PLAYLOG-002 | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | ExecutionEntry timestamps match injected clock |
 | PLAYLOG-003 | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Different injected clocks produce different timestamps |
 | PLAYLOG-004 | INV-PLAYLOG-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Lookahead shortfall (< min_execution_hours) triggers extension |
 | PLAYLOG-005 | INV-PLAYLOG-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Depth at exactly min_execution_hours is compliant |
-| PLAYLOG-006 | INV-PLAYLOG-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY | Gap in sequence detected and faulted |
-| PLAYLOG-007 | INV-PLAYLOG-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION | Playlog gap traced to upstream ScheduleDay gap |
-| PLAYLOG-008 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | Unanchored PlaylogEvent rejected |
-| PLAYLOG-009 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override PlaylogEvent accepted without Playlist ref |
-| PLAYLOG-IMMUT-001 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked PlaylogEvent mutation without override rejected |
-| PLAYLOG-IMMUT-002 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window PlaylogEvent mutation rejected unconditionally |
+| PLAYLOG-006 | INV-PLAYLOG-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY | Gap in ExecutionEntry sequence detected and faulted |
+| PLAYLOG-007 | INV-PLAYLOG-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION | ExecutionEntry gap traced to upstream ResolvedScheduleDay gap |
+| PLAYLOG-008 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | Unanchored ExecutionEntry rejected |
+| PLAYLOG-009 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ExecutionEntry accepted without TransmissionLogEntry ref |
+| PLAYLOG-IMMUT-001 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked ExecutionEntry mutation without override rejected |
+| PLAYLOG-IMMUT-002 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window ExecutionEntry mutation rejected unconditionally |
 | PLAYLOG-IMMUT-003 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Valid atomic override inside locked window accepted |
-| PLAYLIST-GRID-001 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid Playlist entry boundary rejected |
+| PLAYLIST-GRID-001 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary rejected |
 | PLAYLIST-GRID-002 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover alignment passes |
 | PLAYLIST-GRID-003 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight entry has no hidden micro-gap |
-| CROSS-001 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | Breakpoint-free program not cut in Playlist |
+| CROSS-001 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | Breakpoint-free program not cut in TransmissionLog |
 | CROSS-002 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | 120-min longform spans 4 blocks without mid-cut |
-| CROSS-003 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | AsRun without PlaylogEvent ref rejected |
-| CROSS-004 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full chain traversable Plan→Day→Playlist→Playlog→AsRun |
-| CROSS-FOREIGN-001 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | ScheduleDay slot with foreign asset rejected |
-| CROSS-FOREIGN-002 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Playlist entry with foreign asset rejected |
-| CROSS-FOREIGN-003 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | PlaylogEvent with foreign asset rejected |
+| CROSS-003 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | AsRun without ExecutionEntry ref rejected |
+| CROSS-004 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full chain traversable Plan→ResolvedScheduleDay→TransmissionLog→ExecutionEntry→AsRun |
+| CROSS-FOREIGN-001 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | ResolvedScheduleDay slot with foreign asset rejected |
+| CROSS-FOREIGN-002 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | TransmissionLogEntry with foreign asset rejected |
+| CROSS-FOREIGN-003 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | ExecutionEntry with foreign asset rejected |
 | GRID-STRESS-001 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-GRID | programming_day_start rollover produces aligned boundary |
 | GRID-STRESS-002 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Calendar midnight produces no fractional-minute boundary |
 | GRID-STRESS-003 | INV-PLAN-GRID-ALIGNMENT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Zone spanning midnight has aligned boundaries on both sides |
 | GRID-STRESS-004 | INV-NO-MID-PROGRAM-CUT-001, INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID, LAW-DERIVATION | Longform spanning programming_day_start produces no off-grid fence |
 | HORIZON-001 | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Extension triggered by clock progression only |
 | HORIZON-002 | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | No extension when depth >= min_execution_hours |
-| CONST-001 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001, INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full derivation chain integrity Plan→Day→Playlist→Playlog→AsRun |
+| CONST-001 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001, INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full derivation chain integrity Plan→ResolvedScheduleDay→TransmissionLog→ExecutionEntry→AsRun |
 | CONST-002 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-PLAYLOG-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY | Eligibility change mid-cycle propagation |
 | CONST-003 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001, INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-IMMUTABILITY, LAW-DERIVATION | Immutability cascade: locked / past / future / atomic boundary |
 | CONST-004 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | LAW-RUNTIME-AUTHORITY | Planning artifacts do not drive playout directly |
