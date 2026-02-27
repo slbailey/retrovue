@@ -243,6 +243,62 @@ class ExecutionWindowStore:
                     count += 1
         return count
 
+    def replace_entry(
+        self,
+        block_id: str,
+        new_entry: ExecutionEntry,
+        *,
+        now_utc_ms: int,
+        override_record_id: str | None = None,
+    ) -> None:
+        """Replace an existing entry by block_id, enforcing immutability guards.
+
+        Guards (INV-PLAYLOG-LOCKED-IMMUTABLE-001):
+        1. Past window: if existing entry's end_utc_ms <= now_utc_ms, the entry
+           has already aired. Mutation is unconditionally rejected (no override).
+        2. Locked without override: if existing entry is_locked and no
+           override_record_id is provided, mutation is rejected.
+        3. Otherwise: replace the entry and re-sort.
+        """
+        with self._lock:
+            idx = None
+            for i, entry in enumerate(self._entries):
+                if entry.block_id == block_id:
+                    idx = i
+                    break
+            if idx is None:
+                raise ValueError(
+                    f"ExecutionEntry block_id={block_id!r} not found in store."
+                )
+
+            existing = self._entries[idx]
+
+            # Guard 1: past window — unconditional rejection
+            if existing.end_utc_ms <= now_utc_ms:
+                raise ValueError(
+                    "INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED: "
+                    f"ExecutionEntry block_id={block_id!r} is in the past "
+                    f"window (end_utc_ms={existing.end_utc_ms} <= "
+                    f"now_utc_ms={now_utc_ms}). "
+                    f"Window status: \"past\". "
+                    "Past-window entries MUST NOT be mutated under any "
+                    "circumstance."
+                )
+
+            # Guard 2: locked without override
+            if existing.is_locked and override_record_id is None:
+                raise ValueError(
+                    "INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED: "
+                    f"ExecutionEntry block_id={block_id!r} is locked. "
+                    f"Window status: \"locked\". "
+                    "Locked entries require an override_record_id for "
+                    "mutation."
+                )
+
+            # Replace and re-sort
+            self._entries[idx] = new_entry
+            self._entries.sort(key=lambda e: e.start_utc_ms)
+
 
 # ---------------------------------------------------------------------------
 # Standalone validation functions

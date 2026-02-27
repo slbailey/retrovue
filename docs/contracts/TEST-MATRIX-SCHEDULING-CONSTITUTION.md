@@ -130,6 +130,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-SCHEDULEDAY-LEAD-TIME-001 | 3 (missing at deadline + materialized before deadline + parameterized N=5) | **PASS** | `check_scheduleday_lead_time()` standalone function in `schedule_manager_service.py` |
 | INV-PLAYLOG-NO-GAPS-001 | 2 (gap detected + contiguous accepted) | **PASS** | `validate_execution_entry_contiguity()` standalone function in `execution_window_store.py` |
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | 3 (unanchored reject + ref accept + override accept) | **PASS** | `ExecutionWindowStore.add_entries()` with `enforce_derivation_from_playlist=True` |
+| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -157,6 +158,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-LEAD-TIME-001 | `TestInvScheduledayLeadTime001` | `test_..._reject_missing_at_deadline`, `test_..._accept_materialized_before_deadline`, `test_..._parameterized_not_hardcoded` | PASS |
 | INV-PLAYLOG-NO-GAPS-001 | `TestInvPlaylogNoGaps001` | `test_..._detect_gap`, `test_..._accept_contiguous` | PASS |
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | `TestInvPlaylogDerivedFromPlaylist001` | `test_..._reject_unanchored`, `test_..._accept_with_ref`, `test_..._accept_override` | PASS |
+| INV-PLAYLOG-LOCKED-IMMUTABLE-001 | `TestInvPlaylogLockedImmutable001` | `test_..._reject_locked_no_override`, `test_..._reject_past_unconditional`, `test_..._accept_override` | PASS |
 
 ### Full Matrix (Aspirational)
 

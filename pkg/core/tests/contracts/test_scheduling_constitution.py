@@ -2166,3 +2166,143 @@ class TestInvPlaylogDerivedFromPlaylist001:
 
         store.add_entries([entry])
         assert len(store.get_all_entries()) == 1
+
+
+# =========================================================================
+# INV-PLAYLOG-LOCKED-IMMUTABLE-001
+# =========================================================================
+
+
+class TestInvPlaylogLockedImmutable001:
+    """INV-PLAYLOG-LOCKED-IMMUTABLE-001
+
+    ExecutionEntry records in the locked execution window are immutable
+    except via atomic override. Entries in the past window are immutable
+    unconditionally — no override mechanism applies retroactively.
+
+    Enforcement: ExecutionWindowStore.replace_entry() method.
+
+    Derived from: LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY.
+    """
+
+    def test_inv_playlog_locked_immutable_001_reject_locked_no_override(
+        self, contract_clock
+    ):
+        """INV-PLAYLOG-LOCKED-IMMUTABLE-001 -- negative (locked, no override)
+
+        Invariant: INV-PLAYLOG-LOCKED-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY
+        Failure class: Runtime
+        Scenario: Create locked ExecutionEntry at [EPOCH+15m, EPOCH+45m].
+                  Call store.replace_entry() without override. Assert raises
+                  ValueError matching INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED.
+                  Assert message includes window status "locked".
+        """
+        store = ExecutionWindowStore()
+        entry = _make_entry(
+            block_index=0,
+            start_offset_ms=15 * 60 * 1000,    # EPOCH + 15m
+            duration_ms=30 * 60 * 1000,          # 30m → ends at EPOCH + 45m
+            is_locked=True,
+        )
+        store.add_entries([entry])
+
+        new_entry = _make_entry(
+            block_index=0,
+            start_offset_ms=15 * 60 * 1000,
+            duration_ms=30 * 60 * 1000,
+        )
+
+        with pytest.raises(
+            ValueError, match="INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED"
+        ) as exc_info:
+            store.replace_entry(
+                entry.block_id, new_entry, now_utc_ms=EPOCH_MS
+            )
+
+        assert '"locked"' in str(exc_info.value), (
+            "Fault message must include window status 'locked'"
+        )
+
+    def test_inv_playlog_locked_immutable_001_reject_past_unconditional(
+        self, contract_clock
+    ):
+        """INV-PLAYLOG-LOCKED-IMMUTABLE-001 -- negative (past, unconditional)
+
+        Invariant: INV-PLAYLOG-LOCKED-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY
+        Failure class: Runtime
+        Scenario: Create ExecutionEntry at [EPOCH+30m, EPOCH+60m]. Call
+                  store.replace_entry() with now_utc_ms=EPOCH+2h (entry is
+                  past) and override_record_id="or-1". Assert raises
+                  ValueError matching INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED.
+                  Assert message includes window status "past".
+        """
+        store = ExecutionWindowStore()
+        entry = _make_entry(
+            block_index=0,
+            start_offset_ms=30 * 60 * 1000,     # EPOCH + 30m
+            duration_ms=30 * 60 * 1000,           # 30m → ends at EPOCH + 60m
+        )
+        store.add_entries([entry])
+
+        new_entry = _make_entry(
+            block_index=0,
+            start_offset_ms=30 * 60 * 1000,
+            duration_ms=30 * 60 * 1000,
+        )
+
+        two_hours_ms = 2 * 60 * 60 * 1000
+        with pytest.raises(
+            ValueError, match="INV-PLAYLOG-LOCKED-IMMUTABLE-001-VIOLATED"
+        ) as exc_info:
+            store.replace_entry(
+                entry.block_id,
+                new_entry,
+                now_utc_ms=EPOCH_MS + two_hours_ms,
+                override_record_id="or-1",
+            )
+
+        assert '"past"' in str(exc_info.value), (
+            "Fault message must include window status 'past'"
+        )
+
+    def test_inv_playlog_locked_immutable_001_accept_override(
+        self, contract_clock
+    ):
+        """INV-PLAYLOG-LOCKED-IMMUTABLE-001 -- positive (override accepted)
+
+        Invariant: INV-PLAYLOG-LOCKED-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: Create locked ExecutionEntry at [EPOCH+10m, EPOCH+40m].
+                  Call store.replace_entry() with override_record_id="or-1".
+                  Assert accepted. Assert replaced entry is in store.
+        """
+        store = ExecutionWindowStore()
+        original = _make_entry(
+            block_index=0,
+            start_offset_ms=10 * 60 * 1000,     # EPOCH + 10m
+            duration_ms=30 * 60 * 1000,           # 30m → ends at EPOCH + 40m
+            is_locked=True,
+        )
+        store.add_entries([original])
+
+        replacement = _make_entry(
+            block_index=0,
+            start_offset_ms=10 * 60 * 1000,
+            duration_ms=30 * 60 * 1000,
+        )
+
+        store.replace_entry(
+            original.block_id,
+            replacement,
+            now_utc_ms=EPOCH_MS,
+            override_record_id="or-1",
+        )
+
+        entries = store.get_all_entries()
+        assert len(entries) == 1
+        assert entries[0] is replacement, (
+            "Store must contain the replacement entry after override."
+        )
