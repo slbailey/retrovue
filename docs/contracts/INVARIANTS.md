@@ -19,7 +19,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | LAW-GRID | [laws/LAW-GRID.md](laws/LAW-GRID.md) | Scheduling — grid-aligned boundaries |
 | LAW-CONTENT-AUTHORITY | [laws/LAW-CONTENT-AUTHORITY.md](laws/LAW-CONTENT-AUTHORITY.md) | Scheduling — SchedulePlan is sole editorial authority |
 | LAW-DERIVATION | [laws/LAW-DERIVATION.md](laws/LAW-DERIVATION.md) | Scheduling — artifact chain traceability |
-| LAW-RUNTIME-AUTHORITY | [laws/LAW-RUNTIME-AUTHORITY.md](laws/LAW-RUNTIME-AUTHORITY.md) | Scheduling — PlaylogEvent is sole runtime authority |
+| LAW-RUNTIME-AUTHORITY | [laws/LAW-RUNTIME-AUTHORITY.md](laws/LAW-RUNTIME-AUTHORITY.md) | Scheduling — ExecutionEntry is sole runtime authority |
 | LAW-IMMUTABILITY | [laws/LAW-IMMUTABILITY.md](laws/LAW-IMMUTABILITY.md) | Scheduling — published artifacts are immutable |
 
 ---
@@ -44,8 +44,9 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-SCHEDULEDAY-NO-GAPS-001 | [invariants/core/INV-SCHEDULEDAY-NO-GAPS-001.md](invariants/core/INV-SCHEDULEDAY-NO-GAPS-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | [invariants/core/INV-SCHEDULEDAY-LEAD-TIME-001.md](invariants/core/INV-SCHEDULEDAY-LEAD-TIME-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | `min_schedule_day_lead_days` (default: 3) |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | [invariants/core/INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001.md](invariants/core/INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | [invariants/core/INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001.md](invariants/core/INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001.md) | LAW-GRID, LAW-DERIVATION |
 
-### Scheduling — PlaylogEvent
+### Scheduling — ExecutionEntry
 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
@@ -56,8 +57,10 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | [invariants/core/INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001.md](invariants/core/INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | [invariants/core/INV-PLAYLOG-LOCKED-IMMUTABLE-001.md](invariants/core/INV-PLAYLOG-LOCKED-IMMUTABLE-001.md) | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
 | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | [invariants/core/INV-PLAYLOG-LOOKAHEAD-ENFORCED-001.md](invariants/core/INV-PLAYLOG-LOOKAHEAD-ENFORCED-001.md) | LAW-RUNTIME-AUTHORITY |
+| INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | [invariants/core/INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001.md](invariants/core/INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001.md) | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY |
+| INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001 | [invariants/core/INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001.md](invariants/core/INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001.md) | LAW-RUNTIME-AUTHORITY |
 
-### Scheduling — Playlist
+### Scheduling — TransmissionLog
 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
@@ -106,6 +109,14 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
 | INV-CHANNEL-TIMELINE-CONTINUITY-001 | [invariants/core/INV-CHANNEL-TIMELINE-CONTINUITY-001.md](invariants/core/INV-CHANNEL-TIMELINE-CONTINUITY-001.md) | LAW-CLOCK, LAW-TIMELINE |
+
+### Scheduling — Broadcast Day Semantics
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | [invariants/core/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md](invariants/core/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
+
+---
 
 ### Playout — Cross-component
 

@@ -1,4 +1,4 @@
-# INV-PLAYLOG-LOCKED-IMMUTABLE-001 — PlaylogEvent entries in the locked execution window are immutable except via atomic override
+# INV-PLAYLOG-LOCKED-IMMUTABLE-001 — ExecutionEntry records in the locked execution window are immutable except via atomic override
 
 Status: Invariant
 Authority Level: Runtime
@@ -6,13 +6,13 @@ Derived From: `LAW-IMMUTABILITY`, `LAW-RUNTIME-AUTHORITY`
 
 ## Purpose
 
-Protects in-flight execution from unauthorized modification. A PlaylogEvent inside the locked execution window is the active directive for playout. Mutating it without an atomic override record silently alters what the channel airs — violating `LAW-IMMUTABILITY`'s requirement that mutation require an explicit, pre-persisted override record, and undermining the sovereign runtime authority model of `LAW-RUNTIME-AUTHORITY`.
+Protects in-flight execution from unauthorized modification. An ExecutionEntry inside the locked execution window is the active directive for playout. Mutating it without an atomic override record silently alters what the channel airs — violating `LAW-IMMUTABILITY`'s requirement that mutation require an explicit, pre-persisted override record, and undermining the sovereign runtime authority model of `LAW-RUNTIME-AUTHORITY`.
 
 ## Guarantee
 
-A PlaylogEvent entry whose `start_utc` falls within the locked execution window MUST NOT be mutated in place. The only permitted modification is via an atomic operator override: the override record MUST be persisted before the PlaylogEvent entry is updated.
+An ExecutionEntry whose `start_utc_ms` falls within the locked execution window MUST NOT be mutated in place. The only permitted modification is via an atomic operator override: the override record MUST be persisted before the ExecutionEntry is updated.
 
-Entries whose `end_utc` is in the past (already-broadcast window) MUST NOT be mutated under any circumstance. No override mechanism applies retroactively.
+Entries whose `end_utc_ms` is in the past (already-broadcast window) MUST NOT be mutated under any circumstance. No override mechanism applies retroactively.
 
 ## Preconditions
 
@@ -25,7 +25,7 @@ The application layer MUST reject any in-place mutation to a locked entry that i
 
 ## Deterministic Testability
 
-Using FakeAdvancingClock: set clock to T. Create PlaylogEvent at [T+15m, T+45m] (within lock window). Attempt in-place mutation without override record. Assert rejected. Separately, advance clock past the entry's `end_utc` (entry is now in past window). Attempt mutation with a valid override record. Assert rejected unconditionally. No real-time waits required.
+Using FakeAdvancingClock: set clock to T. Create ExecutionEntry at [T+15m, T+45m] (within lock window). Attempt in-place mutation without override record. Assert rejected. Separately, advance clock past the entry's `end_utc_ms` (entry is now in past window). Attempt mutation with a valid override record. Assert rejected unconditionally. No real-time waits required.
 
 ## Failure Semantics
 
