@@ -128,6 +128,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | 3 (carry-in overlap reject + carry-in honored accept + no carry-in accept) | **PASS** | `validate_scheduleday_seam()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | 3 (missing at deadline + materialized before deadline + parameterized N=5) | **PASS** | `check_scheduleday_lead_time()` standalone function in `schedule_manager_service.py` |
+| INV-PLAYLOG-NO-GAPS-001 | 2 (gap detected + contiguous accepted) | **PASS** | `validate_execution_entry_contiguity()` standalone function in `execution_window_store.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -153,6 +154,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `TestInvScheduledayDerivationTraceable001` | `test_..._reject_unanchored`, `test_..._accept_with_plan_id`, `test_..._accept_manual_override` | PASS |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | `TestInvScheduledaySeamNoOverlap001` | `test_..._reject_carry_in_overlap`, `test_..._accept_carry_in_honored`, `test_..._no_carry_in_independent` | PASS |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | `TestInvScheduledayLeadTime001` | `test_..._reject_missing_at_deadline`, `test_..._accept_materialized_before_deadline`, `test_..._parameterized_not_hardcoded` | PASS |
+| INV-PLAYLOG-NO-GAPS-001 | `TestInvPlaylogNoGaps001` | `test_..._detect_gap`, `test_..._accept_contiguous` | PASS |
 
 ### Full Matrix (Aspirational)
 
