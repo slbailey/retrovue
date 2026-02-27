@@ -71,8 +71,8 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
 | INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001 | [invariants/core/INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001.md](invariants/core/INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
-| INV-DERIVATION-ANCHOR-PROTECTED-001 | *(code-enforced)* | LAW-DERIVATION, LAW-IMMUTABILITY |
-| INV-ASRUN-IMMUTABLE-001 | *(code-enforced)* | LAW-IMMUTABILITY |
+| INV-DERIVATION-ANCHOR-PROTECTED-001 | [invariants/core/INV-DERIVATION-ANCHOR-PROTECTED-001.md](invariants/core/INV-DERIVATION-ANCHOR-PROTECTED-001.md) | LAW-DERIVATION, LAW-IMMUTABILITY |
+| INV-ASRUN-IMMUTABLE-001 | [invariants/core/INV-ASRUN-IMMUTABLE-001.md](invariants/core/INV-ASRUN-IMMUTABLE-001.md) | LAW-IMMUTABILITY |
 
 ### Scheduling — Cross-cutting
 
