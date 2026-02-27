@@ -651,6 +651,10 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | THNB-002 | INV-HORIZON-NEXT-BLOCK-READY-001 | Next-next block for lookahead=2 |
 | THNB-003 | INV-HORIZON-NEXT-BLOCK-READY-001 | Missing block at fence detected as planning fault |
 | THNB-004 | INV-HORIZON-NEXT-BLOCK-READY-001 | Fence at day crossover |
+| TNB-001 | INV-HORIZON-NEXT-BLOCK-READY-001 | Next block present after init via HorizonManager._check_next_block_ready |
+| TNB-002 | INV-HORIZON-NEXT-BLOCK-READY-001 | Gap at now filled by pipeline extension |
+| TNB-003 | INV-HORIZON-NEXT-BLOCK-READY-001 | Pipeline failure leaves gap; next_block_compliant=False |
+| TNB-004 | INV-HORIZON-NEXT-BLOCK-READY-001 | Locked window prevents fill; LOCKED_IMMUTABLE error |
 | THCC-001 | INV-HORIZON-CONTINUOUS-COVERAGE-001 | Contiguous boundaries via snapshot read |
 | THCC-002 | INV-HORIZON-CONTINUOUS-COVERAGE-001 | 1 ms gap detected with delta_ms |
 | THCC-003 | INV-HORIZON-CONTINUOUS-COVERAGE-001 | 1 ms overlap detected with delta_ms |

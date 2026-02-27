@@ -79,6 +79,7 @@ class HorizonHealthReport:
     is_healthy: bool
     epg_compliant: bool
     execution_compliant: bool
+    next_block_compliant: bool
     evaluation_interval_seconds: int
     store_entry_count: int
 
@@ -125,6 +126,7 @@ class HorizonManager:
         evaluation_interval_seconds: int = 10,
         programming_day_start_hour: int = 6,
         execution_store=None,  # Optional ExecutionWindowStore
+        locked_window_ms: int = 0,
     ):
         self._schedule_manager = schedule_manager
         self._planning_pipeline = planning_pipeline
@@ -134,12 +136,14 @@ class HorizonManager:
         self._eval_interval_s = evaluation_interval_seconds
         self._day_start_hour = programming_day_start_hour
         self._execution_store = execution_store
+        self._locked_window_ms = locked_window_ms
         self._logger = logging.getLogger(__name__)
 
         # Internal state
         self._epg_farthest_date: date | None = None
         self._execution_window_end_utc_ms: int = 0
         self._last_evaluation_utc_ms: int = 0
+        self._next_block_compliant: bool = True
 
         # Audit state
         self._extension_attempt_count: int = 0
@@ -186,6 +190,11 @@ class HorizonManager:
     def extension_forbidden_trigger_count(self) -> int:
         """Forbidden-trigger attempts intercepted since init."""
         return self._extension_forbidden_trigger_count
+
+    @property
+    def next_block_compliant(self) -> bool:
+        """True when the next block at 'now' is present in the store."""
+        return self._next_block_compliant
 
     @property
     def extension_attempt_log(self) -> list[ExtensionAttempt]:
@@ -248,6 +257,7 @@ class HorizonManager:
             is_healthy=self.is_healthy,
             epg_compliant=epg_h >= self._min_epg_days * 24.0,
             execution_compliant=exec_h >= self._min_execution_hours,
+            next_block_compliant=self._next_block_compliant,
             evaluation_interval_seconds=self._eval_interval_s,
             store_entry_count=store_count,
         )
@@ -285,6 +295,10 @@ class HorizonManager:
         if exec_depth_h < self._min_execution_hours:
             self._extend_execution(current_bd, now_ms)
             extended = True
+
+        # --- Next block readiness (INV-HORIZON-NEXT-BLOCK-READY-001) ---
+        if self._execution_store is not None:
+            self._check_next_block_ready(now_ms, current_bd)
 
         # --- Structured status log ---
         # Healthy + no extension = steady state → DEBUG (avoid log noise).
@@ -469,3 +483,111 @@ class HorizonManager:
 
             next_date = next_date + timedelta(days=1)
             days_extended += 1
+
+    def _check_next_block_ready(self, now_ms: int, current_bd: date) -> None:
+        """Verify block at 'now' is present (INV-HORIZON-NEXT-BLOCK-READY-001).
+
+        If the block is missing and the gap falls inside the locked window,
+        the violation is attributed to INV-HORIZON-LOCKED-IMMUTABLE-001.
+        If the block is missing and the gap is outside the locked window,
+        a pipeline fill is attempted.
+        """
+        store = self._execution_store
+        entry = store.get_entry_at(now_ms)
+        if entry is not None:
+            self._next_block_compliant = True
+            return
+
+        # Block missing — determine if gap is in locked window
+        if self._locked_window_ms > 0:
+            locked_end = now_ms + self._locked_window_ms
+            # now_ms is always inside [now, now + locked_window), so the gap
+            # at now_ms is within the locked window.
+            window_end_before = self._execution_window_end_utc_ms
+            self._extension_attempt_count += 1
+            attempt_id = f"ext-{self._extension_attempt_count}"
+            attempt = ExtensionAttempt(
+                attempt_id=attempt_id,
+                now_utc_ms=now_ms,
+                window_end_before_ms=window_end_before,
+                window_end_after_ms=window_end_before,
+                reason_code="CLOCK_WATERMARK",
+                triggered_by="SCHED_MGR_POLICY",
+                success=False,
+                error_code="INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED",
+            )
+            self._extension_attempt_log.append(attempt)
+            self._next_block_compliant = False
+            self._logger.warning(
+                "HorizonManager: next-block gap at now=%d is inside "
+                "locked window [%d, %d) — cannot fill",
+                now_ms, now_ms, locked_end,
+            )
+            return
+
+        # Gap outside locked window — attempt pipeline fill
+        window_end_before = self._execution_window_end_utc_ms
+        self._extension_attempt_count += 1
+        attempt_id = f"ext-{self._extension_attempt_count}"
+
+        try:
+            result = self._planning_pipeline.extend_execution_day(current_bd)
+        except Exception as exc:
+            error_code = getattr(exc, "error_code", str(exc))
+            attempt = ExtensionAttempt(
+                attempt_id=attempt_id,
+                now_utc_ms=now_ms,
+                window_end_before_ms=window_end_before,
+                window_end_after_ms=self._execution_window_end_utc_ms,
+                reason_code="CLOCK_WATERMARK",
+                triggered_by="SCHED_MGR_POLICY",
+                success=False,
+                error_code="PIPELINE_EXHAUSTED",
+            )
+            self._extension_attempt_log.append(attempt)
+            self._next_block_compliant = False
+            self._logger.warning(
+                "HorizonManager: next-block fill failed for %s: %s",
+                current_bd.isoformat(), error_code,
+            )
+            return
+
+        # Pipeline succeeded — ingest entries and update window end
+        if isinstance(result, int):
+            end_ms = result
+        else:
+            end_ms = result.end_utc_ms
+            if hasattr(result, "entries"):
+                store.add_entries(result.entries)
+
+        if end_ms > self._execution_window_end_utc_ms:
+            self._execution_window_end_utc_ms = end_ms
+
+        # Recheck: does the store now have a block at now_ms?
+        entry = store.get_entry_at(now_ms)
+        if entry is not None:
+            self._extension_success_count += 1
+            attempt = ExtensionAttempt(
+                attempt_id=attempt_id,
+                now_utc_ms=now_ms,
+                window_end_before_ms=window_end_before,
+                window_end_after_ms=self._execution_window_end_utc_ms,
+                reason_code="CLOCK_WATERMARK",
+                triggered_by="SCHED_MGR_POLICY",
+                success=True,
+            )
+            self._extension_attempt_log.append(attempt)
+            self._next_block_compliant = True
+        else:
+            attempt = ExtensionAttempt(
+                attempt_id=attempt_id,
+                now_utc_ms=now_ms,
+                window_end_before_ms=window_end_before,
+                window_end_after_ms=self._execution_window_end_utc_ms,
+                reason_code="CLOCK_WATERMARK",
+                triggered_by="SCHED_MGR_POLICY",
+                success=False,
+                error_code="PIPELINE_EXHAUSTED",
+            )
+            self._extension_attempt_log.append(attempt)
+            self._next_block_compliant = False
