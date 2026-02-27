@@ -544,18 +544,13 @@ async def preview_schedule(
         }
         slots.append(slot)
 
-    # Check for gaps and overlaps
-    if len(slots) > 1:
-        sorted_slots = sorted(slots, key=lambda s: s["start_time"])
-        for i in range(len(sorted_slots) - 1):
-            current_end = sorted_slots[i]["end_time"]
-            next_start = sorted_slots[i + 1]["start_time"]
-            if current_end < next_start:
-                warnings.append(f"Gap detected: {current_end} to {next_start}")
-            elif current_end > next_start:
-                warnings.append(
-                    f"Overlap detected: {sorted_slots[i]['zone_name']} and {sorted_slots[i+1]['zone_name']}"
-                )
+    # Check for gaps and overlaps using the shared helper
+    # (preview keeps warning-only behavior; hard enforcement is in zone_add/zone_update)
+    from ...usecases.zone_coverage_check import check_coverage, check_overlap
+
+    pds = getattr(channel, "programming_day_start", time_type(0, 0))
+    warnings.extend(check_overlap(active_zones, programming_day_start=pds))
+    warnings.extend(check_coverage(active_zones, programming_day_start=pds))
 
     return {
         "status": "ok",

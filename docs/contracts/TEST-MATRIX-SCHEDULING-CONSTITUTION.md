@@ -132,10 +132,13 @@ These invariants have structural enforcement in production code and passing cont
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | 2 (negative + positive) | **PASS** | `InMemoryResolvedStore.delete()` checks `ExecutionWindowStore.has_entries_for()` before deletion |
 | INV-ASRUN-IMMUTABLE-001 | 3 (mutation + deletion + creation) | **PASS** | `AsRunEvent` is `@dataclass(frozen=True)`; `log_playout_end()` uses `dataclasses.replace()` |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | 2 (reserved) | **SKIPPED** | Not yet filed as a constitutional invariant; override system does not exist yet |
+| INV-PLAN-FULL-COVERAGE-001 | 4 (gap reject + exact tile + pds≠00:00 reject + pds≠00:00 tile) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
+| INV-PLAN-NO-ZONE-OVERLAP-001 | 4 (overlap reject + day-filter pass + mutation-induced overlap + precedence) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
+| INV-PLAN-GRID-ALIGNMENT-001 | 7 (block start/duration/valid + zone end/start/duration/valid) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py`; `validate_block_assignment()` in `contracts.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
-All test definitions in sections 5–6 (SCHED-PLAN-*, SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-STRESS-*, HORIZON-*, CONST-*) are roadmap items. They define the target behavior for future enforcement work.
+All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-STRESS-*, HORIZON-*, CONST-*) are roadmap items. They define the target behavior for future enforcement work. SCHED-PLAN-001 through SCHED-PLAN-006 are now enforced (see Blocker Invariants above).
 
 ---
 
@@ -149,6 +152,9 @@ All test definitions in sections 5–6 (SCHED-PLAN-*, SCHED-DAY-*, PLAYLOG-*, CR
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | `TestInvDerivationAnchorProtected001` | `test_..._reject_delete_with_downstream`, `test_..._allow_delete_without_downstream` | PASS |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | `TestInvOverrideRecordPrecedesArtifact001` | `test_..._reject_without_record`, `test_..._atomicity` | SKIPPED |
 | INV-ASRUN-IMMUTABLE-001 | `TestInvAsrunImmutable001` | `test_..._reject_mutation`, `test_..._reject_deletion`, `test_..._valid_creation` | PASS |
+| INV-PLAN-FULL-COVERAGE-001 | `TestInvPlanFullCoverage001` | `test_..._reject_gap`, `test_..._accept_exact_tile`, `test_..._reject_gap_with_pds_0600`, `test_..._accept_tile_with_pds_0600` | PASS |
+| INV-PLAN-NO-ZONE-OVERLAP-001 | `TestInvPlanNoZoneOverlap001` | `test_..._reject_overlapping_zones`, `test_..._allow_mutually_exclusive_days`, `test_..._reject_mutation_induced_overlap`, `test_..._precedence_over_gap` | PASS |
+| INV-PLAN-GRID-ALIGNMENT-001 | `TestInvPlanGridAlignment001` | `test_..._reject_off_grid_start`, `test_..._reject_off_grid_duration`, `test_..._valid_alignment`, `test_..._reject_off_grid_zone_end`, `test_..._reject_off_grid_zone_start`, `test_..._reject_off_grid_zone_duration`, `test_..._accept_aligned_zone` | PASS |
 
 ### Full Matrix (Aspirational)
 

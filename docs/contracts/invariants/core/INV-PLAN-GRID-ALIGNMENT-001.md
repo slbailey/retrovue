@@ -10,29 +10,33 @@ Ensures that ScheduleDay generation produces grid-aligned slot times. A zone wit
 
 ## Guarantee
 
-All zone `start_time` and `end_time` values must coincide with a valid grid boundary for the owning channel, as defined by `grid_block_minutes`, `block_start_offsets_minutes`, and `programming_day_start`.
+All zone `start_time` and `end_time` values MUST be multiples of `grid_block_minutes`. Zone duration (`end_time - start_time`) MUST also be a multiple of `grid_block_minutes`.
 
 ## Preconditions
 
-- Channel grid configuration is defined (`grid_block_minutes` and `block_start_offsets_minutes` are set).
-- Boundary validation is performed at zone creation, zone modification, and ScheduleDay generation.
+- Channel grid configuration is defined (`grid_block_minutes` is set).
+- Boundary validation is performed at zone creation, zone modification, and block assignment validation.
 
 ## Observability
 
-At zone save, compute the set of valid grid boundaries for the channel. Assert `start_time` and `end_time` each fall on a boundary. Report the misaligned time and the nearest valid boundaries on violation.
+At zone save, verify `start_time`, `end_time`, and duration are each divisible by `grid_block_minutes`. Report the misaligned value on violation.
 
 ## Deterministic Testability
 
-Given a channel with `grid_block_minutes=30`, construct a zone with `start_time=18:15` (off-grid). Assert validation raises a grid-alignment fault identifying 18:15 as invalid and reporting 18:00 and 18:30 as valid alternatives. No real-time waits required.
+Given a channel with `grid_block_minutes=30`, construct a zone with `end_time=17:59` (off-grid). Assert validation raises a grid-alignment fault. Repeat for off-grid `start_time` and off-grid duration. No real-time waits required.
 
 ## Failure Semantics
 
-**Planning fault.** The operator specified zone boundaries that do not align to the channel grid. System must reject the zone configuration.
+**Planning fault.** The operator specified zone boundaries that do not align to the channel grid. System MUST reject the zone configuration.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_plan_grid_alignment.py`
+- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlanGridAlignment001`
 
 ## Enforcement Evidence
 
-TODO
+- `pkg/core/src/retrovue/usecases/zone_coverage_check.py` — `check_grid_alignment()`, `validate_zone_plan_integrity()`
+- `pkg/core/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
+- `pkg/core/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
+- `pkg/core/src/retrovue/core/scheduling/contracts.py` — `validate_block_assignment()` checks block-level grid alignment
+- Error tag: `INV-PLAN-GRID-ALIGNMENT-001-VIOLATED`
