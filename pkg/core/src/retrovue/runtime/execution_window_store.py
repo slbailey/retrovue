@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 
@@ -33,12 +34,18 @@ class ExecutionEntry:
     Structurally identical to TransmissionLogEntry.  Defined here to
     avoid a hard import dependency on the planning pipeline module,
     keeping the store independent of pipeline internals.
+
+    Lineage fields (channel_id, programming_day_date) establish explicit
+    traceability to the ResolvedScheduleDay that produced this entry.
+    See INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001.
     """
     block_id: str
     block_index: int
     start_utc_ms: int
     end_utc_ms: int
     segments: list[dict[str, Any]]
+    channel_id: str = ""
+    programming_day_date: date | None = None
     is_locked: bool = True
 
 
@@ -85,7 +92,19 @@ class ExecutionWindowStore:
         """Append entries and maintain sort order.
 
         Duplicate block_ids are silently ignored (idempotent).
+
+        Raises ValueError if any entry lacks schedule lineage
+        (INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001).
         """
+        for entry in entries:
+            if not entry.channel_id or entry.programming_day_date is None:
+                raise ValueError(
+                    "INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001-VIOLATED: "
+                    f"ExecutionEntry block_id={entry.block_id!r} has "
+                    f"channel_id={entry.channel_id!r}, "
+                    f"programming_day_date={entry.programming_day_date!r}. "
+                    "Every execution artifact must carry explicit schedule lineage."
+                )
         with self._lock:
             existing_ids = {e.block_id for e in self._entries}
             new = [e for e in entries if e.block_id not in existing_ids]
@@ -162,6 +181,24 @@ class ExecutionWindowStore:
                         return None
                     return entry
             return None
+
+    def has_entries_for(
+        self,
+        channel_id: str,
+        programming_day_date: date,
+    ) -> bool:
+        """Return True if any entry references the given (channel_id, date).
+
+        Used by InMemoryResolvedStore.delete() to enforce
+        INV-DERIVATION-ANCHOR-PROTECTED-001: a ScheduleDay with
+        downstream execution artifacts must not be deleted.
+        """
+        with self._lock:
+            return any(
+                e.channel_id == channel_id
+                and e.programming_day_date == programming_day_date
+                for e in self._entries
+            )
 
     def mark_locked(self, block_id: str) -> bool:
         """Mark a single entry as locked (execution-eligible).

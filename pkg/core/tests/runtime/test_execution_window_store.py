@@ -32,20 +32,29 @@ from retrovue.runtime.horizon_manager import HorizonManager
 BLOCK_DURATION_MS = 30 * 60 * 1000  # 1,800,000 ms
 
 
+DEFAULT_CHANNEL = "test-channel"
+
+
 def _make_entry(
     block_index: int,
     start_utc_ms: int,
     block_id: str | None = None,
+    channel_id: str = DEFAULT_CHANNEL,
+    programming_day_date: date | None = None,
 ) -> ExecutionEntry:
     """Create a test ExecutionEntry with 30-minute duration."""
     if block_id is None:
         block_id = f"BLOCK-test-{block_index}"
+    if programming_day_date is None:
+        programming_day_date = date(2026, 2, 11)
     return ExecutionEntry(
         block_id=block_id,
         block_index=block_index,
         start_utc_ms=start_utc_ms,
         end_utc_ms=start_utc_ms + BLOCK_DURATION_MS,
         segments=[{"segment_type": "episode", "segment_duration_ms": BLOCK_DURATION_MS}],
+        channel_id=channel_id,
+        programming_day_date=programming_day_date,
     )
 
 
@@ -63,6 +72,7 @@ def _make_day_entries(broadcast_date: date, n_blocks: int = 48) -> list[Executio
             block_index=i,
             start_utc_ms=base_ms + i * BLOCK_DURATION_MS,
             block_id=f"BLOCK-test-{broadcast_date.isoformat()}-{i}",
+            programming_day_date=broadcast_date,
         )
         for i in range(n_blocks)
     ]
@@ -255,6 +265,8 @@ class MockExecutionExtenderWithEntries:
                 start_utc_ms=e.start_utc_ms,
                 end_utc_ms=e.end_utc_ms,
                 segments=e.segments,
+                channel_id=e.channel_id,
+                programming_day_date=e.programming_day_date,
             )
             for e in entries
         ]
