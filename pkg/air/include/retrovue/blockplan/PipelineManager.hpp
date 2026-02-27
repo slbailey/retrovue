@@ -126,6 +126,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
     // Optional: segment seam take (test/contract). Invoked after PerformSegmentSwap when we have
     // re-based next_seam_frame_. Parameters: session_frame_index at swap, next_seam_frame_ after rebase.
     // Used to assert next_seam_frame_ > session_frame_index (no past seam / no catch-up thrash).
+    // CONTRACT: Must be non-blocking — runs on tick thread. No locks, waits, or I/O; else TICK_GAP.
+    // For heavy work, post (session_frame_index, next_seam_frame) to caller's async queue and process off-thread.
     std::function<void(int64_t session_frame_index, int64_t next_seam_frame)> on_segment_seam_take;
   };
 
@@ -250,22 +252,28 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Deferred fill thread and producer from async stop at fence.
   // The old fill thread may still be decoding when B rotates into A.
   // The old producer must stay alive until the old fill thread exits.
-  // Threads are handed to the reaper for non-blocking join (never block tick loop).
+  // Tick thread never join()s: only requests cleanup. Reaper performs join.
+  std::mutex deferred_fill_mutex_;
   std::thread deferred_fill_thread_;
   std::unique_ptr<producers::IProducer> deferred_producer_;
   std::unique_ptr<VideoLookaheadBuffer> deferred_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> deferred_audio_buffer_;
-  void CleanupDeferredFill();  // Non-blocking: hands off to reaper
+  std::atomic<bool> deferred_fill_cleanup_requested_{false};
+  void RequestDeferredFillCleanup(const char* context);  // Non-blocking: set flag, notify reaper
+  void PerformDeferredFillCleanupBlocking();  // Reaper only: take deferred_*, join, push to closer
 
   // Reaper thread: joins deferred fill threads off the tick loop.
   // ReapJob holds thread + owners so objects stay alive until join completes.
+  // Destruction order: producer first (decoder Close), then buffers, then thread.
+  // Buffers may hold decoder-derived frame data; closing decoder first avoids
+  // double-free / corrupted heap (glibc "corrupted double-linked list").
   struct ReapJob {
     int64_t job_id = 0;
     std::string block_id;  // Diagnostic: block at handoff
     std::thread thread;
-    std::unique_ptr<producers::IProducer> producer;
     std::unique_ptr<VideoLookaheadBuffer> video_buffer;
     std::unique_ptr<AudioLookaheadBuffer> audio_buffer;
+    std::unique_ptr<producers::IProducer> producer;
   };
   std::atomic<int64_t> reap_job_id_{0};
   std::thread reaper_thread_;
@@ -273,8 +281,19 @@ class PipelineManager : public IPlayoutExecutionEngine {
   std::condition_variable reaper_cv_;
   std::queue<ReapJob> reaper_queue_;
   std::atomic<bool> reaper_shutdown_{false};
+  std::condition_variable reaper_teardown_drain_cv_;
   void ReaperLoop();
   void HandOffToReaper(ReapJob job);
+  void WaitForReaperDrain();
+
+  // INV-SEAM-001: Decoder close (in producer destructor) runs off the reaper so tick thread
+  // is never delayed by FFmpeg teardown. Reaper joins fill thread then hands job to closer.
+  std::queue<ReapJob> close_queue_;
+  std::mutex close_mutex_;
+  std::condition_variable close_cv_;
+  std::thread closer_thread_;
+  std::atomic<bool> close_shutdown_{false};
+  void CloseLoop();
   static std::string GetBlockIdFromProducer(producers::IProducer* p);
 
   // --- VideoLookaheadBuffer: non-blocking video frame buffer ---

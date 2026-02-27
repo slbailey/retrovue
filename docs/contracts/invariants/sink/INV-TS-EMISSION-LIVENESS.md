@@ -13,6 +13,7 @@ No extension of the bound without contract change.
 No decodable TS emitted within the allowed time after attach. MUST be logged; treat as liveness failure.
 
 ## Required Tests
+- `pkg/air/tests/contracts/Phase9OutputBootstrapTests.cpp` (TEST_INV_P9_TS_EMISSION_LIVENESS_500ms)
 - TS-EMISSION-001: first TS within bound after attach
 - TS-EMISSION-002: violation logged when bound exceeded
 

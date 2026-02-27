@@ -13,7 +13,8 @@ Mux MUST use producer-supplied CT only. No local CT; no reset on attach. PTS is 
 Video drives PCR. Mux resets CT. Mux maintains independent clock. PTS used as scheduling authority. MUST be logged.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/MasterClock/MasterClockContractTests.cpp`
+- `pkg/air/tests/contracts/TimelineController/TimelineControllerContractTests.cpp`
 
 ## Enforcement Evidence
 TODO

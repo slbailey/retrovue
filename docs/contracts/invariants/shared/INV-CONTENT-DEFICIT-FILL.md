@@ -13,7 +13,8 @@ Gap between EOF and boundary MUST be filled at real-time cadence. Mux MUST NOT s
 Mux stalling or breaking TS cadence due to pre-boundary content gap; gap not filled at real-time cadence. MUST be logged.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/BlockPlan/SegmentAdvanceOnEOFTests.cpp`
+- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` (pad-fill / gap fill)
 
 ## Enforcement Evidence
 TODO

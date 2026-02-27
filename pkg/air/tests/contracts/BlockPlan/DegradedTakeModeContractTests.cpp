@@ -23,7 +23,6 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/util/Logger.hpp"
 #include "FastTestConfig.hpp"
@@ -125,20 +124,21 @@ class DegradedTakeModeContractTest : public ::testing::Test {
     callbacks.on_block_summary = [](const BlockPlaybackSummary&) {};
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
-        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0});
   }
 
-  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {
+  bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000,
+                                     int64_t timeout_ms = 15000) {
     return retrovue::blockplan::test_utils::WaitForBounded(
         [this, count] {
           std::lock_guard<std::mutex> lock(cb_mutex_);
           return static_cast<int>(completed_blocks_.size()) >= count;
         },
-        max_steps);
+        max_steps, timeout_ms);
   }
 
-  std::shared_ptr<ITimeSource> test_ts_;
+  std::shared_ptr<test_infra::TestTimeSourceType> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
@@ -216,6 +216,21 @@ TEST_F(DegradedTakeModeContractTest, UnprimedBAtFence_NoBlackNoCrash_HeldThenB) 
   // At least block A must complete (take at fence or after degraded recovery).
   ASSERT_TRUE(WaitForBlocksCompletedBounded(1))
       << "Block A must complete — DEGRADED_TAKE_MODE must not crash or stall A→B";
+
+  // Wait for B to activate after the preloader delay completes.
+  // In fast mode, the tick loop outruns the 2.5s preloader delay — the engine
+  // emits held/pad frames instantly. We must wait for B's preloader to finish
+  // (2.5s wall time) and B frames to appear in fingerprints.
+  ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
+      [this] {
+        std::lock_guard<std::mutex> lock(cb_mutex_);
+        for (const auto& fp : fingerprints_) {
+          if (fp.commit_slot == 'B') return true;
+        }
+        return false;
+      },
+      100000, 15000))
+      << "B must activate after preloader delay completes";
 
   engine_->Stop();
   ClearViolationSink();
@@ -300,8 +315,16 @@ TEST_F(DegradedTakeModeContractTest, UnprimedBAtFence_BNeverPrimes_EscalatesToSt
   });
 
   engine_->Start();
-  // Run long enough to pass HOLD_MAX_MS (5s) and see standby. Fence at ~1.5s, escalate at 6.5s.
-  std::this_thread::sleep_for(std::chrono::milliseconds(8000));
+  // Wait for enough frames to pass HOLD_MAX_MS (5s at 30fps = 150 frames).
+  // Block A fence at ~45 frames; escalation at ~45+150 = 195 frames.
+  // Use frame-based waiting (not wall-clock sleep) for deterministic behavior.
+  ASSERT_TRUE(retrovue::blockplan::test_utils::WaitForBounded(
+      [this] {
+        auto m = engine_->SnapshotMetrics();
+        return m.continuous_frames_emitted_total > 200;
+      },
+      100000, 20000))
+      << "Output must continue through hold then standby with >200 frames";
   engine_->Stop();
 
   auto m = engine_->SnapshotMetrics();

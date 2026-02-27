@@ -30,7 +30,6 @@
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/RationalFps.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "deterministic_tick_driver.hpp"
 #include "FastTestConfig.hpp"
 
@@ -191,7 +190,7 @@ class PipelineManagerSegmentSwapPadFenceTest : public ::testing::Test {
         };
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
-        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0});
   }
 
@@ -217,7 +216,7 @@ class PipelineManagerSegmentSwapPadFenceTest : public ::testing::Test {
     return cadence_refreshes_;
   }
 
-  std::shared_ptr<ITimeSource> test_ts_;
+  std::shared_ptr<test_infra::TestTimeSourceType> test_ts_;
   std::unique_ptr<BlockPlanSessionContext> ctx_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;

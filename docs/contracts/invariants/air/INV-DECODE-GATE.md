@@ -13,7 +13,8 @@ Decode is permitted if and only if at least one slot is free. Hysteresis (e.g. l
 Decoding when no capacity exists (gate closed). Using hysteresis so that resume differs from the admission condition.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` (TEST_P10_DECODE_GATE_001_NoReadWhenEitherBufferFull)
+- `pkg/air/tests/contracts/Phase9SymmetricBackpressureTests.cpp`
 
 ## Enforcement Evidence
 TODO

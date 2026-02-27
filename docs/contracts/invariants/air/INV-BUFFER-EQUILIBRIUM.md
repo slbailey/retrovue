@@ -13,7 +13,8 @@ Depth MUST remain in range [1, 2N] during steady-state. Monotonic growth or drai
 Unbounded growth (memory leak) or steady-state drain to zero.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/Phase9BufferEquilibriumTests.cpp`
+- `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` (TEST_P10_EQUILIBRIUM_001_BufferDepthStable)
 
 ## Enforcement Evidence
 TODO

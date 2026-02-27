@@ -24,7 +24,6 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
-#include "DeterministicOutputClock.hpp"
 #include "retrovue/blockplan/PlaybackTraceTypes.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
@@ -148,7 +147,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
     };
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
-        std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+        test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0});
   }
 
@@ -162,7 +161,7 @@ class PlaybackTraceContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<BlockPlanSessionContext> ctx_;
-  std::shared_ptr<ITimeSource> test_ts_;
+  std::shared_ptr<test_infra::TestTimeSourceType> test_ts_;
   std::unique_ptr<PipelineManager> engine_;
   int drain_fd_ = -1;
   std::atomic<bool> drain_stop_{false};
@@ -389,9 +388,16 @@ TEST_F(PlaybackTraceContractTest, SeamlessTransitionStatus) {
 
 // =============================================================================
 // TRACE-007: PaddedTransitionStatus
-// Delay preloader by 2s. Queue 2 short blocks. Verify seam status is PADDED.
+// Delay preloader past block A's fence. Queue 2 blocks. Verify seam is PADDED.
+//
+// DISABLED: DEGRADED_TAKE_MODE (INV-FENCE-TAKE-READY-001) now holds the last
+// good A frame at the fence instead of entering PADDED_GAP.  The rotation path
+// (line ~2291 of PipelineManager.cpp) unconditionally logs seamless=true for
+// any swap that succeeds, even after a degraded hold.  To re-enable, the
+// engine must track pad frames emitted during degraded mode and set
+// SeamTransitionLog::seamless = false when non-zero.
 // =============================================================================
-TEST_F(PlaybackTraceContractTest, DISABLED_SLOW_PaddedTransitionStatus) {
+TEST_F(PlaybackTraceContractTest, DISABLED_PaddedTransitionStatus) {
   engine_ = MakeEngine();
 
   // Preloader delay must exceed the wall-clock time from preroll arm to
@@ -423,7 +429,7 @@ TEST_F(PlaybackTraceContractTest, DISABLED_SLOW_PaddedTransitionStatus) {
 
   engine_->Start();
 
-  ASSERT_TRUE(WaitForBlocksCompleted(2, 35000))
+  ASSERT_TRUE(WaitForBlocksCompleted(2, 15000))
       << "Both blocks must eventually complete";
 
   engine_->Stop();

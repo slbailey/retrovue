@@ -164,10 +164,7 @@ void VideoLookaheadBuffer::StartFilling(
     Logger::Debug(oss.str()); }
 
   fill_running_ = true;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    fill_generation_++;  // New generation for new fill thread
-  }
+  fill_generation_.fetch_add(1, std::memory_order_release);  // New generation for new fill thread
   fill_thread_ = std::thread(&VideoLookaheadBuffer::FillLoop, this);
   {
     std::ostringstream oss;
@@ -222,13 +219,12 @@ VideoLookaheadBuffer::StopFillingAsync(bool flush) {
     result.thread = std::move(fill_thread_);
     fill_running_ = false;
   }
-  {
+  // Bump generation without lock so tick thread never blocks on fill thread's mutex_ (INV-SEAM-001).
+  fill_generation_.fetch_add(1, std::memory_order_release);
+  if (flush) {
     std::lock_guard<std::mutex> lock(mutex_);
-    fill_generation_++;  // Invalidate any in-flight push from old thread
-    if (flush) {
-      frames_.clear();
-      primed_ = false;
-    }
+    frames_.clear();
+    primed_ = false;
   }
   const bool thread_detached = result.thread.joinable();
   {
@@ -273,11 +269,7 @@ void VideoLookaheadBuffer::FillLoop() {
   std::atomic<bool>* stop_signal = stop_signal_;
 
   // Capture generation at thread start; any mismatch means fence happened.
-  uint64_t my_gen;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    my_gen = fill_generation_;
-  }
+  const uint64_t my_gen = fill_generation_.load(std::memory_order_acquire);
 
   // Capture audio generation for generation-gated audio pushes.
   uint64_t my_audio_gen = 0;
@@ -506,8 +498,8 @@ void VideoLookaheadBuffer::FillLoop() {
               return false;
             });
           } else {
-            // Steady: predicate is fill_stop || frames_.size() < target. No other condition wakes.
-            space_cv_.wait(lock, [this, stop_signal, audio_buffer, &wake_reason] {
+            // Steady: predicate is fill_stop || frames_.size() < target || audio below low-water.
+            space_cv_.wait_for(lock, std::chrono::milliseconds(100), [this, stop_signal, audio_buffer, &wake_reason] {
               bool stopping = fill_stop_.load(std::memory_order_acquire) ||
                   (stop_signal && stop_signal->load(std::memory_order_acquire));
               if (stopping) {
@@ -524,6 +516,16 @@ void VideoLookaheadBuffer::FillLoop() {
                   Logger::Debug(oss.str()); }
                 wake_reason = "space";
                 return true;
+              }
+              // INV-AUDIO-LIVENESS-001: When video is full but audio is below
+              // low-water, wake to decode for audio (video frame will be dropped).
+              if (audio_buffer && depth < hard_cap_frames_) {
+                const int audio_ms = audio_buffer->DepthMs();
+                const int low_ms = audio_buffer->LowWaterMs();
+                if (audio_ms < low_ms) {
+                  wake_reason = "audio_liveness";
+                  return true;
+                }
               }
               return false;
             });
@@ -776,7 +778,7 @@ void VideoLookaheadBuffer::FillLoop() {
       // Push to buffer — generation gate prevents stale-frame bleed.
       // INV-VIDEO-BOUNDED: Enforce hard cap so container never grows unbounded (e.g. consumer stall).
       std::lock_guard<std::mutex> lock(mutex_);
-      if (fill_generation_ != my_gen) {
+      if (fill_generation_.load(std::memory_order_acquire) != my_gen) {
         exit_reason = "audio_gen_mismatch";
         break;  // Fence happened during decode
       }

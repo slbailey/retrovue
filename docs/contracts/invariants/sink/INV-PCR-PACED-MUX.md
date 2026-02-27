@@ -13,7 +13,7 @@ Mux MUST wait for wall_clock >= frame.ct_us before dequeue and emission. Emissio
 Emitting before scheduled CT or emitting based on availability rather than clock.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp`
 
 ## Enforcement Evidence
 TODO

@@ -13,7 +13,8 @@ Silence injection MUST be disabled when steady-state begins. MUST NOT inject sil
 Injected silence after steady-state has begun.
 
 ## Required Tests
-TODO
+- `pkg/air/tests/contracts/BlockPlan/LookaheadBufferContractTests.cpp` (AudioUnderflow_ReturnsFalse_NoSilenceInjected)
+- `pkg/air/tests/contracts/Phase9SteadyStateSilenceTests.cpp`
 
 ## Enforcement Evidence
 TODO

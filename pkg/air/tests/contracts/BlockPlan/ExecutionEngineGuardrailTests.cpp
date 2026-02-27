@@ -13,7 +13,7 @@
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
-#include "DeterministicOutputClock.hpp"
+#include "FastTestConfig.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -58,7 +58,7 @@ TEST_F(ExecutionEngineGuardrailTest, ContinuousOutputSelectsContinuousEngine) {
 
   auto engine = std::make_unique<PipelineManager>(
       ctx_.get(), std::move(callbacks), nullptr,
-      std::make_shared<DeterministicOutputClock>(ctx_->fps.num, ctx_->fps.den),
+      test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den),
       PipelineManagerOptions{0});
   EXPECT_NE(engine, nullptr);
 
