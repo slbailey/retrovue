@@ -2427,3 +2427,154 @@ class TestInvSchedulemanagerNoAirAccess001:
                         f"ScheduleManager must be constructible without any "
                         f"AIR dependency."
                     )
+
+
+# =========================================================================
+# INV-PLAYLIST-GRID-ALIGNMENT-001
+# =========================================================================
+
+
+def _make_tl_entry(
+    block_index: int,
+    start_utc_ms: int,
+    duration_ms: int = GRID_BLOCK_MS,
+) -> "TransmissionLogEntry":
+    """Helper: build a TransmissionLogEntry for grid-alignment tests."""
+    from retrovue.runtime.planning_pipeline import TransmissionLogEntry
+
+    return TransmissionLogEntry(
+        block_id=f"{CHANNEL_ID}-tl-b{block_index:04d}",
+        block_index=block_index,
+        start_utc_ms=start_utc_ms,
+        end_utc_ms=start_utc_ms + duration_ms,
+        segments=[{"type": "content", "asset_id": "asset-001", "duration_ms": duration_ms}],
+    )
+
+
+def _make_tl(entries: list) -> "TransmissionLog":
+    """Helper: wrap entries in a TransmissionLog."""
+    from retrovue.runtime.planning_pipeline import TransmissionLog
+
+    return TransmissionLog(
+        channel_id=CHANNEL_ID,
+        broadcast_date=date(2026, 1, 1),
+        entries=entries,
+    )
+
+
+class TestInvPlaylistGridAlignment001:
+    """INV-PLAYLIST-GRID-ALIGNMENT-001
+
+    All TransmissionLogEntry start_time and end_time values must align
+    to the channel's valid grid boundaries.  Off-grid boundaries produce
+    off-grid ExecutionEntry fences at the next derivation step, cascading
+    a LAW-GRID violation into the runtime layer.
+
+    Derived from: LAW-GRID.
+    """
+
+    def test_inv_playlist_grid_alignment_001_reject_off_grid(
+        self, contract_clock
+    ):
+        """INV-PLAYLIST-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-001
+
+        Invariant: INV-PLAYLIST-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: Planning
+        Scenario: Construct a TransmissionLog with one entry whose
+                  start_utc_ms corresponds to 18:15 (off-grid for 30-min
+                  grid). Call validate_transmission_log_grid_alignment().
+                  Assert raises ValueError matching
+                  INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED. Assert fault
+                  identifies the misaligned boundary.
+        """
+        from retrovue.runtime.transmission_log_validator import (
+            validate_transmission_log_grid_alignment,
+        )
+
+        # 18:15 UTC on 2026-01-01 in epoch ms
+        # EPOCH is 06:00 UTC. 18:15 = EPOCH + 12h15m
+        off_grid_start_ms = EPOCH_MS + (12 * 60 + 15) * 60 * 1000
+        entry = _make_tl_entry(
+            block_index=0,
+            start_utc_ms=off_grid_start_ms,
+            duration_ms=GRID_BLOCK_MS,
+        )
+        log = _make_tl([entry])
+
+        with pytest.raises(
+            ValueError, match="INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED"
+        ) as exc_info:
+            validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
+
+        # Fault must identify the misaligned value
+        assert str(off_grid_start_ms) in str(exc_info.value), (
+            "Fault message must include the misaligned timestamp value"
+        )
+
+    def test_inv_playlist_grid_alignment_001_accept_pds_rollover(
+        self, contract_clock
+    ):
+        """INV-PLAYLIST-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-002
+
+        Invariant: INV-PLAYLIST-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: N/A (positive path)
+        Scenario: Construct a TransmissionLog with entry spanning
+                  [05:30, 06:30] crossing programming_day_start=06:00.
+                  Both 05:30 and 06:30 are valid 30-min grid boundaries.
+                  Call validation. Assert no exception.
+        """
+        from retrovue.runtime.transmission_log_validator import (
+            validate_transmission_log_grid_alignment,
+        )
+
+        # 05:30 UTC = EPOCH - 30m; 06:30 UTC = EPOCH + 30m
+        # Both are 30-minute aligned from midnight (divisible by 30*60*1000)
+        start_ms = EPOCH_MS - GRID_BLOCK_MS  # 05:30
+        entry = _make_tl_entry(
+            block_index=0,
+            start_utc_ms=start_ms,
+            duration_ms=60 * 60 * 1000,  # 1 hour: 05:30 → 06:30
+        )
+        log = _make_tl([entry])
+
+        # Must not raise — both boundaries are grid-aligned
+        validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
+
+    def test_inv_playlist_grid_alignment_001_accept_cross_midnight(
+        self, contract_clock
+    ):
+        """INV-PLAYLIST-GRID-ALIGNMENT-001 -- PLAYLIST-GRID-003
+
+        Invariant: INV-PLAYLIST-GRID-ALIGNMENT-001
+        Derived law(s): LAW-GRID
+        Failure class: N/A (positive path)
+        Scenario: Construct two adjacent entries: A ends at 00:00:00,
+                  B starts at 00:00:00. Call validation. Assert no
+                  exception — no micro-gap at midnight, both boundaries
+                  grid-aligned.
+        """
+        from retrovue.runtime.transmission_log_validator import (
+            validate_transmission_log_grid_alignment,
+        )
+
+        # Midnight UTC on 2026-01-02
+        midnight_ms = int(
+            datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1000
+        )
+
+        entry_a = _make_tl_entry(
+            block_index=0,
+            start_utc_ms=midnight_ms - GRID_BLOCK_MS,  # 23:30 → 00:00
+            duration_ms=GRID_BLOCK_MS,
+        )
+        entry_b = _make_tl_entry(
+            block_index=1,
+            start_utc_ms=midnight_ms,  # 00:00 → 00:30
+            duration_ms=GRID_BLOCK_MS,
+        )
+        log = _make_tl([entry_a, entry_b])
+
+        # Must not raise — midnight is grid-aligned, no micro-gap
+        validate_transmission_log_grid_alignment(log, grid_block_minutes=30)

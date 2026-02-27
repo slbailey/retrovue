@@ -132,6 +132,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | 3 (unanchored reject + ref accept + override accept) | **PASS** | `ExecutionWindowStore.add_entries()` with `enforce_derivation_from_playlist=True` |
 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | 2 (AST import check + attribute inspection) | **PASS** | Structural: no AIR imports in `schedule_manager.py` / `schedule_manager_service.py`; tests verify via AST inspection |
+| INV-PLAYLIST-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -161,6 +162,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | `TestInvPlaylogDerivedFromPlaylist001` | `test_..._reject_unanchored`, `test_..._accept_with_ref`, `test_..._accept_override` | PASS |
 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | `TestInvPlaylogLockedImmutable001` | `test_..._reject_locked_no_override`, `test_..._reject_past_unconditional`, `test_..._accept_override` | PASS |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | `TestInvSchedulemanagerNoAirAccess001` | `test_..._no_air_imports`, `test_..._no_air_attributes` | PASS |
+| INV-PLAYLIST-GRID-ALIGNMENT-001 | `TestInvPlaylistGridAlignment001` | `test_..._reject_off_grid`, `test_..._accept_pds_rollover`, `test_..._accept_cross_midnight` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -1109,6 +1111,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | BLOCKER-007 | INV-ASRUN-IMMUTABLE-001 | LAW-IMMUTABILITY | AsRunEvent valid creation persists correctly | **PASS** |
 | ARCH-BOUNDARY-001 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | ScheduleManager source files contain no AIR imports (AST check) | **PASS** |
 | ARCH-BOUNDARY-002 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | ScheduleManager __init__ has no AIR type annotations | **PASS** |
+| PLAYLIST-GRID-001 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary (18:15) rejected | **PASS** |
+| PLAYLIST-GRID-002 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Entry crossing programming_day_start rollover accepted | **PASS** |
+| PLAYLIST-GRID-003 | INV-PLAYLIST-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight adjacent entries with no micro-gap accepted | **PASS** |
 
 ### Full Matrix (Aspirational)
 
