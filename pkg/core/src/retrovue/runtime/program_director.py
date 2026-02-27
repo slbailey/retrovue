@@ -249,6 +249,8 @@ class _ExecutionHorizonExtender:
                 start_utc_ms=start_ms,
                 end_utc_ms=end_ms,
                 segments=segments,
+                channel_id=self._channel_id,
+                programming_day_date=broadcast_date,
             ))
 
             current += timedelta(minutes=grid_minutes)

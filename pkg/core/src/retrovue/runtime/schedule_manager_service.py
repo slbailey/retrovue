@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.execution_window_store import ExecutionWindowStore
 from retrovue.runtime.horizon_config import HorizonNoScheduleDataError
 from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.schedule_types import (
@@ -78,10 +79,18 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
 
     Stores resolved schedule days. Lost on process restart.
     For production, use a persistent store.
+
+    When constructed with an ``execution_store``, delete() enforces
+    INV-DERIVATION-ANCHOR-PROTECTED-001: a ScheduleDay that has
+    downstream ExecutionEntries may not be removed.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        execution_store: ExecutionWindowStore | None = None,
+    ) -> None:
         self._resolved: dict[str, dict[date, ResolvedScheduleDay]] = {}
+        self._execution_store = execution_store
         self._lock = threading.Lock()
 
     def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
@@ -102,6 +111,33 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         with self._lock:
             channel_days = self._resolved.get(channel_id, {})
             return programming_day_date in channel_days
+
+    def delete(self, channel_id: str, programming_day_date: date) -> None:
+        """Remove a resolved schedule day.
+
+        INV-DERIVATION-ANCHOR-PROTECTED-001: If an ExecutionWindowStore
+        is configured and contains entries derived from this
+        (channel_id, programming_day_date), deletion is refused.
+        Removing a schedule anchor while execution artifacts still
+        reference it severs the constitutional derivation chain.
+
+        Raises:
+            ValueError: If downstream execution artifacts exist.
+        """
+        if self._execution_store is not None:
+            if self._execution_store.has_entries_for(channel_id, programming_day_date):
+                raise ValueError(
+                    "INV-DERIVATION-ANCHOR-PROTECTED-001-VIOLATED: "
+                    f"Cannot delete ResolvedScheduleDay for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={programming_day_date!r}. "
+                    "Downstream ExecutionEntries still reference this "
+                    "schedule anchor. Removing it would sever the "
+                    "constitutional derivation chain."
+                )
+        with self._lock:
+            channel_days = self._resolved.get(channel_id, {})
+            channel_days.pop(programming_day_date, None)
 
 
 # ----------------------------------------------------------------------
