@@ -139,5 +139,5 @@ The following are **planning failures**. Channel Manager does not compensate; ru
 ---
 
 **Document version:** 0.1  
-**Related:** [Schedule Manager Planning Authority (v0.1)](ScheduleManagerPlanningAuthority_v0.1.md) · [Schedule Execution Interface Contract (v0.1)](ScheduleExecutionInterfaceContract_v0.1.md)  
+**Related:** [Schedule Manager Planning Authority (v0.1)](../../domains/ScheduleManagerPlanningAuthority_v0.1.md) · [Schedule Execution Interface Contract (v0.1)](ScheduleExecutionInterfaceContract_v0.1.md)  
 **Governs:** Schedule Manager horizon and readiness guarantees
