@@ -126,6 +126,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-PLAN-NO-ZONE-OVERLAP-001 | 4 (overlap reject + day-filter pass + mutation-induced overlap + precedence) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
 | INV-PLAN-GRID-ALIGNMENT-001 | 7 (block start/duration/valid + zone end/start/duration/valid) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py`; `validate_block_assignment()` in `contracts.py` |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
+| INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | 3 (carry-in overlap reject + carry-in honored accept + no carry-in accept) | **PASS** | `validate_scheduleday_seam()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -149,6 +150,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-ONE-PER-DATE-001 | `TestInvScheduledayOnePerDate001` | `test_..._reject_duplicate_insert`, `test_..._allow_force_regen_atomic_replace`, `test_..._different_dates_independent` | PASS |
 | INV-SCHEDULEDAY-IMMUTABLE-001 | `TestInvScheduledayImmutable001` | `test_..._reject_in_place_slot_mutation`, `test_..._reject_plan_id_update`, `test_..._force_regen_creates_new_record`, `test_..._operator_override_creates_new_record` | PASS |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `TestInvScheduledayDerivationTraceable001` | `test_..._reject_unanchored`, `test_..._accept_with_plan_id`, `test_..._accept_manual_override` | PASS |
+| INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | `TestInvScheduledaySeamNoOverlap001` | `test_..._reject_carry_in_overlap`, `test_..._accept_carry_in_honored`, `test_..._no_carry_in_independent` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -163,6 +165,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULEDAY-NO-GAPS-001 | SCHED-DAY-005, SCHED-DAY-006 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | SCHED-DAY-007, SCHED-DAY-008 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | SCHED-DAY-009, SCHED-DAY-010 | ResolvedScheduleDay |
+| INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | SCHED-DAY-011, SCHED-DAY-012 | ResolvedScheduleDay |
 | INV-PLAYLOG-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | ExecutionEntry |
 | INV-PLAYLOG-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | ExecutionEntry |
 | INV-PLAYLOG-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | ExecutionEntry |
