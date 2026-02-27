@@ -70,3 +70,38 @@ def validate_transmission_log_seams(
                     f"INV-TL-SEAM-003 violated: entry[{i+1}] not strictly after entry[{i}]; "
                     f"start_utc_ms ordering violated"
                 )
+
+
+def validate_transmission_log_grid_alignment(
+    log: TransmissionLog,
+    grid_block_minutes: int,
+) -> None:
+    """Enforce grid alignment on all TransmissionLogEntry boundaries.
+
+    Raises ValueError if any entry start or end time does not fall on a
+    grid boundary (i.e. is not divisible by grid_block_minutes * 60_000 ms).
+
+    Invariant enforced:
+    - INV-PLAYLIST-GRID-ALIGNMENT-001: All TransmissionLogEntry boundaries
+      must align to the channel grid.
+
+    Empty entry lists pass trivially.
+    """
+    grid_ms = grid_block_minutes * 60 * 1000
+
+    for i, entry in enumerate(log.entries):
+        for label, value_ms in (
+            ("start_utc_ms", entry.start_utc_ms),
+            ("end_utc_ms", entry.end_utc_ms),
+        ):
+            if value_ms % grid_ms != 0:
+                floor_ms = (value_ms // grid_ms) * grid_ms
+                ceil_ms = floor_ms + grid_ms
+                raise ValueError(
+                    f"INV-PLAYLIST-GRID-ALIGNMENT-001-VIOLATED: "
+                    f"entry[{i}] (block_id={entry.block_id}) "
+                    f"{label}={value_ms} is not aligned to "
+                    f"{grid_block_minutes}-minute grid. "
+                    f"Nearest valid boundaries: "
+                    f"floor={floor_ms}, ceil={ceil_ms}"
+                )
