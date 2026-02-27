@@ -477,6 +477,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Build a plan using `empty=True` with zones covering only [06:00, 18:00]. 2. Trigger ScheduleDay generation for date D. |
 | **Assertions** | Generation raises a gap fault identifying [18:00, 06:00+24h] as uncovered. No ScheduleDay record is committed. Fault class is "planning". |
 | **Failure Classification** | Planning |
+| **Status** | **PASS** |
 
 ---
 
@@ -491,6 +492,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | **Stimulus / Actions** | 1. Build a plan with full coverage zones (pass SCHED-PLAN-002 conditions). 2. Trigger ScheduleDay generation for date D. |
 | **Assertions** | ScheduleDay is committed. Coverage validation finds no uncovered intervals within [06:00, 06:00+24h]. No gap fault is raised. |
 | **Failure Classification** | N/A (positive path) |
+| **Status** | **PASS** |
 
 ---
 
@@ -1143,3 +1145,16 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | CONST-005 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-PLAYLOG-NO-GAPS-001 | LAW-GRID | Off-grid fault cascades independently at every layer |
 | CONST-006 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-PLAYLOG-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Override record persisted before override artifact |
 | CONST-007 | INV-PLAYLOG-LOOKAHEAD-001, INV-PLAYLOG-NO-GAPS-001, INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Lookahead gap-free over 4h deterministic clock run |
+| CROSSDAY-001 | INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | PlaylogEvent spanning 06:00 boundary persists as single record |
+| CROSSDAY-002 | INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | AsRun record not duplicated for cross-boundary PlaylogEvent |
+| CROSSDAY-003 | INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-IMMUTABILITY | Day-close operation does not mutate committed cross-boundary PlaylogEvent |
+| CROSSDAY-004 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for ending day references source PlaylogEvent ID |
+| CROSSDAY-005 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for starting day references same source PlaylogEvent ID |
+| CROSSDAY-006 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION | Projection row with null source record ID rejected |
+| CROSSDAY-007 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION | Projection row interval not subset of source record interval rejected |
+| CROSSDAY-008 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday slot starting at 06:00 rejected when Monday carry-in ends at 07:00 |
+| CROSSDAY-009 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday first slot correctly opens at carry-in end_utc |
+| CROSSDAY-010 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-DERIVATION | Carry-in slot ID appears only in Monday ScheduleDay, not duplicated in Tuesday |
+| CROSSDAY-011 | INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Single PlaylogEvent returned for every instant within cross-boundary interval |
+| CROSSDAY-012 | INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Two PlaylogEvents covering overlapping 06:00–06:30 interval rejected |
+| CROSSDAY-013 | INV-PLAYLOG-CONTINUITY-SINGLE-AUTHORITY-AT-TIME-001, INV-PLAYLOG-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | Boundary event does not produce dual authority at DAY_BOUNDARY instant |

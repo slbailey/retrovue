@@ -73,6 +73,90 @@ class InMemorySequenceStore(SequenceStateStore):
             self._positions[channel_id][program_id] = index
 
 
+def validate_scheduleday_contiguity(
+    resolved: ResolvedScheduleDay,
+    programming_day_start_hour: int,
+) -> None:
+    """Validate that resolved slots tile the full broadcast day with no gaps or overlaps.
+
+    INV-SCHEDULEDAY-NO-GAPS-001: A materialized ScheduleDay must provide
+    continuous, gap-free coverage from programming_day_start to
+    programming_day_start + 24h.
+
+    Raises:
+        ValueError: If any gap or overlap is detected, with
+            INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED tag.
+    """
+    day = resolved.programming_day_date
+    pds_time = time(programming_day_start_hour, 0)
+    broadcast_start = datetime.combine(day, pds_time, tzinfo=timezone.utc)
+    broadcast_end = broadcast_start + timedelta(hours=24)
+
+    if not resolved.resolved_slots:
+        raise ValueError(
+            "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+            f"ResolvedScheduleDay for {day!r} has no slots. "
+            f"Broadcast day [{broadcast_start}→{broadcast_end}] is entirely uncovered."
+        )
+
+    # Compute absolute (start, end) for each slot.
+    def _slot_start(slot):
+        base = datetime.combine(day, slot.slot_time, tzinfo=timezone.utc)
+        if slot.slot_time.hour < programming_day_start_hour:
+            base += timedelta(days=1)
+        return base
+
+    intervals = []
+    for slot in resolved.resolved_slots:
+        start = _slot_start(slot)
+        end = start + timedelta(seconds=slot.duration_seconds)
+        intervals.append((start, end, slot))
+
+    # Sort by start time.
+    intervals.sort(key=lambda x: x[0])
+
+    # Check first slot starts at broadcast day start.
+    first_start = intervals[0][0]
+    if first_start != broadcast_start:
+        raise ValueError(
+            "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+            f"First slot starts at {first_start}, but broadcast day "
+            f"starts at {broadcast_start}. "
+            f"Gap: [{broadcast_start}→{first_start}]."
+        )
+
+    # Check contiguity: each slot's end must equal next slot's start.
+    for i in range(len(intervals) - 1):
+        current_end = intervals[i][1]
+        next_start = intervals[i + 1][0]
+        if current_end < next_start:
+            raise ValueError(
+                "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+                f"Gap between slot '{intervals[i][2].label}' ending at "
+                f"{current_end} and slot '{intervals[i + 1][2].label}' "
+                f"starting at {next_start}. "
+                f"Gap: [{current_end}→{next_start}]."
+            )
+        if current_end > next_start:
+            raise ValueError(
+                "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+                f"Overlap between slot '{intervals[i][2].label}' ending at "
+                f"{current_end} and slot '{intervals[i + 1][2].label}' "
+                f"starting at {next_start}. "
+                f"Overlap: [{next_start}→{current_end}]."
+            )
+
+    # Check last slot ends at broadcast day end.
+    last_end = intervals[-1][1]
+    if last_end != broadcast_end:
+        raise ValueError(
+            "INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED: "
+            f"Last slot ends at {last_end}, but broadcast day "
+            f"ends at {broadcast_end}. "
+            f"Gap: [{last_end}→{broadcast_end}]."
+        )
+
+
 class InMemoryResolvedStore(ResolvedScheduleStore):
     """
     In-memory implementation of ResolvedScheduleStore.
@@ -88,9 +172,11 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
     def __init__(
         self,
         execution_store: ExecutionWindowStore | None = None,
+        programming_day_start_hour: int | None = None,
     ) -> None:
         self._resolved: dict[str, dict[date, ResolvedScheduleDay]] = {}
         self._execution_store = execution_store
+        self._programming_day_start_hour = programming_day_start_hour
         self._lock = threading.Lock()
 
     def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
@@ -107,8 +193,11 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         Use force_replace() for atomic regeneration.
 
         Raises:
-            ValueError: If a ScheduleDay already exists for this (channel, date).
+            ValueError: If a ScheduleDay already exists for this (channel, date),
+                or if slot contiguity validation fails.
         """
+        if self._programming_day_start_hour is not None:
+            validate_scheduleday_contiguity(resolved, self._programming_day_start_hour)
         with self._lock:
             if channel_id not in self._resolved:
                 self._resolved[channel_id] = {}
@@ -131,8 +220,11 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         critical section. At no point are zero records visible.
 
         Raises:
-            ValueError: If no existing record to replace.
+            ValueError: If no existing record to replace, or if slot
+                contiguity validation fails.
         """
+        if self._programming_day_start_hour is not None:
+            validate_scheduleday_contiguity(resolved, self._programming_day_start_hour)
         with self._lock:
             channel_days = self._resolved.get(channel_id, {})
             if resolved.programming_day_date not in channel_days:

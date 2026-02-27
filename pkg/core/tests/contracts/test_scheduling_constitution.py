@@ -1353,3 +1353,185 @@ class TestInvScheduledayImmutable001:
         assert not hasattr(sd_orig, "is_manual_override") or not getattr(
             sd_orig, "is_manual_override", False
         )
+
+
+# =========================================================================
+# INV-SCHEDULEDAY-NO-GAPS-001
+# =========================================================================
+
+
+class TestInvScheduledayNoGaps001:
+    """INV-SCHEDULEDAY-NO-GAPS-001
+
+    A materialized ResolvedScheduleDay must provide continuous, gap-free
+    slot coverage across the full broadcast day, from programming_day_start
+    to programming_day_start + 24h. No temporal gaps, no overlaps.
+
+    Enforcement lives in InMemoryResolvedStore.store() and force_replace(),
+    via validate_scheduleday_contiguity() called before commit.
+
+    Derived from: LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS.
+    """
+
+    def _make_slot(self, hour, minute, duration_seconds, label="slot"):
+        """Build a minimal ResolvedSlot."""
+        from retrovue.runtime.schedule_types import (
+            ProgramRef,
+            ProgramRefType,
+            ResolvedAsset,
+            ResolvedSlot,
+        )
+
+        return ResolvedSlot(
+            slot_time=time(hour, minute),
+            program_ref=ProgramRef(
+                ref_type=ProgramRefType.FILE, ref_id=f"{label}.ts"
+            ),
+            resolved_asset=ResolvedAsset(
+                file_path=f"/media/{label}.ts",
+                asset_id=f"asset-{label}",
+                content_duration_seconds=duration_seconds,
+            ),
+            duration_seconds=duration_seconds,
+            label=label,
+        )
+
+    def _make_resolved(self, contract_clock, slots, day_date=None):
+        """Build a ResolvedScheduleDay from explicit slots."""
+        from retrovue.runtime.schedule_types import (
+            ResolvedScheduleDay,
+            SequenceState,
+        )
+
+        return ResolvedScheduleDay(
+            programming_day_date=day_date or date(2026, 1, 1),
+            resolved_slots=slots,
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+        )
+
+    def test_inv_scheduleday_no_gaps_001_reject_internal_gap(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-NO-GAPS-001 -- negative (internal gap)
+
+        Invariant: INV-SCHEDULEDAY-NO-GAPS-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS
+        Failure class: Planning
+        Scenario: Broadcast day starts at 06:00 (pds=6). Two slots:
+                  A [06:00→12:00] (6h), B [14:00→06:00+1d] (16h).
+                  Gap exists at [12:00→14:00] (2h).
+                  store() must reject with invariant tag.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+        slots = [
+            self._make_slot(6, 0, 21600, label="morning"),    # 06:00→12:00
+            self._make_slot(14, 0, 57600, label="afternoon"),  # 14:00→06:00+1d
+        ]
+        sd = self._make_resolved(contract_clock, slots)
+
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-NO-GAPS-001"):
+            store.store(CHANNEL_ID, sd)
+
+    def test_inv_scheduleday_no_gaps_001_reject_overlap(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-NO-GAPS-001 -- negative (overlap)
+
+        Invariant: INV-SCHEDULEDAY-NO-GAPS-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS
+        Failure class: Planning
+        Scenario: Broadcast day starts at 06:00 (pds=6). Two slots:
+                  A [06:00→18:00] (12h), B [16:00→06:00+1d] (14h).
+                  Overlap at [16:00→18:00] (2h).
+                  store() must reject with invariant tag.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+        slots = [
+            self._make_slot(6, 0, 43200, label="daytime"),    # 06:00→18:00
+            self._make_slot(16, 0, 50400, label="evening"),    # 16:00→06:00+1d
+        ]
+        sd = self._make_resolved(contract_clock, slots)
+
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-NO-GAPS-001"):
+            store.store(CHANNEL_ID, sd)
+
+    def test_inv_scheduleday_no_gaps_001_reject_missing_day_start(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-NO-GAPS-001 -- negative (missing day start)
+
+        Invariant: INV-SCHEDULEDAY-NO-GAPS-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS
+        Failure class: Planning
+        Scenario: Broadcast day starts at 06:00 (pds=6). Single slot covers
+                  08:00→06:00+1d (22h). Gap at [06:00→08:00] (2h).
+                  store() must reject with invariant tag.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+        slots = [
+            self._make_slot(8, 0, 79200, label="late-start"),  # 08:00→06:00+1d
+        ]
+        sd = self._make_resolved(contract_clock, slots)
+
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-NO-GAPS-001"):
+            store.store(CHANNEL_ID, sd)
+
+    def test_inv_scheduleday_no_gaps_001_reject_missing_day_end(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-NO-GAPS-001 -- negative (missing day end)
+
+        Invariant: INV-SCHEDULEDAY-NO-GAPS-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS
+        Failure class: Planning
+        Scenario: Broadcast day starts at 06:00 (pds=6). Single slot covers
+                  06:00→02:00+1d (20h). Gap at [02:00→06:00+1d] (4h).
+                  store() must reject with invariant tag.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+        slots = [
+            self._make_slot(6, 0, 72000, label="early-end"),  # 06:00→02:00+1d
+        ]
+        sd = self._make_resolved(contract_clock, slots)
+
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-NO-GAPS-001"):
+            store.store(CHANNEL_ID, sd)
+
+    def test_inv_scheduleday_no_gaps_001_accept_exact_tiling(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-NO-GAPS-001 -- positive (exact tiling)
+
+        Invariant: INV-SCHEDULEDAY-NO-GAPS-001
+        Derived law(s): LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-LIVENESS
+        Failure class: N/A (positive path)
+        Scenario: Broadcast day starts at 06:00 (pds=6). Two slots tile exactly:
+                  A [06:00→18:00] (12h), B [18:00→06:00+1d] (12h).
+                  No gap, no overlap. store() must accept without error.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore(programming_day_start_hour=6)
+        slots = [
+            self._make_slot(6, 0, 43200, label="daytime"),     # 06:00→18:00
+            self._make_slot(18, 0, 43200, label="overnight"),  # 18:00→06:00+1d
+        ]
+        sd = self._make_resolved(contract_clock, slots)
+
+        # Should not raise — slots tile the full broadcast day.
+        store.store(CHANNEL_ID, sd)
+
+        # Verify stored successfully.
+        assert store.exists(CHANNEL_ID, date(2026, 1, 1))
+        retrieved = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert retrieved is sd
