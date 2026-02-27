@@ -19,7 +19,7 @@ No enforcement logic is implemented here. No production code is modified.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 
@@ -957,3 +957,399 @@ class TestInvPlanFullCoverage001:
 
         # Should not raise — zones tile 06:00→18:00→24:00/00:00→06:00 = full day.
         validate_zone_plan_integrity(zones, programming_day_start=pds)
+
+
+# =========================================================================
+# INV-SCHEDULEDAY-ONE-PER-DATE-001
+# =========================================================================
+
+
+class TestInvScheduledayOnePerDate001:
+    """INV-SCHEDULEDAY-ONE-PER-DATE-001
+
+    For a given (channel_id, broadcast_date), exactly one authoritative
+    ScheduleDay may exist. Duplicate insertion is forbidden. Replacement
+    must be atomic via explicit regeneration (force_replace).
+
+    Enforcement lives in InMemoryResolvedStore.store() and force_replace().
+
+    Derived from: LAW-DERIVATION, LAW-IMMUTABILITY.
+    """
+
+    def _make_resolved(self, contract_clock, day_date=None):
+        """Build a minimal ResolvedScheduleDay for testing."""
+        from retrovue.runtime.schedule_types import ResolvedScheduleDay, SequenceState
+
+        return ResolvedScheduleDay(
+            programming_day_date=day_date or date(2026, 1, 1),
+            resolved_slots=[],
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+        )
+
+    def test_inv_scheduleday_one_per_date_001_reject_duplicate_insert(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-ONE-PER-DATE-001 -- negative
+
+        Invariant: INV-SCHEDULEDAY-ONE-PER-DATE-001
+        Derived law(s): LAW-DERIVATION, LAW-IMMUTABILITY
+        Failure class: Planning
+        Scenario: Store a ResolvedScheduleDay for (channel, date). Attempt
+                  to store a second ResolvedScheduleDay for the same
+                  (channel, date). Assert the second insert is rejected
+                  with ValueError carrying the invariant name.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore()
+
+        first = self._make_resolved(contract_clock)
+        store.store(CHANNEL_ID, first)
+        assert store.exists(CHANNEL_ID, date(2026, 1, 1))
+
+        # Second insert for same (channel, date) MUST be rejected.
+        second = self._make_resolved(contract_clock)
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-ONE-PER-DATE-001"):
+            store.store(CHANNEL_ID, second)
+
+        # Original must survive — no corruption from rejected insert.
+        surviving = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert surviving is first, (
+            "INV-SCHEDULEDAY-ONE-PER-DATE-001 VIOLATED: "
+            "Original ResolvedScheduleDay was corrupted by the rejected "
+            "duplicate insert."
+        )
+
+    def test_inv_scheduleday_one_per_date_001_allow_force_regen_atomic_replace(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-ONE-PER-DATE-001 -- positive (atomic replace)
+
+        Invariant: INV-SCHEDULEDAY-ONE-PER-DATE-001
+        Derived law(s): LAW-DERIVATION, LAW-IMMUTABILITY
+        Failure class: N/A (positive path)
+        Scenario: Store a ResolvedScheduleDay for (channel, date). Use
+                  force_replace() to atomically swap it with a new one.
+                  Assert old is gone, new is present, and exactly one
+                  record exists at all times.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore()
+
+        original = self._make_resolved(contract_clock)
+        store.store(CHANNEL_ID, original)
+
+        # Advance clock so replacement has a different timestamp.
+        contract_clock.advance_ms(1000)
+        replacement = self._make_resolved(contract_clock)
+
+        # Atomic replace must succeed.
+        store.force_replace(CHANNEL_ID, replacement)
+
+        # Exactly one record must exist.
+        assert store.exists(CHANNEL_ID, date(2026, 1, 1))
+        surviving = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert surviving is replacement, (
+            "INV-SCHEDULEDAY-ONE-PER-DATE-001 VIOLATED: "
+            "force_replace() did not install the replacement. "
+            f"Expected replacement (ts={replacement.resolution_timestamp}), "
+            f"got (ts={surviving.resolution_timestamp})."
+        )
+        assert surviving is not original, (
+            "INV-SCHEDULEDAY-ONE-PER-DATE-001 VIOLATED: "
+            "force_replace() left the original in place."
+        )
+
+    def test_inv_scheduleday_one_per_date_001_different_dates_independent(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-ONE-PER-DATE-001 -- positive (different dates)
+
+        Invariant: INV-SCHEDULEDAY-ONE-PER-DATE-001
+        Derived law(s): LAW-DERIVATION, LAW-IMMUTABILITY
+        Failure class: N/A (positive path)
+        Scenario: Store ResolvedScheduleDays for two different dates on
+                  the same channel. Assert both are accepted — uniqueness
+                  is per (channel, date), not per channel.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore()
+
+        day1 = self._make_resolved(contract_clock, day_date=date(2026, 1, 1))
+        day2 = self._make_resolved(contract_clock, day_date=date(2026, 1, 2))
+
+        store.store(CHANNEL_ID, day1)
+        store.store(CHANNEL_ID, day2)
+
+        assert store.exists(CHANNEL_ID, date(2026, 1, 1))
+        assert store.exists(CHANNEL_ID, date(2026, 1, 2))
+
+
+# =========================================================================
+# INV-SCHEDULEDAY-IMMUTABLE-001
+# =========================================================================
+
+
+class TestInvScheduledayImmutable001:
+    """INV-SCHEDULEDAY-IMMUTABLE-001
+
+    A materialized ResolvedScheduleDay must never be mutated in place.
+    Any change must occur via force-regeneration (atomic replace) or
+    operator override (new record referencing superseded record).
+
+    Enforcement lives in:
+    - ResolvedScheduleDay frozen dataclass (type-level)
+    - InMemoryResolvedStore.update() rejection (store boundary)
+    - InMemoryResolvedStore.operator_override() (override workflow)
+
+    Derived from: LAW-IMMUTABILITY, LAW-DERIVATION.
+    """
+
+    def _make_resolved(self, contract_clock, day_date=None, slots=None):
+        """Build a ResolvedScheduleDay for testing."""
+        from retrovue.runtime.schedule_types import (
+            ProgramRef,
+            ProgramRefType,
+            ResolvedAsset,
+            ResolvedScheduleDay,
+            ResolvedSlot,
+            SequenceState,
+        )
+
+        if slots is None:
+            slots = [
+                ResolvedSlot(
+                    slot_time=time(6, 0),
+                    program_ref=ProgramRef(
+                        ref_type=ProgramRefType.FILE, ref_id="show-001.ts"
+                    ),
+                    resolved_asset=ResolvedAsset(
+                        file_path="/media/show-001.ts",
+                        asset_id="asset-001",
+                        content_duration_seconds=1800.0,
+                    ),
+                    duration_seconds=1800.0,
+                    label="Morning Show",
+                ),
+            ]
+        return ResolvedScheduleDay(
+            programming_day_date=day_date or date(2026, 1, 1),
+            resolved_slots=slots,
+            resolution_timestamp=contract_clock.clock.now_utc(),
+            sequence_state=SequenceState(),
+            program_events=[],
+        )
+
+    def test_inv_scheduleday_immutable_001_reject_in_place_slot_mutation(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-IMMUTABLE-001 -- negative (slot mutation)
+
+        Invariant: INV-SCHEDULEDAY-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-DERIVATION
+        Failure class: Runtime
+        Scenario: Materialize ResolvedScheduleDay SD for (C, D).
+                  Attempt to mutate a slot field or reassign resolved_slots.
+                  Assert mutation is rejected. Assert SD content unchanged.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore()
+        sd = self._make_resolved(contract_clock)
+        store.store(CHANNEL_ID, sd)
+
+        retrieved = store.get(CHANNEL_ID, date(2026, 1, 1))
+
+        # Attempt 1: Reassign resolved_slots list on the dataclass.
+        # Frozen dataclass MUST reject this.
+        with pytest.raises(AttributeError):
+            retrieved.resolved_slots = []
+
+        # Attempt 2: Mutate a slot's resolved_asset field.
+        # Frozen nested dataclass MUST reject this.
+        with pytest.raises(AttributeError):
+            retrieved.resolved_slots[0].resolved_asset = None
+
+        # Attempt 3: Update via store boundary must be rejected.
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-IMMUTABLE-001"):
+            store.update(CHANNEL_ID, date(2026, 1, 1), {"resolved_slots": []})
+
+        # Original must be intact after all rejected mutation attempts.
+        after = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert after is retrieved, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "ResolvedScheduleDay was replaced or corrupted by rejected "
+            "mutation attempts."
+        )
+        assert len(after.resolved_slots) == 1, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "resolved_slots were mutated despite rejection."
+        )
+        assert after.resolved_slots[0].resolved_asset.asset_id == "asset-001"
+
+    def test_inv_scheduleday_immutable_001_reject_plan_id_update(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-IMMUTABLE-001 -- negative (field update)
+
+        Invariant: INV-SCHEDULEDAY-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-DERIVATION
+        Failure class: Runtime
+        Scenario: Materialize ResolvedScheduleDay SD. Attempt to update
+                  resolution_timestamp or programming_day_date via store
+                  boundary. Assert rejected with invariant tag. Assert
+                  original fields preserved.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore()
+        sd = self._make_resolved(contract_clock)
+        original_ts = sd.resolution_timestamp
+        store.store(CHANNEL_ID, sd)
+
+        # Attempt to update resolution_timestamp via store boundary.
+        with pytest.raises(ValueError, match="INV-SCHEDULEDAY-IMMUTABLE-001"):
+            store.update(
+                CHANNEL_ID,
+                date(2026, 1, 1),
+                {"resolution_timestamp": contract_clock.clock.now_utc()},
+            )
+
+        # Attempt direct field mutation on frozen dataclass.
+        retrieved = store.get(CHANNEL_ID, date(2026, 1, 1))
+        with pytest.raises(AttributeError):
+            retrieved.programming_day_date = date(2026, 1, 2)
+
+        # Original must be preserved.
+        after = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert after.resolution_timestamp == original_ts, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "resolution_timestamp was mutated."
+        )
+
+    def test_inv_scheduleday_immutable_001_force_regen_creates_new_record(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-IMMUTABLE-001 -- positive (force regen)
+
+        Invariant: INV-SCHEDULEDAY-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-DERIVATION
+        Failure class: N/A (positive path)
+        Scenario: Materialize SD_OLD. Trigger force_replace() with SD_NEW.
+                  Assert SD_NEW is not SD_OLD (new record, not mutation).
+                  Assert only one authoritative record exists for (C, D).
+                  Assert no in-place update occurred on SD_OLD.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+
+        store = InMemoryResolvedStore()
+        sd_old = self._make_resolved(contract_clock)
+        old_ts = sd_old.resolution_timestamp
+        store.store(CHANNEL_ID, sd_old)
+
+        # Advance clock, create new record.
+        contract_clock.advance_ms(5000)
+        sd_new = self._make_resolved(contract_clock)
+
+        # force_replace creates new record atomically.
+        store.force_replace(CHANNEL_ID, sd_new)
+
+        # Exactly one authoritative record.
+        current = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert current is sd_new, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "force_replace() did not install the new record."
+        )
+        assert current is not sd_old, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "force_replace() returned the old record (in-place mutation?)."
+        )
+        assert current.resolution_timestamp != old_ts, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "New record has the same timestamp as old — suspicious."
+        )
+
+        # SD_OLD was not mutated (frozen dataclass preserves it).
+        assert sd_old.resolution_timestamp == old_ts, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "SD_OLD was mutated during force_replace()."
+        )
+
+    def test_inv_scheduleday_immutable_001_operator_override_creates_new_record(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEDAY-IMMUTABLE-001 -- positive (operator override)
+
+        Invariant: INV-SCHEDULEDAY-IMMUTABLE-001
+        Derived law(s): LAW-IMMUTABILITY, LAW-DERIVATION
+        Failure class: N/A (positive path)
+        Scenario: Materialize SD_ORIG. Trigger operator_override() with
+                  modified content. Assert SD_OVERRIDE is a new record.
+                  Assert SD_OVERRIDE.is_manual_override == True.
+                  Assert SD_OVERRIDE.supersedes_id references SD_ORIG.
+                  Assert SD_ORIG remains unchanged.
+        """
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+        from retrovue.runtime.schedule_types import (
+            ProgramRef,
+            ProgramRefType,
+            ResolvedAsset,
+            ResolvedSlot,
+        )
+
+        store = InMemoryResolvedStore()
+        sd_orig = self._make_resolved(contract_clock)
+        orig_ts = sd_orig.resolution_timestamp
+        store.store(CHANNEL_ID, sd_orig)
+
+        # Build override with different content.
+        contract_clock.advance_ms(5000)
+        override_slots = [
+            ResolvedSlot(
+                slot_time=time(6, 0),
+                program_ref=ProgramRef(
+                    ref_type=ProgramRefType.FILE, ref_id="override-show.ts"
+                ),
+                resolved_asset=ResolvedAsset(
+                    file_path="/media/override-show.ts",
+                    asset_id="asset-override",
+                    content_duration_seconds=1800.0,
+                ),
+                duration_seconds=1800.0,
+                label="Override Show",
+            ),
+        ]
+        sd_override = self._make_resolved(
+            contract_clock, slots=override_slots
+        )
+
+        # Operator override must create a new record.
+        result = store.operator_override(CHANNEL_ID, sd_override)
+
+        # SD_OVERRIDE is a new record, not the original.
+        assert result is not sd_orig
+
+        # Override metadata.
+        assert result.is_manual_override is True, (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "operator_override() did not set is_manual_override=True."
+        )
+        assert result.supersedes_id == id(sd_orig), (
+            "INV-SCHEDULEDAY-IMMUTABLE-001 VIOLATED: "
+            "operator_override() did not link to superseded record."
+        )
+
+        # Current authoritative record is the override.
+        current = store.get(CHANNEL_ID, date(2026, 1, 1))
+        assert current is result
+
+        # SD_ORIG must remain unchanged (frozen).
+        assert sd_orig.resolution_timestamp == orig_ts
+        assert sd_orig.resolved_slots[0].label == "Morning Show"
+        assert not hasattr(sd_orig, "is_manual_override") or not getattr(
+            sd_orig, "is_manual_override", False
+        )

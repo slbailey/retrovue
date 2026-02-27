@@ -100,11 +100,49 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
             return channel_days.get(programming_day_date)
 
     def store(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
-        """Store a resolved schedule day. Must be idempotent."""
+        """Store a resolved schedule day.
+
+        INV-SCHEDULEDAY-ONE-PER-DATE-001: If a record already exists for
+        (channel_id, programming_day_date), the insert is rejected.
+        Use force_replace() for atomic regeneration.
+
+        Raises:
+            ValueError: If a ScheduleDay already exists for this (channel, date).
+        """
         with self._lock:
             if channel_id not in self._resolved:
                 self._resolved[channel_id] = {}
+            if resolved.programming_day_date in self._resolved[channel_id]:
+                raise ValueError(
+                    "INV-SCHEDULEDAY-ONE-PER-DATE-001-VIOLATED: "
+                    f"ResolvedScheduleDay already exists for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={resolved.programming_day_date!r}. "
+                    "Duplicate insertion is forbidden. "
+                    "Use force_replace() for atomic regeneration."
+                )
             self._resolved[channel_id][resolved.programming_day_date] = resolved
+
+    def force_replace(self, channel_id: str, resolved: ResolvedScheduleDay) -> None:
+        """Atomically replace an existing ResolvedScheduleDay.
+
+        INV-SCHEDULEDAY-ONE-PER-DATE-001: Replacement is atomic — the old
+        record is removed and the new record is installed in a single
+        critical section. At no point are zero records visible.
+
+        Raises:
+            ValueError: If no existing record to replace.
+        """
+        with self._lock:
+            channel_days = self._resolved.get(channel_id, {})
+            if resolved.programming_day_date not in channel_days:
+                raise ValueError(
+                    f"force_replace(): No existing ResolvedScheduleDay for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={resolved.programming_day_date!r}. "
+                    "Nothing to replace."
+                )
+            channel_days[resolved.programming_day_date] = resolved
 
     def exists(self, channel_id: str, programming_day_date: date) -> bool:
         """Check if a day has already been resolved."""
@@ -138,6 +176,71 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         with self._lock:
             channel_days = self._resolved.get(channel_id, {})
             channel_days.pop(programming_day_date, None)
+
+    def update(
+        self, channel_id: str, programming_day_date: date, fields: dict
+    ) -> None:
+        """INV-SCHEDULEDAY-IMMUTABLE-001: In-place mutation is unconditionally
+        prohibited. This method always raises.
+
+        Use force_replace() for atomic regeneration or operator_override()
+        for operator-initiated changes.
+
+        Raises:
+            ValueError: Always — in-place mutation is forbidden.
+        """
+        raise ValueError(
+            "INV-SCHEDULEDAY-IMMUTABLE-001-VIOLATED: "
+            f"In-place update of ResolvedScheduleDay for "
+            f"channel_id={channel_id!r}, "
+            f"programming_day_date={programming_day_date!r} "
+            f"is unconditionally prohibited. "
+            f"Attempted to modify fields: {sorted(fields.keys())}. "
+            "Use force_replace() for atomic regeneration or "
+            "operator_override() for operator-initiated changes."
+        )
+
+    def operator_override(
+        self, channel_id: str, resolved: ResolvedScheduleDay
+    ) -> ResolvedScheduleDay:
+        """Create an operator override for an existing ResolvedScheduleDay.
+
+        INV-SCHEDULEDAY-IMMUTABLE-001: The original record is never mutated.
+        A new record is created with is_manual_override=True and
+        supersedes_id pointing to the original. The new record atomically
+        replaces the original as the authoritative record.
+
+        Raises:
+            ValueError: If no existing record to override.
+
+        Returns:
+            The new override ResolvedScheduleDay.
+        """
+        with self._lock:
+            channel_days = self._resolved.get(channel_id, {})
+            original = channel_days.get(resolved.programming_day_date)
+            if original is None:
+                raise ValueError(
+                    f"operator_override(): No existing ResolvedScheduleDay for "
+                    f"channel_id={channel_id!r}, "
+                    f"programming_day_date={resolved.programming_day_date!r}. "
+                    "Nothing to override."
+                )
+
+            # Create override record with metadata linking to superseded.
+            override = ResolvedScheduleDay(
+                programming_day_date=resolved.programming_day_date,
+                resolved_slots=resolved.resolved_slots,
+                resolution_timestamp=resolved.resolution_timestamp,
+                sequence_state=resolved.sequence_state,
+                program_events=resolved.program_events,
+                is_manual_override=True,
+                supersedes_id=id(original),
+            )
+
+            # Atomic swap: original is replaced, not mutated.
+            channel_days[resolved.programming_day_date] = override
+            return override
 
 
 # ----------------------------------------------------------------------
