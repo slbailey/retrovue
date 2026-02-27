@@ -131,6 +131,7 @@ These invariants have structural enforcement in production code and passing cont
 | INV-PLAYLOG-NO-GAPS-001 | 2 (gap detected + contiguous accepted) | **PASS** | `validate_execution_entry_contiguity()` standalone function in `execution_window_store.py` |
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | 3 (unanchored reject + ref accept + override accept) | **PASS** | `ExecutionWindowStore.add_entries()` with `enforce_derivation_from_playlist=True` |
 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
+| INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | 2 (AST import check + attribute inspection) | **PASS** | Structural: no AIR imports in `schedule_manager.py` / `schedule_manager_service.py`; tests verify via AST inspection |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -159,6 +160,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAYLOG-NO-GAPS-001 | `TestInvPlaylogNoGaps001` | `test_..._detect_gap`, `test_..._accept_contiguous` | PASS |
 | INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 | `TestInvPlaylogDerivedFromPlaylist001` | `test_..._reject_unanchored`, `test_..._accept_with_ref`, `test_..._accept_override` | PASS |
 | INV-PLAYLOG-LOCKED-IMMUTABLE-001 | `TestInvPlaylogLockedImmutable001` | `test_..._reject_locked_no_override`, `test_..._reject_past_unconditional`, `test_..._accept_override` | PASS |
+| INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | `TestInvSchedulemanagerNoAirAccess001` | `test_..._no_air_imports`, `test_..._no_air_attributes` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -185,6 +187,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAYLOG-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
 | INV-NO-MID-PROGRAM-CUT-001 | CROSS-001, CROSS-002 | Cross-cutting |
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
+| INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | ARCH-BOUNDARY-001, ARCH-BOUNDARY-002 | Cross-cutting |
 
 ---
 
@@ -1104,6 +1107,8 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | BLOCKER-005 | INV-ASRUN-IMMUTABLE-001 | LAW-IMMUTABILITY | AsRunEvent rejects mutation; replace produces new instance | **PASS** |
 | BLOCKER-006 | INV-ASRUN-IMMUTABLE-001 | LAW-IMMUTABILITY | AsRunEvent frozen dataclass prevents field reassignment | **PASS** |
 | BLOCKER-007 | INV-ASRUN-IMMUTABLE-001 | LAW-IMMUTABILITY | AsRunEvent valid creation persists correctly | **PASS** |
+| ARCH-BOUNDARY-001 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | ScheduleManager source files contain no AIR imports (AST check) | **PASS** |
+| ARCH-BOUNDARY-002 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | ScheduleManager __init__ has no AIR type annotations | **PASS** |
 
 ### Full Matrix (Aspirational)
 
