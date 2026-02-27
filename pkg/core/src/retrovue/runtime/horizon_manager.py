@@ -80,6 +80,7 @@ class HorizonHealthReport:
     epg_compliant: bool
     execution_compliant: bool
     next_block_compliant: bool
+    coverage_compliant: bool
     evaluation_interval_seconds: int
     store_entry_count: int
 
@@ -95,6 +96,16 @@ class ExtensionAttempt:
     triggered_by: str       # "SCHED_MGR_POLICY"
     success: bool
     error_code: str | None = None
+
+
+@dataclass
+class SeamViolation:
+    """Record of a contiguity violation between adjacent entries."""
+    left_block_id: str
+    left_end_utc_ms: int
+    right_block_id: str
+    right_start_utc_ms: int
+    delta_ms: int           # right_start - left_end; >0 = gap, <0 = overlap
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +155,8 @@ class HorizonManager:
         self._execution_window_end_utc_ms: int = 0
         self._last_evaluation_utc_ms: int = 0
         self._next_block_compliant: bool = True
+        self._coverage_compliant: bool = True
+        self._seam_violations: list[SeamViolation] = []
 
         # Audit state
         self._extension_attempt_count: int = 0
@@ -195,6 +208,16 @@ class HorizonManager:
     def next_block_compliant(self) -> bool:
         """True when the next block at 'now' is present in the store."""
         return self._next_block_compliant
+
+    @property
+    def coverage_compliant(self) -> bool:
+        """True when all adjacent entries form a contiguous sequence."""
+        return self._coverage_compliant
+
+    @property
+    def seam_violations(self) -> list[SeamViolation]:
+        """Seam violations found during the most recent evaluation."""
+        return list(self._seam_violations)
 
     @property
     def extension_attempt_log(self) -> list[ExtensionAttempt]:
@@ -258,6 +281,7 @@ class HorizonManager:
             epg_compliant=epg_h >= self._min_epg_days * 24.0,
             execution_compliant=exec_h >= self._min_execution_hours,
             next_block_compliant=self._next_block_compliant,
+            coverage_compliant=self._coverage_compliant,
             evaluation_interval_seconds=self._eval_interval_s,
             store_entry_count=store_count,
         )
@@ -299,6 +323,10 @@ class HorizonManager:
         # --- Next block readiness (INV-HORIZON-NEXT-BLOCK-READY-001) ---
         if self._execution_store is not None:
             self._check_next_block_ready(now_ms, current_bd)
+
+        # --- Seam contiguity (INV-HORIZON-CONTINUOUS-COVERAGE-001) ---
+        if self._execution_store is not None:
+            self._check_seam_contiguity()
 
         # --- Structured status log ---
         # Healthy + no extension = steady state → DEBUG (avoid log noise).
@@ -591,3 +619,43 @@ class HorizonManager:
             )
             self._extension_attempt_log.append(attempt)
             self._next_block_compliant = False
+
+    def _check_seam_contiguity(self) -> None:
+        """Validate all adjacent entries are contiguous (INV-HORIZON-CONTINUOUS-COVERAGE-001).
+
+        For every adjacent pair (E_i, E_{i+1}), E_i.end_utc_ms must equal
+        E_{i+1}.start_utc_ms exactly.  Violations are recorded as SeamViolation
+        and logged as planning faults.
+        """
+        store = self._execution_store
+        entries = store.get_all_entries()  # already sorted by start_utc_ms
+        if len(entries) < 2:
+            self._coverage_compliant = True
+            self._seam_violations = []
+            return
+
+        violations: list[SeamViolation] = []
+        for i in range(len(entries) - 1):
+            left = entries[i]
+            right = entries[i + 1]
+            delta = right.start_utc_ms - left.end_utc_ms
+            if delta != 0:
+                v = SeamViolation(
+                    left_block_id=left.block_id,
+                    left_end_utc_ms=left.end_utc_ms,
+                    right_block_id=right.block_id,
+                    right_start_utc_ms=right.start_utc_ms,
+                    delta_ms=delta,
+                )
+                violations.append(v)
+                kind = "gap" if delta > 0 else "overlap"
+                self._logger.warning(
+                    "INV-HORIZON-CONTINUOUS-COVERAGE-001-VIOLATED: "
+                    "%s of %d ms between %s (end=%d) and %s (start=%d)",
+                    kind, abs(delta),
+                    left.block_id, left.end_utc_ms,
+                    right.block_id, right.start_utc_ms,
+                )
+
+        self._seam_violations = violations
+        self._coverage_compliant = len(violations) == 0

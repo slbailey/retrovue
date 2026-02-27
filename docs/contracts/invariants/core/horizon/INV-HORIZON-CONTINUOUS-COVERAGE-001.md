@@ -42,4 +42,8 @@ MUST be logged as planning fault with fields: `left_block_id`, `left_end_utc_ms`
 
 ## Enforcement Evidence
 
-TODO
+- **Guard location:** `HorizonManager._check_seam_contiguity()` called from `evaluate_once()` in `pkg/core/src/retrovue/runtime/horizon_manager.py`. After execution depth, next-block readiness, and any extension attempts, `_check_seam_contiguity()` runs when an `execution_store` is configured.
+- **Seam check:** Retrieves all entries from `ExecutionWindowStore.get_all_entries()` (sorted by `start_utc_ms`). For every adjacent pair `(E_i, E_{i+1})`, computes `delta = E_{i+1}.start_utc_ms - E_i.end_utc_ms`. If `delta != 0`, a `SeamViolation` is recorded with `left_block_id`, `left_end_utc_ms`, `right_block_id`, `right_start_utc_ms`, `delta_ms`.
+- **Violation logging:** Each violation is logged at WARNING level with tag `INV-HORIZON-CONTINUOUS-COVERAGE-001-VIOLATED`, including gap/overlap classification and magnitude.
+- **Observability:** `HorizonHealthReport.coverage_compliant` (bool), `HorizonManager.coverage_compliant` property, `HorizonManager.seam_violations` (list of `SeamViolation` from most recent evaluation).
+- **Test file:** `pkg/core/tests/contracts/test_inv_horizon_continuous_coverage.py` — THCC-001 (contiguous boundaries after init), THCC-002 (1 ms gap detected), THCC-003 (1 ms overlap detected), THCC-004 (contiguity at extension join), THCC-005 (48-step 24h walk zero violations).
