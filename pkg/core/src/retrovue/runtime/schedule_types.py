@@ -413,6 +413,7 @@ class ResolvedScheduleDay:
     resolution_timestamp: datetime      # When this day was resolved
     sequence_state: SequenceState       # State snapshot at resolution time
     program_events: list[ProgramEvent] = field(default_factory=list)
+    plan_id: str | None = None          # SchedulePlan ID that generated this day
     is_manual_override: bool = False    # True if created by operator override
     supersedes_id: int | None = None    # id() of superseded record, if override
 
