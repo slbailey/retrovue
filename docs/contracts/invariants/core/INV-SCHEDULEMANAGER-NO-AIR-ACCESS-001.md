@@ -62,4 +62,10 @@ Behavioral: in a test harness, replace the AIR process with a spy. Run Schedule 
 
 ## Enforcement Evidence
 
-TODO
+**Structural (no production code changes needed — the boundary is already clean):**
+- `schedule_manager.py` and `schedule_manager_service.py` contain zero imports of AIR-related modules (`playout_session`, `PlayoutSession`, `playout_pb2`, `grpc`, or any `air` package path).
+- `ScheduleManager.__init__` accepts only `ScheduleManagerConfig`; no AIR types in its parameter annotations or instance attributes.
+
+**Tests:**
+- ARCH-BOUNDARY-001 (`test_inv_schedulemanager_no_air_access_001_no_air_imports`): Uses `ast` module to parse both source files. Extracts all `import` and `from ... import` statements. Asserts none reference AIR-related tokens.
+- ARCH-BOUNDARY-002 (`test_inv_schedulemanager_no_air_access_001_no_air_attributes`): Inspects `ScheduleManager.__init__` signature via `inspect`. Asserts no parameters carry AIR-related type annotations.

@@ -2306,3 +2306,124 @@ class TestInvPlaylogLockedImmutable001:
         assert entries[0] is replacement, (
             "Store must contain the replacement entry after override."
         )
+
+
+# =========================================================================
+# INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001
+# =========================================================================
+
+
+class TestInvSchedulemanagerNoAirAccess001:
+    """INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001
+
+    Schedule Manager must never communicate with AIR.  The authoritative
+    communication topology is:
+
+        Schedule Manager → ChannelManager → AIR
+
+    ScheduleManager must not hold a reference to, call, or send messages
+    to any AIR interface.  All interaction between the planning layer and
+    AIR must be mediated by ChannelManager.
+
+    Derived from: LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY.
+    """
+
+    # Modules whose source code must be free of AIR references.
+    _SCHEDULE_MANAGER_MODULES = (
+        "retrovue.runtime.schedule_manager",
+        "retrovue.runtime.schedule_manager_service",
+    )
+
+    # Tokens that would indicate an AIR dependency.
+    _AIR_FORBIDDEN_TOKENS = {
+        "playout_session",
+        "PlayoutSession",
+        "playout_pb2",
+        "playout_pb2_grpc",
+        "grpc",
+        "retrovue_air",
+        "pkg.air",
+    }
+
+    def test_inv_schedulemanager_no_air_access_001_no_air_imports(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 -- ARCH-BOUNDARY-001
+
+        Invariant: INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001
+        Derived law(s): LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
+        Failure class: Planning
+        Scenario: Parse schedule_manager.py and schedule_manager_service.py
+                  via the ast module. Extract all import statements. Assert
+                  none reference AIR-related modules.
+        """
+        import ast
+        import importlib
+        import inspect
+
+        for module_name in self._SCHEDULE_MANAGER_MODULES:
+            mod = importlib.import_module(module_name)
+            source = inspect.getsource(mod)
+            tree = ast.parse(source)
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        assert not any(
+                            tok in alias.name for tok in self._AIR_FORBIDDEN_TOKENS
+                        ), (
+                            f"INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001-VIOLATED: "
+                            f"{module_name} imports AIR-related module "
+                            f"'{alias.name}'. ScheduleManager must not "
+                            f"depend on any AIR interface."
+                        )
+                elif isinstance(node, ast.ImportFrom):
+                    full_module = node.module or ""
+                    imported_names = [a.name for a in node.names]
+                    for tok in self._AIR_FORBIDDEN_TOKENS:
+                        assert tok not in full_module, (
+                            f"INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001-VIOLATED: "
+                            f"{module_name} imports from AIR-related module "
+                            f"'{full_module}'. ScheduleManager must not "
+                            f"depend on any AIR interface."
+                        )
+                        assert tok not in imported_names, (
+                            f"INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001-VIOLATED: "
+                            f"{module_name} imports AIR-related name "
+                            f"'{tok}' from '{full_module}'. ScheduleManager "
+                            f"must not depend on any AIR interface."
+                        )
+
+    def test_inv_schedulemanager_no_air_access_001_no_air_attributes(
+        self, contract_clock
+    ):
+        """INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 -- ARCH-BOUNDARY-002
+
+        Invariant: INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001
+        Derived law(s): LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
+        Failure class: Planning
+        Scenario: Import ScheduleManager. Inspect __init__ parameters and
+                  verify none hold AIR types. Verify ScheduleManager can be
+                  constructed without any AIR dependency.
+        """
+        import inspect
+
+        from retrovue.runtime.schedule_manager import ScheduleManager
+
+        sig = inspect.signature(ScheduleManager.__init__)
+        air_type_names = {"PlayoutSession", "PlayoutStub", "Channel"}
+
+        for param_name, param in sig.parameters.items():
+            if param_name == "self":
+                continue
+            annotation = param.annotation
+            if annotation is not inspect.Parameter.empty:
+                ann_str = str(annotation)
+                for air_name in air_type_names:
+                    assert air_name not in ann_str, (
+                        f"INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001-VIOLATED: "
+                        f"ScheduleManager.__init__ parameter '{param_name}' "
+                        f"has AIR-related type annotation '{ann_str}'. "
+                        f"ScheduleManager must be constructible without any "
+                        f"AIR dependency."
+                    )
