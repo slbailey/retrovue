@@ -2070,3 +2070,99 @@ class TestInvPlaylogNoGaps001:
         ]
         # Must not raise — entries are contiguous.
         validate_execution_entry_contiguity(entries)
+
+
+# =========================================================================
+# INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+# =========================================================================
+
+
+class TestInvPlaylogDerivedFromPlaylist001:
+    """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+
+    Every ExecutionEntry must be traceable to a TransmissionLogEntry,
+    except those created by an explicit recorded operator override.
+    An ExecutionEntry with no TransmissionLogEntry reference and no
+    operator override record MUST NOT be persisted.
+
+    Enforcement: ExecutionWindowStore.add_entries() when
+    enforce_derivation_from_playlist=True.
+
+    Derived from: LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY.
+    """
+
+    def test_inv_playlog_derived_from_playlist_001_reject_unanchored(
+        self, contract_clock
+    ):
+        """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 -- negative (unanchored)
+
+        Invariant: INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+        Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
+        Failure class: Planning
+        Scenario: Construct ExecutionEntry with transmission_log_ref=None and
+                  is_operator_override=False. Submit to ExecutionWindowStore
+                  with enforce_derivation_from_playlist=True. Assert raises
+                  ValueError matching INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED.
+        """
+        store = ExecutionWindowStore(enforce_derivation_from_playlist=True)
+        entry = _make_entry(
+            block_index=0,
+            start_offset_ms=0,
+            transmission_log_ref=None,
+            is_operator_override=False,
+        )
+
+        with pytest.raises(
+            ValueError, match="INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001-VIOLATED"
+        ):
+            store.add_entries([entry])
+
+        assert len(store.get_all_entries()) == 0, (
+            "INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 VIOLATED: "
+            "Store accepted entry without playlist derivation."
+        )
+
+    def test_inv_playlog_derived_from_playlist_001_accept_with_ref(
+        self, contract_clock
+    ):
+        """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 -- positive (with ref)
+
+        Invariant: INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+        Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: Construct ExecutionEntry with transmission_log_ref="tl-001".
+                  Submit to ExecutionWindowStore with enforcement enabled.
+                  Assert accepted.
+        """
+        store = ExecutionWindowStore(enforce_derivation_from_playlist=True)
+        entry = _make_entry(
+            block_index=0,
+            start_offset_ms=0,
+            transmission_log_ref="tl-001",
+        )
+
+        store.add_entries([entry])
+        assert len(store.get_all_entries()) == 1
+
+    def test_inv_playlog_derived_from_playlist_001_accept_override(
+        self, contract_clock
+    ):
+        """INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001 -- positive (operator override)
+
+        Invariant: INV-PLAYLOG-DERIVED-FROM-PLAYLIST-001
+        Derived law(s): LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
+        Failure class: N/A (positive path)
+        Scenario: Construct ExecutionEntry with transmission_log_ref=None,
+                  is_operator_override=True. Submit to ExecutionWindowStore
+                  with enforcement enabled. Assert accepted.
+        """
+        store = ExecutionWindowStore(enforce_derivation_from_playlist=True)
+        entry = _make_entry(
+            block_index=0,
+            start_offset_ms=0,
+            transmission_log_ref=None,
+            is_operator_override=True,
+        )
+
+        store.add_entries([entry])
+        assert len(store.get_all_entries()) == 1
