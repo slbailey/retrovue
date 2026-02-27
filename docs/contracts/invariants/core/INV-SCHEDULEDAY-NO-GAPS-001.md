@@ -6,7 +6,7 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-GRID`, `LAW-LIVENESS`
 
 ## Purpose
 
-Ensures continuous editorial coverage across the full broadcast day. A gap in ScheduleDay means Playlist has no content authority for that window. A gap in Playlist propagates into a PlaylogEvent gap — leaving a live channel with no constitutionally-authorized content to play, threatening `LAW-LIVENESS` at the playout layer.
+Ensures continuous editorial coverage across the full broadcast day. A gap in ResolvedScheduleDay means TransmissionLog has no content authority for that window. A gap in TransmissionLog propagates into an ExecutionEntry gap — leaving a live channel with no constitutionally-authorized content to play, threatening `LAW-LIVENESS` at the playout layer.
 
 ## Guarantee
 
@@ -31,8 +31,11 @@ Generate a ScheduleDay from a plan that has a known gap (upstream `INV-PLAN-FULL
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_scheduleday_no_gaps.py`
+- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayNoGaps001`
 
 ## Enforcement Evidence
 
-TODO
+- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `validate_scheduleday_contiguity()` computes absolute slot intervals, sorts by start, checks first slot starts at broadcast_day_start, adjacent pairs have no gap/overlap, last slot ends at broadcast_day_end
+- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` calls `validate_scheduleday_contiguity()` before commit when `programming_day_start_hour` is configured
+- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` calls `validate_scheduleday_contiguity()` before commit when `programming_day_start_hour` is configured
+- Error tag: `INV-SCHEDULEDAY-NO-GAPS-001-VIOLATED`
