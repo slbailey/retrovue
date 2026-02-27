@@ -643,6 +643,11 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | THPE-006 | INV-HORIZON-PROACTIVE-EXTEND-001 | Forbidden consumer-read path increments counter |
 | THPE-007 | INV-HORIZON-PROACTIVE-EXTEND-001 | Forbidden tune-in path increments counter |
 | THPE-008 | INV-HORIZON-PROACTIVE-EXTEND-001 | Forbidden block-completed path increments counter |
+| TPX-001 | INV-HORIZON-PROACTIVE-EXTEND-001 | No extension when remaining > proactive threshold |
+| TPX-002 | INV-HORIZON-PROACTIVE-EXTEND-001 | Extension when crossing threshold; depth increased |
+| TPX-003 | INV-HORIZON-PROACTIVE-EXTEND-001 | Fires before min_execution_hours violation |
+| TPX-004 | INV-HORIZON-PROACTIVE-EXTEND-001 | Pipeline failure during proactive extend; store not corrupted |
+| TPX-005 | INV-HORIZON-PROACTIVE-EXTEND-001 | Idempotent per tick; no duplicate at same clock |
 | THEM-001 | INV-HORIZON-EXECUTION-MIN-001 | Depth meets minimum after init |
 | THEM-002 | INV-HORIZON-EXECUTION-MIN-001 | Depth maintained across 24h walk |
 | THEM-003 | INV-HORIZON-EXECUTION-MIN-001 | Pipeline failure produces deficit and fault |

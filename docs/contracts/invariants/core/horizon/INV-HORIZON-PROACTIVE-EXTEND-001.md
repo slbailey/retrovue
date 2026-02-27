@@ -47,8 +47,20 @@ MUST be logged as planning fault with the observed `publish_reason_code` and cal
 - `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (THPE-003: viewer tune-in event does not trigger extension)
 - `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (THPE-004: BlockCompleted event does not trigger extension)
 - `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (THPE-005: repeated evaluate_once at same clock value produces no duplicate extension)
+- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-001: no extension when remaining > threshold)
+- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-002: extension when crossing threshold, depth increased)
+- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-003: fires before min_execution_hours violation)
+- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-004: pipeline failure during proactive extend logged, store not corrupted)
+- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-005: idempotent per tick — second evaluate at same clock produces no duplicate)
 - All tests use `DeterministicClock` via `contract_clock` fixture. No real-time waits. Extension trigger is observable via `publish_reason_code` on recorded extension events.
 
 ## Enforcement Evidence
 
-TODO
+- **Guard location:** `HorizonManager._check_proactive_extend()` called from `evaluate_once()` in `pkg/core/src/retrovue/runtime/horizon_manager.py`. Runs after execution depth, next-block readiness, and seam contiguity checks.
+- **Watermark condition:** `remaining_ms = execution_window_end_utc_ms - now_ms`. If `remaining_ms <= proactive_extend_threshold_ms` and `proactive_extend_threshold_ms > 0`, a single extension attempt is made via `extend_execution_day()`.
+- **Single-attempt-per-tick:** At most one proactive extension attempt per `evaluate_once()` call. After extension succeeds, `remaining` exceeds the threshold, so the next tick will not re-trigger unless clock advances further.
+- **Interaction with EXECUTION-MIN:** Proactive extension fires independently of `_extend_execution()`. The threshold can be set above `min_execution_hours` to trigger extension before the hard minimum is breached.
+- **Interaction with LOCKED-IMMUTABLE:** Proactive extension uses `add_entries()` (append-only), not `publish_atomic_replace()`, so locked-window constraints are not violated.
+- **Pipeline failure:** Caught, logged as `ExtensionAttempt(success=False, error_code=...)`. `proactive_extension_triggered` is still set to `True` (the attempt was made).
+- **Observability:** `HorizonHealthReport.proactive_extension_triggered` (bool), `HorizonManager.proactive_extension_triggered` property, `extension_attempt_log` entries with `reason_code="CLOCK_WATERMARK"`.
+- **Test file:** `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` — TPX-001 (no extension above threshold), TPX-002 (extension when crossing), TPX-003 (fires before min violation), TPX-004 (pipeline failure), TPX-005 (idempotent per tick).
