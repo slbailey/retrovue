@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Protocol, runtime_checkable
 
@@ -83,6 +83,19 @@ class HorizonHealthReport:
     store_entry_count: int
 
 
+@dataclass
+class ExtensionAttempt:
+    """Record of a single execution horizon extension attempt."""
+    attempt_id: str
+    now_utc_ms: int
+    window_end_before_ms: int
+    window_end_after_ms: int
+    reason_code: str        # "CLOCK_WATERMARK" | "DAILY_ROLL" | "OPERATOR_OVERRIDE"
+    triggered_by: str       # "SCHED_MGR_POLICY"
+    success: bool
+    error_code: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # HorizonManager
 # ---------------------------------------------------------------------------
@@ -128,6 +141,12 @@ class HorizonManager:
         self._execution_window_end_utc_ms: int = 0
         self._last_evaluation_utc_ms: int = 0
 
+        # Audit state
+        self._extension_attempt_count: int = 0
+        self._extension_success_count: int = 0
+        self._extension_forbidden_trigger_count: int = 0
+        self._extension_attempt_log: list[ExtensionAttempt] = []
+
         # Background thread
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -152,6 +171,26 @@ class HorizonManager:
     def last_evaluation_utc_ms(self) -> int:
         """Wall-clock time of the most recent evaluate_once() call, in epoch ms."""
         return self._last_evaluation_utc_ms
+
+    @property
+    def extension_attempt_count(self) -> int:
+        """Total execution extension attempts since init."""
+        return self._extension_attempt_count
+
+    @property
+    def extension_success_count(self) -> int:
+        """Successful execution extensions since init."""
+        return self._extension_success_count
+
+    @property
+    def extension_forbidden_trigger_count(self) -> int:
+        """Forbidden-trigger attempts intercepted since init."""
+        return self._extension_forbidden_trigger_count
+
+    @property
+    def extension_attempt_log(self) -> list[ExtensionAttempt]:
+        """Full log of all execution extension attempts."""
+        return list(self._extension_attempt_log)
 
     # ------------------------------------------------------------------
     # Depth queries
@@ -375,11 +414,35 @@ class HorizonManager:
         days_extended = 0
         while (self._execution_window_end_utc_ms < target_end_ms
                and days_extended < _MAX_EXTENSION_DAYS):
+            window_end_before = self._execution_window_end_utc_ms
+            self._extension_attempt_count += 1
+            attempt_id = f"ext-{self._extension_attempt_count}"
+
             self._logger.info(
                 "HorizonManager: extending execution → %s",
                 next_date.isoformat(),
             )
-            result = self._planning_pipeline.extend_execution_day(next_date)
+
+            try:
+                result = self._planning_pipeline.extend_execution_day(next_date)
+            except Exception as exc:
+                error_code = getattr(exc, "error_code", str(exc))
+                attempt = ExtensionAttempt(
+                    attempt_id=attempt_id,
+                    now_utc_ms=now_ms,
+                    window_end_before_ms=window_end_before,
+                    window_end_after_ms=self._execution_window_end_utc_ms,
+                    reason_code="CLOCK_WATERMARK",
+                    triggered_by="SCHED_MGR_POLICY",
+                    success=False,
+                    error_code=error_code,
+                )
+                self._extension_attempt_log.append(attempt)
+                self._logger.warning(
+                    "HorizonManager: pipeline failure for %s: %s",
+                    next_date.isoformat(), error_code,
+                )
+                break
 
             # Duck-type: result is int (legacy) or has .end_utc_ms + .entries
             if isinstance(result, int):
@@ -391,5 +454,18 @@ class HorizonManager:
 
             if end_ms > self._execution_window_end_utc_ms:
                 self._execution_window_end_utc_ms = end_ms
+
+            self._extension_success_count += 1
+            attempt = ExtensionAttempt(
+                attempt_id=attempt_id,
+                now_utc_ms=now_ms,
+                window_end_before_ms=window_end_before,
+                window_end_after_ms=self._execution_window_end_utc_ms,
+                reason_code="CLOCK_WATERMARK",
+                triggered_by="SCHED_MGR_POLICY",
+                success=True,
+            )
+            self._extension_attempt_log.append(attempt)
+
             next_date = next_date + timedelta(days=1)
             days_extended += 1
