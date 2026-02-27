@@ -39,8 +39,17 @@ MUST be logged as planning fault with fields: `fence_block_id`, `fence_utc_ms = 
 - `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (THNB-002: N+1 and N+2 present when required_lookahead_blocks=2)
 - `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (THNB-003: missing N+1 at fence detected as planning fault with correct fields)
 - `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (THNB-004: fence at programming day crossover has N+1 from next day)
+- `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (TNB-001: next block present after init via _check_next_block_ready)
+- `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (TNB-002: gap at now filled by pipeline extension)
+- `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (TNB-003: pipeline failure leaves gap; next_block_compliant=False)
+- `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` (TNB-004: locked window prevents fill; LOCKED_IMMUTABLE error)
 - All tests use `DeterministicClock` via `contract_clock` fixture. No real-time waits. Clock is advanced to exact fence times. Observable state: `ExecutionWindowStore` entry presence and `segments` population.
 
 ## Enforcement Evidence
 
-TODO
+- **Guard location:** `HorizonManager._check_next_block_ready()` called from `evaluate_once()` in `pkg/core/src/retrovue/runtime/horizon_manager.py`. After the existing execution depth check and extension, `_check_next_block_ready(now_ms, current_bd)` runs when an `execution_store` is configured.
+- **Block presence check:** Uses `ExecutionWindowStore.get_entry_at(now_ms)` to verify a block covers the current wall-clock instant. If present, `_next_block_compliant` is set to `True`.
+- **Locked window:** When `locked_window_ms > 0` and the block at `now_ms` is missing, the gap is inside the locked window `[now, now + locked_window_ms)`. The guard records `ExtensionAttempt(success=False, error_code="INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED")` and sets `_next_block_compliant = False`. No pipeline fill is attempted.
+- **Pipeline failure:** When `locked_window_ms == 0` and the block is missing, the guard attempts `extend_execution_day(current_bd)`. On exception, records `ExtensionAttempt(success=False, error_code="PIPELINE_EXHAUSTED")` and sets `_next_block_compliant = False`.
+- **Observability:** `HorizonHealthReport.next_block_compliant` (bool), `extension_attempt_log` (list of `ExtensionAttempt` with `success`, `error_code` fields), `next_block_compliant` property on `HorizonManager`.
+- **Test file:** `pkg/core/tests/contracts/test_inv_horizon_next_block_ready.py` — TNB-001 (next block present after init), TNB-002 (gap filled by extension), TNB-003 (pipeline failure leaves gap), TNB-004 (locked window prevents fill).
