@@ -15,6 +15,10 @@ This directory is the **only canonical source of runtime guarantees** for playou
   - Core: `docs/contracts/invariants/core/`
   - Sink: `docs/contracts/invariants/sink/`
   - Shared: `docs/contracts/invariants/shared/`
+- Component contracts (interface and behavior specifications):
+  - `docs/contracts/core/` — Core subsystem contracts (execution interface, horizon management, runway, transmission log, etc.)
+- Domain authority documents (glossary, pipeline model, authority vocabulary):
+  - `docs/domains/` — Domain-level reference documents (HorizonManager, ScheduleManager, PlaylistEventExecution, etc.)
 ## Test labels: contract (CI) vs soak (nightly)
 
 - **contract** — Default in CI. All contract tests have this label; long-running tests are excluded by also being marked **soak**.

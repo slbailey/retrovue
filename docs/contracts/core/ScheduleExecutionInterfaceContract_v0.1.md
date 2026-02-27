@@ -142,5 +142,5 @@ Channel Manager **consumes these artifacts as-is**. It does not transform, resol
 ---
 
 **Document version:** 0.1  
-**Related:** [Schedule Manager Planning Authority (v0.1)](ScheduleManagerPlanningAuthority_v0.1.md)  
+**Related:** [Schedule Manager Planning Authority (v0.1)](../../domains/ScheduleManagerPlanningAuthority_v0.1.md)  
 **Governs:** Schedule Manager → Channel Manager interface
