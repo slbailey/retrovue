@@ -52,7 +52,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 |-----------|------|--------------|
 | INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001.md) | LAW-RUNTIME-AUTHORITY |
-| INV-EXECUTIONENTRY-LOOKAHEAD-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-LOOKAHEAD-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-LOOKAHEAD-001.md) | LAW-RUNTIME-AUTHORITY |
+| INV-EXECUTIONENTRY-LOOKAHEAD-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-LOOKAHEAD-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-LOOKAHEAD-001.md) | LAW-RUNTIME-AUTHORITY, LAW-LIVENESS |
 | INV-EXECUTIONENTRY-NO-GAPS-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-NO-GAPS-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-NO-GAPS-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | [invariants/core/execution-entry/INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001.md](invariants/core/execution-entry/INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001.md) | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
@@ -78,6 +78,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-NO-FOREIGN-CONTENT-001 | [invariants/core/cross-cutting/INV-NO-FOREIGN-CONTENT-001.md](invariants/core/cross-cutting/INV-NO-FOREIGN-CONTENT-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-CHANNEL-TIMELINE-CONTINUITY-001 | [invariants/core/cross-cutting/INV-CHANNEL-TIMELINE-CONTINUITY-001.md](invariants/core/cross-cutting/INV-CHANNEL-TIMELINE-CONTINUITY-001.md) | LAW-CLOCK, LAW-TIMELINE |
 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | [invariants/core/cross-cutting/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md](invariants/core/cross-cutting/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
+| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | [invariants/core/cross-cutting/INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001.md](invariants/core/cross-cutting/INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001.md) | LAW-IMMUTABILITY, LAW-DERIVATION |
 
 ### Scheduling — Execution Boundary
 
@@ -90,6 +91,38 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-MATERIAL-RESOLVED-BEFORE-HORIZON-ENTRY-001 | [invariants/core/execution-boundary/INV-MATERIAL-RESOLVED-BEFORE-HORIZON-ENTRY-001.md](invariants/core/execution-boundary/INV-MATERIAL-RESOLVED-BEFORE-HORIZON-ENTRY-001.md) | LAW-ELIGIBILITY, LAW-RUNTIME-AUTHORITY |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | [invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md](invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-SWITCH-BOUNDARY-TIMING | [invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md](invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md) | — |
+
+### Asset — Entity Integrity
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-ASSET-APPROVED-IMPLIES-READY-001 | [invariants/core/asset/INV-ASSET-APPROVED-IMPLIES-READY-001.md](invariants/core/asset/INV-ASSET-APPROVED-IMPLIES-READY-001.md) | LAW-ELIGIBILITY |
+| INV-ASSET-SOFTDELETE-SYNC-001 | [invariants/core/asset/INV-ASSET-SOFTDELETE-SYNC-001.md](invariants/core/asset/INV-ASSET-SOFTDELETE-SYNC-001.md) | — |
+| INV-ASSET-CANONICAL-KEY-FORMAT-001 | [invariants/core/asset/INV-ASSET-CANONICAL-KEY-FORMAT-001.md](invariants/core/asset/INV-ASSET-CANONICAL-KEY-FORMAT-001.md) | — |
+| INV-ASSET-STATE-MACHINE-001 | [invariants/core/asset/INV-ASSET-STATE-MACHINE-001.md](invariants/core/asset/INV-ASSET-STATE-MACHINE-001.md) | LAW-ELIGIBILITY |
+
+### Asset — Enrichment Pipeline
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-ASSET-DURATION-REQUIRED-FOR-READY-001 | [invariants/core/asset/INV-ASSET-DURATION-REQUIRED-FOR-READY-001.md](invariants/core/asset/INV-ASSET-DURATION-REQUIRED-FOR-READY-001.md) | LAW-ELIGIBILITY |
+| INV-ASSET-APPROVAL-OPERATOR-ONLY-001 | [invariants/core/asset/INV-ASSET-APPROVAL-OPERATOR-ONLY-001.md](invariants/core/asset/INV-ASSET-APPROVAL-OPERATOR-ONLY-001.md) | LAW-ELIGIBILITY |
+| INV-ASSET-REPROBE-RESETS-APPROVAL-001 | [invariants/core/asset/INV-ASSET-REPROBE-RESETS-APPROVAL-001.md](invariants/core/asset/INV-ASSET-REPROBE-RESETS-APPROVAL-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
+
+### Asset — Metadata Integrity
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 | [invariants/core/asset/INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001.md](invariants/core/asset/INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001.md) | LAW-DERIVATION |
+| INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001 | [invariants/core/asset/INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001.md](invariants/core/asset/INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
+| INV-ASSET-MARKER-BOUNDS-001 | [invariants/core/asset/INV-ASSET-MARKER-BOUNDS-001.md](invariants/core/asset/INV-ASSET-MARKER-BOUNDS-001.md) | — |
+
+### Asset — Schedulability & Library Boundary
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 | [invariants/core/asset/INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001.md](invariants/core/asset/INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001.md) | LAW-ELIGIBILITY |
+| INV-ASSET-LIBRARY-PLANNING-ONLY-001 | [invariants/core/asset/INV-ASSET-LIBRARY-PLANNING-ONLY-001.md](invariants/core/asset/INV-ASSET-LIBRARY-PLANNING-ONLY-001.md) | LAW-RUNTIME-AUTHORITY |
 
 ### Scheduling — Horizon Management
 
@@ -114,6 +147,10 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-NO-SILENCE-INJECTION | [invariants/air/INV-NO-SILENCE-INJECTION.md](invariants/air/INV-NO-SILENCE-INJECTION.md) |
 | INV-PAD-PRODUCER | [invariants/air/INV-PAD-PRODUCER.md](invariants/air/INV-PAD-PRODUCER.md) |
 | INV-PRODUCER-THROTTLE | [invariants/air/INV-PRODUCER-THROTTLE.md](invariants/air/INV-PRODUCER-THROTTLE.md) |
+| INV-CONTINUOUS-FRAME-AUTHORITY-001 | [invariants/air/INV-CONTINUOUS-FRAME-AUTHORITY-001.md](invariants/air/INV-CONTINUOUS-FRAME-AUTHORITY-001.md) |
+| INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 | [invariants/air/INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001.md](invariants/air/INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001.md) |
+| INV-NO-FRAME-AUTHORITY-VACUUM-001 | [invariants/air/INV-NO-FRAME-AUTHORITY-VACUUM-001.md](invariants/air/INV-NO-FRAME-AUTHORITY-VACUUM-001.md) |
+| INV-PAD-VIDEO-READINESS-001 | [invariants/air/INV-PAD-VIDEO-READINESS-001.md](invariants/air/INV-PAD-VIDEO-READINESS-001.md) |
 | INV-TIME-MODE-EQUIVALENCE-001 | [invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md](invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md) |
 
 ---

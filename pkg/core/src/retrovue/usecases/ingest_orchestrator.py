@@ -14,7 +14,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from ..adapters.importers.base import DiscoveredItem
-from ..domain.entities import Asset, Collection, Marker, PathMapping
+from ..domain.entities import Asset, Collection, Marker, PathMapping, validate_marker_bounds, validate_state_transition
 from .asset_path_resolver import AssetPathResolver
 from ..infra.metadata.persistence import persist_asset_metadata
 from ..shared.types import MarkerKind
@@ -143,6 +143,7 @@ def ingest_collection_assets(
     for asset in assets:
         try:
             # Transition to "enriching" state
+            validate_state_transition(asset.state, "enriching")
             asset.state = "enriching"
             db.flush()
 
@@ -235,22 +236,34 @@ def ingest_collection_assets(
 
             # Extract and create chapter markers
             chapters = probed_data.get("chapters", [])
-            if chapters:
+            if chapters and asset.duration_ms and asset.duration_ms > 0:
                 for ch in chapters:
+                    ch_start = ch.get("start_ms", 0)
+                    ch_end = ch.get("end_ms", 0)
+                    try:
+                        validate_marker_bounds(ch_start, ch_end, asset.duration_ms)
+                    except ValueError:
+                        logger.warning(
+                            "Skipping out-of-bounds chapter marker for asset %s: start=%d end=%d duration=%d",
+                            asset.uuid, ch_start, ch_end, asset.duration_ms,
+                        )
+                        continue
                     marker = Marker(
                         id=uuid4(),
                         asset_uuid=asset.uuid,
                         kind=MarkerKind.CHAPTER,
-                        start_ms=ch.get("start_ms", 0),
-                        end_ms=ch.get("end_ms", 0),
+                        start_ms=ch_start,
+                        end_ms=ch_end,
                         payload={"title": ch.get("title", "")}
                     )
                     db.add(marker)
 
             # Only promote to ready if we got meaningful probe data
             if asset.duration_ms and asset.duration_ms > 0:
+                validate_state_transition(asset.state, "ready")
                 asset.state = "ready"
             else:
+                validate_state_transition(asset.state, "new")
                 asset.state = "new"
                 asset.approved_for_broadcast = False
                 logger.warning(f"Asset {asset.uuid} enriched but missing valid duration, keeping in new state")

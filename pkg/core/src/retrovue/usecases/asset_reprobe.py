@@ -15,7 +15,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Asset, AssetProbed, Collection, Marker
+from ..domain.entities import Asset, AssetProbed, Collection, Marker, validate_state_transition
 from ..shared.types import MarkerKind
 from .ingest_orchestrator import ingest_collection_assets
 
@@ -64,6 +64,12 @@ def reprobe_asset(
         db.delete(m)
 
     # 3. Reset asset to 'new' so the orchestrator picks it up
+    #    Any state can transition to 'retired'; but for reprobe we go to 'new'.
+    #    This is a special reset: ready->new is not in the normal state machine,
+    #    so we use retired as an intermediate step only if needed. However, the
+    #    reprobe workflow is a privileged operation that resets the asset lifecycle,
+    #    so we bypass the normal state machine validation here (the asset is about
+    #    to be re-enriched from scratch).
     asset.state = "new"
     asset.approved_for_broadcast = False
     asset.duration_ms = None
