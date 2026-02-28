@@ -41,4 +41,7 @@ Invalid scenario: system produces two ExecutionEntrys covering [05:00, 06:00] an
 
 ## Enforcement Evidence
 
-TODO
+- `ExecutionWindowStore` preserves entries that cross broadcast-day boundaries as single, continuous records — no automatic segmentation, truncation, or splitting at the day boundary.
+- **Carry-in logic:** `TestInvScheduledaySeamNoOverlap001` in `test_scheduling_constitution.py` validates carry-in entries are honored across day boundaries without producing overlap or duplication.
+- **Broadcast-day accounting is a projection:** Reporting layers project over committed runtime artifacts by interval intersection (per `INV-BROADCASTDAY-PROJECTION-TRACEABLE-001`); they do not mutate or re-create the underlying `ExecutionEntry`.
+- Dedicated contract test (`test_inv_playlog_crossday_not_split.py`) is referenced in `## Required Tests` but not yet implemented in the current tree.

@@ -50,4 +50,7 @@ Using FakeAdvancingClock and an ExecutionWindowStore pre-populated with a finite
 
 ## Enforcement Evidence
 
-TODO
+- **Architectural boundary:** `ChannelManager` (`channel_manager.py`) has no imports of `schedule_manager_service`, `asset_library`, `playlist_schedule_manager`, or `horizon_manager` — planning modules are inaccessible by import graph, not merely unused by convention.
+- `ChannelManager` consumes pre-built execution artifacts from `ChannelStream` / `ProgramDirector`; it does not construct, extend, or modify execution entries.
+- **Inverse boundary tested:** `TestInvSchedulemanagerNoAirAccess001` in `test_scheduling_constitution.py` proves the inverse boundary (ScheduleManager has no AIR imports), establishing the pattern of import-graph-level enforcement for component boundaries.
+- Dedicated contract tests for the ChannelManager-specific boundary (EXEC-BOUNDARY-001, EXEC-BOUNDARY-002) are referenced in `## Required Tests` but not yet implemented in the current tree.

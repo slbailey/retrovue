@@ -41,4 +41,7 @@ Invalid scenario: two ExecutionEntrys for the same channel both cover 06:00–06
 
 ## Enforcement Evidence
 
-TODO
+- `ExecutionWindowStore` validates single-authority coverage after each commit or extension operation — overlapping entries for the same channel and time interval are rejected at write time.
+- **Broadcast-day boundary safe:** Coverage validation spans broadcast-day boundaries; a carry-in entry crossing midnight does not produce a duplicate or split authority (per `INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001`).
+- **Related coverage:** `TestInvExecutionentryNoGaps001` in `test_scheduling_constitution.py` validates contiguous coverage (the no-gaps complement); `TestInvExecutionentryLockedImmutable001` validates locked entries cannot be overwritten.
+- Dedicated contract test (`test_inv_playlog_continuity_single_authority.py`) is referenced in `## Required Tests` but not yet implemented in the current tree.

@@ -36,6 +36,7 @@ struct VideoBufferFrame {
   std::string asset_uri;
   int64_t block_ct_ms = -1;  // CT at decode time; -1 for repeats
   bool was_decoded = false;   // true = real decode, false = cadence repeat or hold-last
+  int32_t segment_origin_id = -1;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: segment that produced this frame
 };
 
 // VideoLookaheadBuffer accumulates decoded video frames from a background
@@ -165,6 +166,11 @@ class VideoLookaheadBuffer {
   void SetBufferLabel(const char* label) { buffer_label_ = label; }
   const std::string& BufferLabel() const { return buffer_label_; }
 
+  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Segment origin stamped on every
+  // frame pushed by the fill thread.  Set before StartFilling.
+  void SetSegmentOriginId(int32_t id) { segment_origin_id_ = id; }
+  int32_t SegmentOriginId() const { return segment_origin_id_; }
+
   // --- Bootstrap Phase (INV-AUDIO-PRIME-003) ---
 
   // Fill-phase concept for session bootstrap.
@@ -226,6 +232,9 @@ class VideoLookaheadBuffer {
 
   // INV-AUDIO-PREROLL-ISOLATION-001: Buffer context label for diagnostics.
   std::string buffer_label_{"UNKNOWN"};
+
+  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Segment origin for frame stamping.
+  int32_t segment_origin_id_ = -1;
 
   // INV-AUDIO-PRIME-003: Bootstrap fill phase state.
   std::atomic<int> fill_phase_{static_cast<int>(FillPhase::kSteady)};

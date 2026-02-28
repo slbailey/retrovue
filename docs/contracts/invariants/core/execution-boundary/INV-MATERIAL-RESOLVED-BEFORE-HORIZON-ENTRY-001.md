@@ -51,4 +51,7 @@ Using InMemoryAssetLibrary: register an asset as `state=enriching`. Attempt to b
 
 ## Enforcement Evidence
 
-TODO
+- `ScheduleManagerService` (`schedule_manager_service.py`) resolves virtual asset references to physical paths during the planning pipeline, before execution entries are written to `ExecutionWindowStore`.
+- **Eligibility gate:** `test_inv_plan_eligible_assets_only.py` enforces that only assets with `state=ready` and `approved_for_broadcast=true` enter the planning pipeline — ineligible assets are rejected upstream of the horizon entry point.
+- `ExecutionWindowStore.add_entries()` is the sole write path for execution entries — entries pass through the planning pipeline's resolution stage before reaching this gate.
+- Dedicated contract tests (MATERIAL-RESOLVED-001, MATERIAL-RESOLVED-002) for horizon-entry-level validation are referenced in `## Required Tests` but not yet implemented in the current tree.

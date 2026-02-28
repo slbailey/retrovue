@@ -17,4 +17,8 @@ Mux waiting indefinitely for media without emitting control-plane; control-plane
 - `pkg/air/tests/contracts/PrimitiveInvariants/SinkLivenessContractTests.cpp`
 
 ## Enforcement Evidence
-TODO
+
+- **Boot window emission:** `MpegTSOutputSink` emits TS immediately during the boot window (~500ms) without waiting for media — control-plane packets (PAT/PMT, PCR) are emitted on schedule regardless of media availability.
+- **Null packet loop:** When no media is available, null TS packets maintain transport cadence and carry PCR, ensuring decoders stay synchronized.
+- **Bounded media wait:** Media wait within the mux loop is bounded by the control-plane emission cadence — the mux does not wait indefinitely for a media frame before emitting the next control-plane burst.
+- Contract tests: `Phase9OutputBootstrapTests.cpp` validates TS emission within the 500ms bound when media is not yet available. `SinkLivenessContractTests.cpp` validates continuous control-plane emission independent of media starvation.

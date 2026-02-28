@@ -53,4 +53,7 @@ Create an AsRun record without a `playlog_event_id`. Assert creation is rejected
 
 ## Enforcement Evidence
 
-TODO
+- **AsRun immutability enforced:** `TestInvAsrunImmutable001` in `test_scheduling_constitution.py` proves that AsRun records reject mutation and deletion after creation — the derivation chain cannot be broken post-hoc.
+- **ExecutionEntry reference required:** AsRun record creation requires a non-null `playlog_event_id` referencing the ExecutionEntry that authorized the broadcast.
+- **Full chain traversable:** The derivation chain (AsRun → ExecutionEntry → Playlist → ScheduleDay → SchedulePlan) is traversable via audit query; `TestInvExecutionDerivedFromScheduleday001` and `TestInvDerivationAnchorProtected001` in `test_scheduling_constitution.py` enforce upstream links.
+- Dedicated contract test (`test_inv_asrun_traceability.py`) for end-to-end chain validation is referenced in `## Required Tests` but not yet implemented in the current tree.

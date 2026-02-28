@@ -78,7 +78,7 @@ class TestInvHorizonAtomicPublish001:
             range_end_ms=EPOCH_MS + 6 * BLOCK_DUR_MS,
             new_entries=new_entries,
             generation_id=2,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
         )
         assert result.ok
         assert result.published_generation_id == 2
@@ -106,7 +106,7 @@ class TestInvHorizonAtomicPublish001:
             range_end_ms=EPOCH_MS + 6 * BLOCK_DUR_MS,
             new_entries=new_entries,
             generation_id=2,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
         )
         assert result.ok
 
@@ -130,7 +130,7 @@ class TestInvHorizonAtomicPublish001:
     def test_thap_003_snapshot_single_generation_monotonicity(self) -> None:
         """THAP-003: Sequential publishes maintain generation monotonicity.
 
-        Publish gen=1, then gen=2 (CLOCK_WATERMARK). Each snapshot must
+        Publish gen=1, then gen=2 (REASON_TIME_THRESHOLD). Each snapshot must
         show a single generation_id, and generation_ids must be monotonically
         increasing across publishes.
         """
@@ -149,7 +149,7 @@ class TestInvHorizonAtomicPublish001:
             range_end_ms=EPOCH_MS + 6 * BLOCK_DUR_MS,
             new_entries=new_entries,
             generation_id=2,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
         )
         assert result.ok
 

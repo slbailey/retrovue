@@ -34,4 +34,7 @@ Create an ExecutionEntry referencing an asset. Downgrade the asset to `state=enr
 
 ## Enforcement Evidence
 
-TODO
+- **Eligibility gate at plan level:** `test_inv_plan_eligible_assets_only.py` enforces that only assets with `state=ready` and `approved_for_broadcast=true` enter the planning pipeline — ineligible assets are rejected before they reach `ExecutionEntry` generation.
+- `ScheduleManagerService` validates asset eligibility during planning pipeline execution, prior to writing entries to `ExecutionWindowStore`.
+- **Rolling-window verification:** `HorizonManager` is responsible for re-verifying eligibility at each rolling-window extension — an asset that became ineligible after its `TransmissionLogEntry` was generated must be replaced with declared filler.
+- Dedicated contract test (`test_inv_playlog_eligible_content.py`) for runtime-level eligibility verification is referenced in `## Required Tests` but not yet implemented in the current tree.

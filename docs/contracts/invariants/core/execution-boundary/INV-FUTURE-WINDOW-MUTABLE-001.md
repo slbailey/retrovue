@@ -50,4 +50,6 @@ Using FakeAdvancingClock: set clock to T. Set lock_horizon_depth to 3 hours. Att
 
 ## Enforcement Evidence
 
-TODO
+- `ExecutionWindowStore` partitions entries by locked/future status using `lock_horizon_depth` relative to `MasterClock.now()` — entries beyond the boundary are in the flexible future and are not subject to immutability constraints.
+- `HorizonManager` evaluates the flexible-future boundary at the time of each planning operation (not at artifact creation time), allowing future-window entries to be replaced or regenerated.
+- **Inverse enforcement proven:** `TestInvExecutionentryLockedImmutable001` in `test_scheduling_constitution.py` proves locked-window entries are rejected for mutation — the complement (future-window mutability) is enforced by the absence of the lock guard outside the horizon boundary. `TestInvScheduledayImmutable001::test_inv_scheduleday_immutable_001_force_regen_creates_new_record` proves force-regeneration of ScheduleDay creates a new record (not mutation).

@@ -38,7 +38,8 @@ MUST be logged as planning fault with the observed `publish_reason_code` and cal
 
 ## Derives From
 
-`LAW-CLOCK` — time authority drives scheduling decisions, not downstream demand.
+`LAW-RUNTIME-AUTHORITY` — time authority drives scheduling decisions, not downstream demand.
+`LAW-DERIVATION` — every extension event carries an auditable `publish_reason_code`.
 
 ## Required Tests
 
@@ -60,7 +61,7 @@ MUST be logged as planning fault with the observed `publish_reason_code` and cal
 - **Watermark condition:** `remaining_ms = execution_window_end_utc_ms - now_ms`. If `remaining_ms <= proactive_extend_threshold_ms` and `proactive_extend_threshold_ms > 0`, a single extension attempt is made via `extend_execution_day()`.
 - **Single-attempt-per-tick:** At most one proactive extension attempt per `evaluate_once()` call. After extension succeeds, `remaining` exceeds the threshold, so the next tick will not re-trigger unless clock advances further.
 - **Interaction with EXECUTION-MIN:** Proactive extension fires independently of `_extend_execution()`. The threshold can be set above `min_execution_hours` to trigger extension before the hard minimum is breached.
-- **Interaction with LOCKED-IMMUTABLE:** Proactive extension uses `add_entries()` (append-only), not `publish_atomic_replace()`, so locked-window constraints are not violated.
+- **Interaction with LOCKED-IMMUTABLE:** Proactive extension uses `publish_atomic_replace()` with `reason_code="REASON_TIME_THRESHOLD"`. The publish range covers only future entries beyond the current window end, so locked-window constraints are not violated.
 - **Pipeline failure:** Caught, logged as `ExtensionAttempt(success=False, error_code=...)`. `proactive_extension_triggered` is still set to `True` (the attempt was made).
-- **Observability:** `HorizonHealthReport.proactive_extension_triggered` (bool), `HorizonManager.proactive_extension_triggered` property, `extension_attempt_log` entries with `reason_code="CLOCK_WATERMARK"`.
+- **Observability:** `HorizonHealthReport.proactive_extension_triggered` (bool), `HorizonManager.proactive_extension_triggered` property, `extension_attempt_log` entries with `reason_code="REASON_TIME_THRESHOLD"`.
 - **Test file:** `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` — TPX-001 (no extension above threshold), TPX-002 (extension when crossing), TPX-003 (fires before min violation), TPX-004 (pipeline failure), TPX-005 (idempotent per tick).

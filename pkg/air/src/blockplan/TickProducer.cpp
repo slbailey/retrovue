@@ -10,10 +10,12 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
 #include "retrovue/blockplan/FFmpegDecoderAdapter.hpp"
 #include "retrovue/decode/FFmpegDecoder.h"
+#include "retrovue/util/Logger.hpp"
 
 namespace retrovue::blockplan {
 
@@ -320,6 +322,42 @@ void TickProducer::PrimeFirstFrame() {
       ct_before
   };
 
+  // INV-TRANSITION-004: Apply segment transition fade to the primed frame.
+  // Same code path as DecodeNextFrameRaw — no bypass.
+  ApplySegmentTransitionFade(*primed_frame_, ct_before);
+
+  // INSTRUMENTATION: INV-TRANSITION-004 audit — report alpha state of primed frame.
+  {
+    constexpr int32_t kAlphaOnePrime = 65536;
+    int32_t audit_alpha_q16 = kAlphaOnePrime;
+    bool fade_configured = false;
+    if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
+        current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
+      const auto& seg = validated_.plan.segments[current_segment_index_];
+      const auto& boundary = boundaries_[current_segment_index_];
+      if (seg.transition_in == TransitionType::kFade && seg.transition_in_duration_ms > 0) {
+        fade_configured = true;
+        int64_t seg_ct = ct_before - boundary.start_ct_ms;
+        int64_t fade_dur = seg.transition_in_duration_ms;
+        if (seg_ct < fade_dur && fade_dur > 0) {
+          int32_t in_alpha = static_cast<int32_t>((seg_ct * kAlphaOnePrime) / fade_dur);
+          if (in_alpha < audit_alpha_q16) audit_alpha_q16 = in_alpha;
+        }
+      }
+    }
+    // fade_actually_applied=true when fade_configured and alpha != kAlphaOne.
+    bool actually_applied = fade_configured && (audit_alpha_q16 < kAlphaOnePrime);
+    { std::ostringstream oss;
+      oss << "[TickProducer] PRIME_FADE_AUDIT"
+          << " segment_index=" << current_segment_index_
+          << " ct_before=" << ct_before
+          << " fade_configured=" << fade_configured
+          << " computed_alpha_q16=" << audit_alpha_q16
+          << " fade_actually_applied=" << actually_applied
+          << " asset=" << current_asset_uri_;
+      retrovue::util::Logger::Info(oss.str()); }
+  }
+
   std::cout << "[TickProducer] INV-BLOCK-PRIME-001: primed frame 0"
             << " pts_ms=" << decoded_pts_ms
             << " ct_before=" << ct_before
@@ -542,6 +580,45 @@ static void ApplyFade(FrameData& fd, int32_t alpha_q16) {
 }
 
 // =============================================================================
+// ApplySegmentTransitionFade — INV-TRANSITION-004: single code path for fade
+// Called from PrimeFirstFrame and DecodeNextFrameRaw.
+// =============================================================================
+
+void TickProducer::ApplySegmentTransitionFade(FrameData& fd, int64_t ct_before) {
+  if (current_segment_index_ >= static_cast<int32_t>(validated_.plan.segments.size()) ||
+      current_segment_index_ >= static_cast<int32_t>(boundaries_.size())) {
+    return;
+  }
+  const auto& seg = validated_.plan.segments[current_segment_index_];
+  const auto& boundary = boundaries_[current_segment_index_];
+  int32_t alpha_q16 = kAlphaOne;
+
+  if (seg.transition_in == TransitionType::kFade && seg.transition_in_duration_ms > 0) {
+    int64_t seg_ct = ct_before - boundary.start_ct_ms;
+    int64_t fade_dur = seg.transition_in_duration_ms;
+    if (seg_ct < fade_dur && fade_dur > 0) {
+      int32_t in_alpha = static_cast<int32_t>((seg_ct * kAlphaOne) / fade_dur);
+      if (in_alpha < alpha_q16) alpha_q16 = in_alpha;
+    }
+  }
+  if (seg.transition_out == TransitionType::kFade && seg.transition_out_duration_ms > 0) {
+    int64_t seg_duration = boundary.end_ct_ms - boundary.start_ct_ms;
+    int64_t seg_ct = ct_before - boundary.start_ct_ms;
+    int64_t fade_dur = seg.transition_out_duration_ms;
+    int64_t fade_start = seg_duration - fade_dur;
+    if (seg_ct >= fade_start && fade_dur > 0) {
+      int64_t time_in_fade = seg_ct - fade_start;
+      int32_t out_alpha = static_cast<int32_t>((time_in_fade * kAlphaOne) / fade_dur);
+      int32_t a = kAlphaOne - out_alpha;
+      if (a < alpha_q16) alpha_q16 = a;
+    }
+  }
+  if (alpha_q16 < kAlphaOne) {
+    ApplyFade(fd, alpha_q16);
+  }
+}
+
+// =============================================================================
 // DecodeNextFrameRaw — decode-only frame advancement (no delivery state)
 // =============================================================================
 
@@ -627,37 +704,8 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
       ct_before
   };
 
-  // Apply segment transition fade (INV-TRANSITION-004). Fixed-point alpha_q16 [0, 65536].
-  if (current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
-      current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
-    const auto& seg = validated_.plan.segments[current_segment_index_];
-    const auto& boundary = boundaries_[current_segment_index_];
-    int32_t alpha_q16 = kAlphaOne;
-
-    if (seg.transition_in == TransitionType::kFade && seg.transition_in_duration_ms > 0) {
-      int64_t seg_ct = ct_before - boundary.start_ct_ms;
-      int64_t fade_dur = seg.transition_in_duration_ms;
-      if (seg_ct < fade_dur && fade_dur > 0) {
-        int32_t in_alpha = static_cast<int32_t>((seg_ct * kAlphaOne) / fade_dur);
-        if (in_alpha < alpha_q16) alpha_q16 = in_alpha;
-      }
-    }
-    if (seg.transition_out == TransitionType::kFade && seg.transition_out_duration_ms > 0) {
-      int64_t seg_duration = boundary.end_ct_ms - boundary.start_ct_ms;
-      int64_t seg_ct = ct_before - boundary.start_ct_ms;
-      int64_t fade_dur = seg.transition_out_duration_ms;
-      int64_t fade_start = seg_duration - fade_dur;
-      if (seg_ct >= fade_start && fade_dur > 0) {
-        int64_t time_in_fade = seg_ct - fade_start;
-        int32_t out_alpha = static_cast<int32_t>((time_in_fade * kAlphaOne) / fade_dur);
-        int32_t a = kAlphaOne - out_alpha;
-        if (a < alpha_q16) alpha_q16 = a;
-      }
-    }
-    if (alpha_q16 < kAlphaOne) {
-      ApplyFade(result, alpha_q16);
-    }
-  }
+  // INV-TRANSITION-004: Apply segment transition fade (shared code path).
+  ApplySegmentTransitionFade(result, ct_before);
 
   if (advance_output_state) frame_index_++;
   return result;

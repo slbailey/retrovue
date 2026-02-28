@@ -110,7 +110,7 @@ class TestInvHorizonLockedImmutable001:
             range_end_ms=EPOCH_MS + BLOCK_DUR_MS,
             new_entries=[_make_entry(0)],
             generation_id=2,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
             operator_override=False,
         )
         assert not result.ok
@@ -218,7 +218,7 @@ class TestInvHorizonLockedImmutable001:
             range_end_ms=flexible_start + 2 * BLOCK_DUR_MS,
             new_entries=[_make_entry(i) for i in range(4, 6)],
             generation_id=2,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
             operator_override=False,
         )
         assert result.ok
@@ -251,7 +251,7 @@ class TestInvHorizonLockedImmutable001:
             range_end_ms=flexible_start + 2 * BLOCK_DUR_MS,
             new_entries=[_make_entry(i) for i in range(4, 6)],
             generation_id=2,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
             operator_override=False,
         )
         assert result_1.ok
@@ -273,7 +273,7 @@ class TestInvHorizonLockedImmutable001:
             range_end_ms=flexible_start + 2 * BLOCK_DUR_MS,
             new_entries=[_make_entry(i) for i in range(4, 6)],
             generation_id=3,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
             operator_override=False,
         )
         assert not result_2.ok

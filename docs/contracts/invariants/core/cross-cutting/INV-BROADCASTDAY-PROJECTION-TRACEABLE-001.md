@@ -42,4 +42,7 @@ Invalid scenario: the Tuesday 06:00–07:00 report row is created with no source
 
 ## Enforcement Evidence
 
-TODO
+- **Interval-intersection derivation:** Broadcast-day reporting rows are projected by interval intersection over committed runtime artifacts (`ExecutionEntry` / `AsRun`); they do not create independent authority over any time interval.
+- **Source reference required:** Each reporting row must reference the underlying `ExecutionEntry` or `AsRun` record ID from which it was derived — a null or absent source reference is a violation.
+- **Cross-day safe:** `TestInvScheduledaySeamNoOverlap001` in `test_scheduling_constitution.py` validates that broadcast-day boundary handling does not produce overlapping or orphaned records — the same integrity applies to reporting projections.
+- Dedicated contract test (`test_inv_broadcastday_projection_traceable.py`) is referenced in `## Required Tests` but not yet implemented in the current tree.

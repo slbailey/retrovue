@@ -17,4 +17,8 @@ A/V delta exceeds one frame duration; one stream decoding while the other is blo
 - `pkg/air/tests/contracts/Phase9SymmetricBackpressureTests.cpp`
 
 ## Enforcement Evidence
-TODO
+
+- **Symmetric gate:** Decode gate in `VideoLookaheadBuffer` fill thread checks BOTH video and audio buffer depth before calling `av_read_frame` — when either buffer is full, both streams are blocked.
+- **No audio drop:** Audio is never dropped under backpressure. `AudioLookaheadBuffer::Push` blocks (does not discard) when at capacity. Only video may be dropped in extreme conditions.
+- **A/V delta bounded:** Single fill thread decodes both streams interleaved from the same demuxer, ensuring neither stream leads the other by more than one frame duration.
+- Contract tests: `Phase9SymmetricBackpressureTests.cpp` validates symmetric throttling and A/V delta. `Phase10PipelineFlowControlTests.cpp` (`TEST_INV_P10_BACKPRESSURE_SYMMETRIC_NoAudioDrops`) proves zero audio drops under backpressure.

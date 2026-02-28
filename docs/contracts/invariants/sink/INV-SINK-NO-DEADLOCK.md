@@ -16,4 +16,9 @@ No forward progress without terminal state; circular wait detected.
 - `pkg/air/tests/contracts/Phase10PipelineFlowControlTests.cpp` (TEST_INV_SWITCH_READINESS_002_WriteBarrierNoDeadlock)
 
 ## Enforcement Evidence
-TODO
+
+- **Non-blocking output:** Output FD uses `O_NONBLOCK` — write path cannot block the render loop waiting on a slow consumer.
+- **Atomic producer switching:** `OutputBus` performs atomic producer switching (no mutex contention between preview and live paths), eliminating lock-ordering hazards.
+- **Single-threaded render loop:** `ProgramOutput` processes frames in a single-threaded render loop — no inter-thread circular wait is possible within the emission path.
+- **Bounded buffers:** `VideoLookaheadBuffer` and `AudioLookaheadBuffer` have finite capacity with blocking push — producers yield rather than accumulate unbounded work that could starve downstream.
+- Contract tests: `Phase10PipelineFlowControlTests.cpp` (`TEST_INV_SWITCH_READINESS_002_WriteBarrierNoDeadlock`) proves no deadlock under sustained load with concurrent producer switching.

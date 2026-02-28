@@ -20,11 +20,12 @@ import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.execution_window_store import ExecutionWindowStore
 from retrovue.runtime.horizon_config import HorizonNoScheduleDataError
+from retrovue.runtime.override_record import InMemoryOverrideStore
 from retrovue.runtime.schedule_manager import ScheduleManager
 from retrovue.runtime.schedule_types import (
     Episode,
@@ -363,11 +364,15 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         execution_store: ExecutionWindowStore | None = None,
         programming_day_start_hour: int | None = None,
         enforce_derivation_traceability: bool = False,
+        override_store: InMemoryOverrideStore | None = None,
+        clock_fn: Callable[[], int] | None = None,
     ) -> None:
         self._resolved: dict[str, dict[date, ResolvedScheduleDay]] = {}
         self._execution_store = execution_store
         self._programming_day_start_hour = programming_day_start_hour
         self._enforce_derivation_traceability = enforce_derivation_traceability
+        self._override_store = override_store
+        self._clock_fn = clock_fn
         self._lock = threading.Lock()
 
     def get(self, channel_id: str, programming_day_date: date) -> ResolvedScheduleDay | None:
@@ -521,8 +526,13 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
         supersedes_id pointing to the original. The new record atomically
         replaces the original as the authoritative record.
 
+        INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001: When an override_store
+        is configured, the override record MUST be persisted before the
+        artifact is committed. If persist fails, the store is unchanged.
+
         Raises:
             ValueError: If no existing record to override.
+            RuntimeError: If override record persistence fails.
 
         Returns:
             The new override ResolvedScheduleDay.
@@ -536,6 +546,17 @@ class InMemoryResolvedStore(ResolvedScheduleStore):
                     f"channel_id={channel_id!r}, "
                     f"programming_day_date={resolved.programming_day_date!r}. "
                     "Nothing to override."
+                )
+
+            # INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001:
+            # Persist override record BEFORE creating artifact.
+            if self._override_store is not None:
+                now_ms = self._clock_fn() if self._clock_fn is not None else 0
+                self._override_store.persist(
+                    layer="ScheduleDay",
+                    target_id=f"{channel_id}/{resolved.programming_day_date}",
+                    reason_code="OPERATOR_OVERRIDE",
+                    now_ms=now_ms,
                 )
 
             # Create override record with metadata linking to superseded.

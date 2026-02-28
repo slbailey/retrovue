@@ -461,6 +461,14 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/PipelineManagerPadFenceAudio60fpsReproContractTests.cpp
   tests/contracts/BlockPlan/PipelineManagerPadFenceAudioSwapReproContractTests.cpp
   tests/contracts/BlockPlan/PipelineManagerSegmentSwapPadFenceContractTests.cpp
+  tests/contracts/BlockPlan/FrameAuthorityVacuumContractTests.cpp
+  tests/contracts/BlockPlan/AtomicAuthorityTransferContractTests.cpp
+  tests/contracts/BlockPlan/ForceExecutePadToContentBleedContractTests.cpp
+  tests/contracts/BlockPlan/NormalCascadeSeamBleedContractTests.cpp
+  tests/contracts/BlockPlan/NoFrameAuthorityVacuumContractTests.cpp
+  tests/contracts/BlockPlan/PadVideoReadinessContractTests.cpp
+  tests/contracts/BlockPlan/PrimedFrameFadeBypassContractTests.cpp
+  tests/contracts/BlockPlan/ContentSeamTransitionFlashContractTests.cpp
   tests/contracts/test_inv_execution_continuous_output_001.cpp
   tests/contracts/test_inv_fps_resample_drift.cpp
   tests/contracts/test_inv_no_float_fps_timebase_001.cpp

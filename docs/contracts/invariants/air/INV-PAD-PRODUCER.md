@@ -19,4 +19,8 @@ Selecting pad before first real frame committed; pad output not conforming to se
 - `pkg/air/tests/contracts/BlockPlan/PipelineManagerPadFenceAudioContractTests.cpp`
 
 ## Enforcement Evidence
-TODO
+
+- `PadProducer` (`PadProducer.hpp`) constructed at session start and lives for the session lifetime — unconditionally available as a TAKE-selectable source.
+- **Content-before-pad gate:** `PipelineManager` tracks whether the first real content frame has been committed; PAD selection is blocked until this gate opens.
+- **Format conformance:** `PadProducer::VideoFrame()` and `PadProducer::AudioFrame()` produce black video and silent audio matching the session program format (resolution, frame rate, sample rate).
+- Contract tests: `PadProducerContractTests.cpp` validates format conformance, session-lifetime availability, and content-before-pad gate. `PipelineManagerPadFenceAudioContractTests.cpp` validates PAD audio fence behavior at segment boundaries.

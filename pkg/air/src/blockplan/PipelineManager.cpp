@@ -1494,11 +1494,29 @@ void PipelineManager::Run() {
     if (take_b && preview_video_buffer_) {
       v_src = preview_video_buffer_.get();        // Block swap: B buffers
     } else if (take_segment && segment_b_video_buffer_) {
-      if (segb_primed && segb_depth > 0) {
+      // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Only read from incoming segment's
+      // buffer when it is eligible for swap. Reading from B when B is not eligible
+      // produces a frame with incoming origin, but the swap defers in POST-TAKE —
+      // causing origin(T) != active(T). Override paths (PAD_SEAM_OVERRIDE,
+      // CONTENT_SEAM_OVERRIDE) handle their seam types with paired force-swap flags.
+      const int32_t to_seg_vsrc = current_segment_index_ + 1;
+      auto incoming_at_selection = GetIncomingSegmentState(to_seg_vsrc);
+      if (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection)) {
         v_src = segment_b_video_buffer_.get();
       } else {
-        v_src = video_buffer_.get();  // Defer to B until B is ready
+        v_src = video_buffer_.get();
       }
+      // Diagnostic: log v_src decision at seam tick.
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEAM_VSRC_GATE"
+            << " tick=" << session_frame_index
+            << " active_segment=" << current_segment_index_
+            << " a_depth=" << a_depth
+            << " segb_depth=" << segb_depth
+            << " segb_audio_ms=" << (incoming_at_selection ? incoming_at_selection->incoming_audio_ms : -1)
+            << " v_src=" << (v_src == segment_b_video_buffer_.get() ? "incoming" : "active")
+            << " eligible=" << (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection) ? "true" : "false");
+        Logger::Info(oss.str()); }
     } else if (take_b) {
       v_src = preview_video_buffer_.get();         // Block swap: may be null
     } else {
@@ -1516,6 +1534,58 @@ void PipelineManager::Run() {
     } else if (v_src == segment_b_video_buffer_.get()) {
       v_src_primed = segb_primed;
       v_src_depth = segb_depth;
+    }
+
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: PAD seam detection.
+    // When take_segment fires and the target segment is PAD, the frame
+    // selection cascade MUST emit pad_producer_->VideoFrame() — not a
+    // stale hold from the old content buffer.  Computed once, used as
+    // highest-priority override in the cascade below.
+    // ==================================================================
+    bool pad_seam_this_tick = false;
+    int32_t pad_seam_to_seg = -1;
+    if (take_segment) {
+      pad_seam_to_seg = current_segment_index_ + 1;
+      if (pad_seam_to_seg < static_cast<int32_t>(live_parent_block_.segments.size()) &&
+          live_parent_block_.segments[pad_seam_to_seg].segment_type == SegmentType::kPad) {
+        pad_seam_this_tick = true;
+      }
+    }
+
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Content seam override.
+    // Symmetric to PAD seam: when take_segment targets a CONTENT
+    // segment and the active segment (PAD) has no buffered video,
+    // the frame-selection cascade SHOULD pop from segment B (the
+    // incoming CONTENT buffer) so the emitted frame originates from
+    // the new authority — not a stale PAD hold/repeat surface.
+    // EnsureIncomingBReadyForSeam is promoted to here (normally runs
+    // in POST-TAKE after encode) so that segment B exists in time for
+    // the cascade.  The function is idempotent; the POST-TAKE call
+    // becomes a no-op when this fires first.
+    // Detected here; used as a high-priority cascade branch below.
+    // ==================================================================
+    bool content_seam_override_this_tick = false;
+    int32_t content_seam_to_seg = -1;
+    if (take_segment && !pad_seam_this_tick) {
+      const int32_t to_seg = current_segment_index_ + 1;
+      const bool active_is_pad =
+          (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()) &&
+           live_parent_block_.segments[current_segment_index_].segment_type == SegmentType::kPad);
+      if (active_is_pad && a_depth == 0) {
+        // Promote B creation so segment_b_video_buffer_ exists for the
+        // content seam override cascade branch.
+        EnsureIncomingBReadyForSeam(to_seg, session_frame_index);
+        // Re-sample segment B depth after ensure (fill thread may have
+        // pushed frames between session init and now).
+        if (segment_b_video_buffer_) {
+          segb_primed = segment_b_video_buffer_->IsPrimed();
+          segb_depth = segment_b_video_buffer_->DepthFrames();
+          content_seam_override_this_tick = true;
+          content_seam_to_seg = to_seg;
+        }
+      }
     }
 
     // INV-SEAM-AUDIO-001: segment-B audio must not be consumed by tick loop
@@ -1615,9 +1685,72 @@ void PipelineManager::Run() {
       }
     }
 
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: PAD seam override.
+    // Highest-priority branch — when authority is transferring to a PAD
+    // segment THIS tick, force pad_producer_->VideoFrame() synchronously.
+    // No hold, no repeat, no stale content frame.  This branch MUST
+    // precede all other cascade paths so nothing can override it.
+    // ==================================================================
+    if (pad_seam_this_tick) {
+      chosen_video = &pad_producer_->VideoFrame();
+      decision = TakeDecision::kPad;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PAD_SEAM_OVERRIDE"
+            << " tick=" << session_frame_index
+            << " from_segment=" << current_segment_index_
+            << " to_segment=" << pad_seam_to_seg;
+        Logger::Info(oss.str()); }
+    }
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Content seam override.
+    // Symmetric to PAD_SEAM_OVERRIDE: when authority is transferring
+    // FROM PAD TO CONTENT this tick, pop a genuine content frame from
+    // segment B.  This ensures the emitted frame originates from the
+    // incoming authority — not a stale PAD hold surface.  If the pop
+    // fails (segment B still empty due to fill-thread timing), fall
+    // through to the normal cascade; the POST-TAKE restamp safety net
+    // handles that edge case.
+    // ==================================================================
+    else if (content_seam_override_this_tick && segment_b_video_buffer_ &&
+             segment_b_video_buffer_->TryPopFrame(vbf)) {
+      chosen_video = &vbf.video;
+      decision = TakeDecision::kContentA;
+      last_good_video_frame_ = vbf.video;
+      has_last_good_video_frame_ = true;
+      last_good_asset_uri_ = vbf.asset_uri;
+      last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+          ? live_tp()->GetBlock().block_id : std::string();
+      last_good_offset_ms_ = vbf.block_ct_ms;
+      if (!vbf.video.data.empty()) {
+        size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+        last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                        std::min(y_size, vbf.video.data.size()));
+      } else {
+        last_good_y_crc32_ = 0;
+      }
+      { std::ostringstream oss;
+        oss << "[PipelineManager] CONTENT_SEAM_OVERRIDE"
+            << " tick=" << session_frame_index
+            << " from_segment=" << current_segment_index_
+            << " to_segment=" << content_seam_to_seg
+            << " segb_video_depth=" << segment_b_video_buffer_->DepthFrames();
+        Logger::Info(oss.str()); }
+      // INSTRUMENTATION: Log whether the popped frame has fade applied.
+      // was_decoded=true means it came from a real decode (primed or fill).
+      // block_ct_ms reveals its position in the segment timeline.
+      { std::ostringstream oss;
+        oss << "[PipelineManager] CONTENT_SEAM_FRAME_FADE_AUDIT"
+            << " tick=" << session_frame_index
+            << " was_decoded=" << vbf.was_decoded
+            << " block_ct_ms=" << vbf.block_ct_ms
+            << " segment_origin_id=" << vbf.segment_origin_id
+            << " y_crc32=" << last_good_y_crc32_;
+        Logger::Info(oss.str()); }
+    }
     // Explicit repeat path first: on repeat ticks we do NOT call TryPopFrame().
     // Selection only: set decision and chosen_video; single encodeFrame after cascade.
-    if (is_cadence_repeat) {
+    else if (is_cadence_repeat) {
       if (has_last_good_video_frame_) {
         chosen_video = &last_good_video_frame_;
         decision = TakeDecision::kRepeat;
@@ -1731,8 +1864,27 @@ void PipelineManager::Run() {
       }
     } else if (take_segment && has_last_good_video_frame_) {
       // Segment seam: segment B buffer temporarily empty (e.g. single frame drained).
-      chosen_video = &last_good_video_frame_;
-      decision = TakeDecision::kHold;  // Hold at segment seam
+      // INV-TRANSITION-005 / ADR-014: When transitioning FROM PAD to a CONTENT
+      // segment with transition_in=kFade, the first emitted frame must satisfy
+      // alpha(0)=0 (fully attenuated / black).  Emitting last_good_video_frame_
+      // here would show stale pre-PAD content at full brightness — a visible
+      // flash defect.  Emit a pad frame (black) instead, which is observationally
+      // identical to alpha=0 and preserves visual continuity (black→fade-in).
+      const int32_t to_seg_idx = current_segment_index_ + 1;
+      const bool active_is_pad_here =
+          (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()) &&
+           live_parent_block_.segments[current_segment_index_].segment_type == SegmentType::kPad);
+      const bool incoming_has_fade =
+          (to_seg_idx < static_cast<int32_t>(live_parent_block_.segments.size()) &&
+           live_parent_block_.segments[to_seg_idx].transition_in == TransitionType::kFade &&
+           live_parent_block_.segments[to_seg_idx].transition_in_duration_ms > 0);
+      if (active_is_pad_here && incoming_has_fade) {
+        chosen_video = &pad_producer_->VideoFrame();
+        decision = TakeDecision::kPad;
+      } else {
+        chosen_video = &last_good_video_frame_;
+        decision = TakeDecision::kHold;  // Hold at segment seam
+      }
     } else if (a_was_primed && live_tp()->HasDecoder()) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
       // Only treat as hard fault when live has a decoder (expects content). Pad-only
@@ -1768,6 +1920,103 @@ void PipelineManager::Run() {
       case TakeDecision::kStandby:  take_source_char = 'S'; break;
       case TakeDecision::kPad:      take_source_char = 'P'; break;
     }
+
+    // ==================================================================
+    // SEAM_TICK_EMISSION_AUDIT — INV-TRANSITION-005 disambiguation.
+    // Emitted only on segment seam ticks (take_segment == true).
+    // Reports the cascade decision, chosen frame fingerprint, transition
+    // spec, and whether the content seam override fired.  One log line
+    // per seam tick is sufficient to distinguish all flash hypotheses.
+    // ==================================================================
+    if (take_segment && chosen_video) {
+      const int32_t to_seg_audit = current_segment_index_ + 1;
+      const bool active_is_pad_audit =
+          (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()) &&
+           live_parent_block_.segments[current_segment_index_].segment_type == SegmentType::kPad);
+      // Y-plane CRC of the chosen frame.
+      uint32_t chosen_y_crc = 0;
+      int64_t chosen_y_mean = -1;
+      if (!chosen_video->data.empty()) {
+        size_t y_size = static_cast<size_t>(ctx_->width) * ctx_->height;
+        size_t actual = std::min(y_size, chosen_video->data.size());
+        chosen_y_crc = CRC32YPlane(chosen_video->data.data(), actual);
+        int64_t sum = 0;
+        for (size_t i = 0; i < actual; i++) sum += chosen_video->data[i];
+        chosen_y_mean = actual > 0 ? sum / static_cast<int64_t>(actual) : 0;
+      }
+      // Transition spec for the incoming segment.
+      int32_t tin_type = 0;
+      uint32_t tin_dur = 0;
+      if (to_seg_audit < static_cast<int32_t>(live_parent_block_.segments.size())) {
+        tin_type = static_cast<int32_t>(live_parent_block_.segments[to_seg_audit].transition_in);
+        tin_dur = live_parent_block_.segments[to_seg_audit].transition_in_duration_ms;
+      }
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEAM_TICK_EMISSION_AUDIT"
+            << " tick=" << session_frame_index
+            << " decision=" << take_source_char
+            << " from_segment=" << current_segment_index_
+            << " to_segment=" << to_seg_audit
+            << " active_is_pad=" << active_is_pad_audit
+            << " content_seam_override_attempted=" << (take_segment && !pad_seam_this_tick && active_is_pad_audit ? 1 : 0)
+            << " content_seam_override_fired=" << (content_seam_override_this_tick ? 1 : 0)
+            << " segb_available=" << (segment_b_video_buffer_ ? 1 : 0)
+            << " segb_depth=" << (segment_b_video_buffer_ ? segment_b_video_buffer_->DepthFrames() : -1)
+            << " seam_preparer_has_result=" << (seam_preparer_->HasSegmentResult() ? 1 : 0)
+            << " transition_in_type=" << tin_type
+            << " transition_in_duration_ms=" << tin_dur
+            << " y_crc32=" << chosen_y_crc
+            << " y_plane_mean=" << chosen_y_mean
+            << " last_good_y_crc32=" << last_good_y_crc32_
+            << " cadence_enabled=" << (frame_selection_cadence_enabled_ ? 1 : 0)
+            << " cadence_repeat=" << (is_cadence_repeat ? 1 : 0);
+        Logger::Info(oss.str()); }
+    }
+
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Track frame origin segment.
+    // For fresh pops, origin comes from the VideoBufferFrame (frame-attached).
+    // For hold/repeat, origin comes from last_good_origin_segment_ (state).
+    // For PAD seam, origin is the incoming PAD segment (pad_seam_to_seg).
+    // For content seam override, origin is the incoming CONTENT segment.
+    // For other pad/standby/block-swap, origin is -2 (skip check).
+    // ==================================================================
+    int32_t frame_origin_segment_id = -1;
+    if (pad_seam_this_tick) {
+      // PAD seam: origin is the incoming PAD segment.  The invariant
+      // check will fire after PerformSegmentSwap bumps current_segment_index_.
+      frame_origin_segment_id = pad_seam_to_seg;
+      last_good_origin_segment_ = pad_seam_to_seg;
+    } else if (content_seam_override_this_tick && decision == TakeDecision::kContentA) {
+      // Content seam override: origin is the incoming CONTENT segment.
+      // The pop succeeded in CONTENT_SEAM_OVERRIDE — stamp explicitly
+      // so origin does not depend on v_src pointer identity.
+      frame_origin_segment_id = content_seam_to_seg;
+      last_good_origin_segment_ = content_seam_to_seg;
+    } else {
+    switch (decision) {
+      case TakeDecision::kContentA:
+        // Frame-attached origin if buffer was stamped; else infer from v_src.
+        if (vbf.segment_origin_id >= 0) {
+          frame_origin_segment_id = vbf.segment_origin_id;
+        } else if (v_src == segment_b_video_buffer_.get()) {
+          frame_origin_segment_id = current_segment_index_ + 1;
+        } else {
+          frame_origin_segment_id = current_segment_index_;
+        }
+        last_good_origin_segment_ = frame_origin_segment_id;
+        break;
+      case TakeDecision::kRepeat:
+      case TakeDecision::kHold:
+        frame_origin_segment_id = last_good_origin_segment_;
+        break;
+      case TakeDecision::kContentB:
+      case TakeDecision::kPad:
+      case TakeDecision::kStandby:
+        frame_origin_segment_id = -2;  // Different invariant domain; skip check.
+        break;
+    }
+    }  // else (!pad_seam_this_tick)
 
     // INV-PAD-PRODUCER-007: Content-before-pad gate (decision phase only).
     // If we would emit pad and decoder might produce content soon, skip this tick.
@@ -2337,10 +2586,54 @@ void PipelineManager::Run() {
       EnsureIncomingBReadyForSeam(to_seg, session_frame_index);
       std::optional<IncomingState> incoming = GetIncomingSegmentState(to_seg);
 
+      // INV-CONTINUOUS-FRAME-AUTHORITY-001 enforcement: prevent frame-authority vacuum.
+      // Force swap when active cannot provide video and successor has video,
+      // even if normal eligibility gate (audio depth) is not met.
+      const int active_video_depth = video_buffer_ ? video_buffer_->DepthFrames() : 0;
+      const bool force_swap_for_frame_authority =
+          active_video_depth == 0 &&
+          incoming.has_value() &&
+          incoming->incoming_video_frames > 0 &&
+          !IsIncomingSegmentEligibleForSwap(*incoming);
+
+      // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: When a PAD frame was actually
+      // selected this tick (pad_seam_this_tick AND decision==kPad), the swap
+      // MUST NOT be deferred.  The authority check requires current_segment_index_
+      // to match the frame_origin_segment_id stamped during PAD_SEAM_OVERRIDE.
+      const bool force_swap_for_pad_seam =
+          pad_seam_this_tick &&
+          decision == TakeDecision::kPad &&
+          incoming.has_value();
+
+      // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: When a CONTENT frame was
+      // popped from segment B via CONTENT_SEAM_OVERRIDE, the swap MUST NOT
+      // be deferred.  The emitted frame already originates from the incoming
+      // segment; deferring the swap would leave current_segment_index_ on the
+      // old PAD segment, causing origin != active.
+      const bool force_swap_for_content_seam =
+          content_seam_override_this_tick &&
+          decision == TakeDecision::kContentA &&
+          incoming.has_value();
+
       if (!incoming) {
         // No incoming source (no segment B, no worker result).
         if (last_logged_defer_seam_frame_ != next_seam_frame_) {
           last_logged_defer_seam_frame_ = next_seam_frame_;
+          // INV-CONTINUOUS-FRAME-AUTHORITY-001: extend active — no incoming to swap to.
+          if (active_video_depth == 0) {
+            { std::ostringstream oss;
+              oss << "[PipelineManager] EXTEND_ACTIVE_DUE_TO_FRAME_AUTHORITY"
+                  << " tick=" << session_frame_index
+                  << " active_segment_id=" << current_segment_index_
+                  << " successor_segment_id=" << to_seg
+                  << " active_video_depth=" << active_video_depth
+                  << " successor_video_depth=-1"
+                  << " successor_seam_ready=false";
+              Logger::Error(oss.str()); }
+            CheckFrameAuthorityVacuum(
+                session_frame_index, current_segment_index_,
+                active_video_depth, to_seg, -1, false);
+          }
           { std::ostringstream oss;
             oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
                 << " reason=no_incoming"
@@ -2372,9 +2665,27 @@ void PipelineManager::Run() {
             Logger::Info(oss.str()); }
         }
         // Keep current live; do not call PerformSegmentSwap.
-      } else if (!IsIncomingSegmentEligibleForSwap(*incoming)) {
+      } else if (!IsIncomingSegmentEligibleForSwap(*incoming) && !force_swap_for_frame_authority && !force_swap_for_pad_seam && !force_swap_for_content_seam) {
+        // Incoming exists but not eligible, and no force-swap applicable.
         if (last_logged_defer_seam_frame_ != next_seam_frame_) {
           last_logged_defer_seam_frame_ = next_seam_frame_;
+          // INV-CONTINUOUS-FRAME-AUTHORITY-001: extend active — successor not seam-ready.
+          if (active_video_depth == 0) {
+            { std::ostringstream oss;
+              oss << "[PipelineManager] EXTEND_ACTIVE_DUE_TO_FRAME_AUTHORITY"
+                  << " tick=" << session_frame_index
+                  << " active_segment_id=" << current_segment_index_
+                  << " successor_segment_id=" << to_seg
+                  << " active_video_depth=" << active_video_depth
+                  << " successor_video_depth=" << incoming->incoming_video_frames
+                  << " successor_seam_ready=false";
+              Logger::Error(oss.str()); }
+            CheckFrameAuthorityVacuum(
+                session_frame_index, current_segment_index_,
+                active_video_depth, to_seg,
+                incoming->incoming_video_frames,
+                incoming->incoming_video_frames > 0);
+          }
           { std::ostringstream oss;
             oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
                 << " reason=not_ready"
@@ -2384,8 +2695,59 @@ void PipelineManager::Run() {
             Logger::Info(oss.str()); }
         }
         // Keep current live; do not call PerformSegmentSwap.
+      } else if (frame_origin_segment_id >= 0 &&
+                 frame_origin_segment_id == current_segment_index_ &&
+                 !force_swap_for_frame_authority &&
+                 !force_swap_for_pad_seam &&
+                 !force_swap_for_content_seam) {
+        // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Frame-origin consistency gate.
+        // The emitted frame originates from the outgoing (active) segment.
+        // Committing the swap would advance current_segment_index_, causing
+        // origin(T) != active(T). Defer swap until next tick when frame
+        // selection will read from the incoming segment's buffer.
+        if (last_logged_defer_seam_frame_ != next_seam_frame_) {
+          last_logged_defer_seam_frame_ = next_seam_frame_;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] SEGMENT_SWAP_DEFERRED"
+                << " reason=frame_origin_gate"
+                << " tick=" << session_frame_index
+                << " active_segment_id=" << current_segment_index_
+                << " frame_origin_segment_id=" << frame_origin_segment_id
+                << " incoming_audio_ms=" << incoming->incoming_audio_ms
+                << " incoming_video_frames=" << incoming->incoming_video_frames;
+            Logger::Info(oss.str()); }
+        }
       } else {
-        // Eligible: perform swap (INV-SEAM-001: swap is pointer/atomic only; no blocking).
+        // Eligible (normal gate passed), forced by INV-CONTINUOUS-FRAME-AUTHORITY-001,
+        // or forced by INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 (PAD/content seam).
+        if (force_swap_for_content_seam && !force_swap_for_frame_authority && !force_swap_for_pad_seam) {
+          { std::ostringstream oss;
+            oss << "[PipelineManager] FORCE_SWAP_FOR_CONTENT_SEAM"
+                << " tick=" << session_frame_index
+                << " active_segment_id=" << current_segment_index_
+                << " successor_segment_id=" << to_seg;
+            Logger::Info(oss.str()); }
+        }
+        if (force_swap_for_frame_authority) {
+          { std::ostringstream oss;
+            oss << "[PipelineManager] FORCE_EXECUTE_DUE_TO_FRAME_AUTHORITY"
+                << " tick=" << session_frame_index
+                << " active_segment_id=" << current_segment_index_
+                << " successor_segment_id=" << to_seg
+                << " active_video_depth=" << active_video_depth
+                << " successor_video_depth=" << incoming->incoming_video_frames
+                << " successor_seam_ready=true";
+            Logger::Error(oss.str()); }
+        }
+        if (force_swap_for_pad_seam && !force_swap_for_frame_authority) {
+          { std::ostringstream oss;
+            oss << "[PipelineManager] FORCE_SWAP_FOR_PAD_SEAM"
+                << " tick=" << session_frame_index
+                << " active_segment_id=" << current_segment_index_
+                << " successor_segment_id=" << to_seg;
+            Logger::Info(oss.str()); }
+        }
+        // Perform swap (INV-SEAM-001: swap is pointer/atomic only; no blocking).
         last_logged_defer_seam_frame_ = -1;  // Reset so next seam can log if deferred.
         { auto t0_seam = std::chrono::steady_clock::now();
         // SEGMENT_TAKE_COMMIT: log decision state BEFORE swap (a_src still valid).
@@ -2437,6 +2799,27 @@ void PipelineManager::Run() {
         }
         }
 
+        // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Safety net for fill-thread race.
+        // The primary mechanism is CONTENT_SEAM_OVERRIDE (pre-encode pop from
+        // segment B).  This restamp fires ONLY when CONTENT_SEAM_OVERRIDE did
+        // not pop a content frame (segment B was empty at frame-selection time)
+        // but the fill thread pushed frames before POST-TAKE, triggering
+        // FORCE_EXECUTE.  In that case, the encoded frame is a stale PAD
+        // hold — the restamp corrects metadata so the authority check passes.
+        // This path should be rare; its firing indicates a fill-thread race.
+        if (force_swap_for_frame_authority) {
+          const int32_t old_origin = frame_origin_segment_id;
+          frame_origin_segment_id = current_segment_index_;
+          last_good_origin_segment_ = current_segment_index_;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] FORCE_EXECUTE_ORIGIN_RESTAMP_SAFETY_NET"
+                << " tick=" << session_frame_index
+                << " old_origin=" << old_origin
+                << " new_origin=" << current_segment_index_
+                << " content_seam_override_attempted=" << content_seam_override_this_tick;
+            Logger::Warn(oss.str()); }
+        }
+
         // Cadence refresh: new LIVE segment may have different source FPS; reinit tick
         // cadence so duration is preserved (e.g. 23.976→30 upsample after 30→30 segment).
         RefreshFrameSelectionCadenceFromLiveSource("segment_swap");
@@ -2469,6 +2852,40 @@ void PipelineManager::Run() {
               seg.segment_type, seg.event_id);
         }
       }
+    }
+
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: CONTENT_SEAM_OVERRIDE
+    // implies swap.  If a genuine content frame was popped from segment B
+    // but PerformSegmentSwap did not execute, the emitted frame and the
+    // authority diverge — the frame carries origin=to_seg but
+    // current_segment_index_ still points at the old PAD segment.
+    // ==================================================================
+    if (content_seam_override_this_tick && decision == TakeDecision::kContentA && !segment_swap_committed) {
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED"
+            << " reason=content_seam_override_without_swap"
+            << " tick=" << session_frame_index
+            << " active_segment_id=" << current_segment_index_
+            << " frame_origin_segment_id=" << frame_origin_segment_id;
+        Logger::Error(oss.str()); }
+    }
+
+    // ==================================================================
+    // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Post-swap authority check.
+    // current_segment_index_ now reflects this tick's final authority
+    // (incremented by PerformSegmentSwap if a swap fired, unchanged if
+    // deferred).  Compare against frame_origin_segment_id computed
+    // during the frame selection cascade.
+    // Active for: content (kContentA), hold/repeat, AND pad_seam_this_tick.
+    // Skip for: block swaps (take_b — resets segment context),
+    //           non-seam pad/standby/contentB (origin == -2).
+    // ==================================================================
+    if (frame_origin_segment_id >= 0 && !take_b) {
+      EmittedFrameMatchesAuthority(
+          session_frame_index,
+          current_segment_index_,
+          frame_origin_segment_id);
     }
 
     // Segment-swap-to-PAD: use segment type as authority (decision can lag at the seam).
@@ -3395,6 +3812,82 @@ AudioLookaheadBuffer* PipelineManager::SelectAudioSourceForTick(
   return live_audio;
 }
 
+// =============================================================================
+// INV-CONTINUOUS-FRAME-AUTHORITY-001: Frame-authority vacuum detection
+// =============================================================================
+
+bool PipelineManager::CheckFrameAuthorityVacuum(
+    int64_t tick,
+    int32_t active_segment_index,
+    int active_video_depth_frames,
+    int32_t successor_segment_index,
+    int successor_video_depth_frames,
+    bool successor_seam_ready) {
+  // Active segment can still provide a frame — no vacuum.
+  if (active_video_depth_frames > 0) return false;
+
+  // Active cannot provide video frame AND swap is being deferred.
+  // This is a frame-authority vacuum.
+  std::ostringstream oss;
+  oss << "[PipelineManager] INV-CONTINUOUS-FRAME-AUTHORITY-001-VIOLATED"
+      << " tick=" << tick
+      << " active_segment_id=" << active_segment_index
+      << " successor_segment_id=" << successor_segment_index
+      << " active_video_depth=" << active_video_depth_frames
+      << " successor_video_depth=" << successor_video_depth_frames
+      << " successor_seam_ready=" << (successor_seam_ready ? "true" : "false");
+  Logger::Error(oss.str());
+  return true;
+}
+
+FrameAuthorityAction PipelineManager::EvaluateFrameAuthorityEnforcement(
+    int active_video_depth_frames,
+    bool has_incoming,
+    int successor_video_depth_frames) {
+  // Active segment can still provide a frame — deferral is safe.
+  if (active_video_depth_frames > 0) return FrameAuthorityAction::kDefer;
+  // Active cannot provide frame. If successor has video, force swap.
+  if (has_incoming && successor_video_depth_frames > 0) {
+    return FrameAuthorityAction::kForceExecute;
+  }
+  // No successor or successor not seam-ready: extend active.
+  return FrameAuthorityAction::kExtendActive;
+}
+
+// =============================================================================
+// INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Atomic frame-authority transfer check
+// =============================================================================
+
+bool PipelineManager::EmittedFrameMatchesAuthority(
+    int64_t tick,
+    int32_t active_segment_id,
+    int32_t frame_origin_segment_id) {
+  // Frame origin unset/invalid — violation.
+  if (frame_origin_segment_id < 0) {
+    std::ostringstream oss;
+    oss << "[PipelineManager] INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED"
+        << " tick=" << tick
+        << " active_segment_id=" << active_segment_id
+        << " frame_origin_segment_id=" << frame_origin_segment_id
+        << " reason=frame_origin_null";
+    Logger::Error(oss.str());
+    return false;
+  }
+
+  // Frame originates from a segment that is not the current authority — violation.
+  if (active_segment_id != frame_origin_segment_id) {
+    std::ostringstream oss;
+    oss << "[PipelineManager] INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED"
+        << " tick=" << tick
+        << " active_segment_id=" << active_segment_id
+        << " frame_origin_segment_id=" << frame_origin_segment_id
+        << " reason=stale_frame_bleed";
+    Logger::Error(oss.str());
+    return false;
+  }
+
+  return true;
+}
 
 // =============================================================================
 // MakeSyntheticSegmentBlock — build single-segment FedBlock for segment prep
@@ -3877,6 +4370,7 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
       : std::max(1, a_target / 3);
   segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
+  segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
   segment_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
       a_target, buffer::kHouseAudioSampleRate,
       buffer::kHouseAudioChannels, a_low);
@@ -3917,7 +4411,10 @@ std::optional<IncomingState> PipelineManager::GetIncomingSegmentState(int32_t to
   const bool is_pad = (seg_type == SegmentType::kPad);
 
   // CONTENT: only report state from actual B buffers (segment_b_*).
-  if (segment_b_video_buffer_ && segment_b_audio_buffer_) {
+  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Guard on !is_pad so PAD segments
+  // always fall through to the PAD-specific path below, even when stale content
+  // B buffers exist from a previous segment's preroll.
+  if (!is_pad && segment_b_video_buffer_ && segment_b_audio_buffer_) {
     IncomingState s;
     s.incoming_audio_ms = segment_b_audio_buffer_->DepthMs();
     s.incoming_video_frames = segment_b_video_buffer_->DepthFrames();
@@ -3989,14 +4486,14 @@ void PipelineManager::PrimePadBForSeamOrDie(const char* reason) {
   }
 }
 
-bool PipelineManager::IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const {
+bool PipelineManager::IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) {
+  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: PAD segments provide video
+  // on-demand via pad_producer_->VideoFrame().  They have no buffer to fill,
+  // so the video-depth gate does not apply.  Audio depth still required for
+  // audio continuity at the seam.
   if (incoming.is_pad) {
-    // Big Boy Broadcast Rule:
-    // PAD must have at least one tick worth of audio depth before seam.
-    // Use the same minimum depth constant as CONTENT (kMinSegmentSwapAudioMs).
     return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs;
   }
-  // CONTENT: require minimum audio depth and video frames to avoid underflow.
   return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs &&
          incoming.incoming_video_frames >= kMinSegmentSwapVideoFrames;
 }
@@ -4059,6 +4556,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
     segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
+    segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
     const auto& bcfg = ctx_->buffer_config;
     int a_target = bcfg.audio_target_depth_ms;
     int a_low = bcfg.audio_low_water_ms > 0

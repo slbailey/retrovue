@@ -176,7 +176,7 @@ class TestInvHorizonExecutionMin001:
         log = hm.extension_attempt_log
         assert len(log) >= 1
         last = log[-1]
-        assert last.reason_code == "CLOCK_WATERMARK"
+        assert last.reason_code == "REASON_TIME_THRESHOLD"
         assert last.success is True
         assert last.triggered_by == "SCHED_MGR_POLICY"
 
@@ -292,4 +292,4 @@ class TestInvHorizonExecutionMin001:
         # All attempts are policy-triggered with valid reason codes
         for attempt in hm.extension_attempt_log:
             assert attempt.triggered_by == "SCHED_MGR_POLICY"
-            assert attempt.reason_code in {"CLOCK_WATERMARK", "DAILY_ROLL"}
+            assert attempt.reason_code in {"REASON_TIME_THRESHOLD", "DAILY_ROLL"}
