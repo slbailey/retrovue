@@ -121,10 +121,11 @@ These invariants have structural enforcement in production code and passing cont
 | INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001 | 2 (negative + positive) | **PASS** | `ExecutionWindowStore.add_entries()` rejects entries missing `channel_id` or `programming_day_date` |
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | 2 (negative + positive) | **PASS** | `InMemoryResolvedStore.delete()` checks `ExecutionWindowStore.has_entries_for()` before deletion |
 | INV-ASRUN-IMMUTABLE-001 | 3 (mutation + deletion + creation) | **PASS** | `AsRunEvent` is `@dataclass(frozen=True)`; `log_playout_end()` uses `dataclasses.replace()` |
-| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | 2 (reserved) | **SKIPPED** | Not yet filed as a constitutional invariant; override system does not exist yet |
+| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | 6 (TOR-001..004 + 2 inline) | **PASS** | `InMemoryOverrideStore.persist()` called before artifact mutation in `operator_override()` and `publish_atomic_replace()` |
 | INV-PLAN-FULL-COVERAGE-001 | 4 (gap reject + exact tile + pds≠00:00 reject + pds≠00:00 tile) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
 | INV-PLAN-NO-ZONE-OVERLAP-001 | 4 (overlap reject + day-filter pass + mutation-induced overlap + precedence) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
 | INV-PLAN-GRID-ALIGNMENT-001 | 7 (block start/duration/valid + zone end/start/duration/valid) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py`; `validate_block_assignment()` in `contracts.py` |
+| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | 4 (ineligible reject + eligible accept + mixed reject + no-resolver skip) | **PASS** | `check_asset_eligibility()` in `zone_coverage_check.py` via `validate_zone_plan_integrity()` |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | 3 (carry-in overlap reject + carry-in honored accept + no carry-in accept) | **PASS** | `validate_scheduleday_seam()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | 3 (missing at deadline + materialized before deadline + parameterized N=5) | **PASS** | `check_scheduleday_lead_time()` standalone function in `schedule_manager_service.py` |
@@ -148,11 +149,13 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|---|---|
 | INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001 | `TestInvExecutionDerivedFromScheduleday001` | `test_..._reject_without_lineage`, `test_..._valid_lineage` | PASS |
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | `TestInvDerivationAnchorProtected001` | `test_..._reject_delete_with_downstream`, `test_..._allow_delete_without_downstream` | PASS |
-| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | `TestInvOverrideRecordPrecedesArtifact001` | `test_..._reject_without_record`, `test_..._atomicity` | SKIPPED |
+| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | `TestInvOverrideRecordPrecedesArtifact001` (inline) | `test_..._reject_without_record`, `test_..._atomicity` | PASS |
+| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | `TestInvOverrideRecordPrecedesArtifact001` (TOR) | `test_tor_001_record_created_before_artifact`, `test_tor_002_persist_failure_prevents_artifact`, `test_tor_003_execution_window_override_atomicity`, `test_tor_004_no_silent_artifact_without_record` | PASS |
 | INV-ASRUN-IMMUTABLE-001 | `TestInvAsrunImmutable001` | `test_..._reject_mutation`, `test_..._reject_deletion`, `test_..._valid_creation` | PASS |
 | INV-PLAN-FULL-COVERAGE-001 | `TestInvPlanFullCoverage001` | `test_..._reject_gap`, `test_..._accept_exact_tile`, `test_..._reject_gap_with_pds_0600`, `test_..._accept_tile_with_pds_0600` | PASS |
 | INV-PLAN-NO-ZONE-OVERLAP-001 | `TestInvPlanNoZoneOverlap001` | `test_..._reject_overlapping_zones`, `test_..._allow_mutually_exclusive_days`, `test_..._reject_mutation_induced_overlap`, `test_..._precedence_over_gap` | PASS |
 | INV-PLAN-GRID-ALIGNMENT-001 | `TestInvPlanGridAlignment001` | `test_..._reject_off_grid_start`, `test_..._reject_off_grid_duration`, `test_..._valid_alignment`, `test_..._reject_off_grid_zone_end`, `test_..._reject_off_grid_zone_start`, `test_..._reject_off_grid_zone_duration`, `test_..._accept_aligned_zone` | PASS |
+| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | `TestInvPlanEligibleAssetsOnly001` | `test_reject_ineligible_asset_in_zone`, `test_accept_eligible_assets_in_zone`, `test_reject_mixed_eligible_and_ineligible`, `test_skip_check_when_no_resolver` | PASS |
 | INV-SCHEDULEDAY-ONE-PER-DATE-001 | `TestInvScheduledayOnePerDate001` | `test_..._reject_duplicate_insert`, `test_..._allow_force_regen_atomic_replace`, `test_..._different_dates_independent` | PASS |
 | INV-SCHEDULEDAY-IMMUTABLE-001 | `TestInvScheduledayImmutable001` | `test_..._reject_in_place_slot_mutation`, `test_..._reject_plan_id_update`, `test_..._force_regen_creates_new_record`, `test_..._operator_override_creates_new_record` | PASS |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `TestInvScheduledayDerivationTraceable001` | `test_..._reject_unanchored`, `test_..._accept_with_plan_id`, `test_..._accept_manual_override` | PASS |
@@ -190,6 +193,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-NO-MID-PROGRAM-CUT-001 | CROSS-001, CROSS-002 | Cross-cutting |
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | ARCH-BOUNDARY-001, ARCH-BOUNDARY-002 | Cross-cutting |
+| INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | TOR-001, TOR-002, TOR-003, TOR-004 | Cross-cutting |
 
 ---
 

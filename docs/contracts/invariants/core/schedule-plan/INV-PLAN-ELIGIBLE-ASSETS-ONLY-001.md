@@ -31,8 +31,14 @@ Place an asset with `state=enriching` in a zone of an active plan. Trigger Sched
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py`
+- `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py` (test_reject_ineligible_asset_in_zone: ineligible asset rejected with invariant tag)
+- `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py` (test_accept_eligible_assets_in_zone: eligible assets accepted without error)
+- `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py` (test_reject_mixed_eligible_and_ineligible: mixed set rejected, ineligible asset identified)
+- `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py` (test_skip_check_when_no_resolver: backward compatible when no resolver provided)
 
 ## Enforcement Evidence
 
-TODO
+- **Guard function:** `check_asset_eligibility()` in `pkg/core/src/retrovue/usecases/zone_coverage_check.py`. Iterates all `schedulable_assets` in each enabled zone and calls the injected `asset_eligibility_checker(asset_id)` callable. Returns violations tagged `INV-PLAN-ELIGIBLE-ASSETS-ONLY-001-VIOLATED` for each ineligible asset.
+- **Integration point:** `validate_zone_plan_integrity()` in the same file. Called from `zone_add.py` and `zone_update.py` before `db.commit()`. Accepts an optional `asset_eligibility_checker` parameter. When provided, eligibility is enforced after grid/overlap/coverage checks.
+- **Violation tag:** `INV-PLAN-ELIGIBLE-ASSETS-ONLY-001-VIOLATED` with zone name and asset ID in the message.
+- **Test file:** `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py` — 4 tests, all pass.

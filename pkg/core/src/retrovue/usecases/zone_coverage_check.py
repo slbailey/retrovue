@@ -304,15 +304,51 @@ def check_grid_alignment(
     return violations
 
 
+def check_asset_eligibility(
+    zones: list[Any],
+    asset_eligibility_checker: Any | None = None,
+) -> list[str]:
+    """Check that every asset referenced in zone schedulable_assets is eligible.
+
+    An asset is eligible when state=ready AND approved_for_broadcast=true.
+
+    asset_eligibility_checker: callable(asset_id: str) -> tuple[bool, str]
+        Returns (is_eligible, reason) for each asset ID.
+        If None, check is skipped (no resolver available).
+
+    Returns a list of violation strings (empty if clean).
+    Each violation is tagged with INV-PLAN-ELIGIBLE-ASSETS-ONLY-001-VIOLATED.
+    """
+    if asset_eligibility_checker is None:
+        return []
+
+    active = [z for z in zones if z.enabled]
+    violations: list[str] = []
+
+    for z in active:
+        assets = getattr(z, "schedulable_assets", None) or []
+        name = getattr(z, "name", "?")
+        for asset_id in assets:
+            is_eligible, reason = asset_eligibility_checker(str(asset_id))
+            if not is_eligible:
+                violations.append(
+                    f"INV-PLAN-ELIGIBLE-ASSETS-ONLY-001-VIOLATED: "
+                    f"zone '{name}' references ineligible asset '{asset_id}': {reason}"
+                )
+
+    return violations
+
+
 def validate_zone_plan_integrity(
     zones: list[Any],
     programming_day_start: dt_time = dt_time(0, 0),
     grid_block_minutes: int | None = None,
+    asset_eligibility_checker: Any | None = None,
 ) -> None:
-    """Run grid alignment, overlap, and coverage checks.
+    """Run grid alignment, overlap, coverage, and asset eligibility checks.
 
     Raise ValueError on first violation set.
-    Precedence: grid alignment > overlap > coverage.
+    Precedence: grid alignment > overlap > coverage > asset eligibility.
 
     This is the single enforcement entry point called by zone_add and zone_update
     after assembling the candidate zone list.
@@ -329,8 +365,13 @@ def validate_zone_plan_integrity(
     if coverage_violations:
         raise ValueError(coverage_violations[0])
 
+    eligibility_violations = check_asset_eligibility(zones, asset_eligibility_checker)
+    if eligibility_violations:
+        raise ValueError(eligibility_violations[0])
+
 
 __all__ = [
+    "check_asset_eligibility",
     "check_grid_alignment",
     "check_overlap",
     "check_coverage",
