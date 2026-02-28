@@ -224,6 +224,11 @@ class TickProducer : public producers::IProducer,
   // For PAD segments: returns GeneratePadFrame() (no decode needed).
   std::optional<FrameData> DecodeNextFrameRaw(bool advance_output_state = true);
 
+  // INV-TRANSITION-004: Apply segment transition fade (in/out) to a decoded
+  // FrameData based on its continuity time within the current segment.
+  // Shared by PrimeFirstFrame and DecodeNextFrameRaw — single code path.
+  void ApplySegmentTransitionFade(FrameData& fd, int64_t ct_before);
+
   // REMOVED: AdvanceToNextSegment() — reactive segment advancement replaced by
   // eager overlap via SeamPreparer.  See INV-SEAM-SEG-001..006.
 

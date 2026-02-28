@@ -18,4 +18,8 @@ No decodable TS emitted within the allowed time after attach. MUST be logged; tr
 - TS-EMISSION-002: violation logged when bound exceeded
 
 ## Enforcement Evidence
-TODO
+
+- **Boot window:** `MpegTSOutputSink` emits TS packets immediately during the ~500ms boot window without waiting for media — `g_pcr_pace_init_time` tracks the deadline for this window.
+- **Null packet fill:** During the boot window, null TS packets fill gaps to maintain transport stream continuity before media frames are available.
+- **Bounded liveness:** The boot window is a fixed bound (~500ms from PCR-pace initialization); first decodable TS must appear within this bound or a liveness violation is logged.
+- Contract tests: `Phase9OutputBootstrapTests.cpp` (`TEST_INV_P9_TS_EMISSION_LIVENESS_500ms`) validates that decodable TS is emitted within the 500ms bound after attach.

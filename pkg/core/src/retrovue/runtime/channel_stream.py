@@ -558,6 +558,9 @@ class ChannelStream:
         while not self._stop_event.is_set():
             t_start = time.monotonic_ns()
             bytes_read_this_iter = 0
+            t_after_select = t_start
+            t_after_recv = t_start
+            t_after_put = t_start
             try:
                 if not self.ts_source:
                     if not self._connect_with_backoff():
@@ -577,6 +580,7 @@ class ChannelStream:
                         r, _, _ = select.select(
                             [sock], [], [], UPSTREAM_POLL_TIMEOUT_S
                         )
+                        t_after_select = time.monotonic_ns()
                         if not r:
                             continue
                     except (OSError, ValueError):
@@ -586,10 +590,12 @@ class ChannelStream:
                 if not self.ts_source:
                     break
                 chunk = self.ts_source.read(chunk_size)
+                t_after_recv = time.monotonic_ns()
                 bytes_read_this_iter = len(chunk)
                 if not chunk:
                     break
                 self._ring_buffer.put(chunk)
+                t_after_put = time.monotonic_ns()
             except IOError as e:
                 self._logger.warning(
                     "[HTTP] UPSTREAM_DISCONNECTED reason=read_error error=%s",
@@ -602,15 +608,19 @@ class ChannelStream:
                     "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f",
                     duration_ms,
                 )
-                is_spike = (
-                    duration_ms > spike_threshold_long_ms
-                    or (bytes_read_this_iter > 0 and duration_ms > UPSTREAM_LOOP_SPIKE_MS)
-                )
+                is_spike = duration_ms > spike_threshold_long_ms
+                
                 if is_spike:
+                    select_ms = (t_after_select - t_start) / 1e6
+                    recv_ms = (t_after_recv - t_after_select) / 1e6
+                    put_ms = (t_after_put - t_after_recv) / 1e6
                     self._logger.warning(
-                        "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f (spike >%.0fms)",
+                        "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f (spike >%.0fms long-threshold) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
                         duration_ms,
-                        UPSTREAM_LOOP_SPIKE_MS,
+                        spike_threshold_long_ms,
+                        select_ms,
+                        recv_ms,
+                        put_ms,
                     )
 
         self._ring_buffer.close()
@@ -906,4 +916,8 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
             break
         except asyncio.CancelledError:
             break
+        except RuntimeError as exc:
+            if "cannot schedule new futures after shutdown" in str(exc):
+                break
+            raise
 

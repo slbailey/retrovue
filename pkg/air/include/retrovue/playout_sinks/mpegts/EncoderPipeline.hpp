@@ -129,8 +129,27 @@ class EncoderPipeline {
   // Input pixel format (defaults to YUV420P)
   AVPixelFormat input_pix_fmt_;
   
-  // Flag to track if swscale context needs to be recreated
-  bool sws_ctx_valid_;
+  // INV-ENCODER-SWS-COHERENCE-001: Stored parameter tuple for active SwsContext.
+  // Context is valid iff sws_ctx_ != nullptr AND all parameters match.
+  int sws_src_w_ = 0;
+  int sws_src_h_ = 0;
+  AVPixelFormat sws_src_fmt_ = AV_PIX_FMT_NONE;
+  int sws_dst_w_ = 0;
+  int sws_dst_h_ = 0;
+  AVPixelFormat sws_dst_fmt_ = AV_PIX_FMT_NONE;
+  int sws_flags_ = 0;
+
+  // INV-ENCODER-SWS-COHERENCE-001: Returns true iff current sws_ctx_ was created
+  // with exactly the given parameter tuple.  Any mismatch → context must be recreated.
+  bool isSwsContextCompatible(
+      int srcW, int srcH, AVPixelFormat srcFmt,
+      int dstW, int dstH, AVPixelFormat dstFmt,
+      int flags) const {
+    return sws_ctx_ != nullptr &&
+           srcW == sws_src_w_ && srcH == sws_src_h_ && srcFmt == sws_src_fmt_ &&
+           dstW == sws_dst_w_ && dstH == sws_dst_h_ && dstFmt == sws_dst_fmt_ &&
+           flags == sws_flags_;
+  }
   
   // Time base for video stream (1/90000 for MPEG-TS)
   AVRational time_base_;

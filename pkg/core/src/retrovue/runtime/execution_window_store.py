@@ -107,6 +107,7 @@ class ExecutionWindowStore:
         enforce_derivation_from_playlist: bool = False,
         clock_fn: Callable[[], int] | None = None,
         locked_window_ms: int | None = None,
+        override_store: Any | None = None,
     ) -> None:
         self._entries: list[ExecutionEntry] = []
         self._lock = threading.Lock()
@@ -114,6 +115,7 @@ class ExecutionWindowStore:
         self._max_generation_id: int = 0
         self._clock_fn = clock_fn
         self._locked_window_ms = locked_window_ms
+        self._override_store = override_store
 
     # ------------------------------------------------------------------
     # Write (HorizonManager)
@@ -354,6 +356,24 @@ class ExecutionWindowStore:
                             "INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED: "
                             "locked window"
                         ),
+                    )
+
+            # INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001:
+            # Persist override record BEFORE any entry mutation.
+            if operator_override and self._override_store is not None:
+                try:
+                    now_ms = self._clock_fn() if self._clock_fn is not None else 0
+                    self._override_store.persist(
+                        layer="ExecutionWindowStore",
+                        target_id=f"range[{range_start_ms},{range_end_ms})",
+                        reason_code=reason_code,
+                        now_ms=now_ms,
+                    )
+                except Exception:
+                    return PublishResult(
+                        ok=False,
+                        published_generation_id=generation_id,
+                        error_code="OVERRIDE_RECORD_PERSIST_FAILED",
                     )
 
             # Reject non-monotonic generation_id

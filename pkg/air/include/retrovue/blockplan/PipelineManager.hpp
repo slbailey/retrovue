@@ -54,6 +54,13 @@ struct IncomingState {
   SegmentType segment_type = SegmentType::kContent;
 };
 
+// INV-CONTINUOUS-FRAME-AUTHORITY-001: Enforcement action at swap deferral.
+enum class FrameAuthorityAction {
+  kDefer,        // Active can provide frame; normal deferral allowed.
+  kForceExecute, // Active empty, successor seam-ready; force swap.
+  kExtendActive  // Active empty, successor not seam-ready; extend active.
+};
+
 class PadProducer;
 class TickProducer;
 struct FrameData;
@@ -162,6 +169,40 @@ class PipelineManager : public IPlayoutExecutionEngine {
       AudioLookaheadBuffer* live_audio,
       AudioLookaheadBuffer* preview_audio,
       AudioLookaheadBuffer* segment_b_audio);
+
+  // INV-CONTINUOUS-FRAME-AUTHORITY-001: Detect frame-authority vacuum at swap deferral.
+  // Called from DEFER branches of segment swap decision path.
+  // Returns true if violation detected (active cannot provide video frame AND swap deferred).
+  // Emits Logger::Error with structured tag on violation.
+  static bool CheckFrameAuthorityVacuum(
+      int64_t tick,
+      int32_t active_segment_index,
+      int active_video_depth_frames,
+      int32_t successor_segment_index,
+      int successor_video_depth_frames,
+      bool successor_seam_ready);
+
+  // INV-CONTINUOUS-FRAME-AUTHORITY-001: Evaluate enforcement action at swap deferral.
+  // Pure decision function — no side effects, no logging.
+  static FrameAuthorityAction EvaluateFrameAuthorityEnforcement(
+      int active_video_depth_frames,
+      bool has_incoming,
+      int successor_video_depth_frames);
+
+  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Verify emitted frame originates from
+  // the currently authoritative segment. Returns true if frame matches authority.
+  // Returns false and emits Logger::Error with structured tag on violation.
+  // Pure observability — does not alter swap or emission behavior.
+  static bool EmittedFrameMatchesAuthority(
+      int64_t tick,
+      int32_t active_segment_id,
+      int32_t frame_origin_segment_id);
+
+  // INV-NO-FRAME-AUTHORITY-VACUUM-001: Segment swap eligibility gate.
+  // Content: requires minimum audio AND video depth.
+  // PAD: requires minimum audio depth only (video is on-demand).
+  // Pure decision function — no side effects, no logging.
+  static bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming);
 
  private:
   std::shared_ptr<ITimeSource> time_source_;
@@ -369,8 +410,6 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // PAD only: advance segment index and rebase; never touches live buffers.
   void PerformPadTransition(int64_t session_frame_index);
 
-  // Segment seam eligibility gate: minimum readiness before swapping.
-  bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) const;
   std::optional<IncomingState> GetIncomingSegmentState(int32_t to_seg) const;
 
   // Deterministic PAD seam: block until pad_b_audio_buffer_ has >= kMinSegmentSwapAudioMs.
@@ -413,6 +452,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool degraded_take_active_ = false;
   buffer::Frame last_good_video_frame_;
   bool has_last_good_video_frame_ = false;
+  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Segment that produced last_good_video_frame_.
+  int32_t last_good_origin_segment_ = -1;
   // Frame-selection cadence (repeat-vs-advance) for upsampling (e.g., 24→30). TickLoop only.
   bool frame_selection_cadence_enabled_ = false;
   int64_t frame_selection_cadence_budget_num_ = 0;   // Bresenham accumulator

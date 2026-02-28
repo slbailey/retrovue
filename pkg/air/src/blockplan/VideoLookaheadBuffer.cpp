@@ -107,6 +107,7 @@ void VideoLookaheadBuffer::StartFilling(
       vf.asset_uri = std::move(fd->asset_uri);
       vf.block_ct_ms = fd->block_ct_ms;
       vf.was_decoded = true;
+      vf.segment_origin_id = segment_origin_id_;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
 
       // Push decoded audio to AudioLookaheadBuffer.
       if (audio_buffer_) {
@@ -131,6 +132,17 @@ void VideoLookaheadBuffer::StartFilling(
             << " ready_for_seam=" << ready_for_seam
             << " reason=" << reason;
         Logger::Info(oss.str()); }
+
+      // INSTRUMENTATION: Primed frame provenance — this frame was decoded in
+      // PrimeFirstFrame, which does NOT apply fade.  Log its ct_ms so we can
+      // correlate with PRIME_FADE_AUDIT / DECODE_FADE_AUDIT.
+      { std::ostringstream oss2;
+        oss2 << "[VideoBuffer:" << buffer_label_ << "] PRIMED_FRAME_PUSH"
+             << " block_ct_ms=" << vf.block_ct_ms
+             << " was_decoded=" << vf.was_decoded
+             << " segment_origin_id=" << vf.segment_origin_id
+             << " source=PrimeFirstFrame";
+        Logger::Info(oss2.str()); }
 
       std::lock_guard<std::mutex> lock(mutex_);
       while (static_cast<int>(frames_.size()) >= hard_cap_frames_) {
@@ -680,6 +692,7 @@ void VideoLookaheadBuffer::FillLoop() {
     }
 
     VideoBufferFrame vf;
+    vf.segment_origin_id = segment_origin_id_;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
 
     // INV-SEAM-SEG-006: TryGetFrame returns nullopt permanently when the
     // current segment's content is exhausted.  The fill thread enters

@@ -142,6 +142,25 @@ If a change affects:
 - both → treat as a coordinated change with explicit contracts
 
 ────────────────────────
+CODE CHANGE PROTOCOL (MANDATORY)
+────────────────────────
+NEVER make code changes without following this protocol. No exceptions.
+
+1) Identify the violated invariant or the missing invariant.
+   - If no existing invariant covers the behavior, draft a new one.
+   - If an existing invariant is violated, cite it by ID.
+2) Write a test that proves the violation (or proves the missing guarantee).
+   - The test MUST fail before the code change.
+   - The test validates the invariant, not the implementation.
+3) Implement the code change to flip the test green.
+   - Only after the test exists and the failure is proven.
+4) Verify the test is green and no regressions exist.
+
+This is contracts-first, test-driven development. Code changes that skip
+steps 1–2 are not allowed — even if the fix is “obvious.” The test is the
+proof that the invariant holds. Without the proof, the fix is unverified.
+
+────────────────────────
 HOW TO THINK ABOUT CHANGES
 ────────────────────────
 When asked “add X to RetroVue”:

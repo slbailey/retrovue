@@ -5,7 +5,7 @@ Tests ONLY the following blocker invariants:
 
   1) INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001
   2) INV-DERIVATION-ANCHOR-PROTECTED-001
-  3) INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001  (reserved — not yet filed)
+  3) INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001
   4) INV-ASRUN-IMMUTABLE-001
 
 Authoritative sources:
@@ -288,41 +288,142 @@ class TestInvDerivationAnchorProtected001:
 # =========================================================================
 
 
-@pytest.mark.skip(
-    reason=(
-        "INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 is not yet a filed "
-        "constitutional invariant. The override system (OverrideService, "
-        "override records, override artifacts) does not exist in the current "
-        "codebase. Reserved for a future iteration once the override system is "
-        "designed and its invariant is filed under "
-        "docs/contracts/invariants/core/. "
-        "See constitutional completeness audit for details."
-    )
-)
 class TestInvOverrideRecordPrecedesArtifact001:
-    """INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 — RESERVED
+    """INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001
 
-    Override system not yet part of constitutional invariants.
-    Reserved until the override system is designed.
-
-    When filed, this invariant will guarantee:
-      An override record must be persisted before the override artifact is
-      committed. No window may exist where an override artifact is active
-      without a backing override record.
+    An override record must be persisted before the override artifact is
+    committed. No window may exist where an override artifact is active
+    without a backing override record.
     Derived from: LAW-IMMUTABILITY.
+
+    Full test coverage in test_inv_override_record_precedes_artifact.py
+    (TOR-001 through TOR-004). These smoke tests validate the two core
+    paths inline.
     """
 
     def test_inv_override_record_precedes_artifact_001_reject_without_record(
         self, contract_clock
     ):
-        """INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 -- negative (reserved)"""
-        pytest.skip("Override system not yet part of constitutional invariants.")
+        """INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 -- persist failure blocks artifact.
+
+        Invariant: INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001
+        Derived law(s): LAW-IMMUTABILITY
+        Failure class: Runtime
+        Scenario: Override record persist fails → ScheduleDay artifact unchanged.
+        """
+        from retrovue.runtime.override_record import InMemoryOverrideStore
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+        from retrovue.runtime.schedule_types import (
+            ResolvedAsset,
+            ResolvedScheduleDay,
+            ResolvedSlot,
+            ProgramRef,
+            ProgramRefType,
+            SequenceState,
+        )
+
+        clock = contract_clock.clock
+        override_store = InMemoryOverrideStore()
+        resolved_store = InMemoryResolvedStore(
+            override_store=override_store,
+            clock_fn=clock.now_utc_ms,
+        )
+
+        day = date(2025, 2, 8)
+        slot = ResolvedSlot(
+            slot_time=time(6, 0),
+            program_ref=ProgramRef(ProgramRefType.FILE, "show.mp4"),
+            resolved_asset=ResolvedAsset(file_path="show.mp4"),
+            duration_seconds=86400.0,
+            label="all-day",
+        )
+        original = ResolvedScheduleDay(
+            programming_day_date=day,
+            resolved_slots=[slot],
+            resolution_timestamp=datetime(2025, 2, 7, 12, 0, tzinfo=timezone.utc),
+            sequence_state=SequenceState(),
+            plan_id="plan-001",
+        )
+        resolved_store.store("ch-test", original)
+
+        override_store.fail_next_persist = True
+
+        override_day = ResolvedScheduleDay(
+            programming_day_date=day,
+            resolved_slots=[slot],
+            resolution_timestamp=datetime(2025, 2, 8, 12, 0, tzinfo=timezone.utc),
+            sequence_state=SequenceState(),
+            plan_id="plan-override",
+        )
+        with pytest.raises(RuntimeError, match="OVERRIDE_RECORD_PERSIST_FAILED"):
+            resolved_store.operator_override("ch-test", override_day)
+
+        # Artifact unchanged
+        stored = resolved_store.get("ch-test", day)
+        assert stored.is_manual_override is False
+        assert len(override_store.records) == 0
 
     def test_inv_override_record_precedes_artifact_001_atomicity(
         self, contract_clock
     ):
-        """INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 -- atomicity (reserved)"""
-        pytest.skip("Override system not yet part of constitutional invariants.")
+        """INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 -- record precedes artifact.
+
+        Invariant: INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001
+        Derived law(s): LAW-IMMUTABILITY
+        Failure class: Runtime
+        Scenario: Successful override → record exists before artifact swap.
+        """
+        from retrovue.runtime.override_record import InMemoryOverrideStore
+        from retrovue.runtime.schedule_manager_service import InMemoryResolvedStore
+        from retrovue.runtime.schedule_types import (
+            ResolvedAsset,
+            ResolvedScheduleDay,
+            ResolvedSlot,
+            ProgramRef,
+            ProgramRefType,
+            SequenceState,
+        )
+
+        clock = contract_clock.clock
+        override_store = InMemoryOverrideStore()
+        resolved_store = InMemoryResolvedStore(
+            override_store=override_store,
+            clock_fn=clock.now_utc_ms,
+        )
+
+        day = date(2025, 2, 8)
+        slot = ResolvedSlot(
+            slot_time=time(6, 0),
+            program_ref=ProgramRef(ProgramRefType.FILE, "show.mp4"),
+            resolved_asset=ResolvedAsset(file_path="show.mp4"),
+            duration_seconds=86400.0,
+            label="all-day",
+        )
+        original = ResolvedScheduleDay(
+            programming_day_date=day,
+            resolved_slots=[slot],
+            resolution_timestamp=datetime(2025, 2, 7, 12, 0, tzinfo=timezone.utc),
+            sequence_state=SequenceState(),
+            plan_id="plan-001",
+        )
+        resolved_store.store("ch-test", original)
+
+        override_day = ResolvedScheduleDay(
+            programming_day_date=day,
+            resolved_slots=[slot],
+            resolution_timestamp=datetime(2025, 2, 8, 12, 0, tzinfo=timezone.utc),
+            sequence_state=SequenceState(),
+            plan_id="plan-override",
+        )
+        result = resolved_store.operator_override("ch-test", override_day)
+
+        # Record exists
+        assert len(override_store.records) == 1
+        record = override_store.records[0]
+        assert record.layer == "ScheduleDay"
+
+        # Artifact replaced
+        assert result.is_manual_override is True
 
 
 # =========================================================================

@@ -93,7 +93,7 @@ class ExtensionAttempt:
     now_utc_ms: int
     window_end_before_ms: int
     window_end_after_ms: int
-    reason_code: str        # "CLOCK_WATERMARK" | "DAILY_ROLL" | "OPERATOR_OVERRIDE"
+    reason_code: str        # "REASON_TIME_THRESHOLD" | "DAILY_ROLL" | "REASON_OPERATOR_OVERRIDE"
     triggered_by: str       # "SCHED_MGR_POLICY"
     success: bool
     error_code: str | None = None
@@ -161,6 +161,9 @@ class HorizonManager:
         self._coverage_compliant: bool = True
         self._seam_violations: list[SeamViolation] = []
         self._proactive_extension_triggered: bool = False
+
+        # Generation tracking (for publish_atomic_replace)
+        self._next_generation_id: int = 0
 
         # Audit state
         self._extension_attempt_count: int = 0
@@ -428,6 +431,11 @@ class HorizonManager:
     def _now_utc_ms(self) -> int:
         return int(self._clock.now_utc().timestamp() * 1000)
 
+    def _allocate_generation_id(self) -> int:
+        """Return a monotonically increasing generation_id for atomic publish."""
+        self._next_generation_id += 1
+        return self._next_generation_id
+
     def _extend_epg(self, current_bd: date, now_ms: int) -> None:
         """Extend EPG horizon until depth meets min_epg_days."""
         target_end_ms = now_ms + self._min_epg_days * 24 * 3_600_000
@@ -488,7 +496,7 @@ class HorizonManager:
                     now_utc_ms=now_ms,
                     window_end_before_ms=window_end_before,
                     window_end_after_ms=self._execution_window_end_utc_ms,
-                    reason_code="CLOCK_WATERMARK",
+                    reason_code="REASON_TIME_THRESHOLD",
                     triggered_by="SCHED_MGR_POLICY",
                     success=False,
                     error_code=error_code,
@@ -517,7 +525,7 @@ class HorizonManager:
                 now_utc_ms=now_ms,
                 window_end_before_ms=window_end_before,
                 window_end_after_ms=self._execution_window_end_utc_ms,
-                reason_code="CLOCK_WATERMARK",
+                reason_code="REASON_TIME_THRESHOLD",
                 triggered_by="SCHED_MGR_POLICY",
                 success=True,
             )
@@ -553,7 +561,7 @@ class HorizonManager:
                 now_utc_ms=now_ms,
                 window_end_before_ms=window_end_before,
                 window_end_after_ms=window_end_before,
-                reason_code="CLOCK_WATERMARK",
+                reason_code="REASON_TIME_THRESHOLD",
                 triggered_by="SCHED_MGR_POLICY",
                 success=False,
                 error_code="INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED",
@@ -581,7 +589,7 @@ class HorizonManager:
                 now_utc_ms=now_ms,
                 window_end_before_ms=window_end_before,
                 window_end_after_ms=self._execution_window_end_utc_ms,
-                reason_code="CLOCK_WATERMARK",
+                reason_code="REASON_TIME_THRESHOLD",
                 triggered_by="SCHED_MGR_POLICY",
                 success=False,
                 error_code="PIPELINE_EXHAUSTED",
@@ -614,7 +622,7 @@ class HorizonManager:
                 now_utc_ms=now_ms,
                 window_end_before_ms=window_end_before,
                 window_end_after_ms=self._execution_window_end_utc_ms,
-                reason_code="CLOCK_WATERMARK",
+                reason_code="REASON_TIME_THRESHOLD",
                 triggered_by="SCHED_MGR_POLICY",
                 success=True,
             )
@@ -626,7 +634,7 @@ class HorizonManager:
                 now_utc_ms=now_ms,
                 window_end_before_ms=window_end_before,
                 window_end_after_ms=self._execution_window_end_utc_ms,
-                reason_code="CLOCK_WATERMARK",
+                reason_code="REASON_TIME_THRESHOLD",
                 triggered_by="SCHED_MGR_POLICY",
                 success=False,
                 error_code="PIPELINE_EXHAUSTED",
@@ -723,7 +731,7 @@ class HorizonManager:
                 now_utc_ms=now_ms,
                 window_end_before_ms=window_end_before,
                 window_end_after_ms=self._execution_window_end_utc_ms,
-                reason_code="CLOCK_WATERMARK",
+                reason_code="REASON_TIME_THRESHOLD",
                 triggered_by="SCHED_MGR_POLICY",
                 success=False,
                 error_code=error_code,
@@ -735,13 +743,37 @@ class HorizonManager:
             )
             return
 
-        # Ingest result
+        # Ingest result via atomic publish (INV-HORIZON-PROACTIVE-EXTEND-001)
         if isinstance(result, int):
             end_ms = result
         else:
             end_ms = result.end_utc_ms
-            if self._execution_store is not None and hasattr(result, "entries"):
-                self._execution_store.add_entries(result.entries)
+            if self._execution_store is not None and hasattr(result, "entries") and result.entries:
+                gen_id = self._allocate_generation_id()
+                pub = self._execution_store.publish_atomic_replace(
+                    range_start_ms=result.entries[0].start_utc_ms,
+                    range_end_ms=end_ms,
+                    new_entries=result.entries,
+                    generation_id=gen_id,
+                    reason_code="REASON_TIME_THRESHOLD",
+                )
+                if not pub.ok:
+                    attempt = ExtensionAttempt(
+                        attempt_id=attempt_id,
+                        now_utc_ms=now_ms,
+                        window_end_before_ms=window_end_before,
+                        window_end_after_ms=self._execution_window_end_utc_ms,
+                        reason_code="REASON_TIME_THRESHOLD",
+                        triggered_by="SCHED_MGR_POLICY",
+                        success=False,
+                        error_code=pub.error_code,
+                    )
+                    self._extension_attempt_log.append(attempt)
+                    self._logger.warning(
+                        "HorizonManager: proactive atomic publish rejected: %s",
+                        pub.error_code,
+                    )
+                    return
 
         if end_ms > self._execution_window_end_utc_ms:
             self._execution_window_end_utc_ms = end_ms
@@ -752,7 +784,7 @@ class HorizonManager:
             now_utc_ms=now_ms,
             window_end_before_ms=window_end_before,
             window_end_after_ms=self._execution_window_end_utc_ms,
-            reason_code="CLOCK_WATERMARK",
+            reason_code="REASON_TIME_THRESHOLD",
             triggered_by="SCHED_MGR_POLICY",
             success=True,
         )

@@ -17,4 +17,8 @@ Injected silence after steady-state has begun.
 - `pkg/air/tests/contracts/Phase9SteadyStateSilenceTests.cpp`
 
 ## Enforcement Evidence
-TODO
+
+- `AudioLookaheadBuffer::TryPopSamples` returns `false` on underflow — no synthetic silence is fabricated or injected into the content audio path.
+- `PadProducer` generates real silence frames via `AudioFrame()` only when PAD is the authoritative segment — silence enters through the PAD source path, not by injection into the content path.
+- **Steady-state boundary:** Once steady-state begins (first real content frame committed), no silence injection path is reachable from the content audio pipeline.
+- Contract tests: `LookaheadBufferContractTests.cpp` (`AudioUnderflow_ReturnsFalse_NoSilenceInjected`) proves underflow returns false without fabricating samples. `Phase9SteadyStateSilenceTests.cpp` validates no silence after steady-state entry.

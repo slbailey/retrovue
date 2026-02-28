@@ -17,4 +17,8 @@ Video drives PCR. Mux resets CT. Mux maintains independent clock. PTS used as sc
 - `pkg/air/tests/contracts/TimelineController/TimelineControllerContractTests.cpp`
 
 ## Enforcement Evidence
-TODO
+
+- `MasterClock::TrySetEpochOnce()` prevents epoch drift — epoch can only be set once per session; subsequent attempts are rejected, ensuring a single time origin.
+- `TimelineController` owns CT (composition time); all timing decisions derive from this single authority. No subsystem maintains an independent CT counter.
+- `EncoderPipeline` accepts pre-computed CT from the producer — it does not derive, reset, or maintain local CT counters. PTS is computed as `CT + offset`, not used as a scheduling authority.
+- Contract tests: `MasterClockContractTests.cpp` validates single-epoch enforcement and rejects duplicate epoch sets. `TimelineControllerContractTests.cpp` validates CT authority and no local counter drift.

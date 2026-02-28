@@ -17,4 +17,8 @@ Decoding when no capacity exists (gate closed). Using hysteresis so that resume 
 - `pkg/air/tests/contracts/Phase9SymmetricBackpressureTests.cpp`
 
 ## Enforcement Evidence
-TODO
+
+- `VideoLookaheadBuffer` fill thread checks buffer capacity before each `av_read_frame` call — decode is admitted only when at least one slot is free in both video and audio buffers.
+- **No hysteresis:** Resume condition is identical to admission condition (one slot free). No low-water/high-water threshold logic exists in the gate path.
+- **Binary gate:** Gate is open (capacity present) or closed (no capacity). Fill thread blocks when closed; resumes immediately when a single slot becomes available.
+- Contract tests: `Phase10PipelineFlowControlTests.cpp` (`TEST_P10_DECODE_GATE_001_NoReadWhenEitherBufferFull`) proves decode is blocked when either buffer is full. `Phase9SymmetricBackpressureTests.cpp` validates gate behavior under sustained backpressure.

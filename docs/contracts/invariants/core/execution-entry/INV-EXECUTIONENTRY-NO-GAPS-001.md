@@ -10,7 +10,7 @@ Prevents temporal dead zones in the execution sequence. A gap in the ExecutionEn
 
 ## Guarantee
 
-The ExecutionEntry sequence for an active channel must be temporally contiguous with no gaps within the lookahead window (current MasterClock time through current time + 3 hours).
+The ExecutionEntry sequence for an active channel MUST be temporally contiguous with no gaps within the lookahead window (current MasterClock time through current time + `min_execution_horizon_ms`).
 
 A gap is defined as any interval within the lookahead window not covered by at least one ExecutionEntry.
 

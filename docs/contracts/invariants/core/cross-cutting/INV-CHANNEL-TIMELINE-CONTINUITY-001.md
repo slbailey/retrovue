@@ -53,4 +53,7 @@ MUST be logged with fields: `channel_id`, `T`, `channel_epoch`, `expected_positi
 
 ## Enforcement Evidence
 
-TODO
+- **Pure function by construction:** `ChannelStream` (`channel_stream.py`) computes timeline position as `f(channel_epoch, T, schedule)` — the function accepts no mutable state beyond its three declared inputs. AIR lifecycle, session counters, viewer counts, and decoder state are excluded by construction.
+- **No runtime state dependency:** `ChannelManager` has no import of AIR session modules; timeline computation is performed in Core without reference to AIR process lifetime, restart count, or crash state.
+- **Clock injection:** All contract tests use `DeterministicClock` via `contract_clock` fixture — position computation is deterministic and reproducible with explicit `(channel_epoch, T, schedule)` tuples.
+- Dedicated contract test (`test_inv_channel_timeline_continuity.py`) with 6 test cases (THTC-001 through THTC-006: restart invariance, viewer absence, independent computation, cumulative drift, day boundary, interrupted path) is referenced in `## Required Tests` but not yet implemented in the current tree.

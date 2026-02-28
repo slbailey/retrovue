@@ -54,7 +54,9 @@ EncoderPipeline::EncoderPipeline(const MpegTSPlayoutSinkConfig& config)
       frame_width_(0),
       frame_height_(0),
       input_pix_fmt_(AV_PIX_FMT_YUV420P),
-      sws_ctx_valid_(false),
+      sws_src_w_(0), sws_src_h_(0), sws_src_fmt_(AV_PIX_FMT_NONE),
+      sws_dst_w_(0), sws_dst_h_(0), sws_dst_fmt_(AV_PIX_FMT_NONE),
+      sws_flags_(0),
       header_written_(false),
       codec_opened_(false),
       using_nvenc_(false),
@@ -667,14 +669,26 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       size_t y_size = static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height);
       size_t uv_size = (frame.width / 2) * (frame.height / 2);
       if (frame.data.size() < y_size + 2 * uv_size) return false;
-      if (!sws_ctx_valid_ || sws_ctx_ == nullptr) {
+      // INV-ENCODER-SWS-COHERENCE-001: Validate full parameter tuple.
+      // Recreate context whenever any element of (src, dst, fmt, flags) differs.
+      constexpr int kSwsFlags = SWS_BILINEAR;
+      if (!isSwsContextCompatible(
+              frame.width, frame.height, AV_PIX_FMT_YUV420P,
+              frame_width_, frame_height_, AV_PIX_FMT_YUV420P,
+              kSwsFlags)) {
         if (sws_ctx_) { sws_freeContext(sws_ctx_); sws_ctx_ = nullptr; }
         sws_ctx_ = sws_getContext(
             frame.width, frame.height, AV_PIX_FMT_YUV420P,
             frame_width_, frame_height_, AV_PIX_FMT_YUV420P,
-            SWS_BILINEAR, nullptr, nullptr, nullptr);
+            kSwsFlags, nullptr, nullptr, nullptr);
         if (!sws_ctx_) return false;
-        sws_ctx_valid_ = true;
+        sws_src_w_ = frame.width;
+        sws_src_h_ = frame.height;
+        sws_src_fmt_ = AV_PIX_FMT_YUV420P;
+        sws_dst_w_ = frame_width_;
+        sws_dst_h_ = frame_height_;
+        sws_dst_fmt_ = AV_PIX_FMT_YUV420P;
+        sws_flags_ = kSwsFlags;
       }
       const uint8_t* src[3] = {
           frame.data.data(),
@@ -825,7 +839,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         sws_freeContext(sws_ctx_);
         sws_ctx_ = nullptr;
       }
-      sws_ctx_valid_ = false;
+      sws_src_w_ = sws_src_h_ = sws_dst_w_ = sws_dst_h_ = sws_flags_ = 0;
+      sws_src_fmt_ = sws_dst_fmt_ = AV_PIX_FMT_NONE;
     }
     
     // We do not allocate input_frame_->data in this pipeline; only frame_ is used for encode.
@@ -935,7 +950,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       sws_freeContext(sws_ctx_);
       sws_ctx_ = nullptr;
     }
-    sws_ctx_valid_ = false;
+    sws_src_w_ = sws_src_h_ = sws_dst_w_ = sws_dst_h_ = sws_flags_ = 0;
+    sws_src_fmt_ = sws_dst_fmt_ = AV_PIX_FMT_NONE;
 
     // Write header if not already written
     if (!header_written_) {
@@ -1332,7 +1348,8 @@ void EncoderPipeline::close() {
   audio_resample_buffer_samples_ = 0;
   last_seen_audio_pts90k_ = AV_NOPTS_VALUE;
   audio_pts_offset_90k_ = 0;
-  sws_ctx_valid_ = false;
+  sws_src_w_ = sws_src_h_ = sws_dst_w_ = sws_dst_h_ = sws_flags_ = 0;
+  sws_src_fmt_ = sws_dst_fmt_ = AV_PIX_FMT_NONE;
 
   video_stream_ = nullptr;
   frame_width_ = 0;

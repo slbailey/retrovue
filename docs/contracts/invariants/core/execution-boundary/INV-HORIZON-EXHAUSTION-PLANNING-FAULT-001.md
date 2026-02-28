@@ -59,4 +59,7 @@ Using FakeAdvancingClock: populate ExecutionWindowStore with entries covering [T
 
 ## Enforcement Evidence
 
-TODO
+- `HorizonManager` (`horizon_manager.py`) is responsible for maintaining the execution horizon ahead of clock progression — when the horizon is exhausted (no `ExecutionWindowStore` entry covers the required time), a `POLICY_VIOLATION` with `fault_class="planning"` is emitted.
+- **ChannelManager does not compensate:** Per `INV-CHANNELMANAGER-NO-PLANNING-001`, `ChannelManager` has no imports of planning modules and cannot retry planning calls, insert filler, or query the Asset Library to fill the gap.
+- `ChannelManager` signals the failure to `ProgramDirector` for clean halt or AIR-level fallback (freeze/pad/black per AIR invariants) — it does not silently skip the missing window.
+- Dedicated contract tests (EXEC-BOUNDARY-004, EXEC-BOUNDARY-005) are referenced in `## Required Tests` but not yet implemented in the current tree.

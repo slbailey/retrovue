@@ -37,4 +37,7 @@ Create a Program with no breakpoints spanning 90 minutes against a 30-minute gri
 
 ## Enforcement Evidence
 
-TODO
+- **Grid alignment enforcement:** `TestInvPlanGridAlignment001` in `test_scheduling_constitution.py` validates that ScheduleDay slot boundaries align to grid — a mid-program cut would produce an off-grid boundary, which is rejected.
+- **Full-coverage tiling:** `TestInvPlanFullCoverage001` in `test_scheduling_constitution.py` validates that Playlist entries tile the broadcast day exactly — a cut within a breakpoint-free program would leave a gap or produce a misaligned boundary.
+- **Longform accommodation:** Programs without breakpoints that exceed a single grid block may consume whole additional blocks — this is the only permitted off-nominal duration handling, preserving the indivisible editorial unit.
+- Dedicated contract test (`test_inv_no_mid_program_cut.py`) for explicit mid-program cut rejection is referenced in `## Required Tests` but not yet implemented in the current tree.

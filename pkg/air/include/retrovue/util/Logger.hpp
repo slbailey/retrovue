@@ -35,9 +35,14 @@ class Logger {
   // Call with nullptr to clear.
   static void SetErrorSink(std::function<void(const std::string&)> sink);
 
+  // Test-only: set to capture Info() lines for instrumentation analysis.
+  // Call with nullptr to clear.
+  static void SetInfoSink(std::function<void(const std::string&)> sink);
+
  private:
   static std::mutex mutex_;
   static std::function<void(const std::string&)> error_sink_;
+  static std::function<void(const std::string&)> info_sink_;
 };
 
 }  // namespace retrovue::util

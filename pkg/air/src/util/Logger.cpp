@@ -12,14 +12,23 @@ namespace retrovue::util {
 
 std::mutex Logger::mutex_;
 std::function<void(const std::string&)> Logger::error_sink_;
+std::function<void(const std::string&)> Logger::info_sink_;
 
 void Logger::SetErrorSink(std::function<void(const std::string&)> sink) {
   std::lock_guard<std::mutex> lock(mutex_);
   error_sink_ = std::move(sink);
 }
 
+void Logger::SetInfoSink(std::function<void(const std::string&)> sink) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  info_sink_ = std::move(sink);
+}
+
 void Logger::Info(const std::string& line) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (info_sink_) {
+    info_sink_(line);
+  }
   std::cout << line << '\n';
   std::cout.flush();
 }

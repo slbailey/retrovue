@@ -53,4 +53,7 @@ Using FakeAdvancingClock: populate ExecutionWindowStore with block B1 (asset A1,
 
 ## Enforcement Evidence
 
-TODO
+- **Architectural enforcement:** `ChannelManager` playout decision path reads from `ChannelStream` which sources execution data — no EPG store, `ResolvedScheduleDay` store, or `ScheduleDay` is referenced in the playout decision call stack.
+- `ChannelManager` has no import of EPG-related modules for playout purposes — EPG access, if any, is limited to display metadata enrichment (program titles for "Now Playing" labels), not execution decisions.
+- **Enforcement surface:** Dependency injection configuration ensures `ChannelManager` receives only `ExecutionWindowStore`-derived data for playout. Code review and import analysis are the primary enforcement mechanisms.
+- Dedicated contract test (EXEC-BOUNDARY-003) is referenced in `## Required Tests` but not yet implemented in the current tree.
