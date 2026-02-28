@@ -137,6 +137,50 @@ class Episode(Base):
         return f"<Episode(id={self.id}, title_id={self.title_id}, season_id={self.season_id}, number={self.number}, name={self.name})>"
 
 
+_LEGAL_STATE_TRANSITIONS: dict[str, set[str]] = {
+    "new": {"enriching", "retired"},
+    "enriching": {"ready", "new", "retired"},
+    "ready": {"retired"},
+    "retired": set(),
+}
+
+
+def validate_state_transition(current_state: str, new_state: str) -> None:
+    """Validate an asset state transition against the legal state machine.
+
+    Raises ValueError with INV-ASSET-STATE-MACHINE-001-VIOLATED if the
+    transition is not permitted.
+    """
+    if current_state == new_state:
+        return
+    allowed = _LEGAL_STATE_TRANSITIONS.get(current_state, set())
+    if new_state not in allowed:
+        raise ValueError(
+            f"INV-ASSET-STATE-MACHINE-001-VIOLATED: "
+            f"illegal state transition {current_state!r} -> {new_state!r}"
+        )
+
+
+def validate_marker_bounds(
+    start_ms: int, end_ms: int, asset_duration_ms: int
+) -> None:
+    """Validate marker timestamps are within asset duration bounds.
+
+    Raises ValueError with INV-ASSET-MARKER-BOUNDS-001-VIOLATED if the
+    marker timestamps are outside [0, asset_duration_ms].
+    """
+    if start_ms < 0:
+        raise ValueError(
+            f"INV-ASSET-MARKER-BOUNDS-001-VIOLATED: "
+            f"start_ms={start_ms} is negative"
+        )
+    if end_ms > asset_duration_ms:
+        raise ValueError(
+            f"INV-ASSET-MARKER-BOUNDS-001-VIOLATED: "
+            f"end_ms={end_ms} exceeds asset duration {asset_duration_ms}"
+        )
+
+
 class Asset(Base):
     """Represents a media asset (file) in the system."""
 
