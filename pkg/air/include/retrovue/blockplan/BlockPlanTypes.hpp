@@ -153,6 +153,11 @@ struct Segment {
   TransitionType transition_out = TransitionType::kNone;     // Fade at segment end
   uint32_t transition_out_duration_ms = 0;                   // Duration in ms (0 if kNone)
 
+  // INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain.
+  // 0.0 = unity (no adjustment). Computed by Core as target_lufs - integrated_lufs.
+  // AIR applies as constant linear scalar: 10^(gain_db/20) to every S16 sample.
+  float gain_db = 0.0f;
+
   // EXTENSION POINT: Segment metadata (Section 8.2.1)
   // INV-BLOCKPLAN-METADATA-IGNORED: AIR MUST NOT alter execution based on this
   std::optional<std::string> metadata_json;

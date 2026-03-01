@@ -27,7 +27,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Asset, AssetEditorial, Collection, Marker
+from ..domain.entities import Asset, AssetEditorial, AssetProbed, Collection, Marker
+from ..adapters.enrichers.loudness_enricher import get_gain_db_from_probed, needs_loudness_measurement
 from .asset_resolver import AssetMetadata
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,8 @@ class CatalogAssetResolver:
         self._aliases: dict[str, str] = {}  # alternate ID → canonical ID
         self._catalog: list[_CatalogEntry] = []  # for query() filtering
         self._pools: dict[str, dict[str, Any]] = {}  # pool_name → match criteria
+        # INV-LOUDNESS-NORMALIZED-001: Retain probed payloads for lazy backfill checks
+        self._probed_payloads: dict[str, dict] = {}
         self._load(db)
 
     def _load(self, db: Session) -> None:
@@ -127,6 +130,12 @@ class CatalogAssetResolver:
         editorials: dict[str, dict[str, Any]] = {}
         for ed in db.query(AssetEditorial).all():
             editorials[str(ed.asset_uuid)] = ed.payload or {}
+
+        # INV-LOUDNESS-NORMALIZED-001: Load probed metadata (contains loudness data)
+        probed_payloads: dict[str, dict] = {}
+        for p in db.query(AssetProbed).all():
+            probed_payloads[str(p.asset_uuid)] = p.payload or {}
+        self._probed_payloads = probed_payloads
 
         # Load chapter markers
         markers: dict[str, list[float]] = {}
@@ -170,6 +179,9 @@ class CatalogAssetResolver:
 
             display_title = editorial.get("title", "") or series_title or ""
             description = editorial.get("description", "") or ""
+            # INV-LOUDNESS-NORMALIZED-001: read gain_db from probed payload
+            probed = probed_payloads.get(uuid_str)
+            loudness_gain = get_gain_db_from_probed(probed)
             meta = AssetMetadata(
                 type="episode",
                 duration_sec=duration_sec,
@@ -179,6 +191,7 @@ class CatalogAssetResolver:
                 file_uri=resolved_file_uri,
                 chapter_markers_sec=chapter_secs if chapter_secs else None,
                 description=description,
+                loudness_gain_db=loudness_gain,
             )
 
             # Register by UUID (canonical)
@@ -399,6 +412,11 @@ class CatalogAssetResolver:
             )
 
         return asset_ids
+
+    def asset_needs_loudness_measurement(self, asset_id: str) -> bool:
+        """INV-LOUDNESS-NORMALIZED-001 Rule 5: Check if asset lacks loudness data."""
+        probed = self._probed_payloads.get(asset_id)
+        return needs_loudness_measurement(probed)
 
     def list_pools(self) -> list[str]:
         """Return all registered pool names."""

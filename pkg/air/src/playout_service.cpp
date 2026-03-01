@@ -185,6 +185,8 @@ namespace retrovue
         s.transition_in_duration_ms = seg.transition_in_duration_ms();
         s.transition_out = static_cast<blockplan::TransitionType>(seg.transition_out());
         s.transition_out_duration_ms = seg.transition_out_duration_ms();
+        // INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain
+        s.gain_db = seg.gain_db();
         block.segments.push_back(s);
       }
       return block;
