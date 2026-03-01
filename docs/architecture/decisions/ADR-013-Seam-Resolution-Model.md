@@ -73,9 +73,7 @@ authority transfer — produces a liveness violation. This is the sole case wher
 origin mutation is allowed.
 
 This exception is a last resort. The override paths (Case C) are the primary mechanisms
-for authority transfer and do not require origin correction. The vacuum exception MUST log
-an explicit diagnostic event and MUST NOT occur on consecutive ticks. A consecutive firing
-indicates a broken seam — not a transient race — and MUST be treated as a fault.
+for authority transfer and do not require origin correction.
 
 ## Prohibited Behaviors
 

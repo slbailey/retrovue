@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, date
 from typing import Any
 
@@ -320,6 +320,47 @@ def _grid_slot_duration(grid_minutes: int, episode_duration_sec: int) -> int:
     return slots_needed * slot_sec
 
 
+def channel_seed(channel_id: str) -> int:
+    """Derive a deterministic channel-specific seed. Stable across process lifetimes.
+
+    INV-SCHEDULE-SEED-DETERMINISTIC-001: Uses hashlib (cryptographic, stable),
+    not Python's hash() (randomized per process via PYTHONHASHSEED).
+    """
+    return int(hashlib.sha256(channel_id.encode("utf-8")).hexdigest(), 16) % 100000
+
+
+def _validate_grid_alignment(blocks: list[ProgramBlockOutput], grid_minutes: int) -> None:
+    """Assert all blocks are grid-aligned. Raises CompileError on violation.
+
+    Uses epoch-second math for wall-clock alignment independent of hour boundaries
+    and timezone edge cases. Does not depend on .minute arithmetic.
+
+    INV-BLEED-NO-GAP-001: Scope applies only to ProgramBlockOutput emitted by
+    DSL schedule compilation. Does NOT apply to downstream playlog segmentation
+    or ad pod sub-blocks.
+    """
+    slot_unit = grid_minutes * 60
+    for block in blocks:
+        if block.start_at.tzinfo is None or block.start_at.utcoffset() != timedelta(0):
+            raise CompileError(
+                f"Grid violation: block '{block.title}' start_at={block.start_at.isoformat()} "
+                f"is not UTC (utcoffset={block.start_at.utcoffset()}). "
+                f"All ProgramBlockOutput times MUST be timezone-aware UTC."
+            )
+        start_epoch = int(block.start_at.timestamp())
+        if start_epoch % slot_unit != 0:
+            raise CompileError(
+                f"Grid violation: block '{block.title}' start_at={block.start_at.isoformat()} "
+                f"is not aligned to {grid_minutes}-minute grid "
+                f"(epoch {start_epoch} % {slot_unit} = {start_epoch % slot_unit})"
+            )
+        if block.slot_duration_sec % slot_unit != 0:
+            raise CompileError(
+                f"Grid violation: block '{block.title}' slot_duration_sec={block.slot_duration_sec} "
+                f"is not a multiple of {slot_unit}s ({grid_minutes}min grid)"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Time parsing
 # ---------------------------------------------------------------------------
@@ -513,8 +554,9 @@ def _compile_movie_marathon(
             allow_bleed: true   # optional, default false
 
     When allow_bleed is true, if the last movie would end before `end`, one
-    more movie is scheduled even if it bleeds past `end`. The downstream
-    block pruner will absorb any overlapped slots.
+    more movie is scheduled even if it bleeds past `end`. The compaction pass
+    resolves overlaps by pushing subsequent blocks forward to the bleed
+    block's grid-aligned end.
     """
     mm = block_def.get("movie_marathon", {})
     start_str = mm.get("start") or block_def.get("start", "09:00")
@@ -980,17 +1022,41 @@ def compile_schedule(
                             )
                         all_blocks.extend(blocks)
 
-    # Sort before pruning
+    # INV-BLEED-NO-GAP-001: Sort, validate, compact, revalidate, check contiguity.
     all_blocks.sort(key=lambda b: b.start_at)
 
-    # Auto-prune overlapping blocks (later blocks absorbed by earlier movie blocks)
-    pruned: list[ProgramBlockOutput] = []
+    # Normalize all blocks to UTC for consistent epoch math
+    from zoneinfo import ZoneInfo
+    _utc = ZoneInfo("UTC")
+    all_blocks = [
+        replace(b, start_at=b.start_at.astimezone(_utc))
+        if b.start_at.utcoffset() != timedelta(0)
+        else b
+        for b in all_blocks
+    ]
+
+    # Validate grid alignment before compaction
+    _validate_grid_alignment(all_blocks, grid_minutes)
+
+    # Compact: resolve bleed overlaps by pushing blocks forward
+    compacted: list[ProgramBlockOutput] = []
     for block in all_blocks:
-        if pruned and pruned[-1].end_at() > block.start_at:
-            pass  # overlapped block pruned
-            continue
-        pruned.append(block)
-    all_blocks = pruned
+        if compacted and compacted[-1].end_at() > block.start_at:
+            if block.end_at() <= compacted[-1].end_at():
+                raise CompileError(
+                    f"Illegal overlap: block '{block.title}' ({block.start_at.isoformat()}"
+                    f"–{block.end_at().isoformat()}) is fully enclosed within "
+                    f"'{compacted[-1].title}' ({compacted[-1].start_at.isoformat()}"
+                    f"–{compacted[-1].end_at().isoformat()})"
+                )
+            # Partial overlap from bleed: push forward to previous block's grid-aligned end
+            new_start = compacted[-1].end_at()
+            block = replace(block, start_at=new_start)
+        compacted.append(block)
+    all_blocks = compacted
+
+    # Post-compaction revalidation — fail fast, no assumptions
+    _validate_grid_alignment(all_blocks, grid_minutes)
 
     # Build output
     plan: dict[str, Any] = {

@@ -65,8 +65,38 @@ except ImportError:  # pragma: no cover - settings optional
     RuntimeSettings = None  # type: ignore
 
 
-from retrovue.streaming.hls_writer import HLSManager, HLS_BASE_DIR
-from fastapi.responses import FileResponse
+import re as _re
+
+from retrovue.streaming.hls_writer import HLSManager
+
+_HLS_SEGMENT_RE = _re.compile(r"^seg_\d{5}\.ts$")
+
+
+class HLSAccessFilter(logging.Filter):
+    """Suppress uvicorn access log entries for high-frequency polling requests.
+
+    HLS clients poll live.m3u8 every ~1-2s and fetch segments continuously.
+    EPG clients poll /api/epg on short intervals.
+    These are high-frequency, low-information events that clutter the log.
+    Error responses (status >= 400) are still logged.
+    """
+
+    _QUIET_PREFIXES = ("/hls/", "/api/epg")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path = args[2] if len(args) > 2 else ""
+        status_code = args[4] if len(args) > 4 else 0
+        if isinstance(path, str) and any(path.startswith(p) for p in self._QUIET_PREFIXES):
+            try:
+                if int(status_code) < 400:
+                    return False
+            except (ValueError, TypeError):
+                pass
+        return True
+
 
 class SystemMode(Enum):
     """System-wide operational modes"""
@@ -1158,6 +1188,7 @@ class ProgramDirector:
         else:
             def _run_server() -> None:
                 self._logger.info("ProgramDirector HTTP server starting on %s:%s", self.host, self.port)
+                logging.getLogger("uvicorn.access").addFilter(HLSAccessFilter())
                 try:
                     config = Config(self.fastapi_app, host=self.host, port=self.port, log_level="info")
                     self._server = Server(config)
@@ -1882,10 +1913,13 @@ class ProgramDirector:
             date: Optional[str] = None,
             channel: Optional[str] = None,
         ) -> Any:
-            """EPG endpoint for all channels compiled from DSL."""
-            import json as _json
+            """EPG endpoint for all channels — reads from canonical compiled schedule.
+
+            INV-EPG-READS-CANONICAL-SCHEDULE-001: reads from CompiledProgramLog,
+            does NOT call compile_schedule() directly.
+            """
             from zoneinfo import ZoneInfo
-            from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
+            from retrovue.runtime.dsl_schedule_service import DslScheduleService
             from retrovue.runtime.catalog_resolver import CatalogAssetResolver
             from retrovue.infra.uow import session
 
@@ -1903,44 +1937,34 @@ class ProgramDirector:
             if channel:
                 channels = [c for c in channels if c["channel_id"] == channel]
 
-            # Part 2: Build resolver once per EPG request, not per channel
+            # Compute broadcast day window for range-based EPG lookup
+            from datetime import date as _date_type
+            _bd = _date_type.fromisoformat(broadcast_day)
+            _programming_day_start = 6  # 06:00 local
+            _tz = ZoneInfo("America/New_York")
+            window_start = datetime(_bd.year, _bd.month, _bd.day, _programming_day_start, 0, tzinfo=_tz)
+            window_end = window_start + timedelta(hours=24)
+
+            # Build resolver once for metadata lookups
             with session() as db:
                 _shared_resolver = CatalogAssetResolver(db)
 
             all_entries = []
             for ch in channels:
                 try:
-                    dsl_path = ch["schedule_config"]["dsl_path"]
-                    dsl_text = Path(dsl_path).read_text()
-                    dsl = parse_dsl(dsl_text)
-                    dsl["broadcast_day"] = broadcast_day
-
-                    resolver = _shared_resolver
-
-                    # Deterministic sequential counters based on day offset
-                    from datetime import date as _date_type
-                    _epoch = _date_type(2026, 1, 1)
-                    _target = _date_type.fromisoformat(broadcast_day)
-                    _day_offset = (_target - _epoch).days
-                    _slots = sum(
-                        len(b.get("slots", []))
-                        for v in dsl.get("schedule", {}).values()
-                        for b in (v if isinstance(v, list) else [v])
-                        if isinstance(b, dict)
+                    # INV-EPG-READS-CANONICAL-SCHEDULE-001: read from DB cache
+                    blocks = DslScheduleService.get_canonical_epg(
+                        ch["channel_id"], window_start, window_end
                     )
-                    _seq_counters = {
-                        pid: _day_offset * _slots
-                        for pid in dsl.get("pools", {})
-                    }
-                    # Derive channel-specific seed from channel_id hash
-                    _channel_seed = abs(hash(ch["channel_id"])) % 100000
-                    schedule = compile_schedule(
-                        dsl, resolver=resolver, dsl_path=dsl_path,
-                        sequential_counters=_seq_counters,
-                        seed=_channel_seed,
-                    )
+                    if blocks is None:
+                        all_entries.append({
+                            "channel_id": ch["channel_id"],
+                            "channel_name": ch["name"],
+                            "error": "Schedule not yet compiled",
+                        })
+                        continue
 
-                    for block in schedule["program_blocks"]:
+                    for block in blocks:
                         asset_id = block["asset_id"]
                         series_title = block.get("title", "")
                         season_number = None
@@ -1948,7 +1972,7 @@ class ProgramDirector:
 
                         description = ""
                         episode_title = ""
-                        for cat_entry in resolver._catalog:
+                        for cat_entry in _shared_resolver._catalog:
                             if cat_entry.canonical_id == asset_id:
                                 series_title = cat_entry.series_title or series_title
                                 season_number = cat_entry.season
@@ -1976,7 +2000,7 @@ class ProgramDirector:
                             "slot_minutes": round(slot_sec / 60, 1),
                         })
                 except Exception as e:
-                    self._logger.error("EPG compile error for %s: %s", ch["channel_id"], e, exc_info=True)
+                    self._logger.error("EPG error for %s: %s", ch["channel_id"], e, exc_info=True)
                     all_entries.append({
                         "channel_id": ch["channel_id"],
                         "channel_name": ch["name"],
@@ -2096,20 +2120,19 @@ class ProgramDirector:
 
                     _td.Thread(target=_drain_hls_phantom, daemon=True, name=f"hls-phantom-{channel_id}").start()
 
-                # Wait for first playlist to appear
-                for _ in range(30):
-                    if seg.playlist_path.exists():
-                        break
-                    await asyncio.sleep(0.5)
+                # Wait for first segment to be ready
+                ready = await asyncio.get_event_loop().run_in_executor(
+                    None, seg.wait_for_playlist, 15.0
+                )
 
-            playlist = seg.playlist_path
-            if not playlist.exists():
+            playlist_content = seg.get_playlist()
+            if playlist_content is None:
                 return Response(
                     content="Playlist not ready yet",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
             return Response(
-                content=playlist.read_text(),
+                content=playlist_content,
                 media_type="application/vnd.apple.mpegurl",
                 headers={
                     "Cache-Control": "no-cache, no-store",
@@ -2125,14 +2148,17 @@ class ProgramDirector:
             with self._hls_activity_lock:
                 self._hls_last_activity[channel_id] = _time.monotonic()
 
-            seg_path = HLS_BASE_DIR / channel_id / segment
-            if not seg_path.exists() or ".." in segment:
+            if not _HLS_SEGMENT_RE.match(segment):
                 return Response(content="Not found", status_code=404)
-            return FileResponse(
-                str(seg_path),
+            segmenter = self._hls_manager.get_or_create(channel_id)
+            seg_data = segmenter.get_segment(segment)
+            if seg_data is None:
+                return Response(content="Not found", status_code=404)
+            return Response(
+                content=seg_data,
                 media_type="video/mp2t",
                 headers={
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": "public, no-cache",
                     "Access-Control-Allow-Origin": "*",
                 },
             )
@@ -2175,6 +2201,7 @@ class ProgramDirector:
 
         def _run_server():
             try:
+                logging.getLogger("uvicorn.access").addFilter(HLSAccessFilter())
                 config = Config(self.fastapi_app, host=self.host, port=self.port, log_level="info")
                 self._server = Server(config)
                 self._logger.info("ProgramDirector HTTP server starting on %s:%s", self.host, self.port)

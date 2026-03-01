@@ -16,16 +16,14 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import struct
 import threading
 import time
-from pathlib import Path
+from collections import deque
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-HLS_BASE_DIR = Path("/tmp/retrovue-hls")
 
 # ---------------------------------------------------------------------------
 # MPEG-TS constants
@@ -37,6 +35,14 @@ TS_SYNC_BYTE = 0x47
 _H264_IDR_NAL_TYPES = {5}  # IDR slice
 # Also treat SPS (7) as keyframe indicator — encoders emit SPS before IDR
 _H264_KEYFRAME_NAL_TYPES = _H264_IDR_NAL_TYPES | {7}
+
+
+@dataclass(frozen=True, slots=True)
+class HLSSegment:
+    """In-memory HLS segment."""
+    name: str       # e.g. "seg_00042.ts"
+    duration: float  # seconds
+    data: bytes      # raw TS payload
 
 
 def _is_keyframe_packet(packet: bytes) -> bool:
@@ -98,7 +104,7 @@ class HLSSegmenter:
     """Pure-Python MPEG-TS → HLS segmenter.
 
     Call :meth:`feed` with raw TS bytes.  The segmenter accumulates packets,
-    detects keyframes, and writes segment files + playlist to disk.
+    detects keyframes, and stores segments in memory.
     """
 
     def __init__(
@@ -111,7 +117,6 @@ class HLSSegmenter:
         self.target_duration = target_duration
         self.max_segments = max_segments
 
-        self.output_dir = HLS_BASE_DIR / channel_id
         self._lock = threading.Lock()
         self._running = False
 
@@ -121,9 +126,10 @@ class HLSSegmenter:
         self._seg_start_time: Optional[float] = None  # wall-clock when segment started
         self._seg_pkt_count = 0
 
-        # Playlist bookkeeping: list of (filename, duration_seconds)
-        self._segments: list[tuple[str, float]] = []
+        # In-memory segment storage (bounded)
+        self._segments: deque[HLSSegment] = deque(maxlen=max_segments)
         self._media_sequence = 0
+        self._playlist_ready = threading.Event()
 
         # Partial packet buffer (in case feed() gets non-188-aligned data)
         self._leftover = bytearray()
@@ -132,27 +138,39 @@ class HLSSegmenter:
         self._last_pcr: Optional[float] = None
         self._seg_start_pcr: Optional[float] = None
 
-    @property
-    def playlist_path(self) -> Path:
-        return self.output_dir / "live.m3u8"
-
     def is_running(self) -> bool:
         return self._running
+
+    def get_playlist(self) -> str | None:
+        """Return current M3U8 playlist string, or None if no segments yet."""
+        with self._lock:
+            if not self._segments:
+                return None
+            return self._generate_playlist()
+
+    def get_segment(self, name: str) -> bytes | None:
+        """Return segment data by name, or None if not found/evicted."""
+        with self._lock:
+            for seg in self._segments:
+                if seg.name == name:
+                    return seg.data
+            return None
+
+    def has_playlist(self) -> bool:
+        """Return True if at least one segment has been finalized."""
+        return self._playlist_ready.is_set()
+
+    def wait_for_playlist(self, timeout: float) -> bool:
+        """Block until first segment is ready, or timeout. Returns True if ready."""
+        return self._playlist_ready.wait(timeout=timeout)
 
     def start(self) -> None:
         with self._lock:
             if self._running:
                 return
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            # Clean stale files from previous runs
-            for f in self.output_dir.glob("*"):
-                try:
-                    f.unlink()
-                except Exception:
-                    pass
             self._running = True
             self._seg_start_time = time.monotonic()
-            logger.info("[HLS %s] Segmenter started, output: %s", self.channel_id, self.output_dir)
+            logger.info("[HLS %s] Segmenter started (in-memory)", self.channel_id)
 
     def feed(self, data: bytes) -> None:
         """Feed raw MPEG-TS bytes.  Thread-safe."""
@@ -250,32 +268,24 @@ class HLSSegmenter:
         return 0.0
 
     def _finalize_segment(self, duration: float) -> None:
-        """Write current buffer as a segment file and update playlist."""
+        """Store current buffer as an in-memory segment."""
         seg_name = f"seg_{self._seg_index:05d}.ts"
-        seg_path = self.output_dir / seg_name
+        seg_data = bytes(self._seg_buffer)
 
-        seg_path.write_bytes(self._seg_buffer)
-
-        self._segments.append((seg_name, duration))
+        # deque(maxlen) auto-evicts leftmost on append when full;
+        # increment media_sequence to track the first segment's sequence number
+        if len(self._segments) == self._segments.maxlen:
+            self._media_sequence += 1
+        self._segments.append(HLSSegment(name=seg_name, duration=duration, data=seg_data))
         self._seg_index += 1
 
+        if not self._playlist_ready.is_set():
+            self._playlist_ready.set()
+
         logger.debug(
-            "[HLS %s] Segment %s written: %.2fs, %d bytes",
-            self.channel_id, seg_name, duration, len(self._seg_buffer),
+            "[HLS %s] Segment %s stored: %.2fs, %d bytes",
+            self.channel_id, seg_name, duration, len(seg_data),
         )
-
-        # Purge old segments beyond max_segments
-        while len(self._segments) > self.max_segments:
-            old_name, _ = self._segments.pop(0)
-            self._media_sequence += 1
-            old_path = self.output_dir / old_name
-            try:
-                old_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-        # Write playlist
-        self._write_playlist()
 
         # Reset for next segment
         self._seg_buffer = bytearray()
@@ -283,45 +293,28 @@ class HLSSegmenter:
         self._seg_start_time = time.monotonic()
         self._seg_start_pcr = self._last_pcr
 
-    def _write_playlist(self) -> None:
-        """Write the live.m3u8 playlist file."""
-        if not self._segments:
-            return
-
-        max_dur = max(d for _, d in self._segments)
-
+    def _generate_playlist(self) -> str:
+        """Generate m3u8 string from in-memory segments. MUST be called with _lock held."""
+        max_dur = max(seg.duration for seg in self._segments)
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:3",
             f"#EXT-X-TARGETDURATION:{int(max_dur) + 1}",
             f"#EXT-X-MEDIA-SEQUENCE:{self._media_sequence}",
         ]
-        for seg_name, dur in self._segments:
-            lines.append(f"#EXTINF:{dur:.3f},")
-            lines.append(seg_name)
-
-        playlist_content = "\n".join(lines) + "\n"
-
-        # Atomic write: write to temp, rename
-        tmp_path = self.playlist_path.with_suffix(".m3u8.tmp")
-        tmp_path.write_text(playlist_content)
-        tmp_path.rename(self.playlist_path)
+        for seg in self._segments:
+            lines.append(f"#EXTINF:{seg.duration:.3f},")
+            lines.append(seg.name)
+        return "\n".join(lines) + "\n"
 
     def stop(self) -> None:
-        """Stop the segmenter and clean up."""
+        """Stop segmenter. Pure teardown — discard in-flight buffer, release segments."""
         self._running = False
         with self._lock:
-            # Write final segment if there's accumulated data
-            if len(self._seg_buffer) > 0:
-                duration = self._current_seg_duration()
-                if duration > 0.5:  # Only write if > 0.5s
-                    self._finalize_segment(duration)
-        # Clean up directory
-        try:
-            if self.output_dir.exists():
-                shutil.rmtree(self.output_dir, ignore_errors=True)
-        except Exception as e:
-            logger.warning("[HLS %s] Cleanup error: %s", self.channel_id, e)
+            self._seg_buffer = bytearray()
+            self._seg_pkt_count = 0
+            self._segments.clear()
+            self._playlist_ready.clear()
         logger.info("[HLS %s] Segmenter stopped", self.channel_id)
 
 
