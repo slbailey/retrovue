@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -264,12 +265,12 @@ class PlaylogHorizonDaemon:
     # ------------------------------------------------------------------
 
     def _extend_to_target(self, now_ms: int, target_ms: int) -> int:
-        """Fill blocks from Tier 1 until Tier 2 depth reaches target."""
-        from retrovue.infra.uow import session as db_session_factory
-        from retrovue.domain.entities import CompiledProgramLog, TransmissionLog
-        from retrovue.runtime.traffic_manager import fill_ad_blocks
-        from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+        """Fill blocks from Tier 1 until Tier 2 depth reaches target.
 
+        INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001:
+        - Rule 1: Batch TransmissionLog existence checks per scan-day.
+        - Rule 2: Yield GIL (time.sleep) after each block fill.
+        """
         target_end_ms = now_ms + target_ms
         blocks_filled = 0
 
@@ -297,19 +298,28 @@ class PlaylogHorizonDaemon:
                 scan_date += timedelta(days=1)
                 continue
 
+            # Collect candidate block IDs for this scan-day (Rule 1)
+            candidate_ids = []
+            candidate_blocks = []
             for sb_dict in segmented_blocks:
                 block_start = sb_dict["start_utc_ms"]
                 block_end = sb_dict["end_utc_ms"]
-                block_id = sb_dict["block_id"]
-
-                # Skip blocks we've already filled or that are in the past
                 if block_end <= cursor_ms:
                     continue
                 if block_start >= target_end_ms:
                     break
+                candidate_ids.append(sb_dict["block_id"])
+                candidate_blocks.append(sb_dict)
 
-                # Check if already in TransmissionLog
-                if self._block_exists_in_txlog(block_id):
+            # Rule 1: single batched query for all candidates in this day
+            existing_ids = self._batch_block_exists_in_txlog(candidate_ids)
+
+            for sb_dict in candidate_blocks:
+                block_end = sb_dict["end_utc_ms"]
+                block_id = sb_dict["block_id"]
+
+                # Already in TransmissionLog (checked via batch)
+                if block_id in existing_ids:
                     if block_end > self._farthest_end_utc_ms:
                         self._farthest_end_utc_ms = block_end
                     continue
@@ -342,6 +352,10 @@ class PlaylogHorizonDaemon:
                         "PlaylogHorizon[%s]: failed to fill block=%s: %s",
                         self._channel_id, block_id, e,
                     )
+
+                # Rule 2: yield GIL after each block fill so upstream
+                # reader thread can cycle select→recv→put
+                time.sleep(0.001)
 
             scan_date += timedelta(days=1)
 
@@ -477,6 +491,30 @@ class PlaylogHorizonDaemon:
                 ).first() is not None
         except Exception:
             return False
+
+    def _batch_block_exists_in_txlog(self, block_ids: list[str]) -> set[str]:
+        """Batch-check which block_ids already have TransmissionLog entries.
+
+        INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 3:
+        Returns set[str] of block_ids that already have Tier 2 entries.
+        Single query per call: SELECT block_id ... WHERE block_id IN (...).
+        """
+        if not block_ids:
+            return set()
+
+        from retrovue.infra.uow import session as db_session_factory
+        from retrovue.domain.entities import TransmissionLog
+
+        try:
+            with db_session_factory() as db:
+                rows = (
+                    db.query(TransmissionLog.block_id)
+                    .filter(TransmissionLog.block_id.in_(block_ids))
+                    .all()
+                )
+                return {r[0] for r in rows}
+        except Exception:
+            return set()
 
     def _fill_ads(self, block: "ScheduledBlock") -> "ScheduledBlock":
         """Fill empty filler placeholders with real interstitials.
