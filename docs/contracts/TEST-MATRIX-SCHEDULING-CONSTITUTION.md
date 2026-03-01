@@ -136,6 +136,10 @@ These invariants have structural enforcement in production code and passing cont
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
 | INV-BLEED-NO-GAP-001 | 10 (contiguity + compaction + grid alignment + enclosed overlap + misalignment + revalidation + gap + naive dt + non-UTC + day boundary) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | 4 (deterministic + hashlib match + different channels + no builtin hash) | **PASS** | `channel_seed()` in `schedule_compiler.py` |
+| INV-MARATHON-CROSSMIDNIGHT-001 | 4 (produces blocks + start after 22:00 + end resolves next day + fills window) | **PASS** | Cross-midnight detection in `_compile_movie_marathon()` in `schedule_compiler.py` |
+| INV-CHANNEL-STARTUP-NONBLOCKING-001 | 4 (manager survives teardown + retune skips build_initial + build_initial idempotent + startup executor bounded) | **PASS** | `_stop_channel_internal()` preserves manager; `_build_initial()` idempotency guard; bounded `_startup_executor` in `program_director.py` |
+| INV-SCHEDULE-PREWARM-001 | 3 (AST: no load_schedule in _get_or_create_manager + AST: no load_schedule in _get_dsl_service + prewarm method exists and calls load_schedule) | **PASS** | `_get_dsl_service()` creates without loading; `_prewarm_channel_schedules()` loads at startup; `_get_or_create_manager()` assumes schedule ready |
+| INV-CHANNEL-STARTUP-CONCURRENCY-001 | 3 (AST: stream_channel has semaphore locked check + AST: hls_playlist has semaphore locked check + startup_semaphore and executor are bounded) | **PASS** | `_startup_semaphore` caps concurrent startups; `_startup_executor` bounded thread pool; handlers fail-fast 503 at capacity |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -168,6 +172,10 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | `TestInvExecutionentryLockedImmutable001` | `test_..._reject_locked_no_override`, `test_..._reject_past_unconditional`, `test_..._accept_override` | PASS |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | `TestInvSchedulemanagerNoAirAccess001` | `test_..._no_air_imports`, `test_..._no_air_attributes` | PASS |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | `TestInvTransmissionlogGridAlignment001` | `test_..._reject_off_grid`, `test_..._accept_pds_rollover`, `test_..._accept_cross_midnight` | PASS |
+| INV-CHANNEL-STARTUP-NONBLOCKING-001 | `TestInvChannelStartupNonblocking001` | `test_manager_survives_teardown`, `test_retune_after_teardown_skips_build_initial`, `test_build_initial_idempotent`, `test_startup_executor_is_bounded` | PASS |
+| INV-SCHEDULE-PREWARM-001 | `TestInvSchedulePrewarm001` | `test_get_or_create_manager_no_load_schedule`, `test_get_dsl_service_no_load_schedule`, `test_prewarm_method_calls_load_schedule` | PASS |
+| INV-CHANNEL-STARTUP-CONCURRENCY-001 | `TestInvChannelStartupConcurrency001` | `test_stream_channel_has_semaphore_guard`, `test_hls_playlist_has_semaphore_guard`, `test_startup_semaphore_and_executor_bounded` | PASS |
+| INV-TIER2-COMPILATION-CONSISTENCY-001 | `TestInvTier2CompilationConsistency001` | `test_get_block_at_returns_current_compilation_not_stale_txlog`, `test_consecutive_blocks_are_contiguous` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -198,6 +206,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | TOR-001, TOR-002, TOR-003, TOR-004 | Cross-cutting |
 | INV-BLEED-NO-GAP-001 | BLEED-001..010 | ScheduleCompiler |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | SEED-001..004 | ScheduleCompiler |
+| INV-MARATHON-CROSSMIDNIGHT-001 | XMID-001..004 | ScheduleCompiler |
 
 ---
 

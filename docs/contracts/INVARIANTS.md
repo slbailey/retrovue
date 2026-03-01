@@ -92,6 +92,13 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | [invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md](invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-SWITCH-BOUNDARY-TIMING | [invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md](invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md) | — |
 
+### Scheduling — Schedule Lifecycle
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-SCHEDULE-PREWARM-001 | [invariants/core/scheduling/INV-SCHEDULE-PREWARM-001.md](invariants/core/scheduling/INV-SCHEDULE-PREWARM-001.md) | LAW-LIVENESS, INV-CHANNEL-STARTUP-NONBLOCKING-001 |
+| INV-TIER2-COMPILATION-CONSISTENCY-001 | [invariants/core/scheduling/INV-TIER2-COMPILATION-CONSISTENCY-001.md](invariants/core/scheduling/INV-TIER2-COMPILATION-CONSISTENCY-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
+
 ### EPG
 
 | Invariant | File | Derived From |
@@ -104,6 +111,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-EPG-DERIVATION-TRACEABLE-001 | [invariants/core/epg/INV-EPG-DERIVATION-TRACEABLE-001.md](invariants/core/epg/INV-EPG-DERIVATION-TRACEABLE-001.md) | LAW-DERIVATION |
 | INV-EPG-VIEWER-INDEPENDENT-001 | [invariants/core/epg/INV-EPG-VIEWER-INDEPENDENT-001.md](invariants/core/epg/INV-EPG-VIEWER-INDEPENDENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-EPG-PROGRAM-CONTINUITY-001 | [invariants/core/epg/INV-EPG-PROGRAM-CONTINUITY-001.md](invariants/core/epg/INV-EPG-PROGRAM-CONTINUITY-001.md) | LAW-GRID, LAW-DERIVATION |
+| INV-EPG-DURATION-VISIBILITY-001 | [invariants/core/epg/INV-EPG-DURATION-VISIBILITY-001.md](invariants/core/epg/INV-EPG-DURATION-VISIBILITY-001.md) | LAW-GRID, LAW-DERIVATION |
 
 ### Asset — Entity Integrity
 
@@ -158,6 +166,9 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-BLEED-NO-GAP-001 | [invariants/core/runtime/INV-BLEED-NO-GAP-001.md](invariants/core/runtime/INV-BLEED-NO-GAP-001.md) | LAW-LIVENESS, LAW-GRID |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | [invariants/core/runtime/INV-SCHEDULE-SEED-DETERMINISTIC-001.md](invariants/core/runtime/INV-SCHEDULE-SEED-DETERMINISTIC-001.md) | LAW-LIVENESS, LAW-CONTENT-AUTHORITY |
 | INV-EPG-READS-CANONICAL-SCHEDULE-001 | [invariants/core/runtime/INV-EPG-READS-CANONICAL-SCHEDULE-001.md](invariants/core/runtime/INV-EPG-READS-CANONICAL-SCHEDULE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-MARATHON-CROSSMIDNIGHT-001 | [invariants/core/runtime/INV-MARATHON-CROSSMIDNIGHT-001.md](invariants/core/runtime/INV-MARATHON-CROSSMIDNIGHT-001.md) | LAW-GRID, LAW-LIVENESS |
+| INV-CHANNEL-STARTUP-NONBLOCKING-001 | [invariants/core/runtime/INV-CHANNEL-STARTUP-NONBLOCKING-001.md](invariants/core/runtime/INV-CHANNEL-STARTUP-NONBLOCKING-001.md) | LAW-LIVENESS |
+| INV-CHANNEL-STARTUP-CONCURRENCY-001 | [invariants/core/runtime/INV-CHANNEL-STARTUP-CONCURRENCY-001.md](invariants/core/runtime/INV-CHANNEL-STARTUP-CONCURRENCY-001.md) | LAW-LIVENESS, INV-CHANNEL-STARTUP-NONBLOCKING-001 |
 
 ---
 

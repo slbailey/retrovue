@@ -88,6 +88,9 @@ class PlaylogHorizonDaemon:
         self._last_fill_block_id: str | None = None
         self._fill_errors: int = 0
 
+        # Suppress repeated "needs recompile" noise: log once per (channel, day)
+        self._warned_stale_days: set[date] = set()
+
         # Lifecycle
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -237,7 +240,7 @@ class PlaylogHorizonDaemon:
             # Load Tier 1 segmented blocks for this day
             segmented_blocks = self._load_tier1_blocks(scan_date)
             if segmented_blocks is None:
-                logger.warning(
+                logger.debug(
                     "PlaylogHorizon[%s]: No Tier 1 data for %s — cannot extend",
                     self._channel_id, scan_date.isoformat(),
                 )
@@ -396,11 +399,13 @@ class PlaylogHorizonDaemon:
                     return None
                 cj = row.compiled_json
                 if "segmented_blocks" not in cj or not cj["segmented_blocks"]:
-                    logger.warning(
-                        "PlaylogHorizon[%s]: Tier 1 for %s has no segmented_blocks "
-                        "(pre-enhancement cache — needs recompile)",
-                        self._channel_id, broadcast_day.isoformat(),
-                    )
+                    if broadcast_day not in self._warned_stale_days:
+                        self._warned_stale_days.add(broadcast_day)
+                        logger.info(
+                            "PlaylogHorizon[%s]: Tier 1 for %s has no segmented_blocks "
+                            "(pre-enhancement cache — needs recompile)",
+                            self._channel_id, broadcast_day.isoformat(),
+                        )
                     return None
                 return cj["segmented_blocks"]
         except Exception as e:
