@@ -470,11 +470,38 @@ blockplan::RationalFps FFmpegDecoder::GetVideoRationalFps() const {
   if (!format_ctx_ || video_stream_index_ < 0) return blockplan::RationalFps{0, 1};
 
   AVStream* stream = format_ctx_->streams[video_stream_index_];
-  // Use r_frame_rate for cadence (container/codec nominal rate). avg_frame_rate is for
-  // diagnostics only and is not authoritative for cadence math.
-  AVRational fps = stream->r_frame_rate;
-  if (fps.num <= 0 || fps.den <= 0) return blockplan::RationalFps{0, 1};
-  blockplan::RationalFps normalized(static_cast<int64_t>(fps.num), static_cast<int64_t>(fps.den));
+
+  AVRational r_fps = stream->r_frame_rate;
+  AVRational avg_fps = stream->avg_frame_rate;
+
+  // INV-VFR-DROP-GUARD-001: Detect VFR / mislabeled files.
+  // If r_frame_rate and avg_frame_rate diverge by more than 10%, the file is VFR
+  // or the container rate is wrong. Prefer avg_frame_rate to prevent DROP mode from
+  // being selected on files where the nominal rate doesn't match actual frame delivery.
+  if (r_fps.num > 0 && r_fps.den > 0 && avg_fps.num > 0 && avg_fps.den > 0) {
+    double r_val = static_cast<double>(r_fps.num) / static_cast<double>(r_fps.den);
+    double avg_val = static_cast<double>(avg_fps.num) / static_cast<double>(avg_fps.den);
+    double max_val = std::max(r_val, avg_val);
+    if (max_val > 0.0) {
+      double divergence = std::abs(r_val - avg_val) / max_val;
+      if (divergence > 0.10) {
+        std::cout << "[VFR-GUARD] r_frame_rate=" << r_fps.num << "/" << r_fps.den
+                  << " (" << r_val << "fps)"
+                  << " avg_frame_rate=" << avg_fps.num << "/" << avg_fps.den
+                  << " (" << avg_val << "fps)"
+                  << " divergence=" << static_cast<int>(divergence * 100) << "%"
+                  << " → using avg_frame_rate"
+                  << std::endl;
+        blockplan::RationalFps normalized(static_cast<int64_t>(avg_fps.num),
+                                          static_cast<int64_t>(avg_fps.den));
+        return blockplan::SnapToStandardRationalFps(normalized);
+      }
+    }
+  }
+
+  // Default: use r_frame_rate (container/codec nominal rate) for cadence.
+  if (r_fps.num <= 0 || r_fps.den <= 0) return blockplan::RationalFps{0, 1};
+  blockplan::RationalFps normalized(static_cast<int64_t>(r_fps.num), static_cast<int64_t>(r_fps.den));
   return blockplan::SnapToStandardRationalFps(normalized);
 }
 

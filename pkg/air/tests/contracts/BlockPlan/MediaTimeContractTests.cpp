@@ -925,5 +925,108 @@ TEST(MediaTimeContract, CadenceIndependence_MediaCtMsReflectsPtsNotOutputIndex) 
   (void)media_0;
 }
 
+// =============================================================================
+// INV-VFR-DROP-GUARD-001: VFR file must NOT enter DROP mode.
+//
+// Scenario: Popeye commercial has r_frame_rate=60fps but only 1863 frames in
+// 65 seconds (avg ~28.6fps). Without the guard, TickProducer enters DROP with
+// drop_step=2, consuming all frames in ~31s while audio covers 65s → black video.
+//
+// The guard in GetVideoRationalFps() should detect the divergence and return
+// the avg_frame_rate (~28.6 → snapped to 30000/1001), yielding OFF mode.
+// =============================================================================
+
+// VFR fake decoder: reports avg ~28.6fps (snapped to 29.97) to simulate what
+// GetVideoRationalFps() should return after the VFR guard detects divergence.
+class FakeVfrDecoder : public ITickProducerDecoder {
+ public:
+  explicit FakeVfrDecoder(const decode::DecoderConfig& config)
+      : width_(config.target_width),
+        height_(config.target_height),
+        decode_count_(0),
+        // VFR file: 1863 real frames across 65 seconds. avg_frame_rate ≈ 28.6fps.
+        // SnapToStandardRationalFps(28.6) → 30000/1001 (29.97fps).
+        reported_fps_(30000, 1001),
+        max_decodes_(1863) {}
+
+  bool Open() override { return true; }
+  int SeekPreciseToMs(int64_t) override { return 0; }
+  RationalFps GetVideoRationalFps() override { return reported_fps_; }
+  bool DecodeFrameToBuffer(buffer::Frame& out) override {
+    if (decode_count_ >= max_decodes_) return false;
+    decode_count_++;
+    out.width = width_;
+    out.height = height_;
+    // avg inter-frame interval: 65s / 1863 ≈ 34.9ms
+    out.metadata.duration = 65.0 / 1863.0;
+    out.metadata.pts = static_cast<int64_t>((decode_count_ - 1) * 65.0 * 1'000'000.0 / 1863.0);
+    out.metadata.dts = out.metadata.pts;
+    out.metadata.asset_uri = "fake://vfr-popeye";
+    size_t y = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+    size_t uv = (y / 4);
+    out.data.resize(y + 2 * uv, 0x10);
+    buffer::AudioFrame af;
+    af.sample_rate = buffer::kHouseAudioSampleRate;
+    af.channels = buffer::kHouseAudioChannels;
+    af.nb_samples = 1600;  // ~33ms at 48kHz
+    af.pts_us = out.metadata.pts;
+    af.data.resize(static_cast<size_t>(af.nb_samples) * af.channels * sizeof(int16_t), 0);
+    pending_audio_.push(std::move(af));
+    return true;
+  }
+  bool GetPendingAudioFrame(buffer::AudioFrame& out) override {
+    if (pending_audio_.empty()) return false;
+    out = std::move(pending_audio_.front());
+    pending_audio_.pop();
+    return true;
+  }
+  bool IsEOF() const override { return decode_count_ >= max_decodes_; }
+  void SetInterruptFlags(const DecoderInterruptFlags&) override {}
+  bool HasAudioStream() const override { return true; }
+  PumpResult PumpDecoderOnce(PumpMode) override {
+    return decode_count_ >= max_decodes_ ? PumpResult::kEof : PumpResult::kProgress;
+  }
+
+ private:
+  int width_;
+  int height_;
+  int decode_count_;
+  RationalFps reported_fps_;
+  int max_decodes_;
+  std::queue<buffer::AudioFrame> pending_audio_;
+};
+
+TEST(MediaTimeContract, VfrFile_MustNotEnterDropMode) {
+  // Output at 30000/1001 (29.97fps). If input is also 30000/1001 → OFF mode.
+  // If input were incorrectly reported as 60fps → DROP mode (the bug).
+  TickProducer producer(640, 480, kFps_29_97);
+  producer.SetDecoderFactoryForTest(
+      [](const decode::DecoderConfig& c) {
+        return std::make_unique<FakeVfrDecoder>(c);
+      });
+  producer.SetAssetDurationForTest([](const std::string&) { return 65 * 1000; });
+  FedBlock block = MakeSyntheticBlock("vfr-guard", 65 * 1000, "fake://vfr-popeye");
+  producer.AssignBlock(block);
+
+  // INV-VFR-DROP-GUARD-001: VFR file must NOT be in DROP mode.
+  // With the guard, GetVideoRationalFps returns 30000/1001 (from avg_frame_rate),
+  // matching the output fps → OFF mode.
+  EXPECT_NE(producer.GetResampleMode(), ResampleMode::DROP)
+      << "INV-VFR-DROP-GUARD-001: VFR file (r=60fps, avg=28.6fps) must NOT enter DROP mode. "
+         "GetVideoRationalFps should detect r_frame_rate/avg_frame_rate divergence and use avg.";
+  EXPECT_EQ(producer.GetDropStep(), 1)
+      << "INV-VFR-DROP-GUARD-001: drop_step must be 1 (no frame dropping for VFR)";
+
+  // Verify we can decode frames normally (no 2:1 consumption)
+  int frames_decoded = 0;
+  for (int i = 0; i < 100; i++) {
+    auto fd = producer.TryGetFrame();
+    if (!fd) break;
+    frames_decoded++;
+  }
+  EXPECT_EQ(frames_decoded, 100)
+      << "VFR decoder with 1863 frames should easily produce 100 output frames in OFF mode";
+}
+
 }  // namespace
 }  // namespace retrovue::blockplan::testing
