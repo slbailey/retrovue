@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+import threading
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -112,6 +113,7 @@ class CatalogAssetResolver:
     """
 
     def __init__(self, db: Session) -> None:
+        self._lock = threading.Lock()
         self._assets: dict[str, AssetMetadata] = {}
         self._aliases: dict[str, str] = {}  # alternate ID → canonical ID
         self._catalog: list[_CatalogEntry] = []  # for query() filtering
@@ -412,6 +414,27 @@ class CatalogAssetResolver:
             )
 
         return asset_ids
+
+    def update_asset_loudness(self, asset_id: str, gain_db: float) -> None:
+        """Thread-safe O(1) update of a single asset's loudness gain.
+
+        Called from background loudness measurement threads to update
+        the in-memory resolver without forcing a full rebuild.
+        """
+        with self._lock:
+            old_meta = self._assets.get(asset_id)
+            if old_meta is None:
+                return
+            new_meta = replace(old_meta, loudness_gain_db=gain_db)
+            self._assets[asset_id] = new_meta
+            for entry in self._catalog:
+                if entry.canonical_id == asset_id:
+                    entry.meta = new_meta
+                    break
+            # Mark as measured so asset_needs_loudness_measurement() returns False
+            if asset_id not in self._probed_payloads:
+                self._probed_payloads[asset_id] = {}
+            self._probed_payloads[asset_id]["loudness"] = {"gain_db": gain_db}
 
     def asset_needs_loudness_measurement(self, asset_id: str) -> bool:
         """INV-LOUDNESS-NORMALIZED-001 Rule 5: Check if asset lacks loudness data."""

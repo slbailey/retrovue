@@ -149,6 +149,10 @@ class DslScheduleService:
         self._resolver_built_at: float = 0.0
         self._resolver_ttl_s: float = 60.0  # 60-second TTL
 
+        # Cached channel timezone from DSL parse (avoids re-reading DSL file
+        # on every Tier 2 miss in ensure_block_compiled).
+        self._channel_tz = None
+
         # INV-LOUDNESS-NORMALIZED-001: Background loudness measurement
         # Lazy backfill: unmeasured assets enqueue a background job on first encounter.
         # _loudness_pending prevents duplicate enqueues.
@@ -213,8 +217,12 @@ class DslScheduleService:
                 loudness_data["gain_db"],
             )
 
-            # Invalidate resolver cache so next compile picks up the new gain
-            self._resolver = None
+            # Update in-place instead of invalidating: avoids full resolver
+            # rebuild (12k+ assets) which causes UPSTREAM_LOOP spikes on the
+            # event thread via GIL contention.
+            resolver = self._resolver
+            if resolver is not None:
+                resolver.update_asset_loudness(asset_id, loudness_data["gain_db"])
 
         except subprocess.TimeoutExpired:
             logger.warning(
@@ -400,16 +408,9 @@ class DslScheduleService:
                 segments_data.append(d)
 
             from datetime import date as date_type
-            from zoneinfo import ZoneInfo
             block_dt = datetime.fromtimestamp(block.start_utc_ms / 1000.0, tz=timezone.utc)
-            # Use channel tz for broadcast day calculation
-            dsl_text = Path(self._dsl_path).read_text()
-            dsl = parse_dsl(dsl_text)
-            tz_name = dsl.get("timezone", "UTC")
-            try:
-                tz = ZoneInfo(tz_name)
-            except Exception:
-                tz = timezone.utc
+            # Use cached channel tz (populated by _build_initial) for broadcast day
+            tz = self._channel_tz or timezone.utc
             local_dt = block_dt.astimezone(tz)
             if local_dt.hour < self._day_start_hour:
                 broadcast_day = (local_dt - timedelta(days=1)).date()
@@ -697,6 +698,7 @@ class DslScheduleService:
                 tz = ZoneInfo(tz_name)
             except Exception:
                 tz = timezone.utc
+            self._channel_tz = tz  # cache for ensure_block_compiled()
             local_now = now.astimezone(tz)
             if local_now.hour < self._day_start_hour:
                 start_date = (local_now - timedelta(days=1)).date()

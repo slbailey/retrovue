@@ -30,6 +30,7 @@ import queue
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -498,7 +499,21 @@ class ProgramDirector:
         self._evidence_ack_dir = "/opt/retrovue/data/logs/asrun/acks"
         self._evidence_endpoint = f"127.0.0.1:{self._evidence_port}" if self._evidence_enabled else ""
         self._evidence_server = None
-        
+
+        # INV-CHANNEL-STARTUP-NONBLOCKING-001 + INV-CHANNEL-STARTUP-CONCURRENCY-001:
+        # Bounded executor and semaphore for channel startup. The semaphore
+        # caps concurrent startups; the executor provides the thread pool.
+        # Handlers check locked() and fail-fast 503 when at capacity.
+        self._startup_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="channel-startup"
+        )
+        self._startup_semaphore = asyncio.Semaphore(4)
+
+        # INV-SCHEDULE-PREWARM-001: Gate set once background schedule
+        # prewarm + horizon init completes. Request handlers check this
+        # to 503 during the warm-up window.
+        self._startup_complete = threading.Event()
+
         # Register HTTP endpoints
         self._register_endpoints()
         
@@ -659,7 +674,13 @@ class ProgramDirector:
         )
 
     def _get_dsl_service(self, channel_id: str, channel_config: "ChannelConfig") -> Any:
-        """Create or return a DslScheduleService for DSL-backed channels."""
+        """Create or return a DslScheduleService for DSL-backed channels.
+
+        INV-SCHEDULE-PREWARM-001: Service creation is decoupled from schedule
+        compilation. This method only constructs and caches the service object.
+        Schedule loading is the responsibility of _prewarm_channel_schedules()
+        which runs at server startup.
+        """
         key = f"_dsl_{channel_id}"
         cached = getattr(self, key, None)
         if cached is not None:
@@ -679,9 +700,6 @@ class ProgramDirector:
             channel_slug=channel_id,
             channel_type=sc.get("channel_type", "network"),
         )
-        ok, err = svc.load_schedule(channel_id)
-        if not ok:
-            raise ValueError(f"Failed to load DSL schedule for {channel_id}: {err}")
 
         setattr(self, key, svc)
         return svc
@@ -825,6 +843,48 @@ class ProgramDirector:
             len(self._horizon_managers),
         )
 
+    def _prewarm_channel_schedules(self) -> None:
+        """Pre-warm schedule data for all configured channels at server startup.
+
+        INV-SCHEDULE-PREWARM-001: All multi-day DSL compilation and EPG horizon
+        building MUST be performed here (scheduler daemon startup), never on a
+        viewer-triggered code path. This method creates each channel's schedule
+        service and calls load_schedule() to compile the initial horizon.
+
+        Called from start(), before _init_playlog_daemons().
+        """
+        if self._channel_config_provider is None:
+            return
+
+        if not hasattr(self._channel_config_provider, "list_channel_ids"):
+            return
+
+        warmed = 0
+        for channel_id in self._channel_config_provider.list_channel_ids():
+            config = self._channel_config_provider.get_channel_config(channel_id)
+            if config is None:
+                continue
+
+            try:
+                svc = self._get_schedule_service_for_channel(channel_id, config)
+                ok, err = svc.load_schedule(channel_id)
+                if not ok:
+                    self._logger.warning(
+                        "Prewarm[%s]: load_schedule failed: %s",
+                        channel_id, err,
+                    )
+                else:
+                    warmed += 1
+            except Exception as e:
+                self._logger.warning(
+                    "Prewarm[%s]: failed: %s",
+                    channel_id, e, exc_info=True,
+                )
+
+        self._logger.info(
+            "Schedule prewarm complete: %d channels warmed", warmed,
+        )
+
     def _init_playlog_daemons(self) -> None:
         """Create and start PlaylogHorizonDaemons for DSL channels.
 
@@ -832,7 +892,8 @@ class ProgramDirector:
         maintains 2-3+ hours of fully-filled playout logs in
         TransmissionLog (Postgres).
 
-        Called from start(), after _init_horizon_managers.
+        Called from start(), after _prewarm_channel_schedules() and
+        _init_horizon_managers.
         """
         if self._channel_config_provider is None:
             return
@@ -850,18 +911,8 @@ class ProgramDirector:
             if config.schedule_source != "dsl":
                 continue
 
-            # Warm Tier 1 (CompiledProgramLog) so the daemon can extend Tier 2.
-            # _get_schedule_service_for_channel (→ _get_dsl_service) calls
-            # load_schedule(channel_id), which compiles and caches Tier 1. Without
-            # this, DSL channels that have never had a viewer would have empty
-            # Tier 1 and the daemon would log INV-PLAYLOG-HORIZON-002.
-            try:
-                self._get_schedule_service_for_channel(channel_id, config)
-            except Exception as e:
-                self._logger.warning(
-                    "PlaylogHorizon[%s]: Tier 1 warm failed: %s",
-                    channel_id, e, exc_info=True,
-                )
+            # Tier 1 (CompiledProgramLog) is already warmed by
+            # _prewarm_channel_schedules() which runs before this method.
 
             sc = config.schedule_config or {}
 
@@ -904,61 +955,87 @@ class ProgramDirector:
         )
 
     def _get_or_create_manager(self, channel_id: str) -> Any:
-        """Get or create ChannelManager for a channel (embedded mode). PD is sole authority for creation."""
+        """Get or create ChannelManager for a channel (embedded mode). PD is sole authority for creation.
+
+        INV-CHANNEL-STARTUP-NONBLOCKING-001: If a manager already exists (even
+        in STOPPED state after teardown), return it directly — no schedule
+        reload.
+
+        INV-SCHEDULE-PREWARM-001: Manager creation MUST NOT trigger schedule
+        compilation. The schedule is pre-warmed at startup by
+        _prewarm_channel_schedules(). If the schedule is not ready (channel
+        was not configured at startup), this raises ChannelManagerError (503).
+        """
+        if not self._startup_complete.is_set():
+            from retrovue.runtime.channel_manager import ChannelManagerError
+            raise ChannelManagerError("Server is starting up — schedule prewarm in progress")
+
         with self._managers_lock:
-            if channel_id not in self._managers:
-                channel_config = self._channel_config_provider.get_channel_config(channel_id)
-                if channel_config is None:
-                    raise ValueError(
-                        f"[channel {channel_id}] No channel config found; "
-                        "blockplan-only mode requires config for each channel."
-                    )
+            if channel_id in self._managers:
+                manager = self._managers[channel_id]
+                # Re-activate stopped manager for returning viewers
+                if manager._channel_state == "STOPPED":
+                    manager._channel_state = "IDLE"
+                return manager
 
-                # INV-P5-001: Select schedule service based on channel config
-                schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
-
-                success, error = schedule_service.load_schedule(channel_id)
-                if not success:
-                    from retrovue.runtime.channel_manager import ChannelManagerError
-                    raise ChannelManagerError(f"Failed to load schedule for {channel_id}: {error}")
-                from retrovue.runtime.channel_manager import ChannelManager
-                # INV-VIEWER-LIFECYCLE-002: Pass event loop so linger grace
-                # period works.  Without it, every last-viewer disconnect
-                # immediately kills AIR (LINGER_SKIP).
-                try:
-                    _loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    _loop = None
-                manager = ChannelManager(
-                    channel_id=channel_id,
-                    clock=self._embedded_clock,
-                    schedule_service=schedule_service,
-                    program_director=self,
-                    event_loop=_loop,
-                    evidence_endpoint=self._evidence_endpoint,
+            channel_config = self._channel_config_provider.get_channel_config(channel_id)
+            if channel_config is None:
+                raise ValueError(
+                    f"[channel {channel_id}] No channel config found; "
+                    "blockplan-only mode requires config for each channel."
                 )
-                manager.channel_config = channel_config
-                if self._mock_schedule_grid_mode:
-                    manager._mock_grid_block_minutes = 30
-                    manager._mock_grid_program_asset_path = self._program_asset_path
-                    manager._mock_grid_filler_asset_path = self._filler_asset_path
-                    manager._mock_grid_filler_epoch = datetime(
-                        2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc
-                    )
-                cfg = channel_config
-                # ChannelManager always uses BlockPlanProducer.
-                _cm_build = ChannelManager._build_producer_for_mode
 
-                def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
-                    return _cm_build(manager, mode)
-                manager._build_producer_for_mode = factory_wrapper
-                self._managers[channel_id] = manager
-                self._logger.info(
-                    "[channel %s] ChannelManager created (channel_id_int=%d)",
-                    channel_id,
-                    channel_config.channel_id_int,
+            # INV-P5-001: Select schedule service based on channel config
+            schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
+
+            # INV-SCHEDULE-PREWARM-001: Do not call load_schedule() here.
+            # Schedule must already be loaded by _prewarm_channel_schedules().
+            # Check readiness: for DSL services, blocks must be populated.
+            if hasattr(schedule_service, "_blocks") and not schedule_service._blocks:
+                from retrovue.runtime.channel_manager import ChannelManagerError
+                raise ChannelManagerError(
+                    f"Schedule not ready for {channel_id}: "
+                    "schedule was not pre-warmed at startup. "
+                    "Ensure _prewarm_channel_schedules() ran for this channel."
                 )
-            return self._managers[channel_id]
+            from retrovue.runtime.channel_manager import ChannelManager
+            # INV-VIEWER-LIFECYCLE-002: Pass event loop so linger grace
+            # period works.  Without it, every last-viewer disconnect
+            # immediately kills AIR (LINGER_SKIP).
+            try:
+                _loop = asyncio.get_running_loop()
+            except RuntimeError:
+                _loop = None
+            manager = ChannelManager(
+                channel_id=channel_id,
+                clock=self._embedded_clock,
+                schedule_service=schedule_service,
+                program_director=self,
+                event_loop=_loop,
+                evidence_endpoint=self._evidence_endpoint,
+            )
+            manager.channel_config = channel_config
+            if self._mock_schedule_grid_mode:
+                manager._mock_grid_block_minutes = 30
+                manager._mock_grid_program_asset_path = self._program_asset_path
+                manager._mock_grid_filler_asset_path = self._filler_asset_path
+                manager._mock_grid_filler_epoch = datetime(
+                    2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc
+                )
+            cfg = channel_config
+            # ChannelManager always uses BlockPlanProducer.
+            _cm_build = ChannelManager._build_producer_for_mode
+
+            def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
+                return _cm_build(manager, mode)
+            manager._build_producer_for_mode = factory_wrapper
+            self._managers[channel_id] = manager
+            self._logger.info(
+                "[channel %s] ChannelManager created (channel_id_int=%d)",
+                channel_id,
+                channel_config.channel_id_int,
+            )
+            return manager
 
     def _health_check_loop(self) -> None:
         """Run check_health() and tick() on each registered ChannelManager (embedded mode)."""
@@ -1092,7 +1169,13 @@ class ProgramDirector:
             return channel_id in self._fanout_buffers
 
     def _stop_channel_internal(self, channel_id: str) -> None:
-        """Stop channel and remove from registry (embedded mode). PD is sole authority for teardown."""
+        """Stop channel producer and fanout (embedded mode). PD is sole authority for teardown.
+
+        INV-CHANNEL-STARTUP-NONBLOCKING-001: The ChannelManager is kept alive
+        in self._managers so that a returning viewer can re-activate the channel
+        without triggering schedule recompilation. Only the producer and fanout
+        are torn down; schedule state persists in the manager.
+        """
         with self._pre_warmed_lock:
             timer = self._pre_warmed_timers.pop(channel_id, None)
         if timer:
@@ -1100,7 +1183,7 @@ class ProgramDirector:
         with self._managers_lock:
             manager = self._managers.get(channel_id)
         if manager is not None:
-            self._logger.info("[channel %s] ChannelManager destroyed (viewer count 0)", channel_id)
+            self._logger.info("[channel %s] ChannelManager idle (producer stopped)", channel_id)
             manager.stop_channel()
             if manager.active_producer:
                 self._logger.info("[channel %s] Force-stopping producer (terminating Air)", channel_id)
@@ -1112,7 +1195,8 @@ class ProgramDirector:
                         "Error stopping producer for channel %s: %s", channel_id, e
                     )
             with self._managers_lock:
-                self._managers.pop(channel_id, None)
+                # INV-CHANNEL-STARTUP-NONBLOCKING-001: Keep manager alive.
+                # Only the fanout is torn down. Schedule state persists.
                 fanout = self._fanout_buffers.pop(channel_id, None)
             if fanout is not None:
                 self._logger.info("[teardown] stopping reader loop for channel %s", channel_id)
@@ -1130,23 +1214,14 @@ class ProgramDirector:
 
     # Lifecycle -------------------------------------------------------------
     def start(self) -> None:
-        """Start the pacing loop, health-check loop (embedded), and HTTP server."""
-        # Embedded mode: load schedules, init horizon managers, start health-check
-        if self._channel_manager_provider is None:
-            self.load_all_schedules()
-            # Horizon management: create/start HorizonManagers before HTTP server
-            self._init_horizon_managers()
-            # Playlog Horizon Daemons: Tier 2 pre-fill for all DSL channels
-            self._init_playlog_daemons()
-            if self._health_check_stop is not None:
-                self._health_check_stop.clear()
-                self._health_check_thread = Thread(
-                    target=self._health_check_loop,
-                    name="program-director-health-check",
-                    daemon=True,
-                )
-                self._health_check_thread.start()
+        """Start the pacing loop, health-check loop (embedded), and HTTP server.
 
+        INV-SCHEDULE-PREWARM-001 / INV-CHANNEL-STARTUP-NONBLOCKING-001:
+        Evidence server, pace thread, and HTTP server launch first so the
+        process is reachable immediately. Schedule loading, horizon init,
+        and prewarm run in a background daemon thread. Request handlers
+        return 503 until ``_startup_complete`` is set.
+        """
         # Start evidence gRPC server (if enabled)
         if self._evidence_enabled and self._evidence_server is None:
             try:
@@ -1201,6 +1276,43 @@ class ProgramDirector:
             server_thread.start()
             self._logger.debug("ProgramDirector HTTP server thread started")
 
+        # Embedded mode: run schedule loading + horizon init in background
+        if self._channel_manager_provider is None:
+            def _background_prewarm() -> None:
+                try:
+                    self.load_all_schedules()
+                    self._init_horizon_managers()
+                    self._prewarm_channel_schedules()
+                    self._init_playlog_daemons()
+                    if self._health_check_stop is not None:
+                        self._health_check_stop.clear()
+                        self._health_check_thread = Thread(
+                            target=self._health_check_loop,
+                            name="program-director-health-check",
+                            daemon=True,
+                        )
+                        self._health_check_thread.start()
+                except RuntimeError:
+                    self._logger.exception(
+                        "Background prewarm failed (horizon readiness gate). "
+                        "Channels will 503 until resolved."
+                    )
+                except Exception:
+                    self._logger.exception("Background prewarm failed unexpectedly")
+                finally:
+                    self._startup_complete.set()
+
+            prewarm_thread = Thread(
+                target=_background_prewarm,
+                name="program-director-prewarm",
+                daemon=True,
+            )
+            prewarm_thread.start()
+            self._logger.info("Background schedule prewarm started")
+        else:
+            # Non-embedded mode (tests with external provider): ready immediately
+            self._startup_complete.set()
+
     def stop(self, timeout: float = 2.0) -> None:
         """Stop the pacing loop, HTTP server, and join threads.
 
@@ -1225,6 +1337,9 @@ class ProgramDirector:
                 self._logger.debug("ProgramDirector pace thread joined successfully")
             self._pace_thread = None
         
+        # Shutdown startup executor
+        self._startup_executor.shutdown(wait=False)
+
         # Stop all HLS writers
         self._hls_manager.stop_all()
 
@@ -1570,13 +1685,20 @@ class ProgramDirector:
     def _register_endpoints(self) -> None:
         """Register Phase 0 HTTP endpoints."""
         
-        @self.fastapi_app.get("/channels")
-        async def get_channels() -> dict[str, Any]:
+        @self.fastapi_app.get("/channels", response_model=None)
+        async def get_channels():
             """
             Phase 0 contract: Channel discovery endpoint.
-            
+
             Returns list of available channels (from provider or embedded registry).
+            Returns 503 during startup while schedule prewarm is in progress.
             """
+            if not self._startup_complete.is_set():
+                return Response(
+                    content="Server is starting up — schedule prewarm in progress",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
             channels = []
             try:
                 if self._channel_manager_provider is not None:
@@ -1617,6 +1739,17 @@ class ProgramDirector:
                 pass
             cleanup()
 
+        @self.fastapi_app.get("/channel/{channel_id}.m3u")
+        async def channel_m3u(request: Request, channel_id: str) -> Response:
+            """Return an M3U playlist pointing to the channel TS stream, for VLC."""
+            base_url = str(request.base_url).rstrip("/")
+            body = f"#EXTM3U\n#EXTINF:-1,{channel_id}\n{base_url}/channel/{channel_id}.ts\n"
+            return Response(
+                content=body,
+                media_type="audio/x-mpegurl",
+                headers={"Content-Disposition": f'attachment; filename="{channel_id}.m3u"'},
+            )
+
         @self.fastapi_app.get("/channel/{channel_id}.ts")
         async def stream_channel(request: Request, channel_id: str) -> StreamingResponse:
             """
@@ -1626,30 +1759,41 @@ class ProgramDirector:
             - Emits continuous MPEG-TS bytes
             - Stops playout engine pipeline when last viewer disconnects (Phase 8.7: disconnect triggers teardown)
             """
-            try:
-                if self._channel_manager_provider is not None:
-                    manager = self._channel_manager_provider.get_channel_manager(channel_id)
-                else:
-                    manager = self._get_or_create_manager(channel_id)
-            except Exception as e:
-                self._logger.error("Error getting ChannelManager for %s: %s", channel_id, e)
+            # INV-CHANNEL-STARTUP-CONCURRENCY-001: Fail fast when at capacity.
+            if self._startup_semaphore.locked():
                 return Response(
-                    content=f"Channel not available: {e}",
+                    content="Server at startup capacity, try again shortly",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
 
             # Create session ID for this viewer
             session_id = str(uuid.uuid4())
 
-            # Phase 0: Route tune request to ChannelManager
+            # INV-CHANNEL-STARTUP-NONBLOCKING-001 + CONCURRENCY-001: Acquire
+            # semaphore, then offload manager acquisition + tune_in to the
+            # bounded executor so the event loop is never blocked.
+            await self._startup_semaphore.acquire()
             try:
-                manager.tune_in(session_id, {"channel_id": channel_id})
+                def _startup_channel():
+                    if self._channel_manager_provider is not None:
+                        mgr = self._channel_manager_provider.get_channel_manager(channel_id)
+                    else:
+                        mgr = self._get_or_create_manager(channel_id)
+                    mgr.tune_in(session_id, {"channel_id": channel_id})
+                    return mgr
+
+                loop = asyncio.get_running_loop()
+                manager = await loop.run_in_executor(
+                    self._startup_executor, _startup_channel
+                )
             except Exception as e:
-                self._logger.error("Error tuning in viewer to channel %s: %s", channel_id, e)
+                self._logger.error("Error starting channel %s: %s", channel_id, e)
                 return Response(
-                    content=f"Failed to tune in: {e}",
+                    content=f"Channel not available: {e}",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
+            finally:
+                self._startup_semaphore.release()
 
             # Get or create FanoutBuffer for this channel
             fanout = self._get_or_create_fanout_buffer(channel_id, manager)
@@ -1848,15 +1992,10 @@ class ProgramDirector:
             if channel_config.schedule_source != "phase3":
                 return {"channel_id": channel_id, "events": [], "message": "EPG not available for this channel type"}
 
-            # Get or create Phase 3 schedule service
+            # Get Phase 3 schedule service (pre-warmed by _init_horizon_managers)
+            # INV-SCHEDULE-PREWARM-001: Do not call load_schedule() on request path.
             try:
                 schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
-                success, error = schedule_service.load_schedule(channel_id)
-                if not success:
-                    return Response(
-                        content=f"Failed to load schedule: {error}",
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    )
             except Exception as e:
                 self._logger.error("Error getting schedule service for EPG: %s", e)
                 return Response(
@@ -1964,6 +2103,8 @@ class ProgramDirector:
                         })
                         continue
 
+                    from retrovue.epg.duration import epg_display_duration
+
                     for block in blocks:
                         asset_id = block["asset_id"]
                         series_title = block.get("title", "")
@@ -1998,6 +2139,10 @@ class ProgramDirector:
                             "description": description,
                             "duration_minutes": round(ep_sec / 60, 1),
                             "slot_minutes": round(slot_sec / 60, 1),
+                            "display_duration": epg_display_duration(
+                                start_dt, end_dt, slot_sec, ep_sec,
+                                is_movie=season_number is None,
+                            ),
                         })
                 except Exception as e:
                     self._logger.error("EPG error for %s: %s", ch["channel_id"], e, exc_info=True)
@@ -2036,32 +2181,45 @@ class ProgramDirector:
 
             seg = self._hls_manager.get_or_create(channel_id)
             if not seg.is_running():
-                seg.start()
-
-                # Ensure the channel is running so ChannelStream feeds us
-                try:
-                    if self._channel_manager_provider is not None:
-                        manager = self._channel_manager_provider.get_channel_manager(channel_id)
-                    else:
-                        manager = self._get_or_create_manager(channel_id)
-                except Exception as e:
+                # INV-CHANNEL-STARTUP-CONCURRENCY-001: Fail fast when at capacity.
+                if self._startup_semaphore.locked():
                     return Response(
-                        content=f"Channel not available: {e}",
+                        content="Server at startup capacity, try again shortly",
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     )
 
-                # Tune in to trigger producer + ChannelStream start
+                seg.start()
+
+                # INV-CHANNEL-STARTUP-NONBLOCKING-001 + CONCURRENCY-001: Acquire
+                # semaphore, then offload manager acquisition + tune_in to the
+                # bounded executor so the event loop is never blocked.
                 hls_session_id = f"hls-{channel_id}-{uuid.uuid4().hex[:8]}"
                 with self._hls_activity_lock:
                     self._hls_phantom_sessions[channel_id] = hls_session_id
+
+                await self._startup_semaphore.acquire()
                 try:
-                    manager.tune_in(hls_session_id, {"channel_id": channel_id})
+                    def _startup_hls_channel():
+                        if self._channel_manager_provider is not None:
+                            mgr = self._channel_manager_provider.get_channel_manager(channel_id)
+                        else:
+                            mgr = self._get_or_create_manager(channel_id)
+                        mgr.tune_in(hls_session_id, {"channel_id": channel_id})
+                        return mgr
+
+                    loop = asyncio.get_running_loop()
+                    manager = await loop.run_in_executor(
+                        self._startup_executor, _startup_hls_channel
+                    )
                 except Exception as e:
-                    self._logger.warning("HLS tune_in error: %s", e)
+                    self._logger.warning("HLS startup error: %s", e)
+                    manager = None
+                finally:
+                    self._startup_semaphore.release()
 
                 # Wait for fanout (which starts the reader loop that tees to HLS)
                 fanout = None
-                for _ in range(20):
+                for _ in range(20 if manager is not None else 0):
                     fanout = self._get_or_create_fanout_buffer(channel_id, manager)
                     if fanout:
                         break

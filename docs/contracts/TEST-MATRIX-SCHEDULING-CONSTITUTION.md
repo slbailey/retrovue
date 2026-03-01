@@ -197,6 +197,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-EXECUTIONENTRY-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | ExecutionEntry |
 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | PLAYLOG-008, PLAYLOG-009 | ExecutionEntry |
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | ExecutionEntry |
+| INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | PLAYLOG-BATCHED-001, PLAYLOG-BATCHED-002, PLAYLOG-BATCHED-003 | TransmissionLog |
 | INV-NO-FOREIGN-CONTENT-001 | CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003 | Cross-cutting |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | TransmissionLog |
 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
@@ -767,6 +768,52 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
+### 6.7 PlaylogHorizonDaemon Batched TxCheck Tests
+
+---
+
+### PLAYLOG-BATCHED-001: Extend uses batched existence check, not per-block queries
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | PlaylogHorizonDaemon._extend_to_target() evaluates 4 candidate blocks across a scan-day. Existence checks MUST use a single batched query (_batch_block_exists_in_txlog), not per-block _block_exists_in_txlog calls. |
+| **Clock Setup** | now_ms = 1_000_000. 4 blocks spanning now → now+2h. |
+| **Stimulus / Actions** | 1. Provide 4 Tier 1 blocks via _load_tier1_blocks. 2. Call _extend_to_target(now_ms, target_ms). |
+| **Assertions** | _block_exists_in_txlog MUST NOT be called. _batch_block_exists_in_txlog MUST be called at least once. |
+| **Failure Classification** | Runtime |
+
+---
+
+### PLAYLOG-BATCHED-002: GIL yielded after each block fill
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | When _extend_to_target() fills 3 blocks, time.sleep() MUST be called after each fill to yield the GIL. |
+| **Clock Setup** | now_ms = 1_000_000. 3 blocks, none in txlog. |
+| **Stimulus / Actions** | 1. Provide 3 unfilled Tier 1 blocks. 2. Call _extend_to_target(now_ms, target_ms). |
+| **Assertions** | time.sleep() called >= 3 times. Each call duration > 0. |
+| **Failure Classification** | Runtime |
+
+---
+
+### PLAYLOG-BATCHED-003: _batch_block_exists_in_txlog method exists and returns set[str]
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | PlaylogHorizonDaemon MUST expose _batch_block_exists_in_txlog(block_ids) returning set[str]. |
+| **Clock Setup** | N/A (structural check). |
+| **Stimulus / Actions** | 1. Instantiate PlaylogHorizonDaemon. 2. Check for method existence. |
+| **Assertions** | Method exists and is callable. |
+| **Failure Classification** | Runtime |
+
+---
+
 ### 6.6 TransmissionLog Grid Alignment Tests
 
 ---
@@ -1166,6 +1213,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | PLAYLOG-IMMUT-001 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked ExecutionEntry mutation without override rejected |
 | PLAYLOG-IMMUT-002 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window ExecutionEntry mutation rejected unconditionally |
 | PLAYLOG-IMMUT-003 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Valid atomic override inside locked window accepted |
+| PLAYLOG-BATCHED-001 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Extend uses batched existence check, not per-block queries |
+| PLAYLOG-BATCHED-002 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yielded after each block fill |
+| PLAYLOG-BATCHED-003 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _batch_block_exists_in_txlog method exists and returns set[str] |
 | PLAYLIST-GRID-001 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary rejected |
 | PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover alignment passes |
 | PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight entry has no hidden micro-gap |
