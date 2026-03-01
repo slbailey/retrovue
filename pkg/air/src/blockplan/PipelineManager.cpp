@@ -1686,6 +1686,19 @@ void PipelineManager::Run() {
     }
 
     // ==================================================================
+    // INV-CADENCE-SEAM-ADVANCE-001: When the incoming segment is eligible
+    // and the v_src gate selected the incoming buffer, cadence repeat MUST
+    // be suppressed.  The stale outgoing cadence MUST NOT prevent reading
+    // from the incoming source.  Budget accumulator is NOT reset — only
+    // the advance/repeat decision for this tick is overridden.
+    // ==================================================================
+    if (take_segment && is_cadence_repeat &&
+        v_src == segment_b_video_buffer_.get()) {
+      is_cadence_repeat = false;
+      should_advance_video = true;
+    }
+
+    // ==================================================================
     // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: PAD seam override.
     // Highest-priority branch — when authority is transferring to a PAD
     // segment THIS tick, force pad_producer_->VideoFrame() synchronously.
@@ -4629,10 +4642,19 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
       }
       computed = session_frame_index + seg_frames;
     }
+    // INV-LAST-SEGMENT-BLOCK-BOUNDARY-001: When the newly active segment is
+    // the last in the block, the next seam MUST be kBlock — regardless of
+    // whether `computed` falls before `block_fence_frame_`.  Without this
+    // guard, the segment swap handler at the next seam tick would try to swap
+    // to a non-existent segment (to_seg >= segments.size()), returning nullopt
+    // from GetIncomingSegmentState and deferring forever.
+    const bool is_last_segment =
+        (current_segment_index_ + 1 >=
+         static_cast<int32_t>(live_parent_block_.segments.size()));
     next_seam_frame_ = (computed != INT64_MAX && computed < block_fence_frame_)
         ? computed
         : block_fence_frame_;
-    next_seam_type_ = (next_seam_frame_ >= block_fence_frame_)
+    next_seam_type_ = (next_seam_frame_ >= block_fence_frame_ || is_last_segment)
         ? SeamType::kBlock
         : SeamType::kSegment;
     EnforceNextSeamInvariant(session_frame_index, "PerformSegmentSwap");

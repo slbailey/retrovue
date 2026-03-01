@@ -9,6 +9,8 @@
 - `docs/contracts/invariants/air/INV-NO-FRAME-AUTHORITY-VACUUM-001.md`
 - `docs/contracts/invariants/air/INV-PAD-VIDEO-READINESS-001.md`
 - `docs/contracts/invariants/air/INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001.md`
+- `docs/contracts/invariants/air/INV-LAST-SEGMENT-BLOCK-BOUNDARY-001.md`
+- `docs/contracts/invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md`
 
 **Test framework:** Google Test (GTest). All contract tests are C++.
 
@@ -245,3 +247,51 @@ In POST-TAKE, after eligibility is evaluated, a deferral branch checks whether `
 3. Capture error logs via `Logger::SetErrorSink`.
 4. Assert no `INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED` with `reason=stale_frame_bleed`.
 5. Before fix: FAILS (violation at PAD→CONTENT boundary). After fix: PASSES.
+
+## 8. Test Scenario: Last-Segment Block Boundary (Integration)
+
+The following scenario reproduces the permanent `SEGMENT_SWAP_DEFERRED reason=no_incoming` when the last segment's rebased end precedes `block_fence_frame_`. It validates `INV-LAST-SEGMENT-BLOCK-BOUNDARY-001`.
+
+### INV-LAST-SEGMENT-BLOCK-BOUNDARY-001
+
+**Test file:** `pkg/air/tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp`
+
+| Test | Scenario | Expected |
+|---|---|---|
+| LastSegmentEndBeforeFenceMustTransitionToNextBlock | Block [CONTENT(5000ms), CONTENT(5000ms)] with 5000ms epoch delta; successor block fed | Block B starts after block A's last segment ends |
+
+**Bug scenario (before fix):**
+1. Block A has 2 content segments (10000ms total). `block.start_utc_ms = epoch + 5000ms`.
+2. `block_fence_frame_ = ceil((5000 + 10000) * 30/1000) = 450`.
+3. `planned_seam[1] = 0 + ceil(10000 * 30/1000) = 300`.
+4. Swap from seg0 to seg1 at tick ~155. PerformSegmentSwap rebase: `computed = 155 + 150 = 305`.
+5. `305 < 450` — `next_seam_type_ = kSegment` (BUG: seg1 is the last segment).
+6. At tick ~305: `to_seg = 2 >= 2` — `nullopt` — `SEGMENT_SWAP_DEFERRED reason=no_incoming`.
+7. Block fence path never fires (kSegment). Block B never starts.
+
+**Fix:**
+After `current_segment_index_++` in PerformSegmentSwap Step 3, check `is_last_segment`. If true, set `next_seam_type_ = kBlock` regardless of `computed < block_fence_frame_`. The block fence / PADDED_GAP path fires at `computed`, loads block B.
+
+## 9. Test Scenario: Cadence Repeat at Segment Seam (Integration)
+
+The following scenario reproduces the cadence repeat overriding an eligible incoming source at a segment seam tick. It validates `INV-CADENCE-SEAM-ADVANCE-001`.
+
+### INV-CADENCE-SEAM-ADVANCE-001
+
+**Test file:** `pkg/air/tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp`
+
+| Test | Scenario | Expected |
+|---|---|---|
+| CadenceRepeatMustNotOverrideEligibleIncomingSource | Block [CONTENT(5000ms, 30fps), CONTENT(5000ms, 30fps)] with 60fps output; cadence ACTIVE at 50% repeat rate | No tick where v_src=incoming, eligible=true, cadence_repeat=1, decision=R |
+
+**Bug scenario (before fix):**
+1. Output at 60fps with 30fps source assets. Cadence ACTIVE: 30/60 = every other tick repeats.
+2. At segment 0→1 seam, segment B buffer created and filling. 500ms audio threshold causes deferral.
+3. Segment B becomes eligible (audio >= 500ms, video >= 2 frames). VSRC gate selects `v_src=incoming`.
+4. Cadence budget (tuned to outgoing segment's 30fps) says "repeat" on this tick.
+5. `is_cadence_repeat = true` → cascade branch at line 1753 fires: `chosen_video = &last_good_video_frame_`.
+6. `decision = kRepeat` → frame originates from outgoing segment → `frame_origin_gate` defers swap.
+7. Circular dependency: can't swap because frame is outgoing → frame is outgoing because cadence repeated → cadence is stale because swap hasn't committed.
+
+**Fix:**
+After the cadence check, when `take_segment && v_src == segment_b_video_buffer_ && is_cadence_repeat`, suppress the repeat: set `is_cadence_repeat = false`, `should_advance_video = true`. The advance path fires, pops from incoming, swap commits on the same tick. Cadence budget accumulator is not reset.
