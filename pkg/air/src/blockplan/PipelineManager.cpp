@@ -694,11 +694,12 @@ void PipelineManager::Run() {
     return;
   }
 
-  // Bound UDS kernel send buffer to limit post-fence old-tail latency.
-  // At ~284.6 KB/s TS wire rate, 32 KB ≈ 115 ms (Linux doubles to ~64 KB ≈ 225 ms).
+  // Bound UDS kernel send buffer to absorb Python reader pauses.
+  // At ~312 KB/s TS wire rate, 128 KB ≈ 410 ms (Linux doubles to ~256 KB ≈ 820 ms).
+  // Combined with Python's SO_RCVBUF=128KB, total kernel buffer ≈ 512 KB (~1.6s).
 #ifdef __linux__
   {
-    const int requested_sndbuf = 32768;
+    const int requested_sndbuf = 131072;
     if (setsockopt(sink_fd, SOL_SOCKET, SO_SNDBUF,
                    &requested_sndbuf, sizeof(requested_sndbuf)) < 0) {
       { std::ostringstream oss;
@@ -1032,6 +1033,11 @@ void PipelineManager::Run() {
   bool have_prev_frame_time = false;
   // Track whether we're past the live block's fence and waiting for next
   bool past_fence = false;
+
+  // TICK_GAP rate-limiting accumulators (summary every 2s instead of per-event)
+  int64_t tick_gap_count_since_log = 0;
+  int64_t tick_gap_max_ms_since_log = 0;
+  auto last_tick_gap_log = std::chrono::steady_clock::now();
 
   // P3.3: Per-block playback accumulator
   BlockAccumulator block_acc;
@@ -3591,21 +3597,29 @@ void PipelineManager::Run() {
     // (stash + preroll moved to pre-TAKE readiness block above)
     TryKickoffBlockPreload(session_frame_index);
 
-    // ---- Inter-frame gap measurement ----
+    // ---- Inter-frame gap measurement (rate-limited summary) ----
     if (have_prev_frame_time) {
       auto gap_us = std::chrono::duration_cast<std::chrono::microseconds>(
           wake_time - prev_frame_time).count();
       int64_t gap_ms = gap_us / 1000;
       if (gap_ms > 50) {
-        const char* phase =
-            past_fence ? "past_fence"
-            : (take_b ? "block_take" : (take_segment ? "segment_take" : "tick"));
-        { std::ostringstream oss;
-          oss << "[PipelineManager] TICK_GAP gap_ms=" << gap_ms
-              << " tick=" << session_frame_index
-              << " fence_tick=" << FormatFenceTick(block_fence_frame_)
-              << " phase=" << phase;
-          Logger::Info(oss.str()); }
+        tick_gap_count_since_log++;
+        if (gap_ms > tick_gap_max_ms_since_log) {
+          tick_gap_max_ms_since_log = gap_ms;
+        }
+        auto now_tg = std::chrono::steady_clock::now();
+        if (now_tg - last_tick_gap_log >= std::chrono::seconds(2)) {
+          { std::ostringstream oss;
+            oss << "[PipelineManager] TICK_GAP summary: count="
+                << tick_gap_count_since_log
+                << " max_gap_ms=" << tick_gap_max_ms_since_log
+                << " tick=" << session_frame_index
+                << " fence_tick=" << FormatFenceTick(block_fence_frame_);
+            Logger::Info(oss.str()); }
+          tick_gap_count_since_log = 0;
+          tick_gap_max_ms_since_log = 0;
+          last_tick_gap_log = now_tg;
+        }
       }
       std::lock_guard<std::mutex> lock(metrics_mutex_);
       metrics_.sum_inter_frame_gap_us += gap_us;

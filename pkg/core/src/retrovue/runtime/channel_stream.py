@@ -192,12 +192,13 @@ class UdsTsSource:
             self.sock.settimeout(None)  # Blocking mode for reads
             self._connected = True
 
-            # Bound UDS kernel recv buffer to limit post-fence old-tail latency.
-            # At ~284.6 KB/s TS wire rate, 32 KB ≈ 115 ms (Linux doubles to ~64 KB ≈ 225 ms).
+            # Bound UDS kernel recv buffer to absorb Python reader pauses.
+            # At ~312 KB/s TS wire rate, 128 KB ≈ 410 ms (Linux doubles to ~256 KB ≈ 820 ms).
+            # Combined with AIR's SO_SNDBUF=128KB, total kernel buffer ≈ 512 KB (~1.6s).
             import sys
             if sys.platform.startswith("linux"):
                 try:
-                    _requested_rcvbuf = 32768
+                    _requested_rcvbuf = 131072
                     self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _requested_rcvbuf)
                     effective = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
                     _logger.info(
@@ -206,7 +207,7 @@ class UdsTsSource:
                 except Exception as e:
                     _logger.warning(
                         "[UDS-BUF] setsockopt(SO_RCVBUF=%d) failed: %s (continuing with default)",
-                        32768, e,
+                        131072, e,
                     )
 
             # AUDIT: Log actual kernel buffer sizes
@@ -293,12 +294,13 @@ class SocketTsSource:
         self.sock = sock
         self._connected = True
 
-        # Bound UDS kernel recv buffer to limit post-fence old-tail latency.
-        # At ~284.6 KB/s TS wire rate, 32 KB ≈ 115 ms (Linux doubles to ~64 KB ≈ 225 ms).
+        # Bound UDS kernel recv buffer to absorb Python reader pauses.
+        # At ~312 KB/s TS wire rate, 128 KB ≈ 410 ms (Linux doubles to ~256 KB ≈ 820 ms).
+        # Combined with AIR's SO_SNDBUF=128KB, total kernel buffer ≈ 512 KB (~1.6s).
         import sys
         if sys.platform.startswith("linux"):
             try:
-                _requested_rcvbuf = 32768
+                _requested_rcvbuf = 131072
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _requested_rcvbuf)
                 effective = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
                 _logger.debug(
@@ -307,7 +309,7 @@ class SocketTsSource:
             except Exception as e:
                 _logger.warning(
                     "[UDS-BUF] setsockopt(SO_RCVBUF=%d) failed: %s (continuing with default)",
-                    32768, e,
+                    131072, e,
                 )
 
         # AUDIT: Log actual kernel buffer sizes
@@ -551,7 +553,7 @@ class ChannelStream:
         self._logger.debug(
             "[HTTP] Upstream reader started for channel %s", self.channel_id
         )
-        chunk_size = 188 * 10  # 10 TS packets
+        chunk_size = 32768  # ~174 TS packets; reduces iterations from ~166/s to ~10-20/s
 
         # Only log spike when truly slow: > 3× poll timeout, or did read and > 50 ms
         spike_threshold_long_ms = 3 * (UPSTREAM_POLL_TIMEOUT_S * 1000)
