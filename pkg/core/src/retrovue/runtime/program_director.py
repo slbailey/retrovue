@@ -892,11 +892,19 @@ class ProgramDirector:
                     from retrovue.runtime.channel_manager import ChannelManagerError
                     raise ChannelManagerError(f"Failed to load schedule for {channel_id}: {error}")
                 from retrovue.runtime.channel_manager import ChannelManager
+                # INV-VIEWER-LIFECYCLE-002: Pass event loop so linger grace
+                # period works.  Without it, every last-viewer disconnect
+                # immediately kills AIR (LINGER_SKIP).
+                try:
+                    _loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    _loop = None
                 manager = ChannelManager(
                     channel_id=channel_id,
                     clock=self._embedded_clock,
                     schedule_service=schedule_service,
                     program_director=self,
+                    event_loop=_loop,
                     evidence_endpoint=self._evidence_endpoint,
                 )
                 manager.channel_config = channel_config
