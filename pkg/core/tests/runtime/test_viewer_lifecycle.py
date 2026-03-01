@@ -331,5 +331,95 @@ class TestBlockPlanProducer:
         assert producer.health() == "stopped"
 
 
+class TestLingerGracePeriod:
+    """Tests for linger mechanism after last viewer disconnect."""
+
+    def setup_method(self):
+        self.clock = MockClock()
+        self.schedule_service = MockScheduleService()
+        self.program_director = MockProgramDirector()
+
+    @patch.object(ChannelManager, '_ensure_producer_running')
+    def test_linger_defers_teardown_with_event_loop(self, mock_ensure):
+        """INV-VIEWER-LIFECYCLE-002: With event loop, last viewer triggers linger, not immediate teardown."""
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            cm = ChannelManager(
+                channel_id="test-linger",
+                clock=self.clock,
+                schedule_service=self.schedule_service,
+                program_director=self.program_director,
+                event_loop=loop,
+            )
+            cm.set_blockplan_mode(True)
+
+            cm.viewer_join("viewer-1", {})
+            cm.viewer_leave("viewer-1")
+
+            # Linger should be active (deferred teardown), not immediate
+            assert cm._linger_handle is not None, (
+                "Linger timer should be scheduled, not skipped"
+            )
+            assert cm._channel_state == "RUNNING", (
+                "Channel should still be RUNNING during linger period"
+            )
+        finally:
+            loop.close()
+
+    @patch.object(ChannelManager, '_ensure_producer_running')
+    def test_linger_skips_without_event_loop(self, mock_ensure):
+        """Without event loop, last viewer causes immediate teardown (LINGER_SKIP)."""
+        cm = ChannelManager(
+            channel_id="test-no-loop",
+            clock=self.clock,
+            schedule_service=self.schedule_service,
+            program_director=self.program_director,
+            # event_loop not passed → self._loop is None
+        )
+        cm.set_blockplan_mode(True)
+
+        cm.viewer_join("viewer-1", {})
+        cm.viewer_leave("viewer-1")
+
+        # Without event loop, linger cannot be scheduled
+        assert cm._linger_handle is None
+
+    def test_event_loop_passed_in_get_or_create_manager(self):
+        """INV-VIEWER-LIFECYCLE-002: ProgramDirector must pass event_loop to ChannelManager.
+
+        ChannelManager construction in _get_or_create_manager must include
+        event_loop= so the linger grace period works. Without it, every
+        last-viewer disconnect immediately kills AIR.
+        """
+        import ast
+        from pathlib import Path
+
+        source_path = Path(__file__).resolve().parents[2] / "src" / "retrovue" / "runtime" / "program_director.py"
+        tree = ast.parse(source_path.read_text())
+
+        # Find ChannelManager(...) calls and check for event_loop keyword
+        found_construction = False
+        missing_event_loop = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Check if calling ChannelManager
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "ChannelManager":
+                    found_construction = True
+                    kwarg_names = [kw.arg for kw in node.keywords]
+                    if "event_loop" not in kwarg_names:
+                        missing_event_loop.append(f"line {node.lineno}")
+
+        assert found_construction, "Could not find ChannelManager() construction in program_director.py"
+        assert not missing_event_loop, (
+            f"INV-VIEWER-LIFECYCLE-002-VIOLATED: ChannelManager constructed without "
+            f"event_loop= at {missing_event_loop}. Linger grace period will be skipped, "
+            f"causing immediate AIR teardown on every last-viewer disconnect."
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
