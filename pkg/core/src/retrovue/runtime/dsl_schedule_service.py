@@ -132,6 +132,9 @@ class DslScheduleService:
         # Recompile guard: prevent concurrent horizon extensions
         self._extending = False
 
+        # INV-SCHEDULE-RETENTION-001: throttle DB purge to at most once/hour
+        self._last_tier1_purge_utc_ms: int = 0
+
         # Cached CatalogAssetResolver (Part 2B: avoid per-compile reload)
         # TTL-based: resolver is rebuilt if catalog may have changed.
         self._resolver: CatalogAssetResolver | None = None
@@ -512,6 +515,9 @@ class DslScheduleService:
             # Prune old blocks (>24h in the past) to save memory
             self._prune_old_blocks(now_utc_ms)
 
+            # INV-SCHEDULE-RETENTION-001: purge expired Tier 1 DB rows
+            self._purge_expired_tier1(now_utc_ms)
+
         except Exception as e:
             logger.error(
                 "Failed to extend DSL horizon for channel=%s: %s",
@@ -530,6 +536,43 @@ class DslScheduleService:
             pruned = before - len(self._blocks)
             if pruned > 0:
                 logger.info("Pruned %d old blocks (>24h past)", pruned)
+
+    def _purge_expired_tier1(self, now_utc_ms: int = 0) -> int:
+        """Delete CompiledProgramLog rows with broadcast_day < today - 1.
+
+        INV-SCHEDULE-RETENTION-001: Tier 1 retains only rows where
+        broadcast_day >= today - 1. Throttled to at most once per hour.
+
+        Returns the number of rows deleted (0 if throttled or no-op).
+        """
+        if now_utc_ms == 0:
+            now_utc_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        # Hourly throttle
+        if (now_utc_ms - self._last_tier1_purge_utc_ms) < 3_600_000:
+            return 0
+
+        from retrovue.domain.entities import CompiledProgramLog
+
+        cutoff = date.today() - timedelta(days=1)
+        try:
+            with session() as db:
+                count = db.query(CompiledProgramLog).filter(
+                    CompiledProgramLog.broadcast_day < cutoff,
+                ).delete()
+            self._last_tier1_purge_utc_ms = now_utc_ms
+            if count > 0:
+                logger.info(
+                    "INV-SCHEDULE-RETENTION-001: Purged %d expired Tier 1 rows "
+                    "(broadcast_day < %s)",
+                    count, cutoff.isoformat(),
+                )
+            return count
+        except Exception as e:
+            logger.warning(
+                "INV-SCHEDULE-RETENTION-001: Tier 1 purge failed: %s", e,
+            )
+            return 0
 
     # ── Build / compile ───────────────────────────────────────────────
 
@@ -631,6 +674,10 @@ class DslScheduleService:
 
         INV-EPG-READS-CANONICAL-SCHEDULE-001: Populates range_start/range_end
         from program_blocks for range-based overlap queries.
+
+        INV-SCHEDULE-RETENTION-001: Uses query-then-update-or-insert to
+        correctly handle the (channel_id, broadcast_day) unique constraint.
+        The previous db.merge() with a fresh UUID silently failed on conflict.
         """
         from retrovue.domain.entities import CompiledProgramLog
         try:
@@ -647,17 +694,28 @@ class DslScheduleService:
                     for b in program_blocks
                 )
 
+            bd = date_type.fromisoformat(broadcast_day)
             with session() as db:
-                row = CompiledProgramLog(
-                    channel_id=channel_id,
-                    broadcast_day=date_type.fromisoformat(broadcast_day),
-                    schedule_hash=dsl_hash,
-                    compiled_json=schedule,
-                    locked=True,
-                    range_start=range_start,
-                    range_end=range_end,
-                )
-                db.merge(row)
+                existing = db.query(CompiledProgramLog).filter(
+                    CompiledProgramLog.channel_id == channel_id,
+                    CompiledProgramLog.broadcast_day == bd,
+                ).first()
+                if existing:
+                    existing.compiled_json = schedule
+                    existing.schedule_hash = dsl_hash
+                    existing.locked = True
+                    existing.range_start = range_start
+                    existing.range_end = range_end
+                else:
+                    db.add(CompiledProgramLog(
+                        channel_id=channel_id,
+                        broadcast_day=bd,
+                        schedule_hash=dsl_hash,
+                        compiled_json=schedule,
+                        locked=True,
+                        range_start=range_start,
+                        range_end=range_end,
+                    ))
         except Exception as e:
             logger.warning("Failed to save compiled schedule to DB: %s", e)
 

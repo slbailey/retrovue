@@ -91,6 +91,9 @@ class PlaylogHorizonDaemon:
         # Suppress repeated "needs recompile" noise: log once per (channel, day)
         self._warned_stale_days: set[date] = set()
 
+        # INV-SCHEDULE-RETENTION-001: throttle DB purge to at most once/hour
+        self._last_tier2_purge_utc_ms: int = 0
+
         # Lifecycle
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -166,6 +169,9 @@ class PlaylogHorizonDaemon:
                 self._fill_errors,
             )
 
+        # INV-SCHEDULE-RETENTION-001: purge expired Tier 2 DB rows
+        self._purge_expired_tier2(now_ms)
+
         return blocks_filled
 
     def get_health_report(self) -> PlaylogHealthReport:
@@ -208,6 +214,50 @@ class PlaylogHorizonDaemon:
             self._thread.join(timeout=self._eval_interval_s + 5)
             self._thread = None
         logger.info("PlaylogHorizon[%s]: stopped", self._channel_id)
+
+    # ------------------------------------------------------------------
+    # Internal: retention
+    # ------------------------------------------------------------------
+
+    def _purge_expired_tier2(self, now_utc_ms: int = 0) -> int:
+        """Delete TransmissionLog rows with end_utc_ms <= now - 4 hours.
+
+        INV-SCHEDULE-RETENTION-001: Tier 2 retains only rows where
+        end_utc_ms > now - 4h. Throttled to at most once per hour.
+
+        Returns the number of rows deleted (0 if throttled or no-op).
+        """
+        if now_utc_ms == 0:
+            now_utc_ms = self._now_utc_ms()
+
+        # Hourly throttle
+        if (now_utc_ms - self._last_tier2_purge_utc_ms) < 3_600_000:
+            return 0
+
+        from retrovue.infra.uow import session as db_session_factory
+        from retrovue.domain.entities import TransmissionLog
+
+        cutoff_ms = now_utc_ms - (4 * 3_600_000)
+        try:
+            with db_session_factory() as db:
+                count = db.query(TransmissionLog).filter(
+                    TransmissionLog.channel_slug == self._channel_id,
+                    TransmissionLog.end_utc_ms <= cutoff_ms,
+                ).delete()
+            self._last_tier2_purge_utc_ms = now_utc_ms
+            if count > 0:
+                logger.info(
+                    "INV-SCHEDULE-RETENTION-001: Purged %d expired Tier 2 rows "
+                    "for channel=%s (end_utc_ms <= %d)",
+                    count, self._channel_id, cutoff_ms,
+                )
+            return count
+        except Exception as e:
+            logger.warning(
+                "INV-SCHEDULE-RETENTION-001: Tier 2 purge failed for channel=%s: %s",
+                self._channel_id, e,
+            )
+            return 0
 
     # ------------------------------------------------------------------
     # Internal: extension logic
