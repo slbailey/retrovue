@@ -873,7 +873,32 @@ class DslScheduleService:
         # Resolve URIs
         self._resolve_uris(resolver, schedule)
 
-        return self._expand_schedule_to_blocks(schedule, resolver)
+        blocks = self._expand_schedule_to_blocks(schedule, resolver)
+
+        # INV-SCHEDULE-RETENTION-001: Backfill segmented_blocks into the
+        # cached Tier 1 row so PlaylogHorizonDaemon can consume them.
+        # Without this, stale rows (pre-segmented_blocks) stay stale and
+        # the daemon can't pre-fill Tier 2, causing synchronous compiles
+        # on the viewer-join path.
+        try:
+            schedule["segmented_blocks"] = [
+                _serialize_scheduled_block(b) for b in blocks
+            ]
+            dsl_hash = self._hash_dsl(dsl_text)
+            self._save_compiled_schedule(channel_id, broadcast_day, schedule, dsl_hash)
+            logger.info(
+                "INV-SCHEDULE-RETENTION-001: Backfilled segmented_blocks for "
+                "%s/%s (%d blocks)",
+                channel_id, broadcast_day, len(blocks),
+            )
+        except Exception as e:
+            logger.warning(
+                "INV-SCHEDULE-RETENTION-001: Failed to backfill segmented_blocks "
+                "for %s/%s: %s",
+                channel_id, broadcast_day, e,
+            )
+
+        return blocks
 
     def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
         """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.
