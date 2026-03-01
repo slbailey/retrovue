@@ -1777,7 +1777,7 @@ class ProgramDirector:
                 )
 
         @self.fastapi_app.get("/api/epg/{channel_id}")
-        async def get_epg(
+        def get_epg(
             channel_id: str,
             start: Optional[str] = None,
             end: Optional[str] = None,
@@ -1870,7 +1870,7 @@ class ProgramDirector:
 
 
         @self.fastapi_app.get("/api/epg")
-        async def get_epg_all(
+        def get_epg_all(
             date: Optional[str] = None,
             channel: Optional[str] = None,
         ) -> Any:
@@ -2154,7 +2154,7 @@ class ProgramDirector:
             return HTMLResponse(content=html)
 
         @self.fastapi_app.get("/epg", response_class=HTMLResponse)
-        async def epg_guide_html() -> HTMLResponse:
+        def epg_guide_html() -> HTMLResponse:
             """Serve the EPG HTML page."""
             html_path = Path("/opt/retrovue/pkg/core/templates") / "epg" / "guide.html"
             return HTMLResponse(content=html_path.read_text())
