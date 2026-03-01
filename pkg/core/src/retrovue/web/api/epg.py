@@ -138,7 +138,7 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
 
 
 @router.get("/epg")
-async def get_epg(
+def get_epg(
     date: str = Query(default=None, description="Date in YYYY-MM-DD format"),
     channel: str = Query(default=None, description="Channel ID filter"),
 ):

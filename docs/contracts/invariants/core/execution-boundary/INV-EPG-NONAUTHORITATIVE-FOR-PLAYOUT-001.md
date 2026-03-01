@@ -50,6 +50,7 @@ Using FakeAdvancingClock: populate ExecutionWindowStore with block B1 (asset A1,
 ## Required Tests
 
 - `pkg/core/tests/contracts/test_scheduling_constitution.py` (EXEC-BOUNDARY-003)
+- `pkg/core/tests/contracts/test_epg_invariants.py::TestEpgEndpointNonBlocking` (structural: EPG handlers must not block event loop)
 
 ## Enforcement Evidence
 

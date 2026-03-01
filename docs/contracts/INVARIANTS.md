@@ -92,6 +92,19 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | [invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md](invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-SWITCH-BOUNDARY-TIMING | [invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md](invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md) | — |
 
+### EPG
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-EPG-NO-OVERLAP-001 | [invariants/core/epg/INV-EPG-NO-OVERLAP-001.md](invariants/core/epg/INV-EPG-NO-OVERLAP-001.md) | LAW-GRID, LAW-DERIVATION |
+| INV-EPG-NO-GAP-001 | [invariants/core/epg/INV-EPG-NO-GAP-001.md](invariants/core/epg/INV-EPG-NO-GAP-001.md) | LAW-GRID, LAW-LIVENESS |
+| INV-EPG-BROADCAST-DAY-BOUNDED-001 | [invariants/core/epg/INV-EPG-BROADCAST-DAY-BOUNDED-001.md](invariants/core/epg/INV-EPG-BROADCAST-DAY-BOUNDED-001.md) | LAW-GRID, LAW-DERIVATION |
+| INV-EPG-FILLER-INVISIBLE-001 | [invariants/core/epg/INV-EPG-FILLER-INVISIBLE-001.md](invariants/core/epg/INV-EPG-FILLER-INVISIBLE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPG-IDENTITY-STABLE-001 | [invariants/core/epg/INV-EPG-IDENTITY-STABLE-001.md](invariants/core/epg/INV-EPG-IDENTITY-STABLE-001.md) | LAW-IMMUTABILITY, LAW-DERIVATION |
+| INV-EPG-DERIVATION-TRACEABLE-001 | [invariants/core/epg/INV-EPG-DERIVATION-TRACEABLE-001.md](invariants/core/epg/INV-EPG-DERIVATION-TRACEABLE-001.md) | LAW-DERIVATION |
+| INV-EPG-VIEWER-INDEPENDENT-001 | [invariants/core/epg/INV-EPG-VIEWER-INDEPENDENT-001.md](invariants/core/epg/INV-EPG-VIEWER-INDEPENDENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-EPG-PROGRAM-CONTINUITY-001 | [invariants/core/epg/INV-EPG-PROGRAM-CONTINUITY-001.md](invariants/core/epg/INV-EPG-PROGRAM-CONTINUITY-001.md) | LAW-GRID, LAW-DERIVATION |
+
 ### Asset — Entity Integrity
 
 | Invariant | File | Derived From |
