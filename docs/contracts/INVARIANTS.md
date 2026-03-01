@@ -151,6 +151,8 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 | [invariants/air/INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001.md](invariants/air/INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001.md) | Primary |
 | INV-NO-FRAME-AUTHORITY-VACUUM-001 | [invariants/air/INV-NO-FRAME-AUTHORITY-VACUUM-001.md](invariants/air/INV-NO-FRAME-AUTHORITY-VACUUM-001.md) | Enforcement evidence (derived) — parent: INV-CONTINUOUS-FRAME-AUTHORITY-001 |
 | INV-PAD-VIDEO-READINESS-001 | [invariants/air/INV-PAD-VIDEO-READINESS-001.md](invariants/air/INV-PAD-VIDEO-READINESS-001.md) | Enforcement evidence (derived) — parents: INV-CONTINUOUS-FRAME-AUTHORITY-001, INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 |
+| INV-LAST-SEGMENT-BLOCK-BOUNDARY-001 | [invariants/air/INV-LAST-SEGMENT-BLOCK-BOUNDARY-001.md](invariants/air/INV-LAST-SEGMENT-BLOCK-BOUNDARY-001.md) | Primary — ADR-013 seam classification upstream |
+| INV-CADENCE-SEAM-ADVANCE-001 | [invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md](invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md) | Derived — parent: INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 |
 | INV-TIME-MODE-EQUIVALENCE-001 | [invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md](invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md) | Primary |
 
 ---
