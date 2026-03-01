@@ -901,6 +901,12 @@ class CompiledProgramLog(Base):
     locked: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sa.text("true")
     )
+    range_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,  # nullable for backward compat with existing rows
+    )
+    range_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -909,6 +915,7 @@ class CompiledProgramLog(Base):
         UniqueConstraint("channel_id", "broadcast_day", name="uq_compiled_program_log_channel_day"),
         Index("ix_compiled_program_log_channel_id", "channel_id"),
         Index("ix_compiled_program_log_broadcast_day", "broadcast_day"),
+        Index("ix_compiled_program_log_range", "channel_id", "range_start", "range_end"),
     )
 
     def __repr__(self) -> str:

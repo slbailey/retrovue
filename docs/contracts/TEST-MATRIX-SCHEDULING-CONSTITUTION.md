@@ -134,6 +134,8 @@ These invariants have structural enforcement in production code and passing cont
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | 2 (AST import check + attribute inspection) | **PASS** | Structural: no AIR imports in `schedule_manager.py` / `schedule_manager_service.py`; tests verify via AST inspection |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
+| INV-BLEED-NO-GAP-001 | 10 (contiguity + compaction + grid alignment + enclosed overlap + misalignment + revalidation + gap + naive dt + non-UTC + day boundary) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
+| INV-SCHEDULE-SEED-DETERMINISTIC-001 | 4 (deterministic + hashlib match + different channels + no builtin hash) | **PASS** | `channel_seed()` in `schedule_compiler.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -194,6 +196,8 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | ARCH-BOUNDARY-001, ARCH-BOUNDARY-002 | Cross-cutting |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | TOR-001, TOR-002, TOR-003, TOR-004 | Cross-cutting |
+| INV-BLEED-NO-GAP-001 | BLEED-001..010 | ScheduleCompiler |
+| INV-SCHEDULE-SEED-DETERMINISTIC-001 | SEED-001..004 | ScheduleCompiler |
 
 ---
 

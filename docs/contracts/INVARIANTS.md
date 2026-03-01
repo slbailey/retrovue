@@ -153,6 +153,11 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
 | INV-ASPECT-PRESERVE-001 | [invariants/core/runtime/INV-ASPECT-PRESERVE-001.md](invariants/core/runtime/INV-ASPECT-PRESERVE-001.md) | LAW-RUNTIME-AUTHORITY |
+| INV-HLS-NO-DISK-IO-001 | [invariants/core/runtime/INV-HLS-NO-DISK-IO-001.md](invariants/core/runtime/INV-HLS-NO-DISK-IO-001.md) | LAW-LIVENESS |
+| INV-HLS-QUIET-POLLING-001 | [invariants/core/runtime/INV-HLS-QUIET-POLLING-001.md](invariants/core/runtime/INV-HLS-QUIET-POLLING-001.md) | LAW-LIVENESS |
+| INV-BLEED-NO-GAP-001 | [invariants/core/runtime/INV-BLEED-NO-GAP-001.md](invariants/core/runtime/INV-BLEED-NO-GAP-001.md) | LAW-LIVENESS, LAW-GRID |
+| INV-SCHEDULE-SEED-DETERMINISTIC-001 | [invariants/core/runtime/INV-SCHEDULE-SEED-DETERMINISTIC-001.md](invariants/core/runtime/INV-SCHEDULE-SEED-DETERMINISTIC-001.md) | LAW-LIVENESS, LAW-CONTENT-AUTHORITY |
+| INV-EPG-READS-CANONICAL-SCHEDULE-001 | [invariants/core/runtime/INV-EPG-READS-CANONICAL-SCHEDULE-001.md](invariants/core/runtime/INV-EPG-READS-CANONICAL-SCHEDULE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 
 ---
 

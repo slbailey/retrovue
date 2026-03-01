@@ -78,3 +78,18 @@
 |----|----------|----------|------|
 | TEPG-NB-001 | EPG handlers in ProgramDirector | All EPG handlers are plain `def` (not `async def`) | `TestEpgEndpointNonBlocking::test_epg_handlers_not_async_program_director` |
 | TEPG-NB-002 | EPG handler in web/api/epg.py | Handler is plain `def` (not `async def`) | `TestEpgEndpointNonBlocking::test_epg_handler_not_async_web_api` |
+
+---
+
+## Section 5: Canonical Schedule Authority
+
+### INV-EPG-READS-CANONICAL-SCHEDULE-001
+
+**Test file:** `pkg/core/tests/contracts/runtime/test_inv_epg_reads_canonical.py`
+
+| ID | Scenario | Expected | Test |
+|----|----------|----------|------|
+| TEPG-CAN-001 | EPG module AST inspection | No `compile_schedule` call in `/api/epg` handler | `TestInvEpgReadsCanonical001::test_epg_module_does_not_import_compile_schedule` |
+| TEPG-CAN-002 | Canonical EPG with cached blocks | Returns cached `program_blocks` without calling `compile_schedule()` | `TestInvEpgReadsCanonical001::test_get_canonical_epg_returns_cached_blocks` |
+| TEPG-CAN-003 | Canonical EPG with empty DB | Returns `None` when no cached schedule exists | `TestInvEpgReadsCanonical001::test_get_canonical_epg_returns_none_when_not_cached` |
+| TEPG-CAN-004 | Carry-in block from previous day | Range overlap query includes block spanning day boundary | `TestInvEpgReadsCanonical001::test_get_canonical_epg_includes_carry_in_block` |

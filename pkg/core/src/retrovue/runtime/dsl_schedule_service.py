@@ -608,9 +608,25 @@ class DslScheduleService:
         (program_blocks) and segmented block data (segmented_blocks).
         Segmented blocks contain content segments + empty filler
         placeholders (break opportunities with durations/positions).
+
+        INV-EPG-READS-CANONICAL-SCHEDULE-001: Populates range_start/range_end
+        from program_blocks for range-based overlap queries.
         """
         from retrovue.domain.entities import CompiledProgramLog
         try:
+            # Compute time range from program blocks
+            program_blocks = schedule.get("program_blocks", [])
+            range_start = None
+            range_end = None
+            if program_blocks:
+                range_start = min(
+                    datetime.fromisoformat(b["start_at"]) for b in program_blocks
+                )
+                range_end = max(
+                    datetime.fromisoformat(b["start_at"]) + timedelta(seconds=b["slot_duration_sec"])
+                    for b in program_blocks
+                )
+
             with session() as db:
                 row = CompiledProgramLog(
                     channel_id=channel_id,
@@ -618,6 +634,8 @@ class DslScheduleService:
                     schedule_hash=dsl_hash,
                     compiled_json=schedule,
                     locked=True,
+                    range_start=range_start,
+                    range_end=range_end,
                 )
                 db.merge(row)
         except Exception as e:
@@ -626,6 +644,56 @@ class DslScheduleService:
     @staticmethod
     def _hash_dsl(dsl_text: str) -> str:
         return hashlib.sha256(dsl_text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def get_canonical_epg(channel_id: str, window_start: datetime, window_end: datetime) -> list[dict] | None:
+        """Read program_blocks from the DB-cached canonical compiled schedule.
+
+        INV-EPG-READS-CANONICAL-SCHEDULE-001: Uses range-based overlap query to
+        return blocks from any CompiledProgramLog row whose [range_start, range_end)
+        overlaps [window_start, window_end). Returns None if no cached schedule
+        covers the requested window.
+        """
+        from retrovue.domain.entities import CompiledProgramLog
+        try:
+            with session() as db:
+                rows = db.query(CompiledProgramLog).filter(
+                    CompiledProgramLog.channel_id == channel_id,
+                    CompiledProgramLog.locked == True,
+                    CompiledProgramLog.range_start < window_end,
+                    CompiledProgramLog.range_end > window_start,
+                ).all()
+                if not rows:
+                    return None
+
+                # Collect blocks from all overlapping rows, deduplicate
+                all_blocks: list[dict] = []
+                seen: set[tuple] = set()
+                for row in rows:
+                    for pb in row.compiled_json.get("program_blocks", []):
+                        key = (pb["start_at"], pb["slot_duration_sec"], pb["asset_id"])
+                        if key not in seen:
+                            seen.add(key)
+                            all_blocks.append(pb)
+
+                # Sort by start_at for consistent ordering
+                all_blocks.sort(key=lambda b: b["start_at"])
+
+                # Filter to blocks that overlap the requested window
+                visible = []
+                for pb in all_blocks:
+                    block_start = datetime.fromisoformat(pb["start_at"])
+                    block_end = block_start + timedelta(seconds=pb["slot_duration_sec"])
+                    if block_end <= window_start:
+                        continue
+                    if block_start >= window_end:
+                        break
+                    visible.append(pb)
+
+                return visible if visible else None
+        except Exception as e:
+            logger.warning("Failed to read canonical EPG for %s/%s: %s", channel_id, window_start, e)
+        return None
 
     def _compile_day(self, channel_id: str, broadcast_day: str) -> list[ScheduledBlock]:
         """Compile a single broadcast day into filled ScheduledBlocks.
@@ -660,9 +728,9 @@ class DslScheduleService:
         for pool_id in pools:
             sequential_counters[pool_id] = starting_counter
 
-        # Derive channel-specific seed from channel_id hash so different
-        # channels with the same pool don't get identical movie sequences
-        _channel_seed = abs(hash(channel_id)) % 100000
+        # INV-SCHEDULE-SEED-DETERMINISTIC-001: deterministic, stable seed
+        from retrovue.runtime.schedule_compiler import channel_seed
+        _channel_seed = channel_seed(channel_id)
 
         # Compile program schedule with deterministic counters
         schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
