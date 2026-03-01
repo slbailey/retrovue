@@ -203,3 +203,59 @@ Ideas and desired improvements. Not yet committed to roadmaps or contracts.
 
 ---
 
+- **Linear-to-Library QR Bridge (Trailer Watch-Now Option)** *(Wishlist only; documentation of a future concept. No code, contract, or runtime changes.)*
+
+  **Concept Overview:**
+  RetroVue remains a strictly linear broadcast simulator. However, trailers that promote a future Tier 1 scheduled movie could optionally display a QR code that bridges the viewer OUT of RetroVue and into their personal media server (Plex, Jellyfin, Emby, etc.) to watch the promoted film immediately.
+
+  Flow:
+  1. A trailer promotes a future Tier 1 scheduled movie.
+  2. A lower-third displays the scheduled airtime (e.g., "Sunday @ 9PM — HBO Classics").
+  3. A QR code appears late in the trailer (recommended: final 10–15 seconds for urgency).
+  4. Scanning the QR redirects to a RetroVue bridge endpoint.
+  5. The bridge endpoint performs an HTTP redirect to the viewer's configured library provider.
+  6. The viewer watches the film on their own platform. RetroVue's involvement ends at the redirect.
+
+  **Architectural Integrity:**
+  - No VOD playback inside RetroVue. The system remains a linear broadcast simulator.
+  - No playback orchestration inside RetroVue. RetroVue does not control, monitor, or coordinate external playback.
+  - No MasterClock changes. The channel timeline is unaffected.
+  - No Playlog or Channel timeline mutation. The QR bridge is invisible to scheduling and as-run logging.
+  - Implemented purely as metadata on trailer assets + an OverlayStage concept for QR rendering.
+
+  **Conceptual Metadata Addition — PromoBridge:**
+  Trailer assets may carry optional `PromoBridge` metadata:
+  - `external_provider` — target library system (`plex`, `jellyfin`, `emby`, etc.)
+  - `external_key` — provider-specific content identifier (`ratingKey`, `itemId`, etc.)
+  - `allow_watch_now` — bool; controls whether the QR overlay activates for this trailer
+
+  PromoBridge metadata is editorial metadata attached to the asset. It does not affect scheduling, playout plans, or segment boundaries.
+
+  **Overlay Concept — LibraryBridgeOverlayStage:**
+  - A new OverlayStage that activates only for trailer assets carrying PromoBridge metadata with `allow_watch_now = true`.
+  - QR code is generated at playout time from the bridge URL and the asset's PromoBridge metadata.
+  - Recommended placement: final 10–15 seconds of the trailer, creating urgency ("scan now or wait until Sunday").
+  - The overlay is purely visual; it does not alter audio, segment timing, or playout behavior.
+
+  **Redirect Service Concept:**
+  - Endpoint: `/bridge/{promo_id}`
+  - Resolves `promo_id` to the PromoBridge metadata for the asset.
+  - Performs an HTTP redirect (302) to the provider's deep link (`plex://`, `jellyfin://`, etc.).
+  - RetroVue does not control playback after the redirect. The handoff is complete and final.
+  - No state is written back into Core. No playlog entry. No schedule mutation.
+
+  **Strategic Value:**
+  - Preserves appointment viewing as the primary model. The scheduled airing remains the default experience.
+  - Bridges viewer impatience without compromising the linear philosophy — the viewer leaves RetroVue to watch elsewhere.
+  - Feels like modern broadcast behavior: a promotional call-to-action within a linear stream.
+  - Enables potential future engagement metrics (bridge click-through rates) without altering the broadcast model.
+
+  **Explicit Non-Goals:**
+  - No VOD streaming support inside RetroVue.
+  - No Plex/Jellyfin/Emby API auto-play orchestration.
+  - No channel timeline alteration when a viewer scans the QR.
+  - No schedule mutation based on bridge usage.
+  - No blending of linear and on-demand models internally. RetroVue is linear. The bridge is an exit ramp, not a lane merge.
+
+---
+
