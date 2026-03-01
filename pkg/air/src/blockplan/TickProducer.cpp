@@ -198,6 +198,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   dec_config.input_uri = first_seg.asset_uri;
   dec_config.target_width = width_;
   dec_config.target_height = height_;
+  dec_config.aspect_policy = aspect_policy_;
 
   if (decoder_factory_for_test_) {
     decoder_ = (*decoder_factory_for_test_)(dec_config);

@@ -232,6 +232,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
 
   int64_t fps_num = 30, fps_den = 1;
   auto source = std::make_unique<TickProducer>(req.width, req.height, req.fps);
+  source->SetAspectPolicy(req.aspect_policy);
   source->AssignBlock(req.block);
   source->SetLogicalSegmentIndex(req.segment_index);
 

@@ -22,6 +22,7 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/producers/IProducer.h"
+#include "retrovue/runtime/AspectPolicy.h"
 
 namespace retrovue::blockplan {
 
@@ -38,6 +39,7 @@ struct SeamRequest {
   int height;
   RationalFps fps;
   int min_audio_prime_ms;
+  runtime::AspectPolicy aspect_policy = runtime::AspectPolicy::Preserve;
   // Logging context
   std::string parent_block_id;
   int32_t segment_index = -1;

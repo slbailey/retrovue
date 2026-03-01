@@ -28,7 +28,8 @@ void ProducerPreloader::JoinThread() {
 
 void ProducerPreloader::StartPreload(const FedBlock& block,
                                    int width, int height, RationalFps fps,
-                                   int min_audio_prime_ms) {
+                                   int min_audio_prime_ms,
+                                   runtime::AspectPolicy aspect_policy) {
   Cancel();
 
   cancel_requested_.store(false, std::memory_order_release);
@@ -40,7 +41,8 @@ void ProducerPreloader::StartPreload(const FedBlock& block,
   in_progress_ = true;
 
   thread_ = std::thread(&ProducerPreloader::Worker, this,
-                         block, width, height, fps, min_audio_prime_ms);
+                         block, width, height, fps, min_audio_prime_ms,
+                         aspect_policy);
 }
 
 bool ProducerPreloader::IsReady() const {
@@ -92,7 +94,8 @@ void ProducerPreloader::SetDelayHook(DelayHookFn hook) {
 // =============================================================================
 
 void ProducerPreloader::Worker(FedBlock block, int width, int height,
-                               RationalFps fps, int min_audio_prime_ms) {
+                               RationalFps fps, int min_audio_prime_ms,
+                               runtime::AspectPolicy aspect_policy) {
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
   // Test hook: artificial delay before AssignBlock
@@ -103,6 +106,7 @@ void ProducerPreloader::Worker(FedBlock block, int width, int height,
   if (cancel_requested_.load(std::memory_order_acquire)) return;
 
   auto source = std::make_unique<TickProducer>(width, height, fps);
+  source->SetAspectPolicy(aspect_policy);
   source->AssignBlock(block);
 
   if (cancel_requested_.load(std::memory_order_acquire)) return;

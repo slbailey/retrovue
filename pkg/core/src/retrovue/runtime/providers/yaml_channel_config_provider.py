@@ -144,6 +144,7 @@ class YamlChannelConfigProvider:
             frame_rate=video.get("frame_rate", "30000/1001"),
             audio_sample_rate=audio.get("sample_rate", 48000),
             audio_channels=audio.get("channels", 2),
+            aspect_policy=video.get("aspect_policy", "preserve"),
         )
 
         # Build filler config

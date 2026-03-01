@@ -23,10 +23,11 @@ struct ProgramFormat {
     int32_t width;           // Video width in pixels
     int32_t height;          // Video height in pixels
     std::string frame_rate;  // Rational string (e.g., "30000/1001", "25/1")
-    
-    Video() : width(0), height(0), frame_rate("30/1") {}
+    std::string aspect_policy;  // "preserve" (default), "stretch", "crop"
+
+    Video() : width(0), height(0), frame_rate("30/1"), aspect_policy("preserve") {}
     Video(int32_t w, int32_t h, const std::string& fr)
-        : width(w), height(h), frame_rate(fr) {}
+        : width(w), height(h), frame_rate(fr), aspect_policy("preserve") {}
   } video;
   
   // Audio format

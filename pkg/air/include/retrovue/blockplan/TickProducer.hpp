@@ -27,6 +27,7 @@
 #include "retrovue/blockplan/RealAssetSource.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/producers/IProducer.h"
+#include "retrovue/runtime/AspectPolicy.h"
 
 namespace retrovue::decode {
 struct DecoderConfig;
@@ -134,6 +135,9 @@ class TickProducer : public producers::IProducer,
   // RequestStop flag — PipelineManager reads this to respect cooperative stop.
   bool IsStopRequested() const { return stop_requested_; }
 
+  // INV-ASPECT-PRESERVE-001: Set aspect policy for decoder scaling
+  void SetAspectPolicy(runtime::AspectPolicy policy) { aspect_policy_ = policy; }
+
   // Test-only: inject a decoder factory so contract tests can use FakeTickProducerDecoder
   // (deterministic DROP duration/PTS tests). Production leaves this unset.
   using DecoderFactory =
@@ -175,6 +179,7 @@ class TickProducer : public producers::IProducer,
 
   int width_;
   int height_;
+  runtime::AspectPolicy aspect_policy_ = runtime::AspectPolicy::Preserve;
   RationalFps output_fps_;                // Rational output FPS (authoritative)
   int64_t input_fps_num_ = 1;             // Rational input FPS (for resample mode detection)
   int64_t input_fps_den_ = 1;

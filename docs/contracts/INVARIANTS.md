@@ -148,6 +148,12 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-HORIZON-ATOMIC-PUBLISH-001 | [invariants/core/horizon/INV-HORIZON-ATOMIC-PUBLISH-001.md](invariants/core/horizon/INV-HORIZON-ATOMIC-PUBLISH-001.md) | — |
 | INV-HORIZON-LOCKED-IMMUTABLE-001 | [invariants/core/horizon/INV-HORIZON-LOCKED-IMMUTABLE-001.md](invariants/core/horizon/INV-HORIZON-LOCKED-IMMUTABLE-001.md) | — |
 
+### Runtime
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-ASPECT-PRESERVE-001 | [invariants/core/runtime/INV-ASPECT-PRESERVE-001.md](invariants/core/runtime/INV-ASPECT-PRESERVE-001.md) | LAW-RUNTIME-AUTHORITY |
+
 ---
 
 ## AIR
