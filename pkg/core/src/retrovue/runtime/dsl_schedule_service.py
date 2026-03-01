@@ -15,6 +15,7 @@ Implements the ScheduleService protocol (get_block_at, get_playout_plan_now).
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta, date
@@ -215,6 +216,12 @@ class DslScheduleService:
             # Invalidate resolver cache so next compile picks up the new gain
             self._resolver = None
 
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "INV-LOUDNESS-NORMALIZED-001: Background loudness measurement "
+                "timed out for asset=%s path=%s — will retry on next compile",
+                asset_id, file_path,
+            )
         except Exception:
             logger.exception(
                 "INV-LOUDNESS-NORMALIZED-001: Background loudness measurement "

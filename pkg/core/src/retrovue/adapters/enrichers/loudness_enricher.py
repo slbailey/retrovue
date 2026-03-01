@@ -62,7 +62,7 @@ class LoudnessEnricher(BaseEnricher):
     name = "loudness"
     scope = "ingest"
 
-    def __init__(self, ffmpeg_path: str = "ffmpeg", timeout: int = 120) -> None:
+    def __init__(self, ffmpeg_path: str = "ffmpeg", timeout: int = 600) -> None:
         super().__init__(ffmpeg_path=ffmpeg_path, timeout=timeout)
         self.ffmpeg_path = ffmpeg_path
         self.timeout = timeout
@@ -113,6 +113,7 @@ class LoudnessEnricher(BaseEnricher):
         cmd = [
             self.ffmpeg_path,
             "-i", file_path,
+            "-vn",             # skip video decode — ebur128 only needs audio
             "-af", "ebur128",
             "-f", "null",
             "-",
