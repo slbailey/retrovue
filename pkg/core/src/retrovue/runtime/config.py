@@ -25,6 +25,7 @@ class ProgramFormat:
     frame_rate: str  # "30/1", "30000/1001", etc.
     audio_sample_rate: int
     audio_channels: int
+    aspect_policy: str = "preserve"  # "preserve", "stretch", "crop"
 
     @property
     def frame_rate_num(self) -> int:
@@ -51,6 +52,7 @@ class ProgramFormat:
                 "width": self.video_width,
                 "height": self.video_height,
                 "frame_rate": self.frame_rate,
+                "aspect_policy": self.aspect_policy,
             },
             "audio": {
                 "sample_rate": self.audio_sample_rate,
@@ -82,6 +84,7 @@ class ProgramFormat:
                 frame_rate=video["frame_rate"],
                 audio_sample_rate=audio["sample_rate"],
                 audio_channels=audio["channels"],
+                aspect_policy=video.get("aspect_policy", "preserve"),
             )
         else:
             # Flat format
@@ -91,6 +94,7 @@ class ProgramFormat:
                 frame_rate=data["frame_rate"],
                 audio_sample_rate=data["audio_sample_rate"],
                 audio_channels=data["audio_channels"],
+                aspect_policy=data.get("aspect_policy", "preserve"),
             )
 
 

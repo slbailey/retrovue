@@ -15,6 +15,7 @@
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/blockplan/RationalFps.hpp"
 #include "retrovue/blockplan/ITickProducerDecoder.hpp"  // Phase 2: PumpMode, PumpResult
+#include "retrovue/runtime/AspectPolicy.h"
 
 // Forward declarations for FFmpeg types (avoids pulling in FFmpeg headers here)
 struct AVFormatContext;
@@ -34,11 +35,14 @@ struct DecoderConfig {
   bool hw_accel_enabled;        // Enable hardware acceleration if available
   int max_decode_threads;       // Maximum decoder threads (0 = auto)
   
+  runtime::AspectPolicy aspect_policy = runtime::AspectPolicy::Preserve;
+
   DecoderConfig()
       : target_width(1920),
         target_height(1080),
         hw_accel_enabled(false),
-        max_decode_threads(0) {}
+        max_decode_threads(0),
+        aspect_policy(runtime::AspectPolicy::Preserve) {}
 };
 
 // DecoderStats tracks decoding performance and errors.
@@ -150,6 +154,12 @@ class FFmpegDecoder {
   blockplan::RationalFps GetVideoRationalFps() const;
   double GetVideoDuration() const;
 
+  // INV-ASPECT-PRESERVE-001: Scaling geometry (set by InitializeScaler)
+  int GetScaleWidth() const { return scale_width_; }
+  int GetScaleHeight() const { return scale_height_; }
+  int GetPadX() const { return pad_x_; }
+  int GetPadY() const { return pad_y_; }
+
   // True if the asset has an audio stream (for INV-AUDIO-PRIME-002 / priming logs).
 
   // ========================================================================
@@ -209,6 +219,13 @@ class FFmpegDecoder {
   AVPacket* packet_ = nullptr;
   SwsContext* sws_ctx_ = nullptr;
   ::SwrContext* swr_ctx_ = nullptr;  // Audio resampler (FFmpeg type, global scope)
+
+  // INV-ASPECT-PRESERVE-001: SAR-aware scaling geometry
+  int scale_width_ = 0;
+  int scale_height_ = 0;
+  int pad_x_ = 0;
+  int pad_y_ = 0;
+  AVFrame* intermediate_frame_ = nullptr;
 
   int video_stream_index_ = -1;
   int audio_stream_index_ = -1;

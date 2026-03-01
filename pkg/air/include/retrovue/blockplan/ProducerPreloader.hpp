@@ -20,6 +20,7 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/producers/IProducer.h"
+#include "retrovue/runtime/AspectPolicy.h"
 
 namespace retrovue::blockplan {
 
@@ -47,7 +48,8 @@ class ProducerPreloader {
   //     threshold for the preload to be considered READY.  If the threshold
   //     is not met, IsReady() stays false (preload failure).
   void StartPreload(const FedBlock& block, int width, int height, RationalFps fps,
-                    int min_audio_prime_ms = 0);
+                    int min_audio_prime_ms = 0,
+                    runtime::AspectPolicy aspect_policy = runtime::AspectPolicy::Preserve);
 
   // Non-blocking: true if the background work has finished.
   bool IsReady() const;
@@ -74,7 +76,7 @@ class ProducerPreloader {
 
  private:
   void Worker(FedBlock block, int width, int height, RationalFps fps,
-              int min_audio_prime_ms);
+              int min_audio_prime_ms, runtime::AspectPolicy aspect_policy);
   void JoinThread();
 
   std::thread thread_;

@@ -104,7 +104,14 @@ std::optional<ProgramFormat> ProgramFormat::FromJson(const std::string& json_str
   if (!IsValidFrameRate(format.video.frame_rate)) {
     return std::nullopt;
   }
-  
+
+  // Extract aspect_policy (optional, defaults to "preserve")
+  std::string aspect_policy;
+  if (ExtractString(video_json, "aspect_policy", aspect_policy)) {
+    format.video.aspect_policy = aspect_policy;
+  }
+  // else: default "preserve" from Video() constructor
+
   // Extract audio object
   std::string audio_json;
   if (!ExtractNestedObject(json_str, "audio", audio_json)) {
@@ -133,7 +140,8 @@ std::string ProgramFormat::ToJson() const {
       << "\"video\":{"
       << "\"width\":" << video.width << ","
       << "\"height\":" << video.height << ","
-      << "\"frame_rate\":\"" << video.frame_rate << "\""
+      << "\"frame_rate\":\"" << video.frame_rate << "\","
+      << "\"aspect_policy\":\"" << video.aspect_policy << "\""
       << "},"
       << "\"audio\":{"
       << "\"sample_rate\":" << audio.sample_rate << ","

@@ -6,6 +6,8 @@
 #include "retrovue/decode/FFmpegDecoder.h"
 
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <iostream>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"  // SnapToStandardRationalFps
@@ -237,6 +239,15 @@ void FFmpegDecoder::Close() {
   if (sws_ctx_) {
     sws_freeContext(sws_ctx_);
     sws_ctx_ = nullptr;
+  }
+
+  // INV-ASPECT-PRESERVE-001: Free intermediate frame if allocated
+  if (intermediate_frame_) {
+    if (intermediate_frame_->data[0]) {
+      av_freep(&intermediate_frame_->data[0]);
+    }
+    av_frame_free(&intermediate_frame_);
+    intermediate_frame_ = nullptr;
   }
 
   if (scaled_frame_) {
@@ -568,10 +579,61 @@ bool FFmpegDecoder::InitializeScaler() {
   int dst_height = config_.target_height;
   AVPixelFormat dst_format = AV_PIX_FMT_YUV420P;
 
-  // Create scaler context
+  // INV-ASPECT-PRESERVE-001: Compute scale dimensions based on aspect policy
+  if (config_.aspect_policy == runtime::AspectPolicy::Preserve) {
+    // Preserve aspect: scale to fit, pad with black bars.
+    // Use Display Aspect Ratio (DAR) via integer cross-multiplication.
+    AVRational sar = codec_ctx_->sample_aspect_ratio;
+    int64_t src_dar_num, src_dar_den;
+    if (sar.num > 0 && sar.den > 0) {
+      src_dar_num = static_cast<int64_t>(src_width) * sar.num;
+      src_dar_den = static_cast<int64_t>(src_height) * sar.den;
+    } else {
+      // No SAR: assume square pixels
+      src_dar_num = src_width;
+      src_dar_den = src_height;
+    }
+
+    // Cross-multiply to compare aspect ratios (no float division)
+    const int64_t src_cross = src_dar_num * dst_height;
+    const int64_t dst_cross = src_dar_den * dst_width;
+
+    int calc_scale_width, calc_scale_height;
+    if (src_cross > dst_cross) {
+      // Source is wider: fit to width, pad height (letterbox)
+      calc_scale_width = dst_width;
+      calc_scale_height = static_cast<int>((static_cast<int64_t>(dst_width) * src_dar_den) / src_dar_num);
+    } else {
+      // Source is taller or equal: fit to height, pad width (pillarbox)
+      calc_scale_width = static_cast<int>((static_cast<int64_t>(dst_height) * src_dar_num) / src_dar_den);
+      calc_scale_height = dst_height;
+    }
+
+    // 1-pixel tolerance to avoid sub-pixel padding
+    if (std::abs(calc_scale_width - dst_width) <= 1 &&
+        std::abs(calc_scale_height - dst_height) <= 1) {
+      scale_width_ = dst_width;
+      scale_height_ = dst_height;
+      pad_x_ = 0;
+      pad_y_ = 0;
+    } else {
+      scale_width_ = calc_scale_width;
+      scale_height_ = calc_scale_height;
+      pad_x_ = (dst_width - scale_width_) / 2;
+      pad_y_ = (dst_height - scale_height_) / 2;
+    }
+  } else {
+    // Stretch: use target dimensions directly
+    scale_width_ = dst_width;
+    scale_height_ = dst_height;
+    pad_x_ = 0;
+    pad_y_ = 0;
+  }
+
+  // Create scaler context: scale to computed dimensions (not full target if padding)
   sws_ctx_ = sws_getContext(
       src_width, src_height, src_format,
-      dst_width, dst_height, dst_format,
+      scale_width_, scale_height_, dst_format,
       SWS_BILINEAR, nullptr, nullptr, nullptr);
 
   if (!sws_ctx_) {
@@ -579,7 +641,7 @@ bool FFmpegDecoder::InitializeScaler() {
     return false;
   }
 
-  // Allocate buffer for scaled frame
+  // Allocate buffer for scaled frame (always at full target dimensions)
   if (av_image_alloc(scaled_frame_->data, scaled_frame_->linesize,
                      dst_width, dst_height, dst_format, 32) < 0) {
     std::cerr << "[FFmpegDecoder] Failed to allocate scaled frame buffer" << std::endl;
@@ -589,6 +651,37 @@ bool FFmpegDecoder::InitializeScaler() {
   scaled_frame_->width = dst_width;
   scaled_frame_->height = dst_height;
   scaled_frame_->format = dst_format;
+
+  // Allocate intermediate frame if padding is needed (aspect preserve)
+  bool needs_padding = (scale_width_ != dst_width || scale_height_ != dst_height);
+  if (needs_padding) {
+    intermediate_frame_ = av_frame_alloc();
+    if (!intermediate_frame_) {
+      std::cerr << "[FFmpegDecoder] Failed to allocate intermediate frame" << std::endl;
+      return false;
+    }
+    if (av_image_alloc(intermediate_frame_->data, intermediate_frame_->linesize,
+                       scale_width_, scale_height_, dst_format, 32) < 0) {
+      std::cerr << "[FFmpegDecoder] Failed to allocate intermediate frame buffer" << std::endl;
+      av_frame_free(&intermediate_frame_);
+      return false;
+    }
+    intermediate_frame_->width = scale_width_;
+    intermediate_frame_->height = scale_height_;
+    intermediate_frame_->format = dst_format;
+  }
+
+  // INV-ASPECT-PRESERVE-001: Log scaling configuration
+  {
+    AVRational sar = codec_ctx_->sample_aspect_ratio;
+    std::cout << "[FFmpegDecoder] INV-ASPECT-PRESERVE-001: src=" << src_width << "x" << src_height;
+    if (sar.num > 0 && sar.den > 0) {
+      std::cout << " SAR=" << sar.num << ":" << sar.den;
+    }
+    std::cout << " -> scale=" << scale_width_ << "x" << scale_height_
+              << " pad=(" << pad_x_ << "," << pad_y_ << ")"
+              << " -> target=" << dst_width << "x" << dst_height << std::endl;
+  }
 
   return true;
 }
@@ -830,10 +923,51 @@ bool FFmpegDecoder::ReadAndDecodeFrame(buffer::Frame& output_frame) {
 }
 
 bool FFmpegDecoder::ConvertFrame(AVFrame* av_frame, buffer::Frame& output_frame) {
-  // Scale frame
-  sws_scale(sws_ctx_, 
-            av_frame->data, av_frame->linesize, 0, codec_ctx_->height,
-            scaled_frame_->data, scaled_frame_->linesize);
+  // INV-ASPECT-PRESERVE-001: Scale with optional padding
+  bool needs_padding = (intermediate_frame_ != nullptr);
+
+  if (needs_padding) {
+    // Scale to intermediate frame (at scale_width_ x scale_height_)
+    sws_scale(sws_ctx_,
+              av_frame->data, av_frame->linesize, 0, codec_ctx_->height,
+              intermediate_frame_->data, intermediate_frame_->linesize);
+
+    // Clear scaled_frame_ to black (Y=0, U/V=128)
+    std::memset(scaled_frame_->data[0], 0,
+                static_cast<size_t>(scaled_frame_->linesize[0]) * config_.target_height);
+    std::memset(scaled_frame_->data[1], 128,
+                static_cast<size_t>(scaled_frame_->linesize[1]) * (config_.target_height / 2));
+    std::memset(scaled_frame_->data[2], 128,
+                static_cast<size_t>(scaled_frame_->linesize[2]) * (config_.target_height / 2));
+
+    // Copy Y plane with padding offset
+    for (int y = 0; y < scale_height_; y++) {
+      std::memcpy(scaled_frame_->data[0] + (pad_y_ + y) * scaled_frame_->linesize[0] + pad_x_,
+                  intermediate_frame_->data[0] + y * intermediate_frame_->linesize[0],
+                  scale_width_);
+    }
+
+    // Copy U plane with padding offset
+    int uv_pad_x = pad_x_ / 2;
+    int uv_pad_y = pad_y_ / 2;
+    for (int y = 0; y < scale_height_ / 2; y++) {
+      std::memcpy(scaled_frame_->data[1] + (uv_pad_y + y) * scaled_frame_->linesize[1] + uv_pad_x,
+                  intermediate_frame_->data[1] + y * intermediate_frame_->linesize[1],
+                  scale_width_ / 2);
+    }
+
+    // Copy V plane with padding offset
+    for (int y = 0; y < scale_height_ / 2; y++) {
+      std::memcpy(scaled_frame_->data[2] + (uv_pad_y + y) * scaled_frame_->linesize[2] + uv_pad_x,
+                  intermediate_frame_->data[2] + y * intermediate_frame_->linesize[2],
+                  scale_width_ / 2);
+    }
+  } else {
+    // No padding: scale directly to scaled_frame_
+    sws_scale(sws_ctx_,
+              av_frame->data, av_frame->linesize, 0, codec_ctx_->height,
+              scaled_frame_->data, scaled_frame_->linesize);
+  }
 
   // Set frame metadata
   output_frame.width = config_.target_width;

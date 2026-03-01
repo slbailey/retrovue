@@ -17,6 +17,7 @@
 
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/RationalFps.hpp"
+#include "retrovue/runtime/AspectPolicy.h"
 
 namespace retrovue::blockplan {
 
@@ -174,6 +175,7 @@ struct BlockPlanSessionContext {
   int width = 640;
   int height = 480;
   RationalFps fps = FPS_30;
+  runtime::AspectPolicy aspect_policy = runtime::AspectPolicy::Preserve;
 
   BufferConfig buffer_config;
 

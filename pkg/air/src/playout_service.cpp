@@ -764,6 +764,14 @@ namespace retrovue
           blockplan_session_->height = format->video.height;
           const double parsed_fps = format->GetFrameRateAsDouble();
           blockplan_session_->fps = blockplan::DeriveRationalFPS(parsed_fps > 0.0 ? parsed_fps : 29.97);
+          // INV-ASPECT-PRESERVE-001: Propagate aspect policy to engine
+          if (format->video.aspect_policy == "stretch") {
+            blockplan_session_->aspect_policy = runtime::AspectPolicy::Stretch;
+          } else if (format->video.aspect_policy == "crop") {
+            blockplan_session_->aspect_policy = runtime::AspectPolicy::Crop;
+          } else {
+            blockplan_session_->aspect_policy = runtime::AspectPolicy::Preserve;
+          }
         } else {
           Logger::Error("[StartBlockPlanSession] Failed to parse program_format_json");
         }
