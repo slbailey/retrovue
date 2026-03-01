@@ -1966,6 +1966,9 @@ class BlockPlanProducer(Producer):
             if seg.transition_out != "TRANSITION_NONE":
                 d["transition_out"] = seg.transition_out
                 d["transition_out_duration_ms"] = seg.transition_out_duration_ms
+            # INV-LOUDNESS-NORMALIZED-001: propagate per-asset loudness gain
+            if seg.gain_db != 0.0:
+                d["gain_db"] = seg.gain_db
             plan_segments.append(d)
 
         # Log transition fields for debugging (INV-TRANSITION-001)

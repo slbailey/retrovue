@@ -568,6 +568,8 @@ class ScheduledSegment:
     transition_in_duration_ms: int = 0           # Duration of fade-in in ms (0 if NONE)
     transition_out: str = "TRANSITION_NONE"      # "TRANSITION_NONE" | "TRANSITION_FADE"
     transition_out_duration_ms: int = 0          # Duration of fade-out in ms (0 if NONE)
+    # INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain (0.0 = unity)
+    gain_db: float = 0.0
 
 
 @dataclass(frozen=True)

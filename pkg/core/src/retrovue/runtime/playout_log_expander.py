@@ -32,6 +32,7 @@ def expand_program_block(
     num_breaks: int = 3,
     fade_duration_ms: int = 500,
     channel_type: str = "network",
+    gain_db: float = 0.0,
 ) -> ScheduledBlock:
     """
     Expand a program block into a ScheduledBlock with content and filler segments.
@@ -61,6 +62,7 @@ def expand_program_block(
             start_utc_ms=start_utc_ms,
             slot_duration_ms=slot_duration_ms,
             episode_duration_ms=episode_duration_ms,
+            gain_db=gain_db,
         )
 
     return _expand_network(
@@ -72,6 +74,7 @@ def expand_program_block(
         chapter_markers_ms=chapter_markers_ms,
         num_breaks=num_breaks,
         fade_duration_ms=fade_duration_ms,
+        gain_db=gain_db,
     )
 
 
@@ -82,6 +85,7 @@ def _expand_movie(
     start_utc_ms: int,
     slot_duration_ms: int,
     episode_duration_ms: int,
+    gain_db: float = 0.0,
 ) -> ScheduledBlock:
     """Movie channel: content plays uninterrupted, all filler after content.
 
@@ -99,6 +103,7 @@ def _expand_movie(
         asset_uri=asset_uri,
         asset_start_offset_ms=0,
         segment_duration_ms=episode_duration_ms,
+        gain_db=gain_db,
     ))
 
     # Post-content filler (remaining time in the grid slot)
@@ -132,6 +137,7 @@ def _expand_network(
     chapter_markers_ms: tuple[int, ...] | None = None,
     num_breaks: int = 3,
     fade_duration_ms: int = 500,
+    gain_db: float = 0.0,
 ) -> ScheduledBlock:
     """Network channel: mid-content breaks at chapter markers or computed breakpoints.
 
@@ -176,6 +182,7 @@ def _expand_network(
             transition_in_duration_ms=fade_duration_ms if pending_fade_in else 0,
             transition_out="TRANSITION_FADE" if is_second_class else "TRANSITION_NONE",
             transition_out_duration_ms=fade_duration_ms if is_second_class else 0,
+            gain_db=gain_db,
         ))
 
         this_ad = ad_block_ms + (1 if i < ad_remainder else 0)
@@ -200,6 +207,7 @@ def _expand_network(
             segment_duration_ms=final_act_ms,
             transition_in="TRANSITION_FADE" if pending_fade_in else "TRANSITION_NONE",
             transition_in_duration_ms=fade_duration_ms if pending_fade_in else 0,
+            gain_db=gain_db,
         ))
 
     end_utc_ms = start_utc_ms + slot_duration_ms

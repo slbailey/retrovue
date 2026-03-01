@@ -12,6 +12,7 @@ from typing import Any
 
 from .enrichers.base import Enricher, EnricherConfig, EnricherNotFoundError
 from .enrichers.ffprobe_enricher import FFprobeEnricher
+from .enrichers.loudness_enricher import LoudnessEnricher
 from .importers.base import DiscoveredItem, Importer, ImporterNotFoundError
 from .importers.filesystem_importer import FilesystemImporter
 from .importers.plex_importer import PlexImporter
@@ -45,6 +46,7 @@ SOURCES = {
 # Available enricher classes
 ENRICHERS = {
     "ffprobe": FFprobeEnricher,
+    "loudness": LoudnessEnricher,
 }
 
 # Available producer classes

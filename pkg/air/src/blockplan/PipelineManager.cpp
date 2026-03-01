@@ -23,6 +23,7 @@
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/LoudnessGain.hpp"
 #include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "retrovue/blockplan/OutputClock.hpp"
@@ -3078,6 +3079,15 @@ void PipelineManager::Run() {
       if (a_emit->TryPopSamples(samples_this_tick, audio_out)) {
         if (seam_tick_pad_this_tick && active_segment_is_pad) {
           { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " TryPopSamples_success"; Logger::Debug(oss.str()); }
+        }
+        // INV-LOUDNESS-NORMALIZED-001: Apply per-segment loudness gain.
+        // Rule 1: constant linear scalar. Rule 3: int16 clamping. Rule 4: skip if 0.0.
+        if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
+          float seg_gain_db = live_parent_block_.segments[current_segment_index_].gain_db;
+          if (seg_gain_db != 0.0f) {
+            float linear_gain = blockplan::GainDbToLinear(seg_gain_db);
+            blockplan::ApplyGainS16(audio_out, linear_gain);
+          }
         }
         session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, IsPadDecision(decision));
         audio_samples_emitted += samples_this_tick;

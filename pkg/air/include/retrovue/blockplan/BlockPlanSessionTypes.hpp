@@ -51,6 +51,8 @@ struct FedBlock {
     uint32_t transition_in_duration_ms = 0;
     TransitionType transition_out = TransitionType::kNone;
     uint32_t transition_out_duration_ms = 0;
+    // INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain
+    float gain_db = 0.0f;
   };
   std::vector<Segment> segments;
 };
@@ -79,6 +81,8 @@ inline BlockPlan FedBlockToBlockPlan(const FedBlock& block) {
     s.transition_in_duration_ms = seg.transition_in_duration_ms;
     s.transition_out = seg.transition_out;
     s.transition_out_duration_ms = seg.transition_out_duration_ms;
+    // INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain
+    s.gain_db = seg.gain_db;
     plan.segments.push_back(s);
   }
   return plan;

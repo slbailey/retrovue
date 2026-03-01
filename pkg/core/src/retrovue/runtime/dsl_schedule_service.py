@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
 from retrovue.runtime.playout_log_expander import expand_program_block
 from retrovue.runtime.traffic_manager import fill_ad_blocks
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
+from retrovue.adapters.enrichers.loudness_enricher import needs_loudness_measurement
 from retrovue.infra.uow import session
 
 import hashlib
@@ -46,23 +48,27 @@ def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
     INV-SCHEDULE-HORIZON-001: Round-trip serialization preserves all
     segment fields including transitions.
     """
+    segments = []
+    for s in block.segments:
+        d = {
+            "segment_type": s.segment_type,
+            "asset_uri": s.asset_uri,
+            "asset_start_offset_ms": s.asset_start_offset_ms,
+            "segment_duration_ms": s.segment_duration_ms,
+            "transition_in": s.transition_in,
+            "transition_in_duration_ms": s.transition_in_duration_ms,
+            "transition_out": s.transition_out,
+            "transition_out_duration_ms": s.transition_out_duration_ms,
+        }
+        # INV-LOUDNESS-NORMALIZED-001: persist gain_db when non-zero
+        if s.gain_db != 0.0:
+            d["gain_db"] = s.gain_db
+        segments.append(d)
     return {
         "block_id": block.block_id,
         "start_utc_ms": block.start_utc_ms,
         "end_utc_ms": block.end_utc_ms,
-        "segments": [
-            {
-                "segment_type": s.segment_type,
-                "asset_uri": s.asset_uri,
-                "asset_start_offset_ms": s.asset_start_offset_ms,
-                "segment_duration_ms": s.segment_duration_ms,
-                "transition_in": s.transition_in,
-                "transition_in_duration_ms": s.transition_in_duration_ms,
-                "transition_out": s.transition_out,
-                "transition_out_duration_ms": s.transition_out_duration_ms,
-            }
-            for s in block.segments
-        ],
+        "segments": segments,
     }
 
 
@@ -87,6 +93,7 @@ def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
                 transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
                 transition_out=s.get("transition_out", "TRANSITION_NONE"),
                 transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                gain_db=s.get("gain_db", 0.0),
             )
             for s in d["segments"]
         ),
@@ -140,6 +147,83 @@ class DslScheduleService:
         self._resolver: CatalogAssetResolver | None = None
         self._resolver_built_at: float = 0.0
         self._resolver_ttl_s: float = 60.0  # 60-second TTL
+
+        # INV-LOUDNESS-NORMALIZED-001: Background loudness measurement
+        # Lazy backfill: unmeasured assets enqueue a background job on first encounter.
+        # _loudness_pending prevents duplicate enqueues.
+        self._loudness_pending: set[str] = set()
+        self._loudness_lock = threading.Lock()
+        self._loudness_executor: ThreadPoolExecutor | None = None
+
+    def _enqueue_loudness_measurement(self, asset_id: str, file_path: str) -> None:
+        """INV-LOUDNESS-NORMALIZED-001 Rule 5: Enqueue background loudness measurement.
+
+        Deduplicates by asset_id. The background job runs ffmpeg ebur128,
+        computes gain_db, and persists to AssetProbed.
+        """
+        with self._loudness_lock:
+            if asset_id in self._loudness_pending:
+                return  # Already in-flight
+            self._loudness_pending.add(asset_id)
+            if self._loudness_executor is None:
+                self._loudness_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="loudness-measure"
+                )
+
+        self._loudness_executor.submit(self._run_loudness_measurement, asset_id, file_path)
+        logger.info(
+            "INV-LOUDNESS-NORMALIZED-001: Enqueued background loudness measurement "
+            "for asset=%s path=%s",
+            asset_id, file_path,
+        )
+
+    def _run_loudness_measurement(self, asset_id: str, file_path: str) -> None:
+        """Background task: measure loudness and persist to AssetProbed."""
+        try:
+            from retrovue.adapters.enrichers.loudness_enricher import LoudnessEnricher
+            enricher = LoudnessEnricher()
+            # measure_loudness returns {"integrated_lufs", "gain_db", "target_lufs"}
+            loudness_data = enricher.measure_loudness(file_path)
+
+            # Persist to AssetProbed
+            import uuid as uuid_mod
+            from retrovue.domain.entities import AssetProbed
+            with session() as db:
+                probed = db.query(AssetProbed).filter(
+                    AssetProbed.asset_uuid == uuid_mod.UUID(asset_id),
+                ).first()
+                if probed is None:
+                    probed = AssetProbed(
+                        asset_uuid=uuid_mod.UUID(asset_id),
+                        payload={"loudness": loudness_data},
+                    )
+                    db.add(probed)
+                else:
+                    payload = dict(probed.payload) if probed.payload else {}
+                    payload["loudness"] = loudness_data
+                    probed.payload = payload
+                db.commit()
+
+            logger.info(
+                "INV-LOUDNESS-NORMALIZED-001: Background measurement complete "
+                "asset=%s integrated_lufs=%.1f gain_db=%.1f",
+                asset_id,
+                loudness_data["integrated_lufs"],
+                loudness_data["gain_db"],
+            )
+
+            # Invalidate resolver cache so next compile picks up the new gain
+            self._resolver = None
+
+        except Exception:
+            logger.exception(
+                "INV-LOUDNESS-NORMALIZED-001: Background loudness measurement "
+                "error for asset=%s",
+                asset_id,
+            )
+        finally:
+            with self._loudness_lock:
+                self._loudness_pending.discard(asset_id)
 
     def _get_resolver(self) -> CatalogAssetResolver:
         """Return a cached CatalogAssetResolver, rebuilding if TTL expired.
@@ -243,6 +327,7 @@ class DslScheduleService:
                             transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
                             transition_out=s.get("transition_out", "TRANSITION_NONE"),
                             transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                            gain_db=s.get("gain_db", 0.0),
                         ))
                     logger.debug(
                         "INV-TIER2-AUTHORITY-001: block %s already compiled (channel=%s)",
@@ -302,6 +387,9 @@ class DslScheduleService:
                 if seg.transition_out != "TRANSITION_NONE":
                     d["transition_out"] = seg.transition_out
                     d["transition_out_duration_ms"] = seg.transition_out_duration_ms
+                # INV-LOUDNESS-NORMALIZED-001: persist gain_db when non-zero
+                if seg.gain_db != 0.0:
+                    d["gain_db"] = seg.gain_db
                 segments_data.append(d)
 
             from datetime import date as date_type
@@ -391,6 +479,7 @@ class DslScheduleService:
                         transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
                         transition_out=s.get("transition_out", "TRANSITION_NONE"),
                         transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                        gain_db=s.get("gain_db", 0.0),
                     ))
 
                 logger.debug(
@@ -940,6 +1029,12 @@ class DslScheduleService:
             # Resolve asset URI to local path
             asset_uri = self._resolve_uri(meta.file_uri)
 
+            # INV-LOUDNESS-NORMALIZED-001: propagate per-asset loudness gain
+            gain_db = meta.loudness_gain_db
+            # Rule 5: enqueue background measurement for unmeasured assets
+            if gain_db == 0.0 and resolver.asset_needs_loudness_measurement(asset_id):
+                self._enqueue_loudness_measurement(asset_id, asset_uri)
+
             # Expand into acts + ad breaks (empty filler placeholders — Tier 1 data).
             # INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 (PlaylogHorizonDaemon),
             # not here at compile time and not at feed time.
@@ -951,6 +1046,7 @@ class DslScheduleService:
                 episode_duration_ms=block_def["episode_duration_sec"] * 1000,
                 chapter_markers_ms=chapter_ms,
                 channel_type=self._channel_type,
+                gain_db=gain_db,
             )
 
             blocks.append(expanded)

@@ -25,6 +25,7 @@ class AssetMetadata:
     file_uri: str = ""
     chapter_markers_sec: tuple[float, ...] | None = None  # Times where ad breaks should be inserted
     description: str = ""  # Synopsis/description from editorial metadata
+    loudness_gain_db: float = 0.0  # INV-LOUDNESS-NORMALIZED-001: per-asset gain in dB (0.0 = unity)
 
 
 class AssetResolver(Protocol):

@@ -200,6 +200,11 @@ class HorizonBackedScheduleService:
                     asset_uri=s.get("asset_uri", ""),
                     asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
                     segment_duration_ms=s.get("segment_duration_ms", 0),
+                    transition_in=s.get("transition_in", "TRANSITION_NONE"),
+                    transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                    transition_out=s.get("transition_out", "TRANSITION_NONE"),
+                    transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                    gain_db=s.get("gain_db", 0.0),
                 )
                 for s in entry.segments
             ),

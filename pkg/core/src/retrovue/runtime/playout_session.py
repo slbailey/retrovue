@@ -165,6 +165,10 @@ class BlockPlan:
             if t_out == "TRANSITION_FADE":
                 kwargs["transition_out"] = playout_pb2.TRANSITION_FADE
                 kwargs["transition_out_duration_ms"] = seg.get("transition_out_duration_ms", 0)
+            # INV-LOUDNESS-NORMALIZED-001: per-asset loudness normalization gain
+            gain_db = seg.get("gain_db", 0.0)
+            if gain_db != 0.0:
+                kwargs["gain_db"] = gain_db
             pb.segments.append(playout_pb2.BlockSegment(**kwargs))
         return pb
 
