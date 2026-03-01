@@ -171,38 +171,36 @@ class DslScheduleService:
     def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Return the ScheduledBlock covering the given wall-clock time.
 
-        INV-CHANNEL-NO-COMPILE-001: Prefers Tier 2 (TransmissionLog) data.
-        If Tier 2 has no row for this block, compiles it synchronously via
-        ensure_block_compiled() — guaranteeing no Tier 2 miss on viewer join.
+        INV-TIER2-COMPILATION-CONSISTENCY-001: Time resolution uses the current
+        in-memory compilation exclusively. TransmissionLog is queried by block_id
+        only — never by time range.
+
+        INV-CHANNEL-NO-COMPILE-001: If Tier 2 has no row for this block, compiles
+        it synchronously via ensure_block_compiled().
 
         Also checks if the horizon needs extending.
         """
         # Check horizon before lookup
         self._maybe_extend_horizon(channel_id, utc_ms)
 
-        # Tier 2 first: check TransmissionLog for pre-filled block
-        filled = self._get_filled_block_at(channel_id, utc_ms)
-        if filled is not None:
-            return filled
-
-        # Tier 2 miss — find the unfilled block and compile it synchronously.
-        # INV-TIER2-AUTHORITY-001: Compilation is synchronous at ownership time.
-        unfilled = None
-        with self._lock:
-            for block in self._blocks:
-                if block.start_utc_ms <= utc_ms < block.end_utc_ms:
-                    unfilled = block
-                    break
-
-        if unfilled is None:
+        # Step 1: In-memory time resolution (current compilation)
+        # INV-TIER2-COMPILATION-CONSISTENCY-001: Time-to-block mapping is
+        # a pure in-memory concern — always uses the current compilation.
+        block = self._find_in_memory_block(utc_ms)
+        if block is None:
             logger.warning(
                 "No DSL block covers utc_ms=%d for channel=%s", utc_ms, channel_id
             )
             return None
 
-        # Compile this single block into Tier 2 (TransmissionLog)
-        compiled = self.ensure_block_compiled(channel_id, unfilled)
-        return compiled
+        # Step 2: Check TransmissionLog for filled version BY BLOCK_ID
+        filled = self._get_filled_block_by_id(block.block_id)
+        if filled is not None:
+            return filled
+
+        # Step 3: Fill synchronously
+        # INV-TIER2-AUTHORITY-001: Compilation is synchronous at ownership time.
+        return self.ensure_block_compiled(channel_id, block)
 
     def ensure_block_compiled(self, channel_id: str, block: ScheduledBlock) -> ScheduledBlock:
         """Ensure a single block has a Tier 2 (TransmissionLog) entry.
@@ -343,8 +341,24 @@ class DslScheduleService:
 
         return filled_block
 
-    def _get_filled_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
-        """Look up a pre-filled block from TransmissionLog (Tier 2).
+    def _find_in_memory_block(self, utc_ms: int) -> ScheduledBlock | None:
+        """Pure in-memory time-range lookup on the current compilation.
+
+        INV-TIER2-COMPILATION-CONSISTENCY-001: Time resolution is an in-memory
+        concern. This method is the sole authority for mapping utc_ms to a block.
+        """
+        with self._lock:
+            for block in self._blocks:
+                if block.start_utc_ms <= utc_ms < block.end_utc_ms:
+                    return block
+        return None
+
+    def _get_filled_block_by_id(self, block_id: str) -> ScheduledBlock | None:
+        """Look up a pre-filled block from TransmissionLog by block_id.
+
+        INV-TIER2-COMPILATION-CONSISTENCY-001: TransmissionLog is queried by
+        block_id only — never by time range. Its role is to answer: "Do we
+        have a filled version of this block_id?"
 
         INV-CHANNEL-NO-COMPILE-001 / INV-PLAYLOG-PREFILL-001:
         Returns a ScheduledBlock with real ad URIs if the Playlog Horizon
@@ -356,9 +370,7 @@ class DslScheduleService:
 
             with db_session_factory() as db:
                 row = db.query(TransmissionLog).filter(
-                    TransmissionLog.channel_slug == channel_id,
-                    TransmissionLog.start_utc_ms <= utc_ms,
-                    TransmissionLog.end_utc_ms > utc_ms,
+                    TransmissionLog.block_id == block_id,
                 ).first()
 
                 if row is None:
@@ -380,8 +392,8 @@ class DslScheduleService:
 
                 logger.debug(
                     "INV-CHANNEL-NO-COMPILE-001: Tier 2 hit for "
-                    "channel=%s block=%s (%d segs)",
-                    channel_id, row.block_id, len(segments),
+                    "block=%s (%d segs)",
+                    row.block_id, len(segments),
                 )
 
                 return ScheduledBlock(
@@ -394,8 +406,8 @@ class DslScheduleService:
         except Exception as e:
             logger.warning(
                 "INV-CHANNEL-NO-COMPILE-001: Tier 2 lookup failed for "
-                "channel=%s utc_ms=%d: %s — falling back to unfilled",
-                channel_id, utc_ms, e,
+                "block_id=%s: %s — falling back to unfilled",
+                block_id, e,
             )
             return None
 
@@ -522,7 +534,15 @@ class DslScheduleService:
     # ── Build / compile ───────────────────────────────────────────────
 
     def _build_initial(self, channel_id: str) -> None:
-        """Compile DSL for today + HORIZON_DAYS-1 additional days."""
+        """Compile DSL for today + HORIZON_DAYS-1 additional days.
+
+        INV-CHANNEL-STARTUP-NONBLOCKING-001: Idempotent — if blocks are already
+        loaded, return immediately without recompilation.
+        """
+        with self._lock:
+            if self._blocks:
+                return
+
         now = datetime.now(timezone.utc)
 
         if self._broadcast_day_override:

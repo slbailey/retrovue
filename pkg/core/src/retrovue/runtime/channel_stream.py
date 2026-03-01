@@ -607,23 +607,35 @@ class ChannelStream:
             finally:
                 duration_ms = (time.monotonic_ns() - t_start) / 1e6
                 self._logger.debug(
-                    "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f",
-                    duration_ms,
+                    "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f",
+                    self.channel_id, duration_ms,
                 )
                 is_spike = duration_ms > spike_threshold_long_ms
-                
+
                 if is_spike:
                     select_ms = (t_after_select - t_start) / 1e6
                     recv_ms = (t_after_recv - t_after_select) / 1e6
                     put_ms = (t_after_put - t_after_recv) / 1e6
-                    self._logger.warning(
-                        "[HTTP] UPSTREAM_LOOP loop_duration_ms=%.2f (spike >%.0fms long-threshold) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
-                        duration_ms,
-                        spike_threshold_long_ms,
-                        select_ms,
-                        recv_ms,
-                        put_ms,
-                    )
+                    if self._stop_event.is_set():
+                        # Teardown drain: socket closing causes slow I/O — expected, harmless
+                        self._logger.info(
+                            "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f (teardown drain) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
+                            self.channel_id,
+                            duration_ms,
+                            select_ms,
+                            recv_ms,
+                            put_ms,
+                        )
+                    else:
+                        self._logger.warning(
+                            "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f (spike >%.0fms long-threshold) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
+                            self.channel_id,
+                            duration_ms,
+                            spike_threshold_long_ms,
+                            select_ms,
+                            recv_ms,
+                            put_ms,
+                        )
 
         self._ring_buffer.close()
         if self.ts_source:
