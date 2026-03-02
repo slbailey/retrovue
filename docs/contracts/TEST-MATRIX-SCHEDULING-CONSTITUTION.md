@@ -134,12 +134,13 @@ These invariants have structural enforcement in production code and passing cont
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | 2 (AST import check + attribute inspection) | **PASS** | Structural: no AIR imports in `schedule_manager.py` / `schedule_manager_service.py`; tests verify via AST inspection |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
-| INV-BLEED-NO-GAP-001 | 10 (contiguity + compaction + grid alignment + enclosed overlap + misalignment + revalidation + gap + naive dt + non-UTC + day boundary) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
+| INV-BLEED-NO-GAP-001 | 11 (contiguity + compaction + grid alignment + enclosed overlap pushes forward + misalignment + revalidation + gap + naive dt + non-UTC + day boundary + three-marathon cascade) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | 4 (deterministic + hashlib match + different channels + no builtin hash) | **PASS** | `channel_seed()` in `schedule_compiler.py` |
 | INV-MARATHON-CROSSMIDNIGHT-001 | 4 (produces blocks + start after 22:00 + end resolves next day + fills window) | **PASS** | Cross-midnight detection in `_compile_movie_marathon()` in `schedule_compiler.py` |
 | INV-CHANNEL-STARTUP-NONBLOCKING-001 | 4 (manager survives teardown + retune skips build_initial + build_initial idempotent + startup executor bounded) | **PASS** | `_stop_channel_internal()` preserves manager; `_build_initial()` idempotency guard; bounded `_startup_executor` in `program_director.py` |
 | INV-SCHEDULE-PREWARM-001 | 3 (AST: no load_schedule in _get_or_create_manager + AST: no load_schedule in _get_dsl_service + prewarm method exists and calls load_schedule) | **PASS** | `_get_dsl_service()` creates without loading; `_prewarm_channel_schedules()` loads at startup; `_get_or_create_manager()` assumes schedule ready |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | 3 (AST: stream_channel has semaphore locked check + AST: hls_playlist has semaphore locked check + startup_semaphore and executor are bounded) | **PASS** | `_startup_semaphore` caps concurrent startups; `_startup_executor` bounded thread pool; handlers fail-fast 503 at capacity |
+| INV-CHANNEL-LIVENESS-RECOVERY-001 | 9 (AST structural + recovery scheduling + backoff + max attempts + counter reset) | **PASS** | `_on_producer_session_end()` and `_attempt_recovery()` in `channel_manager.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
@@ -176,6 +177,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULE-PREWARM-001 | `TestInvSchedulePrewarm001` | `test_get_or_create_manager_no_load_schedule`, `test_get_dsl_service_no_load_schedule`, `test_prewarm_method_calls_load_schedule` | PASS |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | `TestInvChannelStartupConcurrency001` | `test_stream_channel_has_semaphore_guard`, `test_hls_playlist_has_semaphore_guard`, `test_startup_semaphore_and_executor_bounded` | PASS |
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | `TestInvTier2CompilationConsistency001` | `test_get_block_at_returns_current_compilation_not_stale_txlog`, `test_consecutive_blocks_are_contiguous` | PASS |
+| INV-CHANNEL-LIVENESS-RECOVERY-001 | `TestInvChannelLivenessRecovery001` | `test_channel_manager_has_recovery_handler`, `test_stopped_with_viewers_schedules_restart`, `test_last_viewer_left_no_restart`, `test_lookahead_exhausted_no_restart`, `test_stopped_zero_viewers_no_restart`, `test_error_with_viewers_schedules_restart`, `test_backoff_increases`, `test_max_attempts_gives_up`, `test_recovery_counter_resets_on_successful_start` | PASS |
 
 ### Full Matrix (Aspirational)
 
@@ -197,7 +199,8 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-EXECUTIONENTRY-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | ExecutionEntry |
 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | PLAYLOG-008, PLAYLOG-009 | ExecutionEntry |
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | ExecutionEntry |
-| INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | PLAYLOG-BATCHED-001, PLAYLOG-BATCHED-002, PLAYLOG-BATCHED-003 | TransmissionLog |
+| INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | PLAYLOG-BATCHED-001, PLAYLOG-BATCHED-002, PLAYLOG-BATCHED-003, PLAYLOG-BATCHED-004, PLAYLOG-BATCHED-005, PLAYLOG-BATCHED-006 | TransmissionLog |
+| INV-HLS-DISCONTINUITY-MARKER-001 | HLS-DISCONT-001, HLS-DISCONT-002, HLS-DISCONT-003 | Runtime — HLS |
 | INV-NO-FOREIGN-CONTENT-001 | CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003 | Cross-cutting |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | TransmissionLog |
 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
@@ -205,7 +208,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | ARCH-BOUNDARY-001, ARCH-BOUNDARY-002 | Cross-cutting |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | TOR-001, TOR-002, TOR-003, TOR-004 | Cross-cutting |
-| INV-BLEED-NO-GAP-001 | BLEED-001..010 | ScheduleCompiler |
+| INV-BLEED-NO-GAP-001 | BLEED-001..011 | ScheduleCompiler |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | SEED-001..004 | ScheduleCompiler |
 | INV-MARATHON-CROSSMIDNIGHT-001 | XMID-001..004 | ScheduleCompiler |
 
@@ -814,6 +817,94 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
+### PLAYLOG-BATCHED-004: GIL yield duration sufficient (>= 10ms)
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | AST scan of _extend_to_target() source. The time.sleep() argument MUST be >= 0.010 (10ms). A 1ms yield is insufficient to prevent upstream reader starvation. |
+| **Clock Setup** | N/A (structural AST scan). |
+| **Stimulus / Actions** | 1. Parse _extend_to_target() source with ast. 2. Extract time.sleep() argument constants. |
+| **Assertions** | All sleep arguments >= 0.010. |
+| **Failure Classification** | Runtime |
+
+---
+
+### PLAYLOG-BATCHED-005: _run_loop() uses random.uniform for evaluation jitter
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | AST scan of _run_loop() source. The method MUST contain a random.uniform() call to add jitter to the evaluation wait. |
+| **Clock Setup** | N/A (structural AST scan). |
+| **Stimulus / Actions** | 1. Parse _run_loop() source with ast. 2. Search for random.uniform() call node. |
+| **Assertions** | random.uniform() call found in _run_loop(). |
+| **Failure Classification** | Runtime |
+
+---
+
+### PLAYLOG-BATCHED-006: Evaluation wait jitter varies across cycles
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | Run _run_loop() for 3 cycles with mocked Event.wait. Capture the timeout argument on each wait() call. Timeouts MUST vary (not all identical) and each MUST exceed eval_interval_s + 1.0. |
+| **Clock Setup** | N/A (behavioral with mocked stop_event). |
+| **Stimulus / Actions** | 1. Create daemon. 2. Mock Event.wait to capture timeout args. 3. Run _run_loop() for 3 cycles. |
+| **Assertions** | All timeouts >= eval_interval_s + 1.0. Not all timeouts identical. |
+| **Failure Classification** | Runtime |
+
+---
+
+### 6.6a Runtime — HLS
+
+---
+
+### HLS-DISCONT-001: HLSSegment has discontinuity field
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-HLS-DISCONTINUITY-MARKER-001 |
+| **Derived Law(s)** | LAW-DECODABILITY, LAW-LIVENESS |
+| **Scenario** | Inspect HLSSegment dataclass fields. Verify discontinuity field exists with type bool. |
+| **Clock Setup** | N/A (structural inspection). |
+| **Stimulus / Actions** | 1. Import HLSSegment. 2. Check dataclasses.fields() for discontinuity. |
+| **Assertions** | Field exists. Type is bool. |
+| **Failure Classification** | Runtime |
+
+---
+
+### HLS-DISCONT-002: Playlist emits #EXT-X-DISCONTINUITY on PCR jump
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-HLS-DISCONTINUITY-MARKER-001 |
+| **Derived Law(s)** | LAW-DECODABILITY, LAW-LIVENESS |
+| **Scenario** | Feed synthetic TS packets with a PCR discontinuity mid-stream (jump exceeding max_plausible threshold). The playlist MUST contain #EXT-X-DISCONTINUITY before the affected segment's #EXTINF line. |
+| **Clock Setup** | N/A (synthetic packet feed). |
+| **Stimulus / Actions** | 1. Create HLSSegmenter. 2. Feed continuous-PCR packets (segment 1). 3. Feed keyframe + large PCR jump packets (segment 2). 4. Read playlist. |
+| **Assertions** | #EXT-X-DISCONTINUITY present in playlist. Tag appears immediately before an #EXTINF line. |
+| **Failure Classification** | Runtime |
+
+---
+
+### HLS-DISCONT-003: No spurious discontinuity on continuous PCR
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-HLS-DISCONTINUITY-MARKER-001 |
+| **Derived Law(s)** | LAW-DECODABILITY, LAW-LIVENESS |
+| **Scenario** | Feed only continuous-PCR packets across multiple segments. The playlist MUST NOT contain #EXT-X-DISCONTINUITY. |
+| **Clock Setup** | N/A (synthetic packet feed). |
+| **Stimulus / Actions** | 1. Create HLSSegmenter. 2. Feed 4 segments of continuous-PCR packets. 3. Read playlist. |
+| **Assertions** | #EXT-X-DISCONTINUITY NOT present in playlist. |
+| **Failure Classification** | N/A (negative/guard test) |
+
+---
+
 ### 6.6 TransmissionLog Grid Alignment Tests
 
 ---
@@ -1216,6 +1307,12 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | PLAYLOG-BATCHED-001 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Extend uses batched existence check, not per-block queries |
 | PLAYLOG-BATCHED-002 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yielded after each block fill |
 | PLAYLOG-BATCHED-003 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _batch_block_exists_in_txlog method exists and returns set[str] |
+| PLAYLOG-BATCHED-004 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yield duration sufficient (>= 10ms) |
+| PLAYLOG-BATCHED-005 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _run_loop() uses random.uniform for evaluation jitter |
+| PLAYLOG-BATCHED-006 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Evaluation wait jitter varies across cycles |
+| HLS-DISCONT-001 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | HLSSegment has discontinuity field |
+| HLS-DISCONT-002 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | Playlist emits #EXT-X-DISCONTINUITY on PCR jump |
+| HLS-DISCONT-003 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | No spurious discontinuity on continuous PCR |
 | PLAYLIST-GRID-001 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid TransmissionLogEntry boundary rejected |
 | PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover alignment passes |
 | PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight entry has no hidden micro-gap |
