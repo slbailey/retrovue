@@ -88,6 +88,7 @@ class FilesystemImporter(BaseImporter):
         include_hidden: bool = False,
         calculate_hash: bool = False,
         inference_rules: dict[str, list[dict[str, Any]]] | None = None,
+        tag_from_path_segments: bool = False,
     ):
         """
         Initialize the filesystem importer.
@@ -101,6 +102,10 @@ class FilesystemImporter(BaseImporter):
             inference_rules: Optional dict with ``type_rules`` and ``category_rules`` lists,
                              each containing ``{"match": [...], "tag": "..."}`` entries.
                              If omitted, ``DEFAULT_INFERENCE_RULES`` are used.
+            tag_from_path_segments: When True, every directory component between the
+                configured root and the file's parent (inclusive) is emitted as a
+                normalized ``tag:{component}`` label. Interstitial inference is skipped.
+                See: INV-INGEST-PATH-SEGMENT-TAG-001.
         """
         super().__init__(
             source_name=source_name,
@@ -130,6 +135,7 @@ class FilesystemImporter(BaseImporter):
         self.inference_rules: dict[str, list[dict[str, Any]]] = (
             inference_rules if inference_rules is not None else DEFAULT_INFERENCE_RULES
         )
+        self.tag_from_path_segments: bool = tag_from_path_segments
 
     # ------------------------------------------------------------------
     # Collection discovery
@@ -221,6 +227,31 @@ class FilesystemImporter(BaseImporter):
     # ------------------------------------------------------------------
     # Tag inference
     # ------------------------------------------------------------------
+
+    def _infer_tags_from_path_segments(self, file_path: Path) -> list[str]:
+        """Emit each directory component between root and file parent as ``tag:{component}``.
+
+        INV-INGEST-PATH-SEGMENT-TAG-001: every dir component between the configured
+        root_path and the file's immediate parent (inclusive, root excluded) MUST be
+        returned as a normalized ``tag:`` label. The root itself and the file name are
+        NOT included.
+
+        Args:
+            file_path: Absolute path to the discovered file.
+
+        Returns:
+            List of ``"tag:{normalized_name}"`` strings, deepest directory first.
+        """
+        resolved_roots = {Path(r).resolve() for r in self.root_paths}
+        segments: list[str] = []
+        current = file_path.resolve().parent
+        while True:
+            if current in resolved_roots or current == current.parent:
+                break  # stop at root boundary — root itself is NOT a tag
+            segments.append(current.name)
+            current = current.parent
+        # Normalize each segment: strip, lowercase (single-space collapse handled by strip)
+        return [f"tag:{seg.strip().lower()}" for seg in segments]
 
     def _infer_tags_from_path(self, file_path: Path) -> dict[str, Any]:
         """
@@ -338,6 +369,16 @@ class FilesystemImporter(BaseImporter):
                     ),
                     "default": "DEFAULT_INFERENCE_RULES",
                 },
+                {
+                    "name": "tag_from_path_segments",
+                    "description": (
+                        "When true, every directory component between the root path and "
+                        "the file's parent is emitted as a normalized tag. "
+                        "Interstitial inference is skipped. "
+                        "See: INV-INGEST-PATH-SEGMENT-TAG-001."
+                    ),
+                    "default": "false",
+                },
             ],
             description="Scan local filesystem directories for media files and discover content",
         )
@@ -391,6 +432,14 @@ class FilesystemImporter(BaseImporter):
                 is_sensitive=False,
                 is_immutable=False,
             ),
+            UpdateFieldSpec(
+                config_key="tag_from_path_segments",
+                cli_flag="--tag-from-path-segments",
+                help="Emit each directory component between root and file parent as a tag",
+                field_type="boolean",
+                is_sensitive=False,
+                is_immutable=False,
+            ),
         ]
 
     @classmethod
@@ -439,6 +488,11 @@ class FilesystemImporter(BaseImporter):
             for key in ("type_rules", "category_rules"):
                 if key in rules and not isinstance(rules[key], list):
                     raise ImporterConfigurationError(f"inference_rules['{key}'] must be a list")
+
+        if "tag_from_path_segments" in partial_config:
+            val = partial_config["tag_from_path_segments"]
+            if not isinstance(val, bool):
+                raise ImporterConfigurationError("tag_from_path_segments must be a boolean")
 
     def _validate_parameter_types(self) -> None:
         """
@@ -702,19 +756,28 @@ class FilesystemImporter(BaseImporter):
             # Extract basic labels from filename
             raw_labels = self._extract_filename_labels(file_path.name)
 
-            # Apply directory-based inference rules
-            inferred = self._infer_tags_from_path(file_path)
-            raw_labels = (raw_labels or []) + inferred["inferred_labels"]
-
-            # Build editorial from filename, fs attributes, and inferred tags
-            editorial: dict[str, Any] = {
-                "title": file_path.stem,
-                "size": size,
-                "modified": last_modified.isoformat(),
-                "interstitial_type": inferred["interstitial_type"],
-            }
-            if inferred["interstitial_category"] is not None:
-                editorial["interstitial_category"] = inferred["interstitial_category"]
+            if self.tag_from_path_segments:
+                # INV-INGEST-PATH-SEGMENT-TAG-001: emit each dir component as tag:{name}.
+                # Interstitial inference is intentionally skipped in this mode.
+                segment_tags = self._infer_tags_from_path_segments(file_path)
+                raw_labels = (raw_labels or []) + segment_tags
+                editorial: dict[str, Any] = {
+                    "title": file_path.stem,
+                    "size": size,
+                    "modified": last_modified.isoformat(),
+                }
+            else:
+                # Apply directory-based interstitial inference rules (existing behaviour).
+                inferred = self._infer_tags_from_path(file_path)
+                raw_labels = (raw_labels or []) + inferred["inferred_labels"]
+                editorial = {
+                    "title": file_path.stem,
+                    "size": size,
+                    "modified": last_modified.isoformat(),
+                    "interstitial_type": inferred["interstitial_type"],
+                }
+                if inferred["interstitial_category"] is not None:
+                    editorial["interstitial_category"] = inferred["interstitial_category"]
 
             # Try loading a JSON/YAML sidecar adjacent to the file
             sidecar: dict[str, Any] | None = None

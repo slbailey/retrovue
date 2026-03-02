@@ -87,6 +87,8 @@ def construct_importer_for_collection(collection, db):
                     config = source.config or {}
                     importer_config["source_name"] = source.name
                     importer_config["root_paths"] = config.get("root_paths", [])
+                    if "tag_from_path_segments" in config:
+                        importer_config["tag_from_path_segments"] = config["tag_from_path_segments"]
                 else:
                     raise ValueError(f"Unsupported source type '{source.type}'")
 
@@ -673,11 +675,25 @@ def update_collection(
 
             if sync_enable:
                 updates["sync_enabled"] = True
-                # If enabling sync, ensure collection is (or will be) ingestible
+                # If enabling sync, ensure collection is (or will be) ingestible.
+                # Three ways to satisfy this:
+                #   1. Already marked ingestible in the DB
+                #   2. A valid --path-mapping is being set in this same call
+                #   3. The importer confirms its source paths are directly accessible
+                #      (filesystem sources with readable root_paths need no path mapping)
                 will_be_ingestible = collection.ingestible or local_path_valid
                 if not will_be_ingestible:
+                    try:
+                        _importer = construct_importer_for_collection(collection, db)
+                        if _importer and _importer.validate_ingestible(collection):
+                            will_be_ingestible = True
+                            updates["ingestible"] = True
+                    except Exception:
+                        pass
+                if not will_be_ingestible:
                     validation_errors.append(
-                        "Cannot enable sync: collection is not ingestible (add --path-mapping to set a valid mapping)"
+                        "Cannot enable sync: collection is not ingestible "
+                        "(add --path-mapping to set a valid mapping, or ensure source root paths are accessible)"
                     )
 
             if sync_disable:
@@ -695,6 +711,9 @@ def update_collection(
             try:
                 if "sync_enabled" in updates:
                     collection.sync_enabled = updates["sync_enabled"]
+
+                if "ingestible" in updates:
+                    collection.ingestible = updates["ingestible"]
 
                 if "local_path" in updates:
                     # Do NOT alter external path here
@@ -805,6 +824,78 @@ def update_collection(
                     pass
             typer.echo(f"Error updating collection: {e}", err=True)
             raise typer.Exit(1)
+
+
+@app.command("approve")
+def approve_collection(
+    collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+):
+    """
+    Approve all ready assets in a collection for broadcast.
+
+    Only assets with state=ready are approved; new/enriching assets are skipped.
+
+    Examples:
+        retrovue collection approve "Intros"
+        retrovue collection approve "Intros" --dry-run
+    """
+    from ...domain.entities import Asset
+
+    with session() as db:
+        try:
+            collection = resolve_collection_selector(db, collection_id)
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+
+        assets = (
+            db.query(Asset)
+            .filter(
+                Asset.collection_uuid == collection.uuid,
+                Asset.state == "ready",
+                Asset.approved_for_broadcast.is_(False),
+                Asset.is_deleted.is_(False),
+            )
+            .all()
+        )
+
+        skipped = (
+            db.query(Asset)
+            .filter(
+                Asset.collection_uuid == collection.uuid,
+                Asset.state != "ready",
+                Asset.is_deleted.is_(False),
+            )
+            .count()
+        )
+
+        if not dry_run:
+            for asset in assets:
+                asset.approved_for_broadcast = True
+            db.commit()
+
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "collection": collection.name,
+                        "approved": len(assets),
+                        "skipped_not_ready": skipped,
+                        "dry_run": dry_run,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(f"Collection: {collection.name}")
+            if dry_run:
+                typer.echo(f"  [dry-run] Would approve {len(assets)} ready asset(s)")
+            else:
+                typer.echo(f"  Approved: {len(assets)} asset(s)")
+            if skipped:
+                typer.echo(f"  Skipped:  {skipped} asset(s) not yet ready")
 
 
 @app.command("attach-enricher")
@@ -1490,3 +1581,117 @@ def collection_ingest(
         except Exception as e:
             typer.echo(f"Error ingesting collection: {e}", err=True)
             raise typer.Exit(1)
+
+
+@app.command("sync")
+def collection_sync(
+    collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name"),
+    new_files_only: bool = typer.Option(
+        False, "--new-files-only", help="Only discover new files; skip enrichment pass"
+    ),
+    enrich_only: bool = typer.Option(
+        False, "--enrich-only", help="Only run enrichers on pending/stale assets; skip file discovery"
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Max assets to enrich in the enrichment pass"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+):
+    """
+    Sync a collection: discover new files and/or run enrichers on pending assets.
+
+    Two operations, both run by default:
+
+      1. New-file ingest: find files on disk not yet in the database.
+      2. Enricher pass: run attached enrichers on any asset with state=new
+         or a stale enricher-pipeline checksum (covers newly-attached enrichers).
+
+    Use --new-files-only or --enrich-only to run a single step.
+
+    Examples:
+        retrovue collection sync "Intros"
+        retrovue collection sync "Intros" --enrich-only
+        retrovue collection sync "Intros" --new-files-only
+        retrovue collection sync "Intros" --limit 50
+    """
+    from ...usecases.collection_enrichers import apply_enrichers_to_collection
+
+    if new_files_only and enrich_only:
+        typer.echo("Error: --new-files-only and --enrich-only are mutually exclusive", err=True)
+        raise typer.Exit(1)
+
+    with session() as db:
+        try:
+            collection = resolve_collection_selector(db, collection_id)
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+
+        ingest_result = None
+        enrich_result = None
+
+        # ── Step 1: new-file discovery ─────────────────────────────────────
+        if not enrich_only:
+            if dry_run:
+                typer.echo(f"[dry-run] Would discover new files for collection '{collection.name}'")
+            else:
+                try:
+                    importer = construct_importer_for_collection(collection, db)
+                    svc = collection_ingest_service.CollectionIngestService(db)
+                    ingest_result = svc.ingest(
+                        collection_selector=str(collection.uuid),
+                        importer=importer,
+                    )
+                except Exception as e:
+                    typer.echo(f"Warning: file discovery failed: {e}", err=True)
+
+        # ── Step 2: enricher pass ──────────────────────────────────────────
+        if not new_files_only:
+            if dry_run:
+                typer.echo(f"[dry-run] Would run enrichers on pending/stale assets in '{collection.name}'")
+            else:
+                try:
+                    enrich_result = apply_enrichers_to_collection(
+                        db,
+                        collection_selector=str(collection.uuid),
+                        max_assets=limit,
+                    )
+                    db.commit()
+                except Exception as e:
+                    typer.echo(f"Warning: enricher pass failed: {e}", err=True)
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+
+        # ── Output ─────────────────────────────────────────────────────────
+        if dry_run:
+            raise typer.Exit(0)
+
+        if json_output:
+            out: dict = {
+                "collection_id": str(collection.uuid),
+                "collection_name": collection.name,
+            }
+            if ingest_result is not None:
+                out["ingest"] = {
+                    "discovered": getattr(ingest_result, "discovered", None),
+                    "added": getattr(ingest_result, "added", None),
+                    "skipped": getattr(ingest_result, "skipped", None),
+                }
+            if enrich_result is not None:
+                out["enrich"] = enrich_result.get("stats", {})
+            typer.echo(json.dumps(out, indent=2))
+        else:
+            typer.echo(f"Collection: {collection.name}")
+            if ingest_result is not None:
+                added = getattr(ingest_result, "added", 0) or 0
+                skipped = getattr(ingest_result, "skipped", 0) or 0
+                typer.echo(f"  New files:  {added} added, {skipped} already present")
+            if enrich_result is not None:
+                s = enrich_result.get("stats", {})
+                enriched = s.get("assets_enriched", 0)
+                considered = s.get("assets_considered", 0)
+                auto_ready = s.get("assets_auto_ready", 0)
+                typer.echo(f"  Enrichment: {enriched}/{considered} enriched, {auto_ready} auto-promoted to ready")

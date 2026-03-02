@@ -25,6 +25,18 @@ from ...usecases.source_add import add_source as usecase_add_source
 from ...usecases.source_discover import discover_collections as usecase_discover_collections
 from ...usecases.source_list import list_sources as usecase_list_sources
 
+def _parse_set_value(raw: str):
+    """Parse a --set VALUE string: 'true'/'false' → bool, valid JSON → parsed, else str."""
+    if raw.lower() == "true":
+        return True
+    if raw.lower() == "false":
+        return False
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
 # Thin, contract-aligned functions instead of fat SourceService
 # Each function maps 1:1 to a contract + test
 
@@ -536,6 +548,7 @@ def add_source(
     token: str | None = typer.Option(None, "--token", help="Authentication token"),
     base_path: str | None = typer.Option(None, "--base-path", help="Base filesystem path to scan"),
     enrichers: str | None = typer.Option(None, "--enrichers", help="Comma-separated list of enrichers to use"),
+    set_params: list[str] | None = typer.Option(None, "--set", help="Set importer config key: KEY=VALUE (repeatable). Booleans: true/false. JSON: valid JSON."),
     discover: bool = typer.Option(False, "--discover", help="Automatically discover and persist collections after source creation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be created without executing"),
     test_db: bool = typer.Option(False, "--test-db", help="Direct command to test database environment"),
@@ -724,7 +737,17 @@ def add_source(
             if param_value:
                 importer_params[param_name] = param_value
                 config[param_name] = param_value
-        
+
+        # Apply --set KEY=VALUE overrides for importer-specific optional params
+        if set_params:
+            for kv in set_params:
+                if "=" not in kv:
+                    typer.echo(f"Error: --set requires KEY=VALUE format, got {kv!r}", err=True)
+                    raise typer.Exit(1)
+                k, _, v = kv.partition("=")
+                k = k.strip()
+                config[k] = _parse_set_value(v)
+
         # Store config in the format provided by importer_params
         # The importer's constructor expects these params, and we store them as-is
         # If an importer needs a different storage format, it should provide
@@ -1073,6 +1096,7 @@ def update_source(
     base_url: str | None = typer.Option(None, "--base-url", help="New base URL for the source"),
     token: str | None = typer.Option(None, "--token", help="New authentication token"),
     base_path: str | None = typer.Option(None, "--base-path", help="New base filesystem path"),
+    set_params: list[str] | None = typer.Option(None, "--set", help="Set importer config key: KEY=VALUE (repeatable). Booleans: true/false. JSON: valid JSON."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be updated without executing"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
@@ -1130,10 +1154,19 @@ def update_source(
             for field_spec in update_fields:
                 config_key = field_spec.config_key
                 cli_value = cli_args_map.get(config_key)
-                
+
                 if cli_value is not None:
                     partial_config[config_key] = cli_value
-            
+
+            # Apply --set KEY=VALUE overrides
+            if set_params:
+                for kv in set_params:
+                    if "=" not in kv:
+                        typer.echo(f"Error: --set requires KEY=VALUE format, got {kv!r}", err=True)
+                        raise typer.Exit(1)
+                    k, _, v = kv.partition("=")
+                    partial_config[k.strip()] = _parse_set_value(v)
+
             # Validate partial update using importer
             if partial_config:
                 try:

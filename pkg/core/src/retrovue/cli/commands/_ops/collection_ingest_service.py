@@ -861,7 +861,30 @@ class CollectionIngestService:
             # Persist when not a dry run
             if not dry_run:
                 repo.create(asset)
-                # <-- NEW: write handler output into child tables
+                # Persist tags from raw_labels (tag: prefix) into asset_tags table.
+                # INV-ASSET-TAG-PERSISTENCE-001: tags MUST live in asset_tags, not only JSONB.
+                try:
+                    from ....domain.entities import AssetTag
+                    from ....domain.tag_normalization import normalize_tag_set
+                    tag_labels: list[str] = []
+                    if labels:
+                        tag_labels = [
+                            lbl[len("tag:"):]
+                            for lbl in labels
+                            if isinstance(lbl, str) and lbl.startswith("tag:")
+                        ]
+                    if tag_labels:
+                        for tag_val in normalize_tag_set(tag_labels):
+                            self.db.merge(
+                                AssetTag(
+                                    asset_uuid=asset.uuid,
+                                    tag=tag_val,
+                                    source="ingest",
+                                )
+                            )
+                except Exception as tag_exc:
+                    stats.errors.append(f"tag persistence failed: {tag_exc}")
+                # <-- write handler output into child tables
                 try:
                     if isinstance(ingest_result, dict):
                         rf = handler_resolved_fields if isinstance(handler_resolved_fields, dict) else {}

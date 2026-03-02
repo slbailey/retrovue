@@ -7,14 +7,31 @@ Surfaces read-only views to help operators verify ingest effects.
 from __future__ import annotations
 
 import json
+import uuid as _uuid_mod
 
 import typer
 
+from ...domain.entities import Asset, AssetTag
+from ...domain.tag_normalization import normalize_tag_set
 from ...infra.uow import session
 from ...usecases import asset_attention as _uc_asset_attention
 from ...usecases import asset_update as _uc_asset_update
 
 app = typer.Typer(name="asset", help="Asset inspection and review operations")
+
+
+def resolve_asset_selector(db, asset_id: str) -> Asset:
+    """Resolve an asset by UUID string. Raises typer.Exit(1) if not found."""
+    try:
+        uid = _uuid_mod.UUID(asset_id)
+    except Exception:
+        typer.echo(f"Error: invalid asset UUID: {asset_id!r}", err=True)
+        raise typer.Exit(1)
+    asset = db.get(Asset, uid)
+    if asset is None:
+        typer.echo(f"Error: asset not found: {asset_id}", err=True)
+        raise typer.Exit(1)
+    return asset
 
 
 @app.command("attention")
@@ -104,91 +121,94 @@ def resolve_asset(
         typer.echo(f"Asset {result['uuid']} updated")
 
 
-@app.command("reprobe")
-def reprobe_asset_cmd(
-    asset_uuid: str = typer.Argument(None, help="Asset UUID to reprobe"),
-    collection: str = typer.Option(None, "--collection", help="Reprobe all assets in collection UUID"),
-    force: bool = typer.Option(False, "--force", help="Include ready assets when reprobing a collection"),
-    limit: int = typer.Option(None, "--limit", help="Max assets to reprobe (collection mode only)"),
+
+@app.command("update")
+def update_asset(
+    asset_id: str = typer.Argument(..., help="Asset UUID to update"),
+    tags: str | None = typer.Option(
+        None,
+        "--tags",
+        help="Comma-separated tag set to assign (REPLACE semantics). "
+             "Tags are normalized: stripped, lowercased, deduplicated.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Re-probe asset(s): reset metadata and re-run the enrichment pipeline.
+    Update asset attributes.
 
-    Use this when an asset's file has been replaced or corrected and you need
-    fresh duration/codec metadata from the actual file on disk.
+    Currently supports: --tags (REPLACE semantics per AssetTaggingContract.md).
 
-    Single asset:
-        retrovue asset reprobe <uuid>
-
-    Entire collection:
-        retrovue asset reprobe --collection <uuid>
-        retrovue asset reprobe --collection <uuid> --force   # include ready assets
-        retrovue asset reprobe --collection <uuid> --limit 50
+    Examples:
+        retrovue asset update <uuid> --tags "hbo,1982"
+        retrovue asset update <uuid> --tags "classic,noir" --dry-run
+        retrovue asset update <uuid> --tags "drama" --json
     """
-    import json as _json
-    from ...usecases import asset_reprobe as _uc_reprobe
-    from ...infra.uow import session as _session
-
-    if not asset_uuid and not collection:
-        typer.echo("Error: provide either an asset UUID or --collection <uuid>", err=True)
-        raise typer.Exit(1)
-
-    if asset_uuid and collection:
-        typer.echo("Error: provide either an asset UUID or --collection, not both", err=True)
+    if tags is None:
+        typer.echo("Error: at least one update flag is required (e.g. --tags)", err=True)
         raise typer.Exit(1)
 
     try:
-        with _session() as db:
-            if asset_uuid:
-                result = _uc_reprobe.reprobe_asset(db, asset_uuid=asset_uuid)
+        with session() as db:
+            asset = resolve_asset_selector(db, asset_id)
 
-                if json_output:
-                    typer.echo(_json.dumps(result, indent=2, default=str))
-                else:
-                    typer.echo(f"Reprobed asset {result['uuid']}")
-                    typer.echo(f"  State: {result['old_state']} -> {result['new_state']}")
-                    old_dur = result['old_duration_ms']
-                    new_dur = result['new_duration_ms']
-                    old_str = f"{old_dur/1000:.1f}s" if old_dur else "none"
-                    new_str = f"{new_dur/1000:.1f}s" if new_dur else "none"
-                    typer.echo(f"  Duration: {old_str} -> {new_str}")
-
-            else:
-                typer.echo(f"Reprobing collection {collection}...")
-                if force:
-                    typer.echo("  (--force: including ready assets)")
-                if limit:
-                    typer.echo(f"  (--limit {limit})")
-
-                result = _uc_reprobe.reprobe_collection(
-                    db,
-                    collection_uuid=collection,
-                    include_ready=force,
-                    limit=limit,
+            # D-4: soft-deleted assets reject tagging
+            if asset.is_deleted:
+                typer.echo(
+                    f"Error: asset {asset_id} is deleted; tagging is not permitted.",
+                    err=True,
                 )
+                raise typer.Exit(1)
 
-                if json_output:
-                    typer.echo(_json.dumps(result, indent=2, default=str))
+            # Compute old tag set
+            existing_tags = db.query(AssetTag).filter_by(asset_uuid=asset.uuid).all()
+            old_tag_set = sorted(t.tag for t in existing_tags)
+
+            # B-1/B-2: normalize and deduplicate
+            raw_tags = [t.strip() for t in tags.split(",")]
+            new_tag_set = normalize_tag_set(raw_tags)
+
+            changed = old_tag_set != new_tag_set
+
+            if not dry_run and changed:
+                # D-3: single Unit of Work — delete then insert
+                db.query(AssetTag).filter_by(asset_uuid=asset.uuid).delete()
+                for tag_val in new_tag_set:
+                    db.add(AssetTag(asset_uuid=asset.uuid, tag=tag_val, source="operator"))
+                db.commit()
+
+            status = "changed" if changed else "no_change"
+
+            if json_output:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "status": status,
+                            "asset_uuid": str(asset.uuid),
+                            "dry_run": dry_run,
+                            "changes": {
+                                "tags": {
+                                    "old": old_tag_set,
+                                    "new": new_tag_set,
+                                }
+                            },
+                        },
+                        indent=2,
+                    )
+                )
+            else:
+                typer.echo(f"Asset:  {asset.uuid}")
+                typer.echo(f"Old tags: {old_tag_set}")
+                typer.echo(f"New tags: {new_tag_set}")
+                if dry_run:
+                    typer.echo("[dry-run: no changes written]")
+                elif changed:
+                    typer.echo("Tags updated.")
                 else:
-                    typer.echo(f"Collection: {result['collection_name']}")
-                    typer.echo(f"  Total: {result['total']}")
-                    typer.echo(f"  Succeeded: {result.get('succeeded', 0)}")
-                    typer.echo(f"  Failed: {result.get('failed', 0)}")
+                    typer.echo("No change (tag set identical).")
 
-                    for r in result.get('results', []):
-                        if 'error' in r:
-                            typer.echo(f"  ✗ {r['uuid']}: {r['error']}")
-                        else:
-                            old_dur = r.get('old_duration_ms')
-                            new_dur = r.get('new_duration_ms')
-                            old_str = f"{old_dur/1000:.1f}s" if old_dur else "none"
-                            new_str = f"{new_dur/1000:.1f}s" if new_dur else "none"
-                            typer.echo(f"  ✓ {r['uuid']}: {r['old_state']}->{r['new_state']}  duration {old_str}->{new_str}")
-
-    except ValueError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
