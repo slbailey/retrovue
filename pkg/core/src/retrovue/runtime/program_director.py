@@ -1341,6 +1341,11 @@ class ProgramDirector:
         if self._channel_manager_provider is None:
             def _background_prewarm() -> None:
                 try:
+                    # Disable automatic GC during prewarm. Startup creates 100k+
+                    # objects (catalog, schedules, ORM identities) and automatic
+                    # Gen 2 collections mid-build scan the growing graph for
+                    # 200-300ms with collected=0. We collect+freeze once at the end.
+                    gc.disable()
                     self.load_all_schedules()
                     self._init_horizon_managers()
                     self._prewarm_channel_schedules()
@@ -1354,15 +1359,12 @@ class ProgramDirector:
                         )
                         self._health_check_thread.start()
                     # Freeze long-lived objects out of GC Gen 2 traversal.
-                    # After startup, the heap holds 100k+ tracked objects
-                    # (catalog, schedules, ORM identities) that are never freed.
-                    # Gen 2 collections were taking 60-120ms with collected=0,
-                    # starving the upstream reader thread (UPSTREAM_LOOP spikes).
                     # gc.freeze() moves them to a permanent generation the GC
                     # never re-traverses — Gen 2 drops to <1ms.
                     pre_freeze = len(gc.get_objects())
                     gc.collect()  # Flush pending garbage before freeze
                     gc.freeze()
+                    gc.enable()  # Re-enable for runtime churn
                     self._logger.info(
                         "[GC] Frozen %d long-lived objects after startup "
                         "(Gen 2 traversal eliminated)",
@@ -1376,6 +1378,8 @@ class ProgramDirector:
                 except Exception:
                     self._logger.exception("Background prewarm failed unexpectedly")
                 finally:
+                    if not gc.isenabled():
+                        gc.enable()
                     self._startup_complete.set()
 
             prewarm_thread = Thread(
