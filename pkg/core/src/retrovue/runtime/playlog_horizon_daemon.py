@@ -20,6 +20,7 @@ Lifecycle: start()/stop() run a background daemon thread.
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -354,8 +355,10 @@ class PlaylogHorizonDaemon:
                     )
 
                 # Rule 2: yield GIL after each block fill so upstream
-                # reader thread can cycle select→recv→put
-                time.sleep(0.001)
+                # reader thread can cycle select→recv→put.
+                # 10ms minimum — 1ms was insufficient (UPSTREAM_LOOP
+                # spikes of 260ms+ observed with 0.001).
+                time.sleep(0.010)
 
             scan_date += timedelta(days=1)
 
@@ -645,7 +648,10 @@ class PlaylogHorizonDaemon:
                 logger.exception(
                     "PlaylogHorizon[%s]: evaluation failed", self._channel_id,
                 )
-            self._stop_event.wait(timeout=self._eval_interval_s)
+            # Rule 4: jitter prevents thundering herd when multiple
+            # daemons converge onto the same evaluation cadence.
+            jitter = random.uniform(1.0, self._eval_interval_s * 0.25)
+            self._stop_event.wait(timeout=self._eval_interval_s + jitter)
 
     def _broadcast_date_for(self, dt: datetime) -> date:
         """Compute broadcast day using the channel's local timezone.
