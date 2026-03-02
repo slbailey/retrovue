@@ -734,16 +734,69 @@ class DslScheduleService:
 
     @staticmethod
     def _count_slots_in_dsl(dsl: dict) -> int:
-        """Count total episode slots per broadcast day."""
+        """Count total episode slots per broadcast day.
+
+        INV-SCHEDULE-SEQUENTIAL-ADVANCE-001: MUST return >0 for any DSL
+        that produces program blocks. Handles three block formats:
+          - slot-style:  block_def["slots"] list
+          - block-style: block_def["block"] with duration/start/end
+          - movie_marathon: block_def["movie_marathon"] with start/end
+        """
+        from retrovue.runtime.schedule_compiler import (
+            _parse_duration,
+            NETWORK_GRID_MINUTES,
+            BROADCAST_DAY_START_HOUR,
+        )
+
+        grid_minutes = NETWORK_GRID_MINUTES
+
+        def _block_slots(block_def: dict) -> int:
+            """Estimate episode slots for a single schedule entry."""
+            # Slot-style: explicit slots list
+            slots = block_def.get("slots", [])
+            if slots:
+                return len(slots)
+
+            # Block-style: block with duration or start/end
+            bb = block_def.get("block") or block_def.get("movie_marathon")
+            if bb and isinstance(bb, dict):
+                duration_str = bb.get("duration", "")
+                start_str = bb.get("start", "")
+                end_str = bb.get("end", "")
+
+                if duration_str:
+                    td = _parse_duration(duration_str)
+                    total_min = int(td.total_seconds() // 60)
+                elif start_str and end_str:
+                    s_parts = start_str.split(":")
+                    e_parts = end_str.split(":")
+                    s_min = int(s_parts[0]) * 60 + (int(s_parts[1]) if len(s_parts) > 1 else 0)
+                    e_min = int(e_parts[0]) * 60 + (int(e_parts[1]) if len(e_parts) > 1 else 0)
+                    # Handle overnight wrap (e.g. 22:00 → 06:00)
+                    if e_min <= s_min:
+                        e_min += 24 * 60
+                    total_min = e_min - s_min
+                else:
+                    # No duration or end — default full 24h
+                    total_min = 24 * 60
+
+                return max(1, total_min // grid_minutes)
+
+            # Movie selector (single movie per block)
+            if "movie_selector" in block_def or "movie_block" in block_def:
+                return 1
+
+            return 0
+
         count = 0
         schedule = dsl.get("schedule", {})
         for day_key, day_value in schedule.items():
             if isinstance(day_value, list):
                 for block_def in day_value:
                     if isinstance(block_def, dict):
-                        count += len(block_def.get("slots", []))
+                        count += _block_slots(block_def)
             elif isinstance(day_value, dict):
-                count += len(day_value.get("slots", []))
+                count += _block_slots(day_value)
         return count
 
     def _get_cached_schedule(self, channel_id: str, broadcast_day: str) -> dict | None:
