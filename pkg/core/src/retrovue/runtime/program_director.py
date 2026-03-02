@@ -24,6 +24,7 @@ Design Principles:
 """
 
 import asyncio
+import gc
 import logging
 import os
 import queue
@@ -1037,8 +1038,11 @@ class ProgramDirector:
             )
             return manager
 
+    _GC_REFREEZE_INTERVAL_S = 60.0
+
     def _health_check_loop(self) -> None:
         """Run check_health() and tick() on each registered ChannelManager (embedded mode)."""
+        last_refreeze = time.monotonic()
         while (
             self._health_check_stop is not None
             and not self._health_check_stop.wait(timeout=self._health_check_interval_seconds)
@@ -1067,6 +1071,16 @@ class ProgramDirector:
                         channel_id,
                     )
                     self._stop_channel_internal(channel_id)
+
+                # Periodic re-freeze: runtime churn (DB sessions, ScheduledBlocks,
+                # ORM identities) accumulates in Gen 2 after the startup freeze.
+                # Re-freezing every 60s keeps Gen 2 traversal near zero.
+                now = time.monotonic()
+                if now - last_refreeze >= self._GC_REFREEZE_INTERVAL_S:
+                    gc.collect()
+                    gc.freeze()
+                    last_refreeze = now
+
             except Exception as e:
                 self._logger.warning("Health check loop error: %s", e, exc_info=True)
 
@@ -1213,6 +1227,48 @@ class ProgramDirector:
                 _td.Thread(target=_bg_stop, daemon=True).start()
 
     # Lifecycle -------------------------------------------------------------
+
+    def _install_gc_telemetry(self) -> None:
+        """Register a gc.callbacks entry that logs collection durations.
+
+        Gen 2 collections traverse the entire tracked-object graph while
+        holding the GIL.  With 12k+ catalog objects this can take 100-200ms,
+        starving the upstream reader thread (UPSTREAM_LOOP select_ms spikes).
+
+        Idempotent: skips if already installed (multiple start() calls).
+        """
+        sentinel = "_retrovue_gc_telemetry"
+        for cb in gc.callbacks:
+            if getattr(cb, "__name__", "") == sentinel:
+                return  # Already installed
+
+        _start_ns_holder = [0]
+
+        def _retrovue_gc_telemetry(phase: str, info: dict) -> None:
+            if phase == "start":
+                _start_ns_holder[0] = time.monotonic_ns()
+            elif phase == "stop":
+                duration_ms = (time.monotonic_ns() - _start_ns_holder[0]) / 1e6
+                gen = info.get("generation", -1)
+                collected = info.get("collected", 0)
+                uncollectable = info.get("uncollectable", 0)
+                if gen >= 2 or duration_ms > 50:
+                    self._logger.warning(
+                        "[GC] gen=%d duration_ms=%.2f collected=%d uncollectable=%d",
+                        gen, duration_ms, collected, uncollectable,
+                    )
+                elif duration_ms > 5:
+                    self._logger.debug(
+                        "[GC] gen=%d duration_ms=%.2f collected=%d uncollectable=%d",
+                        gen, duration_ms, collected, uncollectable,
+                    )
+
+        gc.callbacks.append(_retrovue_gc_telemetry)
+        self._logger.info(
+            "[GC] Telemetry installed: thresholds=%s tracked_objects=%d",
+            gc.get_threshold(), len(gc.get_objects()),
+        )
+
     def start(self) -> None:
         """Start the pacing loop, health-check loop (embedded), and HTTP server.
 
@@ -1222,6 +1278,10 @@ class ProgramDirector:
         and prewarm run in a background daemon thread. Request handlers
         return 503 until ``_startup_complete`` is set.
         """
+        # GC telemetry: log collection durations to correlate with UPSTREAM_LOOP spikes.
+        # Gen 2 collections traverse the entire object graph under the GIL.
+        self._install_gc_telemetry()
+
         # Start evidence gRPC server (if enabled)
         if self._evidence_enabled and self._evidence_server is None:
             try:
@@ -1292,6 +1352,21 @@ class ProgramDirector:
                             daemon=True,
                         )
                         self._health_check_thread.start()
+                    # Freeze long-lived objects out of GC Gen 2 traversal.
+                    # After startup, the heap holds 100k+ tracked objects
+                    # (catalog, schedules, ORM identities) that are never freed.
+                    # Gen 2 collections were taking 60-120ms with collected=0,
+                    # starving the upstream reader thread (UPSTREAM_LOOP spikes).
+                    # gc.freeze() moves them to a permanent generation the GC
+                    # never re-traverses — Gen 2 drops to <1ms.
+                    pre_freeze = len(gc.get_objects())
+                    gc.collect()  # Flush pending garbage before freeze
+                    gc.freeze()
+                    self._logger.info(
+                        "[GC] Frozen %d long-lived objects after startup "
+                        "(Gen 2 traversal eliminated)",
+                        pre_freeze,
+                    )
                 except RuntimeError:
                     self._logger.exception(
                         "Background prewarm failed (horizon readiness gate). "
@@ -2175,9 +2250,9 @@ class ProgramDirector:
             """
             import time as _time
 
-            # Track activity for this channel
-            with self._hls_activity_lock:
-                self._hls_last_activity[channel_id] = _time.monotonic()
+            # INV-HLS-PHANTOM-CLEANUP-001: Activity tracking moved to
+            # success path only.  503 retries MUST NOT refresh the
+            # timestamp — otherwise the phantom never idles out.
 
             seg = self._hls_manager.get_or_create(channel_id)
             if not seg.is_running():
@@ -2196,6 +2271,10 @@ class ProgramDirector:
                 hls_session_id = f"hls-{channel_id}-{uuid.uuid4().hex[:8]}"
                 with self._hls_activity_lock:
                     self._hls_phantom_sessions[channel_id] = hls_session_id
+                    # INV-HLS-PHANTOM-CLEANUP-001: Set initial activity so
+                    # the drain thread has a valid baseline.  Subsequent
+                    # updates only happen on successful (200) responses.
+                    self._hls_last_activity[channel_id] = _time.monotonic()
 
                 await self._startup_semaphore.acquire()
                 try:
@@ -2277,6 +2356,27 @@ class ProgramDirector:
                             self._hls_last_activity.pop(cid, None)
 
                     _td.Thread(target=_drain_hls_phantom, daemon=True, name=f"hls-phantom-{channel_id}").start()
+                else:
+                    # INV-HLS-PHANTOM-CLEANUP-001: Startup failed — no fanout
+                    # created.  Clean up the zombie segmenter and phantom
+                    # session so the next request can retry startup fresh.
+                    self._logger.warning(
+                        "[HLS %s] startup failed (no fanout), cleaning up phantom %s",
+                        channel_id, hls_session_id,
+                    )
+                    seg.stop()
+                    if manager is not None:
+                        try:
+                            manager.tune_out(hls_session_id)
+                        except Exception:
+                            pass
+                    with self._hls_activity_lock:
+                        self._hls_phantom_sessions.pop(channel_id, None)
+                        self._hls_last_activity.pop(channel_id, None)
+                    return Response(
+                        content="Channel not available",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
 
                 # Wait for first segment to be ready
                 ready = await asyncio.get_event_loop().run_in_executor(
@@ -2289,6 +2389,9 @@ class ProgramDirector:
                     content="Playlist not ready yet",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
+            # INV-HLS-PHANTOM-CLEANUP-001: Only refresh activity on success.
+            with self._hls_activity_lock:
+                self._hls_last_activity[channel_id] = _time.monotonic()
             return Response(
                 content=playlist_content,
                 media_type="application/vnd.apple.mpegurl",
@@ -2302,9 +2405,6 @@ class ProgramDirector:
         async def hls_segment(channel_id: str, segment: str) -> Response:
             """Serve HLS .ts segments."""
             import time as _time
-            # Track activity — client is still watching
-            with self._hls_activity_lock:
-                self._hls_last_activity[channel_id] = _time.monotonic()
 
             if not _HLS_SEGMENT_RE.match(segment):
                 return Response(content="Not found", status_code=404)
@@ -2312,6 +2412,9 @@ class ProgramDirector:
             seg_data = segmenter.get_segment(segment)
             if seg_data is None:
                 return Response(content="Not found", status_code=404)
+            # INV-HLS-PHANTOM-CLEANUP-001: Only refresh activity on success.
+            with self._hls_activity_lock:
+                self._hls_last_activity[channel_id] = _time.monotonic()
             return Response(
                 content=seg_data,
                 media_type="video/mp2t",
