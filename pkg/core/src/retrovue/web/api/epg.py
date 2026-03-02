@@ -120,6 +120,7 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
         ep_sec = block["episode_duration_sec"]
         end_dt = start_dt + __import__("datetime").timedelta(seconds=slot_sec)
 
+        from retrovue.epg.duration import epg_display_duration
         entries.append({
             "channel_id": channel_cfg["channel_id"],
             "channel_name": channel_cfg["name"],
@@ -132,6 +133,10 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
             "description": description,
             "duration_minutes": round(ep_sec / 60, 1),
             "slot_minutes": round(slot_sec / 60, 1),
+            "display_duration": epg_display_duration(
+                start_dt, end_dt, slot_sec, ep_sec,
+                is_movie=season_number is None,
+            ),
         })
 
     return entries
