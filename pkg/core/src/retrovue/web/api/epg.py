@@ -39,17 +39,13 @@ def _load_channels() -> list[dict[str, Any]]:
 
 
 def _count_slots_in_dsl(dsl: dict[str, Any]) -> int:
-    """Count total episode slots per broadcast day in a DSL schedule."""
-    count = 0
-    schedule = dsl.get("schedule", {})
-    for day_key, day_value in schedule.items():
-        if isinstance(day_value, list):
-            for block_def in day_value:
-                if isinstance(block_def, dict):
-                    count += len(block_def.get("slots", []))
-        elif isinstance(day_value, dict):
-            count += len(day_value.get("slots", []))
-    return count
+    """Count total episode slots per broadcast day in a DSL schedule.
+
+    Delegates to DslScheduleService._count_slots_in_dsl() to avoid
+    duplicate implementations (INV-SCHEDULE-SEQUENTIAL-ADVANCE-001).
+    """
+    from retrovue.runtime.dsl_schedule_service import DslScheduleService
+    return DslScheduleService._count_slots_in_dsl(dsl)
 
 
 def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: CatalogAssetResolver | None = None) -> list[dict[str, Any]]:

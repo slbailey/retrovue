@@ -29,7 +29,7 @@ from retrovue.runtime.asset_resolver import AssetMetadata, AssetResolver
 # Constants
 # ---------------------------------------------------------------------------
 
-COMPILER_VERSION = "2.1.0"
+COMPILER_VERSION = "2.2.0"
 BROADCAST_DAY_START_HOUR = 6  # 06:00 local
 NETWORK_GRID_MINUTES = 30
 PREMIUM_GRID_MINUTES = 15
