@@ -330,6 +330,12 @@ const dotInterval = setInterval(() => {
   if (splashDots) splashDots.textContent = '.'.repeat(dotCount);
 }, 500);
 
+// Signal server on page close so phantom viewer disconnects immediately
+// instead of waiting for the 20-second idle timeout.
+window.addEventListener('beforeunload', () => {
+  navigator.sendBeacon('/hls/' + channelId + '/tune_out');
+});
+
 waitAndStart(30);
 </script>
 </body>

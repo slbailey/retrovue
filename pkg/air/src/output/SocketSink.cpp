@@ -6,6 +6,7 @@
 
 #include "retrovue/output/SocketSink.h"
 #include "retrovue/output/SinkDiagnostics.h"
+#include "retrovue/util/Logger.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -21,6 +22,8 @@
 #include <cassert>
 
 namespace retrovue::output {
+
+using retrovue::util::Logger;
 
 namespace {
 static std::atomic<uint64_t> g_sink_generation{0};
@@ -201,9 +204,9 @@ void SocketSink::WriterThreadLoop() {
 
   while (!writer_stop_.load(std::memory_order_acquire)) {
     auto now = std::chrono::steady_clock::now();
-    if (now - last_queue_log_time >= std::chrono::seconds(1)) {
+    if (now - last_queue_log_time >= std::chrono::seconds(10)) {
       const size_t queue_bytes = GetCurrentBufferSize();
-      std::cout << "[SocketSink:" << name_ << "] queue_bytes=" << queue_bytes << std::endl;
+      Logger::Debug("[SocketSink:" + name_ + "] queue_bytes=" + std::to_string(queue_bytes));
       last_queue_log_time = now;
     }
 

@@ -647,7 +647,7 @@ void VideoLookaheadBuffer::FillLoop() {
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_fill_log_).count();
         const bool depth_delta = (last_watchdog_depth_ >= 0 && std::abs(depth - last_watchdog_depth_) > 5);
         const bool state_changed = (last_watchdog_state_ != filling_state_str);
-        const bool should_log = (elapsed_ms >= 1000) || depth_delta || state_changed;
+        const bool should_log = (elapsed_ms >= 10000) || depth_delta || state_changed;
         if (should_log) {
           last_fill_log_ = now;
           last_watchdog_depth_ = depth;
