@@ -110,6 +110,58 @@ def _two_marathon_dsl(
     }
 
 
+def _three_marathon_dsl() -> dict:
+    """Build a DSL with THREE consecutive movie_marathon blocks that trigger
+    cascading bleed producing a full enclosure.
+
+    All marathons use comedy pool (80 min movies → 1.5h grid slots).
+    8h / 1.5h = 5.33 → 6 blocks = 9h → each bleeds 1h.
+    Cascade amplifies: M1 bleeds 1h → M2 pushed 1h + its own 1h bleed = 2h cascade.
+    M3's first block (1.5h) is fully enclosed within M2's last pushed block (1.5h ending
+    at 00:00) because 22:00+1.5h=23:30 < 00:00.
+    """
+    return {
+        "channel": "test-ch",
+        "broadcast_day": "2026-03-01",
+        "timezone": "UTC",
+        "template": "network",
+        "pools": {
+            "comedy": {"match": {"type": "movie", "rating": {"include": ["PG"]}}},
+        },
+        "schedule": {
+            "all_day": [
+                {
+                    "movie_marathon": {
+                        "start": "06:00",
+                        "end": "14:00",
+                        "title": "Comedy Marathon 1",
+                        "movie_selector": {"pool": "comedy", "mode": "random"},
+                        "allow_bleed": True,
+                    }
+                },
+                {
+                    "movie_marathon": {
+                        "start": "14:00",
+                        "end": "22:00",
+                        "title": "Comedy Marathon 2",
+                        "movie_selector": {"pool": "comedy", "mode": "random"},
+                        "allow_bleed": True,
+                    }
+                },
+                {
+                    "movie_marathon": {
+                        "start": "22:00",
+                        "end": "06:00",
+                        "title": "Comedy Marathon 3",
+                        "movie_selector": {"pool": "comedy", "mode": "random"},
+                        "allow_bleed": True,
+                    }
+                },
+            ]
+        },
+    }
+
+
 def _compile(dsl: dict, resolver: StubAssetResolver) -> list[dict]:
     """Compile and return program_blocks list."""
     result = compile_schedule(dsl, resolver, seed=42)
@@ -193,11 +245,9 @@ class TestInvBleedNoGap001:
                 f"not a multiple of {SLOT_SEC}"
             )
 
-    def test_fully_enclosed_overlap_raises(self):
+    def test_fully_enclosed_overlap_pushes_forward(self):
         """Construct input where one block is fully enclosed within another.
-        Compaction MUST raise CompileError."""
-        # We test _validate_grid_alignment + compaction directly by
-        # constructing ProgramBlockOutput objects
+        Compaction MUST push the enclosed block forward (not raise)."""
         t0 = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
         outer = ProgramBlockOutput(
             title="outer", asset_id="a1", start_at=t0,
@@ -209,26 +259,24 @@ class TestInvBleedNoGap001:
             slot_duration_sec=1800, episode_duration_sec=1500,
         )
         # The inner block is fully enclosed within outer (06:30-07:00 < 06:00-08:00).
-        # When compaction runs, it should detect this and raise.
-        # We test this through compile_schedule by mocking, but since we can
-        # test the compaction logic more directly, let's verify the invariant:
-        # If the code currently prunes instead of raising, this test should fail.
+        # Compaction must push inner forward to outer's end (08:00), not raise.
         blocks = [outer, inner]
         blocks.sort(key=lambda b: b.start_at)
 
-        # Simulate what the compaction code should do
-        from retrovue.runtime.schedule_compiler import CompileError
-        compacted = []
-        with pytest.raises(CompileError, match="[Ii]llegal overlap|[Ff]ully enclosed"):
-            for block in blocks:
-                if compacted and compacted[-1].end_at() > block.start_at:
-                    if block.end_at() <= compacted[-1].end_at():
-                        raise CompileError(
-                            f"Illegal overlap: block '{block.title}' is fully enclosed within "
-                            f"'{compacted[-1].title}'"
-                        )
-                    block = replace(block, start_at=compacted[-1].end_at())
-                compacted.append(block)
+        # Simulate what the compaction code does
+        compacted: list[ProgramBlockOutput] = []
+        for block in blocks:
+            if compacted and compacted[-1].end_at() > block.start_at:
+                new_start = compacted[-1].end_at()
+                block = replace(block, start_at=new_start)
+            compacted.append(block)
+
+        assert len(compacted) == 2
+        assert compacted[0].start_at == t0
+        # Inner pushed to outer's end: 06:00 + 7200s = 08:00
+        assert compacted[1].start_at == t0 + timedelta(seconds=7200)
+        # No overlap
+        assert compacted[0].end_at() <= compacted[1].start_at
 
     def test_grid_misalignment_raises(self):
         """Construct a ProgramBlockOutput with non-grid-aligned start_at.
@@ -311,6 +359,51 @@ class TestInvBleedNoGap001:
         )
         with pytest.raises(CompileError, match="not UTC"):
             _validate_grid_alignment([block], GRID_MINUTES)
+
+    def test_three_marathon_cascading_bleed(self):
+        """Three consecutive movie_marathon blocks with allow_bleed: true.
+        Cascading bleed across all three boundaries MUST compile successfully
+        (no CompileError), producing contiguous grid-aligned output."""
+        resolver = _make_marathon_resolver()
+        dsl = _three_marathon_dsl()
+
+        # Must not raise CompileError
+        blocks = _compile(dsl, resolver)
+
+        assert len(blocks) >= 4, f"Expected at least 4 blocks, got {len(blocks)}"
+
+        # All blocks contiguous — no gaps, no overlaps
+        for i in range(len(blocks) - 1):
+            end_i = datetime.fromisoformat(blocks[i]["start_at"]) + timedelta(
+                seconds=blocks[i]["slot_duration_sec"]
+            )
+            start_next = datetime.fromisoformat(blocks[i + 1]["start_at"])
+            assert end_i == start_next, (
+                f"Gap or overlap between block {i} (ends {end_i.isoformat()}) "
+                f"and block {i+1} (starts {start_next.isoformat()})"
+            )
+
+        # All blocks grid-aligned
+        for b in blocks:
+            start_dt = datetime.fromisoformat(b["start_at"])
+            start_epoch = int(start_dt.timestamp())
+            assert start_epoch % SLOT_SEC == 0, (
+                f"Block '{b['title']}' start_at={b['start_at']} not grid-aligned"
+            )
+
+        # Blocks span the full range: first starts at 06:00, last ends past 06:00 next day
+        first_start = datetime.fromisoformat(blocks[0]["start_at"])
+        last_end = datetime.fromisoformat(blocks[-1]["start_at"]) + timedelta(
+            seconds=blocks[-1]["slot_duration_sec"]
+        )
+        day_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
+        next_day_start = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
+        assert first_start == day_start, (
+            f"First block starts at {first_start.isoformat()}, expected {day_start.isoformat()}"
+        )
+        assert last_end >= next_day_start, (
+            f"Last block ends at {last_end.isoformat()}, expected >= {next_day_start.isoformat()}"
+        )
 
     def test_block_spanning_broadcast_day_not_split(self):
         """One block 05:00-07:00 UTC, broadcast day boundary at 06:00.
