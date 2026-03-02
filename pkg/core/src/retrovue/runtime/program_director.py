@@ -1038,7 +1038,7 @@ class ProgramDirector:
             )
             return manager
 
-    _GC_REFREEZE_INTERVAL_S = 60.0
+    _GC_REFREEZE_INTERVAL_S = 15.0
 
     def _health_check_loop(self) -> None:
         """Run check_health() and tick() on each registered ChannelManager (embedded mode)."""
@@ -1074,7 +1074,8 @@ class ProgramDirector:
 
                 # Periodic re-freeze: runtime churn (DB sessions, ScheduledBlocks,
                 # ORM identities) accumulates in Gen 2 after the startup freeze.
-                # Re-freezing every 60s keeps Gen 2 traversal near zero.
+                # At 60s interval, Gen 2 grew large enough for 80-90ms collections.
+                # At 15s, Gen 2 stays small and collections stay sub-5ms.
                 now = time.monotonic()
                 if now - last_refreeze >= self._GC_REFREEZE_INTERVAL_S:
                     gc.collect()
