@@ -2424,6 +2424,18 @@ class ProgramDirector:
                 },
             )
 
+        @self.fastapi_app.post("/hls/{channel_id}/tune_out")
+        async def hls_tune_out(channel_id: str) -> Response:
+            """Immediate HLS viewer disconnect signal (called via sendBeacon on page unload)."""
+            import time as _time
+            with self._hls_activity_lock:
+                phantom = self._hls_phantom_sessions.get(channel_id)
+                if phantom:
+                    # Set last activity to epoch so the drain thread sees immediate timeout
+                    self._hls_last_activity[channel_id] = 0
+                    self._logger.info("[HLS %s] tune_out received, forcing phantom idle", channel_id)
+            return Response(status_code=204)
+
         @self.fastapi_app.get("/watch/{channel_id}", response_class=HTMLResponse)
         async def watch_channel(channel_id: str) -> HTMLResponse:
             """Serve the HLS web player page."""
