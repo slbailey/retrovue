@@ -43,6 +43,7 @@ class HLSSegment:
     name: str       # e.g. "seg_00042.ts"
     duration: float  # seconds
     data: bytes      # raw TS payload
+    discontinuity: bool = False  # INV-HLS-DISCONTINUITY-MARKER-001 Rule 3
 
 
 def _is_keyframe_packet(packet: bytes) -> bool:
@@ -137,6 +138,8 @@ class HLSSegmenter:
         # PCR-based timing
         self._last_pcr: Optional[float] = None
         self._seg_start_pcr: Optional[float] = None
+        # INV-HLS-DISCONTINUITY-MARKER-001: track PCR discontinuity for next segment
+        self._pending_discontinuity: bool = False
 
     def is_running(self) -> bool:
         return self._running
@@ -259,6 +262,8 @@ class HLSSegmenter:
                     self.channel_id, dur,
                 )
                 self._seg_start_pcr = self._last_pcr
+                # INV-HLS-DISCONTINUITY-MARKER-001 Rule 1: mark segment discontinuous
+                self._pending_discontinuity = True
                 # Fall through to wall-clock
             else:
                 return dur
@@ -276,7 +281,12 @@ class HLSSegmenter:
         # increment media_sequence to track the first segment's sequence number
         if len(self._segments) == self._segments.maxlen:
             self._media_sequence += 1
-        self._segments.append(HLSSegment(name=seg_name, duration=duration, data=seg_data))
+        # INV-HLS-DISCONTINUITY-MARKER-001 Rule 1: carry pending discontinuity flag
+        self._segments.append(HLSSegment(
+            name=seg_name, duration=duration, data=seg_data,
+            discontinuity=self._pending_discontinuity,
+        ))
+        self._pending_discontinuity = False
         self._seg_index += 1
 
         if not self._playlist_ready.is_set():
@@ -303,6 +313,9 @@ class HLSSegmenter:
             f"#EXT-X-MEDIA-SEQUENCE:{self._media_sequence}",
         ]
         for seg in self._segments:
+            # INV-HLS-DISCONTINUITY-MARKER-001 Rule 2: emit discontinuity tag
+            if seg.discontinuity:
+                lines.append("#EXT-X-DISCONTINUITY")
             lines.append(f"#EXTINF:{seg.duration:.3f},")
             lines.append(seg.name)
         return "\n".join(lines) + "\n"
