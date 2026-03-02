@@ -29,7 +29,7 @@ from retrovue.runtime.asset_resolver import AssetMetadata, AssetResolver
 # Constants
 # ---------------------------------------------------------------------------
 
-COMPILER_VERSION = "2.0.0"
+COMPILER_VERSION = "2.1.0"
 BROADCAST_DAY_START_HOUR = 6  # 06:00 local
 NETWORK_GRID_MINUTES = 30
 PREMIUM_GRID_MINUTES = 15
@@ -568,6 +568,10 @@ def _compile_movie_marathon(
     current_time = _parse_time(start_str, broadcast_day, tz_name)
     end_time = _parse_time(end_str, broadcast_day, tz_name)
 
+    # If end <= start, it means overnight wrap (e.g. 22:00 -> 06:00)
+    if end_time <= current_time:
+        end_time = end_time + timedelta(hours=24)
+
     # Support both "pool"/"pools"/"collections"
     collections = ms.get("pools", ms.get("collections", []))
     if not collections:
@@ -1042,14 +1046,7 @@ def compile_schedule(
     compacted: list[ProgramBlockOutput] = []
     for block in all_blocks:
         if compacted and compacted[-1].end_at() > block.start_at:
-            if block.end_at() <= compacted[-1].end_at():
-                raise CompileError(
-                    f"Illegal overlap: block '{block.title}' ({block.start_at.isoformat()}"
-                    f"–{block.end_at().isoformat()}) is fully enclosed within "
-                    f"'{compacted[-1].title}' ({compacted[-1].start_at.isoformat()}"
-                    f"–{compacted[-1].end_at().isoformat()})"
-                )
-            # Partial overlap from bleed: push forward to previous block's grid-aligned end
+            # Both partial and full overlaps get the same treatment: push forward
             new_start = compacted[-1].end_at()
             block = replace(block, start_at=new_start)
         compacted.append(block)

@@ -22,14 +22,14 @@ The schedule compiler MUST emit a strictly contiguous, non-overlapping, grid-ali
 ## Observability
 
 - A validation pass MUST run before and after compaction asserting grid alignment.
-- Fully enclosed blocks (`block.end_at() <= prev.end_at()`) MUST raise `CompileError`.
+- Fully enclosed blocks (`block.end_at() <= prev.end_at()`) MUST be resolved by push-forward — the enclosed block's start is moved to the previous block's end, identical to partial overlap handling.
 - Gaps between consecutive blocks MUST raise `CompileError`.
 - Non-UTC or naive `start_at` MUST raise `CompileError`.
 - Blocks not covering `[range_start, range_end)` MUST raise `CompileError`.
 
 ## Deterministic Testability
 
-Construct two consecutive `movie_marathon` blocks with `allow_bleed: true` where marathon 1 bleeds past its boundary. Verify: (1) no gaps between blocks, (2) marathon 2's first block starts at marathon 1's last block end, (3) all blocks are grid-aligned, (4) fully enclosed overlaps raise, (5) gaps raise, (6) non-UTC timestamps raise, (7) blocks spanning broadcast-day boundaries are not split.
+Construct two consecutive `movie_marathon` blocks with `allow_bleed: true` where marathon 1 bleeds past its boundary. Verify: (1) no gaps between blocks, (2) marathon 2's first block starts at marathon 1's last block end, (3) all blocks are grid-aligned, (4) fully enclosed overlaps are resolved by push-forward, (5) gaps raise, (6) non-UTC timestamps raise, (7) blocks spanning broadcast-day boundaries are not split.
 
 ## Failure Semantics
 

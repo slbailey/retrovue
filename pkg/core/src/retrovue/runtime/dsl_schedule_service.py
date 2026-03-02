@@ -747,8 +747,13 @@ class DslScheduleService:
         return count
 
     def _get_cached_schedule(self, channel_id: str, broadcast_day: str) -> dict | None:
-        """Check DB for a locked compiled schedule."""
+        """Check DB for a locked compiled schedule.
+
+        Invalidates stale rows compiled by an older COMPILER_VERSION —
+        returns None (cache miss) so the caller recompiles and overwrites.
+        """
         from retrovue.domain.entities import CompiledProgramLog
+        from retrovue.runtime.schedule_compiler import COMPILER_VERSION
         try:
             with session() as db:
                 row = db.query(CompiledProgramLog).filter(
@@ -757,6 +762,13 @@ class DslScheduleService:
                     CompiledProgramLog.locked == True,
                 ).first()
                 if row:
+                    cached_version = row.compiled_json.get("source", {}).get("compiler_version")
+                    if cached_version != COMPILER_VERSION:
+                        logger.info(
+                            "Invalidating stale cache for %s/%s: compiler %s != %s",
+                            channel_id, broadcast_day, cached_version, COMPILER_VERSION,
+                        )
+                        return None
                     return row.compiled_json
         except Exception as e:
             logger.warning("Failed to check compiled_program_log cache: %s", e)
