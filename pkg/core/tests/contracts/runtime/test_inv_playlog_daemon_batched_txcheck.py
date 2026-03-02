@@ -7,12 +7,19 @@ Rules:
 1. _extend_to_target() MUST check TransmissionLog existence for
    candidate blocks using a single batched query per scan-day —
    not one query per block.
-2. _extend_to_target() MUST yield the GIL (e.g. time.sleep(0.001))
-   after each block fill.
+2. _extend_to_target() MUST yield the GIL (time.sleep(>=0.010))
+   after each block fill. 1ms yields are insufficient; 10ms MUST
+   be the minimum.
 3. A _batch_block_exists_in_txlog(block_ids) method MUST exist and
    MUST return set[str].
+4. The wait between consecutive _run_loop() evaluations MUST include
+   a random component with a minimum bound of 1 second and a maximum
+   of eval_interval_s * 0.25.
 """
 
+import ast
+import inspect
+import textwrap
 import time
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -157,3 +164,139 @@ class TestRule2GilYield:
         # Each sleep must be > 0 (meaningful yield)
         for s in sleep_calls:
             assert s > 0, f"time.sleep({s}) is not a meaningful GIL yield"
+
+    def test_yield_duration_sufficient(self):
+        """Rule 2: GIL yield in _extend_to_target() MUST be >= 10ms.
+
+        AST scan of _extend_to_target() to verify the time.sleep()
+        argument meets the minimum. A 1ms yield (0.001) is insufficient
+        to prevent upstream reader starvation when filling many blocks;
+        10ms (0.010) is the minimum.
+        """
+        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+
+        source = textwrap.dedent(inspect.getsource(PlaylogHorizonDaemon._extend_to_target))
+        tree = ast.parse(source)
+
+        # Find all time.sleep(...) calls and extract the constant argument
+        sleep_args = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "sleep":
+                if node.args and isinstance(node.args[0], ast.Constant):
+                    sleep_args.append(node.args[0].value)
+
+        assert sleep_args, (
+            "INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 2: "
+            "no time.sleep() calls found in _extend_to_target()"
+        )
+
+        MIN_YIELD_S = 0.010  # 10ms minimum
+        for val in sleep_args:
+            assert val >= MIN_YIELD_S, (
+                f"INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 2: "
+                f"time.sleep({val}) is insufficient. "
+                f"Minimum yield MUST be >= {MIN_YIELD_S}s (10ms) "
+                f"to prevent upstream reader starvation."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Rule 4: Evaluation jitter prevents thundering herd
+# ---------------------------------------------------------------------------
+
+class TestRule4EvaluationJitter:
+    """Rule 4: _run_loop() wait MUST include a random jitter component."""
+
+    def test_run_loop_uses_random_jitter(self):
+        """AST structural: _run_loop() MUST contain a random.uniform call.
+
+        Fails before fix because no `random` import exists in the module.
+        """
+        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+
+        source = textwrap.dedent(inspect.getsource(PlaylogHorizonDaemon._run_loop))
+        tree = ast.parse(source)
+
+        # Look for random.uniform(...) call
+        found_random_uniform = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "uniform"
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "random"
+            ):
+                found_random_uniform = True
+                break
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "uniform"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "random"
+            ):
+                found_random_uniform = True
+                break
+
+        assert found_random_uniform, (
+            "INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 4: "
+            "_run_loop() MUST use random.uniform() for evaluation jitter. "
+            "No random.uniform call found in _run_loop() source."
+        )
+
+    def test_jitter_varies_across_cycles(self):
+        """Behavioral: _run_loop() wait timeouts MUST vary across cycles.
+
+        Runs _run_loop() for 3 evaluation cycles, captures the timeout
+        argument passed to Event.wait() on each cycle. Asserts:
+        - Timeouts are not all identical (jitter introduces variation).
+        - Each timeout exceeds eval_interval_s + 1.0 (minimum jitter bound).
+
+        Fails before fix because all timeouts are exactly eval_interval_s.
+        """
+        daemon = _make_daemon()
+        eval_interval = daemon._eval_interval_s
+        wait_timeouts = []
+        call_count = [0]
+
+        original_wait = daemon._stop_event.wait
+
+        def mock_wait(timeout=None):
+            wait_timeouts.append(timeout)
+            call_count[0] += 1
+            if call_count[0] >= 3:
+                daemon._stop_event.set()
+            return daemon._stop_event.is_set()
+
+        with (
+            patch.object(daemon, "evaluate_once"),
+            patch.object(daemon._stop_event, "wait", side_effect=mock_wait),
+            patch.object(daemon._stop_event, "is_set", side_effect=lambda: call_count[0] >= 3),
+        ):
+            daemon._run_loop()
+
+        assert len(wait_timeouts) >= 3, (
+            f"Expected at least 3 wait() calls, got {len(wait_timeouts)}"
+        )
+
+        # Each timeout MUST exceed eval_interval_s + 1.0 (minimum jitter)
+        for i, t in enumerate(wait_timeouts[:3]):
+            assert t >= eval_interval + 1.0, (
+                f"INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 4: "
+                f"wait timeout[{i}]={t} is below minimum "
+                f"(eval_interval_s={eval_interval} + 1.0 jitter minimum). "
+                f"_run_loop() MUST add random jitter to the wait."
+            )
+
+        # Timeouts MUST NOT all be identical (jitter introduces variation)
+        unique_timeouts = set(wait_timeouts[:3])
+        assert len(unique_timeouts) > 1, (
+            f"INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 4: "
+            f"all 3 wait timeouts are identical ({wait_timeouts[:3]}). "
+            f"_run_loop() MUST include a random jitter component."
+        )
