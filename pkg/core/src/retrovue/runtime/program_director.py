@@ -1252,12 +1252,12 @@ class ProgramDirector:
                 gen = info.get("generation", -1)
                 collected = info.get("collected", 0)
                 uncollectable = info.get("uncollectable", 0)
-                if gen >= 2 or duration_ms > 50:
+                if duration_ms > 50:
                     self._logger.warning(
                         "[GC] gen=%d duration_ms=%.2f collected=%d uncollectable=%d",
                         gen, duration_ms, collected, uncollectable,
                     )
-                elif duration_ms > 5:
+                elif gen >= 2 or duration_ms > 5:
                     self._logger.debug(
                         "[GC] gen=%d duration_ms=%.2f collected=%d uncollectable=%d",
                         gen, duration_ms, collected, uncollectable,
