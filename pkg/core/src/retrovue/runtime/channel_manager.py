@@ -453,6 +453,9 @@ class ChannelManager:
 
         # Linger: grace period before tearing down producer after last viewer leaves.
         self.LINGER_SECONDS: int = 20
+        # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery constants
+        self._RECOVERY_BASE_DELAY_S: float = 1.0
+        self._RECOVERY_MAX_ATTEMPTS: int = 5
         self._linger_handle: asyncio.TimerHandle | None = None
         self._linger_deadline: float | None = None
 
@@ -462,6 +465,10 @@ class ChannelManager:
         # BlockPlan only
         self._blockplan_mode: bool = True
         self._pending_fatal: BaseException | None = None
+
+        # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery state
+        self._recovery_attempts: int = 0
+        self._recovery_timer: threading.Timer | None = None
 
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
@@ -476,6 +483,11 @@ class ChannelManager:
             "[teardown] stopping producer for channel %s (no wait for EOF)", self.channel_id
         )
         self._cancel_linger()
+        # INV-CHANNEL-LIVENESS-RECOVERY-001: Cancel any pending recovery
+        self._recovery_attempts = 0
+        if self._recovery_timer is not None:
+            self._recovery_timer.cancel()
+            self._recovery_timer = None
         self._channel_state = "STOPPED"
         self._teardown_reason = None
         self._pending_fatal = None
@@ -874,6 +886,63 @@ class ChannelManager:
                 "[channel %s] LINGER_CANCELLED viewer_reconnected", self.channel_id
             )
 
+    def _on_producer_session_end(self, reason: str) -> None:
+        """INV-CHANNEL-LIVENESS-RECOVERY-001: Handle producer failure.
+        ChannelManager owns the liveness recovery decision."""
+        if reason not in ("stopped", "error"):
+            return  # Not recoverable (last_viewer_left, lookahead_exhausted)
+
+        viewer_count = self.runtime_state.viewer_count
+        if viewer_count == 0:
+            return  # No viewers to serve
+
+        self._recovery_attempts += 1
+        if self._recovery_attempts > self._RECOVERY_MAX_ATTEMPTS:
+            self._logger.error(
+                "INV-CHANNEL-LIVENESS-RECOVERY-001: Channel %s: "
+                "max recovery attempts (%d) exceeded; entering error state",
+                self.channel_id, self._RECOVERY_MAX_ATTEMPTS,
+            )
+            return
+
+        # Idempotent: cancel any existing recovery timer
+        if self._recovery_timer is not None:
+            self._recovery_timer.cancel()
+            self._recovery_timer = None
+
+        delay = min(
+            self._RECOVERY_BASE_DELAY_S * (2 ** (self._recovery_attempts - 1)),
+            30.0,
+        )
+        self._logger.warning(
+            "INV-CHANNEL-LIVENESS-RECOVERY-001: Channel %s: "
+            "scheduling recovery attempt %d/%d in %.1fs "
+            "(reason=%s, viewers=%d)",
+            self.channel_id, self._recovery_attempts,
+            self._RECOVERY_MAX_ATTEMPTS, delay, reason, viewer_count,
+        )
+
+        self._recovery_timer = threading.Timer(delay, self._attempt_recovery)
+        self._recovery_timer.daemon = True
+        self._recovery_timer.start()
+
+    def _attempt_recovery(self) -> None:
+        """INV-CHANNEL-LIVENESS-RECOVERY-001: Execute deferred recovery."""
+        self._recovery_timer = None  # Timer fired, clear reference
+
+        if self.runtime_state.viewer_count == 0:
+            self._recovery_attempts = 0
+            return  # Viewers left during backoff
+
+        try:
+            self._ensure_producer_running()
+        except Exception as e:
+            self._logger.error(
+                "INV-CHANNEL-LIVENESS-RECOVERY-001: Channel %s: "
+                "recovery attempt %d failed: %s",
+                self.channel_id, self._recovery_attempts, e,
+            )
+
     def _ensure_producer_running(self) -> None:
         """Enforce 'channel goes on-air' (BlockPlan path only)."""
         required_mode = self._get_current_mode()
@@ -942,6 +1011,9 @@ class ChannelManager:
         self.runtime_state.producer_status = "running"
         self.runtime_state.producer_started_at = station_time
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
+
+        # INV-CHANNEL-LIVENESS-RECOVERY-001: Reset recovery budget on successful start
+        self._recovery_attempts = 0
 
         # P12-CORE-010 INV-SESSION-CREATION-UNGATED-001: Session created for viewer.
         self._logger.debug(
@@ -1173,6 +1245,7 @@ class ChannelManager:
             schedule_service=self.schedule_service,
             clock=self.clock,
             evidence_endpoint=self._evidence_endpoint,
+            on_producer_failure=self._on_producer_session_end,
         )
 
     def _get_channel_config(self) -> ChannelConfig:
@@ -1538,12 +1611,14 @@ class BlockPlanProducer(Producer):
         schedule_service: ScheduleService | None = None,
         clock: MasterClock | None = None,
         evidence_endpoint: str = "",
+        on_producer_failure: "Callable[[str], None] | None" = None,
     ):
         super().__init__(channel_id, ProducerMode.NORMAL, configuration or {})
         self.channel_config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
         self.schedule_service = schedule_service
         self.clock = clock
         self._evidence_endpoint = evidence_endpoint
+        self._on_producer_failure = on_producer_failure
 
         # PlayoutSession instance (created on start, destroyed on stop)
         self._session: "PlayoutSession | None" = None
@@ -2480,6 +2555,10 @@ class BlockPlanProducer(Producer):
                 "Channel %s: Lookahead exhausted - no more blocks in schedule",
                 self.channel_id
             )
+
+        # INV-CHANNEL-LIVENESS-RECOVERY-001: Signal failure to ChannelManager
+        if self._on_producer_failure is not None:
+            self._on_producer_failure(reason)
 
     def play_content(self, content: ContentSegment) -> bool:
         """Not used in BlockPlan mode (blocks are fed instead)."""
