@@ -245,6 +245,11 @@ class Asset(Base):
     )
     provider_refs: Mapped[list[ProviderRef]] = relationship("ProviderRef", back_populates="asset")
 
+    # Tags (many-to-one normalized association — INV-ASSET-TAG-PERSISTENCE-001)
+    tags: Mapped[list[AssetTag]] = relationship(
+        "AssetTag", back_populates="asset", cascade="all, delete-orphan", passive_deletes=True
+    )
+
     # Metadata child tables (one-to-one, cascade delete via FK)
     editorial_meta: Mapped[AssetEditorial | None] = relationship(
         "AssetEditorial", uselist=False, back_populates="asset", cascade="all, delete-orphan"
@@ -364,6 +369,43 @@ class AssetSidecar(Base):
     )
 
     asset: Mapped[Asset] = relationship("Asset", back_populates="sidecar_meta")
+
+
+class AssetTag(Base):
+    """Normalized tag association for an asset.
+
+    Tags are persisted here — not in JSONB payloads — so they are queryable.
+    See: INV-ASSET-TAG-PERSISTENCE-001, AssetTaggingContract.md D-1/D-2.
+    """
+
+    __tablename__ = "asset_tags"
+
+    asset_uuid: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("assets.uuid", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    tag: Mapped[str] = mapped_column(String(255), primary_key=True, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        server_default="operator",
+        comment="Provenance: 'ingest', 'operator', or 'enricher'",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    asset: Mapped[Asset] = relationship("Asset", back_populates="tags")
+
+    __table_args__ = (
+        Index("ix_asset_tags_asset_uuid", "asset_uuid"),
+        Index("ix_asset_tags_tag", "tag"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AssetTag(asset_uuid={self.asset_uuid}, tag={self.tag!r}, source={self.source!r})>"
 
 
 # NOTE: EpisodeAsset table has been dropped
