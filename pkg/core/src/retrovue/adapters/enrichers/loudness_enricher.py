@@ -114,7 +114,7 @@ class LoudnessEnricher(BaseEnricher):
             self.ffmpeg_path,
             "-i", file_path,
             "-vn",             # skip video decode — ebur128 only needs audio
-            "-af", "ebur128",
+            "-af", "aformat=channel_layouts=stereo,ebur128",
             "-f", "null",
             "-",
         ]
