@@ -259,3 +259,20 @@ Ideas and desired improvements. Not yet committed to roadmaps or contracts.
 
 ---
 
+Distributed Playout Workers
+
+Introduce the ability to separate the Control Plane (scheduling, playlog generation, MasterClock, orchestration) from the Playout Execution Plane (ffmpeg producers).
+
+Allow multiple worker nodes to dynamically execute channel playout based on load and availability, while preserving these invariants:
+
+Control plane remains authoritative.
+
+Scheduling and playlog generation remain centralized.
+
+Workers are stateless and reconstruct playout from database + MasterClock.
+
+Channels can be reassigned without timeline drift.
+
+This phase should not alter current single-node behavior and must remain an additive evolution.
+
+---
