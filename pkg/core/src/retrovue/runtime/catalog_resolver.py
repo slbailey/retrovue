@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -156,8 +157,11 @@ class CatalogAssetResolver:
             if col.source:
                 col_source_map[str(col.uuid)] = col.source.name
 
+        # INV-CATALOG-REBUILD-GIL-YIELD-001: batch counter for periodic GIL yield
+        _gil_yield_batch = 500
+
         # Process each asset
-        for asset in assets:
+        for _asset_idx, asset in enumerate(assets):
             uuid_str = str(asset.uuid)
             editorial = editorials.get(uuid_str, {})
             chapter_secs = tuple(markers.get(uuid_str, []))
@@ -255,6 +259,13 @@ class CatalogAssetResolver:
                 title=asset_title,
                 description=description,
             ))
+
+            # INV-CATALOG-REBUILD-GIL-YIELD-001: yield GIL at batch
+            # boundaries so the upstream reader thread can cycle
+            # select→recv→put during large catalog rebuilds.
+            # 10ms minimum — matches playlog daemon yield floor.
+            if _asset_idx > 0 and _asset_idx % _gil_yield_batch == 0:
+                time.sleep(0.010)
 
         logger.debug(
             f"CatalogAssetResolver loaded: {len(self._assets)} assets, "
