@@ -111,7 +111,8 @@
   .channel-col .ch-name {
     height: var(--pvg-row-h);
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    justify-content: center;
     padding: 0 14px;
     font-family: 'Archivo Black', Impact, 'Arial Black', sans-serif;
     font-size: 1.05rem;
@@ -120,6 +121,16 @@
     text-transform: uppercase;
     letter-spacing: 2px;
     text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+  }
+  .ch-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ch-buttons {
+    display: flex;
+    gap: 4px;
+    margin-top: 3px;
   }
   .grid-scroll {
     flex: 1;
@@ -296,25 +307,49 @@
   .ch-name {
     position: relative;
   }
-  .ch-name .watch-btn {
+  .watch-btn {
     display: inline-block;
-    margin-left: 8px;
     font-family: 'Roboto Condensed', Arial, sans-serif;
     font-weight: 700;
-    font-size: 0.7rem;
-    background: var(--pvg-highlight);
+    font-size: 0.65rem;
     color: #fff;
-    padding: 3px 10px;
+    padding: 2px 8px;
     border-radius: 3px;
     cursor: pointer;
     text-decoration: none;
-    vertical-align: middle;
     letter-spacing: 1px;
     text-transform: uppercase;
     border: none;
   }
-  .ch-name .watch-btn:hover {
+  .watch-btn-hls {
+    background: var(--pvg-highlight);
+  }
+  .watch-btn-hls:hover {
     background: #ff6666;
+  }
+  .watch-btn-ts {
+    background: var(--pvg-cyan);
+  }
+  .watch-btn-ts:hover {
+    background: #26c6da;
+  }
+  .detail-status {
+    margin-top: 14px;
+    font-family: 'Roboto Condensed', Arial, sans-serif;
+    font-size: 0.95rem;
+  }
+  .detail-status .status-text {
+    color: rgba(255,255,255,0.45);
+    font-style: italic;
+  }
+  .detail-status .detail-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .detail-status .watch-btn {
+    font-size: 0.8rem;
+    padding: 5px 14px;
   }
   /* HLS Player Modal */
   .player-modal {
@@ -455,6 +490,7 @@
   <p id="detailTime"></p>
   <p id="detailDuration"></p>
   <p id="detailChannel"></p>
+  <div id="detailStatus" class="detail-status"></div>
   <p id="detailDesc" style="margin-top:14px; font-size:0.95rem; color:rgba(255,255,255,0.7); line-height:1.5;"></p>
 </div>
 
@@ -539,7 +575,12 @@ function renderGuide(data) {
   chIds.forEach(chId => {
     const div = document.createElement('div');
     div.className = 'ch-name';
-    div.innerHTML = channels[chId].name + ' <span class="watch-btn" onclick="openPlayer(\'' + chId + '\', \'' + channels[chId].name.replace(/'/g, "\\'") + '\')">▶ WATCH</span>';
+    const safeName = channels[chId].name.replace(/'/g, "\\'");
+    div.innerHTML = '<div class="ch-label">' + channels[chId].name + '</div>'
+      + '<div class="ch-buttons">'
+      + '<span class="watch-btn watch-btn-hls" onclick="openPlayer(\'' + chId + '\', \'' + safeName + '\')">▶ HLS</span>'
+      + '<span class="watch-btn watch-btn-ts" onclick="watchTs(\'' + chId + '\')">▶ TS</span>'
+      + '</div>';
     chNamesEl.appendChild(div);
   });
   const gridBody = document.getElementById('gridBody');
@@ -567,9 +608,11 @@ function renderGuide(data) {
         ? `S${String(entry.season).padStart(2,'0')}E${String(entry.episode).padStart(2,'0')}`
         : '';
       const descText = entry.description || '';
+      const durStr = entry.display_duration || '';
+      const metaParts = [epStr, durStr].filter(Boolean).join(' \u00b7 ');
       block.innerHTML = `
         <div class="title">${entry.title}</div>
-        <div class="meta">${epStr}${epStr ? ' · ' : ''}${entry.duration_minutes}min</div>
+        ${metaParts ? `<div class="meta">${metaParts}</div>` : ''}
         ${descText ? `<div class="desc">${descText}</div>` : ''}
       `;
       block.onclick = () => showDetail(entry);
@@ -608,8 +651,26 @@ function showDetail(entry) {
   const startFmt = new Date(entry.start_time).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZone:'America/New_York'});
   const endFmt = new Date(entry.end_time).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZone:'America/New_York'});
   document.getElementById('detailTime').textContent = `${startFmt} — ${endFmt}`;
-  document.getElementById('detailDuration').textContent = `Duration: ${entry.duration_minutes} min (${entry.slot_minutes} min slot)`;
+  document.getElementById('detailDuration').textContent = entry.display_duration
+    ? `Duration: ${entry.display_duration}`
+    : `Duration: ${entry.slot_minutes} min slot`;
   document.getElementById('detailChannel').textContent = `Channel: ${entry.channel_name}`;
+  // Temporal status
+  const now = new Date();
+  const start = new Date(entry.start_time);
+  const end = new Date(entry.end_time);
+  const statusEl = document.getElementById('detailStatus');
+  const safeName = entry.channel_name.replace(/'/g, "\\'");
+  if (now >= end) {
+    statusEl.innerHTML = '<span class="status-text">PROGRAM AIRED</span>';
+  } else if (now < start) {
+    statusEl.innerHTML = '<span class="status-text">PROGRAM HASN\'T AIRED YET</span>';
+  } else {
+    statusEl.innerHTML = '<div class="detail-buttons">'
+      + '<span class="watch-btn watch-btn-hls" onclick="openPlayer(\'' + entry.channel_id + '\', \'' + safeName + '\')">▶ WATCH HLS</span>'
+      + '<span class="watch-btn watch-btn-ts" onclick="watchTs(\'' + entry.channel_id + '\')">▶ WATCH TS</span>'
+      + '</div>';
+  }
   const epTitle = entry.episode_title ? `"${entry.episode_title}" — ` : '';
   document.getElementById('detailDesc').textContent = entry.description ? epTitle + entry.description : '';
   document.getElementById('overlay').classList.add('active');
@@ -644,6 +705,9 @@ setInterval(() => {
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 <script>
 let playerHls = null;
+function watchTs(channelId) {
+  window.location.href = '/channel/' + channelId + '.m3u';
+}
 function openPlayer(channelId, channelName) {
   document.getElementById('playerChName').textContent = channelName;
   document.getElementById('playerModal').classList.add('active');
