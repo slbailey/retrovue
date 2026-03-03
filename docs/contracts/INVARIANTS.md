@@ -173,6 +173,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-HLS-PHANTOM-CLEANUP-001 | [invariants/core/runtime/INV-HLS-PHANTOM-CLEANUP-001.md](invariants/core/runtime/INV-HLS-PHANTOM-CLEANUP-001.md) | LAW-LIVENESS |
 | INV-HLS-DISCONTINUITY-MARKER-001 | [invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md](invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md) | LAW-DECODABILITY, LAW-LIVENESS |
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | [invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md](invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md) | LAW-LIVENESS |
+| INV-DAEMON-SESSION-SCOPE-001 | [invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md](invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md) | LAW-LIVENESS |
 
 ---
 
@@ -194,6 +195,10 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-CADENCE-SEAM-ADVANCE-001 | [invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md](invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md) | Derived — parent: INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 |
 | INV-TIME-MODE-EQUIVALENCE-001 | [invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md](invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md) | Primary |
 | INV-VFR-DROP-GUARD-001 | [invariants/air/INV-VFR-DROP-GUARD-001.md](invariants/air/INV-VFR-DROP-GUARD-001.md) | Primary — derives from INV-FPS-RESAMPLE, LAW-LIVENESS |
+| INV-CADENCE-SOURCE-SYNC-001 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — cadence must reflect live source FPS at all output ticks |
+| INV-CADENCE-SOURCE-SYNC-002 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — producer transition must reinitialize cadence (all paths) |
+| INV-CADENCE-SOURCE-SYNC-003 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — segment swap must refresh cadence |
+| INV-CADENCE-SOURCE-SYNC-004 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — stale cadence causes observable speed error (always a defect) |
 
 ---
 
