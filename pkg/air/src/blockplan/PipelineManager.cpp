@@ -2253,6 +2253,9 @@ void PipelineManager::Run() {
               tp->GetInputRationalFps(), ctx_->fps,
               &ctx_->stop_requested);
         }
+        // INV-CADENCE-SOURCE-SYNC-002: Reinitialize frame selection cadence
+        // from the new live block's source FPS after seamless B→A rotation.
+        InitFrameSelectionCadenceForLiveBlock();
       } else {
         // B was never prerolled — check for late preview or sync fallback.
         // This mirrors the old fence fallback paths.
@@ -2370,6 +2373,9 @@ void PipelineManager::Run() {
               << " fence_frame=" << session_frame_index
               << " outgoing=" << (outgoing_summary ? outgoing_summary->block_id : "none");
           Logger::Info(oss.str()); }
+        // INV-CADENCE-SOURCE-SYNC-002: Reset cadence on PADDED_GAP entry.
+        // No decoder → sanitized to output_fps → DISABLED.
+        InitFrameSelectionCadenceForLiveBlock();
       }
 
       // INV-EVIDENCE-ORDER-001: BLOCK_FENCE(A) must fire BEFORE BLOCK_START(B).
