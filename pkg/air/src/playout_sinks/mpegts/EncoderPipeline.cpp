@@ -6,6 +6,7 @@
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/decode/FFmpegInitGuard.hpp"
 
 #include <cassert>
 #include <cerrno>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <thread>
 
@@ -335,7 +337,11 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     audio_stream_->time_base = audio_codec_ctx_->time_base;
     
     // Open audio codec (this is where libavcodec will populate extradata for AAC)
-    ret = avcodec_open2(audio_codec_ctx_, audio_codec, nullptr);
+    // INV-FFMPEG-CODEC-INIT-SERIALIZATION-001: serialize avcodec_open2
+    {
+      std::lock_guard<std::mutex> init_guard(retrovue::decode::ffmpeg_init_mutex());
+      ret = avcodec_open2(audio_codec_ctx_, audio_codec, nullptr);
+    }
     if (ret < 0) {
       char errbuf[AV_ERROR_MAX_STRING_SIZE];
       av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
@@ -458,7 +464,11 @@ skip_audio:
           "bframes=0:nal-hrd=vbr:vbv-init=0.9",
           0);
     }
-    ret = avcodec_open2(codec_ctx_, codec, &opts);
+    // INV-FFMPEG-CODEC-INIT-SERIALIZATION-001: serialize avcodec_open2
+    {
+      std::lock_guard<std::mutex> init_guard(retrovue::decode::ffmpeg_init_mutex());
+      ret = avcodec_open2(codec_ctx_, codec, &opts);
+    }
     av_dict_free(&opts);
     if (ret < 0) {
       char errbuf[AV_ERROR_MAX_STRING_SIZE];
@@ -893,7 +903,11 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     }
 
     // Open codec with options
-    ret = avcodec_open2(codec_ctx_, codec, &opts);
+    // INV-FFMPEG-CODEC-INIT-SERIALIZATION-001: serialize avcodec_open2
+    {
+      std::lock_guard<std::mutex> init_guard(retrovue::decode::ffmpeg_init_mutex());
+      ret = avcodec_open2(codec_ctx_, codec, &opts);
+    }
     if (ret < 0) {
       char errbuf[AV_ERROR_MAX_STRING_SIZE];
       av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);

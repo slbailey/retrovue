@@ -7,6 +7,9 @@
 
 #include <chrono>
 #include <iostream>
+#include <mutex>
+
+#include "retrovue/decode/FFmpegInitGuard.hpp"
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
 extern "C" {
@@ -19,41 +22,48 @@ namespace retrovue::blockplan::realtime {
 bool RealAssetSource::ProbeAsset(const std::string& uri) {
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   AVFormatContext* fmt_ctx = nullptr;
-
-  auto open_start = std::chrono::steady_clock::now();
-  if (avformat_open_input(&fmt_ctx, uri.c_str(), nullptr, nullptr) < 0) {
-    std::cerr << "[RealAssetSource] Failed to open: " << uri << std::endl;
-    return false;
-  }
-  auto open_end = std::chrono::steady_clock::now();
-  auto open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      open_end - open_start).count();
-#ifdef RETROVUE_DEBUG
-  std::cout << "[METRIC] asset_open_input_ms=" << open_ms
-            << " uri=" << uri << std::endl;
-#endif
-
-  auto stream_info_start = std::chrono::steady_clock::now();
-  if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-    avformat_close_input(&fmt_ctx);
-    std::cerr << "[RealAssetSource] Failed to find stream info: " << uri << std::endl;
-    return false;
-  }
-  auto stream_info_end = std::chrono::steady_clock::now();
-  auto stream_info_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      stream_info_end - stream_info_start).count();
-#ifdef RETROVUE_DEBUG
-  std::cout << "[METRIC] asset_stream_info_ms=" << stream_info_ms
-            << " uri=" << uri << std::endl;
-#endif
-
-  // Get duration in milliseconds
   int64_t duration_ms = 0;
-  if (fmt_ctx->duration != AV_NOPTS_VALUE) {
-    duration_ms = fmt_ctx->duration / 1000;  // AV_TIME_BASE is microseconds
-  }
 
-  avformat_close_input(&fmt_ctx);
+  // INV-FFMPEG-CODEC-INIT-SERIALIZATION-001: Serialize avformat_open_input +
+  // avformat_find_stream_info (the latter internally calls avcodec_open2 for
+  // codec probing).  Guard released before caching results.
+  {
+    std::lock_guard<std::mutex> init_guard(retrovue::decode::ffmpeg_init_mutex());
+
+    auto open_start = std::chrono::steady_clock::now();
+    if (avformat_open_input(&fmt_ctx, uri.c_str(), nullptr, nullptr) < 0) {
+      std::cerr << "[RealAssetSource] Failed to open: " << uri << std::endl;
+      return false;
+    }
+    auto open_end = std::chrono::steady_clock::now();
+    auto open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        open_end - open_start).count();
+#ifdef RETROVUE_DEBUG
+    std::cout << "[METRIC] asset_open_input_ms=" << open_ms
+              << " uri=" << uri << std::endl;
+#endif
+
+    auto stream_info_start = std::chrono::steady_clock::now();
+    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+      avformat_close_input(&fmt_ctx);
+      std::cerr << "[RealAssetSource] Failed to find stream info: " << uri << std::endl;
+      return false;
+    }
+    auto stream_info_end = std::chrono::steady_clock::now();
+    auto stream_info_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        stream_info_end - stream_info_start).count();
+#ifdef RETROVUE_DEBUG
+    std::cout << "[METRIC] asset_stream_info_ms=" << stream_info_ms
+              << " uri=" << uri << std::endl;
+#endif
+
+    // Get duration in milliseconds
+    if (fmt_ctx->duration != AV_NOPTS_VALUE) {
+      duration_ms = fmt_ctx->duration / 1000;  // AV_TIME_BASE is microseconds
+    }
+
+    avformat_close_input(&fmt_ctx);
+  }  // init_guard released
 
   AssetInfo info;
   info.uri = uri;

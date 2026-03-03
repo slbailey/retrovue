@@ -175,6 +175,17 @@ Decoded media time governs **intra-block** segment transitions and CT tracking. 
 | **INV-FPS-MAPPING** | Source→output frame authority: input≠output MUST use OFF (exact rational equality), DROP (integer step), or CADENCE (rational accumulator). 60→30/120→30 DROP; 23.976→30 CADENCE; 30→30 OFF. No float/epsilon, no default OFF. Contract: [INV-FPS-MAPPING.md](../../docs/contracts/INVARIANTS.md#inv-fps-mapping-sourceoutput-frame-authority). | TickProducer, VideoLookaheadBuffer | Semantic |
 | **INV-TICK-AUTHORITY-001** | Returned video PTS delta and video.metadata.duration MUST equal exactly one output tick (OFF/DROP/CADENCE). Input frame duration must never leak into output. Contract: [INV-FPS-MAPPING.md](../../docs/contracts/INVARIANTS.md#inv-fps-mapping-sourceoutput-frame-authority). | TickProducer | Semantic |
 
+### Cadence Source Sync Invariants
+
+Frame selection cadence must reflect the live source FPS at all times. See [CadenceSourceSyncContract.md](semantics/CadenceSourceSyncContract.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-CADENCE-SOURCE-SYNC-001** | Cadence parameters (increment, threshold, enabled) MUST correspond to current live source FPS at every output tick | `PipelineManager` | Semantic |
+| **INV-CADENCE-SOURCE-SYNC-002** | Every producer transition (session start, all fence rotation paths, padded-gap-exit) MUST reinitialize cadence from new live source FPS before next tick | `PipelineManager` | Semantic |
+| **INV-CADENCE-SOURCE-SYNC-003** | Every intra-block segment swap MUST refresh cadence from new segment's source FPS before next tick | `PipelineManager` | Semantic |
+| **INV-CADENCE-SOURCE-SYNC-004** | Stale cadence causes observable speed error (source_fps / output_fps relative speed); always a defect | `PipelineManager` | Semantic |
+
 ### Block Boundary Authorities (Canonical Model)
 
 Block transitions are governed by **three complementary authorities**, each owning a distinct concern. No authority substitutes for another. Together they define the complete block transition model.
@@ -274,11 +285,22 @@ These invariants ensure that tick progression remains wall-clock anchored so tha
 
 ---
 
+### FFmpeg Codec Init Serialization
+
+Process-wide serialization of FFmpeg codec initialization to prevent data races in FFmpeg's internal global state (FFT codelet tables, codec-specific static tables). See [FFmpegCodecInitSerializationContract.md](semantics/FFmpegCodecInitSerializationContract.md).
+
+| ID | One-line | Owner | Type |
+|----|----------|-------|------|
+| **INV-FFMPEG-CODEC-INIT-SERIALIZATION-001** | All `avformat_open_input` / `avformat_find_stream_info` / `avcodec_open2` calls MUST be serialized via process-wide mutex; steady-state decode/encode on separate contexts proceeds without serialization | `RealAssetSource`, `FFmpegDecoder`, `EncoderPipeline`, `FileProducer` | Coordination |
+| **INV-FFMPEG-GLOBAL-INIT-001** | `avformat_network_init()` MUST be called in `main()` before any threads spawn or FFmpeg API is used | `main.cpp` | Coordination |
+
+---
+
 ## Layer 2 – Coordination / Concurrency Invariants
 
 Write barriers, shadow decode, switch arming, backpressure symmetry, readiness, no-deadlock rules, ordering and sequencing that coordinate components.
 
-**Source:** [Phase9-OutputBootstrap.md](../archive/phases/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](../../docs/contracts/INVARIANTS.md#inv-p10-pipeline-flow-control-phase-10-flow-control-invariants) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md) · [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md). *(Phase8 refs retired: [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).)*
+**Source:** [Phase9-OutputBootstrap.md](../archive/phases/Phase9-OutputBootstrap.md) · [INV-P10-PIPELINE-FLOW-CONTROL.md](../../docs/contracts/INVARIANTS.md#inv-p10-pipeline-flow-control-phase-10-flow-control-invariants) · [SwitchWatcherStopTargetContract.md](coordination/SwitchWatcherStopTargetContract.md) · [ProgramBlockAuthorityContract.md](coordination/ProgramBlockAuthorityContract.md) · [FFmpegCodecInitSerializationContract.md](semantics/FFmpegCodecInitSerializationContract.md). *(Phase8 refs retired: [Phase8DecommissionContract](../../../../docs/contracts/architecture/Phase8DecommissionContract.md).)*
 
 | ID | One-line | Type |
 |----|----------|------|
