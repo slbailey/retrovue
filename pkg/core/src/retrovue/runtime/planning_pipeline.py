@@ -1,8 +1,8 @@
 """Planning Pipeline
 
 Headless, artifact-producing pipeline that transforms editorial intent into
-execution-ready transmission logs. Directive → SchedulePlan → ScheduleDay →
-EPG → SegmentedBlocks → FilledBlocks → TransmissionLog (optionally locked).
+execution-ready playlists. Directive → SchedulePlan → ScheduleDay →
+EPG → SegmentedBlocks → FilledBlocks → Playlist (optionally locked).
 
 Testable with no database, no filesystem, no AIR.
 
@@ -250,12 +250,12 @@ class FilledBlock:
 
 
 # =============================================================================
-# Transmission Log (wall-clock aligned)
+# Playlist (wall-clock aligned)
 # =============================================================================
 
 
 @dataclass
-class TransmissionLogEntry:
+class PlaylistEntry:
     """One block's execution-ready segments (wall-clock aligned)."""
     block_id: str
     block_index: int
@@ -265,11 +265,11 @@ class TransmissionLogEntry:
 
 
 @dataclass
-class TransmissionLog:
+class Playlist:
     """Full day of entries. is_locked marks execution eligibility."""
     channel_id: str
     broadcast_date: date
-    entries: list[TransmissionLogEntry]
+    entries: list[PlaylistEntry]
     is_locked: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -743,11 +743,11 @@ def _fill_one_break(
 
 
 # =============================================================================
-# Assemble transmission log Playlist → Transmission Log
+# Assemble Playlist (Filled Blocks → Playlist)
 # =============================================================================
 
 
-def assemble_transmission_log(
+def assemble_playlist(
     channel_id: str,
     broadcast_date: date,
     filled_blocks: list[FilledBlock],
@@ -755,14 +755,14 @@ def assemble_transmission_log(
     programming_day_start_hour: int,
     grid_block_minutes: int,
     generation_time: datetime,
-) -> TransmissionLog:
+) -> Playlist:
     """Assemble execution artifact with wall-clock alignment.
 
     Block-relative offsets from Stages 3-4 are translated to absolute
     epoch millisecond times. Interleaves content segments and break items
     into a flat, ordered segment list per block.
     """
-    entries: list[TransmissionLogEntry] = []
+    entries: list[PlaylistEntry] = []
     rd_date = broadcast_date
 
     for block_idx, fb in enumerate(filled_blocks):
@@ -781,7 +781,7 @@ def assemble_transmission_log(
         for seg in flat_segments:
             seg["event_id"] = f"{block_id}-S{seg['segment_index']:04d}"
 
-        entries.append(TransmissionLogEntry(
+        entries.append(PlaylistEntry(
             block_id=block_id,
             block_index=block_idx,
             start_utc_ms=block_start_ms,
@@ -789,7 +789,7 @@ def assemble_transmission_log(
             segments=flat_segments,
         ))
 
-    return TransmissionLog(
+    return Playlist(
         channel_id=channel_id,
         broadcast_date=broadcast_date,
         entries=entries,
@@ -875,8 +875,8 @@ def _interleave_segments(
     return flat
 
 
-def to_block_plan(entry: TransmissionLogEntry, channel_id_int: int) -> dict[str, Any]:
-    """Convert a TransmissionLogEntry to a BlockPlan-compatible dict.
+def to_block_plan(entry: PlaylistEntry, channel_id_int: int) -> dict[str, Any]:
+    """Convert a PlaylistEntry to a BlockPlan-compatible dict.
 
     Produces the format consumed by playout_session.BlockPlan.from_dict().
     Ensures feed-time segment/asset identity invariants.
@@ -917,29 +917,29 @@ def to_block_plan(entry: TransmissionLogEntry, channel_id_int: int) -> dict[str,
 
 
 # =============================================================================
-# Transmission Log → Horizon-Locked Transmission Log
+# Playlist → Horizon-Locked Playlist
 # =============================================================================
 
 
-def lock_transmission_log(log: TransmissionLog, lock_time: datetime) -> TransmissionLog:
-    """Mark the Transmission Log as execution-eligible and immutable (lock only, no write).
+def lock_playlist(log: Playlist, lock_time: datetime) -> Playlist:
+    """Mark the Playlist as execution-eligible and immutable (lock only, no write).
 
-    Validates seam invariants. Returns a locked TransmissionLog with deterministic
-    transmission_log_id. Does NOT write artifacts; use TransmissionLogArtifactWriter
+    Validates seam invariants. Returns a locked Playlist with deterministic
+    playlist_id. Does NOT write artifacts; use PlaylistArtifactWriter
     after this for artifact write (e.g. plan-day CLI).
     """
-    from retrovue.runtime.transmission_log_validator import (
-        TransmissionLogSeamError,
-        validate_transmission_log_seams,
+    from retrovue.runtime.playlist_validator import (
+        PlaylistSeamError,
+        validate_playlist_seams,
     )
 
     grid_min = log.metadata.get("grid_block_minutes")
     if grid_min is None:
-        raise TransmissionLogSeamError(
-            "lock_transmission_log: grid_block_minutes missing from log.metadata; "
+        raise PlaylistSeamError(
+            "lock_playlist: grid_block_minutes missing from log.metadata; "
             "cannot validate seam invariants"
         )
-    validate_transmission_log_seams(log, int(grid_min))
+    validate_playlist_seams(log, int(grid_min))
 
     new_metadata = dict(log.metadata)
     new_metadata["locked_at"] = lock_time.isoformat()
@@ -947,7 +947,7 @@ def lock_transmission_log(log: TransmissionLog, lock_time: datetime) -> Transmis
     seed = f"{log.channel_id}:{log.broadcast_date.isoformat()}:{lock_time.isoformat()}"
     new_metadata["transmission_log_id"] = hashlib.sha256(seed.encode()).hexdigest()[:32]
 
-    return TransmissionLog(
+    return Playlist(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
         entries=log.entries,
@@ -957,29 +957,29 @@ def lock_transmission_log(log: TransmissionLog, lock_time: datetime) -> Transmis
 
 
 def lock_for_execution(
-    log: TransmissionLog,
+    log: Playlist,
     lock_time: datetime,
     timezone_display: str = "UTC",
     artifact_base_path: Path | None = None,
-) -> TransmissionLog:
-    """Mark the Transmission Log as execution-eligible and immutable.
+) -> Playlist:
+    """Mark the Playlist as execution-eligible and immutable.
 
     This is a lifecycle state transition, not a data transform.
     Validates seam invariants before marking execution-eligible.
-    After lock, writes transmission log artifacts (.tlog + .tlog.jsonl).
+    After lock, writes playlist artifacts (.tlog + .tlog.jsonl).
     """
-    locked = lock_transmission_log(log, lock_time)
+    locked = lock_playlist(log, lock_time)
 
-    from retrovue.planning.transmission_log_artifact_writer import (
-        TransmissionLogArtifactWriter,
+    from retrovue.planning.playlist_artifact_writer import (
+        PlaylistArtifactWriter,
     )
 
     base_path = artifact_base_path or Path("/opt/retrovue/data/logs/transmission")
-    writer = TransmissionLogArtifactWriter(base_path=base_path)
+    writer = PlaylistArtifactWriter(base_path=base_path)
     writer.write(
         channel_id=locked.channel_id,
         broadcast_date=locked.broadcast_date,
-        transmission_log=locked,
+        playlist=locked,
         timezone_display=timezone_display,
         generated_utc=lock_time,
     )
@@ -1000,9 +1000,9 @@ def run_planning_pipeline(
     break_profile: SyntheticBreakProfile | None = None,
     break_fill_policy: BreakFillPolicy | None = None,
     artifact_base_path: Path | None = None,
-) -> TransmissionLog:
+) -> Playlist:
     """Execute pipeline: Directive → SchedulePlan → ScheduleDay → EPG →
-    SegmentedBlocks → FilledBlocks → TransmissionLog (optionally locked).
+    SegmentedBlocks → FilledBlocks → Playlist (optionally locked).
     """
     directive = run_request.directive
 
@@ -1023,7 +1023,7 @@ def run_planning_pipeline(
     filled = fill_breaks(
         segmented, asset_library, policy=break_fill_policy
     )
-    log = assemble_transmission_log(
+    log = assemble_playlist(
         channel_id=directive.channel_id,
         broadcast_date=run_request.broadcast_date,
         filled_blocks=filled,

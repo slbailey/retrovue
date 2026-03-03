@@ -1,10 +1,10 @@
 """Contract tests for INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001.
 
-PlaylogHorizonDaemon MUST batch TransmissionLog existence checks and
+PlaylistBuilderDaemon MUST batch PlaylistEvent existence checks and
 yield GIL between block fills.
 
 Rules:
-1. _extend_to_target() MUST check TransmissionLog existence for
+1. _extend_to_target() MUST check PlaylistEvent existence for
    candidate blocks using a single batched query per scan-day —
    not one query per block.
 2. _extend_to_target() MUST yield the GIL (time.sleep(>=0.010))
@@ -32,8 +32,8 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _make_daemon():
-    from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
-    return PlaylogHorizonDaemon(
+    from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+    return PlaylistBuilderDaemon(
         channel_id="test-ch",
         min_hours=2,
         programming_day_start_hour=6,
@@ -74,7 +74,7 @@ class TestRule3BatchMethodExists:
     def test_method_exists(self):
         daemon = _make_daemon()
         assert hasattr(daemon, "_batch_block_exists_in_txlog"), (
-            "_batch_block_exists_in_txlog method MUST exist on PlaylogHorizonDaemon"
+            "_batch_block_exists_in_txlog method MUST exist on PlaylistBuilderDaemon"
         )
         assert callable(daemon._batch_block_exists_in_txlog)
 
@@ -151,7 +151,7 @@ class TestRule2GilYield:
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
             patch.object(daemon, "_fill_ads", side_effect=lambda b: b),
             patch.object(daemon, "_write_to_txlog"),
-            patch("retrovue.runtime.playlog_horizon_daemon.time.sleep", side_effect=lambda s: sleep_calls.append(s)) as mock_sleep,
+            patch("retrovue.runtime.playlist_builder_daemon.time.sleep", side_effect=lambda s: sleep_calls.append(s)) as mock_sleep,
         ):
             daemon._farthest_end_utc_ms = now_ms
             daemon._extend_to_target(now_ms, target_ms)
@@ -173,9 +173,9 @@ class TestRule2GilYield:
         to prevent upstream reader starvation when filling many blocks;
         10ms (0.010) is the minimum.
         """
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-        source = textwrap.dedent(inspect.getsource(PlaylogHorizonDaemon._extend_to_target))
+        source = textwrap.dedent(inspect.getsource(PlaylistBuilderDaemon._extend_to_target))
         tree = ast.parse(source)
 
         # Find all time.sleep(...) calls and extract the constant argument
@@ -215,9 +215,9 @@ class TestRule4EvaluationJitter:
 
         Fails before fix because no `random` import exists in the module.
         """
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-        source = textwrap.dedent(inspect.getsource(PlaylogHorizonDaemon._run_loop))
+        source = textwrap.dedent(inspect.getsource(PlaylistBuilderDaemon._run_loop))
         tree = ast.parse(source)
 
         # Look for random.uniform(...) call

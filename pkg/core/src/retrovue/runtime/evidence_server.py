@@ -107,7 +107,7 @@ _BLOCK_SEGMENT_CACHE_MAX = 10
 
 
 def _lookup_segment_from_db(block_id: str, segment_index: int) -> object | None:
-    """Look up segment metadata from transmission_log.
+    """Look up segment metadata from playlist_event.
 
     Returns a simple namespace with .title, .segment_type, .asset_uri,
     .segment_duration_ms, .asset_start_offset_ms attributes, or None if not found.
@@ -124,10 +124,10 @@ def _lookup_segment_from_db(block_id: str, segment_index: int) -> object | None:
     if segments is None:
         try:
             from retrovue.infra.uow import session as db_session_factory
-            from retrovue.domain.entities import TransmissionLog
+            from retrovue.domain.entities import PlaylistEvent
             with db_session_factory() as db:
-                row = db.query(TransmissionLog).filter(
-                    TransmissionLog.block_id == block_id
+                row = db.query(PlaylistEvent).filter(
+                    PlaylistEvent.block_id == block_id
                 ).first()
                 if row is None:
                     return None
@@ -178,7 +178,7 @@ def prepopulate_block_segment_cache(block_id: str, segments: list) -> None:
 
     INV-ASRUN-JIP-ENRICH-001: When a block is fed to AIR after JIP renumbering,
     the segment_index values in the fed block may differ from the original
-    TransmissionLog. Pre-populating ensures evidence_server uses the correct
+    PlaylistEvent. Pre-populating ensures evidence_server uses the correct
     (renumbered) segment metadata for AsRun attribution.
 
     Called from BlockPlanProducer._try_feed_block() after successful feed.

@@ -19,36 +19,40 @@ pools:
   hbo_movies:
     match:
       type: movie
+    max_duration_sec: 10800
+
+templates:
+  hbo_feature_with_intro:
+    segments:
+      - source:
+          type: collection
+          name: Intros
+        selection:
+          - type: tags
+            values: [hbo]
+        mode: random
+      - source:
+          type: pool
+          name: hbo_movies
+        mode: random
 
 schedule:
   all_day:
-    - movie_marathon:
-        start: "06:00"
-        end: "14:00"
-        title: "HBO Feature Presentation"
-        movie_selector:
-          pool: hbo_movies
-          mode: random
-          max_duration_sec: 10800
-        allow_bleed: true
-    - movie_marathon:
-        start: "14:00"
-        end: "22:00"
-        title: "HBO Prime"
-        movie_selector:
-          pool: hbo_movies
-          mode: random
-          max_duration_sec: 10800
-        allow_bleed: true
-    - movie_marathon:
-        start: "22:00"
-        end: "06:00"
-        title: "HBO Late Night"
-        movie_selector:
-          pool: hbo_movies
-          mode: random
-          max_duration_sec: 10800
-        allow_bleed: true
+    - type: template
+      name: hbo_feature_with_intro
+      start: "06:00"
+      end: "14:00"
+      allow_bleed: true
+    - type: template
+      name: hbo_feature_with_intro
+      start: "14:00"
+      end: "22:00"
+      allow_bleed: true
+    - type: template
+      name: hbo_feature_with_intro
+      start: "22:00"
+      end: "06:00"
+      allow_bleed: true
 
 traffic:
   allowed_types: [promo]

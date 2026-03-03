@@ -2,8 +2,8 @@
 Contract tests for INV-TIER2-COMPILATION-CONSISTENCY-001.
 
 Time-to-block resolution MUST use the current in-memory compilation.
-TransmissionLog MUST be queried by block_id only, never by time range.
-Stale TransmissionLog entries from a prior compilation MUST NOT corrupt
+PlaylistEvent MUST be queried by block_id only, never by time range.
+Stale PlaylistEvent entries from a prior compilation MUST NOT corrupt
 block contiguity.
 """
 
@@ -63,11 +63,11 @@ class TestInvTier2CompilationConsistency001:
 
     def test_get_block_at_returns_current_compilation_not_stale_txlog(self):
         """get_block_at() MUST return a block from the current in-memory
-        compilation, not a stale TransmissionLog entry from a prior compilation.
+        compilation, not a stale PlaylistEvent entry from a prior compilation.
 
         Scenario:
           C2 (current) in-memory: block_A [T, T+30min), block_B [T+30min, T+60min)
-          C1 (stale) in TransmissionLog: block_X [T, T+25min)
+          C1 (stale) in PlaylistEvent: block_X [T, T+25min)
           get_block_at(T+100) MUST return C2's block_A, not C1's block_X.
         """
         T = 1_772_380_800_000  # arbitrary epoch ms
@@ -83,7 +83,7 @@ class TestInvTier2CompilationConsistency001:
         svc = _build_service(c2_a, c2_b)
 
         def stale_time_lookup(channel_id, utc_ms):
-            """Simulate TransmissionLog time-range query returning stale C1 data."""
+            """Simulate PlaylistEvent time-range query returning stale C1 data."""
             if c1_stale.start_utc_ms <= utc_ms < c1_stale.end_utc_ms:
                 return c1_stale
             return None
@@ -104,7 +104,7 @@ class TestInvTier2CompilationConsistency001:
                     )
                 )
 
-            # After fix: block_id method returns None (C2 not yet in TransmissionLog)
+            # After fix: block_id method returns None (C2 not yet in PlaylistEvent)
             if hasattr(DslScheduleService, "_get_filled_block_by_id"):
                 stack.enter_context(
                     patch.object(svc, "_get_filled_block_by_id", return_value=None)
@@ -116,20 +116,20 @@ class TestInvTier2CompilationConsistency001:
         assert result.block_id == "c2-a", (
             f"INV-TIER2-COMPILATION-CONSISTENCY-001 violated: "
             f"get_block_at() returned block_id={result.block_id} from stale "
-            f"TransmissionLog instead of c2-a from current compilation"
+            f"PlaylistEvent instead of c2-a from current compilation"
         )
 
     def test_consecutive_blocks_are_contiguous(self):
         """Consecutive get_block_at() calls MUST return contiguous blocks,
-        even when stale TransmissionLog entries exist from a prior compilation.
+        even when stale PlaylistEvent entries exist from a prior compilation.
 
         This is the exact runtime failure: the seed phase generates two
         consecutive blocks and asserts block_a.end_utc_ms == block_b.start_utc_ms.
-        Stale TransmissionLog entries cause this check to fail.
+        Stale PlaylistEvent entries cause this check to fail.
 
         Scenario:
           C2 (current): block_A [T, T+30min), block_B [T+30min, T+60min)
-          C1 (stale) in TransmissionLog: block_X [T, T+25min)
+          C1 (stale) in PlaylistEvent: block_X [T, T+25min)
           get_block_at(T+100)             → block_a
           get_block_at(block_a.end_utc_ms) → block_b
           Assert: block_a.end_utc_ms == block_b.start_utc_ms

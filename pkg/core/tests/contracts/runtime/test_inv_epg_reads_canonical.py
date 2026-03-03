@@ -2,7 +2,7 @@
 Contract tests for INV-EPG-READS-CANONICAL-SCHEDULE-001.
 
 EPG data MUST be derived from the canonical compiled schedule — the same
-DB-cached CompiledProgramLog that playout uses. EPG endpoints MUST NOT
+DB-cached ProgramLogDay that playout uses. EPG endpoints MUST NOT
 call compile_schedule() directly.
 """
 
@@ -108,7 +108,7 @@ class TestInvEpgReadsCanonical001:
         )
 
     def test_get_canonical_epg_returns_cached_blocks(self):
-        """Mock CompiledProgramLog query. get_canonical_epg returns cached
+        """Mock ProgramLogDay query. get_canonical_epg returns cached
         program_blocks without calling compile_schedule()."""
         window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
         window_end = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
@@ -116,9 +116,9 @@ class TestInvEpgReadsCanonical001:
         # Create synthetic program blocks covering the full window
         blocks = _make_program_blocks(window_start, count=24, slot_sec=3600)
 
-        # Build a mock CompiledProgramLog row
+        # Build a mock ProgramLogDay row
         mock_row = MagicMock()
-        mock_row.compiled_json = {"program_blocks": blocks}
+        mock_row.program_log_json = {"program_blocks": blocks}
         mock_row.range_start = window_start
         mock_row.range_end = window_end
 
@@ -177,12 +177,12 @@ class TestInvEpgReadsCanonical001:
         )
 
         mock_row_prev = MagicMock()
-        mock_row_prev.compiled_json = {"program_blocks": [carry_in_block]}
+        mock_row_prev.program_log_json = {"program_blocks": [carry_in_block]}
         mock_row_prev.range_start = datetime(2026, 2, 28, 6, 0, tzinfo=UTC)
         mock_row_prev.range_end = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
 
         mock_row_curr = MagicMock()
-        mock_row_curr.compiled_json = {"program_blocks": day_n_blocks}
+        mock_row_curr.program_log_json = {"program_blocks": day_n_blocks}
         mock_row_curr.range_start = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
         mock_row_curr.range_end = window_end
 

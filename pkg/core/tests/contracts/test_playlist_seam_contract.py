@@ -1,7 +1,7 @@
 """
-Contract Tests — Transmission Log Seam Contract
+Contract Tests — Playlist Seam Contract
 
-Tests assert seam invariants from docs/contracts/core/TransmissionLogSeamContract_v0.1.md.
+Tests assert seam invariants from docs/contracts/core/PlaylistSeamContract_v0.1.md.
 Uses real planning pipeline output where possible.
 """
 
@@ -16,10 +16,10 @@ from retrovue.runtime.planning_pipeline import (
     MarkerInfo,
     PlanningDirective,
     PlanningRunRequest,
-    TransmissionLog,
-    TransmissionLogEntry,
+    Playlist,
+    PlaylistEntry,
     ZoneDirective,
-    assemble_transmission_log,
+    assemble_playlist,
     build_schedule_plan,
     derive_epg,
     fill_breaks,
@@ -40,9 +40,9 @@ from retrovue.runtime.schedule_types import (
     ProgramRefType,
     ScheduleManagerConfig,
 )
-from retrovue.runtime.transmission_log_validator import (
-    TransmissionLogSeamError,
-    validate_transmission_log_seams,
+from retrovue.runtime.playlist_validator import (
+    PlaylistSeamError,
+    validate_playlist_seams,
 )
 
 
@@ -95,8 +95,8 @@ def _make_asset_library():
 def _make_log_via_pipeline(
     start: time = time(6, 0),
     end: time = time(7, 0),
-) -> TransmissionLog:
-    """Generate TransmissionLog via real planning pipeline."""
+) -> Playlist:
+    """Generate Playlist via real planning pipeline."""
     directive = PlanningDirective(
         channel_id="ch1",
         grid_block_minutes=30,
@@ -119,50 +119,50 @@ def _make_log_via_pipeline(
 def test_inv_tl_seam_001_real_pipeline_passes():
     """INV-TL-SEAM-001: Real pipeline produces contiguous boundaries."""
     log = _make_log_via_pipeline()
-    validate_transmission_log_seams(log, 30)
+    validate_playlist_seams(log, 30)
     for i in range(len(log.entries) - 1):
         assert log.entries[i].end_utc_ms == log.entries[i + 1].start_utc_ms
 
 
 def test_inv_tl_seam_001_gap_raises():
-    """INV-TL-SEAM-001: Gap between entries raises TransmissionLogSeamError."""
+    """INV-TL-SEAM-001: Gap between entries raises PlaylistSeamError."""
     log = _make_log_via_pipeline()
     base = log.entries[0].start_utc_ms
     block_dur = 30 * 60 * 1000
     entries = [
-        TransmissionLogEntry("b0", 0, base, base + block_dur, []),
-        TransmissionLogEntry("b1", 1, base + block_dur + 1000, base + 2 * block_dur + 1000, []),
+        PlaylistEntry("b0", 0, base, base + block_dur, []),
+        PlaylistEntry("b1", 1, base + block_dur + 1000, base + 2 * block_dur + 1000, []),
     ]
-    bad_log = TransmissionLog(
+    bad_log = Playlist(
         channel_id="ch1",
         broadcast_date=BROADCAST_DATE,
         entries=entries,
         is_locked=False,
         metadata={"grid_block_minutes": 30},
     )
-    with pytest.raises(TransmissionLogSeamError) as exc_info:
-        validate_transmission_log_seams(bad_log, 30)
+    with pytest.raises(PlaylistSeamError) as exc_info:
+        validate_playlist_seams(bad_log, 30)
     assert "INV-TL-SEAM-001" in str(exc_info.value)
     assert "gap" in str(exc_info.value).lower() or "!=" in str(exc_info.value)
 
 
 def test_inv_tl_seam_001_overlap_raises():
-    """INV-TL-SEAM-001: Overlap between entries raises TransmissionLogSeamError."""
+    """INV-TL-SEAM-001: Overlap between entries raises PlaylistSeamError."""
     base = 1721000000000
     block_dur = 30 * 60 * 1000
     entries = [
-        TransmissionLogEntry("b0", 0, base, base + block_dur, []),
-        TransmissionLogEntry("b1", 1, base + block_dur - 5000, base + 2 * block_dur - 5000, []),
+        PlaylistEntry("b0", 0, base, base + block_dur, []),
+        PlaylistEntry("b1", 1, base + block_dur - 5000, base + 2 * block_dur - 5000, []),
     ]
-    bad_log = TransmissionLog(
+    bad_log = Playlist(
         channel_id="ch1",
         broadcast_date=BROADCAST_DATE,
         entries=entries,
         is_locked=False,
         metadata={"grid_block_minutes": 30},
     )
-    with pytest.raises(TransmissionLogSeamError) as exc_info:
-        validate_transmission_log_seams(bad_log, 30)
+    with pytest.raises(PlaylistSeamError) as exc_info:
+        validate_playlist_seams(bad_log, 30)
     assert "INV-TL-SEAM-001" in str(exc_info.value)
 
 
@@ -174,27 +174,27 @@ def test_inv_tl_seam_001_overlap_raises():
 def test_inv_tl_seam_002_real_pipeline_passes():
     """INV-TL-SEAM-002: Real pipeline produces correct grid duration."""
     log = _make_log_via_pipeline()
-    validate_transmission_log_seams(log, 30)
+    validate_playlist_seams(log, 30)
     expected_ms = 30 * 60 * 1000
     for entry in log.entries:
         assert entry.end_utc_ms - entry.start_utc_ms == expected_ms
 
 
 def test_inv_tl_seam_002_wrong_duration_raises():
-    """INV-TL-SEAM-002: Wrong duration raises TransmissionLogSeamError."""
+    """INV-TL-SEAM-002: Wrong duration raises PlaylistSeamError."""
     base = 1721000000000
     entries = [
-        TransmissionLogEntry("b0", 0, base, base + 25 * 60 * 1000, []),
+        PlaylistEntry("b0", 0, base, base + 25 * 60 * 1000, []),
     ]
-    bad_log = TransmissionLog(
+    bad_log = Playlist(
         channel_id="ch1",
         broadcast_date=BROADCAST_DATE,
         entries=entries,
         is_locked=False,
         metadata={"grid_block_minutes": 30},
     )
-    with pytest.raises(TransmissionLogSeamError) as exc_info:
-        validate_transmission_log_seams(bad_log, 30)
+    with pytest.raises(PlaylistSeamError) as exc_info:
+        validate_playlist_seams(bad_log, 30)
     assert "INV-TL-SEAM-002" in str(exc_info.value)
 
 
@@ -206,7 +206,7 @@ def test_inv_tl_seam_002_wrong_duration_raises():
 def test_inv_tl_seam_003_real_pipeline_passes():
     """INV-TL-SEAM-003: Real pipeline produces strictly increasing entries."""
     log = _make_log_via_pipeline()
-    validate_transmission_log_seams(log, 30)
+    validate_playlist_seams(log, 30)
     for i in range(len(log.entries) - 1):
         assert log.entries[i].start_utc_ms < log.entries[i + 1].start_utc_ms
 
@@ -219,26 +219,26 @@ def test_inv_tl_seam_003_real_pipeline_passes():
 def test_inv_tl_seam_004_real_pipeline_passes():
     """INV-TL-SEAM-004: Real pipeline produces non-zero duration entries."""
     log = _make_log_via_pipeline()
-    validate_transmission_log_seams(log, 30)
+    validate_playlist_seams(log, 30)
     for entry in log.entries:
         assert entry.end_utc_ms > entry.start_utc_ms
 
 
 def test_inv_tl_seam_004_zero_duration_raises():
-    """INV-TL-SEAM-004: Zero duration raises TransmissionLogSeamError."""
+    """INV-TL-SEAM-004: Zero duration raises PlaylistSeamError."""
     base = 1721000000000
     entries = [
-        TransmissionLogEntry("b0", 0, base, base, []),
+        PlaylistEntry("b0", 0, base, base, []),
     ]
-    bad_log = TransmissionLog(
+    bad_log = Playlist(
         channel_id="ch1",
         broadcast_date=BROADCAST_DATE,
         entries=entries,
         is_locked=False,
         metadata={"grid_block_minutes": 30},
     )
-    with pytest.raises(TransmissionLogSeamError) as exc_info:
-        validate_transmission_log_seams(bad_log, 30)
+    with pytest.raises(PlaylistSeamError) as exc_info:
+        validate_playlist_seams(bad_log, 30)
     assert "INV-TL-SEAM-004" in str(exc_info.value)
 
 
@@ -256,35 +256,35 @@ def test_lock_for_execution_validates_and_locks(tmp_path):
 
 
 def test_lock_for_execution_rejects_invalid_log():
-    """lock_for_execution raises TransmissionLogSeamError for invalid log."""
+    """lock_for_execution raises PlaylistSeamError for invalid log."""
     base = 1721000000000
     block_dur = 30 * 60 * 1000
     entries = [
-        TransmissionLogEntry("b0", 0, base, base + block_dur, []),
-        TransmissionLogEntry("b1", 1, base + block_dur + 1000, base + 2 * block_dur + 1000, []),
+        PlaylistEntry("b0", 0, base, base + block_dur, []),
+        PlaylistEntry("b1", 1, base + block_dur + 1000, base + 2 * block_dur + 1000, []),
     ]
-    bad_log = TransmissionLog(
+    bad_log = Playlist(
         channel_id="ch1",
         broadcast_date=BROADCAST_DATE,
         entries=entries,
         is_locked=False,
         metadata={"grid_block_minutes": 30},
     )
-    with pytest.raises(TransmissionLogSeamError):
+    with pytest.raises(PlaylistSeamError):
         lock_for_execution(bad_log, datetime(2025, 7, 15, 5, 30, 0))
 
 
 def test_lock_for_execution_missing_grid_block_minutes_raises():
     """lock_for_execution raises when grid_block_minutes missing from metadata."""
     log = _make_log_via_pipeline()
-    log_without_grid = TransmissionLog(
+    log_without_grid = Playlist(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
         entries=log.entries,
         is_locked=False,
         metadata={},
     )
-    with pytest.raises(TransmissionLogSeamError) as exc_info:
+    with pytest.raises(PlaylistSeamError) as exc_info:
         lock_for_execution(log_without_grid, datetime(2025, 7, 15, 5, 30, 0))
     assert "grid_block_minutes" in str(exc_info.value).lower()
 
@@ -310,4 +310,4 @@ def test_run_planning_pipeline_with_lock_produces_valid_locked_log(tmp_path):
         run_req, config, lib, lock_time=lock_time, artifact_base_path=tmp_path
     )
     assert log.is_locked is True
-    validate_transmission_log_seams(log, 30)
+    validate_playlist_seams(log, 30)

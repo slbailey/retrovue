@@ -1,8 +1,8 @@
 """
-Transmission log artifact writer.
+Playlist artifact writer.
 
 Pure artifact generation: writes .tlog (fixed-width) and .tlog.jsonl (sidecar)
-only after transmission log lock. Side-effect free beyond writing files.
+only after playlist lock. Side-effect free beyond writing files.
 Immutable once written (TL-ART-001). Deterministic. Independent of execution.
 
 See: docs/contracts/core/TransmissionLogArtifactContract_v0.1.md
@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from retrovue.runtime.planning_pipeline import TransmissionLog
+    from retrovue.runtime.planning_pipeline import Playlist
 
 
 # Column widths from contract: TIME 8, DUR 8, TYPE 8, EVENT_ID 32, TITLE_ASSET remainder
@@ -33,7 +33,7 @@ TLOG_UNDERLINE = (
 )
 
 
-class TransmissionLogArtifactExistsError(Exception):
+class PlaylistArtifactExistsError(Exception):
     """Raised when .tlog already exists (TL-ART-001: no overwrite)."""
 
 
@@ -79,11 +79,11 @@ class _ArtifactRow:
 
 
 def _build_rows(
-    log: "TransmissionLog",
+    log: "Playlist",
     timezone_display: str,
     generated_utc: datetime,
 ) -> list[_ArtifactRow]:
-    """Build ordered artifact rows from TransmissionLog. Deterministic execution order."""
+    """Build ordered artifact rows from Playlist. Deterministic execution order."""
     tz = ZoneInfo(timezone_display) if timezone_display else timezone.utc
     rows: list[_ArtifactRow] = []
 
@@ -168,9 +168,9 @@ def _build_rows(
     return rows
 
 
-class TransmissionLogArtifactWriter:
+class PlaylistArtifactWriter:
     """
-    Writes transmission log artifacts (.tlog + .tlog.jsonl) after lock.
+    Writes playlist artifacts (.tlog + .tlog.jsonl) after lock.
     Pure artifact generation; side-effect free beyond writing files.
     """
 
@@ -181,7 +181,7 @@ class TransmissionLogArtifactWriter:
         self,
         channel_id: str,
         broadcast_date: date,
-        transmission_log: TransmissionLog,
+        playlist: Playlist,
         timezone_display: str,
         *,
         generated_utc: datetime | None = None,
@@ -196,7 +196,7 @@ class TransmissionLogArtifactWriter:
             Path to .tlog file
 
         Raises:
-            TransmissionLogArtifactExistsError: if .tlog already exists (TL-ART-001).
+            PlaylistArtifactExistsError: if .tlog already exists (TL-ART-001).
         """
         channel_dir = self._base_path / channel_id
         date_str = broadcast_date.isoformat()
@@ -204,24 +204,24 @@ class TransmissionLogArtifactWriter:
         jsonl_path = channel_dir / f"{date_str}.tlog.jsonl"
 
         if tlog_path.exists():
-            raise TransmissionLogArtifactExistsError(
-                f"Transmission log artifact already exists: {tlog_path} (TL-ART-001)"
+            raise PlaylistArtifactExistsError(
+                f"Playlist artifact already exists: {tlog_path} (TL-ART-001)"
             )
 
         channel_dir.mkdir(parents=True, exist_ok=True)
 
         now = generated_utc or datetime.now(timezone.utc)
-        tl_id = transmission_log_id or transmission_log.metadata.get("transmission_log_id") or str(
+        tl_id = transmission_log_id or playlist.metadata.get("transmission_log_id") or str(
             uuid.uuid4()
         )
         generated_utc_str = now.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
-        rows = _build_rows(transmission_log, timezone_display, now)
+        rows = _build_rows(playlist, timezone_display, now)
 
         # Write .tlog to temp then rename (atomic write pattern)
         tlog_tmp = tlog_path.with_suffix(".tlog.tmp")
         try:
-            day_start_hour = transmission_log.metadata.get("programming_day_start_hour")
+            day_start_hour = playlist.metadata.get("programming_day_start_hour")
             with open(tlog_tmp, "w") as f:
                 f.write("# RETROVUE TRANSMISSION LOG\n")
                 f.write(f"# CHANNEL: {channel_id}\n")

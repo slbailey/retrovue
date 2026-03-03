@@ -6,15 +6,15 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
 ## Purpose
 
-EPG data MUST be derived from the canonical compiled schedule — the same DB-cached `CompiledProgramLog` that playout uses. If EPG endpoints call `compile_schedule()` directly, they may produce different output than playout (different seeds, different process state), violating `LAW-CONTENT-AUTHORITY` and `LAW-DERIVATION`.
+EPG data MUST be derived from the canonical compiled schedule — the same DB-cached `ProgramLogDay` that playout uses. If EPG endpoints call `compile_schedule()` directly, they may produce different output than playout (different seeds, different process state), violating `LAW-CONTENT-AUTHORITY` and `LAW-DERIVATION`.
 
 ## Guarantee
 
-EPG endpoints MUST read from `CompiledProgramLog` (the DB-cached canonical schedule). EPG endpoints MUST NOT call `compile_schedule()` directly. EPG and playout MUST always agree because they read from the same source.
+EPG endpoints MUST read from `ProgramLogDay` (the DB-cached canonical schedule). EPG endpoints MUST NOT call `compile_schedule()` directly. EPG and playout MUST always agree because they read from the same source.
 
 ## Preconditions
 
-- `CompiledProgramLog` MUST store `range_start` and `range_end` columns representing the compilation's actual time coverage.
+- `ProgramLogDay` MUST store `range_start` and `range_end` columns representing the compilation's actual time coverage.
 - A schedule is considered cached for a broadcast day if the canonical store provides a complete overlap-covering set of `ProgramBlockOutput` for that day window.
 
 ## Observability
@@ -25,7 +25,7 @@ EPG endpoints MUST read from `CompiledProgramLog` (the DB-cached canonical sched
 
 ## Deterministic Testability
 
-Mock `CompiledProgramLog` query. Call `get_canonical_epg(channel_id, window_start, window_end)`. Assert it returns cached `program_blocks` without calling `compile_schedule()`. Verify carry-in blocks from previous days are included via range overlap. Use AST inspection to verify no `compile_schedule` import in EPG handler.
+Mock `ProgramLogDay` query. Call `get_canonical_epg(channel_id, window_start, window_end)`. Assert it returns cached `program_blocks` without calling `compile_schedule()`. Verify carry-in blocks from previous days are included via range overlap. Use AST inspection to verify no `compile_schedule` import in EPG handler.
 
 ## Failure Semantics
 

@@ -2,7 +2,7 @@
 Deterministic planning CLI entry point.
 
 Runs planning pipeline for one channel + one broadcast day: pipeline,
-seam validation, transmission log lock, artifact write. No execution,
+seam validation, playlist lock, artifact write. No execution,
 scheduler daemon, or evidence server.
 """
 
@@ -12,16 +12,16 @@ from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 from retrovue.catalog.static_asset_library import StaticAssetLibrary
-from retrovue.planning.transmission_log_artifact_writer import (
-    TransmissionLogArtifactExistsError,
-    TransmissionLogArtifactWriter,
+from retrovue.planning.playlist_artifact_writer import (
+    PlaylistArtifactExistsError,
+    PlaylistArtifactWriter,
 )
 from retrovue.runtime.clock import RealTimeMasterClock
 from retrovue.runtime.planning_pipeline import (
     PlanningDirective,
     PlanningRunRequest,
     ZoneDirective,
-    lock_transmission_log,
+    lock_playlist,
     run_planning_pipeline,
 )
 from retrovue.runtime.schedule_manager_service import (
@@ -31,7 +31,7 @@ from retrovue.runtime.schedule_manager_service import (
     ScheduleManagerBackedScheduleService,
 )
 from retrovue.runtime.schedule_types import ScheduleManagerConfig
-from retrovue.runtime.transmission_log_validator import TransmissionLogSeamError
+from retrovue.runtime.playlist_validator import PlaylistSeamError
 
 
 # Default paths (same as ProgramDirector / contract)
@@ -177,13 +177,13 @@ def plan_day(
         0,
         tzinfo=timezone.utc,
     )
-    locked = lock_transmission_log(log, lock_time)
+    locked = lock_playlist(log, lock_time)
 
-    writer = TransmissionLogArtifactWriter(base_path=artifact_base_path)
+    writer = PlaylistArtifactWriter(base_path=artifact_base_path)
     tlog_path = writer.write(
         channel_id=channel_id,
         broadcast_date=broadcast_date,
-        transmission_log=locked,
+        playlist=locked,
         timezone_display=timezone_display,
         generated_utc=lock_time,
         transmission_log_id=locked.metadata.get("transmission_log_id"),

@@ -223,7 +223,7 @@ compile time; cooldowns were evaluated then, not at air time.
 
 `DslScheduleService._compile_day()` produces blocks with **empty filler
 placeholders** (`asset_uri=""`, `segment_type="filler"`). These are stored in
-`compiled_program_log`.
+`program_log_days`.
 
 `BlockPlanProducer._try_feed_block()` fills these placeholders ~30 minutes before
 air using a fresh `DatabaseAssetLibrary` session. Cooldowns, daily caps, and type
@@ -231,13 +231,13 @@ filters are evaluated against current play history.
 
 ### Transmission Log Persistence
 
-After fill, the filled block is written to the `transmission_log` table
+After fill, the filled block is written to the `playlist_events` table
 (see `docs/contracts/runtime/TransmissionLogPersistenceContract.md`).
 This is the authoritative record of what actually aired.
 
-### As-Run Enrichment via transmission_log
+### As-Run Enrichment via playlist_events
 
-The evidence server reads `transmission_log` on each `SEG_START` event to
+The evidence server reads `playlist_events` on each `SEG_START` event to
 enrich `.asrun` and `.asrun.jsonl` with commercial titles and segment types
 (see `docs/contracts/runtime/AsRunEnrichmentContract.md`).
 

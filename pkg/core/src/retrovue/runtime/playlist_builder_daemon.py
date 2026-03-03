@@ -1,11 +1,11 @@
-"""Playlog Horizon Daemon — Tier 2 of the Two-Tier Horizon Architecture.
+"""Playlist Builder Daemon — Tier 2 of the Two-Tier Horizon Architecture.
 
-Maintains a rolling window of fully-filled playout log entries 2–3+ hours
+Maintains a rolling window of fully-filled playlist events 2–3+ hours
 ahead of the current wall-clock time.  Consumes pre-segmented blocks from
-Tier 1 (CompiledProgramLog.segmented_blocks), fills ad break placeholders
-via the traffic manager, and writes the result to TransmissionLog (Postgres).
+Tier 1 (ProgramLogDay.segmented_blocks), fills ad break placeholders
+via the traffic manager, and writes the result to PlaylistEvent (Postgres).
 
-ChannelManager reads TransmissionLog directly — no ad fill or schedule
+ChannelManager reads PlaylistEvent directly — no ad fill or schedule
 compilation at feed time.
 
 See: docs/architecture/two-tier-horizon.md
@@ -36,8 +36,8 @@ PLAYLOG_HORIZON_002_WARN_ON_FIRST_ONLY = True
 
 
 @dataclass
-class PlaylogHealthReport:
-    """Point-in-time health snapshot of the Playlog Horizon."""
+class PlaylistBuilderHealthReport:
+    """Point-in-time health snapshot of the Playlist Builder."""
     depth_hours: float
     min_hours: int
     farthest_block_end_utc_ms: int
@@ -48,14 +48,14 @@ class PlaylogHealthReport:
     fill_errors_since_start: int
 
 
-class PlaylogHorizonDaemon:
-    """Rolling Tier 2 horizon: pre-filled playout logs in Postgres.
+class PlaylistBuilderDaemon:
+    """Rolling Tier 2 horizon: pre-filled playlist events in Postgres.
 
     Write path:
-        evaluate_once() → reads Tier 1, fills ads, writes TransmissionLog
+        evaluate_once() → reads Tier 1, fills ads, writes PlaylistEvent
 
     Read path (ChannelManager):
-        SELECT FROM transmission_log WHERE channel_slug=? AND start_utc_ms <= ? AND end_utc_ms > ?
+        SELECT FROM playlist_event WHERE channel_slug=? AND start_utc_ms <= ? AND end_utc_ms > ?
 
     Thread-safe.  All DB access uses short-lived sessions.
     """
@@ -136,7 +136,7 @@ class PlaylogHorizonDaemon:
             if depth_ms >= target_ms:
                 self._consecutive_zero_fills = 0
                 logger.debug(
-                    "PlaylogHorizon[%s]: depth=%.1fh >= %.1fh — no extension needed",
+                    "PlaylistBuilder[%s]: depth=%.1fh >= %.1fh — no extension needed",
                     self._channel_id, depth_ms / 3_600_000, target_ms / 3_600_000,
                 )
                 return backfill_count
@@ -147,7 +147,7 @@ class PlaylogHorizonDaemon:
             if blocks_filled > 0:
                 self._consecutive_zero_fills = 0
                 logger.info(
-                    "PlaylogHorizon[%s]: filled %d blocks, depth now %.1fh",
+                    "PlaylistBuilder[%s]: filled %d blocks, depth now %.1fh",
                     self._channel_id, blocks_filled,
                     max(0, self._farthest_end_utc_ms - now_ms) / 3_600_000,
                 )
@@ -164,7 +164,7 @@ class PlaylogHorizonDaemon:
                     else logger.debug
                 )
                 log_fn(
-                    "PlaylogHorizon[%s]: INV-PLAYLOG-HORIZON-002 VIOLATION: "
+                    "PlaylistBuilder[%s]: INV-PLAYLOG-HORIZON-002 VIOLATION: "
                     "depth=%.1fh < target=%.1fh but 0 blocks filled "
                     "(consecutive_zeros=%d, frontier=%s, now=%s, "
                     "scan_start_bd=%s, errors=%d)",
@@ -182,11 +182,11 @@ class PlaylogHorizonDaemon:
 
         return blocks_filled
 
-    def get_health_report(self) -> PlaylogHealthReport:
+    def get_health_report(self) -> PlaylistBuilderHealthReport:
         now_ms = self._now_utc_ms()
         depth_ms = max(0, self._farthest_end_utc_ms - now_ms)
         block_count = self._count_blocks_in_window(now_ms)
-        return PlaylogHealthReport(
+        return PlaylistBuilderHealthReport(
             depth_hours=round(depth_ms / 3_600_000, 2),
             min_hours=self._min_hours,
             farthest_block_end_utc_ms=self._farthest_end_utc_ms,
@@ -207,12 +207,12 @@ class PlaylogHorizonDaemon:
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
-            name=f"PlaylogHorizon-{self._channel_id}",
+            name=f"PlaylistBuilder-{self._channel_id}",
             daemon=True,
         )
         self._thread.start()
         logger.info(
-            "PlaylogHorizon[%s]: started (interval=%ds, min_hours=%d)",
+            "PlaylistBuilder[%s]: started (interval=%ds, min_hours=%d)",
             self._channel_id, self._eval_interval_s, self._min_hours,
         )
 
@@ -221,14 +221,14 @@ class PlaylogHorizonDaemon:
         if self._thread is not None:
             self._thread.join(timeout=self._eval_interval_s + 5)
             self._thread = None
-        logger.info("PlaylogHorizon[%s]: stopped", self._channel_id)
+        logger.info("PlaylistBuilder[%s]: stopped", self._channel_id)
 
     # ------------------------------------------------------------------
     # Internal: retention
     # ------------------------------------------------------------------
 
     def _purge_expired_tier2(self, now_utc_ms: int = 0, *, db=None) -> int:
-        """Delete TransmissionLog rows with end_utc_ms <= now - 4 hours.
+        """Delete PlaylistEvent rows with end_utc_ms <= now - 4 hours.
 
         INV-SCHEDULE-RETENTION-001: Tier 2 retains only rows where
         end_utc_ms > now - 4h. Throttled to at most once per hour.
@@ -245,22 +245,22 @@ class PlaylogHorizonDaemon:
         if (now_utc_ms - self._last_tier2_purge_utc_ms) < 3_600_000:
             return 0
 
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
 
         cutoff_ms = now_utc_ms - (4 * 3_600_000)
         try:
             if db is not None:
-                count = db.query(TransmissionLog).filter(
-                    TransmissionLog.channel_slug == self._channel_id,
-                    TransmissionLog.end_utc_ms <= cutoff_ms,
+                count = db.query(PlaylistEvent).filter(
+                    PlaylistEvent.channel_slug == self._channel_id,
+                    PlaylistEvent.end_utc_ms <= cutoff_ms,
                 ).delete()
                 db.commit()
             else:
                 from retrovue.infra.uow import session as db_session_factory
                 with db_session_factory() as db:
-                    count = db.query(TransmissionLog).filter(
-                        TransmissionLog.channel_slug == self._channel_id,
-                        TransmissionLog.end_utc_ms <= cutoff_ms,
+                    count = db.query(PlaylistEvent).filter(
+                        PlaylistEvent.channel_slug == self._channel_id,
+                        PlaylistEvent.end_utc_ms <= cutoff_ms,
                     ).delete()
             self._last_tier2_purge_utc_ms = now_utc_ms
             if count > 0:
@@ -285,7 +285,7 @@ class PlaylogHorizonDaemon:
         """Fill blocks from Tier 1 until Tier 2 depth reaches target.
 
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001:
-        - Rule 1: Batch TransmissionLog existence checks per scan-day.
+        - Rule 1: Batch PlaylistEvent existence checks per scan-day.
         - Rule 2: Yield GIL (time.sleep) after each block fill.
 
         INV-DAEMON-SESSION-SCOPE-001: Receives db from evaluate_once();
@@ -312,7 +312,7 @@ class PlaylogHorizonDaemon:
             segmented_blocks = self._load_tier1_blocks(scan_date, db=db)
             if segmented_blocks is None:
                 logger.debug(
-                    "PlaylogHorizon[%s]: No Tier 1 data for %s — cannot extend",
+                    "PlaylistBuilder[%s]: No Tier 1 data for %s — cannot extend",
                     self._channel_id, scan_date.isoformat(),
                 )
                 scan_date += timedelta(days=1)
@@ -338,7 +338,7 @@ class PlaylogHorizonDaemon:
                 block_end = sb_dict["end_utc_ms"]
                 block_id = sb_dict["block_id"]
 
-                # Already in TransmissionLog (checked via batch)
+                # Already in PlaylistEvent (checked via batch)
                 if block_id in existing_ids:
                     if block_end > self._farthest_end_utc_ms:
                         self._farthest_end_utc_ms = block_end
@@ -352,8 +352,13 @@ class PlaylogHorizonDaemon:
                     # Fill ad breaks via traffic manager
                     filled_block = self._fill_ads(scheduled_block, db=db)
 
-                    # Write to TransmissionLog
-                    self._write_to_txlog(filled_block, scan_date, db=db)
+                    # Write to PlaylistEvent
+                    # INV-TIER2-WINDOW-UUID-PROPAGATION-001: thread provenance
+                    self._write_to_txlog(
+                        filled_block, scan_date,
+                        window_uuid=sb_dict.get("window_uuid"),
+                        db=db,
+                    )
 
                     self._last_fill_block_id = block_id
                     if block_end > self._farthest_end_utc_ms:
@@ -361,7 +366,7 @@ class PlaylogHorizonDaemon:
                     blocks_filled += 1
 
                     logger.debug(
-                        "PlaylogHorizon[%s]: filled block=%s (%d segs)",
+                        "PlaylistBuilder[%s]: filled block=%s (%d segs)",
                         self._channel_id, block_id,
                         len(filled_block.segments),
                     )
@@ -369,7 +374,7 @@ class PlaylogHorizonDaemon:
                 except Exception as e:
                     self._fill_errors += 1
                     logger.error(
-                        "PlaylogHorizon[%s]: failed to fill block=%s: %s",
+                        "PlaylistBuilder[%s]: failed to fill block=%s: %s",
                         self._channel_id, block_id, e,
                     )
 
@@ -419,7 +424,12 @@ class PlaylogHorizonDaemon:
                 block["start_utc_ms"] / 1000.0, tz=timezone.utc
             )
             broadcast_day = self._broadcast_date_for(block_start_dt)
-            self._write_to_txlog(filled_block, broadcast_day, db=db)
+            # INV-TIER2-WINDOW-UUID-PROPAGATION-001: thread provenance
+            self._write_to_txlog(
+                filled_block, broadcast_day,
+                window_uuid=block.get("window_uuid"),
+                db=db,
+            )
 
             self._last_fill_block_id = block_id
             if block_end > self._farthest_end_utc_ms:
@@ -428,25 +438,25 @@ class PlaylogHorizonDaemon:
         except Exception as e:
             self._fill_errors += 1
             logger.error(
-                "PlaylogHorizon[%s]: backfill failed for block=%s: %s",
+                "PlaylistBuilder[%s]: backfill failed for block=%s: %s",
                 self._channel_id, block_id, e,
             )
             return 0
 
     def _tier2_row_covers_now(self, now_ms: int, *, db=None) -> bool:
-        """True if TransmissionLog has a row covering now_ms (by time window).
+        """True if PlaylistEvent has a row covering now_ms (by time window).
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
 
         def _query(s):
             return (
-                s.query(TransmissionLog)
+                s.query(PlaylistEvent)
                 .filter(
-                    TransmissionLog.channel_slug == self._channel_id,
-                    TransmissionLog.start_utc_ms <= now_ms,
-                    TransmissionLog.end_utc_ms > now_ms,
+                    PlaylistEvent.channel_slug == self._channel_id,
+                    PlaylistEvent.start_utc_ms <= now_ms,
+                    PlaylistEvent.end_utc_ms > now_ms,
                 )
                 .first()
                 is not None
@@ -478,26 +488,26 @@ class PlaylogHorizonDaemon:
         return None
 
     def _load_tier1_blocks(self, broadcast_day: date, *, db=None) -> list[dict] | None:
-        """Load segmented_blocks from CompiledProgramLog (Tier 1).
+        """Load segmented_blocks from ProgramLogDay (Tier 1).
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
-        from retrovue.domain.entities import CompiledProgramLog
+        from retrovue.domain.entities import ProgramLogDay
 
         def _query(s):
-            row = s.query(CompiledProgramLog).filter(
-                CompiledProgramLog.channel_id == self._channel_id,
-                CompiledProgramLog.broadcast_day == broadcast_day,
-                CompiledProgramLog.locked == True,
+            row = s.query(ProgramLogDay).filter(
+                ProgramLogDay.channel_id == self._channel_id,
+                ProgramLogDay.broadcast_day == broadcast_day,
+                ProgramLogDay.locked == True,
             ).first()
             if row is None:
                 return None
-            cj = row.compiled_json
+            cj = row.program_log_json
             if "segmented_blocks" not in cj or not cj["segmented_blocks"]:
                 if broadcast_day not in self._warned_stale_days:
                     self._warned_stale_days.add(broadcast_day)
                     logger.info(
-                        "PlaylogHorizon[%s]: Tier 1 for %s has no segmented_blocks "
+                        "PlaylistBuilder[%s]: Tier 1 for %s has no segmented_blocks "
                         "(pre-enhancement cache — needs recompile)",
                         self._channel_id, broadcast_day.isoformat(),
                     )
@@ -512,26 +522,26 @@ class PlaylogHorizonDaemon:
                 return _query(db)
         except Exception as e:
             logger.error(
-                "PlaylogHorizon[%s]: DB error loading Tier 1 for %s: %s",
+                "PlaylistBuilder[%s]: DB error loading Tier 1 for %s: %s",
                 self._channel_id, broadcast_day.isoformat(), e,
             )
             return None
 
     def _block_exists_in_txlog(self, block_id: str) -> bool:
-        """Check if a block already has a TransmissionLog entry."""
+        """Check if a block already has a PlaylistEvent entry."""
         from retrovue.infra.uow import session as db_session_factory
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
 
         try:
             with db_session_factory() as db:
-                return db.query(TransmissionLog).filter(
-                    TransmissionLog.block_id == block_id,
+                return db.query(PlaylistEvent).filter(
+                    PlaylistEvent.block_id == block_id,
                 ).first() is not None
         except Exception:
             return False
 
     def _batch_block_exists_in_txlog(self, block_ids: list[str], *, db=None) -> set[str]:
-        """Batch-check which block_ids already have TransmissionLog entries.
+        """Batch-check which block_ids already have PlaylistEvent entries.
 
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 3:
         Returns set[str] of block_ids that already have Tier 2 entries.
@@ -542,12 +552,12 @@ class PlaylogHorizonDaemon:
         if not block_ids:
             return set()
 
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
 
         def _query(s):
             rows = (
-                s.query(TransmissionLog.block_id)
-                .filter(TransmissionLog.block_id.in_(block_ids))
+                s.query(PlaylistEvent.block_id)
+                .filter(PlaylistEvent.block_id.in_(block_ids))
                 .all()
             )
             return {r[0] for r in rows}
@@ -580,7 +590,7 @@ class PlaylogHorizonDaemon:
                     asset_lib = DatabaseAssetLibrary(db, channel_slug=self._channel_id)
         except Exception as e:
             logger.warning(
-                "PlaylogHorizon[%s]: Could not create asset library: %s",
+                "PlaylistBuilder[%s]: Could not create asset library: %s",
                 self._channel_id, e,
             )
 
@@ -591,13 +601,22 @@ class PlaylogHorizonDaemon:
             asset_library=asset_lib,
         )
 
-    def _write_to_txlog(self, block: "ScheduledBlock", broadcast_day: date, *, db=None) -> None:
-        """Write a filled block to TransmissionLog.
+    def _write_to_txlog(
+        self,
+        block: "ScheduledBlock",
+        broadcast_day: date,
+        *,
+        window_uuid: str | None = None,
+        db=None,
+    ) -> None:
+        """Write a filled block to PlaylistEvent.
 
         INV-PLAYLOG-PREFILL-001: Canonical Tier 2 write path.
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
+        INV-TIER2-WINDOW-UUID-PROPAGATION-001: Sets PlaylistEvent.window_uuid
+        column from Tier 1 block dict when present.
         """
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
 
         segments_data = []
         for i, seg in enumerate(block.segments):
@@ -633,31 +652,34 @@ class PlaylogHorizonDaemon:
 
         try:
             if db is not None:
-                row = TransmissionLog(
+                # INV-TIER2-WINDOW-UUID-PROPAGATION-001: top-level column
+                row = PlaylistEvent(
                     block_id=block.block_id,
                     channel_slug=self._channel_id,
                     broadcast_day=broadcast_day,
                     start_utc_ms=block.start_utc_ms,
                     end_utc_ms=block.end_utc_ms,
                     segments=segments_data,
+                    window_uuid=window_uuid,
                 )
                 db.merge(row)
                 db.commit()
             else:
                 from retrovue.infra.uow import session as db_session_factory
                 with db_session_factory() as db:
-                    row = TransmissionLog(
+                    row = PlaylistEvent(
                         block_id=block.block_id,
                         channel_slug=self._channel_id,
                         broadcast_day=broadcast_day,
                         start_utc_ms=block.start_utc_ms,
                         end_utc_ms=block.end_utc_ms,
                         segments=segments_data,
+                        window_uuid=window_uuid,
                     )
                     db.merge(row)
         except Exception as e:
             logger.error(
-                "PlaylogHorizon[%s]: Failed to write block=%s to TransmissionLog: %s",
+                "PlaylistBuilder[%s]: Failed to write block=%s to PlaylistEvent: %s",
                 self._channel_id, block.block_id, e,
             )
             raise
@@ -667,16 +689,16 @@ class PlaylogHorizonDaemon:
     # ------------------------------------------------------------------
 
     def _get_frontier_utc_ms(self, *, db=None) -> int:
-        """Get the farthest end_utc_ms in TransmissionLog for this channel.
+        """Get the farthest end_utc_ms in PlaylistEvent for this channel.
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
         import sqlalchemy as sa
 
         def _query(s):
-            result = s.query(sa.func.max(TransmissionLog.end_utc_ms)).filter(
-                TransmissionLog.channel_slug == self._channel_id,
+            result = s.query(sa.func.max(PlaylistEvent.end_utc_ms)).filter(
+                PlaylistEvent.channel_slug == self._channel_id,
             ).scalar()
             return result or 0
 
@@ -690,15 +712,15 @@ class PlaylogHorizonDaemon:
             return 0
 
     def _count_blocks_in_window(self, now_ms: int) -> int:
-        """Count TransmissionLog entries from now forward."""
+        """Count PlaylistEvent entries from now forward."""
         from retrovue.infra.uow import session as db_session_factory
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
 
         try:
             with db_session_factory() as db:
-                return db.query(TransmissionLog).filter(
-                    TransmissionLog.channel_slug == self._channel_id,
-                    TransmissionLog.end_utc_ms > now_ms,
+                return db.query(PlaylistEvent).filter(
+                    PlaylistEvent.channel_slug == self._channel_id,
+                    PlaylistEvent.end_utc_ms > now_ms,
                 ).count()
         except Exception:
             return 0
@@ -713,7 +735,7 @@ class PlaylogHorizonDaemon:
                 self.evaluate_once()
             except Exception:
                 logger.exception(
-                    "PlaylogHorizon[%s]: evaluation failed", self._channel_id,
+                    "PlaylistBuilder[%s]: evaluation failed", self._channel_id,
                 )
             # Rule 4: jitter prevents thundering herd when multiple
             # daemons converge onto the same evaluation cadence.

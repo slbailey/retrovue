@@ -2,11 +2,11 @@
 
 ## Behavioral Guarantee
 
-Each `PlaylogHorizonDaemon.evaluate_once()` cycle MUST acquire at most **one** database session for its entire execution. Background daemon threads MUST NOT open multiple sessions per evaluation cycle, as cumulative checkout storms across N concurrent daemons (one per channel) cause QueuePool exhaustion under multi-channel load.
+Each `PlaylistBuilderDaemon.evaluate_once()` cycle MUST acquire at most **one** database session for its entire execution. Background daemon threads MUST NOT open multiple sessions per evaluation cycle, as cumulative checkout storms across N concurrent daemons (one per channel) cause QueuePool exhaustion under multi-channel load.
 
 ## Authority Model
 
-PlaylogHorizonDaemon owns the Tier 2 write path and is the sole background consumer of database sessions for horizon extension. Connection pool capacity is a shared resource across all daemon threads, HTTP handlers, and auxiliary tasks (loudness measurement, resolver rebuilds). Each daemon MUST minimize its pool footprint to at most one concurrent connection.
+PlaylistBuilderDaemon owns the Tier 2 write path and is the sole background consumer of database sessions for horizon extension. Connection pool capacity is a shared resource across all daemon threads, HTTP handlers, and auxiliary tasks (loudness measurement, resolver rebuilds). Each daemon MUST minimize its pool footprint to at most one concurrent connection.
 
 ## Boundary / Constraint
 

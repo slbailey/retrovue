@@ -24,7 +24,7 @@ from retrovue.runtime.channel_stream import (
 def test_channel_stream_multiple_subscribers_same_bytes():
     """Multiple subscribers get the same stream bytes (Phase 8.5 fan-out)."""
     source = FakeTsSource(chunk_size=188 * 10)
-    stream = ChannelStream("test", ts_source_factory=lambda: source)
+    stream = ChannelStream("test", ts_source_factory=lambda _=None: source)
 
     try:
         q1 = stream.subscribe("c1")
@@ -74,7 +74,7 @@ def test_channel_stream_multiple_subscribers_same_bytes():
 
 def test_channel_stream_last_subscriber_does_not_stop_reader():
     """When last subscriber leaves, reader stays running (upstream survives for reconnect)."""
-    stream = ChannelStream("test", ts_source_factory=lambda: FakeTsSource(chunk_size=188 * 5))
+    stream = ChannelStream("test", ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 5))
     q = stream.subscribe("only")
     assert stream.is_running()
 

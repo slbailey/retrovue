@@ -36,8 +36,8 @@ from retrovue.runtime.planning_pipeline import (
     SchedulePlanArtifact,
     SegmentedBlock,
     SyntheticBreakProfile,
-    TransmissionLog,
-    TransmissionLogEntry,
+    Playlist,
+    PlaylistEntry,
     ZoneDirective,
     run_planning_pipeline,
     build_schedule_plan,
@@ -45,7 +45,7 @@ from retrovue.runtime.planning_pipeline import (
     derive_epg,
     segment_blocks,
     fill_breaks,
-    assemble_transmission_log,
+    assemble_playlist,
     lock_for_execution,
     to_block_plan,
 )
@@ -466,11 +466,11 @@ class TestStage4_Playlist:
 
 
 # =============================================================================
-# TestStage5_TransmissionLog
+# TestStage5_Playlist
 # =============================================================================
 
 
-class TestStage5_TransmissionLog:
+class TestStage5_Playlist:
 
     def _get_filled(self):
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
@@ -486,11 +486,11 @@ class TestStage5_TransmissionLog:
 
     def test_content_and_breaks_interleaved_with_wall_clock(self):
         filled, epg = self._get_filled()
-        log = assemble_transmission_log(
+        log = assemble_playlist(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
-        assert isinstance(log, TransmissionLog)
+        assert isinstance(log, Playlist)
         assert len(log.entries) == 1
         entry = log.entries[0]
         assert entry.start_utc_ms > 0
@@ -498,7 +498,7 @@ class TestStage5_TransmissionLog:
 
     def test_segment_type_uses_execution_semantics(self):
         filled, epg = self._get_filled()
-        log = assemble_transmission_log(
+        log = assemble_playlist(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -509,7 +509,7 @@ class TestStage5_TransmissionLog:
 
     def test_pad_segment_appended_when_needed(self):
         filled, epg = self._get_filled()
-        log = assemble_transmission_log(
+        log = assemble_playlist(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -529,7 +529,7 @@ class TestStage5_TransmissionLog:
         epg = derive_epg("ch1", sday, 6)
         segmented = segment_blocks(sday, 30, lib)
         filled = fill_breaks(segmented, lib)
-        log = assemble_transmission_log(
+        log = assemble_playlist(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -538,7 +538,7 @@ class TestStage5_TransmissionLog:
 
     def test_to_block_plan_conversion(self):
         filled, epg = self._get_filled()
-        log = assemble_transmission_log(
+        log = assemble_playlist(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -586,7 +586,7 @@ class TestStage6_HorizonLock:
         epg = derive_epg("ch1", sday, 6)
         segmented = segment_blocks(sday, 30, lib)
         filled = fill_breaks(segmented, lib)
-        return assemble_transmission_log(
+        return assemble_playlist(
             "ch1", BROADCAST_DATE, filled, epg, 6, 30, RESOLUTION_TIME
         )
 
@@ -618,7 +618,7 @@ class TestStage6_HorizonLock:
 class TestPipelineIntegration:
 
     def test_30min_block_directive_to_locked_log(self, tmp_path):
-        """30-min block with ~22-min episode: directive → locked transmission log."""
+        """30-min block with ~22-min episode: directive → locked playlist."""
         directive = _make_cheers_directive(start=time(6, 0), end=time(6, 30))
         config = _make_config()
         lib = _make_asset_library()
@@ -629,7 +629,7 @@ class TestPipelineIntegration:
             run_req, config, lib, lock_time=lock_time, artifact_base_path=tmp_path
         )
 
-        assert isinstance(log, TransmissionLog)
+        assert isinstance(log, Playlist)
         assert log.is_locked is True
         assert log.channel_id == "ch1"
         assert len(log.entries) == 1

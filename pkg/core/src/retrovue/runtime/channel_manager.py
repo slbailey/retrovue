@@ -17,6 +17,8 @@ import socket
 import sys
 import threading
 import time
+import traceback
+import weakref
 from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
@@ -1579,6 +1581,70 @@ class _AsRunAnnotation:
     metadata: dict[str, Any]   # e.g. {"lateness_ms": 3200}
 
 
+class TracedSocket:
+    """Diagnostic proxy: intercepts close/shutdown with stack traces.
+
+    Wraps an accepted ``socket.socket`` so that every close/shutdown is
+    logged with the full Python stack trace.  Also installs a weak-reference
+    callback on the underlying socket to detect unexpected GC collection
+    (which would silently close the fd and cause an EPIPE on the AIR side).
+
+    All other attribute access is delegated transparently via ``__getattr__``.
+    """
+
+    def __init__(
+        self,
+        sock: socket.socket,
+        channel_id: str,
+        accept_generation: int,
+        logger: logging.Logger,
+    ):
+        self._sock = sock
+        self._fd = sock.fileno()
+        self._channel_id = channel_id
+        self._generation = accept_generation
+        self._logger = logger
+        # Weak-ref finalizer fires when the real socket is GC'd without an
+        # explicit close() call — indicates an unexpected socket lifecycle.
+        # Stored so close() can cancel it: an explicit close is expected and
+        # must not trigger the GC warning.
+        self._finalizer = weakref.finalize(sock, self._on_gc)
+
+    def _on_gc(self) -> None:
+        self._logger.warning(
+            "INV-UDS-GC: channel=%s fd=%d gen=%d socket GC'd",
+            self._channel_id,
+            self._fd,
+            self._generation,
+        )
+
+    def close(self) -> None:
+        # Cancel the GC finalizer — an explicit close is expected, not a leak.
+        self._finalizer.detach()
+        self._logger.info(
+            "INV-UDS-CLOSE-TRACE: channel=%s fd=%d gen=%d\n%s",
+            self._channel_id,
+            self._fd,
+            self._generation,
+            "".join(traceback.format_stack()),
+        )
+        self._sock.close()
+
+    def shutdown(self, how: int) -> None:
+        self._logger.info(
+            "INV-UDS-SHUTDOWN-TRACE: channel=%s fd=%d gen=%d how=%s\n%s",
+            self._channel_id,
+            self._fd,
+            self._generation,
+            how,
+            "".join(traceback.format_stack()),
+        )
+        self._sock.shutdown(how)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._sock, name)
+
+
 class BlockPlanProducer(Producer):
     """
     Producer that uses BlockPlan-based execution via PlayoutSession.
@@ -1694,6 +1760,7 @@ class BlockPlanProducer(Producer):
         self._uds_server_socket: socket.socket | None = None
         self._reader_socket_queue: queue.Queue[socket.socket] = queue.Queue()
         self._accept_thread: threading.Thread | None = None
+        self._accept_generation: int = 0
 
         # Program format for encoding (extracted from ChannelConfig.program_format).
         # Must match AIR's ProgramFormat::FromJson: frame_rate is a string (e.g. "30/1").
@@ -1761,10 +1828,17 @@ class BlockPlanProducer(Producer):
                 def accept_air_connection():
                     try:
                         conn, _ = self._uds_server_socket.accept()
-                        self._reader_socket_queue.put(conn)
+                        self._accept_generation += 1
+                        traced = TracedSocket(
+                            conn, self.channel_id,
+                            self._accept_generation, self._logger,
+                        )
+                        self._reader_socket_queue.put(traced)
                         self._logger.debug(
-                            "FIRST-ON-AIR: Channel %s: AIR connected to UDS socket",
-                            self.channel_id
+                            "FIRST-ON-AIR: Channel %s: AIR connected to UDS socket "
+                            "(fd=%d, gen=%d)",
+                            self.channel_id, conn.fileno(),
+                            self._accept_generation,
                         )
                     except Exception as e:
                         if not self._started:

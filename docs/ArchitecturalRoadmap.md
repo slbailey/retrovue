@@ -14,11 +14,11 @@
 ## 0️⃣ Achievements and Current System State (Checked Feb 2025)
 
 ### ✔️ Planning (COMPLETE)
-- **Planning Pipeline** (`Directive → Locked TransmissionLog`): Implemented and verifiable. **[VERIFIED]**
+- **Planning Pipeline** (`Directive → Locked PlaylistEvent`): Implemented and verifiable. **[VERIFIED]**
 - **Deterministic episode resolution:** In use; unit-tested in planning pipeline.
 - **Synthetic/chapter-driven segmentation:** Deployed via `segment_blocks`, `SyntheticBreakProfile`, and `MarkerInfo` in planning pipeline.
 - **Break filling with AssetLibrary:** Functional with deterministic ordering per current filler contract.
-- **TransmissionLog wall-clock alignment:** Confirmed via block plans and active validation harness.
+- **PlaylistEvent wall-clock alignment:** Confirmed via block plans and active validation harness.
 
 ### ✔️ Horizon (MOSTLY COMPLETE)
 - **Why “mostly”:** Extension is day-based only; a block-based extension API is not implemented (see Known Gaps).
@@ -28,18 +28,18 @@
 - **Planning failures surfaced:** Missing data surfaced as exceptions and reported.
 
 ### ✔️ Execution (MAINLINE READY)
-- **BlockPlan conversion from TransmissionLog:** Stable and determines active segment boundaries. **[VERIFIED: `to_block_plan()`, `HorizonBackedScheduleService`, BlockPlanProducer.]**
+- **BlockPlan conversion from PlaylistEvent:** Stable and determines active segment boundaries. **[VERIFIED: `to_block_plan()`, `PlaylistBackedScheduleService`, BlockPlanProducer.]**
 - **AIR frame-count authority:** Enforced; integrated with core for playout segment emission.
 - **Fence-based block timing:** Active and tested in 24-hour burn-in.
-- **Hard-stop (wall-clock) discipline:** All playout plans respect TransmissionLog stop points.
+- **Hard-stop (wall-clock) discipline:** All playout plans respect PlaylistEvent stop points.
 - **Runway Min (INV-RUNWAY-MIN-001):** When queue_depth ≥ 3, AIR must not enter PADDED_GAP due to "no next block" except when ScheduleService returns None (true planning gap). **[VERIFIED: `docs/contracts/core/RunwayMinContract_v0.1.md`; INVARIANTS_INDEX Cross-Domain.]**
 
 ### ✔️ As-Run Reconciliation (CONTRACT DELIVERED)
-- **AsRunReconciliationContract v0.1** and reconciler: Plan-vs-actual comparison (TransmissionLog vs AsRunLog); INV-ASRUN-001..005; structured report with classification. **[VERIFIED: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`, `asrun_reconciler.py`, `test_asrun_reconciliation_contract.py`.]**
+- **AsRunReconciliationContract v0.1** and reconciler: Plan-vs-actual comparison (PlaylistEvent vs AsRunLog); INV-ASRUN-001..005; structured report with classification. **[VERIFIED: `docs/contracts/core/AsRunReconciliationContract_v0.1.md`, `asrun_reconciler.py`, `test_asrun_reconciliation_contract.py`.]**
 - Optional integration (reconciler invoked on execution path or AsRunLogger exporting AsRunLog) not yet wired.
 
 ### 🚧 Known Gaps (AS OF FEB 2025)
-- **Core seam contract:** `docs/contracts/core/TransmissionLogSeamContract_v0.1.md` exists; INV-TL-SEAM-001..004 enforced in `lock_for_execution`. AIR frame-level INV-SEAM-* invariants live in `pkg/air/docs/contracts/`.
+- **Core seam contract:** `docs/contracts/core/PlaylistEventSeamContract_v0.1.md` exists; INV-TL-SEAM-001..004 enforced in `lock_for_execution`. AIR frame-level INV-SEAM-* invariants live in `pkg/air/docs/contracts/`.
 - **Horizon extension:** Day-based (`extend_epg_day`, `extend_execution_day`). Block-based API not implemented.
 - **Deterministic filler policy:** Deterministic on identical inputs; pool partitioning (bumper/promo/ad) is planned but not yet shipped.
 - **As-run logging:** `AsRunLogger` exists. **As-run reconciliation:** `docs/contracts/core/AsRunReconciliationContract_v0.1.md` and reconciler (`asrun_reconciler.py`, `asrun_types.py`) implemented; contract tests in `test_asrun_reconciliation_contract.py`. Optional integration (e.g. post-execution reconciliation run or AsRunLogger exporting AsRunLog) not yet wired.
@@ -57,7 +57,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 **Status:** Most contracts implemented and enforced. See below for residual work.
 
 ### 1.1 **Seam Invariants** _(DELIVERED)_
-- **`docs/contracts/core/TransmissionLogSeamContract_v0.1.md`** exists; wall-clock seam invariants INV-TL-SEAM-001..004 enforced in `transmission_log_validator.py` and `lock_for_execution`. Contract tests in `test_transmission_log_seam_contract.py`.
+- **`docs/contracts/core/PlaylistEventSeamContract_v0.1.md`** exists; wall-clock seam invariants INV-TL-SEAM-001..004 enforced in `transmission_log_validator.py` and `lock_for_execution`. Contract tests in `test_transmission_log_seam_contract.py`.
 - AIR frame-level INV-SEAM-* invariants live in `pkg/air/docs/contracts/`.
 - Seam contract tests run via pytest; burn-in runs manually via `tools/burn_in.py`.
 
@@ -84,7 +84,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 **Goal:** Remove legacy code; fully contract-driven horizon.
 
 ### 2.1 **Remove Consumer Auto-Resolution Path** _(DELIVERED)_
-- Missing schedule/execution data raises `HorizonNoScheduleDataError`; no consumer-triggered auto-resolve. (`ScheduleManagerBackedScheduleService`, `HorizonBackedScheduleService`.)
+- Missing schedule/execution data raises `HorizonNoScheduleDataError`; no consumer-triggered auto-resolve. (`ScheduleManagerBackedScheduleService`, `PlaylistBackedScheduleService`.)
 
 ### 2.2 **As-Run Log Integration** _(RECONCILIATION DELIVERED)_
 - `AsRunLogger` exists (`pkg/core/src/retrovue/runtime/asrun_logger.py`); logs actual block/segment times and transitions.
@@ -148,11 +148,11 @@ Spot-check against the repo (main, pkg/core and tools):
 
 | Claim | Status |
 |-------|--------|
-| **Planning:** Pipeline Directive→TransmissionLog | ✅ Verified: `planning_pipeline.py`, `run_planning_pipeline()`; contract tests in `test_planning_pipeline_contract.py`. |
+| **Planning:** Pipeline Directive→PlaylistEvent | ✅ Verified: `planning_pipeline.py`, `run_planning_pipeline()`; contract tests in `test_planning_pipeline_contract.py`. |
 | **Planning:** Deterministic episode resolution, break filling, AssetLibrary | ✅ Verified: `BreakFillPolicy`, break fill stage, `_deterministic_random_select` in schedule_manager; pipeline contract tests cover break fill. |
-| **Planning:** TransmissionLog wall-clock alignment | ✅ Verified: assembly and lock stages; `to_block_plan()` in pipeline; seam validation in `lock_for_execution`. |
-| **Execution:** BlockPlan from TransmissionLog, fence-based timing | ✅ Verified: `horizon_backed_schedule_service` converts TransmissionLog to BlockPlan format; `channel_manager.BlockPlanProducer`, `playout_session.BlockPlan`. |
-| **Core seam contract:** TransmissionLogSeamContract_v0.1.md | ✅ Verified: `docs/contracts/core/TransmissionLogSeamContract_v0.1.md`; `transmission_log_validator.py`; contract tests in `test_transmission_log_seam_contract.py`. |
+| **Planning:** PlaylistEvent wall-clock alignment | ✅ Verified: assembly and lock stages; `to_block_plan()` in pipeline; seam validation in `lock_for_execution`. |
+| **Execution:** BlockPlan from PlaylistEvent, fence-based timing | ✅ Verified: `horizon_backed_schedule_service` converts PlaylistEvent to BlockPlan format; `channel_manager.BlockPlanProducer`, `playout_session.BlockPlan`. |
+| **Core seam contract:** PlaylistEventSeamContract_v0.1.md | ✅ Verified: `docs/contracts/core/PlaylistEventSeamContract_v0.1.md`; `transmission_log_validator.py`; contract tests in `test_transmission_log_seam_contract.py`. |
 | **Horizon:** Day-based extension | ✅ Verified: `extend_epg_day`, `extend_execution_day`; no block-based API. |
 | **Horizon:** Authority model | ✅ Verified: HorizonManager sole trigger; consumer reads only; `HorizonNoScheduleDataError` for missing data. |
 | **Burn-in:** tools/burn_in.py | ✅ Verified: harness exists; `--horizon` primary, `--pipeline` removed; not run in CI. |

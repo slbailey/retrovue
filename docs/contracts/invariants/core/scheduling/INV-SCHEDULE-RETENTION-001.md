@@ -10,18 +10,19 @@ tick. Historical record lives only in as-run logs.
 
 ## Motivation
 
-CompiledProgramLog (Tier 1) and TransmissionLog (Tier 2) are *caches* of
+ProgramLogDay (Tier 1) and PlaylistEvent (Tier 2) are *caches* of
 forward-looking schedule data. Without retention enforcement:
 
 1. Old broadcast days accumulate indefinitely in both tables.
 2. Pre-`segmented_blocks` Tier 1 rows can never be updated because
    `_save_compiled_schedule` used `db.merge()` with a fresh UUID, which
-   silently failed on the `(channel_id, broadcast_day)` unique constraint.
+   silently failed on the `(channel_id, broadcast_day)` unique constraint
+   in the `program_log_days` table.
 3. Every startup re-expands stale days from scratch (the slow path).
 
 ## Invariant
 
-### Tier 1 — CompiledProgramLog
+### Tier 1 — ProgramLogDay
 
 - **Retention window**: rows where `broadcast_day >= today - 1 day`.
   This covers the current broadcast day and HORIZON_DAYS (3) forward days.
@@ -29,7 +30,7 @@ forward-looking schedule data. Without retention enforcement:
 - **Trigger**: `_purge_expired_tier1()` called from `_maybe_extend_horizon()`.
 - **Throttle**: at most once per hour (`_last_tier1_purge_utc_ms`).
 
-### Tier 2 — TransmissionLog
+### Tier 2 — PlaylistEvent
 
 - **Retention window**: rows where `end_utc_ms > now_ms - 4 hours`.
   This covers the current playback window plus a safety margin.

@@ -14,8 +14,8 @@ import pytest
 from typer.testing import CliRunner
 
 from retrovue.cli.plan_day import UnknownChannelError, plan_day
-from retrovue.planning.transmission_log_artifact_writer import (
-    TransmissionLogArtifactExistsError,
+from retrovue.planning.playlist_artifact_writer import (
+    PlaylistArtifactExistsError,
 )
 
 
@@ -62,7 +62,7 @@ def test_plan_day_writes_tlog_and_jsonl(artifact_dir: Path) -> None:
 
 
 def test_plan_day_second_call_raises_artifact_exists(artifact_dir: Path) -> None:
-    """Call plan_day() twice for same channel+date; second raises TransmissionLogArtifactExistsError."""
+    """Call plan_day() twice for same channel+date; second raises PlaylistArtifactExistsError."""
     if not CHANNELS_CONFIG.exists():
         pytest.skip("config/channels.json not found")
     if not ASSET_CATALOG.exists():
@@ -76,7 +76,7 @@ def test_plan_day_second_call_raises_artifact_exists(artifact_dir: Path) -> None
         asset_catalog_path=ASSET_CATALOG,
     )
 
-    with pytest.raises(TransmissionLogArtifactExistsError):
+    with pytest.raises(PlaylistArtifactExistsError):
         plan_day(
             channel_id="cheers-24-7",
             broadcast_date=date(2026, 2, 14),

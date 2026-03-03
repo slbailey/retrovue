@@ -274,7 +274,7 @@ class DslScheduleService:
         """Return the ScheduledBlock covering the given wall-clock time.
 
         INV-TIER2-COMPILATION-CONSISTENCY-001: Time resolution uses the current
-        in-memory compilation exclusively. TransmissionLog is queried by block_id
+        in-memory compilation exclusively. PlaylistEvent is queried by block_id
         only — never by time range.
 
         INV-CHANNEL-NO-COMPILE-001: If Tier 2 has no row for this block, compiles
@@ -295,7 +295,7 @@ class DslScheduleService:
             )
             return None
 
-        # Step 2: Check TransmissionLog for filled version BY BLOCK_ID
+        # Step 2: Check PlaylistEvent for filled version BY BLOCK_ID
         filled = self._get_filled_block_by_id(block.block_id)
         if filled is not None:
             return filled
@@ -305,29 +305,29 @@ class DslScheduleService:
         return self.ensure_block_compiled(channel_id, block)
 
     def ensure_block_compiled(self, channel_id: str, block: ScheduledBlock) -> ScheduledBlock:
-        """Ensure a single block has a Tier 2 (TransmissionLog) entry.
+        """Ensure a single block has a Tier 2 (PlaylistEvent) entry.
 
         INV-TIER2-AUTHORITY-001: Synchronous, idempotent Tier 2 compilation.
 
         Properties:
-          - If block already compiled in TransmissionLog → returns compiled version (no-op)
-          - If not compiled → fills ads synchronously, writes to TransmissionLog, returns filled block
+          - If block already compiled in PlaylistEvent → returns compiled version (no-op)
+          - If not compiled → fills ads synchronously, writes to PlaylistEvent, returns filled block
           - Safe to call concurrently: uses INSERT ... ON CONFLICT DO NOTHING pattern
           - Does NOT trigger full schedule recompilation
           - Does NOT invalidate existing compiled blocks
 
-        This is the authority path. The PlaylogHorizonDaemon is a preheater
+        This is the authority path. The PlaylistBuilderDaemon is a preheater
         that reduces how often this synchronous path is hit, but correctness
         does not depend on the daemon.
         """
-        from retrovue.domain.entities import TransmissionLog
+        from retrovue.domain.entities import PlaylistEvent
         from retrovue.runtime.traffic_manager import fill_ad_blocks
 
         # Check if already compiled (idempotent fast path)
         try:
             with session() as db:
-                row = db.query(TransmissionLog).filter(
-                    TransmissionLog.block_id == block.block_id,
+                row = db.query(PlaylistEvent).filter(
+                    PlaylistEvent.block_id == block.block_id,
                 ).first()
                 if row is not None:
                     # Already compiled — deserialize and return
@@ -385,7 +385,7 @@ class DslScheduleService:
             asset_library=asset_lib,
         )
 
-        # Write to TransmissionLog (idempotent via merge)
+        # Write to PlaylistEvent (idempotent via merge)
         try:
             segments_data = []
             for i, seg in enumerate(filled_block.segments):
@@ -418,7 +418,7 @@ class DslScheduleService:
                 broadcast_day = local_dt.date()
 
             with session() as db:
-                row = TransmissionLog(
+                row = PlaylistEvent(
                     block_id=filled_block.block_id,
                     channel_slug=channel_id,
                     broadcast_day=broadcast_day,
@@ -453,9 +453,9 @@ class DslScheduleService:
         return None
 
     def _get_filled_block_by_id(self, block_id: str) -> ScheduledBlock | None:
-        """Look up a pre-filled block from TransmissionLog by block_id.
+        """Look up a pre-filled block from PlaylistEvent by block_id.
 
-        INV-TIER2-COMPILATION-CONSISTENCY-001: TransmissionLog is queried by
+        INV-TIER2-COMPILATION-CONSISTENCY-001: PlaylistEvent is queried by
         block_id only — never by time range. Its role is to answer: "Do we
         have a filled version of this block_id?"
 
@@ -465,11 +465,11 @@ class DslScheduleService:
         """
         try:
             from retrovue.infra.uow import session as db_session_factory
-            from retrovue.domain.entities import TransmissionLog
+            from retrovue.domain.entities import PlaylistEvent
 
             with db_session_factory() as db:
-                row = db.query(TransmissionLog).filter(
-                    TransmissionLog.block_id == block_id,
+                row = db.query(PlaylistEvent).filter(
+                    PlaylistEvent.block_id == block_id,
                 ).first()
 
                 if row is None:
@@ -635,7 +635,7 @@ class DslScheduleService:
                 logger.info("Pruned %d old blocks (>24h past)", pruned)
 
     def _purge_expired_tier1(self, now_utc_ms: int = 0) -> int:
-        """Delete CompiledProgramLog rows with broadcast_day < today - 1.
+        """Delete ProgramLogDay rows with broadcast_day < today - 1.
 
         INV-SCHEDULE-RETENTION-001: Tier 1 retains only rows where
         broadcast_day >= today - 1. Throttled to at most once per hour.
@@ -649,13 +649,13 @@ class DslScheduleService:
         if (now_utc_ms - self._last_tier1_purge_utc_ms) < 3_600_000:
             return 0
 
-        from retrovue.domain.entities import CompiledProgramLog
+        from retrovue.domain.entities import ProgramLogDay
 
         cutoff = date.today() - timedelta(days=1)
         try:
             with session() as db:
-                count = db.query(CompiledProgramLog).filter(
-                    CompiledProgramLog.broadcast_day < cutoff,
+                count = db.query(ProgramLogDay).filter(
+                    ProgramLogDay.broadcast_day < cutoff,
                 ).delete()
             self._last_tier1_purge_utc_ms = now_utc_ms
             if count > 0:
@@ -805,26 +805,26 @@ class DslScheduleService:
         Invalidates stale rows compiled by an older COMPILER_VERSION —
         returns None (cache miss) so the caller recompiles and overwrites.
         """
-        from retrovue.domain.entities import CompiledProgramLog
+        from retrovue.domain.entities import ProgramLogDay
         from retrovue.runtime.schedule_compiler import COMPILER_VERSION
         try:
             with session() as db:
-                row = db.query(CompiledProgramLog).filter(
-                    CompiledProgramLog.channel_id == channel_id,
-                    CompiledProgramLog.broadcast_day == date_type.fromisoformat(broadcast_day),
-                    CompiledProgramLog.locked == True,
+                row = db.query(ProgramLogDay).filter(
+                    ProgramLogDay.channel_id == channel_id,
+                    ProgramLogDay.broadcast_day == date_type.fromisoformat(broadcast_day),
+                    ProgramLogDay.locked == True,
                 ).first()
                 if row:
-                    cached_version = row.compiled_json.get("source", {}).get("compiler_version")
+                    cached_version = row.program_log_json.get("source", {}).get("compiler_version")
                     if cached_version != COMPILER_VERSION:
                         logger.info(
                             "Invalidating stale cache for %s/%s: compiler %s != %s",
                             channel_id, broadcast_day, cached_version, COMPILER_VERSION,
                         )
                         return None
-                    return row.compiled_json
+                    return row.program_log_json
         except Exception as e:
-            logger.warning("Failed to check compiled_program_log cache: %s", e)
+            logger.warning("Failed to check program_log_days cache: %s", e)
         return None
 
     def _save_compiled_schedule(self, channel_id: str, broadcast_day: str, schedule: dict, dsl_hash: str) -> None:
@@ -842,7 +842,7 @@ class DslScheduleService:
         correctly handle the (channel_id, broadcast_day) unique constraint.
         The previous db.merge() with a fresh UUID silently failed on conflict.
         """
-        from retrovue.domain.entities import CompiledProgramLog
+        from retrovue.domain.entities import ProgramLogDay
         try:
             # Compute time range from program blocks
             program_blocks = schedule.get("program_blocks", [])
@@ -859,22 +859,22 @@ class DslScheduleService:
 
             bd = date_type.fromisoformat(broadcast_day)
             with session() as db:
-                existing = db.query(CompiledProgramLog).filter(
-                    CompiledProgramLog.channel_id == channel_id,
-                    CompiledProgramLog.broadcast_day == bd,
+                existing = db.query(ProgramLogDay).filter(
+                    ProgramLogDay.channel_id == channel_id,
+                    ProgramLogDay.broadcast_day == bd,
                 ).first()
                 if existing:
-                    existing.compiled_json = schedule
+                    existing.program_log_json = schedule
                     existing.schedule_hash = dsl_hash
                     existing.locked = True
                     existing.range_start = range_start
                     existing.range_end = range_end
                 else:
-                    db.add(CompiledProgramLog(
+                    db.add(ProgramLogDay(
                         channel_id=channel_id,
                         broadcast_day=bd,
                         schedule_hash=dsl_hash,
-                        compiled_json=schedule,
+                        program_log_json=schedule,
                         locked=True,
                         range_start=range_start,
                         range_end=range_end,
@@ -891,18 +891,18 @@ class DslScheduleService:
         """Read program_blocks from the DB-cached canonical compiled schedule.
 
         INV-EPG-READS-CANONICAL-SCHEDULE-001: Uses range-based overlap query to
-        return blocks from any CompiledProgramLog row whose [range_start, range_end)
+        return blocks from any ProgramLogDay row whose [range_start, range_end)
         overlaps [window_start, window_end). Returns None if no cached schedule
         covers the requested window.
         """
-        from retrovue.domain.entities import CompiledProgramLog
+        from retrovue.domain.entities import ProgramLogDay
         try:
             with session() as db:
-                rows = db.query(CompiledProgramLog).filter(
-                    CompiledProgramLog.channel_id == channel_id,
-                    CompiledProgramLog.locked == True,
-                    CompiledProgramLog.range_start < window_end,
-                    CompiledProgramLog.range_end > window_start,
+                rows = db.query(ProgramLogDay).filter(
+                    ProgramLogDay.channel_id == channel_id,
+                    ProgramLogDay.locked == True,
+                    ProgramLogDay.range_start < window_end,
+                    ProgramLogDay.range_end > window_start,
                 ).all()
                 if not rows:
                     return None
@@ -911,7 +911,7 @@ class DslScheduleService:
                 all_blocks: list[dict] = []
                 seen: set[tuple] = set()
                 for row in rows:
-                    for pb in row.compiled_json.get("program_blocks", []):
+                    for pb in row.program_log_json.get("program_blocks", []):
                         key = (pb["start_at"], pb["slot_duration_sec"], pb["asset_id"])
                         if key not in seen:
                             seen.add(key)
@@ -1039,7 +1039,7 @@ class DslScheduleService:
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
 
         # INV-SCHEDULE-RETENTION-001: Backfill segmented_blocks into the
-        # cached Tier 1 row so PlaylogHorizonDaemon can consume them.
+        # cached Tier 1 row so PlaylistBuilderDaemon can consume them.
         # Without this, stale rows (pre-segmented_blocks) stay stale and
         # the daemon can't pre-fill Tier 2, causing synchronous compiles
         # on the viewer-join path.
@@ -1067,7 +1067,7 @@ class DslScheduleService:
         """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.
 
         Produces Tier 1 data: content segments + empty filler placeholders
-        (break opportunities). Ad fill happens at Tier 2 (PlaylogHorizonDaemon),
+        (break opportunities). Ad fill happens at Tier 2 (PlaylistBuilderDaemon),
         not here.
 
         INV-TRAFFIC-LATE-BIND-001: RETIRED — replaced by INV-PLAYLOG-PREFILL-001.
@@ -1080,8 +1080,8 @@ class DslScheduleService:
         """Inner expand loop -- produces Tier 1 blocks with EMPTY filler placeholders.
 
         Filler placeholders (segment_type=filler, asset_uri="") are filled by
-        PlaylogHorizonDaemon at Tier 2 generation time and written to
-        TransmissionLog. ChannelManager reads filled blocks from TransmissionLog.
+        PlaylistBuilderDaemon at Tier 2 generation time and written to
+        PlaylistEvent. ChannelManager reads filled blocks from PlaylistEvent.
 
         INV-PLAYLOG-PREFILL-001: Ad selection at Tier 2, not compile time or feed time.
         """
@@ -1110,7 +1110,7 @@ class DslScheduleService:
                 self._enqueue_loudness_measurement(asset_id, asset_uri)
 
             # Expand into acts + ad breaks (empty filler placeholders — Tier 1 data).
-            # INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 (PlaylogHorizonDaemon),
+            # INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 (PlaylistBuilderDaemon),
             # not here at compile time and not at feed time.
             expanded = expand_program_block(
                 asset_id=asset_id,
@@ -1127,7 +1127,7 @@ class DslScheduleService:
 
         return blocks
 
-    # _get_asset_library removed: ad fill now handled by PlaylogHorizonDaemon (Tier 2).
+    # _get_asset_library removed: ad fill now handled by PlaylistBuilderDaemon (Tier 2).
     # See: INV-PLAYLOG-PREFILL-001, docs/architecture/two-tier-horizon.md
 
     def _resolve_uris(self, resolver: CatalogAssetResolver, schedule: dict) -> None:

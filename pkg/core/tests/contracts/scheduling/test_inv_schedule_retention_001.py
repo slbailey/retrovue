@@ -1,8 +1,8 @@
 """
 Contract tests for INV-SCHEDULE-RETENTION-001: Schedule data lifecycle and retention.
 
-Tier 1 (CompiledProgramLog) retains only rows where broadcast_day >= today - 1.
-Tier 2 (TransmissionLog) retains only rows where end_utc_ms > now - 4 hours.
+Tier 1 (ProgramLogDay) retains only rows where broadcast_day >= today - 1.
+Tier 2 (PlaylistEvent) retains only rows where end_utc_ms > now - 4 hours.
 _save_compiled_schedule correctly upserts on (channel_id, broadcast_day).
 _hydrate_schedule slow path backfills segmented_blocks into the DB row.
 """
@@ -111,13 +111,13 @@ class TestPurgeExpiredTier1:
 
 
 class TestPurgeExpiredTier2:
-    """INV-SCHEDULE-RETENTION-001: Tier 2 purge deletes stale transmission log rows."""
+    """INV-SCHEDULE-RETENTION-001: Tier 2 purge deletes stale playlist event rows."""
 
     def test_deletes_rows_older_than_4h(self):
         """Rows with end_utc_ms <= now - 4h MUST be deleted."""
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-        daemon = PlaylogHorizonDaemon.__new__(PlaylogHorizonDaemon)
+        daemon = PlaylistBuilderDaemon.__new__(PlaylistBuilderDaemon)
         daemon._channel_id = "test-channel"
         daemon._last_tier2_purge_utc_ms = 0
         daemon._lock = threading.Lock()
@@ -144,9 +144,9 @@ class TestPurgeExpiredTier2:
 
     def test_respects_hourly_throttle(self):
         """Purge MUST NOT run more than once per hour."""
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-        daemon = PlaylogHorizonDaemon.__new__(PlaylogHorizonDaemon)
+        daemon = PlaylistBuilderDaemon.__new__(PlaylistBuilderDaemon)
         daemon._channel_id = "test-channel"
         daemon._lock = threading.Lock()
 
@@ -174,7 +174,7 @@ class TestSaveCompiledScheduleUpsert:
         svc = _build_service_for_purge()
 
         existing_row = MagicMock()
-        existing_row.compiled_json = {"old": True}
+        existing_row.program_log_json = {"old": True}
         existing_row.schedule_hash = "old-hash"
 
         mock_db = MagicMock()
@@ -203,7 +203,7 @@ class TestSaveCompiledScheduleUpsert:
             )
 
         # Existing row should be UPDATED, not a new row added
-        assert existing_row.compiled_json == new_schedule
+        assert existing_row.program_log_json == new_schedule
         assert existing_row.schedule_hash == "new-hash"
         mock_db.add.assert_not_called()
 
@@ -248,7 +248,7 @@ class TestSaveCompiledScheduleUpsert:
 
 class TestHydrateSlowPathBackfill:
     """INV-SCHEDULE-RETENTION-001: _hydrate_schedule slow path MUST backfill
-    segmented_blocks into the Tier 1 DB row so the PlaylogHorizonDaemon
+    segmented_blocks into the Tier 1 DB row so the PlaylistBuilderDaemon
     can consume them for Tier 2 pre-fill."""
 
     def test_slow_path_saves_segmented_blocks_back_to_db(self):
@@ -310,6 +310,6 @@ class TestHydrateSlowPathBackfill:
         assert "segmented_blocks" in saved_schedule, (
             "INV-SCHEDULE-RETENTION-001 violated: _hydrate_schedule slow path "
             "did not backfill segmented_blocks into the DB row. "
-            "PlaylogHorizonDaemon cannot pre-fill Tier 2 without them."
+            "PlaylistBuilderDaemon cannot pre-fill Tier 2 without them."
         )
         assert len(saved_schedule["segmented_blocks"]) == 1

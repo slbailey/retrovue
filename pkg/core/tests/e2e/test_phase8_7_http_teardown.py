@@ -147,7 +147,7 @@ def test_http_close_teardown_within_500ms_no_reconnect(caplog: pytest.LogCapture
         cid, ProducerMode.NORMAL, cfg or {}
     )
     channel_stream_factory = lambda cid, path: ChannelStream(
-        cid, ts_source_factory=lambda: FakeTsSource(chunk_size=188 * 10)
+        cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10)
     )
 
     director, base = _start_director_with_provider(provider, channel_stream_factory)

@@ -42,7 +42,7 @@ Result: unfilled blocks, 100% pad frames, `early_exhaustion=Y`.
 ## Origin
 
 Discovered 2026-02-19. `cheers-24-7` (tz=America/New_York) experienced a 5-hour
-Tier-2 gap from 06:00–11:00 UTC because `PlaylogHorizonDaemon._broadcast_date_for()`
+Tier-2 gap from 06:00–11:00 UTC because `PlaylistBuilderDaemon._broadcast_date_for()`
 compared `programming_day_start_hour=6` against UTC hour 6 instead of EST hour 1.
 
 ## Test Coverage

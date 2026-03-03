@@ -152,15 +152,15 @@ def rebuild_cmd(
         typer.echo(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.", err=True)
         raise typer.Exit(1)
 
-    from retrovue.domain.entities import CompiledProgramLog
+    from retrovue.domain.entities import ProgramLogDay
     from retrovue.infra.uow import session
 
     with session() as db:
-        query = db.query(CompiledProgramLog).filter(
-            CompiledProgramLog.broadcast_day == target_date,
+        query = db.query(ProgramLogDay).filter(
+            ProgramLogDay.broadcast_day == target_date,
         )
         if channel_id:
-            query = query.filter(CompiledProgramLog.channel_id == channel_id)
+            query = query.filter(ProgramLogDay.channel_id == channel_id)
 
         deleted = query.delete(synchronize_session=False)
 

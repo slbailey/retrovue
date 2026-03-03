@@ -156,7 +156,7 @@ class YamlChannelConfigProvider:
 
         grid_minutes = fmt.get("grid_minutes", data.get("grid_minutes", 30))
 
-        # Channel timezone for broadcast day computation (used by PlaylogHorizonDaemon)
+        # Channel timezone for broadcast day computation (used by PlaylistBuilderDaemon)
         channel_tz = data.get("timezone", "UTC")
         channel_type = data.get("channel_type", "network")
 

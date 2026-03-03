@@ -1,15 +1,15 @@
-"""Horizon-Backed Schedule Service — Read-Only Execution Consumer.
+"""Playlist-Backed Schedule Service — Read-Only Execution Consumer.
 
 Implements the ScheduleService protocol expected by ChannelManager
 by reading exclusively from pre-populated stores.  Never triggers
 schedule resolution, pipeline execution, or any planning activity.
 
-Read-only schedule service backed by HorizonManager. Violations (missing data) are
+Read-only schedule service backed by PlaylistManager. Violations (missing data) are
 reported as planning failures per ScheduleExecutionInterface §6.
 
 See: docs/contracts/ScheduleExecutionInterfaceContract_v0.1.md
-     docs/contracts/ScheduleHorizonManagementContract_v0.1.md §7
-     docs/domains/HorizonManager_v0.1.md §6 (Data Flow)
+     docs/contracts/SchedulePlaylistManagementContract_v0.1.md §7
+     docs/domains/PlaylistManager_v0.1.md §6 (Data Flow)
 """
 
 from __future__ import annotations
@@ -24,10 +24,10 @@ from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 logger = logging.getLogger(__name__)
 
 
-class HorizonBackedScheduleService:
-    """Schedule service backed by HorizonManager-populated stores.
+class PlaylistBackedScheduleService:
+    """Schedule service backed by PlaylistManager-populated stores.
 
-    Read-only.  All planning artifacts are pre-built by HorizonManager.
+    Read-only.  All planning artifacts are pre-built by PlaylistManager.
     If data is missing at read time, this is a planning failure —
     the service logs a POLICY_VIOLATION and returns an empty result
     or raises, depending on the caller's expectation.
@@ -57,7 +57,7 @@ class HorizonBackedScheduleService:
     # ------------------------------------------------------------------
 
     def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
-        """No-op.  Data comes from stores populated by HorizonManager."""
+        """No-op.  Data comes from stores populated by PlaylistManager."""
         return (True, None)
 
     def get_playout_plan_now(
@@ -90,7 +90,7 @@ class HorizonBackedScheduleService:
             )
             return []
 
-        # Convert TransmissionLog segments to the format expected by
+        # Convert PlaylistEvent segments to the format expected by
         # ChannelManager / BlockPlanProducer consumers.
         return self._entry_to_playout_plan(entry, at_station_time)
 
@@ -107,7 +107,7 @@ class HorizonBackedScheduleService:
         """
         if self._resolved_store is None:
             logger.info(
-                "HorizonBackedScheduleService: No resolved_store; "
+                "PlaylistBackedScheduleService: No resolved_store; "
                 "EPG unavailable for %s",
                 channel_id,
             )
@@ -128,7 +128,7 @@ class HorizonBackedScheduleService:
 
             if resolved is None:
                 logger.info(
-                    "HorizonBackedScheduleService: No resolved day "
+                    "PlaylistBackedScheduleService: No resolved day "
                     "for channel=%s date=%s (read-only; not resolving)",
                     channel_id,
                     bd.isoformat(),
@@ -270,7 +270,7 @@ class HorizonBackedScheduleService:
                 "end_time_utc": seg_end_dt.isoformat(),
                 "segment_type": seg_type,
                 "metadata": {
-                    "phase": "horizon_backed",
+                    "phase": "playlist_backed",
                     "grid_minutes": self._grid_minutes,
                     "block_id": entry.block_id,
                 },

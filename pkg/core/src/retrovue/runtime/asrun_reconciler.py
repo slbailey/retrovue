@@ -1,5 +1,5 @@
 """
-As-Run reconciliation: compare TransmissionLog (plan) to AsRunLog (actual).
+As-Run reconciliation: compare Playlist (plan) to AsRunLog (actual).
 
 Enforces AsRunReconciliationContract v0.1. Deterministic, no mutation, no Horizon/AIR.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from retrovue.runtime.asrun_types import AsRunBlock, AsRunLog, AsRunSegment
-from retrovue.runtime.planning_pipeline import TransmissionLog, TransmissionLogEntry
+from retrovue.runtime.planning_pipeline import Playlist, PlaylistEntry
 
 
 class AsRunReconciliationError(Exception):
@@ -18,7 +18,7 @@ class AsRunReconciliationError(Exception):
 
 @dataclass
 class ReconciliationReport:
-    """Result of reconciling a TransmissionLog with an AsRunLog."""
+    """Result of reconciling a Playlist with an AsRunLog."""
     success: bool
     errors: list[str]
     classification: list[str]
@@ -44,12 +44,12 @@ def _asrun_segment_key(seg: AsRunSegment) -> tuple[str, str | None, int | None, 
     )
 
 
-def reconcile_transmission_log(
-    transmission_log: TransmissionLog,
+def reconcile_playlist(
+    playlist: Playlist,
     as_run_log: AsRunLog,
 ) -> ReconciliationReport:
     """
-    Compare TransmissionLog (plan) to AsRunLog (actual). Enforce INV-ASRUN-001..005.
+    Compare Playlist (plan) to AsRunLog (actual). Enforce INV-ASRUN-001..005.
 
     Deterministic. Does not mutate inputs.     Does not depend on Horizon or AIR.
     Returns structured report; does not auto-correct.
@@ -57,8 +57,8 @@ def reconcile_transmission_log(
     errors: list[str] = []
     classification: list[str] = []
 
-    plan_by_id: dict[str, TransmissionLogEntry] = {
-        e.block_id: e for e in transmission_log.entries
+    plan_by_id: dict[str, PlaylistEntry] = {
+        e.block_id: e for e in playlist.entries
     }
     asrun_blocks_by_id: list[tuple[str, AsRunBlock]] = [
         (b.block_id, b) for b in as_run_log.blocks
@@ -85,7 +85,7 @@ def reconcile_transmission_log(
                 classification.append("EXTRA_BLOCK")
 
     # Build 1:1 mapping plan block_id -> single as-run block (for timing and segment checks)
-    matched: dict[str, tuple[TransmissionLogEntry, AsRunBlock]] = {}
+    matched: dict[str, tuple[PlaylistEntry, AsRunBlock]] = {}
     for bid, plan_entry in plan_by_id.items():
         blks = asrun_id_to_blocks.get(bid, [])
         if len(blks) == 1:

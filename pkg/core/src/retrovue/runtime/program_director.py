@@ -201,7 +201,7 @@ class _ExecutionHorizonExtender:
     without requiring the full planning pipeline infrastructure.
     Ensures the broadcast date is resolved first, then builds
     execution entries from ScheduleManager's program blocks.
-    Writes transmission log artifact (.tlog + .tlog.jsonl) when extending.
+    Writes playlist artifact (.tlog + .tlog.jsonl) when extending.
     """
 
     def __init__(
@@ -294,23 +294,23 @@ class _ExecutionHorizonExtender:
             len(entries), broadcast_date.isoformat(), end_ms,
         )
 
-        # Write transmission log artifact (TL-ART-001: write-once; ignore if exists)
+        # Write playlist artifact (TL-ART-001: write-once; ignore if exists)
         if entries:
-            self._write_transmission_log_artifact(broadcast_date, entries)
+            self._write_playlist_artifact(broadcast_date, entries)
 
         return ExecutionDayResult(end_utc_ms=end_ms, entries=entries)
 
-    def _write_transmission_log_artifact(self, broadcast_date, entries):
-        """Build TransmissionLog from entries and write .tlog + .tlog.jsonl."""
-        from retrovue.planning.transmission_log_artifact_writer import (
-            TransmissionLogArtifactExistsError,
-            TransmissionLogArtifactWriter,
+    def _write_playlist_artifact(self, broadcast_date, entries):
+        """Build Playlist from entries and write .tlog + .tlog.jsonl."""
+        from retrovue.planning.playlist_artifact_writer import (
+            PlaylistArtifactExistsError,
+            PlaylistArtifactWriter,
         )
-        from retrovue.runtime.planning_pipeline import TransmissionLog, TransmissionLogEntry
+        from retrovue.runtime.planning_pipeline import Playlist, PlaylistEntry
 
         grid_minutes = self._service._grid_minutes
         tl_entries = [
-            TransmissionLogEntry(
+            PlaylistEntry(
                 block_id=e.block_id,
                 block_index=e.block_index,
                 start_utc_ms=e.start_utc_ms,
@@ -323,7 +323,7 @@ class _ExecutionHorizonExtender:
             broadcast_date.year, broadcast_date.month, broadcast_date.day,
             5, 0, 0, tzinfo=timezone.utc,
         )
-        transmission_log = TransmissionLog(
+        playlist = Playlist(
             channel_id=self._channel_id,
             broadcast_date=broadcast_date,
             entries=tl_entries,
@@ -333,21 +333,21 @@ class _ExecutionHorizonExtender:
                 "locked_at": lock_time.isoformat(),
             },
         )
-        writer = TransmissionLogArtifactWriter()
+        writer = PlaylistArtifactWriter()
         try:
             path = writer.write(
                 channel_id=self._channel_id,
                 broadcast_date=broadcast_date,
-                transmission_log=transmission_log,
+                playlist=playlist,
                 timezone_display=self._timezone_display,
                 generated_utc=lock_time,
             )
             self._logger.info(
-                "Transmission log artifact written: %s", path,
+                "Playlist artifact written: %s", path,
             )
-        except TransmissionLogArtifactExistsError:
+        except PlaylistArtifactExistsError:
             self._logger.debug(
-                "Transmission log artifact already exists for %s %s (TL-ART-001)",
+                "Playlist artifact already exists for %s %s (TL-ART-001)",
                 self._channel_id, broadcast_date.isoformat(),
             )
 
@@ -444,7 +444,7 @@ class ProgramDirector:
         self._horizon_managers: dict[str, Any] = {}
         self._horizon_execution_stores: dict[str, Any] = {}
         self._horizon_resolved_stores: dict[str, Any] = {}
-        # Playlog Horizon Daemons (Tier 2 — INV-PLAYLOG-HORIZON-001)
+        # Playlist Builder Daemons (Tier 2 — INV-PLAYLOG-HORIZON-001)
         self._playlog_daemons: dict[str, Any] = {}
         self._channel_config_provider: Optional[Any] = None
         self._health_check_stop: Optional[threading.Event] = None
@@ -666,7 +666,7 @@ class ProgramDirector:
 
         schedule_source = channel_config.schedule_source
         if schedule_source == "phase3":
-            return self._get_horizon_backed_service(channel_id, channel_config)
+            return self._get_playlist_backed_service(channel_id, channel_config)
         if schedule_source == "dsl":
             return self._get_dsl_service(channel_id, channel_config)
 
@@ -705,9 +705,9 @@ class ProgramDirector:
         setattr(self, key, svc)
         return svc
 
-    def _get_horizon_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
-        """Create or return a HorizonBackedScheduleService for phase3 channels."""
-        from retrovue.runtime.horizon_backed_schedule_service import HorizonBackedScheduleService
+    def _get_playlist_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
+        """Create or return a PlaylistBackedScheduleService for phase3 channels."""
+        from retrovue.runtime.playlist_backed_schedule_service import PlaylistBackedScheduleService
 
         # Return cached if exists
         key = f"_hbs_{channel_id}"
@@ -727,7 +727,7 @@ class ProgramDirector:
                 channel_id,
             )
 
-        service = HorizonBackedScheduleService(
+        service = PlaylistBackedScheduleService(
             execution_store=execution_store,
             resolved_store=resolved_store,
             grid_block_minutes=grid_minutes,
@@ -887,11 +887,11 @@ class ProgramDirector:
         )
 
     def _init_playlog_daemons(self) -> None:
-        """Create and start PlaylogHorizonDaemons for DSL channels.
+        """Create and start PlaylistBuilderDaemons for DSL channels.
 
         INV-PLAYLOG-HORIZON-001: Each DSL channel gets a daemon that
         maintains 2-3+ hours of fully-filled playout logs in
-        TransmissionLog (Postgres).
+        PlaylistEvent (Postgres).
 
         Called from start(), after _prewarm_channel_schedules() and
         _init_horizon_managers.
@@ -902,7 +902,7 @@ class ProgramDirector:
         if not hasattr(self._channel_config_provider, "list_channel_ids"):
             return
 
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
         for channel_id in self._channel_config_provider.list_channel_ids():
             config = self._channel_config_provider.get_channel_config(channel_id)
@@ -912,12 +912,12 @@ class ProgramDirector:
             if config.schedule_source != "dsl":
                 continue
 
-            # Tier 1 (CompiledProgramLog) is already warmed by
+            # Tier 1 (ProgramLogDay) is already warmed by
             # _prewarm_channel_schedules() which runs before this method.
 
             sc = config.schedule_config or {}
 
-            daemon = PlaylogHorizonDaemon(
+            daemon = PlaylistBuilderDaemon(
                 channel_id=channel_id,
                 min_hours=sc.get("playlog_min_hours", 3),
                 evaluation_interval_seconds=sc.get(
@@ -937,7 +937,7 @@ class ProgramDirector:
             blocks_filled = daemon.evaluate_once()
             report = daemon.get_health_report()
             self._logger.info(
-                "PlaylogHorizon[%s]: readiness gate — "
+                "PlaylistBuilder[%s]: readiness gate — "
                 "healthy=%s depth=%.1fh blocks=%d filled=%d",
                 channel_id,
                 report.is_healthy,
@@ -951,7 +951,7 @@ class ProgramDirector:
             self._playlog_daemons[channel_id] = daemon
 
         self._logger.info(
-            "PlaylogHorizonDaemons initialized: %d channels",
+            "PlaylistBuilderDaemons initialized: %d channels",
             len(self._playlog_daemons),
         )
 
@@ -1078,8 +1078,22 @@ class ProgramDirector:
                 # At 15s, Gen 2 stays small and collections stay sub-5ms.
                 now = time.monotonic()
                 if now - last_refreeze >= self._GC_REFREEZE_INTERVAL_S:
+                    _gc_before = gc.get_stats()[2]
                     gc.collect()
+                    _gc_after = gc.get_stats()[2]
                     gc.freeze()
+                    # INV-GC-AUTOGEN2-SUPPRESSED-001: suppress automatic gen 2
+                    # collections between re-freezes.  Only the gc.collect()
+                    # above may trigger a gen 2 sweep.
+                    # If freeze logic is ever removed, restore explicitly:
+                    #   gc.set_threshold(700, 10, 10)
+                    gc.set_threshold(700, 10, 10_000_000)
+                    self._logger.debug(
+                        "[GC] Re-freeze: gen2 collected=%d uncollectable=%d "
+                        "— thresholds set to (700, 10, 10_000_000)",
+                        _gc_after["collected"] - _gc_before["collected"],
+                        _gc_after["uncollectable"] - _gc_before["uncollectable"],
+                    )
                     last_refreeze = now
 
             except Exception as e:
@@ -1364,11 +1378,21 @@ class ProgramDirector:
                     pre_freeze = len(gc.get_objects())
                     gc.collect()  # Flush pending garbage before freeze
                     gc.freeze()
+                    # INV-GC-AUTOGEN2-SUPPRESSED-001: suppress automatic gen 2
+                    # collections between re-freezes.  The 15-second
+                    # health-check re-freeze is the only gen 2 sweep in steady
+                    # state.  If freeze logic is ever removed, restore
+                    # explicitly: gc.set_threshold(700, 10, 10)
+                    gc.set_threshold(700, 10, 10_000_000)
                     gc.enable()  # Re-enable for runtime churn
                     self._logger.info(
                         "[GC] Frozen %d long-lived objects after startup "
                         "(Gen 2 traversal eliminated)",
                         pre_freeze,
+                    )
+                    self._logger.debug(
+                        "[GC] Thresholds set to (700, 10, 10_000_000) "
+                        "— gen 2 auto-collection suppressed post-startup-freeze"
                     )
                 except RuntimeError:
                     self._logger.exception(
@@ -1694,7 +1718,7 @@ class ProgramDirector:
             ):
                 if channel_id in self._fanout_buffers:
                     return self._fanout_buffers[channel_id]
-                def ts_source_factory() -> FakeTsSource:
+                def ts_source_factory(_stop_event=None) -> FakeTsSource:
                     return FakeTsSource()
                 fanout = ChannelStream(
                     channel_id=channel_id,
@@ -1726,24 +1750,69 @@ class ProgramDirector:
                     channel_id,
                 )
 
-                def ts_source_factory() -> Any:
-                    # Producer may have just started; allow a short wait for socket to appear
+                def ts_source_factory(stop_event=None) -> Any:
+                    # INV-CHANNEL-STREAM-RECONNECT-001: Resolve the *current*
+                    # producer's queue at call time so reconnect after AIR
+                    # restart picks up the new producer's socket.
+                    #
+                    # INV-CHANNEL-STREAM-SHUTDOWN-001: stop_event is passed by
+                    # ChannelStream._create_ts_source so that all blocking waits
+                    # here can be interrupted within the 5s stop() deadline.
                     for attempt in range(6):
-                        try:
-                            sock = reader_queue.get(timeout=2.0)
-                            self._logger.info(
-                                "Got socket from queue for channel %s",
-                                channel_id,
+                        if stop_event is not None and stop_event.is_set():
+                            raise RuntimeError(
+                                "Factory cancelled (shutdown) for %s" % channel_id
                             )
-                            return SocketTsSource(sock)
-                        except queue.Empty:
+                        current_producer = getattr(manager, "active_producer", None)
+                        if current_producer is None:
                             self._logger.debug(
-                                "Reader queue empty for channel %s (attempt %d/6), waiting for socket",
-                                channel_id,
-                                attempt + 1,
+                                "Factory: no active_producer for %s (attempt %d/6)",
+                                channel_id, attempt + 1,
                             )
+                            if stop_event is not None:
+                                if stop_event.wait(timeout=2.0):
+                                    raise RuntimeError(
+                                        "Factory cancelled (shutdown) for %s" % channel_id
+                                    )
+                            else:
+                                time.sleep(2.0)
+                            continue
+                        current_queue = getattr(current_producer, "reader_socket_queue", None)
+                        if current_queue is None:
+                            self._logger.debug(
+                                "Factory: no reader_socket_queue for %s (attempt %d/6)",
+                                channel_id, attempt + 1,
+                            )
+                            if stop_event is not None:
+                                if stop_event.wait(timeout=2.0):
+                                    raise RuntimeError(
+                                        "Factory cancelled (shutdown) for %s" % channel_id
+                                    )
+                            else:
+                                time.sleep(2.0)
+                            continue
+                        # Poll the queue in short bursts so stop_event can interrupt.
+                        deadline = time.monotonic() + 2.0
+                        while time.monotonic() < deadline:
+                            if stop_event is not None and stop_event.is_set():
+                                raise RuntimeError(
+                                    "Factory cancelled (shutdown) for %s" % channel_id
+                                )
+                            try:
+                                sock = current_queue.get(timeout=0.1)
+                                self._logger.info(
+                                    "Got socket from queue for channel %s",
+                                    channel_id,
+                                )
+                                return SocketTsSource(sock)
+                            except queue.Empty:
+                                pass
+                        self._logger.debug(
+                            "Reader queue empty for channel %s (attempt %d/6)",
+                            channel_id, attempt + 1,
+                        )
                     raise RuntimeError(
-                        "Timed out waiting for socket from reader_socket_queue for channel %s"
+                        "Timed out waiting for socket from reader_socket_queue for %s"
                         % channel_id
                     )
 
@@ -2134,7 +2203,7 @@ class ProgramDirector:
         ) -> Any:
             """EPG endpoint for all channels — reads from canonical compiled schedule.
 
-            INV-EPG-READS-CANONICAL-SCHEDULE-001: reads from CompiledProgramLog,
+            INV-EPG-READS-CANONICAL-SCHEDULE-001: reads from ProgramLogDay,
             does NOT call compile_schedule() directly.
             """
             from zoneinfo import ZoneInfo

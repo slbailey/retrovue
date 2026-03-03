@@ -1,8 +1,8 @@
 """
-Contract Tests — TransmissionLogArtifactContract_v0.1
+Contract Tests — PlaylistArtifactContract_v0.1
 
 Tests assert artifact format and invariants from
-docs/contracts/core/TransmissionLogArtifactContract_v0.1.md.
+docs/contracts/core/PlaylistArtifactContract_v0.1.md.
 Uses golden fixtures under tests/contracts/fixtures/logs/.
 """
 

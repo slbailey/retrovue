@@ -74,7 +74,7 @@ def _make_entry(
 class TestInvExecutionDerivedFromScheduleday001:
     """INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001
 
-    Every ExecutionEntry (TransmissionLog entry) must be traceable to
+    Every ExecutionEntry (PlaylistEvent entry) must be traceable to
     exactly one ResolvedScheduleDay.  No execution artifact may exist
     without deterministic schedule lineage.
 
@@ -2181,9 +2181,9 @@ class TestInvExecutionentryNoGaps001:
 class TestInvExecutionentryDerivedFromTransmissionlog001:
     """INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001
 
-    Every ExecutionEntry must be traceable to a TransmissionLogEntry,
+    Every ExecutionEntry must be traceable to a PlaylistEntry,
     except those created by an explicit recorded operator override.
-    An ExecutionEntry with no TransmissionLogEntry reference and no
+    An ExecutionEntry with no PlaylistEntry reference and no
     operator override record MUST NOT be persisted.
 
     Enforcement: ExecutionWindowStore.add_entries() when
@@ -2539,11 +2539,11 @@ def _make_tl_entry(
     block_index: int,
     start_utc_ms: int,
     duration_ms: int = GRID_BLOCK_MS,
-) -> "TransmissionLogEntry":
-    """Helper: build a TransmissionLogEntry for grid-alignment tests."""
-    from retrovue.runtime.planning_pipeline import TransmissionLogEntry
+) -> "PlaylistEntry":
+    """Helper: build a PlaylistEntry for grid-alignment tests."""
+    from retrovue.runtime.planning_pipeline import PlaylistEntry
 
-    return TransmissionLogEntry(
+    return PlaylistEntry(
         block_id=f"{CHANNEL_ID}-tl-b{block_index:04d}",
         block_index=block_index,
         start_utc_ms=start_utc_ms,
@@ -2552,11 +2552,11 @@ def _make_tl_entry(
     )
 
 
-def _make_tl(entries: list) -> "TransmissionLog":
-    """Helper: wrap entries in a TransmissionLog."""
-    from retrovue.runtime.planning_pipeline import TransmissionLog
+def _make_tl(entries: list) -> "Playlist":
+    """Helper: wrap entries in a Playlist."""
+    from retrovue.runtime.planning_pipeline import Playlist
 
-    return TransmissionLog(
+    return Playlist(
         channel_id=CHANNEL_ID,
         broadcast_date=date(2026, 1, 1),
         entries=entries,
@@ -2566,7 +2566,7 @@ def _make_tl(entries: list) -> "TransmissionLog":
 class TestInvTransmissionlogGridAlignment001:
     """INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
 
-    All TransmissionLogEntry start_time and end_time values must align
+    All PlaylistEntry start_time and end_time values must align
     to the channel's valid grid boundaries.  Off-grid boundaries produce
     off-grid ExecutionEntry fences at the next derivation step, cascading
     a LAW-GRID violation into the runtime layer.
@@ -2582,15 +2582,15 @@ class TestInvTransmissionlogGridAlignment001:
         Invariant: INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
         Derived law(s): LAW-GRID
         Failure class: Planning
-        Scenario: Construct a TransmissionLog with one entry whose
+        Scenario: Construct a Playlist with one entry whose
                   start_utc_ms corresponds to 18:15 (off-grid for 30-min
-                  grid). Call validate_transmission_log_grid_alignment().
+                  grid). Call validate_playlist_grid_alignment().
                   Assert raises ValueError matching
                   INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED. Assert fault
                   identifies the misaligned boundary.
         """
-        from retrovue.runtime.transmission_log_validator import (
-            validate_transmission_log_grid_alignment,
+        from retrovue.runtime.playlist_validator import (
+            validate_playlist_grid_alignment,
         )
 
         # 18:15 UTC on 2026-01-01 in epoch ms
@@ -2606,7 +2606,7 @@ class TestInvTransmissionlogGridAlignment001:
         with pytest.raises(
             ValueError, match="INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED"
         ) as exc_info:
-            validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
+            validate_playlist_grid_alignment(log, grid_block_minutes=30)
 
         # Fault must identify the misaligned value
         assert str(off_grid_start_ms) in str(exc_info.value), (
@@ -2621,13 +2621,13 @@ class TestInvTransmissionlogGridAlignment001:
         Invariant: INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001
         Derived law(s): LAW-GRID
         Failure class: N/A (positive path)
-        Scenario: Construct a TransmissionLog with entry spanning
+        Scenario: Construct a Playlist with entry spanning
                   [05:30, 06:30] crossing programming_day_start=06:00.
                   Both 05:30 and 06:30 are valid 30-min grid boundaries.
                   Call validation. Assert no exception.
         """
-        from retrovue.runtime.transmission_log_validator import (
-            validate_transmission_log_grid_alignment,
+        from retrovue.runtime.playlist_validator import (
+            validate_playlist_grid_alignment,
         )
 
         # 05:30 UTC = EPOCH - 30m; 06:30 UTC = EPOCH + 30m
@@ -2641,7 +2641,7 @@ class TestInvTransmissionlogGridAlignment001:
         log = _make_tl([entry])
 
         # Must not raise — both boundaries are grid-aligned
-        validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
+        validate_playlist_grid_alignment(log, grid_block_minutes=30)
 
     def test_inv_transmissionlog_grid_alignment_001_accept_cross_midnight(
         self, contract_clock
@@ -2656,8 +2656,8 @@ class TestInvTransmissionlogGridAlignment001:
                   exception — no micro-gap at midnight, both boundaries
                   grid-aligned.
         """
-        from retrovue.runtime.transmission_log_validator import (
-            validate_transmission_log_grid_alignment,
+        from retrovue.runtime.playlist_validator import (
+            validate_playlist_grid_alignment,
         )
 
         # Midnight UTC on 2026-01-02
@@ -2678,4 +2678,4 @@ class TestInvTransmissionlogGridAlignment001:
         log = _make_tl([entry_a, entry_b])
 
         # Must not raise — midnight is grid-aligned, no micro-gap
-        validate_transmission_log_grid_alignment(log, grid_block_minutes=30)
+        validate_playlist_grid_alignment(log, grid_block_minutes=30)

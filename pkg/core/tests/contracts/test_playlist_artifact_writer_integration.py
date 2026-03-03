@@ -1,10 +1,10 @@
 """
-Integration tests for TransmissionLogArtifactWriter.
+Integration tests for PlaylistArtifactWriter.
 
 Covers: file format, immutability (TL-ART-001), deterministic regeneration,
 JSONL bijection with .tlog, BLOCK UTC boundaries, FENCE UTC_END only.
 
-See: docs/contracts/core/TransmissionLogArtifactContract_v0.1.md
+See: docs/contracts/core/PlaylistArtifactContract_v0.1.md
 """
 
 from __future__ import annotations
@@ -16,19 +16,19 @@ from pathlib import Path
 
 import pytest
 
-from retrovue.planning.transmission_log_artifact_writer import (
-    TransmissionLogArtifactExistsError,
-    TransmissionLogArtifactWriter,
+from retrovue.planning.playlist_artifact_writer import (
+    PlaylistArtifactExistsError,
+    PlaylistArtifactWriter,
 )
-from retrovue.runtime.planning_pipeline import TransmissionLog, TransmissionLogEntry
+from retrovue.runtime.planning_pipeline import Playlist, PlaylistEntry
 
 
 def _make_minimal_log(
     channel_id: str = "test-ch",
     broadcast_date: date | None = None,
     one_block_with_segments: bool = True,
-) -> TransmissionLog:
-    """Build a minimal TransmissionLog for artifact tests."""
+) -> Playlist:
+    """Build a minimal Playlist for artifact tests."""
     d = broadcast_date or date(2026, 2, 13)
     base_ms = int(datetime(d.year, d.month, d.day, 14, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
     block_dur_ms = 30 * 60 * 1000
@@ -49,7 +49,7 @@ def _make_minimal_log(
             },
         ]
     entries = [
-        TransmissionLogEntry(
+        PlaylistEntry(
             block_id=f"{channel_id}-{d.isoformat()}-0000",
             block_index=0,
             start_utc_ms=base_ms,
@@ -57,7 +57,7 @@ def _make_minimal_log(
             segments=segments,
         ),
     ]
-    return TransmissionLog(
+    return Playlist(
         channel_id=channel_id,
         broadcast_date=d,
         entries=entries,
@@ -107,11 +107,11 @@ def _parse_jsonl(path: Path) -> list[dict]:
 def test_file_written_correctly(tmp_path: Path) -> None:
     """Artifact writer produces .tlog and .tlog.jsonl with correct structure."""
     log = _make_minimal_log(channel_id="ch-A", broadcast_date=date(2026, 2, 13))
-    writer = TransmissionLogArtifactWriter(base_path=tmp_path)
+    writer = PlaylistArtifactWriter(base_path=tmp_path)
     tlog_path = writer.write(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
-        transmission_log=log,
+        playlist=log,
         timezone_display="UTC",
         generated_utc=datetime(2026, 2, 13, 14, 0, 0, tzinfo=timezone.utc),
         transmission_log_id="tl-ch-A-20260213",
@@ -145,20 +145,20 @@ def test_file_written_correctly(tmp_path: Path) -> None:
 
 
 def test_immutability_enforced(tmp_path: Path) -> None:
-    """If .tlog already exists, writer raises TransmissionLogArtifactExistsError."""
+    """If .tlog already exists, writer raises PlaylistArtifactExistsError."""
     log = _make_minimal_log(channel_id="ch-B", broadcast_date=date(2026, 2, 14))
-    writer = TransmissionLogArtifactWriter(base_path=tmp_path)
+    writer = PlaylistArtifactWriter(base_path=tmp_path)
     writer.write(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
-        transmission_log=log,
+        playlist=log,
         timezone_display="UTC",
     )
-    with pytest.raises(TransmissionLogArtifactExistsError) as exc_info:
+    with pytest.raises(PlaylistArtifactExistsError) as exc_info:
         writer.write(
             channel_id=log.channel_id,
             broadcast_date=log.broadcast_date,
-            transmission_log=log,
+            playlist=log,
             timezone_display="UTC",
         )
     assert "TL-ART-001" in str(exc_info.value) or "already exists" in str(exc_info.value).lower()
@@ -174,7 +174,7 @@ def test_deterministic_regeneration_produces_identical_file(tmp_path: Path) -> N
     log = _make_minimal_log(channel_id="ch-C", broadcast_date=date(2026, 2, 15))
     fixed_utc = datetime(2026, 2, 15, 12, 0, 0, tzinfo=timezone.utc)
     fixed_id = "tl-deterministic-001"
-    writer = TransmissionLogArtifactWriter(base_path=tmp_path)
+    writer = PlaylistArtifactWriter(base_path=tmp_path)
 
     path1 = tmp_path / "ch-C" / "2026-02-15.tlog"
     path1.parent.mkdir(parents=True, exist_ok=True)
@@ -182,7 +182,7 @@ def test_deterministic_regeneration_produces_identical_file(tmp_path: Path) -> N
     writer.write(
         channel_id="ch-C",
         broadcast_date=date(2026, 2, 15),
-        transmission_log=log,
+        playlist=log,
         timezone_display="UTC",
         generated_utc=fixed_utc,
         transmission_log_id=fixed_id,
@@ -195,7 +195,7 @@ def test_deterministic_regeneration_produces_identical_file(tmp_path: Path) -> N
     writer.write(
         channel_id="ch-C2",
         broadcast_date=date(2026, 2, 16),
-        transmission_log=log2,
+        playlist=log2,
         timezone_display="UTC",
         generated_utc=fixed_utc,
         transmission_log_id="tl-deterministic-002",
@@ -221,11 +221,11 @@ def test_deterministic_regeneration_produces_identical_file(tmp_path: Path) -> N
 def test_jsonl_bijection_with_tlog_event_ids(tmp_path: Path) -> None:
     """Every EVENT_ID in .tlog appears exactly once in .tlog.jsonl and vice versa."""
     log = _make_minimal_log(channel_id="ch-D", broadcast_date=date(2026, 2, 17))
-    writer = TransmissionLogArtifactWriter(base_path=tmp_path)
+    writer = PlaylistArtifactWriter(base_path=tmp_path)
     tlog_path = writer.write(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
-        transmission_log=log,
+        playlist=log,
         timezone_display="UTC",
     )
     jsonl_path = tlog_path.with_suffix(".tlog.jsonl")
@@ -252,11 +252,11 @@ def test_jsonl_bijection_with_tlog_event_ids(tmp_path: Path) -> None:
 def test_block_includes_utc_start_and_utc_end(tmp_path: Path) -> None:
     """TYPE=BLOCK line MUST include UTC_START= and UTC_END= in TITLE_ASSET."""
     log = _make_minimal_log(channel_id="ch-E", broadcast_date=date(2026, 2, 18))
-    writer = TransmissionLogArtifactWriter(base_path=tmp_path)
+    writer = PlaylistArtifactWriter(base_path=tmp_path)
     tlog_path = writer.write(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
-        transmission_log=log,
+        playlist=log,
         timezone_display="UTC",
     )
     rows = _parse_tlog_body_rows(tlog_path)
@@ -278,11 +278,11 @@ def test_block_includes_utc_start_and_utc_end(tmp_path: Path) -> None:
 def test_fence_includes_utc_end_only(tmp_path: Path) -> None:
     """FENCE line MUST include UTC_END= in TITLE_ASSET (no UTC_START)."""
     log = _make_minimal_log(channel_id="ch-F", broadcast_date=date(2026, 2, 19))
-    writer = TransmissionLogArtifactWriter(base_path=tmp_path)
+    writer = PlaylistArtifactWriter(base_path=tmp_path)
     tlog_path = writer.write(
         channel_id=log.channel_id,
         broadcast_date=log.broadcast_date,
-        transmission_log=log,
+        playlist=log,
         timezone_display="UTC",
     )
     rows = _parse_tlog_body_rows(tlog_path)

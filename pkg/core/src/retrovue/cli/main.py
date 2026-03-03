@@ -119,14 +119,14 @@ def plan_day_cmd(
     channel: str = typer.Option(..., "--channel", help="Channel ID"),
     date_str: str = typer.Option(..., "--date", help="Broadcast date (YYYY-MM-DD)"),
 ):
-    """Run planning pipeline for one channel and one broadcast day. Writes transmission log artifact; no execution."""
+    """Run planning pipeline for one channel and one broadcast day. Writes playlist artifact; no execution."""
     from datetime import date
 
     from retrovue.cli.plan_day import PlanDayError, UnknownChannelError, plan_day
-    from retrovue.planning.transmission_log_artifact_writer import (
-        TransmissionLogArtifactExistsError,
+    from retrovue.planning.playlist_artifact_writer import (
+        PlaylistArtifactExistsError,
     )
-    from retrovue.runtime.transmission_log_validator import TransmissionLogSeamError
+    from retrovue.runtime.playlist_validator import PlaylistSeamError
 
     try:
         broadcast_date = date.fromisoformat(date_str)
@@ -139,10 +139,10 @@ def plan_day_cmd(
     except UnknownChannelError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
-    except TransmissionLogArtifactExistsError as e:
+    except PlaylistArtifactExistsError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
-    except TransmissionLogSeamError as e:
+    except PlaylistSeamError as e:
         typer.echo(f"Error: Seam validation failed: {e}", err=True)
         raise typer.Exit(1)
     except PlanDayError as e:

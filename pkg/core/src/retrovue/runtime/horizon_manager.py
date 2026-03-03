@@ -53,7 +53,7 @@ class ExecutionExtender(Protocol):
         """Generate execution data for the given broadcast date.
 
         Returns the end_utc_ms of the last entry in the generated
-        TransmissionLog.
+        Playlist.
         """
         ...
 
@@ -188,7 +188,7 @@ class HorizonManager:
 
     @property
     def execution_window_end_utc_ms(self) -> int:
-        """End of the farthest generated TransmissionLog entry, in epoch ms."""
+        """End of the farthest generated PlaylistEvent entry, in epoch ms."""
         return self._execution_window_end_utc_ms
 
     @property
