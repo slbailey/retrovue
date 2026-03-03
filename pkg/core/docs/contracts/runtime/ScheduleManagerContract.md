@@ -189,9 +189,9 @@ config/channels.json
             │       ├─► HorizonManager (background thread)
             │       │       ├─► EPG extension → resolve_schedule_day()
             │       │       └─► Execution extension → Planning pipeline
-            │       └─► HorizonBackedScheduleService (read-only consumer)
+            │       └─► PlaylistBackedScheduleService (read-only consumer)
             │
-            └─► HorizonBackedScheduleService
+            └─► PlaylistBackedScheduleService
                     ├─► ExecutionWindowStore.get_entry_at(locked_only=True)
                     └─► ResolvedScheduleStore.get() → EPG
 ```

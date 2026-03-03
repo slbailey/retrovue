@@ -106,16 +106,16 @@ the immediate window.
 ## Implementation Status (2026-02-18)
 
 ### Completed
-- [x] Tier 1: CompiledProgramLog stores segmented_blocks (content + break opportunities)
-- [x] Tier 2: PlaylogHorizonDaemon fills ads and writes to TransmissionLog
+- [x] Tier 1: ProgramLogDay stores segmented_blocks (content + break opportunities)
+- [x] Tier 2: PlaylistBuilderDaemon fills ads and writes to PlaylistEvent
 - [x] Consumer: DslScheduleService.get_block_at reads Tier 2 first
-- [x] Wiring: ProgramDirector starts PlaylogHorizonDaemon per DSL channel
+- [x] Wiring: ProgramDirector starts PlaylistBuilderDaemon per DSL channel
 - [x] INV-TRAFFIC-LATE-BIND-001 retired, replaced by INV-PLAYLOG-PREFILL-001
-- [x] JIP ad continuity: re-join returns same ads from TransmissionLog
+- [x] JIP ad continuity: re-join returns same ads from PlaylistEvent
 
 ### Remaining
-- [ ] Recompile all channels' CompiledProgramLog caches (only cheers-24-7 done)
+- [ ] Recompile all channels' ProgramLogDay caches (only cheers-24-7 done)
 - [ ] Schedule Horizon Daemon (Tier 1 rolling — currently manual/on-demand)
 - [ ] Remove _fill_block_at_feed_time from ChannelManager (already absent post-revert)
-- [ ] Eviction policy for old TransmissionLog entries
-- [ ] Health endpoint exposing PlaylogHorizonDaemon status
+- [ ] Eviction policy for old PlaylistEvent entries
+- [ ] Health endpoint exposing PlaylistBuilderDaemon status

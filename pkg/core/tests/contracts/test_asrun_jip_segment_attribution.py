@@ -6,7 +6,7 @@ next CONTENT/FILLER segment's name after JIP renumbering.
 
 Root cause: After JIP, _apply_jip_to_segments removes fully-elapsed segments
 and renumbers the rest from 0. The evidence_server looked up segment metadata
-from TransmissionLog using AIR's renumbered indices, but TransmissionLog
+from PlaylistEvent using AIR's renumbered indices, but PlaylistEvent
 stored original pre-JIP indices. This caused a 1-segment shift in attribution.
 
 Fix: Pre-populate the evidence segment cache with the JIP-renumbered segment
@@ -23,7 +23,7 @@ import pytest
 # ---- Helpers ----------------------------------------------------------------
 
 def _make_segments_with_interleaved_pads():
-    """Build a TransmissionLog-style segment list:
+    """Build a PlaylistEvent-style segment list:
     0: content  (Cheers episode, 114448ms)
     1: commercial (Nike, 59968ms)
     2: pad (BLACK, 374ms)

@@ -12,8 +12,8 @@ from unittest.mock import patch, MagicMock
 
 
 def _make_daemon():
-    from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
-    return PlaylogHorizonDaemon(
+    from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+    return PlaylistBuilderDaemon(
         channel_id="test-ch",
         min_hours=2,
         programming_day_start_hour=6,
@@ -62,7 +62,7 @@ class TestEnsureTier2CoversNowBackfill:
             patch.object(daemon, "_tier2_row_covers_now", return_value=False),
             patch.object(daemon, "_get_tier1_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
-            patch.object(daemon, "_fill_ads", side_effect=lambda b: b),
+            patch.object(daemon, "_fill_ads", side_effect=lambda b, **kw: b),
         ):
             n = daemon._ensure_tier2_covers_now(now_ms)
 
@@ -100,7 +100,7 @@ class TestEnsureTier2CoversNowBackfill:
             patch.object(daemon, "_tier2_row_covers_now", return_value=False),
             patch.object(daemon, "_get_tier1_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
-            patch.object(daemon, "_fill_ads", side_effect=lambda b: b),
+            patch.object(daemon, "_fill_ads", side_effect=lambda b, **kw: b),
         ):
             n = daemon._ensure_tier2_covers_now(now_ms)
 
@@ -169,7 +169,7 @@ class TestEnsureTier2CoversNowBackfill:
             patch.object(daemon, "_tier2_row_covers_now", return_value=False),
             patch.object(daemon, "_get_tier1_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog"),
-            patch.object(daemon, "_fill_ads", side_effect=lambda b: b),
+            patch.object(daemon, "_fill_ads", side_effect=lambda b, **kw: b),
         ):
             daemon._ensure_tier2_covers_now(now_ms)
 

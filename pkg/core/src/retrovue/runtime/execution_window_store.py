@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
-# Entry type (mirrors TransmissionLogEntry without import dependency)
+# Entry type (mirrors PlaylistEntry without import dependency)
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class ExecutionEntry:
     """One block's execution-ready data inside the window.
 
-    Structurally identical to TransmissionLogEntry.  Defined here to
+    Structurally identical to PlaylistEntry.  Defined here to
     avoid a hard import dependency on the planning pipeline module,
     keeping the store independent of pipeline internals.
 
@@ -142,7 +142,7 @@ class ExecutionWindowStore:
                         f"ExecutionEntry block_id={entry.block_id!r} has "
                         f"transmission_log_ref=None and is_operator_override=False. "
                         "Every execution artifact must be derived from a "
-                        "TransmissionLogEntry or be an explicit operator override."
+                        "PlaylistEntry or be an explicit operator override."
                     )
             if not entry.channel_id or entry.programming_day_date is None:
                 raise ValueError(

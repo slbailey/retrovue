@@ -1,6 +1,6 @@
 """Contract tests for INV-DAEMON-SESSION-SCOPE-001.
 
-Each PlaylogHorizonDaemon.evaluate_once() cycle MUST acquire at most one
+Each PlaylistBuilderDaemon.evaluate_once() cycle MUST acquire at most one
 database session for its entire execution. Daemon threads MUST NOT open
 multiple sessions per evaluation cycle, as cumulative checkout storms across
 N concurrent daemons cause QueuePool exhaustion under multi-channel load.
@@ -27,8 +27,8 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _make_daemon():
-    from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
-    return PlaylogHorizonDaemon(
+    from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+    return PlaylistBuilderDaemon(
         channel_id="test-ch",
         min_hours=2,
         programming_day_start_hour=6,
@@ -167,7 +167,7 @@ class TestRule1SingleSessionPerCycle:
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
             patch.object(daemon, "_fill_ads", side_effect=lambda b, db=None: b),
             patch.object(daemon, "_write_to_txlog"),
-            patch("retrovue.runtime.playlog_horizon_daemon.time.sleep"),
+            patch("retrovue.runtime.playlist_builder_daemon.time.sleep"),
         ):
             daemon._farthest_end_utc_ms = now_ms
             daemon.evaluate_once()
@@ -252,9 +252,9 @@ class TestRule3ExtendNoOwnSessions:
         import ast
         import inspect
         import textwrap
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-        source = textwrap.dedent(inspect.getsource(PlaylogHorizonDaemon._extend_to_target))
+        source = textwrap.dedent(inspect.getsource(PlaylistBuilderDaemon._extend_to_target))
         tree = ast.parse(source)
 
         # Find calls to self._fill_ads and self._write_to_txlog and check
@@ -322,7 +322,7 @@ class TestRule4BoundedConcurrentConnections:
                 patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
                 patch.object(daemon, "_fill_ads", side_effect=lambda b, db=None: b),
                 patch.object(daemon, "_write_to_txlog"),
-                patch("retrovue.runtime.playlog_horizon_daemon.time.sleep"),
+                patch("retrovue.runtime.playlist_builder_daemon.time.sleep"),
             ):
                 daemon._farthest_end_utc_ms = now_ms
                 daemon.evaluate_once()

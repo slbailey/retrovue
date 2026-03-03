@@ -1,11 +1,11 @@
-"""Planning artifacts: transmission log artifact generation (write-once, side-effect free)."""
+"""Planning artifacts: playlist artifact generation (write-once, side-effect free)."""
 
-from retrovue.planning.transmission_log_artifact_writer import (
-    TransmissionLogArtifactExistsError,
-    TransmissionLogArtifactWriter,
+from retrovue.planning.playlist_artifact_writer import (
+    PlaylistArtifactExistsError,
+    PlaylistArtifactWriter,
 )
 
 __all__ = [
-    "TransmissionLogArtifactExistsError",
-    "TransmissionLogArtifactWriter",
+    "PlaylistArtifactExistsError",
+    "PlaylistArtifactWriter",
 ]

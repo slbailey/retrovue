@@ -108,7 +108,7 @@ def _start_director(provider: _StubChannelManagerProvider, with_stream_factory: 
     )
     if with_stream_factory:
         director._channel_stream_factory = lambda cid, path: ChannelStream(
-            cid, ts_source_factory=lambda: FakeTsSource(chunk_size=188 * 10)
+            cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10)
         )
     director.start()
     base = f"http://127.0.0.1:{port}"

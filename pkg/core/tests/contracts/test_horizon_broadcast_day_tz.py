@@ -1,4 +1,4 @@
-"""Regression test: PlaylogHorizonDaemon broadcast day boundary must respect channel timezone.
+"""Regression test: PlaylistBuilderDaemon broadcast day boundary must respect channel timezone.
 
 Root cause (2026-02-19): _broadcast_date_for() compared programming_day_start_hour against
 UTC hour, but the schedule compiler uses the channel's local timezone. For America/New_York
@@ -18,8 +18,8 @@ class TestBroadcastDateForTimezone:
     """Test _broadcast_date_for with various timezone configurations."""
 
     def _make_daemon(self, channel_tz="UTC", day_start_hour=6):
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
-        return PlaylogHorizonDaemon(
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+        return PlaylistBuilderDaemon(
             channel_id="test-ch",
             programming_day_start_hour=day_start_hour,
             channel_tz=channel_tz,
@@ -90,8 +90,8 @@ class TestScanOverlap:
 
     def test_scan_date_includes_previous_day(self):
         """The scan start date should be 1 day before the computed broadcast day."""
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
-        daemon = PlaylogHorizonDaemon(
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+        daemon = PlaylistBuilderDaemon(
             channel_id="test-ch",
             channel_tz="America/New_York",
         )
@@ -109,8 +109,8 @@ class TestViolationLogging:
     """Test that consecutive zero-fill cycles produce violation warnings."""
 
     def test_consecutive_zero_fills_counter(self):
-        from retrovue.runtime.playlog_horizon_daemon import PlaylogHorizonDaemon
-        daemon = PlaylogHorizonDaemon(channel_id="test-ch", channel_tz="UTC")
+        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+        daemon = PlaylistBuilderDaemon(channel_id="test-ch", channel_tz="UTC")
         assert daemon._consecutive_zero_fills == 0
 
 

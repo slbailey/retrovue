@@ -3,7 +3,7 @@ Contract Tests — As-Run Reconciliation Contract
 
 Tests assert reconciliation invariants from
 docs/contracts/core/AsRunReconciliationContract_v0.1.md.
-Uses real planning pipeline to generate TransmissionLog; synthetic AsRunLog.
+Uses real planning pipeline to generate Playlist; synthetic AsRunLog.
 No AIR, no modification to planning pipeline or seam validation.
 """
 
@@ -13,13 +13,13 @@ from datetime import date, datetime, time
 
 import pytest
 
-from retrovue.runtime.asrun_reconciler import reconcile_transmission_log
+from retrovue.runtime.asrun_reconciler import reconcile_playlist
 from retrovue.runtime.asrun_types import AsRunBlock, AsRunLog, AsRunSegment
 from retrovue.runtime.planning_pipeline import (
     InMemoryAssetLibrary,
     PlanningDirective,
     PlanningRunRequest,
-    TransmissionLog,
+    Playlist,
     ZoneDirective,
     run_planning_pipeline,
 )
@@ -85,8 +85,8 @@ def _make_asset_library():
 def _make_log_via_pipeline(
     start: time = time(6, 0),
     end: time = time(7, 0),
-) -> TransmissionLog:
-    """Generate TransmissionLog via real planning pipeline."""
+) -> Playlist:
+    """Generate Playlist via real planning pipeline."""
     directive = PlanningDirective(
         channel_id="ch1",
         grid_block_minutes=30,
@@ -112,8 +112,8 @@ def _planned_segment_to_asrun(seg: dict) -> AsRunSegment:
     )
 
 
-def _transmission_log_to_asrun_log(transmission_log: TransmissionLog) -> AsRunLog:
-    """Build an AsRunLog that exactly mirrors the TransmissionLog (perfect match)."""
+def _playlist_to_asrun_log(playlist: Playlist) -> AsRunLog:
+    """Build an AsRunLog that exactly mirrors the Playlist (perfect match)."""
     blocks = [
         AsRunBlock(
             block_id=e.block_id,
@@ -121,11 +121,11 @@ def _transmission_log_to_asrun_log(transmission_log: TransmissionLog) -> AsRunLo
             end_utc_ms=e.end_utc_ms,
             segments=[_planned_segment_to_asrun(s) for s in e.segments],
         )
-        for e in transmission_log.entries
+        for e in playlist.entries
     ]
     return AsRunLog(
-        channel_id=transmission_log.channel_id,
-        broadcast_date=transmission_log.broadcast_date,
+        channel_id=playlist.channel_id,
+        broadcast_date=playlist.broadcast_date,
         blocks=blocks,
     )
 
@@ -137,9 +137,9 @@ def _transmission_log_to_asrun_log(transmission_log: TransmissionLog) -> AsRunLo
 
 def test_perfect_match_success():
     """Perfect match → success=True, no errors, no failure classifications."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is True
     assert report.errors == []
     assert "MISSING_BLOCK" not in report.classification
@@ -156,15 +156,15 @@ def test_perfect_match_success():
 
 def test_missing_block_inv_asrun_001():
     """Missing planned block → MISSING_BLOCK classification."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     # Drop last block from as-run
     as_run_log = AsRunLog(
         channel_id=as_run_log.channel_id,
         broadcast_date=as_run_log.broadcast_date,
         blocks=as_run_log.blocks[:-1],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "MISSING_BLOCK" in report.classification
     assert any("Missing as-run block" in e for e in report.errors)
@@ -177,9 +177,9 @@ def test_missing_block_inv_asrun_001():
 
 def test_extra_block_inv_asrun_001():
     """Extra as-run block not in plan → EXTRA_BLOCK classification."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
-    base = transmission_log.entries[0].start_utc_ms
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
+    base = playlist.entries[0].start_utc_ms
     block_dur = 30 * 60 * 1000
     extra = AsRunBlock(
         block_id="ch1-extra-not-in-plan",
@@ -192,7 +192,7 @@ def test_extra_block_inv_asrun_001():
         broadcast_date=as_run_log.broadcast_date,
         blocks=as_run_log.blocks + [extra],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "EXTRA_BLOCK" in report.classification
     assert any("Extra as-run block" in e or "not in plan" in e for e in report.errors)
@@ -200,8 +200,8 @@ def test_extra_block_inv_asrun_001():
 
 def test_duplicate_block_id_inv_asrun_001():
     """Duplicate block_id in AsRunLog → EXTRA_BLOCK classification."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     first = as_run_log.blocks[0]
     duplicate = AsRunBlock(
         block_id=first.block_id,
@@ -214,7 +214,7 @@ def test_duplicate_block_id_inv_asrun_001():
         broadcast_date=as_run_log.broadcast_date,
         blocks=as_run_log.blocks + [duplicate],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "EXTRA_BLOCK" in report.classification
     assert any("Duplicate block_id" in e for e in report.errors)
@@ -227,8 +227,8 @@ def test_duplicate_block_id_inv_asrun_001():
 
 def test_timing_mismatch_inv_asrun_002():
     """Block start/end time mismatch → BLOCK_TIME_MISMATCH classification."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     # Change first block's start_utc_ms
     first = as_run_log.blocks[0]
     as_run_log = AsRunLog(
@@ -244,7 +244,7 @@ def test_timing_mismatch_inv_asrun_002():
             *as_run_log.blocks[1:],
         ],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "BLOCK_TIME_MISMATCH" in report.classification
     assert any("start_utc_ms mismatch" in e or "end_utc_ms" in e for e in report.errors)
@@ -257,8 +257,8 @@ def test_timing_mismatch_inv_asrun_002():
 
 def test_segment_order_mismatch_inv_asrun_003():
     """Segment order/identity mismatch → SEGMENT_SEQUENCE_MISMATCH classification."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     if len(as_run_log.blocks[0].segments) < 2:
         pytest.skip("Need at least 2 segments in first block")
     first = as_run_log.blocks[0]
@@ -277,7 +277,7 @@ def test_segment_order_mismatch_inv_asrun_003():
             *as_run_log.blocks[1:],
         ],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "SEGMENT_SEQUENCE_MISMATCH" in report.classification
     assert any("sequence mismatch" in e for e in report.errors)
@@ -290,8 +290,8 @@ def test_segment_order_mismatch_inv_asrun_003():
 
 def test_phantom_segment_inv_asrun_004():
     """As-run segment not in plan → PHANTOM_SEGMENT classification."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     first = as_run_log.blocks[0]
     phantom = AsRunSegment(
         segment_type="filler",
@@ -313,7 +313,7 @@ def test_phantom_segment_inv_asrun_004():
             *as_run_log.blocks[1:],
         ],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "PHANTOM_SEGMENT" in report.classification
     assert any("phantom" in e.lower() for e in report.errors)
@@ -326,8 +326,8 @@ def test_phantom_segment_inv_asrun_004():
 
 def test_recovery_segment_allowed_classified_runtime_recovery():
     """Recovery segment allowed → classified RUNTIME_RECOVERY, no phantom/mismatch error."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     first = as_run_log.blocks[0]
     recovery_seg = AsRunSegment(
         segment_type="filler",
@@ -349,7 +349,7 @@ def test_recovery_segment_allowed_classified_runtime_recovery():
             *as_run_log.blocks[1:],
         ],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert "RUNTIME_RECOVERY" in report.classification
     # Recovery segment is allowed: no PHANTOM_SEGMENT or SEGMENT_SEQUENCE_MISMATCH for it
     assert "PHANTOM_SEGMENT" not in report.classification
@@ -364,10 +364,10 @@ def test_recovery_segment_allowed_classified_runtime_recovery():
 
 def test_planned_pad_is_match():
     """Planned PAD in both plan and as-run → MATCH (no recovery, no degradation)."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     # The pipeline produces filler/pad segments — a perfect mirror is a perfect match.
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is True
     assert report.errors == []
     assert "RUNTIME_RECOVERY" not in report.classification
@@ -376,8 +376,8 @@ def test_planned_pad_is_match():
 
 def test_recovery_runway_insufficiency_classified_runway_degradation():
     """Recovery due to runway insufficiency → RUNTIME_RECOVERY + RUNWAY_DEGRADATION."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     first = as_run_log.blocks[0]
     runway_recovery_seg = AsRunSegment(
         segment_type="filler",
@@ -400,7 +400,7 @@ def test_recovery_runway_insufficiency_classified_runway_degradation():
             *as_run_log.blocks[1:],
         ],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is True
     assert "RUNTIME_RECOVERY" in report.classification
     assert "RUNWAY_DEGRADATION" in report.classification
@@ -410,15 +410,15 @@ def test_recovery_runway_insufficiency_classified_runway_degradation():
 
 def test_missing_block_not_runway_degradation():
     """Missing block → MISSING_BLOCK, not RUNWAY_DEGRADATION."""
-    transmission_log = _make_log_via_pipeline()
-    as_run_log = _transmission_log_to_asrun_log(transmission_log)
+    playlist = _make_log_via_pipeline()
+    as_run_log = _playlist_to_asrun_log(playlist)
     # Drop last block from as-run
     as_run_log = AsRunLog(
         channel_id=as_run_log.channel_id,
         broadcast_date=as_run_log.broadcast_date,
         blocks=as_run_log.blocks[:-1],
     )
-    report = reconcile_transmission_log(transmission_log, as_run_log)
+    report = reconcile_playlist(playlist, as_run_log)
     assert report.success is False
     assert "MISSING_BLOCK" in report.classification
     assert "RUNWAY_DEGRADATION" not in report.classification

@@ -256,16 +256,16 @@ class TestFillWithoutAssetLibrary:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Test 4: transmission_log persistence round-trip
+# Test 4: playlist_events persistence round-trip
 # ─────────────────────────────────────────────────────────────────────
 
 
-class TestTransmissionLogPersistence:
-    """transmission_log write/read round-trip via the SQLAlchemy model."""
+class TestPlaylistEventPersistence:
+    """playlist_event write/read round-trip via the SQLAlchemy model."""
 
-    def test_transmission_log_write_read(self):
+    def test_playlist_event_write_read(self):
         """
-        Write a filled block to transmission_log and read it back.
+        Write a filled block to playlist_events and read it back.
         Verifies segments JSONB round-trips correctly.
         """
         from retrovue.infra.uow import session as db_session_factory
@@ -304,14 +304,14 @@ class TestTransmissionLogPersistence:
         ]
 
         try:
-            from retrovue.domain.entities import TransmissionLog
+            from retrovue.domain.entities import PlaylistEvent
         except ImportError:
-            pytest.skip("TransmissionLog entity not yet created (pre-build)")
+            pytest.skip("PlaylistEvent entity not yet created (pre-build)")
 
         try:
             with db_session_factory() as db:
                 # Write
-                row = TransmissionLog(
+                row = PlaylistEvent(
                     block_id=block_id,
                     channel_slug=channel_slug,
                     broadcast_day=broadcast_day,
@@ -323,8 +323,8 @@ class TestTransmissionLogPersistence:
                 db.flush()
 
                 # Read back in same session
-                found = db.query(TransmissionLog).filter(
-                    TransmissionLog.block_id == block_id
+                found = db.query(PlaylistEvent).filter(
+                    PlaylistEvent.block_id == block_id
                 ).first()
 
                 assert found is not None, "Written row must be readable."
@@ -338,21 +338,21 @@ class TestTransmissionLogPersistence:
 
         except Exception as e:
             if "does not exist" in str(e) or "no such table" in str(e):
-                pytest.skip(f"transmission_log table not yet migrated: {e}")
+                pytest.skip(f"playlist_events table not yet migrated: {e}")
             raise
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Test 5: Evidence server segment lookup from transmission_log
+# Test 5: Evidence server segment lookup from playlist_events
 # ─────────────────────────────────────────────────────────────────────
 
 
 class TestEvidenceServerSegmentLookup:
-    """Evidence server queries transmission_log for segment enrichment."""
+    """Evidence server queries playlist_events for segment enrichment."""
 
     def test_lookup_correct_segment_by_index(self):
         """
-        Given a transmission_log row, querying by (block_id, segment_index)
+        Given a playlist_events row, querying by (block_id, segment_index)
         returns the correct segment_type and title.
         """
         segments = [
@@ -367,14 +367,14 @@ class TestEvidenceServerSegmentLookup:
              "segment_duration_ms": 450_000, "title": "BLACK"},
         ]
 
-        def fake_query_transmission_log(block_id):
+        def fake_query_playlist_event(block_id):
             return segments
 
         # Simulate the evidence server lookup logic
         block_id = "block-test-001"
         segment_index = 1
 
-        segs = fake_query_transmission_log(block_id)
+        segs = fake_query_playlist_event(block_id)
         found = next((s for s in segs if s["segment_index"] == segment_index), None)
 
         assert found is not None
@@ -399,7 +399,7 @@ class TestEvidenceServerSegmentLookup:
         assert found["title"] == "BLACK"
 
     def test_lookup_missing_block_returns_none(self):
-        """When block_id not found in transmission_log, lookup returns None gracefully."""
+        """When block_id not found in playlist_events, lookup returns None gracefully."""
         cache: dict = {}
 
         def lookup(block_id, segment_index):

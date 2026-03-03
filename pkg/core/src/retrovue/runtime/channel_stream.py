@@ -110,6 +110,30 @@ class BytesBoundedQueue:
         with self._lock:
             return len(self._chunks)
 
+_SpikeKind = Literal["work_spike", "scheduling_jitter", "no_spike"]
+
+
+def _classify_upstream_spike(
+    duration_ms: float,
+    select_ms: float,
+    recv_ms: float,
+    put_ms: float,
+    threshold_ms: float,
+) -> _SpikeKind:
+    """
+    INV-HTTP-UPSTREAM-SPIKE-001: Classify an upstream loop iteration.
+
+    WARNING fires only when data-path work (recv+put) exceeds the threshold.
+    A spike dominated by select() is OS scheduling / GC jitter — socket buffers
+    absorb the gap and no data-path problem exists.  Downgrade to DEBUG.
+    """
+    if duration_ms <= threshold_ms:
+        return "no_spike"
+    if recv_ms + put_ms > threshold_ms:
+        return "work_spike"
+    return "scheduling_jitter"
+
+
 _logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -407,7 +431,7 @@ class ChannelStream:
         self,
         channel_id: str,
         socket_path: str | Path | None = None,
-        ts_source_factory: Callable[[], TsSource] | None = None,
+        ts_source_factory: Callable[..., TsSource] | None = None,
         hls_manager: Any | None = None,
         *,
         ring_buffer_max_bytes: int | None = None,
@@ -469,7 +493,9 @@ class ChannelStream:
         self.ts_source: TsSource | None = None
 
         # Reconnect backoff
-        self._reconnect_delays = [1.0, 2.0, 5.0, 10.0]
+        # INV-CHANNEL-STREAM-RECONNECT-001: ~33s total window gives
+        # liveness recovery enough time to restart the producer.
+        self._reconnect_delays = [1.0, 2.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
         self._current_reconnect_delay_index = 0
 
         # Debug: log first 16 bytes once per connection to verify TS sync 0x47
@@ -493,9 +519,14 @@ class ChannelStream:
         return socket_dir / f"channel_{self.channel_id}.sock"
 
     def _create_ts_source(self) -> TsSource:
-        """Create TS source (UDS or fake for tests)."""
+        """Create TS source (UDS or fake for tests).
+
+        Passes _stop_event to the factory so blocking factories (e.g. those
+        waiting on a socket queue) can exit immediately when stop() is called
+        (INV-CHANNEL-STREAM-SHUTDOWN-001).
+        """
         if self.ts_source_factory:
-            return self.ts_source_factory()
+            return self.ts_source_factory(self._stop_event)
         socket_path = self.get_socket_path()
         return UdsTsSource(socket_path)
 
@@ -512,7 +543,25 @@ class ChannelStream:
                 except Exception:
                     pass
 
-            self.ts_source = self._create_ts_source()
+            try:
+                self.ts_source = self._create_ts_source()
+            except Exception as e:
+                self._logger.warning(
+                    "TS source factory failed for channel %s (attempt %d/%d): %s",
+                    self.channel_id, attempt + 1, max_attempts, e,
+                )
+                self.ts_source = None
+                # Fall through to backoff/retry below
+                if attempt < max_attempts - 1:
+                    delay = self._reconnect_delays[
+                        min(self._current_reconnect_delay_index, len(self._reconnect_delays) - 1)
+                    ]
+                    if self._stop_event.wait(timeout=delay):
+                        return False
+                    self._current_reconnect_delay_index = min(
+                        self._current_reconnect_delay_index + 1, len(self._reconnect_delays) - 1
+                    )
+                continue
 
             if isinstance(self.ts_source, UdsTsSource):
                 if self.ts_source.connect(timeout=2.0):
@@ -595,46 +644,70 @@ class ChannelStream:
                 t_after_recv = time.monotonic_ns()
                 bytes_read_this_iter = len(chunk)
                 if not chunk:
-                    break
+                    # INV-CHANNEL-STREAM-RECONNECT-001: EOF from upstream
+                    # (AIR crashed or was restarted).  Reconnect via factory
+                    # instead of exiting — the factory will resolve the
+                    # current producer's socket queue dynamically.
+                    self._logger.info(
+                        "[HTTP] UPSTREAM_EOF channel=%s, attempting reconnect",
+                        self.channel_id,
+                    )
+                    if self.ts_source:
+                        try:
+                            self.ts_source.close()
+                        except Exception:
+                            pass
+                        self.ts_source = None
+                    self._first_chunk_logged = False
+                    continue  # next iteration enters _connect_with_backoff
                 self._ring_buffer.put(chunk)
                 t_after_put = time.monotonic_ns()
             except IOError as e:
                 self._logger.warning(
-                    "[HTTP] UPSTREAM_DISCONNECTED reason=read_error error=%s",
-                    e,
+                    "[HTTP] UPSTREAM_DISCONNECTED reason=read_error error=%s "
+                    "channel=%s, attempting reconnect",
+                    e, self.channel_id,
                 )
-                break
+                if self.ts_source:
+                    try:
+                        self.ts_source.close()
+                    except Exception:
+                        pass
+                    self.ts_source = None
+                self._first_chunk_logged = False
+                continue  # reconnect via _connect_with_backoff
             finally:
                 duration_ms = (time.monotonic_ns() - t_start) / 1e6
                 self._logger.debug(
                     "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f",
                     self.channel_id, duration_ms,
                 )
-                is_spike = duration_ms > spike_threshold_long_ms
-
-                if is_spike:
-                    select_ms = (t_after_select - t_start) / 1e6
-                    recv_ms = (t_after_recv - t_after_select) / 1e6
-                    put_ms = (t_after_put - t_after_recv) / 1e6
+                select_ms = (t_after_select - t_start) / 1e6
+                recv_ms = (t_after_recv - t_after_select) / 1e6
+                put_ms = (t_after_put - t_after_recv) / 1e6
+                spike_kind = _classify_upstream_spike(
+                    duration_ms, select_ms, recv_ms, put_ms,
+                    threshold_ms=spike_threshold_long_ms,
+                )
+                if spike_kind != "no_spike":
                     if self._stop_event.is_set():
                         # Teardown drain: socket closing causes slow I/O — expected, harmless
                         self._logger.info(
                             "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f (teardown drain) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
-                            self.channel_id,
-                            duration_ms,
-                            select_ms,
-                            recv_ms,
-                            put_ms,
+                            self.channel_id, duration_ms, select_ms, recv_ms, put_ms,
+                        )
+                    elif spike_kind == "work_spike":
+                        # Data path (recv+put) is actually slow — actionable
+                        self._logger.warning(
+                            "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f (work spike >%.0fms) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
+                            self.channel_id, duration_ms, spike_threshold_long_ms,
+                            select_ms, recv_ms, put_ms,
                         )
                     else:
-                        self._logger.warning(
-                            "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f (spike >%.0fms long-threshold) select_ms=%.2f recv_ms=%.2f put_ms=%.2f",
-                            self.channel_id,
-                            duration_ms,
-                            spike_threshold_long_ms,
-                            select_ms,
-                            recv_ms,
-                            put_ms,
+                        # select-dominated: OS scheduling / GC jitter, absorbed by socket buffers
+                        self._logger.debug(
+                            "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f (scheduling jitter select_ms=%.2f) recv_ms=%.2f put_ms=%.2f",
+                            self.channel_id, duration_ms, select_ms, recv_ms, put_ms,
                         )
 
         self._ring_buffer.close()

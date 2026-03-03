@@ -1,6 +1,6 @@
-"""Transmission Log Seam Validator — Contract Enforcement
+"""Playlist Seam Validator — Contract Enforcement
 
-Validates TransmissionLog seam invariants before execution eligibility.
+Validates Playlist seam invariants before execution eligibility.
 See: docs/contracts/core/TransmissionLogSeamContract_v0.1.md
 
 Pure artifact validation. No AIR dependencies. No side effects.
@@ -11,22 +11,22 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from retrovue.runtime.planning_pipeline import TransmissionLog
+    from retrovue.runtime.planning_pipeline import Playlist
 
 
-class TransmissionLogSeamError(Exception):
-    """Raised when TransmissionLog violates seam invariants."""
+class PlaylistSeamError(Exception):
+    """Raised when Playlist violates seam invariants."""
 
     pass
 
 
-def validate_transmission_log_seams(
-    log: TransmissionLog,
+def validate_playlist_seams(
+    log: Playlist,
     grid_block_minutes: int,
 ) -> None:
-    """Enforce seam invariants on a TransmissionLog.
+    """Enforce seam invariants on a Playlist.
 
-    Raises TransmissionLogSeamError if any invariant is violated.
+    Raises PlaylistSeamError if any invariant is violated.
 
     Invariants enforced:
     - INV-TL-SEAM-001: Contiguous boundaries (no gaps or overlaps)
@@ -40,7 +40,7 @@ def validate_transmission_log_seams(
     for i, entry in enumerate(entries):
         # INV-TL-SEAM-004 — Non-zero duration
         if entry.end_utc_ms <= entry.start_utc_ms:
-            raise TransmissionLogSeamError(
+            raise PlaylistSeamError(
                 f"INV-TL-SEAM-004 violated: entry[{i}] (block_id={entry.block_id}) "
                 f"has non-positive duration: start_utc_ms={entry.start_utc_ms}, "
                 f"end_utc_ms={entry.end_utc_ms}"
@@ -49,7 +49,7 @@ def validate_transmission_log_seams(
         # INV-TL-SEAM-002 — Grid duration consistency
         actual_dur_ms = entry.end_utc_ms - entry.start_utc_ms
         if actual_dur_ms != expected_dur_ms:
-            raise TransmissionLogSeamError(
+            raise PlaylistSeamError(
                 f"INV-TL-SEAM-002 violated: entry[{i}] (block_id={entry.block_id}) "
                 f"duration {actual_dur_ms} ms != expected "
                 f"grid_block_minutes*60*1000 = {expected_dur_ms} ms"
@@ -60,29 +60,29 @@ def validate_transmission_log_seams(
         if i + 1 < len(entries):
             next_entry = entries[i + 1]
             if entry.end_utc_ms != next_entry.start_utc_ms:
-                raise TransmissionLogSeamError(
+                raise PlaylistSeamError(
                     f"INV-TL-SEAM-001 violated: entry[{i}].end_utc_ms={entry.end_utc_ms} "
                     f"!= entry[{i+1}].start_utc_ms={next_entry.start_utc_ms}; "
                     f"gaps or overlaps not allowed"
                 )
             if next_entry.start_utc_ms <= entry.start_utc_ms:
-                raise TransmissionLogSeamError(
+                raise PlaylistSeamError(
                     f"INV-TL-SEAM-003 violated: entry[{i+1}] not strictly after entry[{i}]; "
                     f"start_utc_ms ordering violated"
                 )
 
 
-def validate_transmission_log_grid_alignment(
-    log: TransmissionLog,
+def validate_playlist_grid_alignment(
+    log: Playlist,
     grid_block_minutes: int,
 ) -> None:
-    """Enforce grid alignment on all TransmissionLogEntry boundaries.
+    """Enforce grid alignment on all PlaylistEntry boundaries.
 
     Raises ValueError if any entry start or end time does not fall on a
     grid boundary (i.e. is not divisible by grid_block_minutes * 60_000 ms).
 
     Invariant enforced:
-    - INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001: All TransmissionLogEntry boundaries
+    - INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001: All PlaylistEntry boundaries
       must align to the channel grid.
 
     Empty entry lists pass trivially.

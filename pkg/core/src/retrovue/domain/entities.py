@@ -924,14 +924,14 @@ class Zone(Base):
         return f"<Zone(id={self.id}, plan_id={self.plan_id}, name='{self.name}', start={self.start_time}, end={self.end_time})>"
 
 
-class CompiledProgramLog(Base):
-    """Cached compiled schedule for a channel/broadcast-day pair.
+class ProgramLogDay(Base):
+    """Tier 1: cached compiled schedule for a channel/broadcast-day pair.
 
     DB-first: once a row exists with locked=True, the schedule is never
     recompiled unless the row is explicitly deleted (e.g. via rebuild CLI).
     """
 
-    __tablename__ = "compiled_program_log"
+    __tablename__ = "program_log_days"
 
     id: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
@@ -939,7 +939,7 @@ class CompiledProgramLog(Base):
     channel_id: Mapped[str] = mapped_column(String(255), nullable=False)
     broadcast_day: Mapped[date] = mapped_column(Date, nullable=False)
     schedule_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    compiled_json: Mapped[dict[str, Any]] = mapped_column(PG_JSONB, nullable=False)
+    program_log_json: Mapped[dict[str, Any]] = mapped_column(PG_JSONB, nullable=False)
     locked: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sa.text("true")
     )
@@ -954,14 +954,15 @@ class CompiledProgramLog(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("channel_id", "broadcast_day", name="uq_compiled_program_log_channel_day"),
-        Index("ix_compiled_program_log_channel_id", "channel_id"),
-        Index("ix_compiled_program_log_broadcast_day", "broadcast_day"),
-        Index("ix_compiled_program_log_range", "channel_id", "range_start", "range_end"),
+        UniqueConstraint("channel_id", "broadcast_day", name="uq_program_log_days_channel_day"),
+        Index("ix_program_log_days_channel_id", "channel_id"),
+        Index("ix_program_log_days_broadcast_day", "broadcast_day"),
+        Index("ix_program_log_days_range", "channel_id", "range_start", "range_end"),
     )
 
     def __repr__(self) -> str:
-        return f"<CompiledProgramLog(id={self.id}, channel_id={self.channel_id}, broadcast_day={self.broadcast_day}, locked={self.locked})>"
+        return f"<ProgramLogDay(id={self.id}, channel_id={self.channel_id}, broadcast_day={self.broadcast_day}, locked={self.locked})>"
+
 
 
 
@@ -1006,23 +1007,23 @@ class TrafficPlayLog(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Transmission Log (late-binding traffic architecture)
+# Playlist Events (Tier 2 — execution plan)
 # Contract: docs/contracts/runtime/TransmissionLogPersistenceContract.md
 # INV-TRAFFIC-LATE-BIND-001
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class TransmissionLog(Base):
-    """Authoritative record of what was fed to AIR for each block.
+class PlaylistEvent(Base):
+    """Tier 2: authoritative record of what was fed to AIR for each block.
 
-    Written at feed time by BlockPlanProducer._try_feed_block(), immediately
-    after fill_ad_blocks() fills empty filler placeholders with real interstitials.
-    Read by EvidenceServicer to enrich .asrun logs with commercial titles.
+    Written by PlaylistBuilderDaemon after filling ad break placeholders
+    with real interstitials. Read by EvidenceServicer to enrich .asrun logs
+    with commercial titles.
 
     See: docs/contracts/runtime/TransmissionLogPersistenceContract.md
     """
 
-    __tablename__ = "transmission_log"
+    __tablename__ = "playlist_events"
 
     block_id: Mapped[str] = mapped_column(
         String(255), primary_key=True, nullable=False
@@ -1032,17 +1033,21 @@ class TransmissionLog(Base):
     start_utc_ms: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     end_utc_ms: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     segments: Mapped[list[dict[str, Any]]] = mapped_column(PG_JSONB, nullable=False)
+    window_uuid: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )
 
     __table_args__ = (
-        Index("ix_transmission_log_channel_day", "channel_slug", "broadcast_day"),
+        Index("ix_playlist_events_channel_day", "channel_slug", "broadcast_day"),
+        Index("ix_playlist_events_window_uuid", "window_uuid"),
     )
 
     def __repr__(self) -> str:
         return (
-            f"<TransmissionLog(block_id={self.block_id!r}, "
+            f"<PlaylistEvent(block_id={self.block_id!r}, "
             f"channel={self.channel_slug!r}, "
             f"day={self.broadcast_day})>"
         )

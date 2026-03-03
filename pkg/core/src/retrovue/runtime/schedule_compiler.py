@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import uuid as uuid_mod
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, date
 from typing import Any
@@ -73,6 +74,9 @@ class ProgramBlockOutput:
     episode_duration_sec: int
     collection: str | None = None
     selector: dict[str, Any] | None = None
+    window_uuid: str | None = None
+    template_id: str | None = None
+    epg_title: str | None = None
 
     def end_at(self) -> datetime:
         return self.start_at + timedelta(seconds=self.slot_duration_sec)
@@ -89,6 +93,12 @@ class ProgramBlockOutput:
             d["collection"] = self.collection
         if self.selector:
             d["selector"] = self.selector
+        if self.window_uuid:
+            d["window_uuid"] = self.window_uuid
+        if self.template_id:
+            d["template_id"] = self.template_id
+        if self.epg_title:
+            d["epg_title"] = self.epg_title
         return d
 
 
@@ -177,6 +187,23 @@ def select_movie(
 def expand_templates(dsl: dict[str, Any]) -> dict[str, Any]:
     """Expand template references in the schedule section."""
     templates = dsl.get("templates", {})
+    # Disambiguation (INV-TEMPLATE-GRAFT-DUAL-YAML-001): if any template
+    # entry has a "segments" key, this is a new-style template registry
+    # (segment-composition templates), NOT legacy day-schedule aliases.
+    # Skip expansion — schedule entries use type:template dispatch instead.
+    if any(isinstance(v, dict) and "segments" in v for v in templates.values()):
+        # Rule 6: no mixed mapping — all entries must be segment-composition.
+        legacy_aliases = [
+            k for k, v in templates.items()
+            if not (isinstance(v, dict) and "segments" in v)
+        ]
+        if legacy_aliases:
+            raise CompileError(
+                f"templates: cannot mix segment-composition templates with "
+                f"legacy day-aliases in the same mapping. "
+                f"Legacy aliases found: {legacy_aliases}"
+            )
+        return dsl
     schedule = dsl.get("schedule", {})
     expanded_schedule: dict[str, Any] = {}
 
@@ -638,6 +665,133 @@ def _compile_movie_marathon(
     return blocks
 
 
+def _compile_template_entry(
+    block_def: dict[str, Any],
+    broadcast_day: str,
+    tz_name: str,
+    resolver: AssetResolver,
+    grid_minutes: int,
+    templates: dict[str, Any],
+    seed: int | None = None,
+) -> list[ProgramBlockOutput]:
+    """Compile a type:template schedule entry — fills a time range with
+    primary content from the template's segment definitions.
+
+    Each iteration selects primary content (from the first pool-source
+    segment), producing one ProgramBlockOutput per editorial item.
+    All blocks within the window share the same window_uuid.
+
+    DSL shape:
+        - type: template
+          name: hbo_feature_with_intro
+          start: "06:00"
+          end: "14:00"
+          epg_title: "HBO Feature Presentation"
+          allow_bleed: true
+    """
+    template_name = block_def["name"]
+    if template_name not in templates:
+        raise CompileError(f"Unknown template: {template_name}")
+
+    tpl = templates[template_name]
+    segments = tpl.get("segments", [])
+    if not segments:
+        raise CompileError(f"Template {template_name} has no segments")
+
+    # INV-TEMPLATE-PRIMARY-SEGMENT-001: Identify the primary content segment.
+    #  1. Explicit: exactly one segment with primary: true
+    #  2. Convention: exactly one segment with source.type == "pool"
+    #  3. Otherwise: fail — operator must set primary: true on one segment.
+    marked = [s for s in segments if s.get("primary") is True]
+    if len(marked) == 1:
+        primary_seg = marked[0]
+    elif len(marked) > 1:
+        raise CompileError(
+            f"Template {template_name} has {len(marked)} segments with "
+            f"primary: true; exactly one is required"
+        )
+    else:
+        pools = [s for s in segments if s.get("source", {}).get("type") == "pool"]
+        if len(pools) == 1:
+            primary_seg = pools[0]
+        elif len(pools) == 0:
+            raise CompileError(
+                f"Template {template_name} has no pool segment — "
+                f"set primary: true on exactly one segment"
+            )
+        else:
+            raise CompileError(
+                f"Template {template_name} has {len(pools)} pool segments — "
+                f"set primary: true on exactly one segment"
+            )
+
+    primary_source = primary_seg["source"]
+    pool_name = primary_source["name"]
+
+    start_str = block_def.get("start", "06:00")
+    end_str = block_def.get("end", "22:00")
+    allow_bleed = block_def.get("allow_bleed", False)
+    epg_title = block_def.get("epg_title")
+
+    current_time = _parse_time(start_str, broadcast_day, tz_name)
+    end_time = _parse_time(end_str, broadcast_day, tz_name)
+
+    # Overnight wrap
+    if end_time <= current_time:
+        end_time = end_time + timedelta(hours=24)
+
+    window_uuid = str(uuid_mod.uuid4())
+
+    # Per-window dedupe — no duplicate primary assets within a single window.
+    used_ids: set[str] = set()
+
+    blocks: list[ProgramBlockOutput] = []
+    pick_seed = seed if seed is not None else 42
+    max_attempts = 200
+
+    while max_attempts > 0:
+        if current_time >= end_time:
+            break
+
+        max_attempts -= 1
+
+        asset_id = _select_movie_no_repeat(
+            collections=[pool_name],
+            resolver=resolver,
+            seed=pick_seed,
+            used_ids=used_ids,
+        )
+        pick_seed += 1
+
+        if asset_id is None:
+            # Pool exhausted within window — reset and continue
+            used_ids.clear()
+            continue
+
+        used_ids.add(asset_id)
+        meta = resolver.lookup(asset_id)
+        slot_duration = _grid_slot_duration(grid_minutes, meta.duration_sec)
+
+        block = ProgramBlockOutput(
+            title=meta.title or asset_id,
+            asset_id=asset_id,
+            start_at=current_time,
+            slot_duration_sec=slot_duration,
+            episode_duration_sec=meta.duration_sec,
+            collection=pool_name,
+            window_uuid=window_uuid,
+            template_id=template_name,
+            epg_title=epg_title,
+        )
+        blocks.append(block)
+        current_time = block.end_at()
+
+        if current_time > end_time and not allow_bleed:
+            blocks.pop()
+            break
+
+    return blocks
+
 
 def _compile_episode_block(
     block_def: dict[str, Any],
@@ -963,6 +1117,7 @@ def compile_schedule(
     all_blocks: list[ProgramBlockOutput] = []
     used_movie_ids: set[str] = set()  # track movies across marathon blocks to avoid repeats
     schedule = expanded.get("schedule", {})
+    templates = expanded.get("templates", {})
 
     # Check if schedule uses any DOW/group keys (new layered format)
     schedule_keys = set(schedule.keys())
@@ -987,6 +1142,11 @@ def compile_schedule(
                 elif "movie_block" in block_def or "movie_selector" in block_def:
                     blocks = _compile_movie_block(
                         block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                    )
+                elif block_def.get("type") == "template":
+                    blocks = _compile_template_entry(
+                        block_def, broadcast_day, tz_name, resolver, grid_minutes,
+                        templates=templates, seed=seed,
                     )
                 else:
                     blocks = _compile_sitcom_block(
@@ -1018,6 +1178,11 @@ def compile_schedule(
                         elif "movie_block" in block_def or "movie_selector" in block_def:
                             blocks = _compile_movie_block(
                                 block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
+                            )
+                        elif block_def.get("type") == "template":
+                            blocks = _compile_template_entry(
+                                block_def, broadcast_day, tz_name, resolver, grid_minutes,
+                                templates=templates, seed=seed,
                             )
                         else:
                             blocks = _compile_sitcom_block(

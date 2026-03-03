@@ -235,7 +235,7 @@ def _start_director_with_deficit_source(
     def channel_stream_factory(cid: str, path: str) -> ChannelStream:
         return ChannelStream(
             cid,
-            ts_source_factory=lambda: ContentDeficitTsSource(),
+            ts_source_factory=lambda _=None: ContentDeficitTsSource(),
         )
 
     director._channel_stream_factory = channel_stream_factory
