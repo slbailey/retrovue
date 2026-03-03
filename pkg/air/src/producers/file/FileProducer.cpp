@@ -16,6 +16,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "retrovue/decode/FFmpegInitGuard.hpp"
+
 // FFmpeg headers are C; keep type unambiguous (::SwrContext everywhere).
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -800,6 +802,11 @@ namespace retrovue::producers::file
       return false;
     }
 
+    // INV-FFMPEG-CODEC-INIT-SERIALIZATION-001: serialize all codec init.
+    // Scoped block: guard released before scaler init (steady-state safe).
+    {
+    std::lock_guard<std::mutex> init_guard(retrovue::decode::ffmpeg_init_mutex());
+
     // Open input file
     if (avformat_open_input(&format_ctx_, config_.asset_uri.c_str(), nullptr, nullptr) < 0)
     {
@@ -974,6 +981,7 @@ namespace retrovue::producers::file
         }
       }
     }
+    }  // init_guard released
 
     // Initialize scaler with aspect ratio handling
     int src_width = codec_ctx_->width;

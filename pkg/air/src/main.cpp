@@ -13,6 +13,10 @@
 #include <memory>
 #include <string>
 
+extern "C" {
+#include <libavformat/avformat.h>
+}
+
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
@@ -142,6 +146,10 @@ int main(int argc, char** argv) {
   signal(SIGABRT, crash_handler);
   signal(SIGILL, crash_handler);
   signal(SIGFPE, crash_handler);
+
+  // INV-FFMPEG-GLOBAL-INIT-001: Initialize FFmpeg global state before any
+  // threads are spawned. Required for thread-safe network/TLS initialization.
+  avformat_network_init();
 
   try {
     ServerConfig config = ParseArgs(argc, argv);

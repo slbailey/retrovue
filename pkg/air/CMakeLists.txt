@@ -471,6 +471,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/ContentSeamTransitionFlashContractTests.cpp
   tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp
   tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp
+  tests/contracts/BlockPlan/CadenceSourceSyncContractTests.cpp
   tests/contracts/BlockPlan/AspectPreserveContractTests.cpp
   tests/contracts/BlockPlan/LoudnessGainContractTests.cpp
   tests/contracts/test_inv_execution_continuous_output_001.cpp
@@ -478,6 +479,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/test_inv_no_float_fps_timebase_001.cpp
   
   tests/blockplan/test_segment_aware_playback_proof.cpp
+  tests/contracts/BlockPlan/FFmpegCodecInitSerializationTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests

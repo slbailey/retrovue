@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"  // SnapToStandardRationalFps
+#include "retrovue/decode/FFmpegInitGuard.hpp"
 
 namespace {
 
@@ -92,81 +94,88 @@ bool FFmpegDecoder::Open() {
   // Suppress FFmpeg warnings but keep errors visible
   av_log_set_level(AV_LOG_ERROR);
 
-  // Allocate format context
-  format_ctx_ = avformat_alloc_context();
-  if (!format_ctx_) {
-    std::cerr << "[FFmpegDecoder] Failed to allocate format context" << std::endl;
-    return false;
-  }
+  // INV-FFMPEG-CODEC-INIT-SERIALIZATION-001: Serialize all codec initialization
+  // (avformat_open_input, avformat_find_stream_info, avcodec_open2) via
+  // process-wide mutex. Released before scaler/packet alloc (steady-state safe).
+  {
+    std::lock_guard<std::mutex> init_guard(retrovue::decode::ffmpeg_init_mutex());
 
-  // Set interrupt callback so av_read_frame etc. abort promptly on stop.
-  if (interrupt_flags_.fill_stop || interrupt_flags_.session_stop) {
-    format_ctx_->interrupt_callback.callback = InterruptCallback;
-    format_ctx_->interrupt_callback.opaque = &interrupt_flags_;
-  }
+    // Allocate format context
+    format_ctx_ = avformat_alloc_context();
+    if (!format_ctx_) {
+      std::cerr << "[FFmpegDecoder] Failed to allocate format context" << std::endl;
+      return false;
+    }
 
-  // Open input file — DECODER_STEP: open_input
-  int ret = avformat_open_input(&format_ctx_, config_.input_uri.c_str(), nullptr, nullptr);
-  if (ret < 0) {
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(ret, errbuf, sizeof(errbuf));
-    std::cerr << "[FFmpegDecoder] DECODER_STEP open_input FAILED uri=" << config_.input_uri
-              << " ret=" << ret << " err=" << errbuf << std::endl;
-    avformat_free_context(format_ctx_);
-    format_ctx_ = nullptr;
-    return false;
-  }
+    // Set interrupt callback so av_read_frame etc. abort promptly on stop.
+    if (interrupt_flags_.fill_stop || interrupt_flags_.session_stop) {
+      format_ctx_->interrupt_callback.callback = InterruptCallback;
+      format_ctx_->interrupt_callback.opaque = &interrupt_flags_;
+    }
 
-  // Retrieve stream information — DECODER_STEP: avformat_find_stream_info
-  ret = avformat_find_stream_info(format_ctx_, nullptr);
-  if (ret < 0) {
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(ret, errbuf, sizeof(errbuf));
-    std::cerr << "[FFmpegDecoder] DECODER_STEP avformat_find_stream_info FAILED uri="
-              << config_.input_uri << " ret=" << ret << " err=" << errbuf << std::endl;
-    Close();
-    return false;
-  }
+    // Open input file — DECODER_STEP: open_input
+    int ret = avformat_open_input(&format_ctx_, config_.input_uri.c_str(), nullptr, nullptr);
+    if (ret < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, sizeof(errbuf));
+      std::cerr << "[FFmpegDecoder] DECODER_STEP open_input FAILED uri=" << config_.input_uri
+                << " ret=" << ret << " err=" << errbuf << std::endl;
+      avformat_free_context(format_ctx_);
+      format_ctx_ = nullptr;
+      return false;
+    }
 
-  // Find video stream — DECODER_STEP: find_video_stream
-  if (!FindVideoStream()) {
-    std::cerr << "[FFmpegDecoder] DECODER_STEP find_video_stream FAILED uri="
-              << config_.input_uri << " (no video stream)" << std::endl;
-    Close();
-    return false;
-  }
+    // Retrieve stream information — DECODER_STEP: avformat_find_stream_info
+    ret = avformat_find_stream_info(format_ctx_, nullptr);
+    if (ret < 0) {
+      char errbuf[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(ret, errbuf, sizeof(errbuf));
+      std::cerr << "[FFmpegDecoder] DECODER_STEP avformat_find_stream_info FAILED uri="
+                << config_.input_uri << " ret=" << ret << " err=" << errbuf << std::endl;
+      Close();
+      return false;
+    }
 
-  // Find audio stream (optional)
-  FindAudioStream();
+    // Find video stream — DECODER_STEP: find_video_stream
+    if (!FindVideoStream()) {
+      std::cerr << "[FFmpegDecoder] DECODER_STEP find_video_stream FAILED uri="
+                << config_.input_uri << " (no video stream)" << std::endl;
+      Close();
+      return false;
+    }
 
-  // Initialize codec — DECODER_STEP: initialize_codec
-  if (!InitializeCodec()) {
-    std::cerr << "[FFmpegDecoder] DECODER_STEP initialize_codec FAILED uri="
-              << config_.input_uri << std::endl;
-    Close();
-    return false;
-  }
+    // Find audio stream (optional)
+    FindAudioStream();
 
-  // Initialize audio codec (if audio stream found)
-  if (audio_stream_index_ >= 0) {
-    std::cout << "[FFmpegDecoder] Audio stream found at index " << audio_stream_index_ << ", initializing audio decoder..." << std::endl;
-    if (!InitializeAudioCodec()) {
-      std::cerr << "[FFmpegDecoder] Failed to initialize audio codec" << std::endl;
-      // Continue without audio
-      audio_stream_index_ = -1;
-    } else {
-      std::cout << "[FFmpegDecoder] Audio decoder initialized successfully" << std::endl;
-      if (!InitializeResampler()) {
-        std::cerr << "[FFmpegDecoder] Failed to initialize audio resampler" << std::endl;
+    // Initialize codec — DECODER_STEP: initialize_codec
+    if (!InitializeCodec()) {
+      std::cerr << "[FFmpegDecoder] DECODER_STEP initialize_codec FAILED uri="
+                << config_.input_uri << std::endl;
+      Close();
+      return false;
+    }
+
+    // Initialize audio codec (if audio stream found)
+    if (audio_stream_index_ >= 0) {
+      std::cout << "[FFmpegDecoder] Audio stream found at index " << audio_stream_index_ << ", initializing audio decoder..." << std::endl;
+      if (!InitializeAudioCodec()) {
+        std::cerr << "[FFmpegDecoder] Failed to initialize audio codec" << std::endl;
         // Continue without audio
         audio_stream_index_ = -1;
       } else {
-        std::cout << "[FFmpegDecoder] Audio resampler initialized successfully" << std::endl;
+        std::cout << "[FFmpegDecoder] Audio decoder initialized successfully" << std::endl;
+        if (!InitializeResampler()) {
+          std::cerr << "[FFmpegDecoder] Failed to initialize audio resampler" << std::endl;
+          // Continue without audio
+          audio_stream_index_ = -1;
+        } else {
+          std::cout << "[FFmpegDecoder] Audio resampler initialized successfully" << std::endl;
+        }
       }
+    } else {
+      std::cout << "[FFmpegDecoder] No audio stream found in file" << std::endl;
     }
-  } else {
-    std::cout << "[FFmpegDecoder] No audio stream found in file" << std::endl;
-  }
+  }  // init_guard released — codec initialization complete, steady-state safe
 
   // Initialize scaler — DECODER_STEP: initialize_scaler
   if (!InitializeScaler()) {
