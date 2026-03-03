@@ -111,68 +111,74 @@ class PlaylogHorizonDaemon:
         INV-PLAYLOG-COVERAGE-HOLE-001: Ensures Tier 2 always covers the block
         containing now_ms (backfill current block if missing) before forward fill.
 
+        INV-DAEMON-SESSION-SCOPE-001: Opens at most one database session per
+        cycle and passes it to all sub-methods.
+
         Returns the number of blocks filled in this evaluation.
         """
+        from retrovue.infra.uow import session as db_session_factory
+
         now_ms = self._now_utc_ms()
         self._last_evaluation_utc_ms = now_ms
 
-        # Pre-step: ensure Tier 2 covers the block containing now (backfill if hole)
-        backfill_count = self._ensure_tier2_covers_now(now_ms)
+        with db_session_factory() as db:
+            # Pre-step: ensure Tier 2 covers the block containing now (backfill if hole)
+            backfill_count = self._ensure_tier2_covers_now(now_ms, db=db)
 
-        # Discover current Tier 2 frontier
-        frontier_ms = self._get_frontier_utc_ms()
-        if frontier_ms > self._farthest_end_utc_ms:
-            self._farthest_end_utc_ms = frontier_ms
+            # Discover current Tier 2 frontier
+            frontier_ms = self._get_frontier_utc_ms(db=db)
+            if frontier_ms > self._farthest_end_utc_ms:
+                self._farthest_end_utc_ms = frontier_ms
 
-        depth_ms = max(0, self._farthest_end_utc_ms - now_ms)
-        target_ms = self._min_hours * 3_600_000
+            depth_ms = max(0, self._farthest_end_utc_ms - now_ms)
+            target_ms = self._min_hours * 3_600_000
 
-        if depth_ms >= target_ms:
-            self._consecutive_zero_fills = 0
-            logger.debug(
-                "PlaylogHorizon[%s]: depth=%.1fh >= %.1fh — no extension needed",
-                self._channel_id, depth_ms / 3_600_000, target_ms / 3_600_000,
-            )
-            return backfill_count
+            if depth_ms >= target_ms:
+                self._consecutive_zero_fills = 0
+                logger.debug(
+                    "PlaylogHorizon[%s]: depth=%.1fh >= %.1fh — no extension needed",
+                    self._channel_id, depth_ms / 3_600_000, target_ms / 3_600_000,
+                )
+                return backfill_count
 
-        # Need to extend: find blocks from Tier 1 that don't yet have Tier 2 entries
-        blocks_filled = backfill_count + self._extend_to_target(now_ms, target_ms)
+            # Need to extend: find blocks from Tier 1 that don't yet have Tier 2 entries
+            blocks_filled = backfill_count + self._extend_to_target(now_ms, target_ms, db=db)
 
-        if blocks_filled > 0:
-            self._consecutive_zero_fills = 0
-            logger.info(
-                "PlaylogHorizon[%s]: filled %d blocks, depth now %.1fh",
-                self._channel_id, blocks_filled,
-                max(0, self._farthest_end_utc_ms - now_ms) / 3_600_000,
-            )
-        else:
-            self._consecutive_zero_fills += 1
-            frontier_dt = datetime.fromtimestamp(
-                self._farthest_end_utc_ms / 1000.0, tz=timezone.utc
-            ) if self._farthest_end_utc_ms > 0 else None
-            now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
-            # WARNING only on first occurrence; subsequent repeats at DEBUG to avoid flood.
-            log_fn = (
-                logger.warning
-                if (PLAYLOG_HORIZON_002_WARN_ON_FIRST_ONLY and self._consecutive_zero_fills == 1)
-                else logger.debug
-            )
-            log_fn(
-                "PlaylogHorizon[%s]: INV-PLAYLOG-HORIZON-002 VIOLATION: "
-                "depth=%.1fh < target=%.1fh but 0 blocks filled "
-                "(consecutive_zeros=%d, frontier=%s, now=%s, "
-                "scan_start_bd=%s, errors=%d)",
-                self._channel_id,
-                depth_ms / 3_600_000, target_ms / 3_600_000,
-                self._consecutive_zero_fills,
-                frontier_dt.isoformat() if frontier_dt else "none",
-                now_dt.isoformat(),
-                self._broadcast_date_for(now_dt).isoformat(),
-                self._fill_errors,
-            )
+            if blocks_filled > 0:
+                self._consecutive_zero_fills = 0
+                logger.info(
+                    "PlaylogHorizon[%s]: filled %d blocks, depth now %.1fh",
+                    self._channel_id, blocks_filled,
+                    max(0, self._farthest_end_utc_ms - now_ms) / 3_600_000,
+                )
+            else:
+                self._consecutive_zero_fills += 1
+                frontier_dt = datetime.fromtimestamp(
+                    self._farthest_end_utc_ms / 1000.0, tz=timezone.utc
+                ) if self._farthest_end_utc_ms > 0 else None
+                now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
+                # WARNING only on first occurrence; subsequent repeats at DEBUG to avoid flood.
+                log_fn = (
+                    logger.warning
+                    if (PLAYLOG_HORIZON_002_WARN_ON_FIRST_ONLY and self._consecutive_zero_fills == 1)
+                    else logger.debug
+                )
+                log_fn(
+                    "PlaylogHorizon[%s]: INV-PLAYLOG-HORIZON-002 VIOLATION: "
+                    "depth=%.1fh < target=%.1fh but 0 blocks filled "
+                    "(consecutive_zeros=%d, frontier=%s, now=%s, "
+                    "scan_start_bd=%s, errors=%d)",
+                    self._channel_id,
+                    depth_ms / 3_600_000, target_ms / 3_600_000,
+                    self._consecutive_zero_fills,
+                    frontier_dt.isoformat() if frontier_dt else "none",
+                    now_dt.isoformat(),
+                    self._broadcast_date_for(now_dt).isoformat(),
+                    self._fill_errors,
+                )
 
-        # INV-SCHEDULE-RETENTION-001: purge expired Tier 2 DB rows
-        self._purge_expired_tier2(now_ms)
+            # INV-SCHEDULE-RETENTION-001: purge expired Tier 2 DB rows
+            self._purge_expired_tier2(now_ms, db=db)
 
         return blocks_filled
 
@@ -221,11 +227,14 @@ class PlaylogHorizonDaemon:
     # Internal: retention
     # ------------------------------------------------------------------
 
-    def _purge_expired_tier2(self, now_utc_ms: int = 0) -> int:
+    def _purge_expired_tier2(self, now_utc_ms: int = 0, *, db=None) -> int:
         """Delete TransmissionLog rows with end_utc_ms <= now - 4 hours.
 
         INV-SCHEDULE-RETENTION-001: Tier 2 retains only rows where
         end_utc_ms > now - 4h. Throttled to at most once per hour.
+
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session to avoid
+        opening a new connection when called from evaluate_once().
 
         Returns the number of rows deleted (0 if throttled or no-op).
         """
@@ -236,16 +245,23 @@ class PlaylogHorizonDaemon:
         if (now_utc_ms - self._last_tier2_purge_utc_ms) < 3_600_000:
             return 0
 
-        from retrovue.infra.uow import session as db_session_factory
         from retrovue.domain.entities import TransmissionLog
 
         cutoff_ms = now_utc_ms - (4 * 3_600_000)
         try:
-            with db_session_factory() as db:
+            if db is not None:
                 count = db.query(TransmissionLog).filter(
                     TransmissionLog.channel_slug == self._channel_id,
                     TransmissionLog.end_utc_ms <= cutoff_ms,
                 ).delete()
+                db.commit()
+            else:
+                from retrovue.infra.uow import session as db_session_factory
+                with db_session_factory() as db:
+                    count = db.query(TransmissionLog).filter(
+                        TransmissionLog.channel_slug == self._channel_id,
+                        TransmissionLog.end_utc_ms <= cutoff_ms,
+                    ).delete()
             self._last_tier2_purge_utc_ms = now_utc_ms
             if count > 0:
                 logger.info(
@@ -265,12 +281,15 @@ class PlaylogHorizonDaemon:
     # Internal: extension logic
     # ------------------------------------------------------------------
 
-    def _extend_to_target(self, now_ms: int, target_ms: int) -> int:
+    def _extend_to_target(self, now_ms: int, target_ms: int, *, db=None) -> int:
         """Fill blocks from Tier 1 until Tier 2 depth reaches target.
 
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001:
         - Rule 1: Batch TransmissionLog existence checks per scan-day.
         - Rule 2: Yield GIL (time.sleep) after each block fill.
+
+        INV-DAEMON-SESSION-SCOPE-001: Receives db from evaluate_once();
+        does not open any sessions itself.
         """
         target_end_ms = now_ms + target_ms
         blocks_filled = 0
@@ -290,7 +309,7 @@ class PlaylogHorizonDaemon:
 
         while scan_date <= end_date and cursor_ms < target_end_ms:
             # Load Tier 1 segmented blocks for this day
-            segmented_blocks = self._load_tier1_blocks(scan_date)
+            segmented_blocks = self._load_tier1_blocks(scan_date, db=db)
             if segmented_blocks is None:
                 logger.debug(
                     "PlaylogHorizon[%s]: No Tier 1 data for %s — cannot extend",
@@ -313,7 +332,7 @@ class PlaylogHorizonDaemon:
                 candidate_blocks.append(sb_dict)
 
             # Rule 1: single batched query for all candidates in this day
-            existing_ids = self._batch_block_exists_in_txlog(candidate_ids)
+            existing_ids = self._batch_block_exists_in_txlog(candidate_ids, db=db)
 
             for sb_dict in candidate_blocks:
                 block_end = sb_dict["end_utc_ms"]
@@ -331,10 +350,10 @@ class PlaylogHorizonDaemon:
                     scheduled_block = _deserialize_scheduled_block(sb_dict)
 
                     # Fill ad breaks via traffic manager
-                    filled_block = self._fill_ads(scheduled_block)
+                    filled_block = self._fill_ads(scheduled_block, db=db)
 
                     # Write to TransmissionLog
-                    self._write_to_txlog(filled_block, scan_date)
+                    self._write_to_txlog(filled_block, scan_date, db=db)
 
                     self._last_fill_block_id = block_id
                     if block_end > self._farthest_end_utc_ms:
@@ -364,7 +383,7 @@ class PlaylogHorizonDaemon:
 
         return blocks_filled
 
-    def _ensure_tier2_covers_now(self, now_ms: int) -> int:
+    def _ensure_tier2_covers_now(self, now_ms: int, *, db=None) -> int:
         """Backfill the Tier-1 block containing now_ms if Tier-2 has no row covering it.
 
         INV-PLAYLOG-COVERAGE-HOLE-001: Ensures Tier 2 always covers the block that
@@ -373,10 +392,10 @@ class PlaylogHorizonDaemon:
 
         Returns 1 if a block was filled, 0 otherwise.
         """
-        if self._tier2_row_covers_now(now_ms):
+        if self._tier2_row_covers_now(now_ms, db=db):
             return 0
 
-        block = self._get_tier1_block_containing(now_ms)
+        block = self._get_tier1_block_containing(now_ms, db=db)
         if block is None:
             return 0
 
@@ -395,12 +414,12 @@ class PlaylogHorizonDaemon:
             from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
 
             scheduled_block = _deserialize_scheduled_block(block)
-            filled_block = self._fill_ads(scheduled_block)
+            filled_block = self._fill_ads(scheduled_block, db=db)
             block_start_dt = datetime.fromtimestamp(
                 block["start_utc_ms"] / 1000.0, tz=timezone.utc
             )
             broadcast_day = self._broadcast_date_for(block_start_dt)
-            self._write_to_txlog(filled_block, broadcast_day)
+            self._write_to_txlog(filled_block, broadcast_day, db=db)
 
             self._last_fill_block_id = block_id
             if block_end > self._farthest_end_utc_ms:
@@ -414,27 +433,35 @@ class PlaylogHorizonDaemon:
             )
             return 0
 
-    def _tier2_row_covers_now(self, now_ms: int) -> bool:
-        """True if TransmissionLog has a row covering now_ms (by time window)."""
-        from retrovue.infra.uow import session as db_session_factory
+    def _tier2_row_covers_now(self, now_ms: int, *, db=None) -> bool:
+        """True if TransmissionLog has a row covering now_ms (by time window).
+
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
+        """
         from retrovue.domain.entities import TransmissionLog
 
-        try:
-            with db_session_factory() as db:
-                return (
-                    db.query(TransmissionLog)
-                    .filter(
-                        TransmissionLog.channel_slug == self._channel_id,
-                        TransmissionLog.start_utc_ms <= now_ms,
-                        TransmissionLog.end_utc_ms > now_ms,
-                    )
-                    .first()
-                    is not None
+        def _query(s):
+            return (
+                s.query(TransmissionLog)
+                .filter(
+                    TransmissionLog.channel_slug == self._channel_id,
+                    TransmissionLog.start_utc_ms <= now_ms,
+                    TransmissionLog.end_utc_ms > now_ms,
                 )
+                .first()
+                is not None
+            )
+
+        try:
+            if db is not None:
+                return _query(db)
+            from retrovue.infra.uow import session as db_session_factory
+            with db_session_factory() as db:
+                return _query(db)
         except Exception:
             return False
 
-    def _get_tier1_block_containing(self, now_ms: int) -> dict | None:
+    def _get_tier1_block_containing(self, now_ms: int, *, db=None) -> dict | None:
         """Return the Tier-1 segmented block dict that contains now_ms, or None.
 
         Checks broadcast_date(now) and broadcast_date(now)-1 for day-boundary blocks.
@@ -442,7 +469,7 @@ class PlaylogHorizonDaemon:
         now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
         bd = self._broadcast_date_for(now_dt)
         for scan_date in (bd - timedelta(days=1), bd):
-            blocks = self._load_tier1_blocks(scan_date)
+            blocks = self._load_tier1_blocks(scan_date, db=db)
             if blocks is None:
                 continue
             for sb_dict in blocks:
@@ -450,31 +477,39 @@ class PlaylogHorizonDaemon:
                     return sb_dict
         return None
 
-    def _load_tier1_blocks(self, broadcast_day: date) -> list[dict] | None:
-        """Load segmented_blocks from CompiledProgramLog (Tier 1)."""
-        from retrovue.infra.uow import session as db_session_factory
+    def _load_tier1_blocks(self, broadcast_day: date, *, db=None) -> list[dict] | None:
+        """Load segmented_blocks from CompiledProgramLog (Tier 1).
+
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
+        """
         from retrovue.domain.entities import CompiledProgramLog
 
+        def _query(s):
+            row = s.query(CompiledProgramLog).filter(
+                CompiledProgramLog.channel_id == self._channel_id,
+                CompiledProgramLog.broadcast_day == broadcast_day,
+                CompiledProgramLog.locked == True,
+            ).first()
+            if row is None:
+                return None
+            cj = row.compiled_json
+            if "segmented_blocks" not in cj or not cj["segmented_blocks"]:
+                if broadcast_day not in self._warned_stale_days:
+                    self._warned_stale_days.add(broadcast_day)
+                    logger.info(
+                        "PlaylogHorizon[%s]: Tier 1 for %s has no segmented_blocks "
+                        "(pre-enhancement cache — needs recompile)",
+                        self._channel_id, broadcast_day.isoformat(),
+                    )
+                return None
+            return cj["segmented_blocks"]
+
         try:
+            if db is not None:
+                return _query(db)
+            from retrovue.infra.uow import session as db_session_factory
             with db_session_factory() as db:
-                row = db.query(CompiledProgramLog).filter(
-                    CompiledProgramLog.channel_id == self._channel_id,
-                    CompiledProgramLog.broadcast_day == broadcast_day,
-                    CompiledProgramLog.locked == True,
-                ).first()
-                if row is None:
-                    return None
-                cj = row.compiled_json
-                if "segmented_blocks" not in cj or not cj["segmented_blocks"]:
-                    if broadcast_day not in self._warned_stale_days:
-                        self._warned_stale_days.add(broadcast_day)
-                        logger.info(
-                            "PlaylogHorizon[%s]: Tier 1 for %s has no segmented_blocks "
-                            "(pre-enhancement cache — needs recompile)",
-                            self._channel_id, broadcast_day.isoformat(),
-                        )
-                    return None
-                return cj["segmented_blocks"]
+                return _query(db)
         except Exception as e:
             logger.error(
                 "PlaylogHorizon[%s]: DB error loading Tier 1 for %s: %s",
@@ -495,43 +530,54 @@ class PlaylogHorizonDaemon:
         except Exception:
             return False
 
-    def _batch_block_exists_in_txlog(self, block_ids: list[str]) -> set[str]:
+    def _batch_block_exists_in_txlog(self, block_ids: list[str], *, db=None) -> set[str]:
         """Batch-check which block_ids already have TransmissionLog entries.
 
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 3:
         Returns set[str] of block_ids that already have Tier 2 entries.
         Single query per call: SELECT block_id ... WHERE block_id IN (...).
+
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
         if not block_ids:
             return set()
 
-        from retrovue.infra.uow import session as db_session_factory
         from retrovue.domain.entities import TransmissionLog
 
+        def _query(s):
+            rows = (
+                s.query(TransmissionLog.block_id)
+                .filter(TransmissionLog.block_id.in_(block_ids))
+                .all()
+            )
+            return {r[0] for r in rows}
+
         try:
+            if db is not None:
+                return _query(db)
+            from retrovue.infra.uow import session as db_session_factory
             with db_session_factory() as db:
-                rows = (
-                    db.query(TransmissionLog.block_id)
-                    .filter(TransmissionLog.block_id.in_(block_ids))
-                    .all()
-                )
-                return {r[0] for r in rows}
+                return _query(db)
         except Exception:
             return set()
 
-    def _fill_ads(self, block: "ScheduledBlock") -> "ScheduledBlock":
+    def _fill_ads(self, block: "ScheduledBlock", *, db=None) -> "ScheduledBlock":
         """Fill empty filler placeholders with real interstitials.
 
         INV-PLAYLOG-PREFILL-001: Ad fill happens here at Tier 2 generation.
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
         from retrovue.runtime.traffic_manager import fill_ad_blocks
-        from retrovue.infra.uow import session as db_session_factory
 
         asset_lib = None
         try:
             from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
-            with db_session_factory() as db:
+            if db is not None:
                 asset_lib = DatabaseAssetLibrary(db, channel_slug=self._channel_id)
+            else:
+                from retrovue.infra.uow import session as db_session_factory
+                with db_session_factory() as db:
+                    asset_lib = DatabaseAssetLibrary(db, channel_slug=self._channel_id)
         except Exception as e:
             logger.warning(
                 "PlaylogHorizon[%s]: Could not create asset library: %s",
@@ -545,12 +591,12 @@ class PlaylogHorizonDaemon:
             asset_library=asset_lib,
         )
 
-    def _write_to_txlog(self, block: "ScheduledBlock", broadcast_day: date) -> None:
+    def _write_to_txlog(self, block: "ScheduledBlock", broadcast_day: date, *, db=None) -> None:
         """Write a filled block to TransmissionLog.
 
         INV-PLAYLOG-PREFILL-001: Canonical Tier 2 write path.
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
-        from retrovue.infra.uow import session as db_session_factory
         from retrovue.domain.entities import TransmissionLog
 
         segments_data = []
@@ -586,7 +632,7 @@ class PlaylogHorizonDaemon:
             segments_data.append(d)
 
         try:
-            with db_session_factory() as db:
+            if db is not None:
                 row = TransmissionLog(
                     block_id=block.block_id,
                     channel_slug=self._channel_id,
@@ -596,6 +642,19 @@ class PlaylogHorizonDaemon:
                     segments=segments_data,
                 )
                 db.merge(row)
+                db.commit()
+            else:
+                from retrovue.infra.uow import session as db_session_factory
+                with db_session_factory() as db:
+                    row = TransmissionLog(
+                        block_id=block.block_id,
+                        channel_slug=self._channel_id,
+                        broadcast_day=broadcast_day,
+                        start_utc_ms=block.start_utc_ms,
+                        end_utc_ms=block.end_utc_ms,
+                        segments=segments_data,
+                    )
+                    db.merge(row)
         except Exception as e:
             logger.error(
                 "PlaylogHorizon[%s]: Failed to write block=%s to TransmissionLog: %s",
@@ -607,18 +666,26 @@ class PlaylogHorizonDaemon:
     # Internal: queries
     # ------------------------------------------------------------------
 
-    def _get_frontier_utc_ms(self) -> int:
-        """Get the farthest end_utc_ms in TransmissionLog for this channel."""
-        from retrovue.infra.uow import session as db_session_factory
+    def _get_frontier_utc_ms(self, *, db=None) -> int:
+        """Get the farthest end_utc_ms in TransmissionLog for this channel.
+
+        INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
+        """
         from retrovue.domain.entities import TransmissionLog
         import sqlalchemy as sa
 
+        def _query(s):
+            result = s.query(sa.func.max(TransmissionLog.end_utc_ms)).filter(
+                TransmissionLog.channel_slug == self._channel_id,
+            ).scalar()
+            return result or 0
+
         try:
+            if db is not None:
+                return _query(db)
+            from retrovue.infra.uow import session as db_session_factory
             with db_session_factory() as db:
-                result = db.query(sa.func.max(TransmissionLog.end_utc_ms)).filter(
-                    TransmissionLog.channel_slug == self._channel_id,
-                ).scalar()
-                return result or 0
+                return _query(db)
         except Exception:
             return 0
 
