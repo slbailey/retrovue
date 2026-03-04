@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/retrovue asset attention)",
+      "Bash(journalctl -u retrovue --since \"2026-03-02 15:00:00\" --no-pager)",
+      "Bash(journalctl --since \"1 hour ago\" --no-pager)"
+    ]
+  }
+}

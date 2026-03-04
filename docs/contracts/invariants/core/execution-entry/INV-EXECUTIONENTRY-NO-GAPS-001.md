@@ -29,7 +29,7 @@ Construct an ExecutionEntry sequence with a deliberate 10-minute gap at a known 
 
 ## Failure Semantics
 
-**Runtime fault** if the TransmissionLog-to-ExecutionEntry conversion introduced the gap. **Planning fault** if the gap propagated from an upstream `INV-SCHEDULEDAY-NO-GAPS-001` violation. Fault origin is identified by inspecting whether the upstream TransmissionLogEntry existed for the gap window.
+**Runtime fault** if the PlaylistEvent-to-ExecutionEntry conversion introduced the gap. **Planning fault** if the gap propagated from an upstream `INV-SCHEDULEDAY-NO-GAPS-001` violation. Fault origin is identified by inspecting whether an upstream PlaylistEvent existed for the gap window.
 
 ## Required Tests
 

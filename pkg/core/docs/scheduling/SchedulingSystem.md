@@ -1,9 +1,11 @@
+> **DEPRECATED.** This document describes a retired scheduling architecture.
+> The canonical pipeline is: `ScheduleItem → PlaylistEvent → ExecutionSegment → BlockPlan → AIR → AsRun`.
+> See [GLOSSARY.md](../../../../docs/core/GLOSSARY.md) for authoritative definitions.
+> This file is retained for historical reference only. Do not cite it in new contracts or code.
+
 _Related: [Architecture overview](ArchitectureOverview.md) • [Domain: Scheduling](../domain/Scheduling.md) • [Runtime: Channel manager](../runtime/ChannelManager.md) • [Runtime: MasterClock](../domain/MasterClock.md)_
 
-# Scheduling system architecture
-
-> **Note:** This document reflects the modern scheduling architecture.  
-> The active scheduling pipeline is: **SchedulableAsset → ScheduleDay → Playlist → Producer(ffmpeg) → AsRun.**
+# Scheduling system architecture (Deprecated)
 
 ## Purpose
 

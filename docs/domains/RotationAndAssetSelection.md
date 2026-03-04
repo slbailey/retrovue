@@ -175,5 +175,5 @@ Rotation-induced scarcity is not a failure condition. As defined in the rotation
 ---
 
 **Document version:** 0.1
-**Related:** [Program Template Assembly (v1.0)](ProgramTemplateAssembly.md) · [Program Event Scheduling Model (v0.1)](ProgramEventSchedulingModel_v0.1.md) · [Horizon Manager (v0.1)](HorizonManager_v0.1.md) · [Schedule Manager Planning Authority (v0.1)](ScheduleManagerPlanningAuthority_v0.1.md)
+**Related:** [Program Template Assembly (v1.0)](ProgramTemplateAssembly.md) · [ScheduleItem](ScheduleItem.md) · [Horizon Manager (v0.1)](HorizonManager_v0.1.md) · [Schedule Manager Planning Authority (v0.1)](ScheduleManagerPlanningAuthority_v0.1.md)
 **Governs:** Asset warehouse usage, candidate querying, deterministic ordering, randomness policy, rotation memory, tentative/committed lifecycle, rebuild semantics, selection vs serialization boundary, lineage requirements

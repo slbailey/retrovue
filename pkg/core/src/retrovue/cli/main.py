@@ -24,6 +24,7 @@ from .commands import (
     producer,
     program_director,
     runtime,
+    schedule,
     source,
     zone,
     programming,
@@ -111,6 +112,13 @@ router.register(
     programming.app,
     help_text="Programming DSL compile and validate operations",
     doc_path="programming.md",
+)
+
+router.register(
+    "schedule",
+    schedule.app,
+    help_text="Schedule listing and rescheduling operations",
+    doc_path="schedule.md",
 )
 
 

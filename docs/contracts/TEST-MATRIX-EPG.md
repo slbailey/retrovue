@@ -49,7 +49,7 @@
 | ID | Scenario | Expected | Test |
 |----|----------|----------|------|
 | TEPG-DT-001 | EPG events from resolved day | Every event's programming_day_date matches source | `TestInvEpgDerivationTraceable001::test_every_event_traces_to_resolved_day` |
-| TEPG-DT-002 | EPG event fields vs source ProgramEvent | Asset fields match source ProgramEvent | `TestInvEpgDerivationTraceable001::test_event_fields_match_source` |
+| TEPG-DT-002 | EPG event fields vs source ScheduleItem | Asset fields match source ScheduleItem | `TestInvEpgDerivationTraceable001::test_event_fields_match_source` |
 
 ---
 

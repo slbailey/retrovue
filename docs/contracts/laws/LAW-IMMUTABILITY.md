@@ -9,7 +9,7 @@ Mutation requires explicit regeneration or operator override and must be atomic.
 ## Implications
 
 - ScheduleDay is immutable for its broadcast date once materialized; modification requires force-regeneration (atomic replacement) or a recorded manual override.
-- PlaylogEvent entries inside the locked execution window are immutable except via atomic operator override with an explicit override record.
+- PlaylistEvent entries inside the locked execution window are immutable except via atomic operator override with an explicit override record.
 - AsRun entries are immutable once recorded; no post-hoc mutation is permitted under any circumstance.
 - Regeneration replaces an artifact atomically; partial in-place updates to published artifacts are not permitted.
 - Override records must reference the artifact being superseded and must be persisted before the superseding artifact takes effect.
@@ -17,4 +17,4 @@ Mutation requires explicit regeneration or operator override and must be atomic.
 
 ## Violation
 
-Any in-place mutation of a published ScheduleDay, a locked PlaylogEvent entry, or an AsRun record, without an atomic regeneration or a persisted operator override record that precedes the change.
+Any in-place mutation of a published ScheduleDay, a locked PlaylistEvent entry, or an AsRun record, without an atomic regeneration or a persisted operator override record that precedes the change.

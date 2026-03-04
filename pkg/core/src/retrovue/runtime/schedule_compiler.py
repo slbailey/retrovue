@@ -356,6 +356,26 @@ def channel_seed(channel_id: str) -> int:
     return int(hashlib.sha256(channel_id.encode("utf-8")).hexdigest(), 16) % 100000
 
 
+def compilation_seed(channel_id: str, broadcast_day: str) -> int:
+    """Day-specific compilation seed. Deterministic for same (channel, day).
+
+    INV-SCHEDULE-SEED-DAY-VARIANCE-001: Incorporates broadcast_day so that
+    different days produce different movie selections while rebuilding
+    the same day always produces identical output.
+    """
+    raw = f"{channel_id}:{broadcast_day}"
+    return int(hashlib.sha256(raw.encode("utf-8")).hexdigest(), 16) % (2**31)
+
+
+def _window_seed(seed: int | None, start_str: str) -> int:
+    """Derive a window-specific seed by mixing the window start time.
+
+    INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: Two windows at different
+    start times on the same day receive different seeds.
+    """
+    return int(hashlib.sha256(f"{seed}:{start_str}".encode("utf-8")).hexdigest(), 16) % (2**31)
+
+
 def _validate_grid_alignment(blocks: list[ProgramBlockOutput], grid_minutes: int) -> None:
     """Assert all blocks are grid-aligned. Raises CompileError on violation.
 
@@ -522,6 +542,9 @@ def _compile_movie_block(
     start_str = block_def.get("start", "20:00")
     current_time = _parse_time(start_str, broadcast_day, tz_name)
 
+    # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
+    wseed = _window_seed(seed, start_str)
+
     mb = block_def.get("movie_block", {})
     ms = mb.get("movie_selector", {}) if mb else block_def.get("movie_selector", {})
 
@@ -538,7 +561,7 @@ def _compile_movie_block(
         rating_include=rating_cfg.get("include"),
         rating_exclude=rating_cfg.get("exclude"),
         max_duration_sec=ms.get("max_duration_sec"),
-        seed=seed,
+        seed=wseed,
     )
 
     movie_meta = resolver.lookup(movie_asset_id)
@@ -611,7 +634,8 @@ def _compile_movie_marathon(
         used_movie_ids = set()
 
     blocks: list[ProgramBlockOutput] = []
-    movie_seed = seed if seed is not None else 42
+    # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
+    movie_seed = _window_seed(seed, start_str)
     max_attempts = 200  # safety valve
 
     while max_attempts > 0:
@@ -746,7 +770,8 @@ def _compile_template_entry(
     used_ids: set[str] = set()
 
     blocks: list[ProgramBlockOutput] = []
-    pick_seed = seed if seed is not None else 42
+    # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
+    pick_seed = _window_seed(seed, start_str)
     max_attempts = 200
 
     while max_attempts > 0:
@@ -853,7 +878,8 @@ def _compile_episode_block(
     slot_sec = grid_minutes * 60
     blocks: list[ProgramBlockOutput] = []
     pool_index = 0  # for round-robin across pools
-    rng = random.Random(seed or 42)
+    # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
+    rng = random.Random(_window_seed(seed, start_str))
 
     if sequential_counters is None:
         sequential_counters = {}

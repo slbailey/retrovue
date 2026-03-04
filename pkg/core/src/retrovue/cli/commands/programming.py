@@ -152,19 +152,20 @@ def rebuild_cmd(
         typer.echo(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.", err=True)
         raise typer.Exit(1)
 
-    from retrovue.domain.entities import ProgramLogDay
+    from retrovue.domain.entities import ScheduleRevision
     from retrovue.infra.uow import session
 
     with session() as db:
-        query = db.query(ProgramLogDay).filter(
-            ProgramLogDay.broadcast_day == target_date,
+        query = db.query(ScheduleRevision).filter(
+            ScheduleRevision.broadcast_day == target_date,
+            ScheduleRevision.status == "active",
         )
         if channel_id:
-            query = query.filter(ProgramLogDay.channel_id == channel_id)
+            query = query.join(ScheduleRevision.channel).filter_by(slug=channel_id)
 
-        deleted = query.delete(synchronize_session=False)
+        deleted = query.update({ScheduleRevision.status: "superseded"}, synchronize_session=False)
 
     if deleted:
-        typer.echo(f"Deleted {deleted} cached schedule(s) for {date_str}. They will recompile on next access.")
+        typer.echo(f"Superseded {deleted} active revision(s) for {date_str}. They will recompile on next access.")
     else:
-        typer.echo(f"No cached schedules found for {date_str}.")
+        typer.echo(f"No active revisions found for {date_str}.")

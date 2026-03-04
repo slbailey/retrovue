@@ -346,5 +346,5 @@ Duration management for this window is governed entirely by `INV-SCHED-WINDOW-IT
 ---
 
 **Document version:** 1.0
-**Related:** [Program Event Scheduling Model (v1.0)](ProgramEventSchedulingModel_v1.0.md) · [Schedule Manager Planning Authority (v1.0)](ScheduleManagerPlanningAuthority_v1.0.md) · [Two-Tier Horizon Architecture](../architecture/two-tier-horizon.md) · [Programming DSL & Schedule Compiler](../contracts/core/programming_dsl.md)
+**Related:** [ScheduleItem](ScheduleItem.md) · [Schedule Manager Planning Authority (v1.0)](ScheduleManagerPlanningAuthority_v1.0.md) · [Two-Tier Horizon Architecture](../architecture/two-tier-horizon.md) · [Programming DSL & Schedule Compiler](../contracts/core/programming_dsl.md)
 **Governs:** Template definition, segment composition, template resolution lifecycle, duration enforcement, selection rule evaluation

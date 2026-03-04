@@ -81,13 +81,13 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
     for pool_id in pools:
         sequential_counters[pool_id] = starting_counter
 
-    # INV-SCHEDULE-SEED-DETERMINISTIC-001: deterministic, stable seed
-    from retrovue.runtime.schedule_compiler import channel_seed
-    _channel_seed = channel_seed(channel_cfg["channel_id"])
+    # INV-SCHEDULE-SEED-DAY-VARIANCE-001: day-varying deterministic seed
+    from retrovue.runtime.schedule_compiler import compilation_seed
+    _seed = compilation_seed(channel_cfg["channel_id"], broadcast_day)
 
     schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path,
                                 sequential_counters=sequential_counters,
-                                seed=_channel_seed)
+                                seed=_seed)
 
     entries = []
     for block in schedule["program_blocks"]:

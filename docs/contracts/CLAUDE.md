@@ -12,7 +12,7 @@ All new work MUST maintain the consistency of the index, style, and test coverag
 2. **Update `INVARIANTS.md`** — add the new invariant (or law) to the correct section table. Every row requires: invariant ID, relative file link, and `Derived From` law(s). An invariant that exists on disk but is absent from `INVARIANTS.md` is invisible to the rest of the system.
 
 3. **Update the relevant TEST-MATRIX** — each test matrix covers a specific domain:
-   - `TEST-MATRIX-SCHEDULING-CONSTITUTION.md` — scheduling pipeline (SchedulePlan → ResolvedScheduleDay → TransmissionLog → ExecutionEntry → AsRun)
+   - `TEST-MATRIX-SCHEDULING-CONSTITUTION.md` — scheduling pipeline (SchedulePlan → ScheduleRevision → ScheduleItem → PlaylistEvent → ExecutionSegment → BlockPlan → AIR → AsRun)
    - `TEST-MATRIX-HORIZON-INVARIANTS.md` — horizon management and execution window coverage
    - If no TEST-MATRIX covers the new invariant's domain, flag this before proceeding.
 
