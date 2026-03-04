@@ -23,11 +23,11 @@ Sort EPG events by `start_time`. For each consecutive pair, assert `events[i].en
 
 ## Deterministic Testability
 
-Build a `ResolvedScheduleDay` with multiple `ProgramEvent` entries on grid boundaries. Derive EPG events via `ScheduleManager.get_epg_events()`. Sort by `start_time` and assert no consecutive pair overlaps. No real-time waits required.
+Build a `ResolvedScheduleDay` with multiple ScheduleItem entries on grid boundaries. Derive EPG events via `ScheduleManager.get_epg_events()`. Sort by `start_time` and assert no consecutive pair overlaps. No real-time waits required.
 
 ## Failure Semantics
 
-**Planning fault.** Overlap in EPG events indicates a defect in the derivation logic that maps `ProgramEvent` and `ResolvedSlot` data to `EPGEvent` time spans.
+**Planning fault.** Overlap in EPG events indicates a defect in the derivation logic that maps ScheduleItem and `ResolvedSlot` data to `EPGEvent` time spans.
 
 ## Required Tests
 

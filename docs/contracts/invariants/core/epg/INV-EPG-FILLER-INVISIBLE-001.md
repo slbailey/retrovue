@@ -10,7 +10,7 @@ Filler and padding segments are scheduling artifacts used to fill grid time when
 
 ## Guarantee
 
-No `EPGEvent` MUST have a `title` or `resolved_asset` that identifies it as filler content. EPG derivation produces one event per `ProgramEvent`; filler segments within blocks are subsumed into the program's grid occupancy and do not generate separate EPG entries.
+No `EPGEvent` MUST have a `title` or `resolved_asset` that identifies it as filler content. EPG derivation produces one event per ScheduleItem; filler segments are subsumed into the program's grid occupancy and do not generate separate EPG entries.
 
 ## Observability
 
@@ -18,11 +18,11 @@ Inspect EPG events for any entry whose `resolved_asset.file_path` matches the co
 
 ## Deterministic Testability
 
-Build a `ResolvedScheduleDay` with `ProgramEvent` entries that have content shorter than grid occupancy (triggering filler in playout). Derive EPG events. Assert no EPG event references the filler asset. No real-time waits required.
+Build a `ResolvedScheduleDay` with ScheduleItem entries that have content shorter than grid occupancy (triggering filler in playout). Derive EPG events. Assert no EPG event references the filler asset. No real-time waits required.
 
 ## Failure Semantics
 
-**Planning fault.** Filler appearing in EPG indicates the derivation logic is emitting per-slot entries instead of per-ProgramEvent entries, or is failing to filter filler-only slots.
+**Planning fault.** Filler appearing in EPG indicates the derivation logic is emitting per-slot entries instead of per-ScheduleItem entries, or is failing to filter filler-only slots.
 
 ## Required Tests
 

@@ -4,16 +4,18 @@
 
 Each downstream scheduling artifact is a pure, traceable derivation of its immediate upstream authority.
 
-`SchedulePlan → ScheduleDay → Playlist → PlaylogEvent → AsRun`
+`SchedulePlan → ScheduleRevision → ScheduleItem → PlaylistEvent → ExecutionSegment → BlockPlan → AIR → AsRun`
 
 No layer may redefine or editorially reinterpret upstream truth.
 
 ## Implications
 
-- ScheduleDay must be derived from and traceable to an active SchedulePlan.
-- Playlist must be derived from and traceable to a ScheduleDay.
-- PlaylogEvent must be derived from and traceable to a Playlist entry.
-- AsRun must record the PlaylogEvent that authorized the playback.
+- ScheduleRevision must be derived from and traceable to an active SchedulePlan.
+- ScheduleItem must belong to exactly one ScheduleRevision.
+- ScheduleDay is a derived grouping of ScheduleItems by broadcast_day, not an authority in the derivation chain.
+- PlaylistEvent must be derived from and traceable to a ScheduleItem.
+- ExecutionSegment must be derived from and traceable to a PlaylistEvent.
+- AsRun must record the PlaylistEvent that authorized the playback.
 - Derivation traceability must be preserved through substitutions and operator overrides; override records must reference the artifact being superseded.
 - A downstream layer may specialize or resolve upstream intent (e.g., expanding a Program to physical assets) but may not contradict it.
 

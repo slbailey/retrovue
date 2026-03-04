@@ -46,7 +46,7 @@ Core concepts RetroVue is built on. These define what the system is, not how it 
 - [Zone](domain/Zone.md) - Zone domain model (time windows)
 - [ScheduleDay](domain/ScheduleDay.md) - Resolved daily schedules
 - [Playlist](architecture/Playlist.md) - Resolved pre-AsRun list of physical assets
-- [PlaylogEvent](domain/PlaylogEvent.md) - Runtime execution plan
+- [PlaylistEvent](../../docs/domains/playout/PlaylistEvent.md) - Execution-intent domain model
 
 ## Runtime
 

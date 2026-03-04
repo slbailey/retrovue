@@ -2,11 +2,11 @@
 
 ## Behavioral Guarantee
 
-Schedule Manager maintains execution-ready data (Transmission Log entries) such that `execution_horizon_end - TimeAuthority.now() >= execution_horizon_min_duration_ms` at every evaluation point. This is the **macro depth guarantee**: the total coverage window ahead of authoritative time meets a configured minimum. This invariant does not govern per-fence block readiness (see `INV-HORIZON-NEXT-BLOCK-READY-001`).
+Schedule Manager maintains execution-ready data (PlaylistEvent entries) such that `execution_horizon_end - TimeAuthority.now() >= execution_horizon_min_duration_ms` at every evaluation point. This is the **macro depth guarantee**: the total coverage window ahead of authoritative time meets a configured minimum. This invariant does not govern per-fence block readiness (see `INV-HORIZON-NEXT-BLOCK-READY-001`).
 
 ## Authority Model
 
-Schedule Manager owns execution horizon depth. `execution_horizon_min_duration_ms` is a deployment-configured value. `execution_horizon_end` is the `end_utc_ms` of the last Transmission Log entry in the execution store.
+Schedule Manager owns execution horizon depth. `execution_horizon_min_duration_ms` is a deployment-configured value. `execution_horizon_end` is the `end_utc_ms` of the last PlaylistEvent in the execution store.
 
 ## Boundary / Constraint
 

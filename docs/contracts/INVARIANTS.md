@@ -98,6 +98,8 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 |-----------|------|--------------|
 | INV-SCHEDULE-PREWARM-001 | [invariants/core/scheduling/INV-SCHEDULE-PREWARM-001.md](invariants/core/scheduling/INV-SCHEDULE-PREWARM-001.md) | LAW-LIVENESS, INV-CHANNEL-STARTUP-NONBLOCKING-001 |
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | [invariants/core/scheduling/INV-TIER2-COMPILATION-CONSISTENCY-001.md](invariants/core/scheduling/INV-TIER2-COMPILATION-CONSISTENCY-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
+| INV-RESCHEDULE-FUTURE-GUARD-001 | [invariants/core/scheduling/INV-RESCHEDULE-FUTURE-GUARD-001.md](invariants/core/scheduling/INV-RESCHEDULE-FUTURE-GUARD-001.md) | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
+| INV-RESCHEDULE-CASCADE-TIER2-001 | [invariants/core/scheduling/INV-RESCHEDULE-CASCADE-TIER2-001.md](invariants/core/scheduling/INV-RESCHEDULE-CASCADE-TIER2-001.md) | LAW-DERIVATION, LAW-IMMUTABILITY |
 
 ### EPG
 

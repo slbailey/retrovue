@@ -1,6 +1,11 @@
 # Program Event Scheduling Model — v0.1
 
-**Status:** Domain Model
+> **DEPRECATED.** This document describes the retired `ProgramEvent` model.
+> The canonical editorial unit is now **ScheduleItem** — see [ScheduleItem](ScheduleItem.md).
+> The canonical execution-intent unit is **PlaylistEvent** — see [PlaylistEvent](playout/PlaylistEvent.md).
+> This file is retained for historical reference only. Do not cite it in new contracts or code.
+
+**Status:** Deprecated
 **Version:** 0.1
 
 **Classification:** Domain (Editorial-to-Execution Mapping)

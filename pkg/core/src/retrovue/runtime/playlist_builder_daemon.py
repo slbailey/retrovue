@@ -1,8 +1,8 @@
 """Playlist Builder Daemon — Tier 2 of the Two-Tier Horizon Architecture.
 
 Maintains a rolling window of fully-filled playlist events 2–3+ hours
-ahead of the current wall-clock time.  Consumes pre-segmented blocks from
-Tier 1 (ProgramLogDay.segmented_blocks), fills ad break placeholders
+ahead of the current wall-clock time. Consumes pre-segmented blocks from
+Tier 1 (active ScheduleRevision/ScheduleItems), fills ad break placeholders
 via the traffic manager, and writes the result to PlaylistEvent (Postgres).
 
 ChannelManager reads PlaylistEvent directly — no ad fill or schedule
@@ -488,31 +488,22 @@ class PlaylistBuilderDaemon:
         return None
 
     def _load_tier1_blocks(self, broadcast_day: date, *, db=None) -> list[dict] | None:
-        """Load segmented_blocks from ProgramLogDay (Tier 1).
+        """Load Tier-1 segmented blocks from active ScheduleRevision only.
+
+        Stage 4: ProgramLogDay JSON fallback removed.
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
-        from retrovue.domain.entities import ProgramLogDay
+        from retrovue.runtime.schedule_items_reader import (
+            load_segmented_blocks_from_active_revision,
+        )
 
         def _query(s):
-            row = s.query(ProgramLogDay).filter(
-                ProgramLogDay.channel_id == self._channel_id,
-                ProgramLogDay.broadcast_day == broadcast_day,
-                ProgramLogDay.locked == True,
-            ).first()
-            if row is None:
-                return None
-            cj = row.program_log_json
-            if "segmented_blocks" not in cj or not cj["segmented_blocks"]:
-                if broadcast_day not in self._warned_stale_days:
-                    self._warned_stale_days.add(broadcast_day)
-                    logger.info(
-                        "PlaylistBuilder[%s]: Tier 1 for %s has no segmented_blocks "
-                        "(pre-enhancement cache — needs recompile)",
-                        self._channel_id, broadcast_day.isoformat(),
-                    )
-                return None
-            return cj["segmented_blocks"]
+            return load_segmented_blocks_from_active_revision(
+                s,
+                channel_slug=self._channel_id,
+                broadcast_day=broadcast_day,
+            )
 
         try:
             if db is not None:

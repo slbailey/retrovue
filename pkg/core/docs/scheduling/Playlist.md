@@ -1,6 +1,11 @@
+> **DEPRECATED.** The `Playlist` concept as a standalone structural layer has been retired.
+> The canonical pipeline is: `ScheduleItem → PlaylistEvent → ExecutionSegment → BlockPlan → AIR → AsRun`.
+> **PlaylistEvent** is the execution-intent entity — see [PlaylistEvent](../../../../docs/domains/playout/PlaylistEvent.md).
+> This file is retained for historical reference only. Do not cite it in new contracts or code.
+
 _Related: [Architecture overview](ArchitectureOverview.md) • [Domain: ScheduleDay](../domain/ScheduleDay.md) • [Domain: PlaylogEvent](../domain/PlaylogEvent.md) • [Runtime: Channel manager](../runtime/ChannelManager.md)_
 
-# Architecture — Playlist
+# Architecture — Playlist (Deprecated)
 
 ## Purpose
 

@@ -1,4 +1,4 @@
-# INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 — Every ExecutionEntry must be traceable to a TransmissionLogEntry
+# INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 — Every ExecutionEntry must be traceable to a PlaylistEvent
 
 Status: Invariant
 Authority Level: Runtime
@@ -6,13 +6,13 @@ Derived From: `LAW-DERIVATION`, `LAW-RUNTIME-AUTHORITY`, `LAW-CONTENT-AUTHORITY`
 
 ## Purpose
 
-Enforces `LAW-DERIVATION` at the runtime layer. An ExecutionEntry that cannot be traced to a TransmissionLogEntry represents content introduced into the execution stream outside the constitutional derivation chain. This would allow the runtime layer to play content that was never authorized by a SchedulePlan, violating `LAW-CONTENT-AUTHORITY`. It also severs the audit chain required by `INV-ASRUN-TRACEABILITY-001`.
+Enforces `LAW-DERIVATION` at the runtime layer. An ExecutionEntry that cannot be traced to a PlaylistEvent represents content introduced into the execution stream outside the constitutional derivation chain. This would allow the runtime layer to play content that was never authorized by a SchedulePlan, violating `LAW-CONTENT-AUTHORITY`. It also severs the audit chain required by `INV-ASRUN-TRACEABILITY-001`.
 
 ## Guarantee
 
-Every ExecutionEntry, except those created by an explicit recorded operator override, must be derived from a TransmissionLogEntry that is itself traceable to a ResolvedScheduleDay.
+Every ExecutionEntry, except those created by an explicit recorded operator override, must be derived from a PlaylistEvent that is itself traceable to a ResolvedScheduleDay.
 
-An ExecutionEntry with no TransmissionLogEntry reference and no operator override record MUST NOT be persisted.
+An ExecutionEntry with no PlaylistEvent reference and no operator override record MUST NOT be persisted.
 
 ## Preconditions
 
@@ -20,15 +20,15 @@ An ExecutionEntry with no TransmissionLogEntry reference and no operator overrid
 
 ## Observability
 
-Application-layer enforcement at ExecutionEntry creation time. Audit query: any ExecutionEntry with no TransmissionLogEntry reference and no override record is a violation. HorizonManager MUST verify derivation before committing each entry.
+Application-layer enforcement at ExecutionEntry creation time. Audit query: any ExecutionEntry with no PlaylistEvent reference and no override record is a violation. HorizonManager MUST verify derivation before committing each entry.
 
 ## Deterministic Testability
 
-Attempt to create an ExecutionEntry without a TransmissionLogEntry reference and without an override record via HorizonManager. Assert creation is rejected. Separately, create one with a valid TransmissionLogEntry reference and assert it is accepted. No real-time waits required.
+Attempt to create an ExecutionEntry without a PlaylistEvent reference and without an override record via HorizonManager. Assert creation is rejected. Separately, create one with a valid PlaylistEvent reference and assert it is accepted. No real-time waits required.
 
 ## Failure Semantics
 
-**Planning fault.** HorizonManager generated an entry outside the constitutional derivation chain. Indicates a logic error in the TransmissionLog-to-ExecutionEntry conversion.
+**Planning fault.** HorizonManager generated an entry outside the constitutional derivation chain. Indicates a logic error in the PlaylistEvent-to-ExecutionEntry conversion.
 
 ## Required Tests
 

@@ -6,7 +6,7 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-GRID`, `LAW-LIVENESS`
 
 ## Purpose
 
-Ensures continuous editorial coverage across the full broadcast day. A gap in ResolvedScheduleDay means TransmissionLog has no content authority for that window. A gap in TransmissionLog propagates into an ExecutionEntry gap — leaving a live channel with no constitutionally-authorized content to play, threatening `LAW-LIVENESS` at the playout layer.
+Ensures continuous editorial coverage across the full broadcast day. A gap in ResolvedScheduleDay means the PlaylistEvent layer has no content authority for that window. A gap in the PlaylistEvent sequence propagates into an ExecutionEntry gap — leaving a live channel with no constitutionally-authorized content to play, threatening `LAW-LIVENESS` at the playout layer.
 
 ## Guarantee
 

@@ -964,8 +964,167 @@ class ProgramLogDay(Base):
         return f"<ProgramLogDay(id={self.id}, channel_id={self.channel_id}, broadcast_day={self.broadcast_day}, locked={self.locked})>"
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Schedule Revisions (Tier-1 authority snapshots)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
+class ScheduleRevision(Base):
+    """Immutable Tier-1 authority snapshot for one channel/broadcast_day.
+
+    Lifecycle: draft → active → superseded.
+    At most one revision per (channel_id, broadcast_day) may be 'active'
+    at any time (enforced by partial unique index in the DB).
+    """
+
+    __tablename__ = "schedule_revisions"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    channel_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    broadcast_day: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="Lifecycle: draft | active | superseded",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", PG_JSONB, nullable=True
+    )
+
+    # Relationships
+    channel: Mapped[Channel | None] = relationship("Channel", passive_deletes=True)
+    items: Mapped[list["ScheduleItem"]] = relationship(
+        "ScheduleItem", back_populates="revision", cascade="all, delete-orphan",
+        order_by="ScheduleItem.slot_index",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'active', 'superseded')",
+            name="chk_schedule_revisions_status_valid",
+        ),
+        Index("ix_schedule_revisions_channel_day", "channel_id", "broadcast_day"),
+        # Partial unique index created via raw SQL in migration
+        # (SQLAlchemy doesn't natively support partial unique indexes in table_args)
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ScheduleRevision(id={self.id}, channel_id={self.channel_id}, "
+            f"day={self.broadcast_day}, status={self.status!r})>"
+        )
+
+
+class ScheduleItem(Base):
+    """Editorial schedule unit belonging to exactly one ScheduleRevision.
+
+    Does NOT carry channel_id or broadcast_day — those are inherited from
+    the parent ScheduleRevision via FK join.  This prevents split-authority
+    bugs (item claiming channel B inside revision for channel A).
+
+    Does NOT store execution details (segments, ad breaks, file offsets,
+    playlist artifacts). Those belong to PlaylistEvent and ExecutionSegment.
+    """
+
+    __tablename__ = "schedule_items"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    schedule_revision_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("schedule_revisions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    start_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    duration_sec: Mapped[int] = mapped_column(Integer, nullable=False)
+    asset_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
+    collection_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
+    content_type: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="episode | movie | filler | bumper | promo | station_id",
+    )
+    window_uuid: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
+    slot_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", PG_JSONB, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    revision: Mapped[ScheduleRevision | None] = relationship(
+        "ScheduleRevision", back_populates="items"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("schedule_revision_id", "slot_index", name="uq_schedule_items_revision_slot"),
+        UniqueConstraint("schedule_revision_id", "start_time", name="uq_schedule_items_revision_start"),
+        Index("ix_schedule_items_revision_id", "schedule_revision_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ScheduleItem(id={self.id}, revision={self.schedule_revision_id}, "
+            f"slot={self.slot_index}, type={self.content_type!r})>"
+        )
+
+
+
+
+class ChannelActiveRevision(Base):
+    """Direct pointer to active ScheduleRevision for a channel+broadcast_day."""
+
+    __tablename__ = "channel_active_revisions"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    channel_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    broadcast_day: Mapped[date] = mapped_column(Date, nullable=False)
+    schedule_revision_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("schedule_revisions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("channel_id", "broadcast_day", name="uq_channel_active_revisions_channel_day"),
+        Index("ix_channel_active_revisions_channel_day", "channel_id", "broadcast_day"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            "<ChannelActiveRevision(channel_id=%s, day=%s, revision=%s)>"
+            % (self.channel_id, self.broadcast_day, self.schedule_revision_id)
+        )
 # ═══════════════════════════════════════════════════════════════════════════════
 # Traffic Management
 # ═══════════════════════════════════════════════════════════════════════════════

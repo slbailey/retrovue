@@ -912,7 +912,7 @@ class ProgramDirector:
             if config.schedule_source != "dsl":
                 continue
 
-            # Tier 1 (ProgramLogDay) is already warmed by
+            # Tier 1 (active revisions/items) is already warmed by
             # _prewarm_channel_schedules() which runs before this method.
 
             sc = config.schedule_config or {}
@@ -2203,8 +2203,8 @@ class ProgramDirector:
         ) -> Any:
             """EPG endpoint for all channels — reads from canonical compiled schedule.
 
-            INV-EPG-READS-CANONICAL-SCHEDULE-001: reads from ProgramLogDay,
-            does NOT call compile_schedule() directly.
+            INV-EPG-READS-CANONICAL-SCHEDULE-001: reads from canonical relational
+            schedule data, does NOT call compile_schedule() directly.
             """
             from zoneinfo import ZoneInfo
             from retrovue.runtime.dsl_schedule_service import DslScheduleService
@@ -2240,7 +2240,7 @@ class ProgramDirector:
             all_entries = []
             for ch in channels:
                 try:
-                    # INV-EPG-READS-CANONICAL-SCHEDULE-001: read from DB cache
+                    # INV-EPG-READS-CANONICAL-SCHEDULE-001: read canonical relational schedule
                     blocks = DslScheduleService.get_canonical_epg(
                         ch["channel_id"], window_start, window_end
                     )

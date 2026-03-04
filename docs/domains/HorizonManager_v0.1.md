@@ -41,7 +41,7 @@ HorizonManager operates independently of Channel Manager. Channel Manager is a c
 
 | Component | Owns |
 |---|---|
-| **Schedule Manager** | ProgramEvent resolution, episode advancement, Schedule Day generation |
+| **Schedule Manager** | ScheduleItem resolution, episode advancement, Schedule Day generation |
 | **HorizonManager** | Horizon depth enforcement, lock window progression, eviction of expired data |
 | **Channel Manager** | Execution consumption, session lifecycle, stream delivery |
 | **AIR** | Frame rendering, real-time pacing, transport |
@@ -56,11 +56,11 @@ HorizonManager does not produce planning artifacts itself. It invokes Schedule M
 
 ### EPG Horizon
 
-The window of Schedule Day and ProgramEvent data maintained ahead of real time for editorial visibility, guide publication, and operator confidence. Coarse granularity: day-level and slot-level. Contains resolved program assignments but not execution-level segments or asset paths.
+The window of Schedule Day and ScheduleItem data maintained ahead of real time for editorial visibility, guide publication, and operator confidence. Coarse granularity: day-level and slot-level. Contains resolved program assignments but not execution-level segments or asset paths.
 
 ### Execution Horizon
 
-The window of execution-ready data (Transmission Log entries: blocks, segments, resolved asset references, filler and padding instructions) maintained ahead of real time for playout. Fine granularity: block-level and segment-level. All material references are resolved. Immutable once inside the locked window.
+The window of execution-ready data (PlaylistEvent entries: time-bounded execution instructions with resolved asset references, segment structure, and filler/padding placement) maintained ahead of real time for playout. Fine granularity: block-level and segment-level. All material references are resolved. Immutable once inside the locked window.
 
 ### Lock Windows
 
@@ -89,7 +89,7 @@ These are minimums, not targets. Falling below either threshold is a policy viol
 - Maintain execution depth at or above `min_execution_hours` ahead of real time.
 - Advance the lock window boundary as wall-clock time progresses. Data that enters the execution horizon becomes locked; data that passes behind the current time becomes past.
 - Prune expired data (past window) according to retention policy. Pruning is bounded: data older than the retention window may be discarded. Retention policy is deployment-configurable.
-- Trigger planning pipeline extensions when horizon depth falls below the configured minimum. Extensions produce new Schedule Days (for EPG) and new Transmission Log entries (for execution).
+- Trigger planning pipeline extensions when horizon depth falls below the configured minimum. Extensions produce new Schedule Days (for EPG) and new PlaylistEvents (for execution).
 - Replace affected windows atomically when regenerated due to operator override. Partial or mixed-generation windows are not permitted within the execution horizon.
 
 ### HorizonManager MUST NOT
@@ -110,7 +110,7 @@ HorizonManager runs as a long-lived background component within Core. It is not 
 
 1. Determine current wall-clock time from MasterClock.
 2. Compute current EPG depth (distance from now to the farthest resolved Schedule Day).
-3. Compute current execution depth (distance from now to the farthest locked Transmission Log entry).
+3. Compute current execution depth (distance from now to the farthest locked PlaylistEvent).
 4. If EPG depth is below `min_epg_days`, invoke Schedule Manager to resolve the next required Schedule Day(s).
 5. If execution depth is below `min_execution_hours`, invoke the planning pipeline to extend the execution horizon.
 6. Advance the lock window boundary: any execution data that has entered the execution window since the last evaluation is now locked.
@@ -140,8 +140,8 @@ Evaluation cadence is not execution cadence. HorizonManager does not run once pe
                          │                 │
                          ▼                 ▼
                   ┌─────────────┐  ┌─────────────────┐
-                  │  Resolved   │  │  Transmission    │
-                  │  Store      │  │  Log Store       │
+                  │  Resolved   │  │  PlaylistEvent   │
+                  │  Store      │  │  Store           │
                   │ (EPG data)  │  │ (execution data) │
                   └──────┬──────┘  └───────┬──────────┘
                          │                 │
@@ -154,8 +154,8 @@ Evaluation cadence is not execution cadence. HorizonManager does not run once pe
 ```
 
 - HorizonManager calls Schedule Manager to extend the EPG horizon (resolve new Schedule Days).
-- HorizonManager calls the planning pipeline to extend the execution horizon (produce new Transmission Log entries).
-- Artifacts are stored in their respective stores (Resolved Store for Schedule Days; Transmission Log Store for execution data).
+- HorizonManager calls the planning pipeline to extend the execution horizon (produce new PlaylistEvents).
+- Artifacts are stored in their respective stores (Resolved Store for Schedule Days; PlaylistEvent Store for execution data).
 - Channel Manager reads from the execution store. The view is read-only. Channel Manager does not write to, invalidate, or request population of any store.
 - Channel Manager never triggers generation. If execution data is absent when needed, that is a planning failure attributable to HorizonManager.
 
@@ -201,7 +201,7 @@ The following are explicitly excluded from this document:
 
 The following are recognized as future work and are not addressed in this version:
 
-- **Persistent store backing.** Production deployments will require durable storage for resolved schedules and transmission logs across process restarts.
+- **Persistent store backing.** Production deployments will require durable storage for resolved schedules and PlaylistEvents across process restarts.
 - **Multi-channel coordination.** HorizonManager policy enforcement across many channels with shared resources (pipeline throughput, store capacity).
 - **Cluster coordination.** Distributed HorizonManager instances with coordinated horizon ownership and failover.
 - **Predictive regeneration.** Anticipatory horizon extension based on pipeline throughput and historical generation time, rather than simple depth threshold.
@@ -214,4 +214,4 @@ The following are recognized as future work and are not addressed in this versio
 - [Schedule Horizon Management Contract (v0.1)](../contracts/ScheduleHorizonManagementContract_v0.1.md)
 - [Schedule Manager Planning Authority (v0.1)](../contracts/ScheduleManagerPlanningAuthority_v0.1.md)
 - [Schedule Execution Interface Contract (v0.1)](../contracts/ScheduleExecutionInterfaceContract_v0.1.md)
-- [Program Event Scheduling Model (v0.1)](ProgramEventSchedulingModel_v0.1.md)
+- [ScheduleItem domain model](ScheduleItem.md)

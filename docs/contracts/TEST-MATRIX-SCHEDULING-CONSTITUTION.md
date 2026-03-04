@@ -24,8 +24,10 @@ Every test in this matrix maps to at least one invariant. Every invariant is cov
 ### Derivation Chain
 
 ```
-SchedulePlan → ResolvedScheduleDay → PlaylistEvent → ExecutionEntry → AsRun
+SchedulePlan → ScheduleRevision → ScheduleItem → PlaylistEvent → ExecutionSegment → BlockPlan → AIR → AsRun
 ```
+
+ScheduleDay (ResolvedScheduleDay) is a derived grouping of ScheduleItems by broadcast_day, not an editorial authority.
 
 ---
 
@@ -1349,3 +1351,19 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | CROSSDAY-011 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Single ExecutionEntry returned for every instant within cross-boundary interval |
 | CROSSDAY-012 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Two ExecutionEntrys covering overlapping 06:00–06:30 interval rejected |
 | CROSSDAY-013 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001, INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | Boundary event does not produce dual authority at DAY_BOUNDARY instant |
+
+## Reschedule Operations
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| RESCHED-001 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Tier 1 reschedule of past ProgramLogDay rejected |
+| RESCHED-002 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Tier 1 reschedule of currently-airing ProgramLogDay rejected |
+| RESCHED-003 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Tier 1 reschedule of future ProgramLogDay succeeds |
+| RESCHED-004 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 2 reschedule of past PlaylistEvent rejected |
+| RESCHED-005 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 2 reschedule of currently-airing PlaylistEvent rejected |
+| RESCHED-006 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 2 reschedule of future PlaylistEvent succeeds |
+| RESCHED-007 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 1 reschedule of ProgramLogDay with range_start=None rejected |
+| RESCHED-008 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Tier 1 reschedule cascade-deletes future Tier 2 rows |
+| RESCHED-009 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-IMMUTABILITY | Tier 1 reschedule preserves past Tier 2 rows |
+| RESCHED-010 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different channel |
+| RESCHED-011 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different broadcast_day |

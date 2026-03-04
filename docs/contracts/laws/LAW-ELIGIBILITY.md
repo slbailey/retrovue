@@ -10,8 +10,8 @@ No other eligibility criterion may override this gate.
 
 - SchedulePlan zone resolution must exclude non-eligible assets before materialization.
 - ScheduleDay must not reference assets that did not pass the eligibility gate at resolution time.
-- Playlist entries must not reference ineligible assets.
-- PlaylogEvent must not reference assets that have become ineligible since their Playlist entry was generated.
+- PlaylistEvent entries must not reference ineligible assets.
+- ExecutionSegments must not reference assets that have become ineligible since their PlaylistEvent was generated.
 - Runtime must not begin playout for any asset that is not currently eligible.
 
 ## Violation

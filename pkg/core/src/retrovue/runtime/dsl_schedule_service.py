@@ -800,85 +800,31 @@ class DslScheduleService:
         return count
 
     def _get_cached_schedule(self, channel_id: str, broadcast_day: str) -> dict | None:
-        """Check DB for a locked compiled schedule.
+        """Deprecated ProgramLogDay cache path (Stage 4).
 
-        Invalidates stale rows compiled by an older COMPILER_VERSION —
-        returns None (cache miss) so the caller recompiles and overwrites.
+        Schedule authority now lives in ScheduleRevision + ScheduleItems.
+        Keep compile behavior deterministic by treating this as cache-miss.
         """
-        from retrovue.domain.entities import ProgramLogDay
-        from retrovue.runtime.schedule_compiler import COMPILER_VERSION
-        try:
-            with session() as db:
-                row = db.query(ProgramLogDay).filter(
-                    ProgramLogDay.channel_id == channel_id,
-                    ProgramLogDay.broadcast_day == date_type.fromisoformat(broadcast_day),
-                    ProgramLogDay.locked == True,
-                ).first()
-                if row:
-                    cached_version = row.program_log_json.get("source", {}).get("compiler_version")
-                    if cached_version != COMPILER_VERSION:
-                        logger.info(
-                            "Invalidating stale cache for %s/%s: compiler %s != %s",
-                            channel_id, broadcast_day, cached_version, COMPILER_VERSION,
-                        )
-                        return None
-                    return row.program_log_json
-        except Exception as e:
-            logger.warning("Failed to check program_log_days cache: %s", e)
         return None
 
     def _save_compiled_schedule(self, channel_id: str, broadcast_day: str, schedule: dict, dsl_hash: str) -> None:
-        """Persist a compiled schedule to the DB.
+        """Persist compiled schedule to relational Tier-1 authority only.
 
-        INV-SCHEDULE-HORIZON-001: Stores both program-level metadata
-        (program_blocks) and segmented block data (segmented_blocks).
-        Segmented blocks contain content segments + empty filler
-        placeholders (break opportunities with durations/positions).
-
-        INV-EPG-READS-CANONICAL-SCHEDULE-001: Populates range_start/range_end
-        from program_blocks for range-based overlap queries.
-
-        INV-SCHEDULE-RETENTION-001: Uses query-then-update-or-insert to
-        correctly handle the (channel_id, broadcast_day) unique constraint.
-        The previous db.merge() with a fresh UUID silently failed on conflict.
+        Stage 4: ProgramLogDay schedule storage is deprecated.
         """
-        from retrovue.domain.entities import ProgramLogDay
+        from retrovue.runtime.schedule_revision_writer import (
+            write_active_revision_from_compiled_schedule,
+        )
         try:
-            # Compute time range from program blocks
-            program_blocks = schedule.get("program_blocks", [])
-            range_start = None
-            range_end = None
-            if program_blocks:
-                range_start = min(
-                    datetime.fromisoformat(b["start_at"]) for b in program_blocks
-                )
-                range_end = max(
-                    datetime.fromisoformat(b["start_at"]) + timedelta(seconds=b["slot_duration_sec"])
-                    for b in program_blocks
-                )
-
             bd = date_type.fromisoformat(broadcast_day)
             with session() as db:
-                existing = db.query(ProgramLogDay).filter(
-                    ProgramLogDay.channel_id == channel_id,
-                    ProgramLogDay.broadcast_day == bd,
-                ).first()
-                if existing:
-                    existing.program_log_json = schedule
-                    existing.schedule_hash = dsl_hash
-                    existing.locked = True
-                    existing.range_start = range_start
-                    existing.range_end = range_end
-                else:
-                    db.add(ProgramLogDay(
-                        channel_id=channel_id,
-                        broadcast_day=bd,
-                        schedule_hash=dsl_hash,
-                        program_log_json=schedule,
-                        locked=True,
-                        range_start=range_start,
-                        range_end=range_end,
-                    ))
+                write_active_revision_from_compiled_schedule(
+                    db,
+                    channel_slug=channel_id,
+                    broadcast_day=bd,
+                    schedule=schedule,
+                    created_by="dsl_schedule_service",
+                )
         except Exception as e:
             logger.warning("Failed to save compiled schedule to DB: %s", e)
 
@@ -888,50 +834,66 @@ class DslScheduleService:
 
     @staticmethod
     def get_canonical_epg(channel_id: str, window_start: datetime, window_end: datetime) -> list[dict] | None:
-        """Read program_blocks from the DB-cached canonical compiled schedule.
+        """Read canonical EPG from active ScheduleRevision + ScheduleItems.
 
-        INV-EPG-READS-CANONICAL-SCHEDULE-001: Uses range-based overlap query to
-        return blocks from any ProgramLogDay row whose [range_start, range_end)
-        overlaps [window_start, window_end). Returns None if no cached schedule
-        covers the requested window.
+        Ordering is authoritative by slot_index ASC.
         """
-        from retrovue.domain.entities import ProgramLogDay
+        from retrovue.domain.entities import Channel, ChannelActiveRevision, ScheduleItem, ScheduleRevision
         try:
             with session() as db:
-                rows = db.query(ProgramLogDay).filter(
-                    ProgramLogDay.channel_id == channel_id,
-                    ProgramLogDay.locked == True,
-                    ProgramLogDay.range_start < window_end,
-                    ProgramLogDay.range_end > window_start,
-                ).all()
-                if not rows:
+                channel = db.query(Channel).filter(Channel.slug == channel_id).first()
+                if channel is None:
                     return None
 
-                # Collect blocks from all overlapping rows, deduplicate
-                all_blocks: list[dict] = []
-                seen: set[tuple] = set()
-                for row in rows:
-                    for pb in row.program_log_json.get("program_blocks", []):
-                        key = (pb["start_at"], pb["slot_duration_sec"], pb["asset_id"])
-                        if key not in seen:
-                            seen.add(key)
-                            all_blocks.append(pb)
+                pointers = db.query(ChannelActiveRevision).filter(
+                    ChannelActiveRevision.channel_id == channel.id,
+                    ChannelActiveRevision.broadcast_day >= window_start.date() - timedelta(days=1),
+                    ChannelActiveRevision.broadcast_day <= window_end.date() + timedelta(days=1),
+                ).order_by(ChannelActiveRevision.broadcast_day.asc()).all()
 
-                # Sort by start_at for consistent ordering
-                all_blocks.sort(key=lambda b: b["start_at"])
+                revisions = []
+                if pointers:
+                    rev_ids = [ptr.schedule_revision_id for ptr in pointers]
+                    rev_rows = db.query(ScheduleRevision).filter(
+                        ScheduleRevision.id.in_(rev_ids)
+                    ).all()
+                    rev_map = {r.id: r for r in rev_rows}
+                    revisions = [rev_map[rid] for rid in rev_ids if rid in rev_map]
 
-                # Filter to blocks that overlap the requested window
-                visible = []
-                for pb in all_blocks:
-                    block_start = datetime.fromisoformat(pb["start_at"])
-                    block_end = block_start + timedelta(seconds=pb["slot_duration_sec"])
-                    if block_end <= window_start:
-                        continue
-                    if block_start >= window_end:
-                        break
-                    visible.append(pb)
+                if not revisions:
+                    revisions = db.query(ScheduleRevision).filter(
+                        ScheduleRevision.channel_id == channel.id,
+                        ScheduleRevision.status == active,
+                        ScheduleRevision.broadcast_day >= window_start.date() - timedelta(days=1),
+                        ScheduleRevision.broadcast_day <= window_end.date() + timedelta(days=1),
+                    ).order_by(ScheduleRevision.broadcast_day.asc()).all()
 
-                return visible if visible else None
+                if not revisions:
+                    return None
+
+                out=[]
+                for rev in revisions:
+                    items = (
+                        db.query(ScheduleItem)
+                        .filter(ScheduleItem.schedule_revision_id == rev.id)
+                        .order_by(ScheduleItem.slot_index.asc())
+                        .all()
+                    )
+                    for it in items:
+                        block_start = it.start_time
+                        block_end = block_start + timedelta(seconds=it.duration_sec)
+                        if block_end <= window_start or block_start >= window_end:
+                            continue
+                        meta = it.metadata_ or {}
+                        out.append({
+                            "start_at": block_start.isoformat(),
+                            "slot_duration_sec": int(it.duration_sec),
+                            "asset_id": meta.get("asset_id_raw") or (str(it.asset_id) if it.asset_id else ""),
+                            "collection": meta.get("collection_raw") or (str(it.collection_id) if it.collection_id else None),
+                            "content_type": it.content_type,
+                        })
+
+                return out if out else None
         except Exception as e:
             logger.warning("Failed to read canonical EPG for %s/%s: %s", channel_id, window_start, e)
         return None
@@ -969,14 +931,14 @@ class DslScheduleService:
         for pool_id in pools:
             sequential_counters[pool_id] = starting_counter
 
-        # INV-SCHEDULE-SEED-DETERMINISTIC-001: deterministic, stable seed
-        from retrovue.runtime.schedule_compiler import channel_seed
-        _channel_seed = channel_seed(channel_id)
+        # INV-SCHEDULE-SEED-DAY-VARIANCE-001: day-varying deterministic seed
+        from retrovue.runtime.schedule_compiler import compilation_seed
+        _seed = compilation_seed(channel_id, broadcast_day)
 
         # Compile program schedule with deterministic counters
         schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
                                      sequential_counters=sequential_counters,
-                                     seed=_channel_seed)
+                                     seed=_seed)
 
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
