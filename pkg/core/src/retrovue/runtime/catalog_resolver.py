@@ -29,7 +29,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Asset, AssetEditorial, AssetProbed, Collection, Marker
+from ..domain.entities import Asset, AssetEditorial, AssetProbed, AssetTag, Collection, Marker
 from ..adapters.enrichers.loudness_enricher import get_gain_db_from_probed, needs_loudness_measurement
 from .asset_resolver import AssetMetadata
 
@@ -148,6 +148,14 @@ class CatalogAssetResolver:
                 markers[key] = []
             markers[key].append(m.start_ms / 1000.0)
 
+        # Load asset tags (INV-ASSET-TAG-PERSISTENCE-001)
+        asset_tags: dict[str, list[str]] = {}
+        for at in db.query(AssetTag).all():
+            key = str(at.asset_uuid)
+            if key not in asset_tags:
+                asset_tags[key] = []
+            asset_tags[key].append(at.tag)
+
         # Load collection and source name mappings
         collections = db.query(Collection).all()
         col_name_map: dict[str, str] = {}  # collection_uuid → collection_name
@@ -188,11 +196,12 @@ class CatalogAssetResolver:
             # INV-LOUDNESS-NORMALIZED-001: read gain_db from probed payload
             probed = probed_payloads.get(uuid_str)
             loudness_gain = get_gain_db_from_probed(probed)
+            asset_tag_list = tuple(sorted(asset_tags.get(uuid_str, [])))
             meta = AssetMetadata(
                 type="episode",
                 duration_sec=duration_sec,
                 title=display_title,
-                tags=(),
+                tags=asset_tag_list,
                 rating=rating,
                 file_uri=resolved_file_uri,
                 chapter_markers_sec=chapter_secs if chapter_secs else None,

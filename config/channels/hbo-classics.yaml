@@ -35,6 +35,7 @@ templates:
           type: pool
           name: hbo_movies
         mode: random
+        primary: true
 
 schedule:
   all_day:
