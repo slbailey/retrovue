@@ -23,6 +23,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     Time,
@@ -1209,4 +1210,102 @@ class PlaylistEvent(Base):
             f"<PlaylistEvent(block_id={self.block_id!r}, "
             f"channel={self.channel_slug!r}, "
             f"day={self.broadcast_day})>"
+        )
+
+
+# =============================================================================
+# Serial Episode Progression
+# See: docs/contracts/runtime/INV-SERIAL-EPISODE-PROGRESSION.md
+# =============================================================================
+
+
+class SerialRun(Base):
+    """
+    Persistent serial episode progression record.
+
+    Binds a recurring program placement on a channel timeline to an anchor
+    point and progression policy.  Episode selection is a pure computation
+    from (anchor, target_date, placement_days) — no runtime counters.
+
+    Placement identity: (channel_id, placement_time, placement_days, content_source_id).
+    At most one active run may exist per placement identity (PI-001).
+    """
+
+    __tablename__ = "serial_runs"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    run_name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Operator-facing name (e.g. 'Bonanza Weekday Strip')"
+    )
+    channel_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    placement_time: Mapped[dt_time] = mapped_column(
+        Time, nullable=False, comment="Schedule-time HH:MM for this strip"
+    )
+    placement_days: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False,
+        comment="7-bit DOW bitmask: bit0=Mon … bit6=Sun. 127=daily, 31=weekday, 96=weekend",
+    )
+    content_source_id: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Program, collection, or pool identifier"
+    )
+    content_source_type: Mapped[str] = mapped_column(
+        String(50), nullable=False,
+        comment="Type of content source: 'program', 'collection', 'pool'",
+    )
+    anchor_datetime: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        comment="When anchor_episode_index airs (day-of-week must match placement_days)",
+    )
+    anchor_episode_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+        comment="Index into the ordered episode list at the anchor date",
+    )
+    progression_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="serial",
+        comment="Progression mode: 'serial'",
+    )
+    wrap_policy: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="wrap",
+        comment="Wrap policy: 'wrap', 'hold_last', 'stop'",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sa.text("true"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    channel: Mapped["Channel"] = relationship("Channel", passive_deletes=True)
+
+    __table_args__ = (
+        # PI-001: Partial unique index enforced via migration (Alembic)
+        # because SQLAlchemy ORM UniqueConstraint does not support WHERE.
+        # See: alembic/versions/20260306_create_serial_runs.py
+        Index("ix_serial_runs_channel_id", "channel_id"),
+        Index("ix_serial_runs_active", "channel_id", "is_active"),
+        CheckConstraint(
+            "placement_days >= 1 AND placement_days <= 127",
+            name="ck_serial_runs_placement_days_range",
+        ),
+        CheckConstraint(
+            "anchor_episode_index >= 0",
+            name="ck_serial_runs_anchor_ep_nonneg",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<SerialRun(id={self.id}, run_name={self.run_name!r}, "
+            f"channel_id={self.channel_id}, "
+            f"placement_time={self.placement_time}, "
+            f"placement_days={self.placement_days}, "
+            f"content_source_id={self.content_source_id!r})>"
         )

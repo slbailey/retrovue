@@ -134,6 +134,31 @@ def select_episode(
     elif mode == "weighted":
         rng = random.Random(seed)
         return rng.choice(episode_ids)
+    elif mode == "serial":
+        # INV-SERIAL-001: Deterministic serial progression via calendar
+        # occurrence counting.  Requires serial_run_info and broadcast_day
+        # to be passed via kwargs by the caller.
+        from retrovue.runtime.serial_episode_resolver import (
+            SerialRunInfo,
+            resolve_serial_episode,
+        )
+
+        serial_run_info: SerialRunInfo | None = kwargs.get("serial_run_info")
+        broadcast_day_str: str | None = kwargs.get("broadcast_day")
+        if serial_run_info is None or broadcast_day_str is None:
+            raise CompileError(
+                f"Serial mode for pool {collection_id} requires "
+                "'serial_run_info' and 'broadcast_day' kwargs"
+            )
+        from datetime import date as date_type
+
+        target = date_type.fromisoformat(broadcast_day_str)
+        idx = resolve_serial_episode(serial_run_info, target, len(episode_ids))
+        if idx is None:
+            # stop policy exhausted — return first episode as filler fallback
+            # (the caller can handle this differently if needed)
+            return episode_ids[0]
+        return episode_ids[idx]
     else:
         raise CompileError(f"Unknown episode selector mode: {mode}")
 

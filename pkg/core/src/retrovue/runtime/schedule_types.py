@@ -506,6 +506,60 @@ class ResolvedScheduleStore(Protocol):
         ...
 
 
+class SerialRunLookup(Protocol):
+    """
+    Abstraction for looking up active serial run records.
+
+    Used by ScheduleManager to resolve serial episode progression.
+    See: docs/contracts/runtime/INV-SERIAL-EPISODE-PROGRESSION.md
+    """
+
+    def get_active_run(
+        self,
+        channel_id: str,
+        placement_time: time,
+        placement_days: int,
+        content_source_id: str,
+    ) -> "SerialRunRecord | None":
+        """Look up the active serial run for a full placement identity.
+
+        Returns None if no active run exists for this placement.
+        """
+        ...
+
+    def get_active_run_by_content(
+        self,
+        channel_id: str,
+        placement_time: time,
+        content_source_id: str,
+    ) -> "SerialRunRecord | None":
+        """Look up the active serial run by (channel, time, content).
+
+        Used when the caller does not know the placement_days bitmask
+        (e.g., ScheduleManager resolution path where the zone's day
+        filter is not directly available).
+
+        Returns None if no active run exists.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class SerialRunRecord:
+    """Read-only snapshot of a serial_runs row for the resolver.
+
+    Lightweight value object — the resolver never touches the database.
+    """
+
+    channel_id: str
+    placement_time: time
+    placement_days: int
+    content_source_id: str
+    anchor_date: date
+    anchor_episode_index: int
+    wrap_policy: str
+
+
 class EPGProvider(Protocol):
     """
     Protocol for EPG query capability.
@@ -543,6 +597,7 @@ class ScheduleManagerConfig:
     filler_path: str                           # Path to filler content
     filler_duration_seconds: float = 0.0       # Duration of filler file
     programming_day_start_hour: int = 6        # Broadcast day start
+    serial_run_lookup: SerialRunLookup | None = None  # Optional serial run store
 
 
 # =============================================================================
