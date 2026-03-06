@@ -40,8 +40,22 @@ def _parse_uuid(value: Any) -> uuid_mod.UUID | None:
 def _infer_content_type(block: dict[str, Any]) -> str:
     """Infer ScheduleItem.content_type from compiler block metadata.
 
-    Keep this conservative; unknowns default to "episode".
+    INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
+    When compiled_segments is present (template-derived block), derive
+    content_type from the primary segment's source type. This eliminates
+    dependence on title heuristics for template blocks.
+
+    Keep this conservative for legacy blocks; unknowns default to "episode".
     """
+    # Template-derived blocks: derive from compiled_segments primary source
+    compiled_segs = block.get("compiled_segments")
+    if compiled_segs:
+        for seg in compiled_segs:
+            if seg.get("is_primary"):
+                if seg.get("source_type") == "pool":
+                    return "movie"
+                return "episode"
+
     selector = block.get("selector")
     if isinstance(selector, dict):
         # movie selector paths include duration/rating-oriented filters in practice
@@ -137,6 +151,7 @@ def write_active_revision_from_compiled_schedule(
                 "episode_duration_sec": block.get("episode_duration_sec"),
                 "template_id": block.get("template_id"),
                 "epg_title": block.get("epg_title"),
+                "compiled_segments": block.get("compiled_segments"),
             },
         )
         db.add(item)
