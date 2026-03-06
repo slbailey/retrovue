@@ -28,6 +28,10 @@ from retrovue.runtime.schedule_types import (
     EPGEvent,
     ScheduleManagerConfig,
 )
+from retrovue.runtime.serial_episode_resolver import (
+    SerialRunInfo,
+    resolve_serial_episode as _resolve_serial,
+)
 
 
 class ScheduleManager:
@@ -383,6 +387,13 @@ class ScheduleManager:
             # Manual mode: first episode (in production, operator selects)
             return program.episodes[0]
 
+        if program.play_mode == "serial":
+            # INV-SERIAL-001 through INV-SERIAL-008: Deterministic serial
+            # progression via calendar-based occurrence counting.
+            return self._select_serial_episode(
+                channel_id, program, programming_day_date, slot_time,
+            )
+
         raise ScheduleError(f"Unknown play_mode: {program.play_mode}")
 
     def _deterministic_random_select(
@@ -402,6 +413,72 @@ class ScheduleManager:
         hash_bytes = hashlib.sha256(seed_string.encode()).digest()
         hash_int = int.from_bytes(hash_bytes[:8], byteorder='big')
         return hash_int % episode_count
+
+    def _select_serial_episode(
+        self,
+        channel_id: str,
+        program: Program,
+        programming_day_date: date,
+        slot_time: time,
+    ) -> Episode:
+        """Select an episode using deterministic serial progression.
+
+        Delegates to the pure serial resolver.  Requires an active
+        SerialRun record matching the placement identity.
+
+        INV-SERIAL-001: Deterministic episode selection.
+        INV-SERIAL-002: Scheduler downtime independence.
+        INV-SERIAL-005: Placement identity stability.
+        """
+        lookup = self._config.serial_run_lookup
+        if lookup is None:
+            raise ScheduleError(
+                f"Program {program.program_id} has play_mode='serial' but "
+                "no serial_run_lookup is configured"
+            )
+
+        # Derive placement_days from the slot context.  The lookup stores
+        # the bitmask; we need it to find the right run.  Since the caller
+        # may not know the bitmask, we ask the lookup to find any active
+        # run for this (channel, time, content_source).
+        #
+        # For Phase 3, the caller provides slot_time which maps to
+        # placement_time.  The content_source_id is program.program_id.
+        #
+        # We search by (channel, time, content_source) — placement_days
+        # is part of the stored run's identity so the lookup returns it.
+        run_record = lookup.get_active_run_by_content(
+            channel_id=channel_id,
+            placement_time=slot_time,
+            content_source_id=program.program_id,
+        )
+
+        if run_record is None:
+            raise ScheduleError(
+                f"No active serial run for program {program.program_id!r} "
+                f"at {slot_time} on channel {channel_id!r}"
+            )
+
+        run_info = SerialRunInfo(
+            channel_id=run_record.channel_id,
+            placement_time=run_record.placement_time,
+            placement_days=run_record.placement_days,
+            content_source_id=run_record.content_source_id,
+            anchor_date=run_record.anchor_date,
+            anchor_episode_index=run_record.anchor_episode_index,
+            wrap_policy=run_record.wrap_policy,
+        )
+
+        idx = _resolve_serial(run_info, programming_day_date, len(program.episodes))
+
+        if idx is None:
+            # stop policy exhausted — fall through to filler
+            raise ScheduleError(
+                f"Serial run for {program.program_id!r} exhausted (stop policy); "
+                f"episode list has {len(program.episodes)} episodes"
+            )
+
+        return program.episodes[idx]
 
     def _capture_sequence_positions(self, channel_id: str) -> dict[str, int]:
         """Capture current sequence positions for all programs."""

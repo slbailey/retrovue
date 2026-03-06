@@ -40,6 +40,8 @@ from retrovue.runtime.schedule_types import (
     ScheduledSegment,
     ScheduleSlot,
     SequenceStateStore,
+    SerialRunLookup,
+    SerialRunRecord,
 )
 
 
@@ -72,6 +74,60 @@ class InMemorySequenceStore(SequenceStateStore):
             if channel_id not in self._positions:
                 self._positions[channel_id] = {}
             self._positions[channel_id][program_id] = index
+
+
+class InMemorySerialRunStore:
+    """
+    In-memory implementation of SerialRunLookup.
+
+    Stores serial run records for testing and lightweight deployments.
+    For production, use a Postgres-backed implementation.
+    """
+
+    def __init__(self) -> None:
+        # Key: (channel_id, placement_time, placement_days, content_source_id)
+        self._runs: dict[tuple[str, time, int, str], SerialRunRecord] = {}
+        self._lock = threading.Lock()
+
+    def add_run(self, record: SerialRunRecord) -> None:
+        """Register an active serial run."""
+        key = (
+            record.channel_id,
+            record.placement_time,
+            record.placement_days,
+            record.content_source_id,
+        )
+        with self._lock:
+            self._runs[key] = record
+
+    def get_active_run(
+        self,
+        channel_id: str,
+        placement_time: time,
+        placement_days: int,
+        content_source_id: str,
+    ) -> SerialRunRecord | None:
+        """Look up by full placement identity."""
+        key = (channel_id, placement_time, placement_days, content_source_id)
+        with self._lock:
+            return self._runs.get(key)
+
+    def get_active_run_by_content(
+        self,
+        channel_id: str,
+        placement_time: time,
+        content_source_id: str,
+    ) -> SerialRunRecord | None:
+        """Look up by (channel, time, content) — ignores placement_days."""
+        with self._lock:
+            for key, record in self._runs.items():
+                if (
+                    key[0] == channel_id
+                    and key[1] == placement_time
+                    and key[3] == content_source_id
+                ):
+                    return record
+            return None
 
 
 def validate_scheduleday_contiguity(
