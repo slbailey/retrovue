@@ -1267,7 +1267,8 @@ class ProgramDirector:
                 gen = info.get("generation", -1)
                 collected = info.get("collected", 0)
                 uncollectable = info.get("uncollectable", 0)
-                if duration_ms > 50:
+                warn_threshold_ms = 50 if gen >= 2 else 180
+                if duration_ms > warn_threshold_ms:
                     self._logger.warning(
                         "[GC] gen=%d duration_ms=%.2f collected=%d uncollectable=%d",
                         gen, duration_ms, collected, uncollectable,
@@ -2273,7 +2274,7 @@ class ProgramDirector:
 
                         start_dt = datetime.fromisoformat(block["start_at"])
                         slot_sec = block["slot_duration_sec"]
-                        ep_sec = block["episode_duration_sec"]
+                        ep_sec = block.get("episode_duration_sec", block["slot_duration_sec"])
                         end_dt = start_dt + timedelta(seconds=slot_sec)
 
                         all_entries.append({
@@ -2281,7 +2282,7 @@ class ProgramDirector:
                             "channel_name": ch["name"],
                             "start_time": start_dt.isoformat(),
                             "end_time": end_dt.isoformat(),
-                            "title": series_title,
+                            "title": (series_title or episode_title or "Untitled"),
                             "episode_title": episode_title,
                             "season": season_number,
                             "episode": episode_number,

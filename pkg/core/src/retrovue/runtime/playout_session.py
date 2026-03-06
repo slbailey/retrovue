@@ -303,6 +303,10 @@ class PlayoutSession:
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = log_dir / f"{self.channel_id}-air.log"
 
+                # Preserve previous log so crash reasons survive reconnect
+                if log_path.exists() and log_path.stat().st_size > 0:
+                    log_path.rename(log_path.with_suffix(".log.prev"))
+
                 logger.debug(f"[PlayoutSession:{self.channel_id}] Starting AIR: {' '.join(cmd)}")
 
                 with open(

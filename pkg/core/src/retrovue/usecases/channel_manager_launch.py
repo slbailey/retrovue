@@ -45,10 +45,17 @@ def _air_log_path(channel_id: str) -> Path:
 from retrovue.runtime.config import ChannelConfig, MOCK_CHANNEL_CONFIG
 
 
+def _rotate_air_log(log_path: Path) -> None:
+    """Preserve the previous AIR log so crash reasons survive reconnect."""
+    if log_path.exists() and log_path.stat().st_size > 0:
+        log_path.rename(log_path.with_suffix(".log.prev"))
+
+
 def _open_air_log(channel_id: str):
     """Open Air log file for this channel (truncate on open, line-buffered). Caller closes after Popen."""
     log_path = _air_log_path(channel_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_air_log(log_path)
     return open(log_path, "w", buffering=1, encoding="utf-8", errors="replace")
 
 

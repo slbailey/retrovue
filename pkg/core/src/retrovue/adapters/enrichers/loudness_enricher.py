@@ -123,16 +123,21 @@ class LoudnessEnricher(BaseEnricher):
             cmd, capture_output=True, text=True, timeout=self.timeout,
         )
 
-        if result.returncode != 0:
-            raise EnricherError(f"ffmpeg ebur128 failed: {result.stderr[:500]}")
-
         # The summary block appears at the end of stderr. Per-moment I: lines
         # appear throughout. Extract only the summary section to avoid matching
         # early running-average values (often -70 LUFS at start of file).
+        #
+        # ffmpeg flushes the summary even when interrupted by SIGINT (rc=-2/255),
+        # so attempt to parse before checking the return code.
         summary_idx = result.stderr.rfind("Summary:")
         search_text = result.stderr[summary_idx:] if summary_idx >= 0 else result.stderr
         match = _INTEGRATED_RE.search(search_text)
-        if not match:
+
+        if match is None:
+            if result.returncode != 0:
+                raise EnricherError(
+                    f"ffmpeg ebur128 failed (rc={result.returncode}): {result.stderr[-500:]}"
+                )
             raise EnricherError(
                 "Could not parse integrated loudness from ffmpeg ebur128 output"
             )
