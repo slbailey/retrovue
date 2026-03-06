@@ -890,7 +890,7 @@ class DslScheduleService:
                 if not revisions:
                     revisions = db.query(ScheduleRevision).filter(
                         ScheduleRevision.channel_id == channel.id,
-                        ScheduleRevision.status == active,
+                        ScheduleRevision.status == "active",
                         ScheduleRevision.broadcast_day >= window_start.date() - timedelta(days=1),
                         ScheduleRevision.broadcast_day <= window_end.date() + timedelta(days=1),
                     ).order_by(ScheduleRevision.broadcast_day.asc()).all()

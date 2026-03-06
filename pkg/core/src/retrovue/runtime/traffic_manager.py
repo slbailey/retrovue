@@ -54,6 +54,7 @@ def fill_ad_blocks(
     _assert_no_filler_before_primary(block.segments)
 
     new_segments: list[ScheduledSegment] = []
+    filler_offset_ms = 0  # v1: running offset into filler file, wraps at end
 
     for seg in block.segments:
         if seg.segment_type == "filler" and seg.asset_uri == "":
@@ -67,17 +68,19 @@ def fill_ad_blocks(
                     continue
 
             # Fallback: static filler (v1 behavior)
-            if seg.segment_duration_ms > filler_duration_ms:
-                raise ValueError(
-                    f"Ad break duration ({seg.segment_duration_ms}ms) exceeds "
-                    f"filler duration ({filler_duration_ms}ms)"
-                )
-            new_segments.append(ScheduledSegment(
-                segment_type="filler",
-                asset_uri=filler_uri,
-                asset_start_offset_ms=0,
-                segment_duration_ms=seg.segment_duration_ms,
-            ))
+            # Fill the break by sequentially playing through filler,
+            # wrapping when the end of the filler file is reached.
+            remaining_ms = seg.segment_duration_ms
+            while remaining_ms > 0:
+                playable = min(remaining_ms, filler_duration_ms - filler_offset_ms)
+                new_segments.append(ScheduledSegment(
+                    segment_type="filler",
+                    asset_uri=filler_uri,
+                    asset_start_offset_ms=filler_offset_ms,
+                    segment_duration_ms=playable,
+                ))
+                filler_offset_ms = (filler_offset_ms + playable) % filler_duration_ms
+                remaining_ms -= playable
         else:
             new_segments.append(seg)
 
