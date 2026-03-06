@@ -55,7 +55,7 @@ def load_segmented_blocks_from_active_revision(
             .filter(
                 ScheduleRevision.channel_id == channel.id,
                 ScheduleRevision.broadcast_day == broadcast_day,
-                ScheduleRevision.status == active,
+                ScheduleRevision.status == "active",
             )
             .first()
         )

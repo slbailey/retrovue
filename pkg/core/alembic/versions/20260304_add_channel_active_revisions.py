@@ -45,7 +45,7 @@ def upgrade() -> None:
         INSERT INTO channel_active_revisions (channel_id, broadcast_day, schedule_revision_id, updated_at)
         SELECT sr.channel_id, sr.broadcast_day, sr.id, now()
         FROM schedule_revisions sr
-        WHERE sr.status = active
+        WHERE sr.status = 'active'
         ON CONFLICT (channel_id, broadcast_day)
         DO UPDATE SET
             schedule_revision_id = EXCLUDED.schedule_revision_id,
