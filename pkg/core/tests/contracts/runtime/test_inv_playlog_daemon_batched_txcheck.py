@@ -41,6 +41,12 @@ def _make_daemon():
     )
 
 
+def _deser(d, **kw):
+    """Passthrough: deserialize block dict without ad filling."""
+    from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
+    return _deserialize_scheduled_block(d)
+
+
 def _fake_block_dict(block_id: str, start_ms: int, end_ms: int, segments_count: int = 3):
     """Minimal Tier-1 segmented block dict."""
     seg_dur = (end_ms - start_ms) // segments_count if segments_count else 0
@@ -105,7 +111,7 @@ class TestRule1BatchedExistenceCheck:
             patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
             patch.object(daemon, "_block_exists_in_txlog", wraps=lambda _bid: False) as mock_per_block,
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()) as mock_batch,
-            patch.object(daemon, "_fill_ads", side_effect=lambda b: b),
+            patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
             patch.object(daemon, "_write_to_txlog"),
             patch("time.sleep"),
         ):
@@ -149,7 +155,7 @@ class TestRule2GilYield:
         with (
             patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
-            patch.object(daemon, "_fill_ads", side_effect=lambda b: b),
+            patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
             patch.object(daemon, "_write_to_txlog"),
             patch("retrovue.runtime.playlist_builder_daemon.time.sleep", side_effect=lambda s: sleep_calls.append(s)) as mock_sleep,
         ):

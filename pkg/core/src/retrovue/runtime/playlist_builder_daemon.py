@@ -28,6 +28,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from retrovue.runtime.schedule_items_reader import expand_editorial_block
+
 logger = logging.getLogger(__name__)
 
 # Log INV-PLAYLOG-HORIZON-002 at WARNING only on first consecutive zero; later repeats at DEBUG.
@@ -344,13 +346,14 @@ class PlaylistBuilderDaemon:
                         self._farthest_end_utc_ms = block_end
                     continue
 
-                # Deserialize and fill ads
+                # Canonical expansion: deserialize + fill ads
                 try:
-                    from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
-                    scheduled_block = _deserialize_scheduled_block(sb_dict)
-
-                    # Fill ad breaks via traffic manager
-                    filled_block = self._fill_ads(scheduled_block, db=db)
+                    filled_block = expand_editorial_block(
+                        sb_dict,
+                        filler_uri=self._filler_path,
+                        filler_duration_ms=self._filler_duration_ms,
+                        asset_library=self._get_asset_library(db=db),
+                    )
 
                     # Write to PlaylistEvent
                     # INV-TIER2-WINDOW-UUID-PROPAGATION-001: thread provenance
@@ -416,10 +419,12 @@ class PlaylistBuilderDaemon:
         )
 
         try:
-            from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
-
-            scheduled_block = _deserialize_scheduled_block(block)
-            filled_block = self._fill_ads(scheduled_block, db=db)
+            filled_block = expand_editorial_block(
+                block,
+                filler_uri=self._filler_path,
+                filler_duration_ms=self._filler_duration_ms,
+                asset_library=self._get_asset_library(db=db),
+            )
             block_start_dt = datetime.fromtimestamp(
                 block["start_utc_ms"] / 1000.0, tz=timezone.utc
             )
@@ -562,35 +567,25 @@ class PlaylistBuilderDaemon:
         except Exception:
             return set()
 
-    def _fill_ads(self, block: "ScheduledBlock", *, db=None) -> "ScheduledBlock":
-        """Fill empty filler placeholders with real interstitials.
+    def _get_asset_library(self, *, db=None):
+        """Create a DatabaseAssetLibrary for interstitial selection.
 
-        INV-PLAYLOG-PREFILL-001: Ad fill happens here at Tier 2 generation.
+        INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 generation.
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
-        from retrovue.runtime.traffic_manager import fill_ad_blocks
-
-        asset_lib = None
         try:
             from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
             if db is not None:
-                asset_lib = DatabaseAssetLibrary(db, channel_slug=self._channel_id)
-            else:
-                from retrovue.infra.uow import session as db_session_factory
-                with db_session_factory() as db:
-                    asset_lib = DatabaseAssetLibrary(db, channel_slug=self._channel_id)
+                return DatabaseAssetLibrary(db, channel_slug=self._channel_id)
+            from retrovue.infra.uow import session as db_session_factory
+            with db_session_factory() as db:
+                return DatabaseAssetLibrary(db, channel_slug=self._channel_id)
         except Exception as e:
             logger.warning(
                 "PlaylistBuilder[%s]: Could not create asset library: %s",
                 self._channel_id, e,
             )
-
-        return fill_ad_blocks(
-            block,
-            filler_uri=self._filler_path,
-            filler_duration_ms=self._filler_duration_ms,
-            asset_library=asset_lib,
-        )
+            return None
 
     def _write_to_txlog(
         self,

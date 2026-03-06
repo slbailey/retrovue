@@ -21,6 +21,12 @@ def _make_daemon():
     )
 
 
+def _deser(d):
+    """Passthrough deserializer for test mocks."""
+    from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
+    return _deserialize_scheduled_block(d)
+
+
 def _fake_block_dict(block_id: str, start_ms: int, end_ms: int, segments_count: int = 3):
     """Minimal Tier-1 segmented block dict for _deserialize_scheduled_block."""
     seg_dur = (end_ms - start_ms) // segments_count if segments_count else 0
@@ -62,7 +68,7 @@ class TestEnsureTier2CoversNowBackfill:
             patch.object(daemon, "_tier2_row_covers_now", return_value=False),
             patch.object(daemon, "_get_tier1_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
-            patch.object(daemon, "_fill_ads", side_effect=lambda b, **kw: b),
+            patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=lambda d, **kw: _deser(d)),
         ):
             n = daemon._ensure_tier2_covers_now(now_ms)
 
@@ -100,7 +106,7 @@ class TestEnsureTier2CoversNowBackfill:
             patch.object(daemon, "_tier2_row_covers_now", return_value=False),
             patch.object(daemon, "_get_tier1_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
-            patch.object(daemon, "_fill_ads", side_effect=lambda b, **kw: b),
+            patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=lambda d, **kw: _deser(d)),
         ):
             n = daemon._ensure_tier2_covers_now(now_ms)
 
@@ -169,7 +175,7 @@ class TestEnsureTier2CoversNowBackfill:
             patch.object(daemon, "_tier2_row_covers_now", return_value=False),
             patch.object(daemon, "_get_tier1_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog"),
-            patch.object(daemon, "_fill_ads", side_effect=lambda b, **kw: b),
+            patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=lambda d, **kw: _deser(d)),
         ):
             daemon._ensure_tier2_covers_now(now_ms)
 

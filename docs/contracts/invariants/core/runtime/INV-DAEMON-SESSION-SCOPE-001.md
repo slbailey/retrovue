@@ -11,7 +11,7 @@ PlaylistBuilderDaemon owns the Tier 2 write path and is the sole background cons
 ## Boundary / Constraint
 
 1. `evaluate_once()` MUST open at most one database session and pass it to all sub-methods that require database access within that cycle.
-2. All database helper methods (`_tier2_row_covers_now`, `_get_frontier_utc_ms`, `_load_tier1_blocks`, `_batch_block_exists_in_txlog`, `_fill_ads`, `_write_to_txlog`, `_purge_expired_tier2`) MUST accept an optional `db` parameter. When provided, they MUST reuse it instead of opening a new session.
+2. All database helper methods (`_tier2_row_covers_now`, `_get_frontier_utc_ms`, `_load_tier1_blocks`, `_batch_block_exists_in_txlog`, `_get_asset_library`, `_write_to_txlog`, `_purge_expired_tier2`) MUST accept an optional `db` parameter. When provided, they MUST reuse it instead of opening a new session.
 3. `_extend_to_target()` MUST NOT open any sessions internally; it MUST receive the session from `evaluate_once()`.
 4. With N active channels, peak daemon connection demand MUST be at most N (one per daemon thread), not `N * sessions_per_iteration`.
 

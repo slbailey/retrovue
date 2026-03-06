@@ -49,6 +49,10 @@ def fill_ad_blocks(
     if filler_duration_ms <= 0:
         raise ValueError("filler_duration_ms must be positive")
 
+    # INV-MOVIE-PRIMARY-ATOMIC: If block contains a primary segment,
+    # no filler placeholder may appear before the primary segment ends.
+    _assert_no_filler_before_primary(block.segments)
+
     new_segments: list[ScheduledSegment] = []
 
     for seg in block.segments:
@@ -83,6 +87,33 @@ def fill_ad_blocks(
         end_utc_ms=block.end_utc_ms,
         segments=tuple(new_segments),
     )
+
+
+def _assert_no_filler_before_primary(
+    segments: tuple[ScheduledSegment, ...],
+) -> None:
+    """Reject blocks where filler placeholders appear before primary content ends.
+
+    INV-MOVIE-PRIMARY-ATOMIC: Primary segments must never be split by ads.
+    If a block contains a primary segment, all filler placeholders must
+    appear after the primary segment — never before or between primary content.
+    """
+    primary_indices = [
+        i for i, s in enumerate(segments) if s.is_primary
+    ]
+    if not primary_indices:
+        return  # No primary segments — nothing to guard
+
+    last_primary_idx = max(primary_indices)
+    for i in range(last_primary_idx):
+        seg = segments[i]
+        if seg.segment_type == "filler" and seg.asset_uri == "":
+            raise ValueError(
+                f"INV-MOVIE-PRIMARY-ATOMIC violated: filler placeholder at "
+                f"segment index {i} appears before primary segment at "
+                f"index {last_primary_idx}. Primary content must never be "
+                f"split by ad breaks."
+            )
 
 
 def _fill_break_with_interstitials(

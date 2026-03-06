@@ -30,6 +30,34 @@ def _iso_to_local(iso_str: str | None) -> str:
 app = typer.Typer(name="schedule", help="Schedule listing and rescheduling operations")
 
 
+def _load_filler_config(channel_slug: str) -> tuple[str, int]:
+    """Load filler_uri and filler_duration_ms from channel YAML config.
+
+    Returns defaults if the config cannot be loaded.
+    Same source as PlaylistBuilderDaemon (INV-PLAYLOG-PREFILL-001).
+    """
+    filler_uri = "/opt/retrovue/assets/filler.mp4"
+    filler_duration_ms = 3_650_000
+    try:
+        from pathlib import Path
+        from retrovue.runtime.providers import YamlChannelConfigProvider, FileChannelConfigProvider
+
+        yaml_dir = Path("/opt/retrovue/config/channels")
+        json_path = Path("/opt/retrovue/config/channels.json")
+        cfg = None
+        if yaml_dir.is_dir():
+            cfg = YamlChannelConfigProvider(yaml_dir).get_channel_config(channel_slug)
+        if cfg is None and json_path.exists():
+            cfg = FileChannelConfigProvider(json_path).get_channel_config(channel_slug)
+        if cfg is not None:
+            sc = cfg.schedule_config or {}
+            filler_uri = sc.get("filler_path", filler_uri)
+            filler_duration_ms = sc.get("filler_duration_ms", filler_duration_ms)
+    except Exception:
+        pass  # fall through to defaults
+    return filler_uri, filler_duration_ms
+
+
 @app.command("list")
 def list_cmd(
     channel_id: str = typer.Option(None, "--channel", "-c", help="Filter by channel ID"),
@@ -198,26 +226,7 @@ def rebuild_cmd(
     if live_safe:
         typer.echo("  Live-safe: enabled (will skip currently playing block)")
 
-    # Load filler config from channel YAML (same source as PlaylistBuilderDaemon)
-    filler_uri = "/opt/retrovue/assets/filler.mp4"
-    filler_duration_ms = 3_650_000
-    try:
-        from pathlib import Path
-        from retrovue.runtime.providers import YamlChannelConfigProvider, FileChannelConfigProvider
-
-        yaml_dir = Path("/opt/retrovue/config/channels")
-        json_path = Path("/opt/retrovue/config/channels.json")
-        cfg = None
-        if yaml_dir.is_dir():
-            cfg = YamlChannelConfigProvider(yaml_dir).get_channel_config(channel)
-        if cfg is None and json_path.exists():
-            cfg = FileChannelConfigProvider(json_path).get_channel_config(channel)
-        if cfg is not None:
-            sc = cfg.schedule_config or {}
-            filler_uri = sc.get("filler_path", filler_uri)
-            filler_duration_ms = sc.get("filler_duration_ms", filler_duration_ms)
-    except Exception as e_cfg:
-        typer.echo(f"  Warning: could not load channel config, using defaults: {e_cfg}", err=True)
+    filler_uri, filler_duration_ms = _load_filler_config(channel)
 
     try:
         with session() as db:
@@ -333,7 +342,11 @@ def preview_cmd(
 
     try:
         with session() as db:
-            result = preview_at(db, channel_slug=channel, at=at)
+            result = preview_at(
+                db,
+                channel_slug=channel,
+                at=at,
+            )
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

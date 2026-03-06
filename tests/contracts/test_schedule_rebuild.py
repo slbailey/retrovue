@@ -9,7 +9,7 @@ Coverage:
   4. --dry-run performs no database writes
   5. --live-safe prevents modification of the currently playing block
   6. Only blocks inside the rebuild window are modified
-  7. fill_ad_blocks receives filler_uri and filler_duration_ms
+  7. expand_editorial_block receives filler_uri and filler_duration_ms
   8. Blocks with filler placeholders receive filled segments
   9. Template-derived blocks remain intro + movie + filler after rebuild
   10. No exceptions during rebuild with filler args
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date, datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import ANY, MagicMock, patch, call
 
 import pytest
 
@@ -76,6 +76,16 @@ def _make_tier1_block(
     }
 
 
+def _fake_expand(sb_dict, *, filler_uri, filler_duration_ms, asset_library=None):
+    """Stub for expand_editorial_block that returns a MagicMock block."""
+    fake = MagicMock()
+    fake.block_id = sb_dict["block_id"]
+    fake.start_utc_ms = sb_dict["start_utc_ms"]
+    fake.end_utc_ms = sb_dict["end_utc_ms"]
+    fake.segments = []
+    return fake
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Unit: _broadcast_date_for
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,10 +106,9 @@ class TestBroadcastDate:
 
 class TestTier2RebuildReplacesBlocks:
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_deletes_and_rebuilds(self, mock_load, mock_deser, mock_fill):
+    def test_deletes_and_rebuilds(self, mock_load, mock_expand):
         """Rebuild deletes existing Tier-2 blocks and rebuilds from Tier-1."""
         db = MagicMock()
 
@@ -114,14 +123,7 @@ class TestTier2RebuildReplacesBlocks:
             return [block] if broadcast_day == target_bd else None
         mock_load.side_effect = _load
 
-        # Mock deserialization and fill
-        fake_scheduled = MagicMock()
-        fake_scheduled.block_id = block["block_id"]
-        fake_scheduled.start_utc_ms = block["start_utc_ms"]
-        fake_scheduled.end_utc_ms = block["end_utc_ms"]
-        fake_scheduled.segments = []
-        mock_deser.return_value = fake_scheduled
-        mock_fill.return_value = fake_scheduled
+        mock_expand.side_effect = _fake_expand
 
         result = rebuild_tier2(
             db,
@@ -142,10 +144,9 @@ class TestTier2RebuildReplacesBlocks:
 
 class TestTier1Unchanged:
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_no_tier1_writes(self, mock_load, mock_deser, mock_fill):
+    def test_no_tier1_writes(self, mock_load, mock_expand):
         """Tier-2 rebuild must never write to ScheduleItem or ScheduleRevision."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
@@ -213,10 +214,9 @@ class TestCompiledSegmentsRebuild:
         # Filler should follow
         assert "filler" in seg_types
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_rebuild_with_compiled_segments_block(self, mock_load, mock_deser, mock_fill):
+    def test_rebuild_with_compiled_segments_block(self, mock_load, mock_expand):
         """Tier-1 blocks with compiled_segments are loaded and rebuilt by
         the same reader path that honors compiled_segments."""
         db = MagicMock()
@@ -257,8 +257,7 @@ class TestCompiledSegmentsRebuild:
             MagicMock(segment_type="content", asset_uri="/assets/movie.mp4",
                      asset_start_offset_ms=0, segment_duration_ms=5400000),
         ]
-        mock_deser.return_value = fake_scheduled
-        mock_fill.return_value = fake_scheduled
+        mock_expand.return_value = fake_scheduled
 
         result = rebuild_tier2(
             db,
@@ -380,23 +379,22 @@ class TestLiveSafe:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Only blocks inside the rebuild window are modified
+# 6. Only blocks that overlap the rebuild window are modified
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestWindowBoundary:
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_only_window_blocks_rebuilt(self, mock_load, mock_deser, mock_fill):
-        """Only Tier-1 blocks with start_utc_ms inside [start, end) get rebuilt."""
+    def test_non_overlapping_blocks_excluded(self, mock_load, mock_expand):
+        """Blocks that ended before the window or start after it are excluded."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
 
         window_start = BASE_MS
         window_end = BASE_MS + HOUR_MS
 
-        # Three blocks: before, inside, after
+        # Three blocks: ended-before, inside, starts-after
         block_before = _make_tier1_block("b-before", BASE_MS - HOUR_MS, BASE_MS)
         block_inside = _make_tier1_block("b-inside", BASE_MS + 100, BASE_MS + HALF_HOUR_MS)
         block_after = _make_tier1_block("b-after", BASE_MS + 2 * HOUR_MS, BASE_MS + 3 * HOUR_MS)
@@ -409,13 +407,7 @@ class TestWindowBoundary:
             return None
         mock_load.side_effect = _load
 
-        fake_scheduled = MagicMock()
-        fake_scheduled.block_id = block_inside["block_id"]
-        fake_scheduled.start_utc_ms = block_inside["start_utc_ms"]
-        fake_scheduled.end_utc_ms = block_inside["end_utc_ms"]
-        fake_scheduled.segments = []
-        mock_deser.return_value = fake_scheduled
-        mock_fill.return_value = fake_scheduled
+        mock_expand.side_effect = _fake_expand
 
         result = rebuild_tier2(
             db,
@@ -424,26 +416,66 @@ class TestWindowBoundary:
             end_utc_ms=window_end,
         )
 
-        # Only the inside block should have been rebuilt
         assert result.rebuilt == 1
-        assert mock_deser.call_count == 1
+        assert mock_expand.call_count == 1
+
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
+    @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
+    def test_block_overlapping_window_start_is_rebuilt(self, mock_load, mock_expand):
+        """A block that started before the window but is still active (end > window_start)
+        MUST be rebuilt. This is the --from now case: the currently-playing block
+        started before 'now' but is still playing."""
+        db = MagicMock()
+        db.query.return_value.filter.return_value.delete.return_value = 0
+
+        window_start = BASE_MS
+        window_end = BASE_MS + 3 * HOUR_MS
+
+        # Started 1h before window, ends 1h after window start — overlaps
+        overlapping = _make_tier1_block("playing", BASE_MS - HOUR_MS, BASE_MS + HOUR_MS)
+        # Starts inside window
+        future = _make_tier1_block("future", BASE_MS + HOUR_MS, BASE_MS + 2 * HOUR_MS)
+
+        from datetime import date as date_type
+        target_bd = date_type(2026, 3, 6)
+        def _load(db, *, channel_slug, broadcast_day):
+            if broadcast_day == target_bd:
+                return [overlapping, future]
+            return None
+        mock_load.side_effect = _load
+
+        mock_expand.side_effect = _fake_expand
+
+        result = rebuild_tier2(
+            db,
+            channel_slug="test-channel",
+            start_utc_ms=window_start,
+            end_utc_ms=window_end,
+        )
+
+        rebuilt_ids = [c[0][0]["block_id"] for c in mock_expand.call_args_list]
+        assert overlapping["block_id"] in rebuilt_ids, (
+            f"Block started before window but still active MUST be rebuilt. "
+            f"Rebuilt: {rebuilt_ids}"
+        )
+        assert result.rebuilt == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. fill_ad_blocks receives filler_uri and filler_duration_ms
+# 7. expand_editorial_block receives filler_uri and filler_duration_ms
 # ─────────────────────────────────────────────────────────────────────────────
 
 FILLER_URI = "/media/test-filler.mp4"
 FILLER_DURATION_MS = 60_000
 
 
-class TestFillerArgsPassedToFillAdBlocks:
+class TestFillerArgsPassedToExpandEditorialBlock:
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_filler_args_forwarded(self, mock_load, mock_deser, mock_fill):
-        """rebuild_tier2 must pass filler_uri and filler_duration_ms to fill_ad_blocks."""
+    def test_filler_args_forwarded(self, mock_load, mock_expand):
+        """rebuild_tier2 must pass filler_uri and filler_duration_ms to
+        expand_editorial_block."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
 
@@ -454,13 +486,7 @@ class TestFillerArgsPassedToFillAdBlocks:
             return [block] if broadcast_day == target_bd else None
         mock_load.side_effect = _load
 
-        fake_scheduled = MagicMock()
-        fake_scheduled.block_id = block["block_id"]
-        fake_scheduled.start_utc_ms = block["start_utc_ms"]
-        fake_scheduled.end_utc_ms = block["end_utc_ms"]
-        fake_scheduled.segments = []
-        mock_deser.return_value = fake_scheduled
-        mock_fill.return_value = fake_scheduled
+        mock_expand.side_effect = _fake_expand
 
         rebuild_tier2(
             db,
@@ -471,16 +497,16 @@ class TestFillerArgsPassedToFillAdBlocks:
             filler_duration_ms=FILLER_DURATION_MS,
         )
 
-        mock_fill.assert_called_once_with(
-            fake_scheduled,
+        mock_expand.assert_called_once_with(
+            block,
             filler_uri=FILLER_URI,
             filler_duration_ms=FILLER_DURATION_MS,
+            asset_library=ANY,
         )
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_default_filler_args(self, mock_load, mock_deser, mock_fill):
+    def test_default_filler_args(self, mock_load, mock_expand):
         """When no filler args are provided, defaults match PlaylistBuilderDaemon."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
@@ -492,13 +518,7 @@ class TestFillerArgsPassedToFillAdBlocks:
             return [block] if broadcast_day == target_bd else None
         mock_load.side_effect = _load
 
-        fake_scheduled = MagicMock()
-        fake_scheduled.block_id = block["block_id"]
-        fake_scheduled.start_utc_ms = block["start_utc_ms"]
-        fake_scheduled.end_utc_ms = block["end_utc_ms"]
-        fake_scheduled.segments = []
-        mock_deser.return_value = fake_scheduled
-        mock_fill.return_value = fake_scheduled
+        mock_expand.side_effect = _fake_expand
 
         rebuild_tier2(
             db,
@@ -507,10 +527,11 @@ class TestFillerArgsPassedToFillAdBlocks:
             end_utc_ms=BASE_MS + HOUR_MS,
         )
 
-        mock_fill.assert_called_once_with(
-            fake_scheduled,
+        mock_expand.assert_called_once_with(
+            block,
             filler_uri="/opt/retrovue/assets/filler.mp4",
             filler_duration_ms=3_650_000,
+            asset_library=ANY,
         )
 
 
@@ -623,10 +644,9 @@ class TestTemplateBlocksWithFiller:
 
 class TestNoExceptionsDuringRebuild:
 
-    @patch("retrovue.usecases.schedule_rebuild.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_rebuild._deserialize_scheduled_block")
+    @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
-    def test_rebuild_completes_without_errors(self, mock_load, mock_deser, mock_fill):
+    def test_rebuild_completes_without_errors(self, mock_load, mock_expand):
         """Tier-2 rebuild with filler args completes with zero errors."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 1
@@ -638,13 +658,7 @@ class TestNoExceptionsDuringRebuild:
             return [block] if broadcast_day == target_bd else None
         mock_load.side_effect = _load
 
-        fake_scheduled = MagicMock()
-        fake_scheduled.block_id = block["block_id"]
-        fake_scheduled.start_utc_ms = block["start_utc_ms"]
-        fake_scheduled.end_utc_ms = block["end_utc_ms"]
-        fake_scheduled.segments = []
-        mock_deser.return_value = fake_scheduled
-        mock_fill.return_value = fake_scheduled
+        mock_expand.side_effect = _fake_expand
 
         result = rebuild_tier2(
             db,
