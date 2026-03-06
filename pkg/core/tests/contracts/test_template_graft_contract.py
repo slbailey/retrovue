@@ -84,6 +84,16 @@ class _FakeResolver:
         return self._assets[asset_id]
 
     def query(self, match: dict) -> list[str]:
+        col = match.get("collection")
+        if col and col in self._assets:
+            meta = self._assets[col]
+            return list(meta.tags)
+        pool = match.get("type")
+        if pool:
+            return [
+                aid for aid, m in self._assets.items()
+                if m.type == pool and m.tags != ()
+            ]
         return []
 
     def register_pools(self, pools: dict) -> None:

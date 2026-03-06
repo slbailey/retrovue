@@ -157,6 +157,8 @@ class TestIngestOrchestrator:
         
         # Patch dependencies
         with patch("retrovue.adapters.registry.get_importer", return_value=mock_importer):
+          with patch("retrovue.usecases.ingest_orchestrator.AssetPathResolver") as MockResolver:
+            MockResolver.return_value.resolve.return_value = "/mnt/data/media/tv/show/episode.mkv"
             with patch.dict("retrovue.adapters.registry.ENRICHERS", {"ffprobe": lambda **kwargs: mock_enricher}):
                 with patch("retrovue.usecases.ingest_orchestrator.persist_asset_metadata") as mock_persist:
                     # Run orchestrator

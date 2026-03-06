@@ -2,8 +2,8 @@
 Contract tests for INV-EPG-READS-CANONICAL-SCHEDULE-001.
 
 EPG data MUST be derived from the canonical compiled schedule — the same
-DB-cached ProgramLogDay that playout uses. EPG endpoints MUST NOT
-call compile_schedule() directly.
+DB-cached ScheduleRevision/ScheduleItems that playout uses. EPG endpoints
+MUST NOT call compile_schedule() directly.
 """
 
 from __future__ import annotations
@@ -26,46 +26,80 @@ SRC_ROOT = Path(__file__).parents[3] / "src" / "retrovue"
 UTC = timezone.utc
 
 
-def _find_compile_schedule_calls(filepath: Path) -> list[str]:
-    """AST-walk a file to find compile_schedule() calls."""
-    source = filepath.read_text()
-    tree = ast.parse(source, filename=str(filepath))
-    violations = []
+def _mock_db_for_epg(
+    channel_id: int,
+    items: list[MagicMock],
+    *,
+    pointers: list[MagicMock] | None = None,
+    revisions: list[MagicMock] | None = None,
+):
+    """Build a MagicMock db that handles the multi-query chain in get_canonical_epg.
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            # Match: compile_schedule(...)
-            if isinstance(func, ast.Name) and func.id == "compile_schedule":
-                violations.append(
-                    f"{filepath.name}:{node.lineno} — compile_schedule() call"
-                )
-            # Match: module.compile_schedule(...)
-            elif isinstance(func, ast.Attribute) and func.attr == "compile_schedule":
-                violations.append(
-                    f"{filepath.name}:{node.lineno} — compile_schedule() call"
-                )
-    return violations
+    The code does:
+      1. db.query(Channel).filter(slug==...).first() → Channel row
+      2. db.query(ChannelActiveRevision).filter(...).order_by(...).all() → pointers
+      3. db.query(ScheduleRevision).filter(id.in_(...)).all() → revisions
+      4. db.query(ScheduleItem).filter(...).order_by(...).all() → items
+    """
+    from retrovue.domain.entities import (
+        Channel, ChannelActiveRevision, ScheduleItem, ScheduleRevision,
+    )
+
+    mock_channel = MagicMock()
+    mock_channel.id = channel_id
+
+    # Default: one revision with id=1
+    if revisions is None:
+        rev = MagicMock()
+        rev.id = 1
+        revisions = [rev]
+
+    # Default: one pointer per revision
+    if pointers is None:
+        pointers = []
+        for rev in revisions:
+            ptr = MagicMock()
+            ptr.schedule_revision_id = rev.id
+            pointers.append(ptr)
+
+    db = MagicMock()
+
+    def _query_dispatch(entity):
+        chain = MagicMock()
+        if entity is Channel:
+            chain.filter.return_value.first.return_value = mock_channel
+        elif entity is ChannelActiveRevision:
+            chain.filter.return_value.order_by.return_value.all.return_value = pointers
+        elif entity is ScheduleRevision:
+            chain.filter.return_value.all.return_value = revisions
+        elif entity is ScheduleItem:
+            chain.filter.return_value.order_by.return_value.all.return_value = items
+        return chain
+
+    db.query.side_effect = _query_dispatch
+    return db
 
 
-def _make_program_blocks(
-    start: datetime,
-    count: int = 3,
-    slot_sec: int = 3600,
-) -> list[dict]:
-    """Generate synthetic program_blocks for testing."""
-    blocks = []
-    cursor = start
-    for i in range(count):
-        blocks.append({
-            "title": f"Movie {i+1}",
-            "asset_id": f"asset.movie_{i+1}",
-            "start_at": cursor.isoformat(),
-            "slot_duration_sec": slot_sec,
-            "episode_duration_sec": slot_sec - 300,
-        })
-        cursor += timedelta(seconds=slot_sec)
-    return blocks
+def _make_schedule_item(
+    title: str,
+    start_time: datetime,
+    duration_sec: int,
+    *,
+    asset_id: str = "",
+    content_type: str = "movie",
+    revision_id: int = 1,
+) -> MagicMock:
+    """Build a mock ScheduleItem matching what get_canonical_epg reads."""
+    item = MagicMock()
+    item.schedule_revision_id = revision_id
+    item.start_time = start_time
+    item.duration_sec = duration_sec
+    item.asset_id = asset_id
+    item.collection_id = None
+    item.content_type = content_type
+    item.metadata_ = {"asset_id_raw": asset_id}
+    item.slot_index = 0
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +117,9 @@ class TestInvEpgReadsCanonical001:
         source = pd_path.read_text()
         tree = ast.parse(source, filename=str(pd_path))
 
-        # Find the get_epg_all function body — look for the /api/epg endpoint
         violations = []
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "get_epg_all":
-                # Walk only this function's body
                 for child in ast.walk(node):
                     if isinstance(child, ast.Call):
                         func = child.func
@@ -108,25 +140,26 @@ class TestInvEpgReadsCanonical001:
         )
 
     def test_get_canonical_epg_returns_cached_blocks(self):
-        """Mock ProgramLogDay query. get_canonical_epg returns cached
-        program_blocks without calling compile_schedule()."""
+        """get_canonical_epg reads from active ScheduleRevision/ScheduleItems
+        without calling compile_schedule()."""
         window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
         window_end = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
 
-        # Create synthetic program blocks covering the full window
-        blocks = _make_program_blocks(window_start, count=24, slot_sec=3600)
+        items = [
+            _make_schedule_item(
+                f"Movie {i+1}",
+                window_start + timedelta(hours=i),
+                3600,
+                asset_id=f"asset.movie_{i+1}",
+            )
+            for i in range(24)
+        ]
 
-        # Build a mock ProgramLogDay row
-        mock_row = MagicMock()
-        mock_row.program_log_json = {"program_blocks": blocks}
-        mock_row.range_start = window_start
-        mock_row.range_end = window_end
+        mock_db = _mock_db_for_epg(channel_id=1, items=items)
 
         with patch("retrovue.runtime.dsl_schedule_service.session") as mock_session:
-            mock_db = MagicMock()
             mock_session.return_value.__enter__ = MagicMock(return_value=mock_db)
             mock_session.return_value.__exit__ = MagicMock(return_value=False)
-            mock_db.query.return_value.filter.return_value.all.return_value = [mock_row]
 
             result = DslScheduleService.get_canonical_epg(
                 "showtime-cinema", window_start, window_end
@@ -134,10 +167,10 @@ class TestInvEpgReadsCanonical001:
 
         assert result is not None
         assert len(result) == 24
-        assert result[0]["title"] == "Movie 1"
+        assert result[0]["asset_id"] == "asset.movie_1"
 
     def test_get_canonical_epg_returns_none_when_not_cached(self):
-        """Mock empty DB. get_canonical_epg() returns None."""
+        """When no channel exists, get_canonical_epg() returns None."""
         window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
         window_end = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
 
@@ -145,7 +178,8 @@ class TestInvEpgReadsCanonical001:
             mock_db = MagicMock()
             mock_session.return_value.__enter__ = MagicMock(return_value=mock_db)
             mock_session.return_value.__exit__ = MagicMock(return_value=False)
-            mock_db.query.return_value.filter.return_value.all.return_value = []
+            # Channel query returns None
+            mock_db.query.return_value.filter.return_value.first.return_value = None
 
             result = DslScheduleService.get_canonical_epg(
                 "showtime-cinema", window_start, window_end
@@ -154,51 +188,52 @@ class TestInvEpgReadsCanonical001:
         assert result is None
 
     def test_get_canonical_epg_includes_carry_in_block(self):
-        """DB has day N-1 row with a block starting 04:00 ending 08:00 that
-        carries into day N window. Range overlap query returns this block
-        alongside day N blocks."""
-        # Day N window: 06:00 Mar 1 to 06:00 Mar 2
+        """A ScheduleItem from the previous day that overlaps the window
+        MUST be included in the EPG output."""
         window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
         window_end = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
 
-        # Day N-1 row has a carry-in block from 04:00 to 08:00 Mar 1
-        # (starts before window, ends 2h into window)
-        carry_in_block = {
-            "title": "Late Night Movie",
-            "asset_id": "asset.late_movie",
-            "start_at": datetime(2026, 3, 1, 4, 0, tzinfo=UTC).isoformat(),
-            "slot_duration_sec": 14400,  # 4h → ends 08:00 Mar 1
-            "episode_duration_sec": 13000,
-        }
-
-        # Day N row has blocks covering 08:00 Mar 1 through 06:00 Mar 2 (22h)
-        day_n_blocks = _make_program_blocks(
-            datetime(2026, 3, 1, 8, 0, tzinfo=UTC), count=22, slot_sec=3600
+        # Carry-in: starts 04:00 (before window), 4h duration → ends 08:00 (inside window)
+        carry_in = _make_schedule_item(
+            "Late Night Movie",
+            datetime(2026, 3, 1, 4, 0, tzinfo=UTC),
+            14400,
+            asset_id="asset.late_movie",
+            revision_id=1,
+        )
+        # Day N block: starts 08:00
+        day_block = _make_schedule_item(
+            "Morning Show",
+            datetime(2026, 3, 1, 8, 0, tzinfo=UTC),
+            3600,
+            asset_id="asset.morning",
+            revision_id=2,
         )
 
-        mock_row_prev = MagicMock()
-        mock_row_prev.program_log_json = {"program_blocks": [carry_in_block]}
-        mock_row_prev.range_start = datetime(2026, 2, 28, 6, 0, tzinfo=UTC)
-        mock_row_prev.range_end = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
+        rev1 = MagicMock()
+        rev1.id = 1
+        rev2 = MagicMock()
+        rev2.id = 2
 
-        mock_row_curr = MagicMock()
-        mock_row_curr.program_log_json = {"program_blocks": day_n_blocks}
-        mock_row_curr.range_start = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
-        mock_row_curr.range_end = window_end
+        # We need items to be returned for each revision query.
+        # Since the mock dispatches all ScheduleItem queries the same way,
+        # return both items — the code filters by window overlap.
+        mock_db = _mock_db_for_epg(
+            channel_id=1,
+            items=[carry_in, day_block],
+            revisions=[rev1, rev2],
+        )
 
         with patch("retrovue.runtime.dsl_schedule_service.session") as mock_session:
-            mock_db = MagicMock()
             mock_session.return_value.__enter__ = MagicMock(return_value=mock_db)
             mock_session.return_value.__exit__ = MagicMock(return_value=False)
-            mock_db.query.return_value.filter.return_value.all.return_value = [
-                mock_row_prev, mock_row_curr
-            ]
 
             result = DslScheduleService.get_canonical_epg(
                 "showtime-cinema", window_start, window_end
             )
 
-        # The carry-in block should be included since it overlaps the window
         assert result is not None
-        carry_in_found = any(b["title"] == "Late Night Movie" for b in result)
-        assert carry_in_found, "Carry-in block from previous day not included"
+        asset_ids = [b["asset_id"] for b in result]
+        assert "asset.late_movie" in asset_ids, (
+            "Carry-in block from previous day not included"
+        )

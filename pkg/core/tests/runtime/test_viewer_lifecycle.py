@@ -50,8 +50,22 @@ class MockClock:
         self._now += timedelta(seconds=seconds)
 
 
+class _MockBlock:
+    """Mock block returned by get_block_at."""
+
+    def __init__(self, start_utc_ms: int, duration_ms: int = 3_600_000):
+        self.start_utc_ms = start_utc_ms
+        self.duration_ms = duration_ms
+
+
 class MockScheduleService:
     """Mock schedule service for testing."""
+
+    def get_block_at(self, channel_id: str, now_utc_ms: int):
+        """Return a mock block covering the requested time."""
+        # Block starts at the top of the current hour
+        block_start = (now_utc_ms // 3_600_000) * 3_600_000
+        return _MockBlock(start_utc_ms=block_start, duration_ms=3_600_000)
 
     def get_playout_plan_now(
         self,
@@ -272,7 +286,7 @@ class TestBlockPlanProducer:
                 producer._session = mock_session
 
                 # Second start (should be idempotent)
-                result2 = producer.start([], datetime.now(timezone.utc))
+                result2 = producer.start(datetime.now(timezone.utc))
                 assert result2 is True  # Returns True but doesn't restart
                 assert producer._start_count == 1  # Count doesn't change
 
