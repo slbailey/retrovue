@@ -460,6 +460,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
   int64_t frame_selection_cadence_budget_den_ = 1;   // Threshold to advance
   int64_t frame_selection_cadence_increment_ = 0;   // Amount to add per tick
   RationalFps last_source_fps_{0, 1};      // Last live source FPS (for refresh-on-segment-swap).
+  // INV-CADENCE-SOURCE-SYNC-002: Diagnostic counters for cadence decisions.
+  int64_t cadence_diag_advance_ = 0;
+  int64_t cadence_diag_repeat_ = 0;
+  int64_t cadence_diag_bypass_ = 0;   // Ticks where cadence was not evaluated (take_b, v_src null, etc.)
+  int64_t cadence_diag_last_log_tick_ = 0;
   // Fingerprint context for held frame (no-unintentional-black: H must match last A content).
   uint32_t last_good_y_crc32_ = 0;
   std::string last_good_asset_uri_;
