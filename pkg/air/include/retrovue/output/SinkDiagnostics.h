@@ -40,6 +40,43 @@ bool LogFirstWriteFailure(
 void CloseFdWithLog(int fd, const char* reason, const char* file, int line,
                     int64_t sink_generation = -1);
 
+// =========================================================================
+// AIR_SHUTDOWN: Centralized shutdown summary event
+// =========================================================================
+// Emits exactly one structured log per process lifetime for terminal reasons.
+// First terminal reason wins (atomic CAS). kBlackModeEntered is non-terminal:
+// it always emits but does NOT block future terminal events.
+// =========================================================================
+
+enum class ShutdownReason {
+  kChannelTeardown,        // Normal: StopBlockPlanSession / StopChannel
+  kOutputWriteFailure,     // EPIPE, ECONNRESET, EBADF, POLLHUP on socket
+  kSignalReceived,         // SIGPIPE, SIGTERM, SIGINT
+  kDecoderFailure,         // FFmpeg decoder/encoder fatal error
+  kBlackModeEntered,       // Visibility event (non-terminal, repeatable)
+  kUnexpectedProcessExit,  // atexit with no prior terminal reason
+};
+
+struct ShutdownContext {
+  int32_t channel_id = 0;
+  std::string block_id;
+  int32_t segment_index = -1;
+  int64_t frame_number = -1;
+  std::string details;
+};
+
+// Log AIR_SHUTDOWN. Returns true if this call emitted the log.
+// Terminal reasons: first writer wins via atomic CAS; subsequent calls return false.
+// kBlackModeEntered: always emits, never sets the fired flag.
+bool LogAirShutdown(ShutdownReason reason, const ShutdownContext& ctx);
+
+// Query whether a terminal shutdown reason has been logged.
+bool AirShutdownFired();
+
+// Set global channel_id for signal handlers / atexit (which have no context).
+// Call once when a session starts.
+void SetAirShutdownChannelId(int32_t channel_id);
+
 }  // namespace retrovue::output
 
 // Hook B macro: instrument all closes/detaches of output fds.

@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sstream>
 #endif
 
 #include <cassert>
@@ -248,6 +249,16 @@ void SocketSink::WriterThreadLoop() {
       if (poll_ret < 0) {
         if (errno == EINTR) continue;
         // Poll error
+        {
+          int64_t tick = -1;
+          std::string block_id;
+          GetTickContext(&tick, &block_id);
+          ShutdownContext sctx;
+          sctx.details = std::string("poll_error_errno=") + std::to_string(errno);
+          sctx.block_id = block_id;
+          sctx.frame_number = tick;
+          LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
+        }
         uint64_t err_count = write_errors_.fetch_add(1, std::memory_order_relaxed);
         if ((err_count & 0xFF) == 0) {
           std::cerr << "[SocketSink:" << name_ << "] poll() error: "
@@ -262,7 +273,16 @@ void SocketSink::WriterThreadLoop() {
       }
 
       if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-        // Socket error/hangup - stop
+        {
+          int64_t tick = -1;
+          std::string block_id;
+          GetTickContext(&tick, &block_id);
+          ShutdownContext sctx;
+          sctx.details = (pfd.revents & POLLHUP) ? "POLLHUP" : "POLLERR";
+          sctx.block_id = block_id;
+          sctx.frame_number = tick;
+          LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
+        }
         break;
       }
 
@@ -281,9 +301,29 @@ void SocketSink::WriterThreadLoop() {
         }
         // Real error — Hook A: first write failure diagnostic; Hook C: detach to stop spiral
         if (errno == EPIPE) {
+          {
+            int64_t tick = -1;
+            std::string block_id;
+            GetTickContext(&tick, &block_id);
+            ShutdownContext sctx;
+            sctx.details = "EPIPE";
+            sctx.block_id = block_id;
+            sctx.frame_number = tick;
+            LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
+          }
           LogFirstWriteFailure(OutputKind::kSocket, fd_, this, sink_generation_, "writer_thread pid=n/a");
           DetachSlowConsumer("send() EPIPE");
           break;  // Exit inner loop; outer loop will see writer_stop_ and exit
+        }
+        {
+          int64_t tick = -1;
+          std::string block_id;
+          GetTickContext(&tick, &block_id);
+          ShutdownContext sctx;
+          sctx.details = std::string("send_error_errno=") + std::to_string(errno);
+          sctx.block_id = block_id;
+          sctx.frame_number = tick;
+          LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
         }
         uint64_t err_count = write_errors_.fetch_add(1, std::memory_order_relaxed);
         if ((err_count & 0xFF) == 0) {

@@ -24,6 +24,7 @@ extern "C" {
 #include "playout_service.h"
 #include "retrovue/runtime/PlayoutEngine.h"
 #include "retrovue/runtime/PlayoutInterface.h"
+#include "retrovue/output/SinkDiagnostics.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/timing/MasterClock.h"
 
@@ -35,6 +36,57 @@ void crash_handler(int sig) {
   std::fprintf(stderr, "FATAL SIGNAL %d\n", sig);
   backtrace_symbols_fd(array, static_cast<int>(size), STDERR_FILENO);
   _exit(1);
+}
+
+// =========================================================================
+// AIR_SHUTDOWN signal handlers (async-signal-safe: write(2) only)
+// =========================================================================
+// Pre-formatted message buffers. pid is patched once at startup.
+// SIGPIPE: log but do NOT exit — let the EPIPE path handle recovery.
+// SIGTERM/SIGINT: log and _exit immediately.
+// =========================================================================
+static volatile sig_atomic_t g_signal_shutdown_logged = 0;
+
+// Fixed-size buffers for async-signal-safe output. Pid patched at init.
+static char g_sigpipe_msg[256];
+static char g_sigterm_msg[256];
+static char g_sigint_msg[256];
+static int g_sigpipe_msg_len = 0;
+static int g_sigterm_msg_len = 0;
+static int g_sigint_msg_len = 0;
+
+static void init_signal_messages() {
+  pid_t pid = ::getpid();
+  g_sigpipe_msg_len = snprintf(g_sigpipe_msg, sizeof(g_sigpipe_msg),
+      "[AIR_SHUTDOWN] AIR_SHUTDOWN channel=0 pid=%d reason=signal_received"
+      " details=SIGPIPE block_id=unknown segment_index=-1 frame=-1\n", pid);
+  g_sigterm_msg_len = snprintf(g_sigterm_msg, sizeof(g_sigterm_msg),
+      "[AIR_SHUTDOWN] AIR_SHUTDOWN channel=0 pid=%d reason=signal_received"
+      " details=SIGTERM block_id=unknown segment_index=-1 frame=-1\n", pid);
+  g_sigint_msg_len = snprintf(g_sigint_msg, sizeof(g_sigint_msg),
+      "[AIR_SHUTDOWN] AIR_SHUTDOWN channel=0 pid=%d reason=signal_received"
+      " details=SIGINT block_id=unknown segment_index=-1 frame=-1\n", pid);
+}
+
+void sigpipe_handler(int) {
+  if (g_signal_shutdown_logged) return;
+  g_signal_shutdown_logged = 1;
+  if (write(STDERR_FILENO, g_sigpipe_msg, static_cast<size_t>(g_sigpipe_msg_len)) < 0) { /* best-effort */ }
+  // Do NOT _exit — let the write path see EPIPE and handle it.
+}
+
+void sigterm_handler(int sig) {
+  if (g_signal_shutdown_logged) return;
+  g_signal_shutdown_logged = 1;
+  if (write(STDERR_FILENO, g_sigterm_msg, static_cast<size_t>(g_sigterm_msg_len)) < 0) { /* best-effort */ }
+  _exit(128 + sig);
+}
+
+void sigint_handler(int sig) {
+  if (g_signal_shutdown_logged) return;
+  g_signal_shutdown_logged = 1;
+  if (write(STDERR_FILENO, g_sigint_msg, static_cast<size_t>(g_sigint_msg_len)) < 0) { /* best-effort */ }
+  _exit(128 + sig);
 }
 
 // Parse command-line arguments
@@ -147,6 +199,22 @@ int main(int argc, char** argv) {
   signal(SIGILL, crash_handler);
   signal(SIGFPE, crash_handler);
 
+  // AIR_SHUTDOWN: Signal handlers for graceful shutdown instrumentation
+  init_signal_messages();
+  signal(SIGPIPE, sigpipe_handler);
+  signal(SIGTERM, sigterm_handler);
+  signal(SIGINT,  sigint_handler);
+
+  // AIR_SHUTDOWN: atexit fallback — fires only if no terminal reason was logged
+  std::atexit([]() {
+    if (!retrovue::output::AirShutdownFired()) {
+      retrovue::output::ShutdownContext ctx;
+      ctx.details = "atexit_no_prior_shutdown";
+      retrovue::output::LogAirShutdown(
+          retrovue::output::ShutdownReason::kUnexpectedProcessExit, ctx);
+    }
+  });
+
   // INV-FFMPEG-GLOBAL-INIT-001: Initialize FFmpeg global state before any
   // threads are spawned. Required for thread-safe network/TLS initialization.
   avformat_network_init();
@@ -154,9 +222,13 @@ int main(int argc, char** argv) {
   try {
     ServerConfig config = ParseArgs(argc, argv);
     RunServer(config);
+    std::cout << "[AIR_SHUTDOWN] AIR_PROCESS_EXIT pid=" << static_cast<int>(::getpid())
+              << " exit_code=0 reason=server_wait_returned" << std::endl;
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "Fatal error: " << e.what() << std::endl;
+    std::cerr << "[AIR_SHUTDOWN] AIR_PROCESS_EXIT pid=" << static_cast<int>(::getpid())
+              << " exit_code=1 reason=exception" << std::endl;
     return 1;
   }
 }

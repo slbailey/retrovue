@@ -676,6 +676,12 @@ void PipelineManager::Run() {
     { std::ostringstream oss;
       oss << "[PipelineManager] dup(fd) failed: " << strerror(errno);
       Logger::Error(oss.str()); }
+    {
+      output::ShutdownContext sctx;
+      sctx.channel_id = ctx_->channel_id;
+      sctx.details = "dup_failed";
+      output::LogAirShutdown(output::ShutdownReason::kDecoderFailure, sctx);
+    }
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
       callbacks_.on_session_ended("dup_failed", 0);
@@ -796,6 +802,12 @@ void PipelineManager::Run() {
   auto encoder_open_start = std::chrono::steady_clock::now();
   if (!session_encoder->open(enc_config, &write_ctx, write_callback)) {
     Logger::Error("[PipelineManager] Failed to open session encoder");
+    {
+      output::ShutdownContext sctx;
+      sctx.channel_id = ctx_->channel_id;
+      sctx.details = "encoder_open_failed";
+      output::LogAirShutdown(output::ShutdownReason::kDecoderFailure, sctx);
+    }
     if (callbacks_.on_session_ended && !session_ended_fired_) {
       session_ended_fired_ = true;
       callbacks_.on_session_ended("encoder_failed", 0);
@@ -3189,6 +3201,12 @@ void PipelineManager::Run() {
       // OUT-SEG-005b: Fence pad silence = fallback tick.
       current_consecutive_fallback_ticks++;
     }
+
+    // INV-MUX-CYCLE-FLUSH: Flush the internal interleaver after encoding both
+    // video and audio for this tick.  All packets from this encode cycle are
+    // buffered; flushing drains them in global DTS order.
+    // See: docs/contracts/mux_interleaver.md
+    session_encoder->FlushMuxInterleaver();
 
     // OUT-SEG-005b: Update max consecutive fallback ticks metric.
     if (current_consecutive_fallback_ticks > 0) {

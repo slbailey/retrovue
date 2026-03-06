@@ -30,6 +30,7 @@ struct AudioFrame;
 
 namespace retrovue::playout_sinks::mpegts {
 class EncoderPipeline;
+class MuxInterleaver;
 }  // namespace retrovue::playout_sinks::mpegts
 
 namespace retrovue::output {
@@ -126,6 +127,11 @@ class MpegTSOutputSink : public IOutputSink {
 
   // Encoder pipeline (owns FFmpeg encoder/muxer)
   std::unique_ptr<playout_sinks::mpegts::EncoderPipeline> encoder_;
+
+  // INV-MUX-GLOBAL-DTS-MONOTONIC: Cross-stream packet interleaver.
+  // Buffers encoded packets from encoder_ and drains in global DTS order.
+  // Owned by sink (mux discipline), not encoder (encoding discipline).
+  std::unique_ptr<playout_sinks::mpegts::MuxInterleaver> mux_interleaver_;
 
   // Socket transport (non-blocking byte consumer)
   std::unique_ptr<SocketSink> socket_sink_;
@@ -267,6 +273,12 @@ class MpegTSOutputSink : public IOutputSink {
   // =========================================================================
   std::shared_ptr<telemetry::MetricsExporter> metrics_exporter_;
   int32_t channel_id_{0};
+
+  // Output writer diagnostics context
+  std::atomic<uint64_t> diag_frame_number_{0};
+  std::atomic<int64_t> diag_ct_ms_{0};
+  mutable std::mutex diag_meta_mutex_;
+  std::string diag_block_id_{"unknown"};
 
   // =========================================================================
   // INV-TS-CONTINUITY: Null packet emission for transport continuity
