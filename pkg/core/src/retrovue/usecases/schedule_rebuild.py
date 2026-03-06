@@ -17,11 +17,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from retrovue.domain.entities import PlaylistEvent
-from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
 from retrovue.runtime.schedule_items_reader import (
+    expand_editorial_block,
     load_segmented_blocks_from_active_revision,
 )
-from retrovue.runtime.traffic_manager import fill_ad_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -110,19 +109,19 @@ def rebuild_tier2(
         return result
 
     if dry_run:
-        # Count what would be deleted
+        # Count what would be deleted (overlap semantics)
         result.deleted = db.query(PlaylistEvent).filter(
             PlaylistEvent.channel_slug == channel_slug,
-            PlaylistEvent.start_utc_ms >= start_utc_ms,
             PlaylistEvent.start_utc_ms < end_utc_ms,
+            PlaylistEvent.end_utc_ms > start_utc_ms,
         ).count()
         return result
 
-    # Step 2: delete existing Tier-2 rows in window
+    # Step 2: delete existing Tier-2 rows that overlap the window
     result.deleted = db.query(PlaylistEvent).filter(
         PlaylistEvent.channel_slug == channel_slug,
-        PlaylistEvent.start_utc_ms >= start_utc_ms,
         PlaylistEvent.start_utc_ms < end_utc_ms,
+        PlaylistEvent.end_utc_ms > start_utc_ms,
     ).delete(synchronize_session=False)
 
     # Step 3: determine broadcast days to scan
@@ -130,6 +129,19 @@ def rebuild_tier2(
     end_dt = datetime.fromtimestamp(end_utc_ms / 1000, tz=timezone.utc)
     scan_date = _broadcast_date_for(start_dt) - timedelta(days=1)
     end_date = _broadcast_date_for(end_dt) + timedelta(days=1)
+
+    # Build asset library for interstitial selection
+    # INV-TIER2-EXPANSION-CANONICAL-001: all Tier-2 writers MUST pass asset_library
+    try:
+        from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
+        asset_library = DatabaseAssetLibrary(db, channel_slug=channel_slug)
+    except Exception as e:
+        logger.warning(
+            "rebuild_tier2[%s]: could not create asset library, "
+            "falling back to static filler: %s",
+            channel_slug, e,
+        )
+        asset_library = None
 
     # Step 4: load Tier-1, rebuild Tier-2
     while scan_date <= end_date:
@@ -144,16 +156,16 @@ def rebuild_tier2(
             block_start = sb_dict["start_utc_ms"]
             block_end = sb_dict["end_utc_ms"]
 
-            # Only rebuild blocks that start within the window
-            if block_start < start_utc_ms or block_start >= end_utc_ms:
+            # Skip blocks that don't overlap the window
+            if block_start >= end_utc_ms or block_end <= start_utc_ms:
                 continue
 
             try:
-                scheduled_block = _deserialize_scheduled_block(sb_dict)
-                filled_block = fill_ad_blocks(
-                    scheduled_block,
+                filled_block = expand_editorial_block(
+                    sb_dict,
                     filler_uri=filler_uri,
                     filler_duration_ms=filler_duration_ms,
+                    asset_library=asset_library,
                 )
 
                 row = PlaylistEvent(

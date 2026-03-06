@@ -26,7 +26,40 @@ from retrovue.domain.entities import (
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
 from retrovue.runtime.playout_log_expander import expand_program_block
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
-from retrovue.runtime.dsl_schedule_service import _serialize_scheduled_block
+from retrovue.runtime.dsl_schedule_service import (
+    _deserialize_scheduled_block,
+    _serialize_scheduled_block,
+)
+from retrovue.runtime.traffic_manager import fill_ad_blocks
+
+
+def expand_editorial_block(
+    sb_dict: dict[str, Any],
+    *,
+    filler_uri: str,
+    filler_duration_ms: int,
+    asset_library: Any = None,
+) -> ScheduledBlock:
+    """Canonical Tier-1 → Tier-2 block expansion pipeline.
+
+    Deserializes a serialized block dict (as produced by
+    load_segmented_blocks_from_active_revision) and applies traffic
+    fill to produce a playout-ready ScheduledBlock.
+
+    INV-MOVIE-REBUILD-EQUIVALENCE: This is the single expansion function
+    that both the horizon daemon and schedule rebuild MUST use. No caller
+    may substitute its own deserialization or traffic insertion logic.
+
+    Pipeline:
+        serialized block dict → ScheduledBlock → fill_ad_blocks → ScheduledBlock
+    """
+    scheduled_block = _deserialize_scheduled_block(sb_dict)
+    return fill_ad_blocks(
+        scheduled_block,
+        filler_uri=filler_uri,
+        filler_duration_ms=filler_duration_ms,
+        asset_library=asset_library,
+    )
 
 
 def _hydrate_compiled_segments(
@@ -52,6 +85,7 @@ def _hydrate_compiled_segments(
             asset_start_offset_ms=cs.get("asset_start_offset_ms", 0),
             segment_duration_ms=cs["segment_duration_ms"],
             gain_db=cs.get("gain_db", 0.0),
+            is_primary=cs.get("is_primary", False),
         ))
         content_total_ms += cs["segment_duration_ms"]
 

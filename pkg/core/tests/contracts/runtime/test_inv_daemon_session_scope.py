@@ -36,6 +36,12 @@ def _make_daemon():
     )
 
 
+def _deser(d, **kw):
+    """Passthrough: deserialize block dict without ad filling."""
+    from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
+    return _deserialize_scheduled_block(d)
+
+
 def _fake_block_dict(block_id: str, start_ms: int, end_ms: int, segments_count: int = 3):
     """Minimal Tier-1 segmented block dict."""
     seg_dur = (end_ms - start_ms) // segments_count if segments_count else 0
@@ -140,7 +146,7 @@ class TestRule1SingleSessionPerCycle:
 
         VIOLATION (before fix): Each helper (_get_frontier_utc_ms,
         _tier2_row_covers_now, _load_tier1_blocks, _batch_block_exists_in_txlog,
-        _fill_ads, _write_to_txlog, _purge_expired_tier2) opens its own session.
+        _get_asset_library, _write_to_txlog, _purge_expired_tier2) opens its own session.
         With 4 blocks to fill, this results in 10+ checkouts per cycle.
         """
         daemon = _make_daemon()
@@ -165,7 +171,7 @@ class TestRule1SingleSessionPerCycle:
             ),
             patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
-            patch.object(daemon, "_fill_ads", side_effect=lambda b, db=None: b),
+            patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
             patch.object(daemon, "_write_to_txlog"),
             patch("retrovue.runtime.playlist_builder_daemon.time.sleep"),
         ):
@@ -192,7 +198,7 @@ class TestRule2HelpersAcceptDbParam:
         "_get_frontier_utc_ms",
         "_load_tier1_blocks",
         "_batch_block_exists_in_txlog",
-        "_fill_ads",
+        "_get_asset_library",
         "_write_to_txlog",
         "_purge_expired_tier2",
     ])
@@ -243,10 +249,10 @@ class TestRule3ExtendNoOwnSessions:
         )
 
     def test_extend_to_target_passes_db_to_helpers(self):
-        """_extend_to_target() MUST forward its db param to _fill_ads
+        """_extend_to_target() MUST forward its db param to _get_asset_library
         and _write_to_txlog.
 
-        VIOLATION (before fix): _fill_ads and _write_to_txlog are called
+        VIOLATION (before fix): _get_asset_library and _write_to_txlog are called
         without a db argument; they open their own sessions.
         """
         import ast
@@ -257,9 +263,9 @@ class TestRule3ExtendNoOwnSessions:
         source = textwrap.dedent(inspect.getsource(PlaylistBuilderDaemon._extend_to_target))
         tree = ast.parse(source)
 
-        # Find calls to self._fill_ads and self._write_to_txlog and check
+        # Find calls to self._get_asset_library and self._write_to_txlog and check
         # they pass a `db` keyword argument
-        helpers_checked = {"_fill_ads": False, "_write_to_txlog": False}
+        helpers_checked = {"_get_asset_library": False, "_write_to_txlog": False}
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -320,7 +326,7 @@ class TestRule4BoundedConcurrentConnections:
                 ),
                 patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
                 patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
-                patch.object(daemon, "_fill_ads", side_effect=lambda b, db=None: b),
+                patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
                 patch.object(daemon, "_write_to_txlog"),
                 patch("retrovue.runtime.playlist_builder_daemon.time.sleep"),
             ):

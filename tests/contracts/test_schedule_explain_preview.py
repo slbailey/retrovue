@@ -224,40 +224,41 @@ class TestExplainLegacy:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# preview: 4. Returns correct segment list
+# preview: 4. Reads Tier-2 PlaylistEvent data
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _mock_playlist_event(block_id, start_ms, end_ms, segments):
+    """Create a mock PlaylistEvent row."""
+    row = MagicMock()
+    row.block_id = block_id
+    row.start_utc_ms = start_ms
+    row.end_utc_ms = end_ms
+    row.segments = segments
+    return row
+
+
+def _setup_db_for_preview(db, row):
+    """Wire up db.query(PlaylistEvent).filter(...).first() to return row."""
+    mock_query = MagicMock()
+    mock_filter = MagicMock()
+    mock_filter.first.return_value = row
+    mock_query.filter.return_value = mock_filter
+    db.query.return_value = mock_query
+
 
 class TestPreviewSegmentList:
 
-    @patch("retrovue.usecases.schedule_preview.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_preview._deserialize_scheduled_block")
-    @patch("retrovue.usecases.schedule_preview.load_segmented_blocks_from_active_revision")
-    def test_returns_segments(self, mock_load, mock_deser, mock_fill):
+    def test_returns_segments(self):
         """preview_at returns a list of segments with all required fields."""
         db = MagicMock()
-        block_start = BASE_MS - 1800000  # 30 min before
-        block_end = BASE_MS + 1800000    # 30 min after
+        block_start = BASE_MS - 1800000
+        block_end = BASE_MS + 1800000
 
-        mock_load.return_value = [{
-            "block_id": "blk-test",
-            "start_utc_ms": block_start,
-            "end_utc_ms": block_end,
-            "segments": [{"segment_type": "content", "asset_uri": "/test.mp4",
-                         "asset_start_offset_ms": 0, "segment_duration_ms": 3600000}],
-        }]
-
-        fake_block = MagicMock()
-        fake_block.block_id = "blk-test"
-        fake_block.start_utc_ms = block_start
-        fake_block.end_utc_ms = block_end
-        seg = MagicMock()
-        seg.segment_type = "content"
-        seg.asset_uri = "/test.mp4"
-        seg.asset_start_offset_ms = 0
-        seg.segment_duration_ms = 3600000
-        fake_block.segments = [seg]
-        mock_deser.return_value = fake_block
-        mock_fill.return_value = fake_block
+        row = _mock_playlist_event("blk-test", block_start, block_end, [
+            {"segment_type": "content", "asset_uri": "/test.mp4",
+             "asset_start_offset_ms": 0, "segment_duration_ms": 3600000},
+        ])
+        _setup_db_for_preview(db, row)
 
         result = preview_at(db, channel_slug="test-ch", at=BASE_DT)
 
@@ -274,53 +275,30 @@ class TestPreviewSegmentList:
 
     def test_returns_error_when_no_block(self):
         db = MagicMock()
-        with patch(
-            "retrovue.usecases.schedule_preview.load_segmented_blocks_from_active_revision"
-        ) as mock_load:
-            mock_load.return_value = None
-            result = preview_at(db, channel_slug="missing", at=BASE_DT)
-
+        _setup_db_for_preview(db, None)
+        result = preview_at(db, channel_slug="missing", at=BASE_DT)
         assert "error" in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# preview: 5. Respects compiled_segments path
+# preview: 5. Shows intro + content from Tier-2
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPreviewCompiledSegments:
 
-    @patch("retrovue.usecases.schedule_preview.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_preview._deserialize_scheduled_block")
-    @patch("retrovue.usecases.schedule_preview.load_segmented_blocks_from_active_revision")
-    def test_compiled_segments_produce_intro_and_content(self, mock_load, mock_deser, mock_fill):
-        """Blocks with compiled_segments produce intro + content segments."""
+    def test_compiled_segments_produce_intro_and_content(self):
+        """Tier-2 blocks with intro + content segments are rendered correctly."""
         db = MagicMock()
         block_start = BASE_MS - 1800000
         block_end = BASE_MS + 5400000
 
-        mock_load.return_value = [{
-            "block_id": "blk-template",
-            "start_utc_ms": block_start,
-            "end_utc_ms": block_end,
-            "segments": [
-                {"segment_type": "intro", "asset_uri": "/intro.mp4",
-                 "asset_start_offset_ms": 0, "segment_duration_ms": 30000},
-                {"segment_type": "content", "asset_uri": "/movie.mp4",
-                 "asset_start_offset_ms": 0, "segment_duration_ms": 5400000},
-            ],
-        }]
-
-        fake_block = MagicMock()
-        fake_block.block_id = "blk-template"
-        fake_block.start_utc_ms = block_start
-        fake_block.end_utc_ms = block_end
-        intro_seg = MagicMock(segment_type="intro", asset_uri="/intro.mp4",
-                              asset_start_offset_ms=0, segment_duration_ms=30000)
-        content_seg = MagicMock(segment_type="content", asset_uri="/movie.mp4",
-                                asset_start_offset_ms=0, segment_duration_ms=5400000)
-        fake_block.segments = [intro_seg, content_seg]
-        mock_deser.return_value = fake_block
-        mock_fill.return_value = fake_block
+        row = _mock_playlist_event("blk-template", block_start, block_end, [
+            {"segment_type": "intro", "asset_uri": "/intro.mp4",
+             "asset_start_offset_ms": 0, "segment_duration_ms": 30000},
+            {"segment_type": "content", "asset_uri": "/movie.mp4",
+             "asset_start_offset_ms": 0, "segment_duration_ms": 5400000},
+        ])
+        _setup_db_for_preview(db, row)
 
         result = preview_at(db, channel_slug="hbo-classics", at=BASE_DT)
 
@@ -330,45 +308,24 @@ class TestPreviewCompiledSegments:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# preview: 6. Respects legacy expansion path
+# preview: 6. Shows filled filler segments from Tier-2
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPreviewLegacy:
 
-    @patch("retrovue.usecases.schedule_preview.fill_ad_blocks")
-    @patch("retrovue.usecases.schedule_preview._deserialize_scheduled_block")
-    @patch("retrovue.usecases.schedule_preview.load_segmented_blocks_from_active_revision")
-    def test_legacy_block_expanded(self, mock_load, mock_deser, mock_fill):
-        """Legacy blocks (no compiled_segments) still produce segments via
-        the standard expansion path."""
+    def test_legacy_block_segments_shown(self):
+        """Tier-2 blocks with content + filler are rendered correctly."""
         db = MagicMock()
         block_start = BASE_MS - 900000
         block_end = BASE_MS + 900000
 
-        # A legacy block with content + filler (as expand_program_block would produce)
-        mock_load.return_value = [{
-            "block_id": "blk-legacy",
-            "start_utc_ms": block_start,
-            "end_utc_ms": block_end,
-            "segments": [
-                {"segment_type": "content", "asset_uri": "/cheers.mp4",
-                 "asset_start_offset_ms": 0, "segment_duration_ms": 1320000},
-                {"segment_type": "filler", "asset_uri": "",
-                 "asset_start_offset_ms": 0, "segment_duration_ms": 480000},
-            ],
-        }]
-
-        fake_block = MagicMock()
-        fake_block.block_id = "blk-legacy"
-        fake_block.start_utc_ms = block_start
-        fake_block.end_utc_ms = block_end
-        content_seg = MagicMock(segment_type="content", asset_uri="/cheers.mp4",
-                                asset_start_offset_ms=0, segment_duration_ms=1320000)
-        filler_seg = MagicMock(segment_type="filler", asset_uri="",
-                               asset_start_offset_ms=0, segment_duration_ms=480000)
-        fake_block.segments = [content_seg, filler_seg]
-        mock_deser.return_value = fake_block
-        mock_fill.return_value = fake_block
+        row = _mock_playlist_event("blk-legacy", block_start, block_end, [
+            {"segment_type": "content", "asset_uri": "/cheers.mp4",
+             "asset_start_offset_ms": 0, "segment_duration_ms": 1320000},
+            {"segment_type": "filler", "asset_uri": "/filler.mp4",
+             "asset_start_offset_ms": 0, "segment_duration_ms": 480000},
+        ])
+        _setup_db_for_preview(db, row)
 
         result = preview_at(db, channel_slug="cheers-24-7", at=BASE_DT)
 

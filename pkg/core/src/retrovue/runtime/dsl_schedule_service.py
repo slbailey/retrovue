@@ -64,6 +64,9 @@ def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
         # INV-LOUDNESS-NORMALIZED-001: persist gain_db when non-zero
         if s.gain_db != 0.0:
             d["gain_db"] = s.gain_db
+        # INV-MOVIE-PRIMARY-ATOMIC: persist is_primary when True
+        if s.is_primary:
+            d["is_primary"] = True
         segments.append(d)
     return {
         "block_id": block.block_id,
@@ -95,6 +98,7 @@ def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
                 transition_out=s.get("transition_out", "TRANSITION_NONE"),
                 transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
                 gain_db=s.get("gain_db", 0.0),
+                is_primary=s.get("is_primary", False),
             )
             for s in d["segments"]
         ),

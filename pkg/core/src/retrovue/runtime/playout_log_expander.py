@@ -98,12 +98,14 @@ def _expand_movie(
     segments: list[ScheduledSegment] = []
 
     # Single uninterrupted content segment
+    # INV-MOVIE-PRIMARY-ATOMIC: movie content is primary and must never be split
     segments.append(ScheduledSegment(
         segment_type="content",
         asset_uri=asset_uri,
         asset_start_offset_ms=0,
         segment_duration_ms=episode_duration_ms,
         gain_db=gain_db,
+        is_primary=True,
     ))
 
     # Post-content filler (remaining time in the grid slot)
