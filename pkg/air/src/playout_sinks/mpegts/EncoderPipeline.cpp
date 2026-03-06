@@ -453,10 +453,10 @@ skip_audio:
     } else {
       // libx264 settings for low latency
       av_dict_set(&opts, "preset", "ultrafast", 0);
-      // zerolatency tune: disables lookahead, B-frames, and other latency-adding features
+      // zerolatency tune: disables lookahead, B-frames, and other latency-adding features.
+      // With zerolatency, x264 uses slice-based threading (no frame reordering),
+      // so multi-thread is safe and reduces per-frame encode time.
       av_dict_set(&opts, "tune", "zerolatency", 0);
-      // Force single-threaded encoding to eliminate frame reordering
-      av_dict_set(&opts, "threads", "1", 0);
       // VBV-constrained VBR with settings to handle startup:
       // - vbv-init=0.9: Start with buffer nearly full for immediate output
       // - bframes=0: Already set by zerolatency tune
@@ -573,6 +573,21 @@ skip_audio:
     header_written_ = true;
     std::cout << "[EncoderPipeline] Header written - TS output is now decodable" << std::endl;
 
+    // INV-MUX-DTS-TRACE: Log stream time_bases AFTER avformat_write_header
+    // (the muxer may change them; we need to know the actual values used for rescaling)
+    if (video_stream_) {
+      std::cout << "[EncoderPipeline] INV-MUX-DTS-TRACE: video_stream_->time_base="
+                << video_stream_->time_base.num << "/" << video_stream_->time_base.den
+                << " codec_ctx_->time_base="
+                << codec_ctx_->time_base.num << "/" << codec_ctx_->time_base.den << std::endl;
+    }
+    if (audio_stream_ && audio_codec_ctx_) {
+      std::cout << "[EncoderPipeline] INV-MUX-DTS-TRACE: audio_stream_->time_base="
+                << audio_stream_->time_base.num << "/" << audio_stream_->time_base.den
+                << " audio_codec_ctx_->time_base="
+                << audio_codec_ctx_->time_base.num << "/" << audio_codec_ctx_->time_base.den << std::endl;
+    }
+
     // ========================================================================
     // INSTRUMENTATION: Log header write time (PAT/PMT now in output)
     // ========================================================================
@@ -581,6 +596,18 @@ skip_audio:
         now.time_since_epoch()).count();
     std::cout << "[METRIC] header_written_epoch_ms=" << since_epoch << std::endl;
   }
+
+  // =========================================================================
+  // INV-MUX-STARTUP-HOLDOFF: Create internal interleaver for the
+  // no-callback path (PipelineManager).  When an external capture
+  // callback is later set via SetPacketCaptureCallback(), this
+  // interleaver is bypassed (EmitPacket checks capture callback first).
+  // =========================================================================
+  internal_interleaver_ = std::make_unique<MuxInterleaver>(
+      [this](AVPacket* pkt, int64_t /*dts_90k*/) {
+        WriteMuxPacket(pkt);
+      });
+  internal_interleaver_->SetStartupHoldoff(true);
 
   initialized_ = true;
   return true;
@@ -759,8 +786,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
           av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
           EnforceMonotonicDts();
           GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-          av_write_frame(format_ctx_, packet_);
-          avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Force immediate emission
+          EmitPacket();  // INV-MUX-GLOBAL-DTS-MONOTONIC
         }
         send_ret = avcodec_send_frame(codec_ctx_, frame_);
       }
@@ -788,15 +814,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
       EnforceMonotonicDts();
       GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-      int write_ret = av_write_frame(format_ctx_, packet_);
-      // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Flush after EVERY write, not just at end
-      avio_flush(format_ctx_->pb);
-      if (write_ret < 0 && write_ret != AVERROR(EPIPE)) {
-        char errbuf[AV_ERROR_MAX_STRING_SIZE];
-        av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-        std::cerr << "[EncoderPipeline] write_frame failed: " << errbuf << std::endl;
-      }
-      // EPIPE: already logged once by sink (Hook A); avoid spam (Hook C)
+      EmitPacket();  // INV-MUX-GLOBAL-DTS-MONOTONIC
     }
     return true;
   }
@@ -896,7 +914,6 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       // libx264 settings for low latency
       av_dict_set(&opts, "preset", "ultrafast", 0);
       av_dict_set(&opts, "tune", "zerolatency", 0);
-      av_dict_set(&opts, "threads", "1", 0);
       av_dict_set(&opts, "x264-params",
           "bframes=0:nal-hrd=vbr:vbv-init=0.9",
           0);
@@ -1135,17 +1152,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
         EnforceMonotonicDts();
         GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-        // av_write_frame takes ownership and unrefs the packet.
-        int write_ret = av_write_frame(format_ctx_, packet_);
-        avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
-        if (write_ret == AVERROR(EAGAIN)) {
-          break;
-        }
-        if (write_ret < 0 && write_ret != AVERROR(EPIPE)) {
-          char write_errbuf[AV_ERROR_MAX_STRING_SIZE];
-          av_strerror(write_ret, write_errbuf, AV_ERROR_MAX_STRING_SIZE);
-          std::cerr << "[EncoderPipeline] Error writing drained packet: " << write_errbuf << std::endl;
-        }
+        // INV-MUX-GLOBAL-DTS-MONOTONIC: Buffer or write packet
+        EmitPacket();
       }
 
       // Try sending frame again after draining
@@ -1219,23 +1227,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     EnforceMonotonicDts();
     GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
 
-    // Write packet to muxer.
-    // av_write_frame takes ownership and unrefs the packet.
-    int write_ret = av_write_frame(format_ctx_, packet_);
-    // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Flush after EVERY write
-    avio_flush(format_ctx_->pb);
-
-    if (write_ret == AVERROR(EAGAIN)) {
-      break;
-    }
-    if (write_ret < 0) {
-      if (write_ret != AVERROR(EPIPE)) {
-        char errbuf[AV_ERROR_MAX_STRING_SIZE];
-        av_strerror(write_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-        std::cerr << "[EncoderPipeline] Error writing packet: " << errbuf << std::endl;
-      }
-      continue;
-    }
+    // INV-MUX-GLOBAL-DTS-MONOTONIC: Buffer or write packet
+    EmitPacket();
   }
 
   ++video_frame_count_;
@@ -1251,6 +1244,16 @@ void EncoderPipeline::close() {
   }
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
+  // Disable packet capture during close() — flush path writes directly
+  packet_capture_callback_ = nullptr;
+
+  // INV-MUX-WRITE-ORDER: DrainAll at shutdown — no more packets will arrive,
+  // so ignore the watermark and write everything remaining in DTS order.
+  if (internal_interleaver_) {
+    internal_interleaver_->DrainAll();
+    internal_interleaver_.reset();
+  }
+
   // Idempotent: prevent double-close (e.g. from destructor) from re-running teardown.
   initialized_ = false;
   last_video_mux_dts_ = AV_NOPTS_VALUE;
@@ -1279,8 +1282,8 @@ void EncoderPipeline::close() {
         av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
         EnforceMonotonicDts();
         GateOutputTiming(packet_->pts);  // Video stream is already 90kHz
-        // av_write_frame takes ownership and unrefs the packet.
-        int write_ret = av_write_frame(format_ctx_, packet_);
+        // av_interleaved_write_frame unrefs packet data internally.
+        int write_ret = av_interleaved_write_frame(format_ctx_, packet_);
         avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
         if (write_ret < 0 && write_ret != AVERROR(EAGAIN) && write_ret != AVERROR(EPIPE)) {
           char errbuf[AV_ERROR_MAX_STRING_SIZE];
@@ -1692,13 +1695,35 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     current_pts90k = pts90k + audio_pts_offset_90k_;
   }
   
+  // =========================================================================
+  // INV-AUDIO-SAMPLE-CLOCK: Internal sample counter is sole PTS authority.
+  // =========================================================================
+  // Ignore caller's PTS (which may be at video cadence). The internal counter
+  // advances by exactly frame_size (1024) per encoded chunk, producing the
+  // correct AAC PTS sequence: 0, 1920, 3840, 5760, ...
+  // =========================================================================
+  current_pts90k = (audio_encode_sample_counter_ * 90000) / encoder_sample_rate;
+
+  // INV-AUDIO-SAMPLE-CLOCK-DBG: Log first 20 audio chunk PTS values.
+  static int64_t dbg_audio_chunk_count = 0;
+  constexpr int64_t kDbgAudioChunkLogLimit = 20;
+
   // Convert caller's 90kHz PTS into the codec's time base for audio.
   AVRational tb_audio = audio_codec_ctx_->time_base;
-  
+
   // Process samples, sending only complete frame_size chunks
   // Buffer any remainder for the next call
   while (samples_remaining >= frame_size) {
     const int samples_this_frame = frame_size;  // Always exactly frame_size
+
+    if (dbg_audio_chunk_count < kDbgAudioChunkLogLimit) {
+      std::cout << "[INV-AUDIO-SAMPLE-CLOCK-DBG] chunk#" << dbg_audio_chunk_count
+                << " type=" << (is_silence_pad ? "SILENCE" : "REAL")
+                << " pts90k=" << current_pts90k
+                << " audio_encode_samples=" << audio_encode_sample_counter_
+                << " nb_samples=" << samples_this_frame << std::endl;
+      dbg_audio_chunk_count++;
+    }
     
     // Set frame parameters (encoder format and rate)
     audio_frame_->format = audio_codec_ctx_->sample_fmt;
@@ -1755,12 +1780,16 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
           if (ret < 0) break;
           packet_->stream_index = audio_stream_->index;
           av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
+          // INV-AAC-PRIMING-DROP: drop priming packets in drain path too
+          if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
+            av_packet_unref(packet_);
+            continue;
+          }
           EnforceMonotonicDts();
           // Convert audio PTS to 90kHz for consistent output timing
           int64_t audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
           GateOutputTiming(audio_pts_90k);
-          av_write_frame(format_ctx_, packet_);
-          avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
+          EmitPacket();  // INV-MUX-PER-STREAM-DTS-MONOTONIC
         }
         ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
       }
@@ -1781,29 +1810,75 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       if (ret < 0) return false;
       ++n;
       packet_->stream_index = audio_stream_->index;
+
+      // INV-MUX-DTS-TRACE: Capture raw encoder DTS before any transformation
+      const int64_t trace_raw_dts = packet_->dts;
+      const int64_t trace_raw_pts = packet_->pts;
+
       av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
-      
-      // Enforce monotonic DTS for audio
-      // If first packet has negative or zero DTS (common with AAC encoder priming),
-      // just clamp to 0 and track from there.
-      if (last_audio_mux_dts_ == AV_NOPTS_VALUE) {
-        if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
-          packet_->dts = 0;
-          if (packet_->pts < packet_->dts) {
-            packet_->pts = packet_->dts;
-          }
+
+      const int64_t trace_post_rescale_dts = packet_->dts;
+
+      // =====================================================================
+      // INV-AAC-PRIMING-DROP: Drop AAC encoder priming packets cleanly.
+      // =====================================================================
+      // The AAC encoder produces a priming packet with negative DTS/PTS
+      // (typically -1024 samples = -1920 in 90kHz).  This packet contains
+      // encoder delay padding, not real audio.
+      //
+      // Previous code clamped DTS to 0 and stored last_audio_mux_dts_=0,
+      // then EnforceMonotonicDts bumped the next real packet (DTS=0) to 1,
+      // producing the dts_90k=1/2 artifact.
+      //
+      // Fix: drop the priming packet entirely.  Do NOT advance
+      // last_audio_mux_dts_.  The first real packet (DTS=0) becomes the
+      // true first audio packet with no artificial bump.
+      // =====================================================================
+      if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
+        static int priming_drop_count = 0;
+        if (++priming_drop_count <= 5) {
+          std::cout << "[EncoderPipeline] INV-AAC-PRIMING-DROP: dropping priming packet"
+                    << " raw_dts=" << trace_raw_dts
+                    << " rescaled_dts=" << trace_post_rescale_dts
+                    << " stream_tb=" << audio_stream_->time_base.num
+                    << "/" << audio_stream_->time_base.den
+                    << std::endl;
         }
-        last_audio_mux_dts_ = (packet_->dts != AV_NOPTS_VALUE) ? packet_->dts : 0;
+        av_packet_unref(packet_);
+        continue;
       }
 
       EnforceMonotonicDts();
-      
+
+      const int64_t trace_post_enforce_dts = packet_->dts;
+
+      // INV-MUX-DTS-TRACE: Full audio DTS transformation chain (first 20 packets)
+      {
+        static int64_t trace_audio_pkt_count = 0;
+        if (trace_audio_pkt_count < 20) {
+          int64_t trace_90k = (packet_->dts != AV_NOPTS_VALUE && audio_stream_)
+              ? av_rescale_q(packet_->dts, audio_stream_->time_base, {1, 90000})
+              : -1;
+          std::cout << "[INV-MUX-DTS-TRACE] audio pkt#" << trace_audio_pkt_count
+                    << " stream_index=" << packet_->stream_index
+                    << " | raw_encoder: dts=" << trace_raw_dts << " pts=" << trace_raw_pts
+                    << " codec_tb=" << audio_codec_ctx_->time_base.num << "/" << audio_codec_ctx_->time_base.den
+                    << " | post_rescale: dts=" << trace_post_rescale_dts
+                    << " stream_tb=" << audio_stream_->time_base.num << "/" << audio_stream_->time_base.den
+                    << " | post_enforce: dts=" << trace_post_enforce_dts
+                    << " | rescaled_90k_dts=" << trace_90k
+                    << std::endl;
+          ++trace_audio_pkt_count;
+        }
+      }
+
       // Convert audio PTS to 90kHz for consistent output timing
       int64_t audio_pts_90k_gate = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
       GateOutputTiming(audio_pts_90k_gate);
 
-      int mux_ret = av_write_frame(format_ctx_, packet_);
-      avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
+      // INV-MUX-PER-STREAM-DTS-MONOTONIC: Buffer or write packet
+      EmitPacket();
+      int mux_ret = 0;  // Error handling preserved for log paths below
       if (mux_ret < 0 && mux_ret != AVERROR(EPIPE)) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE];
         av_strerror(mux_ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
@@ -1811,14 +1886,13 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       }
     }
 
-    // Advance pointer and PTS for next chunk
+    // Advance pointer, PTS, and internal sample counter for next chunk
     samples_ptr += samples_this_frame * encoder_channels;
     samples_remaining -= samples_this_frame;
+    audio_encode_sample_counter_ += samples_this_frame;
 
-    // Advance PTS by the duration of the chunk we just encoded
-    // Duration in 90kHz units = (samples * 90000) / sample_rate
-    int64_t chunk_duration_90k = (static_cast<int64_t>(samples_this_frame) * 90000) / encoder_sample_rate;
-    current_pts90k += chunk_duration_90k;
+    // Derive next chunk PTS from the authoritative counter
+    current_pts90k = (audio_encode_sample_counter_ * 90000) / encoder_sample_rate;
   }
   
   // Buffer any remaining samples (< frame_size) for the next call
@@ -1926,14 +2000,19 @@ bool EncoderPipeline::flushAudio() {
         ret = avcodec_receive_packet(audio_codec_ctx_, packet_);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
         if (ret < 0) break;
-        
+
         packet_->stream_index = audio_stream_->index;
         av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
+        // INV-AAC-PRIMING-DROP: drop priming packets in flush drain
+        if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
+          av_packet_unref(packet_);
+          continue;
+        }
         EnforceMonotonicDts();
         // Convert audio PTS to 90kHz for consistent output timing
         int64_t flush_audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
         GateOutputTiming(flush_audio_pts_90k);
-        av_write_frame(format_ctx_, packet_);
+        av_interleaved_write_frame(format_ctx_, packet_);
         avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
       }
 
@@ -1966,11 +2045,16 @@ bool EncoderPipeline::flushAudio() {
     packets_drained++;
     packet_->stream_index = audio_stream_->index;
     av_packet_rescale_ts(packet_, audio_codec_ctx_->time_base, audio_stream_->time_base);
+    // INV-AAC-PRIMING-DROP: drop priming packets in final drain
+    if (packet_->dts != AV_NOPTS_VALUE && packet_->dts < 0) {
+      av_packet_unref(packet_);
+      continue;
+    }
     EnforceMonotonicDts();
     // Convert audio PTS to 90kHz for consistent output timing
     int64_t drain_audio_pts_90k = av_rescale_q(packet_->pts, audio_stream_->time_base, {1, 90000});
     GateOutputTiming(drain_audio_pts_90k);
-    av_write_frame(format_ctx_, packet_);
+    av_interleaved_write_frame(format_ctx_, packet_);
     avio_flush(format_ctx_->pb);  // INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT
   }
 
@@ -2127,6 +2211,115 @@ void EncoderPipeline::GetEgressPacerMetrics(EgressPacerMetrics& out) const {
   out.pacer_max_late_ms = 0;
   out.pacer_chunks_paced = 0;
   (void)out;
+}
+
+// =========================================================================
+// INV-MUX-GLOBAL-DTS-MONOTONIC: Packet capture + external interleaving
+// =========================================================================
+
+void EncoderPipeline::SetPacketCaptureCallback(PacketCaptureCallback callback) {
+  packet_capture_callback_ = std::move(callback);
+  if (packet_capture_callback_) {
+    std::cout << "[EncoderPipeline] INV-MUX-GLOBAL-DTS-MONOTONIC: Packet capture callback SET (external interleaving)" << std::endl;
+  }
+}
+
+void EncoderPipeline::EmitPacket() {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  if (!packet_ || !format_ctx_) return;
+
+  if (packet_capture_callback_) {
+    // Clone the packet and hand to external interleaver
+    AVPacket* cloned = av_packet_clone(packet_);
+    if (!cloned) {
+      std::cerr << "[EncoderPipeline] av_packet_clone failed, writing directly" << std::endl;
+      WriteMuxPacket(packet_);
+      return;
+    }
+
+    // Rescale DTS to 90kHz common timebase for cross-stream ordering
+    int64_t dts_90k = 0;
+    if (cloned->dts != AV_NOPTS_VALUE) {
+      bool is_video = (video_stream_ && cloned->stream_index == video_stream_->index);
+      AVRational stream_tb;
+      if (is_video) {
+        stream_tb = video_stream_->time_base;
+      } else if (audio_stream_ && cloned->stream_index == audio_stream_->index) {
+        stream_tb = audio_stream_->time_base;
+      } else {
+        stream_tb = {1, 90000};
+      }
+      dts_90k = av_rescale_q(cloned->dts, stream_tb, {1, 90000});
+    }
+
+    packet_capture_callback_(cloned, dts_90k, cloned->stream_index);
+  } else if (internal_interleaver_) {
+    // INV-MUX-STARTUP-HOLDOFF: Route through internal interleaver.
+    // Clone the packet (packet_ is reused) and enqueue for DTS-ordered drain.
+    AVPacket* cloned = av_packet_clone(packet_);
+    if (!cloned) {
+      std::cerr << "[EncoderPipeline] av_packet_clone failed (internal), writing directly" << std::endl;
+      WriteMuxPacket(packet_);
+      return;
+    }
+
+    // Rescale DTS to 90kHz common timebase for cross-stream ordering
+    int64_t dts_90k = 0;
+    if (cloned->dts != AV_NOPTS_VALUE) {
+      bool is_video = (video_stream_ && cloned->stream_index == video_stream_->index);
+      AVRational stream_tb;
+      if (is_video) {
+        stream_tb = video_stream_->time_base;
+      } else if (audio_stream_ && cloned->stream_index == audio_stream_->index) {
+        stream_tb = audio_stream_->time_base;
+      } else {
+        stream_tb = {1, 90000};
+      }
+      dts_90k = av_rescale_q(cloned->dts, stream_tb, {1, 90000});
+    }
+
+    internal_interleaver_->Enqueue(cloned, dts_90k, cloned->stream_index);
+    // INV-MUX-CYCLE-FLUSH: Do NOT flush here. The caller (PipelineManager)
+    // must call FlushMuxInterleaver() at encode-cycle boundaries so that
+    // video and audio packets are interleaved correctly.
+  } else {
+    // Legacy path: write directly (no interleaving at all)
+    WriteMuxPacket(packet_);
+  }
+#endif
+}
+
+void EncoderPipeline::FlushMuxInterleaver() {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  if (internal_interleaver_) {
+    internal_interleaver_->Flush();
+  }
+#endif
+}
+
+void EncoderPipeline::WriteMuxPacket(AVPacket* pkt) {
+#ifdef RETROVUE_FFMPEG_AVAILABLE
+  if (!pkt || !format_ctx_) return;
+
+  // Notify observer before writing
+  if (packet_write_observer_) {
+    bool is_video = (video_stream_ && pkt->stream_index == video_stream_->index);
+    AVRational stream_tb = is_video ? video_stream_->time_base :
+                           (audio_stream_ ? audio_stream_->time_base : AVRational{1, 90000});
+    int64_t dts_90k = av_rescale_q(pkt->dts, stream_tb, {1, 90000});
+    int64_t pts_90k = av_rescale_q(pkt->pts, stream_tb, {1, 90000});
+    packet_write_observer_(pkt->stream_index, pkt->dts, pkt->pts, dts_90k, pts_90k);
+  }
+
+  av_interleaved_write_frame(format_ctx_, pkt);
+  avio_flush(format_ctx_->pb);
+#else
+  (void)pkt;
+#endif
+}
+
+void EncoderPipeline::SetPacketWriteObserver(PacketWriteObserver observer) {
+  packet_write_observer_ = std::move(observer);
 }
 
 }  // namespace retrovue::playout_sinks::mpegts

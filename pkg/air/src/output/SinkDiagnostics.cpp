@@ -97,4 +97,67 @@ void CloseFdWithLog(int fd, const char* reason, const char* file, int line,
   ::close(fd);
 }
 
+// =========================================================================
+// AIR_SHUTDOWN: Centralized shutdown summary event
+// =========================================================================
+
+namespace {
+
+// Single-fire latch for terminal shutdown reasons.
+std::atomic<bool> g_shutdown_fired{false};
+
+// Global channel_id for signal handlers / atexit (set at session start).
+std::atomic<int32_t> g_shutdown_channel_id{0};
+
+const char* ShutdownReasonToString(ShutdownReason r) {
+  switch (r) {
+    case ShutdownReason::kChannelTeardown:       return "channel_teardown";
+    case ShutdownReason::kOutputWriteFailure:    return "output_write_failure";
+    case ShutdownReason::kSignalReceived:        return "signal_received";
+    case ShutdownReason::kDecoderFailure:        return "decoder_failure";
+    case ShutdownReason::kBlackModeEntered:      return "black_mode_entered";
+    case ShutdownReason::kUnexpectedProcessExit: return "unexpected_process_exit";
+    default: return "unknown";
+  }
+}
+
+}  // namespace
+
+bool LogAirShutdown(ShutdownReason reason, const ShutdownContext& ctx) {
+  const bool is_non_terminal = (reason == ShutdownReason::kBlackModeEntered);
+
+  if (!is_non_terminal) {
+    // Terminal: first writer wins via CAS.
+    bool expected = false;
+    if (!g_shutdown_fired.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel)) {
+      return false;  // Already fired a terminal reason
+    }
+  }
+
+  // Use channel_id from context, fall back to global.
+  int32_t ch = ctx.channel_id;
+  if (ch == 0) ch = g_shutdown_channel_id.load(std::memory_order_acquire);
+
+  std::ostringstream oss;
+  oss << "[AIR_SHUTDOWN] AIR_SHUTDOWN"
+      << " channel=" << ch
+      << " pid=" << static_cast<int>(::getpid())
+      << " reason=" << ShutdownReasonToString(reason)
+      << " details=" << (ctx.details.empty() ? "none" : ctx.details)
+      << " block_id=" << (ctx.block_id.empty() ? "unknown" : ctx.block_id)
+      << " segment_index=" << ctx.segment_index
+      << " frame=" << ctx.frame_number;
+  std::cerr << oss.str() << std::endl;
+  return true;
+}
+
+bool AirShutdownFired() {
+  return g_shutdown_fired.load(std::memory_order_acquire);
+}
+
+void SetAirShutdownChannelId(int32_t channel_id) {
+  g_shutdown_channel_id.store(channel_id, std::memory_order_release);
+}
+
 }  // namespace retrovue::output

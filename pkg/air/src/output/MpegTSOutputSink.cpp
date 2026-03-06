@@ -18,6 +18,7 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
+#include "retrovue/playout_sinks/mpegts/MuxInterleaver.hpp"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/RationalFps.hpp"
@@ -172,15 +173,37 @@ bool MpegTSOutputSink::Start() {
   // output_timing_enabled_=true; pacing is applied in encode path when enabled.
 
   // =========================================================================
-  // INV-P9-IMMEDIATE-OUTPUT: Keep audio liveness ENABLED at startup
+  // INV-AUDIO-SAMPLE-CLOCK: Disable EncoderPipeline silence generation
   // =========================================================================
-  // Professional broadcast systems output decodable content immediately.
-  // At startup, we emit pad frames + silence until real content is ready.
-  // Silence injection is only disabled AFTER real audio is confirmed flowing.
-  // This prevents MuxLoop stalls when audio queue is empty at startup.
+  // Silence is now generated in MuxLoop using audio_samples_emitted_ as the
+  // single PTS authority. EncoderPipeline's GenerateSilenceFrames used a
+  // competing counter (silence_audio_pts_90k_) that caused backward PTS
+  // jumps at the silence→real transition.
   // =========================================================================
-  encoder_->SetAudioLivenessEnabled(true);
-  std::cout << "[MpegTSOutputSink] INV-P9-IMMEDIATE-OUTPUT: Silence injection ENABLED (until real audio flows)" << std::endl;
+  encoder_->SetAudioLivenessEnabled(false);
+  std::cout << "[MpegTSOutputSink] INV-AUDIO-SAMPLE-CLOCK: EncoderPipeline silence DISABLED (MuxLoop owns silence)" << std::endl;
+
+  // =========================================================================
+  // INV-MUX-GLOBAL-DTS-MONOTONIC: Set up cross-stream interleaving
+  // =========================================================================
+  // MuxInterleaver buffers encoded packets and drains them in global DTS
+  // order.  Owned by the sink (mux discipline), not the encoder.
+  // Startup holdoff prevents audio-only flushes during H.264 encoder delay.
+  // =========================================================================
+  {
+    auto* enc = encoder_.get();
+    mux_interleaver_ = std::make_unique<playout_sinks::mpegts::MuxInterleaver>(
+        [enc](AVPacket* pkt, int64_t /*dts_90k*/) {
+          enc->WriteMuxPacket(pkt);
+        });
+    mux_interleaver_->SetStartupHoldoff(true);
+
+    encoder_->SetPacketCaptureCallback(
+        [this](AVPacket* pkt, int64_t dts_90k, int stream_index) {
+          mux_interleaver_->Enqueue(pkt, dts_90k, stream_index);
+        });
+  }
+  std::cout << "[MpegTSOutputSink] INV-MUX-GLOBAL-DTS-MONOTONIC: MuxInterleaver ENABLED (startup holdoff ON)" << std::endl;
 
   // INV-TS-CONTINUITY: Initialize null packets for transport continuity
   InitNullPackets();
@@ -212,6 +235,14 @@ void MpegTSOutputSink::Stop() {
   // Wait for thread to finish
   if (mux_thread_.joinable()) {
     mux_thread_.join();
+  }
+
+  // Drain all remaining packets before closing encoder (interleaver
+  // holds cloned packets that reference encoder's format context).
+  // DrainAll ignores the watermark — at shutdown, no more packets arrive.
+  if (mux_interleaver_) {
+    mux_interleaver_->DrainAll();
+    mux_interleaver_.reset();
   }
 
   // Close encoder
@@ -442,6 +473,20 @@ void MpegTSOutputSink::MuxLoop() {
     std::memset(prealloc_black_frame.data.data() + y_size, 128, static_cast<size_t>(2 * uv_size));
   }
 
+  // INV-AUDIO-SAMPLE-CLOCK: Pre-allocate silence frame for MuxLoop-owned audio padding.
+  // Uses the same audio_samples_emitted_ counter as real audio — no competing PTS source.
+  buffer::AudioFrame prealloc_silence_frame;
+  {
+    constexpr int kAacFrameSize = 1024;
+    prealloc_silence_frame.sample_rate = buffer::kHouseAudioSampleRate;
+    prealloc_silence_frame.channels = buffer::kHouseAudioChannels;
+    prealloc_silence_frame.nb_samples = kAacFrameSize;
+    prealloc_silence_frame.pts_us = 0;
+    prealloc_silence_frame.data.resize(
+        static_cast<size_t>(kAacFrameSize) * static_cast<size_t>(buffer::kHouseAudioChannels) * sizeof(int16_t),
+        0);
+  }
+
   // Last emitted frame for freeze mode
   buffer::Frame last_emitted_frame;
   bool have_last_frame = false;
@@ -456,6 +501,17 @@ void MpegTSOutputSink::MuxLoop() {
   // at startup - we give upstream time to deliver the first frame.
   // =========================================================================
   last_real_frame_dequeue_time_ = std::chrono::steady_clock::now();
+
+  // INV-AUDIO-SAMPLE-CLOCK: Belt-and-suspenders — ensure GenerateSilenceFrames is
+  // disabled on the MuxLoop thread. Start() already set this, but this removes any
+  // doubt about cross-thread visibility of the plain bool audio_liveness_enabled_.
+  if (encoder_) {
+    encoder_->SetAudioLivenessEnabled(false);
+  }
+
+  // INV-AUDIO-SAMPLE-CLOCK: Debug counter for first N audio PTS values
+  int64_t dbg_audio_frame_count = 0;
+  constexpr int64_t kDbgAudioLogLimit = 20;
 
   std::cout << "[MpegTSOutputSink] INV-TICK-GUARANTEED-OUTPUT: Unconditional emission enabled" << std::endl;
   std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Time-driven emission enabled" << std::endl;
@@ -715,6 +771,13 @@ void MpegTSOutputSink::MuxLoop() {
       // Log transition to fallback mode (once)
       if (!in_fallback_mode) {
         in_fallback_mode = true;
+        {
+          ShutdownContext sctx;
+          sctx.channel_id = channel_id_;
+          sctx.details = have_last_frame ? "buffer_underflow" : "no_segment";
+          sctx.block_id = have_last_frame ? "freeze://last" : "fallback://black";
+          LogAirShutdown(ShutdownReason::kBlackModeEntered, sctx);
+        }
         std::cout << "[MpegTSOutputSink] INV-TICK-GUARANTEED-OUTPUT: "
                   << "Entering fallback mode (no real frames), "
                   << "source=" << (have_last_frame ? "freeze" : "black") << std::endl;
@@ -754,6 +817,29 @@ void MpegTSOutputSink::MuxLoop() {
       std::cout << "[MpegTSOutputSink] Encoder received frame: real=no pts=" << fallback_pts_us
                 << " (" << fallback_source << ")" << std::endl;
       encoder_->encodeFrame(fallback_frame, pts90k);
+
+      // INV-AUDIO-SAMPLE-CLOCK: Silence in fallback path.
+      // One AAC frame per video tick. No video-derived deadline — counter only.
+      {
+        bool audio_queue_empty;
+        { std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+          audio_queue_empty = audio_queue_.empty(); }
+        if (!silence_injection_disabled_.load(std::memory_order_acquire) && audio_queue_empty) {
+          constexpr int kAacFrameSize = 1024;
+          const int64_t silence_pts90k = (audio_samples_emitted_ * 90000) / buffer::kHouseAudioSampleRate;
+          if (dbg_audio_frame_count < kDbgAudioLogLimit) {
+            std::cout << "[INV-AUDIO-SAMPLE-CLOCK-DBG] audio_frame#" << dbg_audio_frame_count
+                      << " type=SILENCE_FALLBACK pts90k=" << silence_pts90k
+                      << " samples_emitted=" << audio_samples_emitted_ << std::endl;
+          }
+          encoder_->encodeAudioFrame(prealloc_silence_frame, silence_pts90k, true);
+          audio_samples_emitted_ += kAacFrameSize;
+          dbg_audio_frame_count++;
+        }
+      }
+
+      // INV-MUX-GLOBAL-DTS-MONOTONIC: Drain interleaved packets after fallback encoding
+      if (mux_interleaver_) mux_interleaver_->Flush();
 
       fallback_frame_count++;
       last_fallback_pts_us = fallback_pts_us;
@@ -1111,6 +1197,31 @@ void MpegTSOutputSink::MuxLoop() {
         on_successor_video_emitted_();
       }
 
+      // =====================================================================
+      // INV-AUDIO-SAMPLE-CLOCK: MuxLoop-owned silence generation
+      // =====================================================================
+      // One AAC frame per video tick. No video-derived deadline — the audio
+      // sample counter is the sole PTS authority. The muxer interleaves
+      // audio and video; we do not chase video timestamps.
+      // =====================================================================
+      {
+        bool audio_queue_empty;
+        { std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+          audio_queue_empty = audio_queue_.empty(); }
+        if (!silence_injection_disabled_.load(std::memory_order_acquire) && audio_queue_empty) {
+          constexpr int kAacFrameSize = 1024;
+          const int64_t silence_pts90k = (audio_samples_emitted_ * 90000) / buffer::kHouseAudioSampleRate;
+          if (dbg_audio_frame_count < kDbgAudioLogLimit) {
+            std::cout << "[INV-AUDIO-SAMPLE-CLOCK-DBG] audio_frame#" << dbg_audio_frame_count
+                      << " type=SILENCE_NORMAL pts90k=" << silence_pts90k
+                      << " samples_emitted=" << audio_samples_emitted_ << std::endl;
+          }
+          encoder_->encodeAudioFrame(prealloc_silence_frame, silence_pts90k, true);
+          audio_samples_emitted_ += kAacFrameSize;
+          dbg_audio_frame_count++;
+        }
+      }
+
       // ---------------------------------------------------------------------
       // Step 5: Dequeue and encode all audio with CT <= video CT
       // ---------------------------------------------------------------------
@@ -1142,6 +1253,13 @@ void MpegTSOutputSink::MuxLoop() {
 
           // INV-AUDIO-PTS-HOUSE-CLOCK-001: Derive PTS from sample clock, not content pts_us
           const int64_t audio_pts90k = (audio_samples_emitted_ * 90000) / buffer::kHouseAudioSampleRate;
+          if (dbg_audio_frame_count < kDbgAudioLogLimit) {
+            std::cout << "[INV-AUDIO-SAMPLE-CLOCK-DBG] audio_frame#" << dbg_audio_frame_count
+                      << " type=REAL pts90k=" << audio_pts90k
+                      << " samples_emitted=" << audio_samples_emitted_
+                      << " nb_samples=" << audio_frame.nb_samples << std::endl;
+            dbg_audio_frame_count++;
+          }
           encoder_->encodeAudioFrame(audio_frame, audio_pts90k);
           audio_samples_emitted_ += audio_frame.nb_samples;
 
@@ -1174,6 +1292,9 @@ void MpegTSOutputSink::MuxLoop() {
         }
       }
     }
+
+    // INV-MUX-GLOBAL-DTS-MONOTONIC: Drain interleaved packets after video+audio encoding
+    if (mux_interleaver_) mux_interleaver_->Flush();
 
     // =========================================================================
     // INV-NO-SINK-PACING: Sink does NOT pace - ProgramOutput owns pacing
@@ -1214,12 +1335,24 @@ void MpegTSOutputSink::MuxLoop() {
               << " fallback_frames=" << fallback_frame_count
               << " null_packets=" << null_packets_emitted_.load(std::memory_order_relaxed) << std::endl;
   } else if (fd_invalid) {
+    {
+      ShutdownContext sctx;
+      sctx.channel_id = channel_id_;
+      sctx.details = "implicit_eof_fd_invalid";
+      LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
+    }
     std::cerr << "[MpegTSOutputSink] INV-SINK-NO-IMPLICIT-EOF VIOLATION: "
               << "mux loop exiting without explicit stop (reason=fd_invalid), "
               << "video_emitted=" << video_emit_count
               << " audio_emitted=" << audio_emit_count
               << " fallback_frames=" << fallback_frame_count << std::endl;
   } else {
+    {
+      ShutdownContext sctx;
+      sctx.channel_id = channel_id_;
+      sctx.details = "implicit_eof_unknown";
+      LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
+    }
     std::cerr << "[MpegTSOutputSink] INV-SINK-NO-IMPLICIT-EOF VIOLATION: "
               << "mux loop exiting without explicit stop (reason=unknown), "
               << "video_emitted=" << video_emit_count
@@ -1327,6 +1460,12 @@ int MpegTSOutputSink::WriteToFdCallback(void* opaque, uint8_t* buf, int buf_size
                                   sink->socket_sink_->GetSinkGeneration(),
                                   "n/a");
       sink->socket_sink_->ForceDetachAndClose("WriteToFdCallback: sink full or closed");
+    }
+    {
+      ShutdownContext sctx;
+      sctx.channel_id = sink->channel_id_;
+      sctx.details = "avio_enqueue_failed";
+      LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
     }
     return -1;
   }

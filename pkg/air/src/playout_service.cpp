@@ -237,6 +237,8 @@ namespace retrovue
         return grpc::Status(code, result.message);
       }
 
+      output::SetAirShutdownChannelId(channel_id);
+
       { std::ostringstream oss;
         oss << "[StartChannel] Channel " << channel_id << " started successfully";
         Logger::Info(oss.str()); }
@@ -300,6 +302,13 @@ namespace retrovue
           code = grpc::StatusCode::NOT_FOUND;
         }
         return grpc::Status(code, result.message);
+      }
+
+      {
+        output::ShutdownContext sctx;
+        sctx.channel_id = channel_id;
+        sctx.details = "stop_channel";
+        output::LogAirShutdown(output::ShutdownReason::kChannelTeardown, sctx);
       }
 
       { std::ostringstream oss;
@@ -732,6 +741,8 @@ namespace retrovue
         return grpc::Status::OK;
       }
 
+      output::SetAirShutdownChannelId(channel_id);
+
       // Create session state
       blockplan_session_ = std::make_unique<BlockPlanSessionState>();
       blockplan_session_->channel_id = channel_id;
@@ -1147,6 +1158,13 @@ namespace retrovue
 
       blockplan_session_->active = false;
       blockplan_session_.reset();
+
+      {
+        output::ShutdownContext sctx;
+        sctx.channel_id = channel_id;
+        sctx.details = reason;
+        output::LogAirShutdown(output::ShutdownReason::kChannelTeardown, sctx);
+      }
 
       { std::ostringstream oss;
         oss << "[StopBlockPlanSession] Session stopped: reason=" << reason

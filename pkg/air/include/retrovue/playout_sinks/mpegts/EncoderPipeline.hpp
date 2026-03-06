@@ -7,6 +7,7 @@
 #define RETROVUE_PLAYOUT_SINKS_MPEGTS_ENCODER_PIPELINE_HPP_
 
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
+#include "retrovue/playout_sinks/mpegts/MuxInterleaver.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -118,6 +119,11 @@ class EncoderPipeline {
   std::vector<int16_t> audio_resample_buffer_;  // S16 interleaved, house format
   int audio_resample_buffer_samples_;
   
+  // INV-AUDIO-SAMPLE-CLOCK: Internal sample counter — sole PTS authority for
+  // encoded audio chunks. Advances by exactly frame_size (1024) per chunk.
+  // Produces PTS sequence 0, 1920, 3840, ... regardless of caller's PTS.
+  int64_t audio_encode_sample_counter_{0};
+
   // Track last PTS to detect producer switches (for PTS continuity and flush timing)
   int64_t last_seen_audio_pts90k_;  // Last INCOMING PTS we saw (to detect backward jumps)
   int64_t audio_pts_offset_90k_;    // Offset to add to incoming PTS for muxer continuity
@@ -239,12 +245,51 @@ class EncoderPipeline {
   int64_t output_timing_anchor_pts_;  // First packet's PTS (90kHz timebase)
   std::chrono::steady_clock::time_point output_timing_anchor_wall_;
   bool output_timing_enabled_;  // P8-IO-001: Egress pacing is in write_callback (deadline_mono_ns)
+
+  // =========================================================================
+  // INV-MUX-GLOBAL-DTS-MONOTONIC: Packet capture for external interleaving
+  // =========================================================================
+  // When a PacketCaptureCallback is set, encoded packets are cloned and
+  // handed to the callback instead of being written directly.  The external
+  // owner (MpegTSOutputSink / MuxInterleaver) buffers, sorts by DTS, and
+  // calls WriteMuxPacket() to write in global DTS order.
+  //
+  // When no callback is set, packets are written directly (legacy path).
+  //
+  // See: docs/contracts/semantics/MuxInterleavingContract.md
+  // =========================================================================
+  using PacketCaptureCallback = std::function<void(AVPacket* pkt, int64_t dts_90k, int stream_index)>;
+  PacketCaptureCallback packet_capture_callback_;
+
+  // Emit the current packet_: if capture callback set, clone and hand off;
+  // otherwise route through internal_interleaver_ (startup holdoff gate).
+  void EmitPacket();
+
+  // =========================================================================
+  // INV-MUX-STARTUP-HOLDOFF: Internal interleaver for the no-callback path
+  // =========================================================================
+  // When no external PacketCaptureCallback is set (PipelineManager path),
+  // this internal interleaver gates all packet writes.  It holds packets
+  // until both audio and video have been observed, then drains in DTS order.
+  // See: docs/contracts/mux_startup_holdoff_contract.md
+  // =========================================================================
+  std::unique_ptr<MuxInterleaver> internal_interleaver_;
 #endif
 
   MpegTSPlayoutSinkConfig config_;
   bool initialized_;
 
  public:
+  // =========================================================================
+  // INV-MUX-CYCLE-FLUSH: Flush internal MuxInterleaver at cycle boundary
+  // =========================================================================
+  // Call after encoding one video frame + corresponding audio frames.
+  // Drains all buffered packets in global DTS order.
+  // No-op when external PacketCaptureCallback is set (MpegTSOutputSink path).
+  // See: docs/contracts/mux_interleaver.md
+  // =========================================================================
+  void FlushMuxInterleaver();
+
   // Reset output timing anchor (call on SwitchToLive per OutputTimingContract.md §6)
   void ResetOutputTiming();
 
@@ -272,6 +317,36 @@ class EncoderPipeline {
     int64_t pacer_chunks_paced = 0;
   };
   void GetEgressPacerMetrics(EgressPacerMetrics& out) const;
+
+  // =========================================================================
+  // INV-MUX-GLOBAL-DTS-MONOTONIC: Packet capture callback
+  // =========================================================================
+  // When set, encoded packets are cloned and delivered to the callback
+  // instead of being written directly.  The callback receives ownership
+  // of the cloned AVPacket*.  Used by MpegTSOutputSink to feed the
+  // MuxInterleaver.  When not set, packets are written directly.
+  // =========================================================================
+  void SetPacketCaptureCallback(PacketCaptureCallback callback);
+
+  // Write a single packet to the MPEG-TS muxer using av_interleaved_write_frame.
+  // Called by the external MuxInterleaver after sorting packets in DTS order.
+  // Notifies the PacketWriteObserver before writing.
+  // The caller is responsible for freeing the AVPacket* shell after this returns
+  // (av_interleaved_write_frame unrefs the packet data internally).
+  void WriteMuxPacket(AVPacket* pkt);
+
+  // =========================================================================
+  // INV-MUX-GLOBAL-DTS-MONOTONIC: Packet write observer (test hook)
+  // =========================================================================
+  // When set, called for every packet written to the muxer with:
+  //   (stream_index, dts, pts, dts_90k, pts_90k)
+  // Used by contract tests to verify global DTS ordering.
+  // =========================================================================
+  using PacketWriteObserver = std::function<void(int stream_index, int64_t dts, int64_t pts, int64_t dts_90k, int64_t pts_90k)>;
+  void SetPacketWriteObserver(PacketWriteObserver observer);
+
+ private:
+  PacketWriteObserver packet_write_observer_;
 };
 
 }  // namespace retrovue::playout_sinks::mpegts
