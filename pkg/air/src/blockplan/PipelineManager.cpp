@@ -926,7 +926,7 @@ void PipelineManager::Run() {
       : std::max(1, video_target_depth / 3);
   video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
       video_target_depth, video_low_water);
-  video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+  video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
 
   // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
   pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
@@ -1702,10 +1702,40 @@ void PipelineManager::Run() {
       if (frame_selection_cadence_budget_num_ >= frame_selection_cadence_budget_den_) {
         frame_selection_cadence_budget_num_ -= frame_selection_cadence_budget_den_;
         should_advance_video = true;
+        cadence_diag_advance_++;
       } else {
         should_advance_video = false;
         is_cadence_repeat = true;
+        cadence_diag_repeat_++;
       }
+    } else if (!take_b) {
+      // Cadence not evaluated: either disabled or v_src null.
+      cadence_diag_bypass_++;
+    }
+
+    // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
+    if (session_frame_index - cadence_diag_last_log_tick_ >= 300) {
+      auto now_wall = std::chrono::system_clock::now();
+      auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now_wall.time_since_epoch()).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] CADENCE_DIAG"
+            << " tick=" << session_frame_index
+            << " wall_ms=" << epoch_ms
+            << " enabled=" << frame_selection_cadence_enabled_
+            << " advance=" << cadence_diag_advance_
+            << " repeat=" << cadence_diag_repeat_
+            << " bypass=" << cadence_diag_bypass_
+            << " v_src=" << (v_src ? "non-null" : "null")
+            << " take_b=" << take_b
+            << " budget=" << frame_selection_cadence_budget_num_
+            << " threshold=" << frame_selection_cadence_budget_den_
+            << " increment=" << frame_selection_cadence_increment_
+            << " y_crc=" << std::hex << last_good_y_crc32_ << std::dec
+            << " seg=" << current_segment_index_
+            << " decision=" << take_source_char;
+        Logger::Info(oss.str()); }
+      cadence_diag_last_log_tick_ = session_frame_index;
     }
 
     // ==================================================================
@@ -2251,7 +2281,7 @@ void PipelineManager::Run() {
       if (preview_video_buffer_) {
         // B buffers become the new A buffers.
         video_buffer_ = std::move(preview_video_buffer_);
-        video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+        video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
         audio_buffer_ = std::move(preview_audio_buffer_);
         live_ = std::move(preview_);
         swapped = true;
@@ -2333,7 +2363,7 @@ void PipelineManager::Run() {
           }
           video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
               fallback_video_target, fallback_video_low);
-          video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+          video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
           const auto& fbcfg = ctx_->buffer_config;
           int fa_target = fbcfg.audio_target_depth_ms;
           int fa_low = fbcfg.audio_low_water_ms > 0
@@ -2363,7 +2393,7 @@ void PipelineManager::Run() {
             ? gbcfg.video_low_water_frames
             : std::max(1, gap_video_target / 3);
         video_buffer_ = std::make_unique<VideoLookaheadBuffer>(gap_video_target, gap_video_low);
-        video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+        video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
         {
           int ga_target = gbcfg.audio_target_depth_ms;
           int ga_low = gbcfg.audio_low_water_ms > 0
@@ -4045,6 +4075,9 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
     frame_selection_cadence_budget_num_ = 0;
     frame_selection_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * input_fps.den;
     frame_selection_cadence_increment_ = static_cast<int64_t>(input_fps.num) * output_fps.den;
+    cadence_diag_advance_ = 0;
+    cadence_diag_repeat_ = 0;
+    cadence_diag_bypass_ = 0;
 
     { std::ostringstream oss;
       oss << "[PipelineManager] FRAME_SELECTION_CADENCE_INIT"
@@ -4607,7 +4640,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     video_buffer_ = std::move(pad_b_video_buffer_);
     audio_buffer_ = std::move(pad_b_audio_buffer_);
     live_ = std::move(pad_b_producer_);
-    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+    video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
     prep_mode = "INSTANT";
     swap_branch = "PAD_SWAP";
     pad_swap_used_pad_b = true;
@@ -4616,7 +4649,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     video_buffer_ = std::move(segment_b_video_buffer_);
     audio_buffer_ = std::move(segment_b_audio_buffer_);
     live_ = std::move(segment_b_producer_);
-    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+    video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
     prep_mode = "PREROLLED";
     swap_branch = "SWAP_B_TO_A";
   } else {
@@ -4640,7 +4673,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     video_buffer_ = std::move(segment_b_video_buffer_);
     audio_buffer_ = std::move(segment_b_audio_buffer_);
     live_ = std::move(segment_b_producer_);
-    video_buffer_->SetBufferLabel("LIVE_AUDIO_BUFFER");
+    video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
     prep_mode = "MISS";
     swap_branch = "MISS";
     { std::ostringstream oss;
