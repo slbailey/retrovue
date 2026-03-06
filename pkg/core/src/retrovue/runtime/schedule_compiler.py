@@ -77,6 +77,7 @@ class ProgramBlockOutput:
     window_uuid: str | None = None
     template_id: str | None = None
     epg_title: str | None = None
+    compiled_segments: list[dict[str, Any]] | None = None
 
     def end_at(self) -> datetime:
         return self.start_at + timedelta(seconds=self.slot_duration_sec)
@@ -99,6 +100,8 @@ class ProgramBlockOutput:
             d["template_id"] = self.template_id
         if self.epg_title:
             d["epg_title"] = self.epg_title
+        if self.compiled_segments:
+            d["compiled_segments"] = self.compiled_segments
         return d
 
 
@@ -714,6 +717,101 @@ def _compile_movie_marathon(
     return blocks
 
 
+def _resolve_template_segments(
+    *,
+    segments: list[dict[str, Any]],
+    primary_seg: dict[str, Any],
+    primary_asset_id: str,
+    primary_meta: "AssetMetadata",
+    resolver: "AssetResolver",
+    seed: int | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve all template segments into an explicit compiled list.
+
+    INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
+    Each template segment is fully resolved at compile time. The primary
+    segment uses the already-selected asset; non-primary segments are
+    resolved from their declared source (collection or pool).
+
+    Returns a list of dicts with the stable compiled segment shape.
+    """
+    compiled: list[dict[str, Any]] = []
+    rng = random.Random(seed)
+
+    for seg_def in segments:
+        source = seg_def.get("source", {})
+        source_type = source.get("type", "")
+        source_name = source.get("name", "")
+        is_primary = seg_def is primary_seg
+
+        if is_primary:
+            asset_id = primary_asset_id
+            asset_meta = primary_meta
+            seg_type = "content"
+        else:
+            # Resolve non-primary segment from its source
+            # INV-TEMPLATE-COLLECTION-SOURCE-RESOLVE: collection sources
+            # must query by collection name, not lookup (which only handles
+            # assets, aliases, and pools).
+            if source_type == "collection":
+                candidates = resolver.query({"collection": source_name})
+            else:
+                col_meta = resolver.lookup(source_name)
+                candidates = list(col_meta.tags)
+
+            # Apply selection filters if declared
+            selection = seg_def.get("selection", [])
+            for rule in selection:
+                if rule.get("type") == "tags":
+                    # Tag filter: keep candidates whose asset_id contains
+                    # any of the required tag values (substring match on ID
+                    # or title for lightweight tag filtering at compile time)
+                    tag_values = rule.get("values", [])
+                    if tag_values:
+                        filtered = []
+                        for cid in candidates:
+                            try:
+                                cmeta = resolver.lookup(cid)
+                                cid_lower = cid.lower()
+                                title_lower = (cmeta.title or "").lower()
+                                tags_lower = [t.lower() for t in cmeta.tags]
+                                if any(
+                                    tv.lower() in cid_lower
+                                    or tv.lower() in title_lower
+                                    or tv.lower() in tags_lower
+                                    for tv in tag_values
+                                ):
+                                    filtered.append(cid)
+                            except KeyError:
+                                pass
+                        candidates = filtered
+
+            if not candidates:
+                raise CompileError(
+                    f"Template segment source '{source_name}' "
+                    f"resolved to zero candidates after filtering"
+                )
+
+            candidates.sort()
+            asset_id = rng.choice(candidates)
+            asset_meta = resolver.lookup(asset_id)
+            seg_type = "intro" if source_type == "collection" else "content"
+
+        compiled.append({
+            "segment_type": seg_type,
+            "asset_id": asset_id,
+            "asset_uri": asset_meta.file_uri or "",
+            "asset_start_offset_ms": 0,
+            "segment_duration_ms": asset_meta.duration_sec * 1000,
+            "source_type": source_type,
+            "source_name": source_name,
+            "is_primary": is_primary,
+            "gain_db": asset_meta.loudness_gain_db,
+        })
+
+    return compiled
+
+
 def _compile_template_entry(
     block_def: dict[str, Any],
     broadcast_day: str,
@@ -820,7 +918,24 @@ def _compile_template_entry(
 
         used_ids.add(asset_id)
         meta = resolver.lookup(asset_id)
-        slot_duration = _grid_slot_duration(grid_minutes, meta.duration_sec)
+
+        # INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
+        # Resolve ALL template segments (not just primary) into an explicit
+        # compiled_segments list that preserves the template's segment order.
+        compiled_segs = _resolve_template_segments(
+            segments=segments,
+            primary_seg=primary_seg,
+            primary_asset_id=asset_id,
+            primary_meta=meta,
+            resolver=resolver,
+            seed=pick_seed,
+        )
+
+        # Slot duration must cover ALL template segments, not just primary.
+        total_content_sec = sum(
+            seg["segment_duration_ms"] for seg in compiled_segs
+        ) / 1000
+        slot_duration = _grid_slot_duration(grid_minutes, total_content_sec)
 
         block = ProgramBlockOutput(
             title=meta.title or asset_id,
@@ -832,6 +947,7 @@ def _compile_template_entry(
             window_uuid=window_uuid,
             template_id=template_name,
             epg_title=epg_title,
+            compiled_segments=compiled_segs,
         )
         blocks.append(block)
         current_time = block.end_at()

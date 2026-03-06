@@ -69,12 +69,17 @@ class StubAssetResolver:
     def __init__(self, assets: dict[str, AssetMetadata] | None = None) -> None:
         self._assets: dict[str, AssetMetadata] = dict(assets) if assets else {}
         self._pools: dict[str, dict[str, Any]] = {}
+        self._collections: dict[str, list[str]] = {}  # collection_name → [asset_id, ...]
 
     def add(self, asset_id: str, meta: AssetMetadata) -> None:
         self._assets[asset_id] = meta
 
     def register_pools(self, pools: dict[str, dict[str, Any]]) -> None:
         self._pools.update(pools)
+
+    def register_collection(self, collection_name: str, asset_ids: list[str]) -> None:
+        """Register assets as belonging to a named collection."""
+        self._collections[collection_name] = list(asset_ids)
 
     def lookup(self, asset_id: str) -> AssetMetadata:
         # Direct lookup
@@ -97,10 +102,21 @@ class StubAssetResolver:
         raise KeyError(f"Asset not found: {asset_id}")
 
     def query(self, match: dict[str, Any]) -> list[str]:
-        """Simple query implementation for tests — filters by type and tags."""
+        """Simple query implementation for tests — filters by type, collection, and tags."""
+        # Collection filter: return only assets in the named collection
+        collection = match.get("collection")
+        if collection and collection in self._collections:
+            candidate_ids = self._collections[collection]
+        else:
+            candidate_ids = [
+                aid for aid, meta in self._assets.items()
+                if meta.type not in ("collection", "pool")
+            ]
+
         results = []
-        for asset_id, meta in self._assets.items():
-            if meta.type in ("collection", "pool"):
+        for asset_id in candidate_ids:
+            meta = self._assets.get(asset_id)
+            if meta is None:
                 continue
 
             # Filter: type
