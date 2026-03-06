@@ -20,13 +20,14 @@ import select
 import socket
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any, Callable, Literal, Optional, Protocol
 
 from .ts_ring_buffer import DEFAULT_RING_BUFFER_MAX_BYTES, TsRingBuffer
 
-# Config from env (bytes-based client buffer; default ~2–4 s at ~2.5 Mbit/s TS)
+# Config from env (bytes-based client buffer; default ~6 s at ~5 Mbit/s TS)
 def _client_buffer_bytes() -> int:
     val = os.environ.get("HTTP_CLIENT_BUFFER_BYTES")
     if val is not None:
@@ -34,7 +35,7 @@ def _client_buffer_bytes() -> int:
             return max(64 * 1024, int(val))
         except ValueError:
             pass
-    return 2_000_000
+    return 4_000_000
 
 
 def _ring_buffer_bytes() -> int:
@@ -56,7 +57,7 @@ class BytesBoundedQueue:
     def __init__(self, max_bytes: int) -> None:
         self._max_bytes = max(64 * 1024, max_bytes)
         self._lock = threading.Lock()
-        self._chunks: list[bytes] = []
+        self._chunks: deque[bytes] = deque()
         self._current_bytes = 0
         self._not_empty = threading.Condition(self._lock)
         self._closed = False
@@ -70,7 +71,7 @@ class BytesBoundedQueue:
             if self._closed:
                 return False
             while self._chunks and self._current_bytes + len(chunk) > self._max_bytes:
-                old = self._chunks.pop(0)
+                old = self._chunks.popleft()
                 self._current_bytes -= len(old)
                 had_eviction = True
             self._chunks.append(chunk)
@@ -91,9 +92,41 @@ class BytesBoundedQueue:
                 return None
             if not self._chunks:
                 raise Empty
-            chunk = self._chunks.pop(0)
+            chunk = self._chunks.popleft()
             self._current_bytes -= len(chunk)
             return chunk
+
+    def drain_many(self, max_bytes: int = 65536) -> Optional[bytes]:
+        """Drain up to max_bytes of queued data as a single consolidated buffer.
+
+        Returns None if closed, raises Empty if no data and timeout not applicable.
+        Reduces per-chunk overhead in the async HTTP drain path.
+        """
+        with self._not_empty:
+            while not self._closed and not self._chunks:
+                if not self._not_empty.wait(timeout=0.1):
+                    raise Empty
+            if self._closed:
+                return None
+            if not self._chunks:
+                raise Empty
+            # Check for EOF sentinel
+            if self._chunks[0] == b"":
+                self._chunks.popleft()
+                return b""
+            parts: list[bytes] = []
+            collected = 0
+            while self._chunks and collected < max_bytes:
+                chunk = self._chunks[0]
+                if chunk == b"":
+                    break  # EOF sentinel — leave it for next call
+                self._chunks.popleft()
+                self._current_bytes -= len(chunk)
+                parts.append(chunk)
+                collected += len(chunk)
+            if not parts:
+                raise Empty
+            return b"".join(parts) if len(parts) > 1 else parts[0]
 
     def close(self) -> None:
         with self._lock:
@@ -648,10 +681,6 @@ class ChannelStream:
                     # (AIR crashed or was restarted).  Reconnect via factory
                     # instead of exiting — the factory will resolve the
                     # current producer's socket queue dynamically.
-                    self._logger.info(
-                        "[HTTP] UPSTREAM_EOF channel=%s, attempting reconnect",
-                        self.channel_id,
-                    )
                     if self.ts_source:
                         try:
                             self.ts_source.close()
@@ -659,6 +688,13 @@ class ChannelStream:
                             pass
                         self.ts_source = None
                     self._first_chunk_logged = False
+                    # If stop was requested, exit cleanly instead of reconnecting.
+                    if self._stop_event.is_set():
+                        break
+                    self._logger.info(
+                        "[HTTP] UPSTREAM_EOF channel=%s, attempting reconnect",
+                        self.channel_id,
+                    )
                     continue  # next iteration enters _connect_with_backoff
                 self._ring_buffer.put(chunk)
                 t_after_put = time.monotonic_ns()
@@ -755,8 +791,8 @@ class ChannelStream:
                     if do_log:
                         qb = client_queue.current_bytes
                         qc = client_queue.current_chunk_count
-                        # Optional: ~2.5 Mbit/s TS -> ms ≈ bytes * 8 / 2.5e6 * 1000
-                        est_ms = int(qb * 8 / 2_500_000 * 1000) if qb else 0
+                        # AIR encodes at ~5 Mbit/s (H.264 VBV-constrained)
+                        est_ms = int(qb * 8 / 5_000_000 * 1000) if qb else 0
                         self._logger.warning(
                             "[HTTP] BACKPRESSURE client_queue_bytes=%d client_queue_chunks=%d "
                             "action=drop estimated_client_buffer_ms=%d client_id=%s",
@@ -959,15 +995,11 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
     """
     INV-IO-DRAIN-REALTIME: Async generator for live TS streaming.
 
-    This async version yields to the event loop between chunks to ensure:
-    - Non-blocking streaming
-    - Backpressure-aware draining
-    - Regular yielding to event loop
-    - Flush-friendly chunk cadence
-    - Clean disconnect semantics
+    Batch-drains up to 64 KB per executor call to reduce per-chunk overhead
+    and produce larger, more efficient TCP writes.
 
     Args:
-        client_queue: Queue receiving TS chunks from ChannelStream
+        client_queue: BytesBoundedQueue receiving TS chunks from ChannelStream
 
     Yields:
         TS data chunks (bytes)
@@ -975,28 +1007,25 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
     import asyncio
 
     consecutive_timeouts = 0
-    max_consecutive_timeouts = 20  # 10 seconds at 0.5s timeout
+    max_consecutive_timeouts = 100  # 10 seconds at 0.1s timeout
     loop = asyncio.get_event_loop()
 
     while True:
         try:
-            # Use run_in_executor to make the blocking get() async-friendly
-            chunk = await loop.run_in_executor(
+            batch = await loop.run_in_executor(
                 None,
-                lambda: client_queue.get(timeout=0.1)  # Short timeout for responsiveness
+                lambda: client_queue.drain_many(262144)
             )
             consecutive_timeouts = 0
-            if not chunk:  # EOF signal
+            if not batch:  # EOF signal (b"") or closed (None)
                 break
-            yield chunk
-            # Yield to event loop after each chunk for flush opportunity
+            yield batch
             await asyncio.sleep(0)
         except Empty:
             consecutive_timeouts += 1
-            if consecutive_timeouts >= max_consecutive_timeouts * 5:  # Adjusted for shorter timeout
+            if consecutive_timeouts >= max_consecutive_timeouts:
                 _logger.debug("generate_ts_stream_async exiting due to timeout")
                 break
-            # Yield to event loop even when queue is empty
             await asyncio.sleep(0.01)
             continue
         except GeneratorExit:

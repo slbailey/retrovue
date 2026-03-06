@@ -185,6 +185,11 @@ class DslScheduleService:
     def _run_loudness_measurement(self, asset_id: str, file_path: str) -> None:
         """Background task: measure loudness and persist to AssetProbed."""
         try:
+            import os
+            if not os.path.isfile(file_path):
+                self._demote_missing_asset(asset_id, file_path)
+                return
+
             from retrovue.adapters.enrichers.loudness_enricher import LoudnessEnricher
             enricher = LoudnessEnricher()
             # measure_loudness returns {"integrated_lufs", "gain_db", "target_lufs"}
@@ -239,6 +244,24 @@ class DslScheduleService:
         finally:
             with self._loudness_lock:
                 self._loudness_pending.discard(asset_id)
+
+    def _demote_missing_asset(self, asset_id: str, file_path: str) -> None:
+        """Demote an asset whose source file is missing from disk to 'new'."""
+        import uuid as uuid_mod
+        from retrovue.domain.entities import Asset
+
+        with session() as db:
+            asset = db.query(Asset).filter(
+                Asset.uuid == uuid_mod.UUID(asset_id),
+            ).first()
+            if asset is not None and asset.state == "ready":
+                asset.state = "new"
+                asset.approved_for_broadcast = False
+                db.commit()
+                logger.warning(
+                    "Asset %s demoted ready → new: source file missing: %s",
+                    asset_id, file_path,
+                )
 
     def _get_resolver(self) -> CatalogAssetResolver:
         """Return a cached CatalogAssetResolver, rebuilding if TTL expired.
@@ -1068,7 +1091,12 @@ class DslScheduleService:
             # INV-LOUDNESS-NORMALIZED-001: propagate per-asset loudness gain
             gain_db = meta.loudness_gain_db
             # Rule 5: enqueue background measurement for unmeasured assets
-            if gain_db == 0.0 and resolver.asset_needs_loudness_measurement(asset_id):
+            # Only measure locally-accessible files (absolute paths).
+            if (
+                gain_db == 0.0
+                and asset_uri.startswith("/")
+                and resolver.asset_needs_loudness_measurement(asset_id)
+            ):
                 self._enqueue_loudness_measurement(asset_id, asset_uri)
 
             # Expand into acts + ad breaks (empty filler placeholders — Tier 1 data).
