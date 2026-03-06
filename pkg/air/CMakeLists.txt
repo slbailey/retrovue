@@ -361,6 +361,18 @@ add_executable(contracts_playoutengine_tests
   # INV-P8-PRODUCER-CONTINUITY: Producer handoff continuity contract tests
   tests/contracts/ProducerContinuity/ProducerContinuityContractTests.cpp
   tests/contracts/test_inv_audio_pts_house_clock_001.cpp
+  # INV-MUX-GLOBAL-DTS-MONOTONIC: Mux interleaving contract tests
+  tests/contracts/MuxInterleavingContractTests.cpp
+  # INV-MUX-STARTUP-HOLDOFF: Startup interleave holdoff contract tests
+  tests/contracts/mux_startup_interleave_contract_tests.cpp
+  # INV-MUX-STARTUP-HOLDOFF: Holdoff contract tests (PipelineManager path)
+  tests/contracts/mux_startup_holdoff_contract_tests.cpp
+  # INV-MUX-CYCLE-FLUSH: Mux interleaver contract tests (cycle-flush)
+  tests/contracts/mux_interleaver_contract_tests.cpp
+  # INV-STREAM-JOINABLE: Stream bootstrap contract tests (SPS/PPS at IDR)
+  tests/contracts/stream_bootstrap_contract_tests.cpp
+  # INV-TS-TRANSPORT: TS transport integrity contract tests
+  tests/contracts/ts_transport_contract_tests.cpp
   tests/ContractRegistry.cpp
   tests/contracts/ContractRegistryEnvironment.cpp
   src/timing/TestMasterClock.cpp
