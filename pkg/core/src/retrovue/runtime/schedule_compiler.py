@@ -760,7 +760,11 @@ def _resolve_template_segments(
                 candidates = list(col_meta.tags)
 
             # Apply selection filters if declared
+            # INV-TEMPLATE-SELECTION-NORMALIZE-001: selection may be a single
+            # rule dict (YAML shorthand) or a list of rule dicts (canonical).
             selection = seg_def.get("selection", [])
+            if isinstance(selection, dict):
+                selection = [selection]
             for rule in selection:
                 if rule.get("type") == "tags":
                     # Tag filter: keep candidates whose asset_id contains
