@@ -55,6 +55,18 @@ def expand_program_block(
     Returns:
         ScheduledBlock with content and filler segments.
     """
+    # INV-TIME-TYPE-001: Fail fast on float contamination.
+    if not isinstance(slot_duration_ms, int):
+        raise TypeError(
+            f"INV-TIME-TYPE-001: slot_duration_ms must be int, "
+            f"got {type(slot_duration_ms).__name__}: {slot_duration_ms!r}"
+        )
+    if not isinstance(episode_duration_ms, int):
+        raise TypeError(
+            f"INV-TIME-TYPE-001: episode_duration_ms must be int, "
+            f"got {type(episode_duration_ms).__name__}: {episode_duration_ms!r}"
+        )
+
     if channel_type == "movie":
         return _expand_movie(
             asset_id=asset_id,

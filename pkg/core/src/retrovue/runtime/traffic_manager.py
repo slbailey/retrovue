@@ -48,6 +48,12 @@ def fill_ad_blocks(
     """
     if filler_duration_ms <= 0:
         raise ValueError("filler_duration_ms must be positive")
+    # INV-TIME-TYPE-001: Fail fast — upstream must pass int ms.
+    if not isinstance(filler_duration_ms, int):
+        raise TypeError(
+            f"INV-TIME-TYPE-001: filler_duration_ms must be int, "
+            f"got {type(filler_duration_ms).__name__}: {filler_duration_ms!r}"
+        )
 
     # INV-MOVIE-PRIMARY-ATOMIC: If block contains a primary segment,
     # no filler placeholder may appear before the primary segment ends.
@@ -131,6 +137,12 @@ def _fill_break_with_interstitials(
 
     Returns None if no interstitials were found (caller falls back to v1).
     """
+    # INV-TIME-TYPE-001: Fail fast — upstream must pass int ms.
+    if not isinstance(break_duration_ms, int):
+        raise TypeError(
+            f"INV-TIME-TYPE-001: break_duration_ms must be int, "
+            f"got {type(break_duration_ms).__name__}: {break_duration_ms!r}"
+        )
     remaining_ms = break_duration_ms
     picks: list[tuple[str, int, str]] = []  # (uri, duration_ms, asset_type)
 

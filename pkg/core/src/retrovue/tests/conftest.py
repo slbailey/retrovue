@@ -17,18 +17,21 @@ from sqlalchemy.orm import Session, sessionmaker
 from retrovue.infra.settings import settings
 
 
+_TEST_SCHEMA = "retrovue_test"
+
+
 @pytest.fixture(scope="session")
 def test_database_url() -> str:
     """
     Get the test database URL.
-    
-    Uses the same database as the application but with a test schema to avoid conflicts.
+
+    Uses the same database as the application but with a dedicated test schema
+    to avoid destroying production tables on teardown.
     """
-    # Use the same database but with a test schema
     base_url = settings.database_url
     if "?" in base_url:
         base_url = base_url.split("?")[0]
-    return f"{base_url}?options=-csearch_path=public"
+    return f"{base_url}?options=-csearch_path={_TEST_SCHEMA},public"
 
 
 @pytest.fixture(scope="session")
@@ -52,41 +55,34 @@ def test_session_factory(test_engine):
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database(test_engine, test_database_url):
     """
-    Set up the test database with Alembic migrations.
-    
-    This fixture runs once per test session and applies all Alembic migrations
-    to ensure the database schema is up to date.
+    Set up the test database with Alembic migrations in a dedicated test schema.
+
+    Uses _TEST_SCHEMA so that teardown never touches the production 'public' schema.
     """
-    
-    # Get the project root directory (where alembic.ini is located)
-    current_dir = os.getcwd()
-    if current_dir.endswith("src/retrovue"):
-        # We're in src/retrovue, go up to project root
-        project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
-    else:
-        # We're already in project root
-        project_root = current_dir
-    
+
+    # Resolve pkg/core root (where alembic.ini lives) regardless of cwd.
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.normpath(os.path.join(_this_dir, "..", "..", ".."))
+
     alembic_ini_path = os.path.join(project_root, "alembic.ini")
     alembic_dir_path = os.path.join(project_root, "alembic")
-    
-    # Create all tables using Alembic
+
+    # Create the test schema (idempotent)
+    with test_engine.connect() as conn:
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_TEST_SCHEMA}"))
+        conn.commit()
+
+    # Run Alembic migrations into the test schema
     alembic_cfg = Config(alembic_ini_path)
     alembic_cfg.set_main_option("sqlalchemy.url", test_database_url)
-    
-    # Ensure script_location is set correctly
     alembic_cfg.set_main_option("script_location", alembic_dir_path)
-    
-    # Run migrations to create/update schema
     command.upgrade(alembic_cfg, "head")
-    
+
     yield
-    
-    # Cleanup: Drop all tables after tests complete
+
+    # Teardown: drop ONLY the test schema — never touch public
     with test_engine.connect() as conn:
-        # Drop all tables in the public schema
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {_TEST_SCHEMA} CASCADE"))
         conn.commit()
 
 

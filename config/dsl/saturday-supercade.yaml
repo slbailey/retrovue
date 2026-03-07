@@ -29,7 +29,7 @@ pools:
   superman:
     match:
       type: episode
-      series_title: "The Superman+Aquaman Hour of Adventure"
+      series_title: "The Superman/Aquaman Hour of Adventure"
 
 schedule:
   all_day:

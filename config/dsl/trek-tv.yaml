@@ -9,19 +9,19 @@ pools:
   tng:
     match:
       type: episode
-      series_title: "Star Trek - The Next Generation"
+      series_title: "Star Trek: The Next Generation"
   ds9:
     match:
       type: episode
-      series_title: "Star Trek - Deep Space Nine"
+      series_title: "Star Trek: Deep Space Nine"
   voyager:
     match:
       type: episode
-      series_title: "Star Trek - Voyager"
+      series_title: "Star Trek: Voyager"
   snw:
     match:
       type: episode
-      series_title: "Star Trek - Strange New Worlds"
+      series_title: "Star Trek: Strange New Worlds"
 
 schedule:
   all_day:

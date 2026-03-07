@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RetroVue backup script
-# Backs up: SQLite database, config files, DSL schedules
+# Backs up: PostgreSQL database, SQLite legacy database, config files
 # Keeps last 7 daily backups, rotates automatically
 
 set -euo pipefail
@@ -12,18 +12,38 @@ BACKUP_NAME="retrovue_${TIMESTAMP}"
 BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
 KEEP_DAYS=7
 
+# PostgreSQL connection (matches pkg/core settings)
+PG_HOST="${PG_HOST:-192.168.1.50}"
+PG_PORT="${PG_PORT:-5432}"
+PG_DB="${PG_DB:-retrovue}"
+PG_USER="${PG_USER:-retrovue}"
+
 mkdir -p "${BACKUP_PATH}"
 
-# 1. SQLite backup (cp is safe for small DBs; use sqlite3 .backup for large/busy ones)
+# 1. PostgreSQL backup (primary database)
+if command -v pg_dump &>/dev/null; then
+    pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
+        --format=custom --compress=6 \
+        -f "${BACKUP_PATH}/retrovue_pg.dump" 2>/dev/null
+    if [ $? -eq 0 ] && [ -f "${BACKUP_PATH}/retrovue_pg.dump" ]; then
+        echo "✓ PostgreSQL backed up ($(du -h "${BACKUP_PATH}/retrovue_pg.dump" | cut -f1))"
+    else
+        echo "✗ PostgreSQL backup failed"
+    fi
+else
+    echo "✗ pg_dump not found — skipping PostgreSQL backup"
+fi
+
+# 2. SQLite backup (legacy database)
 DB_FILE="${RETROVUE_HOME}/data/retrovue.db"
 if [ -f "$DB_FILE" ]; then
     sqlite3 "$DB_FILE" ".backup ${BACKUP_PATH}/retrovue.db"
-    echo "✓ Database backed up ($(du -h "${BACKUP_PATH}/retrovue.db" | cut -f1))"
+    echo "✓ SQLite backed up ($(du -h "${BACKUP_PATH}/retrovue.db" | cut -f1))"
 else
-    echo "✗ Database not found: ${DB_FILE}"
+    echo "- SQLite not found (legacy): ${DB_FILE}"
 fi
 
-# 2. Config files
+# 3. Config files
 cp -r "${RETROVUE_HOME}/config" "${BACKUP_PATH}/config"
 echo "✓ Config backed up"
 

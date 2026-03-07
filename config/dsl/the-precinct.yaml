@@ -17,7 +17,7 @@ pools:
   csi:
     match:
       type: episode
-      series_title: "CSI - NY"
+      series_title: "CSI: NY"
   person:
     match:
       type: episode

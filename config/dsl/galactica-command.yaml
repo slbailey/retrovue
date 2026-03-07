@@ -9,11 +9,11 @@ pools:
   bsg_classic:
     match:
       type: episode
-      series_title: "Battlestar Galactica (1978)"
+      series_title: "Battlestar Galactica"
   bsg_new:
     match:
       type: episode
-      series_title: "Battlestar Galactica (2003)"
+      series_title: "Battlestar Galactica"
 
 schedule:
   all_day:
