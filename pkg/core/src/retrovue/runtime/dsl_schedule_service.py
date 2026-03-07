@@ -91,12 +91,12 @@ def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
             ScheduledSegment(
                 segment_type=s["segment_type"],
                 asset_uri=s.get("asset_uri", ""),
-                asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
-                segment_duration_ms=s.get("segment_duration_ms", 0),
+                asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
+                segment_duration_ms=int(s.get("segment_duration_ms", 0)),
                 transition_in=s.get("transition_in", "TRANSITION_NONE"),
-                transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
                 transition_out=s.get("transition_out", "TRANSITION_NONE"),
-                transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
                 gain_db=s.get("gain_db", 0.0),
                 is_primary=s.get("is_primary", False),
             )
@@ -363,12 +363,12 @@ class DslScheduleService:
                         segments.append(ScheduledSegment(
                             segment_type=s.get("segment_type", "content"),
                             asset_uri=s.get("asset_uri", ""),
-                            asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
-                            segment_duration_ms=s.get("segment_duration_ms", 0),
+                            asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
+                            segment_duration_ms=int(s.get("segment_duration_ms", 0)),
                             transition_in=s.get("transition_in", "TRANSITION_NONE"),
-                            transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                            transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
                             transition_out=s.get("transition_out", "TRANSITION_NONE"),
-                            transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                            transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
                             gain_db=s.get("gain_db", 0.0),
                         ))
                     logger.debug(
@@ -508,12 +508,12 @@ class DslScheduleService:
                     segments.append(ScheduledSegment(
                         segment_type=s.get("segment_type", "content"),
                         asset_uri=s.get("asset_uri", ""),
-                        asset_start_offset_ms=s.get("asset_start_offset_ms", 0),
-                        segment_duration_ms=s.get("segment_duration_ms", 0),
+                        asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
+                        segment_duration_ms=int(s.get("segment_duration_ms", 0)),
                         transition_in=s.get("transition_in", "TRANSITION_NONE"),
-                        transition_in_duration_ms=s.get("transition_in_duration_ms", 0),
+                        transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
                         transition_out=s.get("transition_out", "TRANSITION_NONE"),
-                        transition_out_duration_ms=s.get("transition_out_duration_ms", 0),
+                        transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
                         gain_db=s.get("gain_db", 0.0),
                     ))
 

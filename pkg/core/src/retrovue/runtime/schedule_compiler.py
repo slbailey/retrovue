@@ -806,7 +806,7 @@ def _resolve_template_segments(
             "asset_id": asset_id,
             "asset_uri": asset_meta.file_uri or "",
             "asset_start_offset_ms": 0,
-            "segment_duration_ms": asset_meta.duration_sec * 1000,
+            "segment_duration_ms": int(asset_meta.duration_sec * 1000),
             "source_type": source_type,
             "source_name": source_name,
             "is_primary": is_primary,

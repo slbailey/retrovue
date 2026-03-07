@@ -14,7 +14,7 @@ import subprocess
 import typer
 from src_legacy.retrovue.content_manager.library_service import LibraryService
 
-from retrovue.web.server import run_server
+# run_server removed — ProgramDirector now owns the HTTP server
 
 from ..domain.entities import EntityType, ProviderRef
 from ..infra.uow import session
@@ -260,11 +260,8 @@ def play(
     # Create active streams dict for the server
     active_streams = {str(channel_id): {"path": str(src_path)}}
 
-    try:
-        # Start the IPTV server with the resolved asset
-        run_server(port=port, active_streams=active_streams, debug=debug)
-    except KeyboardInterrupt:
-        typer.echo("\nShutting down...")
+    typer.echo("[legacy] run_server removed — use 'retrovue program-director start' instead")
+    raise typer.Exit(code=1)
 
 
 def play_channel(
@@ -297,11 +294,8 @@ def play_channel(
         else:
             typer.echo(f"Port {port} is available")
 
-    try:
-        # Start the IPTV server
-        run_server(port=port)
-    except KeyboardInterrupt:
-        typer.echo("\nShutting down...")
+    typer.echo("[legacy] run_server removed — use 'retrovue program-director start' instead")
+    raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

@@ -482,6 +482,12 @@ class ProgramDirector:
         self.fastapi_app = FastAPI(title="RetroVue ProgramDirector")
         self._server: Optional[Server] = None
         self._server_thread: Optional[Thread] = None
+
+        # INV-VIEWER-LIFECYCLE-002: Cached event loop for ChannelManager
+        # linger timers. Set by _start_http_server's uvicorn thread once
+        # the asyncio loop is running. Without this, linger always SKIPs
+        # and every last-viewer disconnect immediately kills AIR.
+        self._asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
         
         # Phase 0: System mode
         self._system_mode = SystemMode.NORMAL
@@ -517,6 +523,13 @@ class ProgramDirector:
 
         # Register HTTP endpoints
         self._register_endpoints()
+
+        # INV-VIEWER-LIFECYCLE-002: Capture the asyncio event loop from
+        # uvicorn's thread so ChannelManager linger timers can schedule
+        # call_later on it.
+        @self.fastapi_app.on_event("startup")
+        async def _capture_event_loop():
+            self._asyncio_loop = asyncio.get_running_loop()
         
         self._logger.debug(
             "ProgramDirector initialized with target_hz=%s clock=%s host=%s port=%s",
@@ -1003,10 +1016,9 @@ class ProgramDirector:
             # INV-VIEWER-LIFECYCLE-002: Pass event loop so linger grace
             # period works.  Without it, every last-viewer disconnect
             # immediately kills AIR (LINGER_SKIP).
-            try:
-                _loop = asyncio.get_running_loop()
-            except RuntimeError:
-                _loop = None
+            # NOTE: get_running_loop() fails when called from an executor
+            # thread. Use the loop cached on ProgramDirector instead.
+            _loop = self._asyncio_loop
             manager = ChannelManager(
                 channel_id=channel_id,
                 clock=self._embedded_clock,
@@ -2540,6 +2552,41 @@ class ProgramDirector:
             """Serve the EPG HTML page."""
             html_path = Path("/opt/retrovue/pkg/core/templates") / "epg" / "guide.html"
             return HTMLResponse(content=html_path.read_text())
+
+        # --- IPTV Discovery Endpoints ---
+
+        @self.fastapi_app.get("/iptv/channels.m3u")
+        def get_m3u_playlist(request: Request) -> Response:
+            """Multi-channel M3U playlist for IPTV clients (Plex, Jellyfin, VLC)."""
+            from retrovue.web.iptv import generate_m3u
+
+            channels = self._load_channels_list()
+            base_url = str(request.base_url).rstrip("/")
+            m3u = generate_m3u(channels, base_url=base_url)
+            return Response(content=m3u, media_type="audio/x-mpegurl")
+
+        @self.fastapi_app.get("/iptv/guide.xml")
+        def get_xmltv_guide(
+            date: Optional[str] = None,
+        ) -> Response:
+            """XMLTV electronic program guide for IPTV clients.
+
+            Plain def (not async) to avoid blocking the event loop during
+            schedule compilation (INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001).
+            Reuses the same EPG compilation path as /api/epg.
+            """
+            from retrovue.web.iptv import generate_xmltv
+
+            # Build EPG entries using the same logic as get_epg_all
+            epg_result = get_epg_all(date=date)
+            channels = self._load_channels_list()
+            entries = [e for e in epg_result.get("entries", []) if "error" not in e]
+
+            xml_str = generate_xmltv(channels, entries)
+            return Response(
+                content='<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str,
+                media_type="application/xml",
+            )
 
     def _start_http_server(self) -> None:
         """Start the HTTP server in a background thread."""
