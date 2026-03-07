@@ -1216,8 +1216,12 @@ class ChannelManager:
                 duration,
                 reason,
             )
-            if producer:
-                producer.stop()
+
+        # INV-TEARDOWN-AIR-REAP-001: Always stop the producer before dropping
+        # the reference, regardless of graceful vs timeout completion.
+        # Without this, the AIR subprocess is orphaned as a zombie.
+        if producer:
+            producer.stop()
 
         self.active_producer = None
         self.runtime_state.producer_status = "stopped"

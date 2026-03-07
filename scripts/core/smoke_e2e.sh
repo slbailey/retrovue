@@ -68,8 +68,8 @@ start_server() {
         exit 1
     fi
     
-    # Start server in background
-    python run_server.py --port "$SERVER_PORT" &
+    # Start ProgramDirector HTTP server in background
+    retrovue program-director start --http-port "$SERVER_PORT" &
     SERVER_PID=$!
     
     # Wait for server to start (give it 5 seconds)
@@ -216,45 +216,40 @@ test_hex_sync() {
 import sys
 import os
 
-# Add src to path
-sys.path.insert(0, 'src')
-
-from retrovue.web.server import analyze_ts_cadence
-
 def main():
     input_file = sys.argv[1]
-    
+
     if not os.path.exists(input_file):
         print("❌ Input file not found: " + input_file)
         sys.exit(1)
-    
+
     with open(input_file, 'rb') as f:
-        data = f.read(4096)  # Read first 4KB for analysis
-    
+        data = f.read(4096)
+
     if len(data) < 16:
         print("❌ Insufficient data for analysis")
         sys.exit(1)
-    
-    # Perform cadence analysis
-    result = analyze_ts_cadence(data)
-    
+
+    # Inline TS cadence analysis (0x47 sync byte at 188-byte intervals)
+    sync_positions = [i for i, b in enumerate(data) if b == 0x47][:10]
+    if len(sync_positions) < 2:
+        print("❌ Hex sync check failed: insufficient sync bytes")
+        sys.exit(1)
+
+    intervals = [sync_positions[i+1] - sync_positions[i] for i in range(len(sync_positions)-1)]
+    valid = all(iv == 188 for iv in intervals)
+
     print("🔍 Hex Sync Analysis:")
-    print(f"  Valid: {result['valid']}")
-    print(f"  Sync bytes found: {result['sync_count']}")
-    
-    if 'intervals' in result:
-        print(f"  Intervals: {result['intervals']}")
-        print(f"  Expected interval: {result['expected_interval']}")
-    
-    if 'first_sync_position' in result and result['first_sync_position'] is not None:
-        print(f"  First sync at position: {result['first_sync_position']}")
-    
-    if not result['valid']:
+    print(f"  Valid: {valid}")
+    print(f"  Sync bytes found: {len(sync_positions)}")
+    print(f"  Intervals: {intervals}")
+    print(f"  First sync at position: {sync_positions[0]}")
+
+    if not valid:
         print("❌ Hex sync check failed")
         sys.exit(1)
     else:
         print("✅ Hex sync check passed")
-        sys.exit(0)
 
 if __name__ == "__main__":
     main()

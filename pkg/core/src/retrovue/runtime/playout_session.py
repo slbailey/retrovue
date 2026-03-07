@@ -141,16 +141,19 @@ class BlockPlan:
         )
         for seg in self.segments:
             seg_type = seg.get("segment_type", "content")
+            # INV-BLOCKPLAN-PROTO-INT-001: Coerce ms fields to int.
+            # Schedule compilation may produce floats (duration_sec * 1000)
+            # and JSON deserialization preserves them. Protobuf int64 rejects floats.
             kwargs = dict(
-                segment_index=seg["segment_index"],
-                segment_duration_ms=seg["segment_duration_ms"],
+                segment_index=int(seg["segment_index"]),
+                segment_duration_ms=int(seg["segment_duration_ms"]),
             )
             if seg_type == "pad":
                 kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_PAD
                 # PAD segments have no asset_uri or asset_start_offset_ms
             else:
                 kwargs["asset_uri"] = seg["asset_uri"]
-                kwargs["asset_start_offset_ms"] = seg.get("asset_start_offset_ms", 0)
+                kwargs["asset_start_offset_ms"] = int(seg.get("asset_start_offset_ms", 0))
                 if seg_type == "filler":
                     kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_FILLER
                 # else: CONTENT (proto default 0)
@@ -161,10 +164,10 @@ class BlockPlan:
             t_out = seg.get("transition_out", "TRANSITION_NONE")
             if t_in == "TRANSITION_FADE":
                 kwargs["transition_in"] = playout_pb2.TRANSITION_FADE
-                kwargs["transition_in_duration_ms"] = seg.get("transition_in_duration_ms", 0)
+                kwargs["transition_in_duration_ms"] = int(seg.get("transition_in_duration_ms", 0))
             if t_out == "TRANSITION_FADE":
                 kwargs["transition_out"] = playout_pb2.TRANSITION_FADE
-                kwargs["transition_out_duration_ms"] = seg.get("transition_out_duration_ms", 0)
+                kwargs["transition_out_duration_ms"] = int(seg.get("transition_out_duration_ms", 0))
             # INV-LOUDNESS-NORMALIZED-001: per-asset loudness normalization gain
             gain_db = seg.get("gain_db", 0.0)
             if gain_db != 0.0:

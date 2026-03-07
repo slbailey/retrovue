@@ -82,8 +82,8 @@ def _hydrate_compiled_segments(
         segments.append(ScheduledSegment(
             segment_type=cs["segment_type"],
             asset_uri=cs["asset_uri"],
-            asset_start_offset_ms=cs.get("asset_start_offset_ms", 0),
-            segment_duration_ms=cs["segment_duration_ms"],
+            asset_start_offset_ms=int(cs.get("asset_start_offset_ms", 0)),
+            segment_duration_ms=int(cs["segment_duration_ms"]),
             gain_db=cs.get("gain_db", 0.0),
             is_primary=cs.get("is_primary", False),
         ))
