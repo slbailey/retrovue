@@ -113,12 +113,27 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BlockPlan:
-    """Python representation of a BlockPlan for the executor."""
+    """Python representation of a BlockPlan for the executor.
+
+    INV-TIME-TYPE-001: All ms fields enforced as int at construction.
+    """
     block_id: str
     channel_id: int
     start_utc_ms: int
     end_utc_ms: int
     segments: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not isinstance(self.start_utc_ms, int):
+            raise TypeError(
+                f"INV-TIME-TYPE-001: BlockPlan.start_utc_ms must be int, "
+                f"got {type(self.start_utc_ms).__name__}: {self.start_utc_ms!r}"
+            )
+        if not isinstance(self.end_utc_ms, int):
+            raise TypeError(
+                f"INV-TIME-TYPE-001: BlockPlan.end_utc_ms must be int, "
+                f"got {type(self.end_utc_ms).__name__}: {self.end_utc_ms!r}"
+            )
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "BlockPlan":
@@ -126,8 +141,8 @@ class BlockPlan:
         return cls(
             block_id=d["block_id"],
             channel_id=d["channel_id"],
-            start_utc_ms=d["start_utc_ms"],
-            end_utc_ms=d["end_utc_ms"],
+            start_utc_ms=int(d["start_utc_ms"]),
+            end_utc_ms=int(d["end_utc_ms"]),
             segments=d.get("segments", []),
         )
 

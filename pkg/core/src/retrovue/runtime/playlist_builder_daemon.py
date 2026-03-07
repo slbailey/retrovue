@@ -273,6 +273,13 @@ class PlaylistBuilderDaemon:
                 )
             return count
         except Exception as e:
+            # INV-DAEMON-SESSION-RECOVERY-001: rollback poisoned transaction
+            # so subsequent queries on the shared session can proceed.
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             logger.warning(
                 "INV-SCHEDULE-RETENTION-001: Tier 2 purge failed for channel=%s: %s",
                 self._channel_id, e,
@@ -376,6 +383,12 @@ class PlaylistBuilderDaemon:
 
                 except Exception as e:
                     self._fill_errors += 1
+                    # INV-DAEMON-SESSION-RECOVERY-001: rollback so next block can proceed
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
                     logger.error(
                         "PlaylistBuilder[%s]: failed to fill block=%s: %s",
                         self._channel_id, block_id, e,
@@ -442,6 +455,11 @@ class PlaylistBuilderDaemon:
             return 1
         except Exception as e:
             self._fill_errors += 1
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             logger.error(
                 "PlaylistBuilder[%s]: backfill failed for block=%s: %s",
                 self._channel_id, block_id, e,
@@ -471,9 +489,14 @@ class PlaylistBuilderDaemon:
             if db is not None:
                 return _query(db)
             from retrovue.infra.uow import session as db_session_factory
-            with db_session_factory() as db:
-                return _query(db)
+            with db_session_factory() as s:
+                return _query(s)
         except Exception:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             return False
 
     def _get_tier1_block_containing(self, now_ms: int, *, db=None) -> dict | None:
@@ -514,9 +537,14 @@ class PlaylistBuilderDaemon:
             if db is not None:
                 return _query(db)
             from retrovue.infra.uow import session as db_session_factory
-            with db_session_factory() as db:
-                return _query(db)
+            with db_session_factory() as s:
+                return _query(s)
         except Exception as e:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             logger.error(
                 "PlaylistBuilder[%s]: DB error loading Tier 1 for %s: %s",
                 self._channel_id, broadcast_day.isoformat(), e,
@@ -562,9 +590,14 @@ class PlaylistBuilderDaemon:
             if db is not None:
                 return _query(db)
             from retrovue.infra.uow import session as db_session_factory
-            with db_session_factory() as db:
-                return _query(db)
+            with db_session_factory() as s:
+                return _query(s)
         except Exception:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             return set()
 
     def _get_asset_library(self, *, db=None):
@@ -578,9 +611,14 @@ class PlaylistBuilderDaemon:
             if db is not None:
                 return DatabaseAssetLibrary(db, channel_slug=self._channel_id)
             from retrovue.infra.uow import session as db_session_factory
-            with db_session_factory() as db:
-                return DatabaseAssetLibrary(db, channel_slug=self._channel_id)
+            with db_session_factory() as s:
+                return DatabaseAssetLibrary(s, channel_slug=self._channel_id)
         except Exception as e:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             logger.warning(
                 "PlaylistBuilder[%s]: Could not create asset library: %s",
                 self._channel_id, e,
@@ -664,6 +702,11 @@ class PlaylistBuilderDaemon:
                     )
                     db.merge(row)
         except Exception as e:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             logger.error(
                 "PlaylistBuilder[%s]: Failed to write block=%s to PlaylistEvent: %s",
                 self._channel_id, block.block_id, e,
@@ -692,9 +735,14 @@ class PlaylistBuilderDaemon:
             if db is not None:
                 return _query(db)
             from retrovue.infra.uow import session as db_session_factory
-            with db_session_factory() as db:
-                return _query(db)
+            with db_session_factory() as s:
+                return _query(s)
         except Exception:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             return 0
 
     def _count_blocks_in_window(self, now_ms: int) -> int:

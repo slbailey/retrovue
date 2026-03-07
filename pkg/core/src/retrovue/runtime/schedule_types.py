@@ -605,12 +605,33 @@ class ScheduleManagerConfig:
 # =============================================================================
 
 
+def _enforce_int_ms(value: object, field_name: str) -> None:
+    """INV-TIME-TYPE-001: Reject non-int millisecond values at construction.
+
+    All durations and timestamps in the playout pipeline MUST be integer
+    milliseconds.  Float contamination (e.g. duration_sec * 1000) causes
+    downstream failures: range(float), protobuf int64 rejection, and
+    sub-millisecond drift in deterministic scheduling math.
+
+    Fail fast here — not deep in traffic fill or proto serialization.
+    """
+    if not isinstance(value, int):
+        raise TypeError(
+            f"INV-TIME-TYPE-001: {field_name} must be int, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+
+
 @dataclass(frozen=True)
 class ScheduledSegment:
     """One segment within a ScheduledBlock. Immutable.
 
     Produced by the schedule/planning layer.
     Consumed (read-only) by the execution layer.
+
+    INV-TIME-TYPE-001: All ms fields are enforced as int at construction.
+    Float contamination from `duration_sec * 1000` arithmetic is rejected
+    here — not deep in traffic fill or proto serialization.
     """
     segment_type: str           # "content", "filler", "padding", "episode", "pad"
     asset_uri: str              # File path for playback
@@ -628,6 +649,13 @@ class ScheduledSegment:
     # INV-MOVIE-PRIMARY-ATOMIC: Primary content segment (must never be split)
     is_primary: bool = False
 
+    def __post_init__(self):
+        # INV-TIME-TYPE-001: Hard type enforcement at construction boundary.
+        _enforce_int_ms(self.segment_duration_ms, "ScheduledSegment.segment_duration_ms")
+        _enforce_int_ms(self.asset_start_offset_ms, "ScheduledSegment.asset_start_offset_ms")
+        _enforce_int_ms(self.transition_in_duration_ms, "ScheduledSegment.transition_in_duration_ms")
+        _enforce_int_ms(self.transition_out_duration_ms, "ScheduledSegment.transition_out_duration_ms")
+
 
 @dataclass(frozen=True)
 class ScheduledBlock:
@@ -638,11 +666,16 @@ class ScheduledBlock:
 
     INV-EXEC-NO-STRUCTURE-001: Execution SHALL NOT define block duration.
     INV-EXEC-NO-BOUNDARY-001: Execution MAY NOT compute block boundaries.
+    INV-TIME-TYPE-001: Timestamp fields enforced as int at construction.
     """
     block_id: str
     start_utc_ms: int
     end_utc_ms: int
     segments: tuple[ScheduledSegment, ...]  # tuple for true immutability
+
+    def __post_init__(self):
+        _enforce_int_ms(self.start_utc_ms, "ScheduledBlock.start_utc_ms")
+        _enforce_int_ms(self.end_utc_ms, "ScheduledBlock.end_utc_ms")
 
     @property
     def duration_ms(self) -> int:

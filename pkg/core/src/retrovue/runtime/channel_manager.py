@@ -2514,6 +2514,10 @@ class BlockPlanProducer(Producer):
         BlockStarted = queue slot consumed → credit += 1.
         This is the preferred credit signal; BlockCompleted is fallback.
         Also triggers SEEDED→RUNNING transition (earlier than BlockCompleted).
+
+        INV-CALLBACK-EXCEPTION-SAFETY-001: Exceptions in _feed_ahead MUST NOT
+        propagate to the event loop.  Credit bookkeeping completes before the
+        feed attempt so the session remains viable even on transient failures.
         """
         with self._lock:
             if self._session_ended or not self._started:
@@ -2534,7 +2538,15 @@ class BlockPlanProducer(Producer):
                     block_id, self._compute_runway_ms(),
                 )
 
-            self._feed_ahead()
+            try:
+                self._feed_ahead()
+            except Exception as exc:
+                self._logger.error(
+                    "INV-CALLBACK-EXCEPTION-SAFETY-001: _feed_ahead failed "
+                    "in on_block_started(%s): %s — credits preserved, "
+                    "retry on next tick/event",
+                    block_id, exc,
+                )
 
     def _on_block_complete(self, block_id: str):
         """
@@ -2603,7 +2615,15 @@ class BlockPlanProducer(Producer):
             self._error_backoff_remaining = 0
 
             # Proactive feed-ahead (replaces direct _try_feed_block)
-            self._feed_ahead()
+            try:
+                self._feed_ahead()
+            except Exception as exc:
+                self._logger.error(
+                    "INV-CALLBACK-EXCEPTION-SAFETY-001: _feed_ahead failed "
+                    "in on_block_complete(%s): %s — credits preserved, "
+                    "retry on next tick/event",
+                    block_id, exc,
+                )
 
     def _on_session_end(self, reason: str):
         """
