@@ -18,6 +18,7 @@ import pytest
 from retrovue.runtime.playout_log_expander import expand_program_block
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 from retrovue.runtime.traffic_manager import fill_ad_blocks
+from retrovue.runtime.traffic_policy import PlayRecord, TrafficPolicy
 
 # ─────────────────────────────────────────────────────────────────────
 # Fixtures / helpers
@@ -442,6 +443,166 @@ class TestEvidenceServerSegmentLookup:
 # ─────────────────────────────────────────────────────────────────────
 # Test 6: Cooldowns evaluated at fill time, not compile time
 # ─────────────────────────────────────────────────────────────────────
+
+
+class TestTrafficPolicyIntegration:
+    """fill_ad_blocks uses TrafficPolicy when provided."""
+
+    def test_cooldown_excludes_asset(self):
+        """Asset in cooldown is skipped; next eligible asset is selected."""
+        block = _make_block_with_empty_fillers(break_duration_ms=30_000)
+
+        mock_lib = MagicMock()
+        mock_lib.get_filler_assets.return_value = [
+            _make_filler_asset("/ads/ad1.mp4", 30_000, "commercial"),
+            _make_filler_asset("/ads/ad2.mp4", 30_000, "commercial"),
+        ]
+
+        policy = TrafficPolicy(
+            allowed_types=["commercial"],
+            default_cooldown_ms=3_600_000,
+        )
+        now_ms = 10_000_000_000
+        day_start_ms = 9_900_000_000
+        # ad1 played 100s ago — still in 1hr cooldown
+        play_history = [
+            PlayRecord(asset_id="/ads/ad1.mp4", asset_type="commercial",
+                       played_at_ms=now_ms - 100_000),
+        ]
+
+        filled = fill_ad_blocks(
+            block, "/ads/filler.mp4", 30_000,
+            asset_library=mock_lib,
+            policy=policy,
+            play_history=play_history,
+            now_ms=now_ms,
+            day_start_ms=day_start_ms,
+        )
+
+        uris = [s.asset_uri for s in filled.segments
+                if s.asset_uri and s.segment_type not in ("content", "pad")]
+        assert "/ads/ad1.mp4" not in uris, "Cooled-down asset must not be selected"
+        assert "/ads/ad2.mp4" in uris, "Eligible asset must be selected"
+
+    def test_disallowed_type_excluded(self):
+        """Asset with disallowed type is not selected."""
+        block = _make_block_with_empty_fillers(break_duration_ms=30_000)
+
+        mock_lib = MagicMock()
+        mock_lib.get_filler_assets.return_value = [
+            _make_filler_asset("/ads/promo1.mp4", 30_000, "promo"),
+        ]
+
+        policy = TrafficPolicy(
+            allowed_types=["commercial"],  # promo not allowed
+            default_cooldown_ms=0,
+        )
+
+        filled = fill_ad_blocks(
+            block, "/ads/filler.mp4", 30_000,
+            asset_library=mock_lib,
+            policy=policy,
+            play_history=[],
+            now_ms=10_000_000_000,
+            day_start_ms=9_900_000_000,
+        )
+
+        # promo excluded by type → no interstitials → falls back to static filler
+        uris = [s.asset_uri for s in filled.segments
+                if s.segment_type == "filler"]
+        assert all(u == "/ads/filler.mp4" for u in uris), (
+            "Disallowed type must not be selected; should fall back to static filler"
+        )
+
+    def test_rotation_across_breaks(self):
+        """Within a block, policy rotates assets across multiple breaks."""
+        block = _make_block_with_empty_fillers(
+            break_duration_ms=30_000, num_breaks=2,
+        )
+
+        mock_lib = MagicMock()
+        mock_lib.get_filler_assets.return_value = [
+            _make_filler_asset("/ads/ad1.mp4", 30_000, "commercial"),
+            _make_filler_asset("/ads/ad2.mp4", 30_000, "commercial"),
+        ]
+
+        policy = TrafficPolicy(
+            allowed_types=["commercial"],
+            default_cooldown_ms=0,
+        )
+
+        filled = fill_ad_blocks(
+            block, "/ads/filler.mp4", 30_000,
+            asset_library=mock_lib,
+            policy=policy,
+            play_history=[],
+            now_ms=10_000_000_000,
+            day_start_ms=9_900_000_000,
+        )
+
+        picked_uris = [s.asset_uri for s in filled.segments
+                       if s.asset_uri and s.segment_type not in ("content", "pad")]
+        assert len(picked_uris) == 2
+        # Rotation should pick both, not the same one twice
+        assert len(set(picked_uris)) == 2, (
+            f"Policy rotation must select different assets across breaks, got {picked_uris}"
+        )
+
+    def test_select_next_none_stops_filling(self):
+        """When select_next returns None, break filling stops without error."""
+        block = _make_block_with_empty_fillers(break_duration_ms=60_000)
+
+        mock_lib = MagicMock()
+        mock_lib.get_filler_assets.return_value = [
+            _make_filler_asset("/ads/ad1.mp4", 30_000, "commercial"),
+        ]
+
+        policy = TrafficPolicy(
+            allowed_types=["commercial"],
+            default_cooldown_ms=3_600_000,
+        )
+        now_ms = 10_000_000_000
+        # ad1 in cooldown — select_next will return None
+        play_history = [
+            PlayRecord(asset_id="/ads/ad1.mp4", asset_type="commercial",
+                       played_at_ms=now_ms - 100_000),
+        ]
+
+        filled = fill_ad_blocks(
+            block, "/ads/filler.mp4", 60_000,
+            asset_library=mock_lib,
+            policy=policy,
+            play_history=play_history,
+            now_ms=now_ms,
+            day_start_ms=9_900_000_000,
+        )
+
+        # All candidates rejected → falls back to static filler
+        filler_segs = [s for s in filled.segments if s.segment_type == "filler"]
+        assert all(s.asset_uri == "/ads/filler.mp4" for s in filler_segs), (
+            "When policy rejects all candidates, must fall back to static filler"
+        )
+
+    def test_no_policy_preserves_old_behavior(self):
+        """Without policy parameter, candidates[0] selection is preserved."""
+        block = _make_block_with_empty_fillers(break_duration_ms=30_000)
+
+        mock_lib = MagicMock()
+        mock_lib.get_filler_assets.return_value = [
+            _make_filler_asset("/ads/ad1.mp4", 30_000, "commercial"),
+            _make_filler_asset("/ads/ad2.mp4", 30_000, "commercial"),
+        ]
+
+        # No policy parameter — old behavior
+        filled = fill_ad_blocks(
+            block, "/ads/filler.mp4", 30_000,
+            asset_library=mock_lib,
+        )
+
+        uris = [s.asset_uri for s in filled.segments
+                if s.asset_uri and s.segment_type not in ("content", "pad")]
+        # First candidate should be selected (old candidates[0] behavior)
+        assert "/ads/ad1.mp4" in uris
 
 
 class TestCooldownAtFillTime:

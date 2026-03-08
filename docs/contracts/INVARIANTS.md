@@ -92,6 +92,35 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | [invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md](invariants/core/execution-boundary/INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-SWITCH-BOUNDARY-TIMING | [invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md](invariants/core/execution-boundary/INV-SWITCH-BOUNDARY-TIMING.md) | — |
 
+### Scheduling — Break Detection
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-BREAK-001 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAK-002 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+| INV-BREAK-003 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-BREAK-004 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAK-005 | [break_detection.md](break_detection.md) | LAW-GRID, LAW-DERIVATION |
+| INV-BREAK-006 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAK-007 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+| INV-BREAK-008 | [break_detection.md](break_detection.md) | LAW-DERIVATION |
+| INV-BREAK-009 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+| INV-BREAK-010 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+| INV-BREAK-011 | [break_detection.md](break_detection.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+
+### Scheduling — Traffic Policy
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TRAFFIC-ALLOWED-TYPE-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+| INV-TRAFFIC-COOLDOWN-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY |
+| INV-TRAFFIC-DAILY-CAP-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY |
+| INV-TRAFFIC-ROTATION-001 | [traffic_policy.md](traffic_policy.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TRAFFIC-FILTER-ORDER-001 | [traffic_policy.md](traffic_policy.md) | LAW-DERIVATION |
+| INV-TRAFFIC-PURE-001 | [traffic_policy.md](traffic_policy.md) | LAW-DERIVATION |
+| INV-TRAFFIC-EMPTY-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY |
+| INV-TRAFFIC-NONE-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+
 ### Scheduling — Schedule Lifecycle
 
 | Invariant | File | Derived From |

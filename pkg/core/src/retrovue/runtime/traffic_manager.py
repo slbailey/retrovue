@@ -16,6 +16,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+from retrovue.runtime.traffic_policy import (
+    PlayRecord,
+    TrafficCandidate,
+    TrafficPolicy,
+    select_next,
+)
 
 if TYPE_CHECKING:
     from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
@@ -26,13 +32,20 @@ def fill_ad_blocks(
     filler_uri: str,
     filler_duration_ms: int,
     asset_library: DatabaseAssetLibrary | None = None,
+    policy: TrafficPolicy | None = None,
+    play_history: list[PlayRecord] | None = None,
+    now_ms: int = 0,
+    day_start_ms: int = 0,
 ) -> ScheduledBlock:
     """
     Fill all empty filler placeholders in a ScheduledBlock.
 
     If asset_library is provided, selects real interstitials (commercials,
-    promos, etc.) from the database, respecting channel policy. Any
-    leftover time is distributed as evenly-spaced black pads between spots.
+    promos, etc.) from the database. When a TrafficPolicy is also provided,
+    selection uses the traffic policy engine (cooldowns, caps, rotation).
+    Otherwise falls back to candidates[0] (legacy behavior).
+
+    Any leftover time is distributed as evenly-spaced black pads between spots.
 
     If asset_library is None or returns no candidates, falls back to
     the static filler file (v1 behavior).
@@ -42,6 +55,10 @@ def fill_ad_blocks(
         filler_uri: Path to the fallback filler video file.
         filler_duration_ms: Total duration of the fallback filler file in ms.
         asset_library: Optional DatabaseAssetLibrary for real interstitial selection.
+        policy: Optional TrafficPolicy for policy-driven selection.
+        play_history: Play records for cooldown/cap evaluation. Caller-owned.
+        now_ms: Current timestamp in ms for cooldown evaluation.
+        day_start_ms: Channel traffic day start in ms for daily cap evaluation.
 
     Returns:
         New ScheduledBlock with filled segments.
@@ -62,12 +79,20 @@ def fill_ad_blocks(
     new_segments: list[ScheduledSegment] = []
     filler_offset_ms = 0  # v1: running offset into filler file, wraps at end
 
+    # Accumulate play records across breaks within this block so rotation
+    # advances between breaks. Copy to avoid mutating the caller's list.
+    running_history: list[PlayRecord] = list(play_history) if play_history else []
+
     for seg in block.segments:
         if seg.segment_type == "filler" and seg.asset_uri == "":
             if asset_library is not None:
                 filled = _fill_break_with_interstitials(
                     break_duration_ms=seg.segment_duration_ms,
                     asset_library=asset_library,
+                    policy=policy,
+                    play_history=running_history,
+                    now_ms=now_ms,
+                    day_start_ms=day_start_ms,
                 )
                 if filled:
                     new_segments.extend(filled)
@@ -128,14 +153,27 @@ def _assert_no_filler_before_primary(
 def _fill_break_with_interstitials(
     break_duration_ms: int,
     asset_library: DatabaseAssetLibrary,
+    policy: TrafficPolicy | None = None,
+    play_history: list[PlayRecord] | None = None,
+    now_ms: int = 0,
+    day_start_ms: int = 0,
 ) -> list[ScheduledSegment] | None:
     """
     Fill a single ad break with interstitials from the asset library.
+
+    When a TrafficPolicy is provided, candidates are evaluated through
+    the traffic policy engine (select_next) which enforces allowed types,
+    cooldowns, daily caps, and deterministic rotation.
+
+    When no policy is provided, falls back to candidates[0] (legacy).
 
     Packs spots until the break is full (or no more fit), then distributes
     remaining time as evenly-spaced black pads between spots.
 
     Returns None if no interstitials were found (caller falls back to v1).
+
+    When policy is provided, new PlayRecord entries are appended to
+    play_history so rotation advances across breaks within a block.
     """
     # INV-TIME-TYPE-001: Fail fast — upstream must pass int ms.
     if not isinstance(break_duration_ms, int):
@@ -145,16 +183,42 @@ def _fill_break_with_interstitials(
         )
     remaining_ms = break_duration_ms
     picks: list[tuple[str, int, str]] = []  # (uri, duration_ms, asset_type)
+    history = play_history if play_history is not None else []
 
     while remaining_ms > 0:
         candidates = asset_library.get_filler_assets(
-            max_duration_ms=remaining_ms, count=5
+            max_duration_ms=remaining_ms, count=20 if policy else 5,
         )
         if not candidates:
             break
-        pick = candidates[0]
-        picks.append((pick.asset_uri, pick.duration_ms, pick.asset_type))
-        remaining_ms -= pick.duration_ms
+
+        if policy is not None:
+            # Convert FillerAsset → TrafficCandidate for policy evaluation
+            traffic_candidates = [
+                TrafficCandidate(
+                    asset_id=c.asset_uri,
+                    asset_type=c.asset_type,
+                    duration_ms=c.duration_ms,
+                )
+                for c in candidates
+            ]
+            picked = select_next(
+                traffic_candidates, policy, history, now_ms, day_start_ms,
+            )
+            if picked is None:
+                break
+            # Record the play so rotation advances within this block
+            history.append(PlayRecord(
+                asset_id=picked.asset_id,
+                asset_type=picked.asset_type,
+                played_at_ms=now_ms,
+            ))
+            picks.append((picked.asset_id, picked.duration_ms, picked.asset_type))
+            remaining_ms -= picked.duration_ms
+        else:
+            pick = candidates[0]
+            picks.append((pick.asset_uri, pick.duration_ms, pick.asset_type))
+            remaining_ms -= pick.duration_ms
 
     if not picks:
         return None

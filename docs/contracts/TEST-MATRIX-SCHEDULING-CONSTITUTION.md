@@ -1367,3 +1367,61 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | RESCHED-009 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-IMMUTABILITY | Tier 1 reschedule preserves past Tier 2 rows |
 | RESCHED-010 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different channel |
 | RESCHED-011 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different broadcast_day |
+
+## Break Detection
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| BREAK-001 | INV-BREAK-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Break detection accepts AssemblyResult, returns BreakPlan |
+| BREAK-002 | INV-BREAK-001 | LAW-DERIVATION | Break detection function signature requires AssemblyResult, not raw duration |
+| BREAK-003 | INV-BREAK-002 | LAW-CONTENT-AUTHORITY | Single-asset program with 3 chapter markers produces 3 chapter opportunities |
+| BREAK-004 | INV-BREAK-002 | LAW-CONTENT-AUTHORITY | Accumulate program with chapter markers produces both chapter and boundary breaks |
+| BREAK-005 | INV-BREAK-002 | LAW-CONTENT-AUTHORITY | Chapter markers present — no algorithmic break at a chapter position |
+| BREAK-006 | INV-BREAK-003 | LAW-CONTENT-AUTHORITY, LAW-GRID | Algorithmic breaks all have position_ms >= 20% of runtime |
+| BREAK-007 | INV-BREAK-003 | LAW-CONTENT-AUTHORITY | Chapter marker at 5% of runtime is emitted — protected zone exempt |
+| BREAK-008 | INV-BREAK-004 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | 3-segment accumulate program produces exactly 2 boundary opportunities |
+| BREAK-009 | INV-BREAK-004 | LAW-DERIVATION | Single-segment program produces 0 boundary opportunities |
+| BREAK-010 | INV-BREAK-005 | LAW-GRID, LAW-DERIVATION | Budget = grid_duration - total_runtime (with intro+outro included) |
+| BREAK-011 | INV-BREAK-005 | LAW-DERIVATION | Accumulate program: budget uses sum of segments, not first segment alone |
+| BREAK-012 | INV-BREAK-006 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | BreakPlan output contains all information needed by traffic fill |
+| BREAK-013 | INV-BREAK-007 | LAW-CONTENT-AUTHORITY | 3+ algorithmic breaks: first interval > last interval |
+| BREAK-014 | INV-BREAK-007 | LAW-CONTENT-AUTHORITY | 2 algorithmic breaks: intervals differ |
+| BREAK-015 | INV-BREAK-007 | LAW-CONTENT-AUTHORITY | Algorithmic break weights increase monotonically |
+| BREAK-016 | INV-BREAK-008 | LAW-DERIVATION | Break detection function importable and callable without playout_log_expander |
+| BREAK-017 | INV-BREAK-009 | LAW-CONTENT-AUTHORITY | No break falls within intro segment timeline range |
+| BREAK-018 | INV-BREAK-009 | LAW-CONTENT-AUTHORITY | No break falls within outro segment timeline range |
+| BREAK-019 | INV-BREAK-009 | LAW-CONTENT-AUTHORITY | Intro-to-content transition is not a boundary break |
+| BREAK-020 | INV-BREAK-010 | LAW-CONTENT-AUTHORITY | Chapter marker at 180s — no algorithmic break before 180s |
+| BREAK-021 | INV-BREAK-011 | LAW-GRID, LAW-CONTENT-AUTHORITY | Program runtime > grid duration — empty opportunities, budget <= 0 |
+| BREAK-022 | INV-BREAK-011 | LAW-GRID | Program runtime == grid duration — empty opportunities, budget == 0 |
+
+## Traffic Policy
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TRAFFIC-001 | INV-TRAFFIC-ALLOWED-TYPE-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | Candidate with disallowed type excluded |
+| TRAFFIC-002 | INV-TRAFFIC-ALLOWED-TYPE-001 | LAW-ELIGIBILITY | Candidate with allowed type passes |
+| TRAFFIC-003 | INV-TRAFFIC-ALLOWED-TYPE-001 | LAW-ELIGIBILITY | Empty allowed_types excludes all candidates |
+| TRAFFIC-004 | INV-TRAFFIC-ALLOWED-TYPE-001 | LAW-ELIGIBILITY | Mixed types — only allowed types survive |
+| TRAFFIC-005 | INV-TRAFFIC-COOLDOWN-001 | LAW-ELIGIBILITY | Asset played within default cooldown excluded |
+| TRAFFIC-006 | INV-TRAFFIC-COOLDOWN-001 | LAW-ELIGIBILITY | Asset played outside cooldown passes |
+| TRAFFIC-007 | INV-TRAFFIC-COOLDOWN-001 | LAW-ELIGIBILITY | Type-specific cooldown overrides default |
+| TRAFFIC-008 | INV-TRAFFIC-COOLDOWN-001 | LAW-ELIGIBILITY | Zero default cooldown, no type cooldowns — cooldown skipped |
+| TRAFFIC-009 | INV-TRAFFIC-COOLDOWN-001 | LAW-ELIGIBILITY | Multiple plays — most recent determines cooldown |
+| TRAFFIC-010 | INV-TRAFFIC-DAILY-CAP-001 | LAW-ELIGIBILITY | Asset at daily cap excluded |
+| TRAFFIC-011 | INV-TRAFFIC-DAILY-CAP-001 | LAW-ELIGIBILITY | Asset below daily cap passes |
+| TRAFFIC-012 | INV-TRAFFIC-DAILY-CAP-001 | LAW-ELIGIBILITY | max_plays_per_day=0 disables cap |
+| TRAFFIC-013 | INV-TRAFFIC-DAILY-CAP-001 | LAW-ELIGIBILITY | Plays before day_start_ms not counted |
+| TRAFFIC-014 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Least-recently-played candidate selected first |
+| TRAFFIC-015 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | Never-played candidates preferred over played |
+| TRAFFIC-016 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | Equal history — sorted by asset_id lexical order |
+| TRAFFIC-017 | INV-TRAFFIC-FILTER-ORDER-001 | LAW-DERIVATION | Type filter applied before cooldown |
+| TRAFFIC-018 | INV-TRAFFIC-PURE-001 | LAW-DERIVATION | evaluate_candidates does not mutate inputs |
+| TRAFFIC-019 | INV-TRAFFIC-EMPTY-001 | LAW-ELIGIBILITY | Empty candidates returns empty |
+| TRAFFIC-020 | INV-TRAFFIC-EMPTY-001 | LAW-ELIGIBILITY | Empty play_history — all pass cooldown/cap |
+| TRAFFIC-021 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | Three rounds of select_next produce round-robin |
+| TRAFFIC-022 | INV-TRAFFIC-COOLDOWN-001, INV-TRAFFIC-DAILY-CAP-001 | LAW-ELIGIBILITY | All candidates excluded — select_next returns None |
+| TRAFFIC-023 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | Different candidate input order — same output order |
+| TRAFFIC-024 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | No play history — sorted by asset_id |
+| TRAFFIC-025 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | All excluded by type — select_next returns None |
+| TRAFFIC-026 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY | All excluded by cooldown — select_next returns None |

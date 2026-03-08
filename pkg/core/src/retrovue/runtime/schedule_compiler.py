@@ -25,6 +25,13 @@ from typing import Any
 import yaml
 
 from retrovue.runtime.asset_resolver import AssetMetadata, AssetResolver
+from retrovue.runtime.progression_cursor import (
+    CursorStore,
+    ProgressionCursor,
+    ScheduleBlockIdentity,
+    advance_cursor,
+    initialize_cursor,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -110,12 +117,23 @@ class ProgramBlockOutput:
 # ---------------------------------------------------------------------------
 
 
+def _pool_identity(channel_id: str, collection_id: str) -> ScheduleBlockIdentity:
+    """Construct a cursor identity keyed by (channel_id, pool_id)."""
+    return ScheduleBlockIdentity(
+        channel_id=channel_id,
+        schedule_layer="compilation",
+        start_time="00:00",
+        program_ref=collection_id,
+    )
+
+
 def select_episode(
     collection_id: str,
     mode: str,
     resolver: AssetResolver,
     seed: int | None = None,
-    sequential_counters: dict[str, int] | None = None,
+    cursor_store: CursorStore | None = None,
+    channel_id: str = "",
     **kwargs: Any,
 ) -> str:
     """Select an episode asset from a collection or pool."""
@@ -125,9 +143,18 @@ def select_episode(
         raise AssetResolutionError(f"Pool/collection {collection_id} has no episodes")
 
     if mode == "sequential":
-        if sequential_counters is not None:
-            idx = sequential_counters.get(collection_id, 0) % len(episode_ids)
-            sequential_counters[collection_id] = sequential_counters.get(collection_id, 0) + 1
+        if cursor_store is not None:
+            identity = _pool_identity(channel_id, collection_id)
+            cursor = cursor_store.load(identity)
+            if cursor is None:
+                cursor = initialize_cursor(identity)
+            result = advance_cursor(
+                cursor=cursor,
+                pool_assets=episode_ids,
+                progression="sequential",
+            )
+            cursor_store.save(result.cursor)
+            return result.selected_asset
         else:
             idx = (seed or 0) % len(episode_ids)
         return episode_ids[idx]
@@ -502,7 +529,8 @@ def _compile_sitcom_block(
     resolver: AssetResolver,
     grid_minutes: int,
     seed: int | None = None,
-    sequential_counters: dict[str, int] | None = None,
+    cursor_store: CursorStore | None = None,
+    channel_id: str = "",
 ) -> list[ProgramBlockOutput]:
     """Compile a sitcom/rerun block — program blocks only.
 
@@ -529,7 +557,7 @@ def _compile_sitcom_block(
             pool_id = ep_sel.get("pool") or ep_sel.get("collection", "")
             mode = ep_sel.get("mode", "sequential")
             ep_seed = ep_sel.get("seed", seed)
-            asset_id = select_episode(pool_id, mode, resolver, seed=ep_seed, sequential_counters=sequential_counters)
+            asset_id = select_episode(pool_id, mode, resolver, seed=ep_seed, cursor_store=cursor_store, channel_id=channel_id)
         else:
             asset_id = program_id
 
@@ -970,7 +998,8 @@ def _compile_episode_block(
     resolver: AssetResolver,
     grid_minutes: int,
     seed: int | None = None,
-    sequential_counters: dict[str, int] | None = None,
+    cursor_store: CursorStore | None = None,
+    channel_id: str = "",
 ) -> list[ProgramBlockOutput]:
     """Compile an episode block — fills a time range with episodes from a pool.
 
@@ -1026,8 +1055,8 @@ def _compile_episode_block(
     # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
     rng = random.Random(_window_seed(seed, start_str))
 
-    if sequential_counters is None:
-        sequential_counters = {}
+    if cursor_store is None:
+        cursor_store = CursorStore()
 
     max_iterations = 500  # safety valve
 
@@ -1049,7 +1078,7 @@ def _compile_episode_block(
         ep_seed = seed if mode != "random" else rng.randint(0, 2**31)
         asset_id = select_episode(
             pool_id, "sequential" if mode in ("sequential", "shuffle") else mode,
-            resolver, seed=ep_seed, sequential_counters=sequential_counters,
+            resolver, seed=ep_seed, cursor_store=cursor_store, channel_id=channel_id,
         )
 
         ep_meta = resolver.lookup(asset_id)
@@ -1251,7 +1280,7 @@ def compile_schedule(
     dsl_path: str = "unknown",
     git_commit: str = "0000000",
     seed: int | None = 42,
-    sequential_counters: dict[str, int] | None = None,
+    cursor_store: CursorStore | None = None,
 ) -> dict[str, Any]:
     """
     Compile a DSL definition into a Program Schedule.
@@ -1280,9 +1309,9 @@ def compile_schedule(
     template = get_channel_template(expanded)
     grid_minutes = get_grid_minutes(template)
 
-    # Sequential counters persist across all blocks in this compilation
-    if sequential_counters is None:
-        sequential_counters = {}
+    # Cursor store persists across all blocks in this compilation
+    if cursor_store is None:
+        cursor_store = CursorStore()
 
     # Compile program blocks — use day-of-week resolver if broadcast_day is set
     all_blocks: list[ProgramBlockOutput] = []
@@ -1303,7 +1332,7 @@ def compile_schedule(
                 if "block" in block_def:
                     blocks = _compile_episode_block(
                         block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                        sequential_counters=sequential_counters,
+                        cursor_store=cursor_store, channel_id=channel_id,
                     )
                 elif "movie_marathon" in block_def:
                     blocks = _compile_movie_marathon(
@@ -1322,7 +1351,7 @@ def compile_schedule(
                 else:
                     blocks = _compile_sitcom_block(
                         block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                        sequential_counters=sequential_counters,
+                        cursor_store=cursor_store, channel_id=channel_id,
                     )
                 all_blocks.extend(blocks)
     else:
@@ -1331,7 +1360,7 @@ def compile_schedule(
             if isinstance(day_value, dict):
                 blocks = _compile_sitcom_block(
                     day_value, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                    sequential_counters=sequential_counters,
+                    cursor_store=cursor_store, channel_id=channel_id,
                 )
                 all_blocks.extend(blocks)
             elif isinstance(day_value, list):
@@ -1340,7 +1369,7 @@ def compile_schedule(
                         if "block" in block_def:
                             blocks = _compile_episode_block(
                                 block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                                sequential_counters=sequential_counters,
+                                cursor_store=cursor_store, channel_id=channel_id,
                             )
                         elif "movie_marathon" in block_def:
                             blocks = _compile_movie_marathon(
@@ -1358,7 +1387,7 @@ def compile_schedule(
                         else:
                             blocks = _compile_sitcom_block(
                                 block_def, broadcast_day, tz_name, resolver, grid_minutes, seed=seed,
-                                sequential_counters=sequential_counters,
+                                cursor_store=cursor_store, channel_id=channel_id,
                             )
                         all_blocks.extend(blocks)
 
