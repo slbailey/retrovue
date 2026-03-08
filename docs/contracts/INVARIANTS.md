@@ -187,6 +187,14 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-HORIZON-ATOMIC-PUBLISH-001 | [invariants/core/horizon/INV-HORIZON-ATOMIC-PUBLISH-001.md](invariants/core/horizon/INV-HORIZON-ATOMIC-PUBLISH-001.md) | — |
 | INV-HORIZON-LOCKED-IMMUTABLE-001 | [invariants/core/horizon/INV-HORIZON-LOCKED-IMMUTABLE-001.md](invariants/core/horizon/INV-HORIZON-LOCKED-IMMUTABLE-001.md) | — |
 
+### Infrastructure — Channel Purge
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-CHANNEL-PURGE-001 | [channel_purge.md](channel_purge.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CHANNEL-PURGE-002 | [channel_purge.md](channel_purge.md) | LAW-CONTENT-AUTHORITY |
+| INV-CHANNEL-PURGE-003 | [channel_purge.md](channel_purge.md) | LAW-DERIVATION |
+
 ### Runtime
 
 | Invariant | File | Derived From |
