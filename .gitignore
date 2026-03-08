@@ -188,5 +188,5 @@ CTestTestfile.cmake
 *.bak*
 
 # Large backup files and test media
-backups/*.tar.gz
+backups/
 Teaser.mp4
