@@ -182,14 +182,30 @@ class TestRule2ConsecutiveDaysDiffer:
         day_b = epoch + timedelta(days=61)
 
         def compile_day(broadcast_day: date) -> dict:
+            from retrovue.runtime.progression_cursor import (
+                CursorStore,
+                ProgressionCursor,
+                ScheduleBlockIdentity,
+            )
             d = dict(dsl)
             d["broadcast_day"] = broadcast_day.isoformat()
             day_offset = (broadcast_day - epoch).days
             starting_counter = day_offset * slots_per_day
-            counters = {"test_pool": starting_counter}
+            cursor_store = CursorStore()
+            identity = ScheduleBlockIdentity(
+                channel_id="test-sequential-channel",
+                schedule_layer="compilation",
+                start_time="00:00",
+                program_ref="test_pool",
+            )
+            cursor_store.save(ProgressionCursor(
+                identity=identity,
+                position=starting_counter,
+                cycle=0,
+            ))
             return compile_schedule(
                 d, resolver=resolver,
-                sequential_counters=counters,
+                cursor_store=cursor_store,
                 seed=seed,
             )
 

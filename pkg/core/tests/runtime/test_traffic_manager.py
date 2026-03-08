@@ -17,7 +17,10 @@ START_MS = 1_000_000_000_000
 
 
 def _make_block() -> ScheduledBlock:
-    """Block with 3 ad breaks, 160_000ms each (480_000ms total ad time)."""
+    """Block with 3 weighted ad breaks (480_000ms total ad time).
+
+    Weights [1,2,3] → filler durations [80_000, 160_000, 240_000].
+    """
     return expand_program_block(
         asset_id="ep1", asset_uri="/shows/ep1.mp4",
         start_utc_ms=START_MS, slot_duration_ms=1_800_000,
@@ -30,18 +33,16 @@ class TestSequentialOffsets:
     def test_ads_have_sequential_offsets(self):
         """Filler segments should play sequentially through filler.mp4."""
         block = _make_block()
-        # 30s filler, 160s ad block → plays 0-30, 30-60, 60-90, 90-120, 120-150, then wraps
+        # 30s filler, first weighted ad block is 80s → 80/30 = 2 full + 20s partial
         filled = fill_ad_blocks(block, "/ads/filler.mp4", 30_000)
         fillers = [s for s in filled.segments if s.segment_type == "filler"]
-        # First ad block: offsets 0, 30000, 60000, 90000, 120000 (5 full plays)
+        # First ad block (80s): 30+30+20 = 80s
         assert fillers[0].asset_start_offset_ms == 0
-        assert fillers[1].asset_start_offset_ms == 0  # wraps: 30000 offset consumes full filler
-        # Actually with 30s filler and 30s ad slots, each starts at 0 after consuming full file
-        # Let me verify: first block 160s / 30s = 5 full + 10s pad
-        first_block_fillers = fillers[:5]
-        for f in first_block_fillers:
-            assert f.segment_duration_ms == 30_000
-            assert f.asset_uri == "/ads/filler.mp4"
+        assert fillers[0].segment_duration_ms == 30_000
+        assert fillers[0].asset_uri == "/ads/filler.mp4"
+        assert fillers[1].asset_start_offset_ms == 0
+        assert fillers[1].segment_duration_ms == 30_000
+        assert fillers[2].segment_duration_ms == 20_000
 
     def test_offset_wraps_at_filler_end(self):
         """When filler is shorter than ad slot, offset wraps to 0."""
@@ -63,18 +64,19 @@ class TestSequentialOffsets:
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
-            episode_duration_ms=1_680_000,  # 120s total, 2 breaks of 60s each
+            episode_duration_ms=1_680_000,  # 120s total, 2 chapter breaks
             chapter_markers_ms=(560_000, 1_120_000),
         )
-        # 100s filler, 60s ad blocks
+        # Weighted: weights [1,2], budget 120k → [40k, 80k]
+        # 100s filler
         filled = fill_ad_blocks(block, "/ads/filler.mp4", 100_000)
         fillers = [s for s in filled.segments if s.segment_type == "filler"]
-        # Block 1 (60s): plays 0-60 from filler (offset now at 60000)
+        # Block 1 (40k): plays 0-40 from filler (offset now at 40000)
         assert fillers[0].asset_start_offset_ms == 0
-        assert fillers[0].segment_duration_ms == 60_000
-        # Block 2 (60s): plays 60-100 (40s), then wraps to 0-20 (20s)
-        assert fillers[1].asset_start_offset_ms == 60_000
-        assert fillers[1].segment_duration_ms == 40_000
+        assert fillers[0].segment_duration_ms == 40_000
+        # Block 2 (80k): plays 40-100 (60k), then wraps to 0-20 (20k)
+        assert fillers[1].asset_start_offset_ms == 40_000
+        assert fillers[1].segment_duration_ms == 60_000
         assert fillers[2].asset_start_offset_ms == 0
         assert fillers[2].segment_duration_ms == 20_000
 
@@ -118,17 +120,18 @@ class TestPadding:
     def test_filler_longer_than_block_partial_play(self):
         """When filler > ad block, a partial filler segment plays."""
         block = _make_block()
-        # 200s filler, 160s ad block → plays 0-160 (partial), offset carries to next block
+        # Weighted filler blocks: [80k, 160k, 240k]
+        # 200s filler
         filled = fill_ad_blocks(block, "/ads/filler.mp4", 200_000)
         fillers = [s for s in filled.segments if s.segment_type == "filler"]
-        # First ad block: 160s from offset 0
+        # First ad block (80k): 80s from offset 0 (partial filler play)
         assert fillers[0].asset_start_offset_ms == 0
-        assert fillers[0].segment_duration_ms == 160_000
-        # Second ad block: 40s from offset 160000, then wraps to 0 for 120s
-        assert fillers[1].asset_start_offset_ms == 160_000
-        assert fillers[1].segment_duration_ms == 40_000
+        assert fillers[0].segment_duration_ms == 80_000
+        # Second ad block (160k): 120s from offset 80, wraps to 0 for 40s
+        assert fillers[1].asset_start_offset_ms == 80_000
+        assert fillers[1].segment_duration_ms == 120_000
         assert fillers[2].asset_start_offset_ms == 0
-        assert fillers[2].segment_duration_ms == 120_000
+        assert fillers[2].segment_duration_ms == 40_000
 
 
 class TestDurationMath:

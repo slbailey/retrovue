@@ -175,9 +175,10 @@ schedule:
         - title: "Sitcom"
           episode_selector: { pool: sitcom, mode: sequential }
 """
-        counters = {}
+        from retrovue.runtime.progression_cursor import CursorStore
+        cursor_store = CursorStore()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42, sequential_counters=counters)
+        plan = compile_schedule(dsl, resolver, seed=42, cursor_store=cursor_store)
         # Drama placed (counter increments for drama pool)
         # Slot 1 skipped (preempted) - sitcom counter NOT incremented
         # Slot 2 placed - sitcom counter incremented once

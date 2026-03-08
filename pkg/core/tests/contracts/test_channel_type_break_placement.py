@@ -77,7 +77,7 @@ class TestMovieChannelType:
 
 
 class TestNetworkChannelType:
-    """B-CT-3: Network type = mid-content breaks (existing behavior)."""
+    """B-CT-3: Network type = mid-content breaks via detect_breaks pipeline."""
 
     def test_network_has_mid_content_breaks(self):
         b = expand_program_block(
@@ -89,7 +89,8 @@ class TestNetworkChannelType:
             channel_type="network",
         )
         filler_segs = [s for s in b.segments if s.segment_type == "filler"]
-        assert len(filler_segs) == 3
+        # detect_breaks produces 2 algorithmic breaks for 22min content
+        assert len(filler_segs) == 2
 
     def test_network_uses_chapter_markers(self):
         b = expand_program_block(
@@ -117,7 +118,8 @@ class TestDefaultChannelType:
             episode_duration_ms=1320000,
         )
         filler_segs = [s for s in b.segments if s.segment_type == "filler"]
-        assert len(filler_segs) == 3, "Default should behave as network"
+        # detect_breaks produces 2 algorithmic breaks for 22min content
+        assert len(filler_segs) == 2, "Default should behave as network"
 
 
 if __name__ == "__main__":

@@ -63,30 +63,43 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
         with session() as db:
             resolver = CatalogAssetResolver(db)
 
-    # Calculate deterministic counter offset based on day number from epoch
-    # This ensures each day starts at the right episode regardless of
-    # which day the EPG is viewed
+    # Deterministic cursor positions based on day offset from epoch.
+    # Each pool cursor is pre-seeded so episodes advance across days.
     from datetime import date as date_type
+    from retrovue.runtime.progression_cursor import (
+        CursorStore,
+        ProgressionCursor,
+        ScheduleBlockIdentity,
+    )
     epoch = date_type(2026, 1, 1)  # fixed epoch
     target = date_type.fromisoformat(broadcast_day)
     day_offset = (target - epoch).days
 
-    # Count slots per day to compute starting counter
     slots_per_day = _count_slots_in_dsl(dsl)
     starting_counter = day_offset * slots_per_day
 
-    # Pre-seed sequential counters for all pools
-    sequential_counters = {}
+    ch_id = channel_cfg["channel_id"]
+    cursor_store = CursorStore()
     pools = dsl.get("pools", {})
     for pool_id in pools:
-        sequential_counters[pool_id] = starting_counter
+        identity = ScheduleBlockIdentity(
+            channel_id=ch_id,
+            schedule_layer="compilation",
+            start_time="00:00",
+            program_ref=pool_id,
+        )
+        cursor_store.save(ProgressionCursor(
+            identity=identity,
+            position=starting_counter,
+            cycle=0,
+        ))
 
     # INV-SCHEDULE-SEED-DAY-VARIANCE-001: day-varying deterministic seed
     from retrovue.runtime.schedule_compiler import compilation_seed
-    _seed = compilation_seed(channel_cfg["channel_id"], broadcast_day)
+    _seed = compilation_seed(ch_id, broadcast_day)
 
     schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path,
-                                sequential_counters=sequential_counters,
+                                cursor_store=cursor_store,
                                 seed=_seed)
 
     entries = []

@@ -5,11 +5,12 @@ Expands a program block from the Program Schedule into a ScheduledBlock
 containing ScheduledSegments — the exact types ChannelManager consumes.
 
 Break placement is determined by channel_type (B-CT-1):
-  - "network": Mid-content breaks at chapter markers or computed breakpoints
+  - "network": Mid-content breaks via break detection pipeline (INV-BREAK-008)
   - "movie": Post-content only — content plays uninterrupted, filler after
 
-Uses chapter markers from asset metadata to determine act boundaries.
-If no chapter markers, approximates by dividing the episode evenly.
+INV-BREAK-008: Break positions are determined exclusively by detect_breaks().
+The expander does NOT contain inline chapter marker extraction or synthetic
+break computation. BreakPlan is the sole source of break positions.
 
 Pure function — no DB writes, no globals.
 """
@@ -17,8 +18,45 @@ Pure function — no DB writes, no globals.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
+from retrovue.runtime.break_detection import BreakOpportunity, detect_breaks
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+
+
+# ---------------------------------------------------------------------------
+# Assembly helpers — bridge single-asset inputs to detect_breaks interface
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _AssemblySegment:
+    """Minimal segment for break detection assembly."""
+    segment_type: str
+    duration_ms: int
+    chapter_markers_ms: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
+class _AssemblyResult:
+    """Minimal assembly result for break detection."""
+    total_runtime_ms: int
+    segments: tuple[_AssemblySegment, ...]
+
+
+def _assemble_single_asset(
+    episode_duration_ms: int,
+    chapter_markers_ms: tuple[int, ...] | None = None,
+) -> _AssemblyResult:
+    """Create an assembly result from a single content asset."""
+    seg = _AssemblySegment(
+        segment_type="content",
+        duration_ms=episode_duration_ms,
+        chapter_markers_ms=chapter_markers_ms,
+    )
+    return _AssemblyResult(
+        total_runtime_ms=episode_duration_ms,
+        segments=(seg,),
+    )
 
 
 def expand_program_block(
@@ -141,6 +179,46 @@ def _expand_movie(
     )
 
 
+def _allocate_weighted_budget(
+    opportunities: list[BreakOpportunity],
+    budget_ms: int,
+) -> list[int]:
+    """Allocate break budget proportional to opportunity weights.
+
+    INV-BREAK-WEIGHT-001:
+    - Durations proportional to weight.
+    - Sum equals budget_ms exactly.
+    - Remainder ms distributed starting from highest-weight break.
+    """
+    if not opportunities:
+        return []
+    if budget_ms <= 0:
+        return [0] * len(opportunities)
+
+    weights = [opp.weight for opp in opportunities]
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        # Fallback: equal distribution
+        base = budget_ms // len(opportunities)
+        durations = [base] * len(opportunities)
+        remainder = budget_ms - sum(durations)
+        for i in range(remainder):
+            durations[-(i + 1)] += 1
+        return durations
+
+    # Base allocation: floor of proportional share
+    durations = [int(budget_ms * w / total_weight) for w in weights]
+    remainder = budget_ms - sum(durations)
+
+    # Distribute remainder starting from highest-weight break
+    # Build indices sorted by weight descending, then by position (index) descending for ties
+    ranked = sorted(range(len(weights)), key=lambda i: (-weights[i], -i))
+    for r in range(remainder):
+        durations[ranked[r % len(ranked)]] += 1
+
+    return durations
+
+
 def _expand_network(
     *,
     asset_id: str,
@@ -153,39 +231,44 @@ def _expand_network(
     fade_duration_ms: int = 500,
     gain_db: float = 0.0,
 ) -> ScheduledBlock:
-    """Network channel: mid-content breaks at chapter markers or computed breakpoints.
+    """Network channel: mid-content breaks via break detection pipeline.
 
-    B-CT-3: Existing behavior for ad-supported channels.
+    INV-BREAK-008: Break positions determined exclusively by detect_breaks().
+    No inline chapter marker extraction or synthetic break computation.
 
     Break classification (INV-TRANSITION-001, SegmentTransitionContract.md):
-    - First-class: from chapter_markers_ms — clean cuts, TRANSITION_NONE.
-    - Second-class: computed by dividing episode evenly — TRANSITION_FADE applied.
+    - First-class: chapter-sourced breaks → TRANSITION_NONE.
+    - Second-class: algorithmic/boundary breaks → TRANSITION_FADE applied.
+
+    Note: num_breaks parameter is retained for API compatibility but is
+    ignored — break count is determined by detect_breaks() algorithm.
     """
-    total_ad_ms = max(0, slot_duration_ms - episode_duration_ms)
+    # Step 1: Assemble — create assembly result from single asset
+    assembly_result = _assemble_single_asset(
+        episode_duration_ms=episode_duration_ms,
+        chapter_markers_ms=chapter_markers_ms,
+    )
 
-    # Determine break points and their class (first vs second).
-    if chapter_markers_ms and len(chapter_markers_ms) > 0:
-        break_points = sorted(bp for bp in chapter_markers_ms if 0 < bp < episode_duration_ms)
-        second_class_set: set[int] = set()
-    else:
-        if num_breaks <= 0:
-            break_points = []
-        else:
-            interval = episode_duration_ms / (num_breaks + 1)
-            break_points = [int(interval * (i + 1)) for i in range(num_breaks)]
-        second_class_set = set(break_points)
+    # Step 2: Detect breaks via dedicated pipeline stage
+    break_plan = detect_breaks(
+        assembly_result=assembly_result,
+        grid_duration_ms=slot_duration_ms,
+    )
 
-    actual_num_breaks = len(break_points)
-    ad_block_ms = total_ad_ms // actual_num_breaks if actual_num_breaks > 0 else 0
-    ad_remainder = total_ad_ms - (ad_block_ms * actual_num_breaks) if actual_num_breaks > 0 else 0
+    # Step 3: Allocate budget proportional to opportunity weights
+    break_positions = [opp.position_ms for opp in break_plan.opportunities]
+    break_sources = {opp.position_ms: opp.source for opp in break_plan.opportunities}
+    ad_durations = _allocate_weighted_budget(
+        break_plan.opportunities, max(0, break_plan.break_budget_ms),
+    )
 
     raw_segments: list[ScheduledSegment] = []
     prev_break = 0
     pending_fade_in = False
 
-    for i, bp in enumerate(break_points):
+    for i, bp in enumerate(break_positions):
         act_duration = bp - prev_break
-        is_second_class = bp in second_class_set
+        is_second_class = break_sources.get(bp) != "chapter"
 
         raw_segments.append(ScheduledSegment(
             segment_type="content",
@@ -199,7 +282,7 @@ def _expand_network(
             gain_db=gain_db,
         ))
 
-        this_ad = ad_block_ms + (1 if i < ad_remainder else 0)
+        this_ad = ad_durations[i]
         if this_ad > 0:
             raw_segments.append(ScheduledSegment(
                 segment_type="filler",

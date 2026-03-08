@@ -66,33 +66,36 @@ class TestChapterMarkers:
             assert act.asset_uri == "/shows/ep1.mp4"
 
 
-class TestApproximation:
-    def test_no_markers_approximates(self):
+class TestAlgorithmicBreaks:
+    def test_no_markers_produces_algorithmic_breaks(self):
+        """detect_breaks produces 2 algorithmic breaks for 22min in 30min slot."""
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
             episode_duration_ms=1_320_000,
-            num_breaks=3,
         )
         acts = [s for s in block.segments if s.segment_type == "content"]
         fillers = [s for s in block.segments if s.segment_type == "filler"]
-        assert len(acts) == 4
-        assert len(fillers) == 3
+        # detect_breaks: max(2, 1_320_000 // 480_000) = 2 breaks
+        assert len(acts) == 3
+        assert len(fillers) == 2
 
-    def test_approximation_even_acts(self):
+    def test_algorithmic_acts_non_uniform(self):
+        """Algorithmic breaks use non-uniform spacing (first act longest)."""
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
             episode_duration_ms=1_320_000,
-            num_breaks=3,
         )
         acts = [s for s in block.segments if s.segment_type == "content"]
         durations = [a.segment_duration_ms for a in acts]
-        assert all(abs(d - 330_000) < 1000 for d in durations)
+        # Non-uniform: first act > last act (harmonic-decreasing intervals)
+        assert durations[0] > durations[-1]
 
 
 class TestAdBlockDurations:
-    def test_equal_ad_block_split(self):
+    def test_weighted_ad_block_split(self):
+        """INV-BREAK-WEIGHT-001: filler durations proportional to weights."""
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
@@ -100,9 +103,8 @@ class TestAdBlockDurations:
             chapter_markers_ms=(330_000, 660_000, 990_000),
         )
         fillers = [s for s in block.segments if s.segment_type == "filler"]
-        # 480_000ms total / 3 = 160_000ms each
-        for f in fillers:
-            assert f.segment_duration_ms == 160_000
+        # 480_000ms budget, weights [1,2,3] → [80_000, 160_000, 240_000]
+        assert [f.segment_duration_ms for f in fillers] == [80_000, 160_000, 240_000]
 
     def test_no_ad_time_when_episode_fills_slot(self):
         block = expand_program_block(
@@ -154,12 +156,12 @@ class TestBlockMetadata:
 
 
 class TestEdgeCases:
-    def test_zero_breaks(self):
+    def test_no_breaks_when_episode_fills_slot(self):
+        """INV-BREAK-011: zero budget → empty break plan → no filler."""
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
-            start_utc_ms=START_MS, slot_duration_ms=1_800_000,
+            start_utc_ms=START_MS, slot_duration_ms=1_320_000,
             episode_duration_ms=1_320_000,
-            num_breaks=0,
         )
         acts = [s for s in block.segments if s.segment_type == "content"]
         fillers = [s for s in block.segments if s.segment_type == "filler"]
@@ -167,15 +169,16 @@ class TestEdgeCases:
         assert len(fillers) == 0
         assert acts[0].segment_duration_ms == 1_320_000
 
-    def test_empty_chapter_markers_falls_back(self):
+    def test_empty_chapter_markers_falls_back_to_algorithmic(self):
+        """Empty chapter markers tuple → algorithmic break detection."""
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
             episode_duration_ms=1_320_000,
             chapter_markers_ms=(),
-            num_breaks=2,
         )
         acts = [s for s in block.segments if s.segment_type == "content"]
+        # detect_breaks: 2 algorithmic breaks → 3 content segments
         assert len(acts) == 3
 
     def test_segment_order(self):
