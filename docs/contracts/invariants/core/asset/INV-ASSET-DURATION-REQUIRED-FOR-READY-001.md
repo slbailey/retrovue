@@ -18,7 +18,7 @@ The enrichment pipeline MUST have run and extracted a valid duration from the me
 
 ## Observability
 
-Enforced in `ingest_orchestrator.ingest_collection_assets()` at the promotion gate. Assets failing the duration check are logged at WARNING level and remain in `new` state.
+Enforced in `asset_enrich.enrich_asset()` at the promotion gate (canonical enforcement point). `CollectionIngestService.ingest_collection()` creates all assets in `state = 'new'`; promotion to `ready` only occurs through `enrich_asset()`. Also enforced in `ingest_orchestrator.ingest_collection_assets()` (legacy path). Assets failing the duration check are logged at WARNING level and remain in `new` state.
 
 ## Deterministic Testability
 
@@ -34,5 +34,6 @@ Simulate enrichment completion with `duration_ms=1320000` and assert promotion t
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — promotion guard: `if asset.duration_ms and asset.duration_ms > 0`
+- `pkg/core/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` promotion gate (canonical enforcement point)
+- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — promotion guard (legacy path, unchanged in Phase 1)
 - Error tag: `INV-ASSET-DURATION-REQUIRED-FOR-READY-001-VIOLATED`

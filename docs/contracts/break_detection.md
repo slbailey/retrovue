@@ -12,7 +12,9 @@ Break detection is a dedicated pipeline stage that runs after program assembly a
 
 The schedule compiler produces grid-aligned program blocks. Program assembly produces ordered content segments with total runtime. Break detection identifies where breaks may occur within or around those segments, classifies each opportunity by source, and computes the budget available for traffic to fill.
 
-Break detection does not select traffic assets. Break detection does not modify content segments. Break detection does not alter timing. It produces a plan that downstream consumers execute.
+Break detection produces a BreakPlan describing where breaks occur and the break budget available. Break detection does not select traffic assets. Traffic fill is performed by the traffic manager using policies defined in `traffic_policy.md` and configured via `traffic_dsl.md`.
+
+Break detection does not modify content segments. Break detection does not alter timing. It produces a plan that downstream consumers execute.
 
 ---
 
@@ -365,6 +367,18 @@ Derived From: `LAW-GRID`, `LAW-CONTENT-AUTHORITY`
 
 ---
 
+### INV-BREAK-012 — No break opportunity within primary content
+
+Status: Invariant
+Authority Level: Planning
+Derived From: `LAW-CONTENT-AUTHORITY`
+
+**Guarantee:** When the assembled program contains a segment marked `is_primary`, break detection MUST NOT place any break opportunity at a position within that segment's timeline range. Primary content plays without interruption. Break opportunities MUST appear only outside primary segment boundaries.
+
+**Violation:** A BreakOpportunity whose `position_ms` falls within the timeline range occupied by a primary segment; an algorithmic or boundary break placed inside primary content.
+
+---
+
 ## Required Tests
 
 All tests live under:
@@ -397,3 +411,5 @@ pkg/core/tests/contracts/test_break_detection.py
 | `test_bleed_program_empty_plan` | INV-BREAK-011 | Program runtime > grid duration — empty opportunities, budget <= 0. |
 | `test_zero_budget_empty_plan` | INV-BREAK-011 | Program runtime == grid duration — empty opportunities, budget == 0. |
 | `test_weight_increases_toward_end` | INV-BREAK-007 | Algorithmic break weights increase monotonically from first to last. |
+| `test_no_break_in_primary_segment` | INV-BREAK-012 | Primary segment present — no opportunity falls within its timeline range. |
+| `test_breaks_only_after_primary` | INV-BREAK-012 | All opportunities have position_ms outside the primary segment range. |

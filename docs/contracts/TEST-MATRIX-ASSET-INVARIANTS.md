@@ -76,6 +76,16 @@
 | TRRA-002 | Non-CHAPTER markers survive | AVAILABILITY preserved, CHAPTER deleted | `TestInvAssetReprobeResetsApproval001::test_trra_002_non_chapter_markers_survive` |
 | TRRA-003 | CHAPTER markers removed | All CHAPTER markers deleted | `TestInvAssetReprobeResetsApproval001::test_trra_003_chapter_markers_removed` |
 
+### INV-ASSET-REENRICH-RESETS-STALE-001
+
+| ID | Scenario | Expected | Test |
+|----|----------|----------|------|
+| TERS-001 | Stale asset metadata cleared | duration_ms, video_codec, audio_codec, container = null | `TestInvAssetReenrichResetsStale001::test_ters_001_stale_asset_metadata_cleared` |
+| TERS-002 | Stale asset approval reset | approved_for_broadcast = false | `TestInvAssetReenrichResetsStale001::test_ters_002_stale_asset_approval_reset` |
+| TERS-003 | CHAPTER markers cleared, non-CHAPTER preserved | AVAIL survives, CHAPTER deleted | `TestInvAssetReenrichResetsStale001::test_ters_003_chapter_markers_cleared_non_chapter_preserved` |
+| TERS-004 | State transitions through enriching | new → enriching → ready/new legal | `TestInvAssetReenrichResetsStale001::test_ters_004_state_transitions_through_enriching` |
+| TERS-005 | Never approves after re-enrichment | approved_for_broadcast = false after full lifecycle | `TestInvAssetReenrichResetsStale001::test_ters_005_never_approves_after_reenrichment` |
+
 ---
 
 ## Section 3: Metadata Integrity

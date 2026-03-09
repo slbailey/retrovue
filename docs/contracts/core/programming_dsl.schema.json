@@ -117,6 +117,28 @@
           "type": "object",
           "description": "Episode/movie selector state for provenance",
           "additionalProperties": true
+        },
+        "compiled_segments": {
+          "type": "array",
+          "description": "Assembled program segments from program assembly stage",
+          "items": {
+            "type": "object",
+            "required": ["segment_type", "asset_id", "duration_ms"],
+            "properties": {
+              "segment_type": {
+                "type": "string",
+                "enum": ["content", "intro", "outro"]
+              },
+              "asset_id": {
+                "type": "string"
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": true
+          }
         }
       },
       "additionalProperties": false
