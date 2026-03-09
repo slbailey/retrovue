@@ -5,9 +5,9 @@ Contract reference:
     docs/contracts/architecture/Phase8DecommissionContract.md
 
 These tests enforce the normative outcomes of "Phase 8 removed":
-- Single runtime playout authority: blockplan
+- Single runtime playout authority: DSL
 - No Phase8 services in ProgramDirector registry
-- ChannelConfig rejects non-blockplan schedule_source
+- ChannelConfig rejects non-DSL schedule_source
 - No production import of Phase8AirProducer (playlist/load_playlist removed)
 """
 
@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 from retrovue.runtime.config import (
-    BLOCKPLAN_SCHEDULE_SOURCE,
     ChannelConfig,
     DEFAULT_PROGRAM_FORMAT,
     assert_schedule_source_valid,
@@ -27,11 +26,11 @@ from retrovue.runtime.config import (
 
 
 # =============================================================================
-# Schedule source validation (Phase8 Decommission: only blockplan source valid)
+# Schedule source validation (only DSL schedule source valid)
 # =============================================================================
 
 def test_channel_config_rejects_schedule_source_mock():
-    """ChannelConfig validation rejects schedule_source != phase3 (e.g. 'mock')."""
+    """ChannelConfig validation rejects schedule_source != 'dsl' (e.g. 'mock')."""
     config = ChannelConfig(
         channel_id="test",
         channel_id_int=1,
@@ -42,24 +41,23 @@ def test_channel_config_rejects_schedule_source_mock():
     with pytest.raises(ValueError) as exc_info:
         assert_schedule_source_valid(config)
     assert "schedule_source" in str(exc_info.value)
-    assert "mock" in str(exc_info.value) or "phase3" in str(exc_info.value)
 
 
-def test_channel_config_accepts_schedule_source_phase3():
-    """ChannelConfig validation accepts schedule_source 'phase3' (blockplan)."""
+def test_channel_config_accepts_schedule_source_dsl():
+    """ChannelConfig validation accepts schedule_source 'dsl'."""
     config = ChannelConfig(
         channel_id="test",
         channel_id_int=1,
         name="Test",
         program_format=DEFAULT_PROGRAM_FORMAT,
-        schedule_source=BLOCKPLAN_SCHEDULE_SOURCE,
+        schedule_source="dsl",
     )
     assert_schedule_source_valid(config)  # must not raise
 
 
-def test_valid_schedule_sources_includes_phase3_and_dsl():
-    """Valid schedule sources include phase3 (blockplan) and dsl; preserve flexibility."""
-    assert set(valid_schedule_sources()) == {"phase3", "dsl"}
+def test_valid_schedule_sources_is_dsl_only():
+    """Valid schedule sources include only 'dsl'."""
+    assert set(valid_schedule_sources()) == {"dsl"}
 
 
 # =============================================================================

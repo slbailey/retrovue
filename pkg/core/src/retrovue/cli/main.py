@@ -122,42 +122,6 @@ router.register(
 )
 
 
-@app.command("plan-day")
-def plan_day_cmd(
-    channel: str = typer.Option(..., "--channel", help="Channel ID"),
-    date_str: str = typer.Option(..., "--date", help="Broadcast date (YYYY-MM-DD)"),
-):
-    """Run planning pipeline for one channel and one broadcast day. Writes playlist artifact; no execution."""
-    from datetime import date
-
-    from retrovue.cli.plan_day import PlanDayError, UnknownChannelError, plan_day
-    from retrovue.planning.playlist_artifact_writer import (
-        PlaylistArtifactExistsError,
-    )
-    from retrovue.runtime.playlist_validator import PlaylistSeamError
-
-    try:
-        broadcast_date = date.fromisoformat(date_str)
-    except ValueError:
-        typer.echo(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.", err=True)
-        raise typer.Exit(1)
-
-    try:
-        plan_day(channel_id=channel, broadcast_date=broadcast_date)
-    except UnknownChannelError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-    except PlaylistArtifactExistsError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-    except PlaylistSeamError as e:
-        typer.echo(f"Error: Seam validation failed: {e}", err=True)
-        raise typer.Exit(1)
-    except PlanDayError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-
-
 @app.command("start")
 def start_alias(
     channel_id: str = typer.Argument(None, help="Channel ID to start directly (e.g., cheers-24-7). If omitted, starts ProgramDirector."),
@@ -227,7 +191,7 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
             "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
             "audio": {"sample_rate": 48000, "channels": 2}
         }),
-        "schedule_source": channel_data.get("schedule_source", "phase3"),
+        "schedule_source": channel_data.get("schedule_source", "dsl"),
         "schedule_config": channel_data.get("schedule_config", {}),
     }
     channel_config = ChannelConfig.from_dict(config_data)

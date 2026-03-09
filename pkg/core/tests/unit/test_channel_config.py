@@ -96,7 +96,7 @@ class TestChannelConfig:
                 "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
                 "audio": {"sample_rate": 48000, "channels": 2},
             },
-            "schedule_source": "phase3",
+            "schedule_source": "dsl",
             "schedule_config": {"path": "/schedules/retro1.json"},
         }
         cc = ChannelConfig.from_dict(data)
@@ -105,7 +105,7 @@ class TestChannelConfig:
         assert cc.channel_id_int == 5
         assert cc.name == "Retro Channel 1"
         assert cc.program_format.video_width == 1920
-        assert cc.schedule_source == "phase3"
+        assert cc.schedule_source == "dsl"
         assert cc.schedule_config["path"] == "/schedules/retro1.json"
 
     def test_from_dict_requires_schedule_source(self):
@@ -119,16 +119,16 @@ class TestChannelConfig:
             ChannelConfig.from_dict(data)
         assert "schedule_source" in str(exc_info.value)
 
-    def test_from_dict_accepts_phase3(self):
-        """from_dict() accepts schedule_source 'phase3' and uses defaults for other optional fields."""
+    def test_from_dict_accepts_dsl(self):
+        """from_dict() accepts schedule_source 'dsl' and uses defaults for other optional fields."""
         data = {
             "channel_id": "test",
             "channel_id_int": 99,
             "name": "Test Channel",
-            "schedule_source": "phase3",
+            "schedule_source": "dsl",
         }
         cc = ChannelConfig.from_dict(data)
-        assert cc.schedule_source == "phase3"
+        assert cc.schedule_source == "dsl"
         assert cc.schedule_config == {}
         assert cc.program_format == DEFAULT_PROGRAM_FORMAT
 
