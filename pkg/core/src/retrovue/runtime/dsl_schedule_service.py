@@ -796,8 +796,8 @@ class DslScheduleService:
     def _count_slots_in_dsl(dsl: dict) -> int:
         """Count total episode slots per broadcast day.
 
-        INV-SCHEDULE-SEQUENTIAL-ADVANCE-001: MUST return >0 for any DSL
-        that produces program blocks. Handles three block formats:
+        NOTE: INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 is RETIRED. This method
+        is retained for non-sequential use cases. Handles three block formats:
           - slot-style:  block_def["slots"] list
           - block-style: block_def["block"] with duration/start/end
           - movie_marathon: block_def["movie_marathon"] with start/end
@@ -992,43 +992,18 @@ class DslScheduleService:
         # Use cached resolver (Part 2B: avoid per-compile reload)
         resolver = self._get_resolver()
 
-        # Deterministic cursor positions based on day offset from epoch.
-        # Each pool cursor is pre-seeded so episodes advance across days.
-        from datetime import date as date_type
-        from retrovue.runtime.progression_cursor import (
-            CursorStore,
-            ProgressionCursor,
-            ScheduleBlockIdentity,
-        )
-        epoch = date_type(2026, 1, 1)
-        target = date_type.fromisoformat(broadcast_day)
-        day_offset = (target - epoch).days
-        slots_per_day = self._count_slots_in_dsl(dsl)
-        starting_counter = day_offset * slots_per_day
-
-        cursor_store = CursorStore()
-        pools = dsl.get("pools", {})
-        for pool_id in pools:
-            identity = ScheduleBlockIdentity(
-                channel_id=channel_id,
-                schedule_layer="compilation",
-                start_time="00:00",
-                program_ref=pool_id,
-            )
-            cursor_store.save(ProgressionCursor(
-                identity=identity,
-                position=starting_counter,
-                cycle=0,
-            ))
-
         # INV-SCHEDULE-SEED-DAY-VARIANCE-001: day-varying deterministic seed
         from retrovue.runtime.schedule_compiler import compilation_seed
         _seed = compilation_seed(channel_id, broadcast_day)
 
-        # Compile program schedule with cursor store
-        schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
-                                     cursor_store=cursor_store,
-                                     seed=_seed)
+        # Compile program schedule.  Sequential episode progression uses the
+        # canonical calendar-based resolver (docs/contracts/episode_progression.md)
+        # with persistent ProgressionRun records.
+        from retrovue.runtime.progression_run_store import DbProgressionRunStore
+        with session() as run_db:
+            run_store = DbProgressionRunStore(run_db)
+            schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
+                                         seed=_seed, run_store=run_store)
 
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)

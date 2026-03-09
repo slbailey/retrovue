@@ -1,16 +1,18 @@
 # Progression Cursor — Domain Contract
 
-Status: Contract
+Status: Contract (partially retired)
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`, `LAW-IMMUTABILITY`
+
+**Scope change (March 2026):** Sequential progression is no longer governed by cursors. Sequential episode selection is now a pure function of the calendar — see `docs/contracts/episode_progression.md`. This contract remains authoritative for **shuffle** and **random** progression modes only. Sequential sections below are retained for historical reference and marked as retired.
 
 ---
 
 ## Overview
 
-A ProgressionCursor tracks which asset a schedule block will select next from its program's pool. Cursor state persists across scheduler restarts, recompilation, and multi-day schedules. Without persistent cursors, sequential and shuffle progressions produce non-deterministic content selection — violating `LAW-CONTENT-AUTHORITY` and `LAW-DERIVATION`.
+A ProgressionCursor tracks which asset a schedule block will select next from its program's pool for **shuffle** progression. Cursor state persists across scheduler restarts, recompilation, and multi-day schedules. Without persistent cursors, shuffle progressions produce non-deterministic content selection — violating `LAW-CONTENT-AUTHORITY` and `LAW-DERIVATION`.
 
-This contract defines the cursor model, its lifecycle, and the behavioral guarantees for each progression mode.
+This contract defines the cursor model, its lifecycle, and the behavioral guarantees for shuffle and random progression modes. Sequential progression is governed by [episode_progression.md](episode_progression.md).
 
 ---
 
@@ -44,15 +46,11 @@ A ProgressionCursor holds the state needed to deterministically select the next 
 
 ## Cursor Behavior by Progression Mode
 
-### `sequential`
+### `sequential` — RETIRED
 
-Assets are consumed in pool order. The cursor advances one position per execution.
+**Retired.** Sequential progression no longer uses cursors. See [episode_progression.md](episode_progression.md).
 
-- `position` starts at 0 on first use.
-- Each program execution increments `position` by 1.
-- When `position` reaches the pool size, it wraps to 0 and `cycle` increments by 1.
-- Pool order is the canonical order defined by the pool's match criteria and sort rules.
-- The cursor persists across days. It does not reset at broadcast day boundaries.
+~~Assets are consumed in pool order. The cursor advances one position per execution.~~
 
 ### `shuffle`
 
@@ -79,7 +77,7 @@ An asset is chosen independently each execution. No persistent ordering exists.
 
 | Mode | Persistence Required | Persisted Fields |
 |------|---------------------|-----------------|
-| `sequential` | Yes | `position`, `cycle` |
+| `sequential` | ~~Yes~~ N/A (RETIRED — see episode_progression.md) | ~~`position`, `cycle`~~ |
 | `shuffle` | Yes | `position`, `cycle`, `shuffle_seed` |
 | `random` | No | None (selection derived from execution context) |
 
@@ -111,39 +109,21 @@ First-use initialization MUST be deterministic. Two schedulers with the same con
 
 ## Invariants
 
-### INV-CURSOR-001 — Sequential cursor must exist before asset selection
+### INV-CURSOR-001 — RETIRED
 
-Status: Invariant
-Authority Level: Planning
-Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
-
-**Guarantee:** A schedule block with `progression: sequential` MUST have a ProgressionCursor resolved (loaded or initialized) before asset selection begins. Asset selection without a cursor is a planning fault.
-
-**Violation:** A sequential-mode schedule block that selects an asset without a resolved cursor.
+**Retired.** Sequential progression no longer uses cursors. Superseded by INV-EPISODE-PROGRESSION-001 (deterministic episode selection). See [episode_progression.md](episode_progression.md).
 
 ---
 
-### INV-CURSOR-002 — Cursor must advance exactly one position per execution
+### INV-CURSOR-002 — RETIRED
 
-Status: Invariant
-Authority Level: Planning
-Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
-
-**Guarantee:** Each program execution MUST advance the cursor `position` by exactly 1. No execution may skip positions, advance by more than 1, or leave the position unchanged.
-
-**Violation:** A cursor whose `position` after an execution differs from `position_before + 1` (modulo pool size for wrap).
+**Retired.** Cursor advancement for sequential progression is superseded by calendar-based occurrence counting. See INV-EPISODE-PROGRESSION-003 (monotonic ordered advancement).
 
 ---
 
-### INV-CURSOR-003 — Cursor must wrap at pool boundary
+### INV-CURSOR-003 — RETIRED
 
-Status: Invariant
-Authority Level: Planning
-Derived From: `LAW-CONTENT-AUTHORITY`
-
-**Guarantee:** When `position` equals the pool size after advancement, the cursor MUST wrap to `position = 0` and increment `cycle` by 1. The wrap MUST be atomic — no intermediate state where position exceeds pool size is observable.
-
-**Violation:** A cursor with `position >= pool_size` after advancement, or a cursor that wrapped without incrementing `cycle`.
+**Retired.** Cursor wrap behavior for sequential progression is superseded by exhaustion policies (wrap/hold_last/stop). See INV-EPISODE-PROGRESSION-006.
 
 ---
 
@@ -173,13 +153,15 @@ Derived From: `LAW-CONTENT-AUTHORITY`
 
 ### INV-CURSOR-006 — Cursor state must persist across scheduler restarts
 
-Status: Invariant
+Status: Invariant (scoped to shuffle only)
 Authority Level: Planning
 Derived From: `LAW-DERIVATION`, `LAW-IMMUTABILITY`
 
-**Guarantee:** For sequential and shuffle modes, the cursor state (position, cycle, shuffle_seed) MUST be recoverable after a scheduler process restart. A restarted scheduler MUST resume from the persisted cursor position, not from position 0.
+**Guarantee:** For shuffle mode, the cursor state (position, cycle, shuffle_seed) MUST be recoverable after a scheduler process restart. A restarted scheduler MUST resume from the persisted cursor position, not from position 0.
 
-**Violation:** A scheduler restart that causes a sequential or shuffle cursor to reset to position 0 without an explicit operator reset.
+Sequential progression no longer uses cursors. Restart invariance for sequential is guaranteed by INV-EPISODE-PROGRESSION-002.
+
+**Violation:** A scheduler restart that causes a shuffle cursor to reset to position 0 without an explicit operator reset.
 
 ---
 
@@ -195,15 +177,17 @@ Derived From: `LAW-CONTENT-AUTHORITY`
 
 ---
 
-### INV-CURSOR-008 — Cursor initialization must be deterministic
+### INV-CURSOR-008 — RETIRED (sequential), active (shuffle)
 
-Status: Invariant
+Status: Invariant (scoped to shuffle only)
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** When no persisted cursor exists for a schedule block, initialization MUST produce `position = 0`, `cycle = 0`. Two schedulers with identical configuration and no prior state MUST produce identical initial cursors.
+**Guarantee:** When no persisted cursor exists for a shuffle schedule block, initialization MUST produce `position = 0`, `cycle = 0`. Two schedulers with identical configuration and no prior state MUST produce identical initial cursors.
 
-**Violation:** Non-deterministic cursor initialization, or initial position != 0, or initial cycle != 0.
+Sequential cursor initialization is retired. Sequential episode selection is a pure function requiring no initialization. See INV-EPISODE-PROGRESSION-001.
+
+**Violation:** Non-deterministic shuffle cursor initialization, or initial position != 0, or initial cycle != 0.
 
 ---
 
@@ -217,13 +201,13 @@ pkg/core/tests/contracts/test_progression_cursor.py
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|
-| `test_sequential_cursor_required_before_selection` | INV-CURSOR-001 | Sequential block without cursor raises planning fault. |
-| `test_sequential_cursor_loaded_before_selection` | INV-CURSOR-001 | Sequential block with loaded cursor proceeds. |
-| `test_cursor_advances_one_position` | INV-CURSOR-002 | Single execution advances position from N to N+1. |
-| `test_cursor_advances_once_per_execution` | INV-CURSOR-002 | Two executions advance position by exactly 2. |
-| `test_cursor_does_not_skip` | INV-CURSOR-002 | Position after 3 executions from 0 is exactly 3. |
-| `test_cursor_wraps_at_pool_size` | INV-CURSOR-003 | Position wraps to 0 when reaching pool size. |
-| `test_cursor_increments_cycle_on_wrap` | INV-CURSOR-003 | Cycle increments by 1 on wrap. |
+| ~~`test_sequential_cursor_required_before_selection`~~ | ~~INV-CURSOR-001~~ | RETIRED — see `test_episode_progression.py` |
+| ~~`test_sequential_cursor_loaded_before_selection`~~ | ~~INV-CURSOR-001~~ | RETIRED — see `test_episode_progression.py` |
+| ~~`test_cursor_advances_one_position`~~ | ~~INV-CURSOR-002~~ | RETIRED — see `test_episode_progression.py` |
+| ~~`test_cursor_advances_once_per_execution`~~ | ~~INV-CURSOR-002~~ | RETIRED — see `test_episode_progression.py` |
+| ~~`test_cursor_does_not_skip`~~ | ~~INV-CURSOR-002~~ | RETIRED — see `test_episode_progression.py` |
+| ~~`test_cursor_wraps_at_pool_size`~~ | ~~INV-CURSOR-003~~ | RETIRED — see `test_episode_progression.py` |
+| ~~`test_cursor_increments_cycle_on_wrap`~~ | ~~INV-CURSOR-003~~ | RETIRED — see `test_episode_progression.py` |
 | `test_shuffle_order_stable_within_cycle` | INV-CURSOR-004 | Same seed and cycle produce same order across calls. |
 | `test_shuffle_order_not_regenerated_mid_cycle` | INV-CURSOR-004 | Advancing within a cycle does not change order. |
 | `test_shuffle_reshuffles_on_new_cycle` | INV-CURSOR-005 | New cycle produces different seed and ordering. |

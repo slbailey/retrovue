@@ -172,6 +172,23 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-TRAFFIC-FILL-FALLBACK-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
 | INV-TRAFFIC-FILL-BUDGET-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-DERIVATION |
 
+### Scheduling — Episode Progression
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-EPISODE-PROGRESSION-001 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-001.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPISODE-PROGRESSION-002 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-002.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-002.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPISODE-PROGRESSION-003 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-003.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-003.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPISODE-PROGRESSION-004 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-004.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-004.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPISODE-PROGRESSION-005 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-005.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-005.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPISODE-PROGRESSION-006 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-006.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-006.md) | LAW-CONTENT-AUTHORITY |
+| INV-EPISODE-PROGRESSION-009 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-009.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-009.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-EPISODE-PROGRESSION-010 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-010.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-010.md) | LAW-CONTENT-AUTHORITY, LAW-IMMUTABILITY |
+| INV-EPISODE-PROGRESSION-011 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-011.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-011.md) | LAW-CONTENT-AUTHORITY |
+| INV-EPISODE-PROGRESSION-012 | [invariants/core/episode-progression/INV-EPISODE-PROGRESSION-012.md](invariants/core/episode-progression/INV-EPISODE-PROGRESSION-012.md) | LAW-DERIVATION |
+
+Canonical contract: [episode_progression.md](episode_progression.md)
+
 ### Scheduling — Schedule Lifecycle
 
 | Invariant | File | Derived From |

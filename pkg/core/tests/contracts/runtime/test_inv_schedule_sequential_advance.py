@@ -1,17 +1,24 @@
 """Contract tests for INV-SCHEDULE-SEQUENTIAL-ADVANCE-001.
 
-For channels using `progression: sequential`, consecutive broadcast days MUST
-advance the sequential cursor so that episodes progress through the pool
-across days rather than repeating from the start.
+STATUS: RETIRED
 
-Rules:
-1. A V2 DSL with slots > 0 MUST produce program blocks.
-2. Compiling two consecutive days with the same DSL and advancing cursors
-   MUST produce different first episodes when the pool is larger than
-   one day's slots.
+INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 has been superseded by
+INV-EPISODE-PROGRESSION-003 (monotonic ordered advancement).
+
+The cursor-based sequential progression tested here has been replaced by
+calendar-based occurrence counting. See:
+  - docs/contracts/episode_progression.md
+  - pkg/core/tests/contracts/test_episode_progression.py
+
+These tests are skipped. They are retained for historical reference only.
 """
 
 import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="RETIRED: INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 superseded by "
+           "INV-EPISODE-PROGRESSION-003. See test_episode_progression.py."
+)
 from datetime import date, timedelta
 
 from retrovue.runtime.schedule_compiler import (

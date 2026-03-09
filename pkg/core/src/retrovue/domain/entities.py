@@ -1309,3 +1309,84 @@ class SerialRun(Base):
             f"placement_days={self.placement_days}, "
             f"content_source_id={self.content_source_id!r})>"
         )
+
+
+class ProgressionRun(Base):
+    """Persistent episode progression run record.
+
+    Contract: docs/contracts/episode_progression.md § Progression Run Model
+
+    Binds a recurring program placement to an anchor point, a day-of-week
+    pattern, and an exhaustion policy.  Episode selection is a pure
+    computation from (anchor_date, target_date, placement_days) — no
+    runtime counters.
+
+    Lookup key: (channel_id, run_id) where run_id is unique per channel.
+    """
+
+    __tablename__ = "progression_runs"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4,
+    )
+    run_id: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="Stable identity — explicit from DSL or derived from placement",
+    )
+    channel_id: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="Channel slug (string, not FK — matches DSL channel identifier)",
+    )
+    content_source_id: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="Pool or program providing episodes",
+    )
+    anchor_date: Mapped[date] = mapped_column(
+        Date, nullable=False,
+        comment="Calendar origin for occurrence counting",
+    )
+    anchor_episode_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0",
+        comment="Episode index at anchor_date (0-based)",
+    )
+    placement_days: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False,
+        comment="7-bit DOW bitmask: bit0=Mon … bit6=Sun. 127=daily",
+    )
+    exhaustion_policy: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="wrap",
+        comment="wrap | hold_last | stop",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sa.text("true"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=sa.func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=sa.func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "placement_days >= 1 AND placement_days <= 127",
+            name="ck_progression_runs_placement_days_range",
+        ),
+        CheckConstraint(
+            "anchor_episode_index >= 0",
+            name="ck_progression_runs_anchor_ep_nonneg",
+        ),
+        CheckConstraint(
+            "exhaustion_policy IN ('wrap', 'hold_last', 'stop')",
+            name="ck_progression_runs_exhaustion_policy_valid",
+        ),
+        Index("ix_progression_runs_channel_id", "channel_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ProgressionRun(run_id={self.run_id!r}, "
+            f"channel_id={self.channel_id!r}, "
+            f"anchor_date={self.anchor_date}, "
+            f"placement_days={self.placement_days})>"
+        )

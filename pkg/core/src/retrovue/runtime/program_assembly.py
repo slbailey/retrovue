@@ -12,7 +12,15 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from datetime import date as _date, timedelta as _timedelta
 from typing import Any
+
+# Migration epoch — backward-compatible anchor origin for channels that
+# predate ProgressionRun persistence.  Monday 2026-01-05 was the bootstrap
+# epoch used before persistent runs were introduced.  Every placement
+# pattern (weekday, weekend, daily, single DOW) has a matching date
+# within the first 7 days from this Monday.
+_MIGRATION_EPOCH = _date(2026, 1, 5)
 
 from retrovue.runtime.asset_resolver import AssetResolver
 from retrovue.runtime.program_definition import (
@@ -22,11 +30,12 @@ from retrovue.runtime.program_definition import (
     ProgramDefinition,
     assemble_program,
 )
-from retrovue.runtime.progression_cursor import (
-    CursorStore,
-    ScheduleBlockIdentity,
-    advance_cursor,
-    initialize_cursor,
+from retrovue.runtime.serial_episode_resolver import (
+    SerialRunInfo,
+    count_occurrences,
+    apply_wrap_policy,
+    dsl_layer_key_to_mask,
+    resolve_serial_episode,
 )
 
 
@@ -77,8 +86,15 @@ def assemble_schedule_block(
     grid_minutes: int,
     resolver: AssetResolver,
     seed: int | None = None,
-    cursor_store: CursorStore | None = None,
     channel_id: str = "",
+    broadcast_day: str = "",
+    schedule_layer: str = "all_day",
+    start_time: str = "00:00",
+    run_id: str | None = None,
+    exhaustion_policy: str = "wrap",
+    run_store: object | None = None,
+    emissions_per_occurrence: int = 1,
+    prior_same_day_emissions: int = 0,
 ) -> list[AssemblyResult]:
     """Assemble all program executions for a single schedule block.
 
@@ -114,9 +130,6 @@ def assemble_schedule_block(
         outro=outro_ref,
     )
 
-    if cursor_store is None:
-        cursor_store = CursorStore()
-
     # Resolve intro/outro assets if referenced
     intro_asset = _resolve_wrapper_asset(intro_ref, resolver) if intro_ref else None
     outro_asset = _resolve_wrapper_asset(outro_ref, resolver) if outro_ref else None
@@ -140,13 +153,21 @@ def assemble_schedule_block(
             progression=progression,
             program_ref=program_ref,
             channel_id=channel_id,
-            cursor_store=cursor_store,
             rng=rng,
             fill_mode=fill_mode,
             grid_blocks=grid_blocks,
             grid_minutes=grid_minutes,
             bleed=bleed,
             seed=seed,
+            broadcast_day=broadcast_day,
+            schedule_layer=schedule_layer,
+            start_time=start_time,
+            run_id=run_id,
+            exhaustion_policy=exhaustion_policy,
+            execution_index=exec_idx,
+            run_store=run_store,
+            emissions_per_occurrence=emissions_per_occurrence,
+            prior_same_day_emissions=prior_same_day_emissions,
         )
 
         # Build pool adapter with progression-ordered assets
@@ -206,13 +227,21 @@ def _apply_progression(
     progression: str,
     program_ref: str,
     channel_id: str,
-    cursor_store: CursorStore,
     rng: random.Random,
     fill_mode: str,
     grid_blocks: int,
     grid_minutes: int,
     bleed: bool,
     seed: int | None,
+    broadcast_day: str = "",
+    schedule_layer: str = "all_day",
+    start_time: str = "00:00",
+    run_id: str | None = None,
+    exhaustion_policy: str = "wrap",
+    execution_index: int = 0,
+    run_store: object | None = None,
+    emissions_per_occurrence: int = 1,
+    prior_same_day_emissions: int = 0,
 ) -> list[str]:
     """Order candidate asset IDs according to progression mode.
 
@@ -224,44 +253,21 @@ def _apply_progression(
     progression order.
     """
     if progression == "sequential":
-        identity = ScheduleBlockIdentity(
-            channel_id=channel_id,
-            schedule_layer="compilation",
-            start_time="00:00",
+        return _apply_sequential_progression(
+            candidate_ids=candidate_ids,
             program_ref=program_ref,
+            channel_id=channel_id,
+            broadcast_day=broadcast_day,
+            schedule_layer=schedule_layer,
+            start_time=start_time,
+            run_id=run_id,
+            exhaustion_policy=exhaustion_policy,
+            execution_index=execution_index,
+            fill_mode=fill_mode,
+            run_store=run_store,
+            emissions_per_occurrence=emissions_per_occurrence,
+            prior_same_day_emissions=prior_same_day_emissions,
         )
-        cursor = cursor_store.load(identity)
-        if cursor is None:
-            cursor = initialize_cursor(identity)
-
-        if fill_mode == "single":
-            # Advance cursor once, put selected first, then rest for fallback
-            result = advance_cursor(
-                cursor=cursor,
-                pool_assets=candidate_ids,
-                progression="sequential",
-            )
-            cursor_store.save(result.cursor)
-            selected = result.selected_asset
-            rest = [c for c in candidate_ids if c != selected]
-            return [selected] + rest
-        else:
-            # Accumulate: build ordered list by advancing cursor repeatedly
-            ordered: list[str] = []
-            seen: set[str] = set()
-            for _ in range(len(candidate_ids)):
-                result = advance_cursor(
-                    cursor=cursor,
-                    pool_assets=candidate_ids,
-                    progression="sequential",
-                )
-                cursor_store.save(result.cursor)
-                cursor = result.cursor
-                if result.selected_asset in seen:
-                    break
-                seen.add(result.selected_asset)
-                ordered.append(result.selected_asset)
-            return ordered
 
     elif progression == "random":
         shuffled = list(candidate_ids)
@@ -276,3 +282,151 @@ def _apply_progression(
     else:
         # Fallback: natural order
         return list(candidate_ids)
+
+
+def _derive_run_id(
+    channel_id: str,
+    schedule_layer: str,
+    start_time: str,
+    program_ref: str,
+) -> str:
+    """Derive a deterministic run identity from placement components.
+
+    Contract: docs/contracts/episode_progression.md § Identity Rules
+    """
+    return f"{channel_id}:{schedule_layer}:{start_time}:{program_ref}"
+
+
+def _apply_sequential_progression(
+    *,
+    candidate_ids: list[str],
+    program_ref: str,
+    channel_id: str,
+    broadcast_day: str,
+    schedule_layer: str,
+    start_time: str = "00:00",
+    run_id: str | None,
+    exhaustion_policy: str,
+    execution_index: int,
+    fill_mode: str,
+    run_store: object | None = None,
+    emissions_per_occurrence: int = 1,
+    prior_same_day_emissions: int = 0,
+) -> list[str]:
+    """Select episodes using the canonical episode progression resolver.
+
+    Contract: docs/contracts/episode_progression.md
+    Invariants: INV-EPISODE-PROGRESSION-001 through 012
+
+    Uses calendar-based occurrence counting scaled by emissions_per_occurrence.
+    Episode selection is a pure function of the run record, broadcast day,
+    and the block's position among same-run_id blocks on that day.
+
+    The run record (anchor, placement_days, exhaustion_policy) is loaded
+    from the ProgressionRunStore.  If no record exists, a new one is created
+    with anchor_date = migration epoch (2026-01-05).
+    """
+    from datetime import date as date_type
+
+    if not broadcast_day or not candidate_ids:
+        return list(candidate_ids)
+
+    episode_count = len(candidate_ids)
+    target_date = date_type.fromisoformat(broadcast_day)
+
+    # Resolve placement_days from schedule layer key.
+    # dsl_layer_key_to_mask raises on unknown keys; fall back to DAILY (127).
+    try:
+        placement_days = dsl_layer_key_to_mask(schedule_layer)
+    except ValueError:
+        placement_days = 127  # DAILY
+
+    # Derive the effective run identity using block's actual start_time.
+    effective_run_id = run_id or _derive_run_id(
+        channel_id, schedule_layer, start_time, program_ref,
+    )
+
+    # Ensure a run store is available (default to in-memory for tests).
+    if run_store is None:
+        from retrovue.runtime.progression_run_store import InMemoryProgressionRunStore
+        run_store = InMemoryProgressionRunStore()
+
+    # Load or create the ProgressionRun record.
+    run_info = run_store.load(channel_id, effective_run_id)
+
+    if run_info is None:
+        # First encounter — create and persist a new ProgressionRun.
+        #
+        # Anchor selection: use the MIGRATION EPOCH (2026-01-05, Monday)
+        # for backward compatibility with the pre-persistence era.
+        anchor = _find_matching_anchor(_MIGRATION_EPOCH, placement_days)
+
+        run_info = run_store.create(
+            channel_id=channel_id,
+            run_id=effective_run_id,
+            content_source_id=program_ref,
+            anchor_date=anchor,
+            anchor_episode_index=0,
+            placement_days=placement_days,
+            exhaustion_policy=exhaustion_policy,
+        )
+
+    # INV-EPISODE-PROGRESSION-009: Multi-execution sequencing.
+    # INV-EPISODE-PROGRESSION-003: Monotonic advancement scales with emissions.
+    #
+    # Formula: raw_index = anchor_episode_index
+    #                    + (occurrences × emissions_per_occurrence)
+    #                    + prior_same_day_emissions
+    #                    + execution_index
+    #
+    # - occurrences: matching calendar days in [anchor, target)
+    # - emissions_per_occurrence: total executions across ALL blocks sharing
+    #   this run_id on a single matching day
+    # - prior_same_day_emissions: cumulative executions from earlier blocks
+    #   sharing this run_id on the SAME day (schedule order)
+    # - execution_index: this block's execution offset (0..slots/grid_blocks-1)
+    occ = count_occurrences(run_info.anchor_date, target_date, run_info.placement_days)
+    raw_index = (run_info.anchor_episode_index
+                 + (occ * emissions_per_occurrence)
+                 + prior_same_day_emissions
+                 + execution_index)
+
+    selected_index = apply_wrap_policy(raw_index, episode_count, run_info.wrap_policy)
+
+    if selected_index is None:
+        # Exhaustion under "stop" policy — return empty or filler.
+        # The caller handles empty candidate lists gracefully.
+        return list(candidate_ids)
+
+    # Place the selected episode first; rest follow for fallback.
+    selected = candidate_ids[selected_index]
+    if fill_mode == "single":
+        rest = [c for c in candidate_ids if c != selected]
+        return [selected] + rest
+    else:
+        # Accumulate: return full catalog starting from selected_index
+        rotated = candidate_ids[selected_index:] + candidate_ids[:selected_index]
+        return rotated
+
+
+def _find_matching_anchor(origin: object, placement_days: int) -> object:
+    """Find the origin date itself, or the nearest future matching date.
+
+    Contract: episode_progression.md § Anchor Rules:
+        anchor_date MUST match the placement_days pattern.
+
+    Walks forward up to 6 days from *origin* to find a day whose
+    weekday bit is set in *placement_days*.
+    """
+    # Origin itself matches — most common case (epoch is Monday).
+    if placement_days & (1 << origin.weekday()):
+        return origin
+
+    # Walk forward up to 6 days to find a matching date.
+    for i in range(1, 7):
+        candidate = origin + _timedelta(days=i)
+        if placement_days & (1 << candidate.weekday()):
+            return candidate
+
+    # Should never happen with valid placement_days (1-127).
+    return origin

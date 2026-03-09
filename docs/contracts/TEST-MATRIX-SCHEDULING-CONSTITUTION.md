@@ -1,6 +1,6 @@
 # Test Matrix: Scheduling Constitution
 
-**Scope:** Deterministic-clock validation of all 6 constitutional Laws and 24 Invariants governing the RetroVue scheduling pipeline.
+**Scope:** Deterministic-clock validation of all 6 constitutional Laws and 34 Invariants governing the RetroVue scheduling pipeline.
 
 **Authoritative inputs:**
 - `docs/contracts/laws/LAW-*.md` (6 laws)
@@ -213,6 +213,16 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-BLEED-NO-GAP-001 | BLEED-001..011 | ScheduleCompiler |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | SEED-001..004 | ScheduleCompiler |
 | INV-MARATHON-CROSSMIDNIGHT-001 | XMID-001..004 | ScheduleCompiler |
+| INV-EPISODE-PROGRESSION-001 | EP-DETERM-001..004 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-002 | EP-RESTART-001, EP-RESTART-002 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-003 | EP-MONO-001..003 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-004 | EP-ISOLATE-001..004, EP-SHARED-001 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-005 | EP-DAYPATTERN-001..003 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-006 | EP-EXHAUST-001..004 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-009 | EP-MULTI-001, EP-MULTI-002 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-010 | EP-EDIT-001, EP-EDIT-002 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-011 | EP-ANCHOR-001 | EpisodeProgression |
+| INV-EPISODE-PROGRESSION-012 | EP-CALENDAR-001..004 | EpisodeProgression |
 
 ---
 
@@ -1542,3 +1552,42 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | TRAFFIC-FILL-013 | INV-TRAFFIC-FILL-FALLBACK-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | No candidates: filler loop, no exception |
 | TRAFFIC-FILL-014 | INV-TRAFFIC-FILL-BUDGET-001 | LAW-GRID, LAW-DERIVATION | Sum of all break allocations <= break_budget_ms |
 | TRAFFIC-FILL-015 | INV-TRAFFIC-FILL-BUDGET-001 | LAW-GRID | Weight rounding across 5 breaks stays within budget |
+
+### Episode Progression
+
+**Test file:** `pkg/core/tests/contracts/test_episode_progression.py`
+
+**Canonical contract:** `docs/contracts/episode_progression.md`
+
+| Test ID | Invariant | Derived Law(s) | Scenario |
+|---------|-----------|----------------|----------|
+| EP-DETERM-001 | INV-EPISODE-PROGRESSION-001 | LAW-DERIVATION | Anchor date resolves to anchor episode index |
+| EP-DETERM-002 | INV-EPISODE-PROGRESSION-001 | LAW-DERIVATION | Daily sequential progression Mon→E0, Tue→E1, Wed→E2 |
+| EP-DETERM-003 | INV-EPISODE-PROGRESSION-001 | LAW-DERIVATION | Progression crosses week boundary without reset |
+| EP-DETERM-004 | INV-EPISODE-PROGRESSION-001 | LAW-DERIVATION | Repeated resolution of same date yields identical result |
+| EP-RESTART-001 | INV-EPISODE-PROGRESSION-002 | LAW-DERIVATION | Scheduler offline Tue–Thu; Friday selects correct episode |
+| EP-RESTART-002 | INV-EPISODE-PROGRESSION-002 | LAW-DERIVATION | Scheduler offline full week; next compilation correct |
+| EP-MONO-001 | INV-EPISODE-PROGRESSION-003 | LAW-CONTENT-AUTHORITY | Daily placement: each day's episode index ≥ previous day's |
+| EP-MONO-002 | INV-EPISODE-PROGRESSION-003 | LAW-CONTENT-AUTHORITY | Non-zero anchor_episode_index=10 → anchor date selects E10 |
+| EP-MONO-003 | INV-EPISODE-PROGRESSION-003 | LAW-CONTENT-AUTHORITY | Out-of-order resolution produces same results as chronological |
+| EP-ISOLATE-001 | INV-EPISODE-PROGRESSION-004 | LAW-CONTENT-AUTHORITY | Same show at different times are independent runs |
+| EP-ISOLATE-002 | INV-EPISODE-PROGRESSION-004 | LAW-CONTENT-AUTHORITY | Same show on different day patterns are independent runs |
+| EP-ISOLATE-003 | INV-EPISODE-PROGRESSION-004 | LAW-CONTENT-AUTHORITY | Three concurrent strips on same channel progress independently |
+| EP-ISOLATE-004 | INV-EPISODE-PROGRESSION-004 | LAW-CONTENT-AUTHORITY | Two blocks with same run_id resolve same episode |
+| EP-SHARED-001 | INV-EPISODE-PROGRESSION-004, INV-EPISODE-PROGRESSION-012 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Two blocks at different times sharing run_id resolve identical episode; 06:00 and 18:00 same day same result |
+| EP-DAYPATTERN-001 | INV-EPISODE-PROGRESSION-005 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Weekly placement advances once per week |
+| EP-DAYPATTERN-002 | INV-EPISODE-PROGRESSION-005 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Weekday placement: Fri→E4, next Mon→E5 (skips weekends) |
+| EP-DAYPATTERN-003 | INV-EPISODE-PROGRESSION-005 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | MWF placement skips Tue/Thu/Sat/Sun |
+| EP-EXHAUST-001 | INV-EPISODE-PROGRESSION-006 | LAW-CONTENT-AUTHORITY | `wrap`: returns to E0 after catalog exhaustion |
+| EP-EXHAUST-002 | INV-EPISODE-PROGRESSION-006 | LAW-CONTENT-AUTHORITY | `hold_last`: repeats final episode indefinitely |
+| EP-EXHAUST-003 | INV-EPISODE-PROGRESSION-006 | LAW-CONTENT-AUTHORITY | `stop`: returns FILLER after last episode |
+| EP-EXHAUST-004 | INV-EPISODE-PROGRESSION-006 | LAW-CONTENT-AUTHORITY | All three policies agree before exhaustion |
+| EP-MULTI-001 | INV-EPISODE-PROGRESSION-009 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Block with 3 executions selects E_n, E_n+1, E_n+2 |
+| EP-MULTI-002 | INV-EPISODE-PROGRESSION-009 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Next day base episode from calendar, not previous day offset |
+| EP-EDIT-001 | INV-EPISODE-PROGRESSION-010 | LAW-CONTENT-AUTHORITY, LAW-IMMUTABILITY | Changing start time with same run_id continues progression |
+| EP-EDIT-002 | INV-EPISODE-PROGRESSION-010 | LAW-CONTENT-AUTHORITY, LAW-IMMUTABILITY | Changing run_id creates new run with fresh anchor |
+| EP-ANCHOR-001 | INV-EPISODE-PROGRESSION-011 | LAW-CONTENT-AUTHORITY | Anchor on Saturday for weekday mask is rejected |
+| EP-CALENDAR-001 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | `count_occurrences(anchor, anchor, mask)` returns 0 |
+| EP-CALENDAR-002 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | `count_occurrences` with daily mask over 1 day returns 1 |
+| EP-CALENDAR-003 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | `count_occurrences` with daily mask over 7 days returns 7 |
+| EP-CALENDAR-004 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | 10-year range computed in bounded time |

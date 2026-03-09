@@ -27,7 +27,6 @@ from typing import Any
 import yaml
 
 from retrovue.runtime.asset_resolver import AssetResolver
-from retrovue.runtime.progression_cursor import CursorStore
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -251,6 +250,8 @@ def resolve_day_schedule(dsl: dict[str, Any], target_date: date) -> list[dict[st
 
     # Base layer: all_day
     merged = _blocks_to_dict(_ensure_list(schedule.get("all_day", [])))
+    # Track which schedule layer each block came from (for derived placement identity)
+    layer_map: dict[str, str] = {k: "all_day" for k in merged}
 
     # Group layer
     dow_index = target_date.weekday()  # 0=Monday
@@ -259,18 +260,29 @@ def resolve_day_schedule(dsl: dict[str, Any], target_date: date) -> list[dict[st
     if dow_name in WEEKDAY_NAMES and "weekdays" in schedule:
         group_blocks = _blocks_to_dict(_ensure_list(schedule["weekdays"]))
         merged.update(group_blocks)
+        for k in group_blocks:
+            layer_map[k] = "weekdays"
     elif dow_name in WEEKEND_NAMES and "weekends" in schedule:
         group_blocks = _blocks_to_dict(_ensure_list(schedule["weekends"]))
         merged.update(group_blocks)
+        for k in group_blocks:
+            layer_map[k] = "weekends"
 
     # Specific DOW layer
     if dow_name in schedule:
         dow_blocks = _blocks_to_dict(_ensure_list(schedule[dow_name]))
         merged.update(dow_blocks)
+        for k in dow_blocks:
+            layer_map[k] = dow_name
 
-    # Sort by start time and return as list
+    # Sort by start time and return as list, annotated with source layer
     sorted_keys = sorted(merged.keys())
-    return [merged[k] for k in sorted_keys]
+    result = []
+    for k in sorted_keys:
+        block = merged[k]
+        block["_schedule_layer"] = layer_map.get(k, "all_day")
+        result.append(block)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +313,10 @@ def _compile_program_block(
     resolver: AssetResolver,
     grid_minutes: int,
     seed: int | None = None,
-    cursor_store: CursorStore | None = None,
     channel_id: str = "",
+    run_store: object = None,
+    emissions_per_occurrence: int = 1,
+    prior_same_day_emissions: int = 0,
 ) -> list[ProgramBlockOutput]:
     """Compile a V2 schedule block into program blocks.
 
@@ -326,13 +340,15 @@ def _compile_program_block(
     program_ref = block_def.get("program", "")
     progression = block_def.get("progression", "sequential")
 
+    # Episode progression DSL fields (canonical contract: episode_progression.md)
+    run_id = block_def.get("run_id")
+    exhaustion_policy = block_def.get("exhaustion", "wrap")
+    schedule_layer = block_def.get("_schedule_layer", "all_day")
+
     prog_def = programs.get(program_ref, {})
     pool = prog_def.get("pool", program_ref)
 
     current_time = _parse_time(start_str, broadcast_day, tz_name)
-
-    if cursor_store is None:
-        cursor_store = CursorStore()
 
     # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
     wseed = _window_seed(seed, start_str)
@@ -347,8 +363,15 @@ def _compile_program_block(
         grid_minutes=grid_minutes,
         resolver=resolver,
         seed=wseed,
-        cursor_store=cursor_store,
         channel_id=channel_id,
+        broadcast_day=broadcast_day,
+        schedule_layer=schedule_layer,
+        start_time=start_str,
+        run_id=run_id,
+        exhaustion_policy=exhaustion_policy,
+        run_store=run_store,
+        emissions_per_occurrence=emissions_per_occurrence,
+        prior_same_day_emissions=prior_same_day_emissions,
     )
 
     # Convert AssemblyResults into ProgramBlockOutputs
@@ -489,7 +512,8 @@ def compile_schedule(
     dsl_path: str = "unknown",
     git_commit: str = "0000000",
     seed: int | None = 42,
-    cursor_store: CursorStore | None = None,
+    cursor_store: object = None,  # deprecated, unused — retained for caller compat
+    run_store: object = None,
 ) -> dict[str, Any]:
     """
     Compile a V2 DSL definition into a Program Schedule.
@@ -520,10 +544,6 @@ def compile_schedule(
     grid_minutes = get_grid_minutes(template)
     programs_defs = dsl.get("programs", {})
 
-    # Cursor store persists across all blocks in this compilation
-    if cursor_store is None:
-        cursor_store = CursorStore()
-
     # Schedule resolution: resolve DOW layering to flat block list
     all_blocks: list[ProgramBlockOutput] = []
     schedule = dsl.get("schedule", {})
@@ -542,15 +562,75 @@ def compile_schedule(
             elif isinstance(day_value, dict):
                 resolved_blocks.append(day_value)
 
-    # Program execution plan → program assembly
+    # Pre-scan: compute emissions_per_occurrence and prior_same_day_emissions
+    # for each block, keyed by run_id.
+    #
+    # emissions_per_occurrence = total executions across ALL blocks sharing a
+    #   run_id on a single matching day.
+    # prior_same_day_emissions = cumulative executions from earlier blocks
+    #   sharing the same run_id (in schedule order).
+    from retrovue.runtime.program_assembly import _derive_run_id
+
+    # First pass: collect execution counts per effective run_id
+    _run_id_exec_counts: dict[str, int] = {}
+    _block_run_ids: list[str | None] = []
+    _block_executions: list[int] = []
+
     for block_def in resolved_blocks:
+        if not isinstance(block_def, dict):
+            _block_run_ids.append(None)
+            _block_executions.append(0)
+            continue
+
+        prog_ref = block_def.get("program", "")
+        prog_def = programs_defs.get(prog_ref, {})
+        grid_blocks = prog_def.get("grid_blocks", 1)
+        b_slots = block_def.get("slots", 1)
+        if not isinstance(b_slots, int):
+            b_slots = len(b_slots)
+        b_progression = block_def.get("progression", "sequential")
+
+        if b_progression != "sequential":
+            _block_run_ids.append(None)
+            _block_executions.append(0)
+            continue
+
+        b_run_id = block_def.get("run_id")
+        b_layer = block_def.get("_schedule_layer", "all_day")
+        b_start = block_def.get("start", "06:00")
+
+        effective_rid = b_run_id or _derive_run_id(
+            channel_id, b_layer, b_start, prog_ref,
+        )
+        execs = b_slots // max(grid_blocks, 1)
+
+        _block_run_ids.append(effective_rid)
+        _block_executions.append(execs)
+        _run_id_exec_counts[effective_rid] = _run_id_exec_counts.get(effective_rid, 0) + execs
+
+    # Second pass: compute prior_same_day_emissions per block
+    _run_id_prior: dict[str, int] = {}
+
+    # Program execution plan → program assembly
+    for i, block_def in enumerate(resolved_blocks):
         if isinstance(block_def, dict):
+            rid = _block_run_ids[i] if i < len(_block_run_ids) else None
+            epo = _run_id_exec_counts.get(rid, 1) if rid else 1
+            prior = _run_id_prior.get(rid, 0) if rid else 0
+
             blocks = _compile_program_block(
                 block_def, programs_defs, broadcast_day, tz_name,
                 resolver, grid_minutes, seed=seed,
-                cursor_store=cursor_store, channel_id=channel_id,
+                channel_id=channel_id,
+                run_store=run_store,
+                emissions_per_occurrence=epo,
+                prior_same_day_emissions=prior,
             )
             all_blocks.extend(blocks)
+
+            # Advance prior emissions for subsequent blocks with same run_id
+            if rid:
+                _run_id_prior[rid] = prior + _block_executions[i]
 
     # INV-BLEED-NO-GAP-001: Sort, validate, compact, revalidate.
     all_blocks.sort(key=lambda b: b.start_at)
