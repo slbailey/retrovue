@@ -1,7 +1,8 @@
 """
-Asset CLI commands for asset visibility and review workflows.
+Asset CLI commands for asset visibility, review workflows, and bulk enrichment.
 
-Surfaces read-only views to help operators verify ingest effects.
+Surfaces read-only views to help operators verify ingest effects,
+and provides bulk enrichment for stale assets across sources or collections.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from ...domain.tag_normalization import normalize_tag_set
 from ...infra.uow import session
 from ...usecases import asset_attention as _uc_asset_attention
 from ...usecases import asset_update as _uc_asset_update
+from ...usecases.asset_enrich_stale import enrich_stale_assets
 
 app = typer.Typer(name="asset", help="Asset inspection and review operations")
 
@@ -212,3 +214,101 @@ def update_asset(
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
+
+
+@app.command("enrich")
+def enrich_assets(
+    stale: bool = typer.Option(False, "--stale", help="Target only stale assets (null/mismatched enricher checksum or state='new')"),
+    source: str | None = typer.Option(None, "--source", help="Scope to all collections under this source"),
+    collection: str | None = typer.Option(None, "--collection", help="Scope to a single collection"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count stale assets without enriching"),
+    limit: int | None = typer.Option(None, "--limit", help="Max assets per collection"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+):
+    """
+    Bulk enrich assets across a source or collection.
+
+    Examples:
+        retrovue asset enrich --stale --source Interstitials --dry-run
+        retrovue asset enrich --stale --source Interstitials
+        retrovue asset enrich --stale --collection "commercials" --json
+        retrovue asset enrich --stale --source Interstitials --limit 50
+    """
+    if not stale:
+        typer.echo("Error: --stale is required (the only supported mode)", err=True)
+        raise typer.Exit(1)
+
+    if source and collection:
+        typer.echo("Error: --source and --collection are mutually exclusive", err=True)
+        raise typer.Exit(1)
+
+    if not source and not collection:
+        typer.echo("Error: provide --source or --collection to scope the operation", err=True)
+        raise typer.Exit(1)
+
+    try:
+        with session() as db:
+            result = enrich_stale_assets(
+                db,
+                source_selector=source,
+                collection_selector=collection,
+                dry_run=dry_run,
+                max_assets=limit,
+            )
+
+            if not dry_run:
+                db.commit()
+
+        if json_output:
+            typer.echo(json.dumps(result.to_dict(), indent=2, default=str))
+        else:
+            _print_enrich_summary(result)
+
+    except typer.Exit:
+        raise
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+def _print_enrich_summary(result) -> None:
+    """Human-readable output for asset enrich command."""
+    mode = "[dry-run] " if result.dry_run else ""
+    src = result.source_name or "unknown"
+    typer.echo(f"{mode}Source: {src}")
+    typer.echo(f"Collections processed: {result.collections_processed}")
+    typer.echo("")
+
+    for cr in result.collection_results:
+        name = cr.get("collection_name", "?")
+        stats = cr.get("stats", {})
+        considered = stats.get("assets_considered", 0)
+        enriched = stats.get("assets_enriched", 0)
+
+        if result.dry_run:
+            typer.echo(f"  {name}: {considered} stale assets")
+        else:
+            ready = stats.get("assets_auto_ready", 0)
+            typer.echo(f"  {name}: {enriched} enriched ({ready} auto-ready) of {considered} stale")
+
+        errs = stats.get("errors", [])
+        for e in errs:
+            typer.echo(f"    error: {e}")
+
+    typer.echo("")
+    if result.dry_run:
+        typer.echo(f"Total stale: {result.total_assets_considered}")
+    else:
+        typer.echo(
+            f"Total: {result.total_assets_enriched} enriched "
+            f"({result.total_assets_auto_ready} auto-ready) "
+            f"of {result.total_assets_considered} stale"
+        )
+
+    if result.total_errors:
+        typer.echo(f"Errors: {len(result.total_errors)}")
+        for e in result.total_errors:
+            typer.echo(f"  {e}")

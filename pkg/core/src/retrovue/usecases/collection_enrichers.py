@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.importers.base import DiscoveredItem
 from ..adapters.registry import ENRICHERS
+from .asset_enrich import enrich_asset
 from .asset_path_resolver import AssetPathResolver
 from ..domain.entities import Asset, Collection, Enricher
 
@@ -206,6 +207,7 @@ def apply_enrichers_to_collection(
     auto_ready_threshold: float = 0.80,
     review_threshold: float = 0.50,
     max_assets: int | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Apply currently attached ingest-scope enrichers to existing assets in a collection.
 
@@ -246,6 +248,21 @@ def apply_enrichers_to_collection(
     pipeline.sort(key=lambda t: (t[0], t[1]))
     signature = [{"enricher_id": eid, "priority": pr} for (pr, eid, _) in pipeline]
 
+    # INV-INTERSTITIAL-TYPE-STAMP-001: Auto-inject InterstitialTypeEnricher
+    # for interstitial collections, matching the ingest path.
+    try:
+        from ..adapters.enrichers.interstitial_type_enricher import (
+            COLLECTION_TYPE_MAP,
+            InterstitialTypeEnricher,
+        )
+        coll_name = getattr(collection, "name", "") or ""
+        if coll_name in COLLECTION_TYPE_MAP:
+            it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
+            pipeline.insert(0, (-1, "__interstitial_type__", it_enricher))
+            signature.insert(0, {"enricher_id": "__interstitial_type__", "priority": -1})
+    except Exception:
+        pass
+
     # If no pipeline is configured, this is a no-op
     if not pipeline:
         return {
@@ -272,10 +289,6 @@ def apply_enrichers_to_collection(
     else:
         assets = q.all()
 
-    # Use module-level functions (extracted for testability)
-    _extract_label_value = extract_label_value
-    _compute_confidence_from_labels = compute_confidence_from_labels
-
     stats = {
         "assets_considered": len(assets),
         "assets_enriched": 0,
@@ -283,14 +296,26 @@ def apply_enrichers_to_collection(
         "errors": [],
     }
 
+    if dry_run:
+        stale_assets = [
+            {"uuid": str(a.uuid), "uri": a.canonical_uri or a.uri or "", "state": a.state}
+            for a in assets
+        ]
+        return {
+            "collection_id": str(collection.uuid),
+            "collection_name": collection.name,
+            "pipeline_checksum": pipeline_checksum,
+            "stats": stats,
+            "stale_assets": stale_assets,
+        }
+
     for asset in assets:
         try:
-            # Construct a DiscoveredItem for enrichment based on stored canonical_uri
+            # Resolve plex:// URIs before delegating to enrich_asset()
             path_uri = asset.canonical_uri or asset.uri or ""
             if not path_uri:
                 continue
 
-            # If still a plex:// URI, try to resolve via AssetPathResolver
             if path_uri.startswith("plex://"):
                 try:
                     from ..domain.entities import PathMapping as _PM
@@ -299,7 +324,6 @@ def apply_enrichers_to_collection(
                     ).all()
                     pm_list = [(r.plex_path, r.local_path) for r in pm_rows]
                     coll_locs = (collection.config or {}).get("locations", [])
-                    # Get plex client from source
                     plex_client = None
                     src = getattr(collection, "source", None)
                     if src and getattr(src, "type", None) == "plex":
@@ -314,49 +338,24 @@ def apply_enrichers_to_collection(
                     )
                     resolved = resolver.resolve(uri=path_uri)
                     if resolved:
-                        path_uri = resolved
                         asset.canonical_uri = resolved
                 except Exception:
                     pass  # Fall through with plex:// URI; enricher will skip
 
-            item = DiscoveredItem(path_uri=path_uri, raw_labels=[], size=asset.size)
-            # Run pipeline
-            for _, _, enr in pipeline:
-                try:
-                    item = enr.enrich(item)
-                except Exception as enr_exc:
-                    stats["errors"].append(str(enr_exc))
-            # Map labels back to asset fields
-            labels = item.raw_labels or []
-            dur_val = _extract_label_value(labels, "duration_ms")
-            if dur_val is not None:
-                try:
-                    asset.duration_ms = int(dur_val)
-                except Exception:
-                    pass
-            vid_val = _extract_label_value(labels, "video_codec")
-            if vid_val is not None:
-                asset.video_codec = vid_val
-            aud_val = _extract_label_value(labels, "audio_codec")
-            if aud_val is not None:
-                asset.audio_codec = aud_val
-            cont_val = _extract_label_value(labels, "container")
-            if cont_val is not None:
-                asset.container = cont_val
-
-            # Record pipeline checksum
-            if pipeline_checksum:
-                asset.last_enricher_checksum = pipeline_checksum
-
-            # Recompute confidence and auto-promote if eligible
-            conf = _compute_confidence_from_labels(item)
-            if conf >= auto_ready_threshold:
-                asset.state = "ready"
-                asset.approved_for_broadcast = True
-                stats["assets_auto_ready"] += 1
+            # Delegate to the unified enrichment lifecycle
+            # (INV-ASSET-REENRICH-RESETS-STALE-001)
+            result = enrich_asset(
+                db,
+                asset,
+                pipeline,
+                pipeline_checksum=pipeline_checksum,
+            )
 
             stats["assets_enriched"] += 1
-            db.add(asset)
+            if result.new_state == "ready":
+                stats["assets_auto_ready"] += 1
+            if result.enricher_errors:
+                stats["errors"].extend(result.enricher_errors)
         except Exception as e:
             stats["errors"].append(str(e))
 

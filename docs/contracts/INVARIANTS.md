@@ -107,6 +107,30 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-BREAK-009 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
 | INV-BREAK-010 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
 | INV-BREAK-011 | [break_detection.md](break_detection.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-BREAK-012 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+
+### Scheduling — BreakPlan
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-BREAKPLAN-ORDERED-001 | [break_plan.md](break_plan.md) | LAW-DERIVATION, LAW-GRID |
+| INV-BREAKPLAN-POSITIONS-BOUNDED-001 | [break_plan.md](break_plan.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-BREAKPLAN-BUDGET-DERIVED-001 | [break_plan.md](break_plan.md) | LAW-GRID, LAW-DERIVATION |
+| INV-BREAKPLAN-ALLOCATION-BOUNDED-001 | [break_plan.md](break_plan.md) | LAW-GRID |
+| INV-BREAKPLAN-IMMUTABLE-001 | [break_plan.md](break_plan.md) | LAW-IMMUTABILITY, LAW-DERIVATION |
+| INV-BREAKPLAN-SOLE-AUTHORITY-001 | [break_plan.md](break_plan.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAKPLAN-EMPTY-VALID-001 | [break_plan.md](break_plan.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+
+### Scheduling — BreakStructure
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-BREAKSTRUCTURE-ORDERED-001 | [break_structure.md](break_structure.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAKSTRUCTURE-BUDGET-EXACT-001 | [break_structure.md](break_structure.md) | LAW-GRID |
+| INV-BREAKSTRUCTURE-INTERSTITIAL-REQUIRED-001 | [break_structure.md](break_structure.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-BREAKSTRUCTURE-TRAFFIC-SCOPE-001 | [break_structure.md](break_structure.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAKSTRUCTURE-DETERMINISTIC-001 | [break_structure.md](break_structure.md) | LAW-DERIVATION |
+| INV-BREAKSTRUCTURE-NO-INVENT-001 | [break_structure.md](break_structure.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 
 ### Scheduling — Traffic Policy
 
@@ -120,6 +144,33 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-TRAFFIC-PURE-001 | [traffic_policy.md](traffic_policy.md) | LAW-DERIVATION |
 | INV-TRAFFIC-EMPTY-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY |
 | INV-TRAFFIC-NONE-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+
+### Scheduling — Traffic DSL
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY |
+| INV-TRAFFIC-DSL-INVENTORY-TYPE-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-ELIGIBILITY |
+| INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-TRAFFIC-DSL-NO-PROGRAM-POLICY-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TRAFFIC-DSL-BREAK-CONFIG-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TRAFFIC-DSL-INVENTORY-PLANNING-ONLY-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-ELIGIBILITY, LAW-RUNTIME-AUTHORITY |
+
+### Scheduling — Traffic Manager
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TRAFFIC-FILL-STRUCTURED-001 | [traffic_manager.md](traffic_manager.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TRAFFIC-FILL-BUMPER-DEGRADE-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-TRAFFIC-FILL-EXACT-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID |
+| INV-TRAFFIC-FILL-PAD-DISTRIBUTED-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID |
+| INV-TRAFFIC-FILL-ORDER-001 | [traffic_manager.md](traffic_manager.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-TRAFFIC-FILL-NO-INVENT-001 | [traffic_manager.md](traffic_manager.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TRAFFIC-FILL-ROTATION-ADVANCES-001 | [traffic_manager.md](traffic_manager.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
+| INV-TRAFFIC-FILL-LATE-BIND-001 | [traffic_manager.md](traffic_manager.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+| INV-TRAFFIC-FILL-FALLBACK-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-TRAFFIC-FILL-BUDGET-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-DERIVATION |
 
 ### Scheduling — Schedule Lifecycle
 
@@ -160,6 +211,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-ASSET-DURATION-REQUIRED-FOR-READY-001 | [invariants/core/asset/INV-ASSET-DURATION-REQUIRED-FOR-READY-001.md](invariants/core/asset/INV-ASSET-DURATION-REQUIRED-FOR-READY-001.md) | LAW-ELIGIBILITY |
 | INV-ASSET-APPROVAL-OPERATOR-ONLY-001 | [invariants/core/asset/INV-ASSET-APPROVAL-OPERATOR-ONLY-001.md](invariants/core/asset/INV-ASSET-APPROVAL-OPERATOR-ONLY-001.md) | LAW-ELIGIBILITY |
 | INV-ASSET-REPROBE-RESETS-APPROVAL-001 | [invariants/core/asset/INV-ASSET-REPROBE-RESETS-APPROVAL-001.md](invariants/core/asset/INV-ASSET-REPROBE-RESETS-APPROVAL-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
+| INV-ASSET-REENRICH-RESETS-STALE-001 | [invariants/core/asset/INV-ASSET-REENRICH-RESETS-STALE-001.md](invariants/core/asset/INV-ASSET-REENRICH-RESETS-STALE-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
 
 ### Asset — Metadata Integrity
 
@@ -195,6 +247,14 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-CHANNEL-PURGE-002 | [channel_purge.md](channel_purge.md) | LAW-CONTENT-AUTHORITY |
 | INV-CHANNEL-PURGE-003 | [channel_purge.md](channel_purge.md) | LAW-DERIVATION |
 
+### Infrastructure — Channel Reconciliation
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-CHANNEL-CONFIG-SOURCE-OF-TRUTH | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
+| INV-CHANNEL-RECONCILE-DELETE | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CHANNEL-RECONCILE-IDEMPOTENT | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
+
 ### Runtime
 
 | Invariant | File | Derived From |
@@ -213,6 +273,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-HLS-DISCONTINUITY-MARKER-001 | [invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md](invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md) | LAW-DECODABILITY, LAW-LIVENESS |
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | [invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md](invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md) | LAW-LIVENESS |
 | INV-DAEMON-SESSION-SCOPE-001 | [invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md](invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md) | LAW-LIVENESS |
+| INV-BREAK-V2-SINGLE-CHAPTER-001 | [invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md](invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 
 ---
 

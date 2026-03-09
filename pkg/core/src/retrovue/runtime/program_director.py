@@ -558,9 +558,11 @@ class ProgramDirector:
             return result
         else:
             from pathlib import Path
-            channels_path = Path('/opt/retrovue/config/channels.json')
-            with open(channels_path) as f:
-                return _json.load(f)['channels']
+            from retrovue.runtime.providers import YamlChannelConfigProvider
+            yaml_dir = Path("/opt/retrovue/config/channels")
+            if yaml_dir.is_dir():
+                return YamlChannelConfigProvider(yaml_dir).to_channels_list()
+            return []
 
     def _init_embedded_registry(
         self, channel_config_provider: Optional[Any] = None
@@ -944,6 +946,7 @@ class ProgramDirector:
                 filler_duration_ms=sc.get("filler_duration_ms", 3_650_000),
                 master_clock=self._embedded_clock,
                 channel_tz=sc.get("channel_tz", "UTC"),
+                dsl_path=sc.get("dsl_path", ""),
             )
 
             # Readiness gate: synchronous initial evaluation
@@ -1373,7 +1376,12 @@ class ProgramDirector:
                     # Gen 2 collections mid-build scan the growing graph for
                     # 200-300ms with collected=0. We collect+freeze once at the end.
                     gc.disable()
-                    self.load_all_schedules()
+                    configured_ids = self.load_all_schedules()
+                    # Reconcile DB channels against YAML config (single source of truth).
+                    from retrovue.runtime.channel_reconciliation import reconcile_channels
+                    from retrovue.infra.uow import session as uow_session
+                    with uow_session() as db:
+                        reconcile_channels(db, set(configured_ids))
                     self._init_horizon_managers()
                     self._prewarm_channel_schedules()
                     self._init_playlog_daemons()

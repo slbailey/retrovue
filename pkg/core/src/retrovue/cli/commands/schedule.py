@@ -40,15 +40,12 @@ def _load_filler_config(channel_slug: str) -> tuple[str, int]:
     filler_duration_ms = 3_650_000
     try:
         from pathlib import Path
-        from retrovue.runtime.providers import YamlChannelConfigProvider, FileChannelConfigProvider
+        from retrovue.runtime.providers import YamlChannelConfigProvider
 
         yaml_dir = Path("/opt/retrovue/config/channels")
-        json_path = Path("/opt/retrovue/config/channels.json")
         cfg = None
         if yaml_dir.is_dir():
             cfg = YamlChannelConfigProvider(yaml_dir).get_channel_config(channel_slug)
-        if cfg is None and json_path.exists():
-            cfg = FileChannelConfigProvider(json_path).get_channel_config(channel_slug)
         if cfg is not None:
             sc = cfg.schedule_config or {}
             filler_uri = sc.get("filler_path", filler_uri)
@@ -56,6 +53,27 @@ def _load_filler_config(channel_slug: str) -> tuple[str, int]:
     except Exception:
         pass  # fall through to defaults
     return filler_uri, filler_duration_ms
+
+
+def _load_channel_dsl(channel_slug: str) -> dict | None:
+    """Load the raw parsed YAML dict for a channel.
+
+    Returns None if the YAML cannot be loaded. Used by rebuild to resolve
+    break_config and traffic policy (INV-TIER2-EXPANSION-CANONICAL-001).
+    """
+    try:
+        from pathlib import Path
+
+        import yaml
+
+        yaml_dir = Path("/opt/retrovue/config/channels")
+        yaml_file = yaml_dir / f"{channel_slug}.yaml"
+        if yaml_file.is_file():
+            with open(yaml_file) as f:
+                return yaml.safe_load(f)
+    except Exception:
+        pass
+    return None
 
 
 @app.command("list")
@@ -227,6 +245,7 @@ def rebuild_cmd(
         typer.echo("  Live-safe: enabled (will skip currently playing block)")
 
     filler_uri, filler_duration_ms = _load_filler_config(channel)
+    channel_dsl = _load_channel_dsl(channel)
 
     try:
         with session() as db:
@@ -239,6 +258,7 @@ def rebuild_cmd(
                 filler_duration_ms=filler_duration_ms,
                 live_safe=live_safe,
                 dry_run=dry_run,
+                channel_dsl=channel_dsl,
             )
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
@@ -314,7 +334,7 @@ def explain_cmd(
             primary = " [PRIMARY]" if seg.get("is_primary") else ""
             typer.echo(
                 f"  {i}: [{seg['segment_type']}] {seg.get('asset_id', '?')}"
-                f"  dur={seg['segment_duration_ms']}ms"
+                f"  dur={seg.get('segment_duration_ms') or seg.get('duration_ms', '?')}ms"
                 f"  source={seg.get('source_type', '?')}:{seg.get('source_name', '?')}"
                 f"{primary}"
             )

@@ -12,7 +12,7 @@ import typer
 
 import retrovue.cli.commands._ops.collection_ingest_service as collection_ingest_service
 
-from ...adapters.registry import get_importer
+from ...adapters.registry import get_importer  # noqa: F401 — used by construct_importer_for_collection re-export
 from ...infra.db import get_sessionmaker
 from ...infra.exceptions import ValidationError
 from ...infra.settings import settings
@@ -86,7 +86,11 @@ def construct_importer_for_collection(collection, db):
                 elif source.type == "filesystem":
                     config = source.config or {}
                     importer_config["source_name"] = source.name
-                    importer_config["root_paths"] = config.get("root_paths", [])
+                    # Use collection-specific locations if available (from discovery),
+                    # otherwise fall back to source-level root_paths.
+                    coll_cfg = getattr(collection, "config", None) or {}
+                    coll_locations = coll_cfg.get("locations", []) if isinstance(coll_cfg, dict) else []
+                    importer_config["root_paths"] = coll_locations or config.get("root_paths", [])
                     if "tag_from_path_segments" in config:
                         importer_config["tag_from_path_segments"] = config["tag_from_path_segments"]
                 else:
@@ -312,10 +316,14 @@ def list_collections(
             else:
                 # Find the source by UUID, external_id, or name using in-session resolution
                 source_obj = None
-                # Try UUID first (always attempt query to satisfy contract mocks)
+                # Try UUID first, using a savepoint to avoid poisoning the
+                # PG transaction when source_id is not a valid UUID.
                 try:
+                    nested = db.begin_nested()
                     source_obj = db.query(Source).filter(Source.id == source_id).first()
+                    nested.commit()
                 except Exception:
+                    nested.rollback()
                     source_obj = None
 
                 # Try external_id if not found by UUID
@@ -1639,8 +1647,8 @@ def collection_sync(
                 try:
                     importer = construct_importer_for_collection(collection, db)
                     svc = collection_ingest_service.CollectionIngestService(db)
-                    ingest_result = svc.ingest(
-                        collection_selector=str(collection.uuid),
+                    ingest_result = svc.ingest_collection(
+                        collection=collection,
                         importer=importer,
                     )
                 except Exception as e:
