@@ -33,21 +33,12 @@ def _load_channels() -> list[dict[str, Any]]:
     return []
 
 
-def _count_slots_in_dsl(dsl: dict[str, Any]) -> int:
-    """Count total episode slots per broadcast day in a DSL schedule.
 
-    Delegates to DslScheduleService._count_slots_in_dsl() to avoid
-    duplicate implementations (INV-SCHEDULE-SEQUENTIAL-ADVANCE-001).
-    """
-    from retrovue.runtime.dsl_schedule_service import DslScheduleService
-    return DslScheduleService._count_slots_in_dsl(dsl)
-
-
-def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: CatalogAssetResolver | None = None) -> list[dict[str, Any]]:
+def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: CatalogAssetResolver | None = None, run_store: object = None) -> list[dict[str, Any]]:
     """Compile a single channel's DSL for a broadcast day and return EPG entries.
-    
-    Uses deterministic sequential counters based on the broadcast day offset
-    from a fixed epoch, so each day shows different episodes.
+
+    Episode progression uses the canonical calendar-based resolver
+    (docs/contracts/episode_progression.md) with persistent run records.
     """
     dsl_path = channel_cfg["schedule_config"]["dsl_path"]
     dsl_text = Path(dsl_path).read_text()
@@ -58,44 +49,14 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
         with session() as db:
             resolver = CatalogAssetResolver(db)
 
-    # Deterministic cursor positions based on day offset from epoch.
-    # Each pool cursor is pre-seeded so episodes advance across days.
-    from datetime import date as date_type
-    from retrovue.runtime.progression_cursor import (
-        CursorStore,
-        ProgressionCursor,
-        ScheduleBlockIdentity,
-    )
-    epoch = date_type(2026, 1, 1)  # fixed epoch
-    target = date_type.fromisoformat(broadcast_day)
-    day_offset = (target - epoch).days
-
-    slots_per_day = _count_slots_in_dsl(dsl)
-    starting_counter = day_offset * slots_per_day
-
     ch_id = channel_cfg["channel_id"]
-    cursor_store = CursorStore()
-    pools = dsl.get("pools", {})
-    for pool_id in pools:
-        identity = ScheduleBlockIdentity(
-            channel_id=ch_id,
-            schedule_layer="compilation",
-            start_time="00:00",
-            program_ref=pool_id,
-        )
-        cursor_store.save(ProgressionCursor(
-            identity=identity,
-            position=starting_counter,
-            cycle=0,
-        ))
 
     # INV-SCHEDULE-SEED-DAY-VARIANCE-001: day-varying deterministic seed
     from retrovue.runtime.schedule_compiler import compilation_seed
     _seed = compilation_seed(ch_id, broadcast_day)
 
     schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path,
-                                cursor_store=cursor_store,
-                                seed=_seed)
+                                seed=_seed, run_store=run_store)
 
     entries = []
     for block in schedule["program_blocks"]:
@@ -166,14 +127,16 @@ def get_epg(
     if channel:
         channels = [c for c in channels if c["channel_id"] == channel]
 
-    # Part 2A: Build resolver once per EPG request, not per channel.
+    # Part 2A: Build resolver and run store once per EPG request.
+    from retrovue.runtime.progression_run_store import DbProgressionRunStore
     with session() as db:
         shared_resolver = CatalogAssetResolver(db)
+        shared_run_store = DbProgressionRunStore(db)
 
     all_entries = []
     for ch in channels:
         try:
-            entries = _compile_epg(ch, broadcast_day, resolver=shared_resolver)
+            entries = _compile_epg(ch, broadcast_day, resolver=shared_resolver, run_store=shared_run_store)
             all_entries.extend(entries)
         except Exception as e:
             logger.error(f"Failed to compile EPG for {ch['channel_id']}: {e}", exc_info=True)

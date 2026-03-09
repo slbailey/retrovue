@@ -383,7 +383,7 @@ These govern specific compiler or resolver behaviors. They belong in code and te
 | INV-TEMPLATE-GRAFT-DUAL-YAML-001 | Legacy and new template YAML both accepted | YAML parser backward compatibility. Important operationally but not an architectural property of the scheduling system. |
 | INV-TEMPLATE-PRIMARY-SEGMENT-001 | Templates resolve to exactly one primary segment | Template disambiguation logic (explicit flag vs. convention fallback). Compiler internal. |
 | INV-MARATHON-CROSSMIDNIGHT-001 | Marathon blocks crossing midnight resolve correctly | DSL time-parser edge case for one specific block type. Bug prevention, not architecture. |
-| INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 | Sequential counter advances across broadcast days | Counter initialization for `mode: sequential`. Implementation detail of one selection mode. |
+| INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 | ~~Sequential counter advances across broadcast days~~ **RETIRED** — superseded by INV-EPISODE-PROGRESSION-003. See `episode_progression.md`. | Counter initialization for `mode: sequential`. Retired: replaced by calendar-based occurrence counting. |
 | INV-P3-009 | Asset duration is authoritative over slot duration | Duration resolution rule within ScheduleManager. Governs how the resolver handles mismatches, not how schedules are structured. |
 | INV-P5-001 | `schedule_source: "phase3"` activates dynamic mode | Configuration routing between code paths. Internal wiring. |
 

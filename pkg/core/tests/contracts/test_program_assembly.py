@@ -20,7 +20,6 @@ import pytest
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
 from retrovue.runtime.program_assembly import assemble_schedule_block
 from retrovue.runtime.program_definition import AssemblyFault
-from retrovue.runtime.progression_cursor import CursorStore
 
 
 GRID_MINUTES = 30
@@ -259,7 +258,6 @@ class TestAssemblyProgression:
 
     def test_sequential_advances_across_executions(self):
         resolver = _resolver_with_episodes("sitcoms", [1500, 1400, 1600])
-        cursor_store = CursorStore()
         results = assemble_schedule_block(
             program_ref="half_hour",
             program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
@@ -268,8 +266,10 @@ class TestAssemblyProgression:
             progression="sequential",
             grid_minutes=GRID_MINUTES,
             resolver=resolver,
-            cursor_store=cursor_store,
+            broadcast_day="2026-01-05",
+            channel_id="test-channel",
         )
         # Sequential: each execution picks the next episode
+        # (INV-EPISODE-PROGRESSION-009: multi-execution sequencing)
         asset_ids = [r.segments[0].asset_id for r in results]
         assert asset_ids == ["ep-000", "ep-001", "ep-002"]

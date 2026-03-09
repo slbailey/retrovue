@@ -1,12 +1,30 @@
 # Scheduler Cursor Integration — Domain Contract
 
-Status: Contract
-Authority Level: Planning
-Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`, `LAW-IMMUTABILITY`
+**Status: RETIRED**
+
+Superseded by `docs/contracts/episode_progression.md`.
+
+The 6-step compilation protocol (load → select → advance → persist → publish) is superseded by pure-function episode selection via calendar-based occurrence counting. INV-SCHED-CURSOR-001 through INV-SCHED-CURSOR-005 are retired.
+
+Cursor integration remains relevant for **shuffle** progression only, which is governed by `docs/contracts/progression_cursor.md`.
+
+See: [episode_progression.md](episode_progression.md) § Retired Contracts
 
 ---
 
-## Overview
+## Historical Content (retained for reference)
+
+The following content describes the retired sequential cursor protocol.
+
+---
+
+~~Status: Contract~~
+~~Authority Level: Planning~~
+~~Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`, `LAW-IMMUTABILITY`~~
+
+---
+
+## Overview (RETIRED)
 
 The scheduler compiler must use ProgressionCursors — not in-memory counters — to select assets during schedule compilation. Cursor state is the authoritative record of where a schedule block is in its progression sequence. This contract defines the exact interaction protocol between the scheduler compiler and the cursor system.
 
