@@ -9,10 +9,9 @@ format:
   audio: { sample_rate: 48000, channels: 2 }
   grid_minutes: 30
 
-filler: !include _defaults.yaml:filler
-
-notes:
-  vibe: "Where Everybody Knows Your Name — all day, every day"
+# -----------------------------
+# CONTENT POOLS
+# -----------------------------
 
 pools:
   cheers:
@@ -20,19 +19,86 @@ pools:
       type: episode
       series_title: Cheers
 
-schedule:
-  all_day:
-    - block:
-        start: "06:00"
-        duration: "24h"
-        title: "Cheers"
-        pool: cheers
-        mode: sequential
+# -----------------------------
+# PROGRAM DEFINITIONS
+# -----------------------------
+
+programs:
+
+  cheers_30:
+    pool: cheers
+    grid_blocks: 1
+    fill_mode: single
+    bleed: false
+
+# -----------------------------
+# TRAFFIC CONFIG
+# -----------------------------
 
 traffic:
-  allowed_types: [commercial, promo, station_id, psa, stinger, bumper, filler]
-  default_cooldown_seconds: 3600
-  type_cooldowns:
-    commercial: 3600
-    promo: 1800
-  max_plays_per_day: 0
+
+  break_config:
+    to_break_bumper_ms: 3000
+    from_break_bumper_ms: 3000
+    station_id_ms: 5000
+
+  default_profile: sitcom_standard
+
+  inventories:
+
+    commercials:
+      match:
+        type: commercial
+      asset_type: commercial
+
+    promos:
+      match:
+        type: promo
+      asset_type: promo
+
+    trailers:
+      match:
+        type: trailer
+      asset_type: trailer
+
+    bumpers:
+      match:
+        type: bumper
+      asset_type: bumper
+
+    station_ids:
+      match:
+        type: station_id
+      asset_type: station_id
+
+  # ---------------------------
+  # TRAFFIC PROFILES
+  # ---------------------------
+
+  profiles:
+
+    sitcom_standard:
+
+      allowed_types:
+        - commercial
+        - promo
+        - trailer
+
+      default_cooldown_ms: 3600000
+
+      type_cooldowns_ms:
+        trailer: 7200000
+
+      max_plays_per_day: 0
+
+# -----------------------------
+# SCHEDULE
+# -----------------------------
+
+schedule:
+
+  all_day:
+    - start: "06:00"
+      slots: 48
+      program: cheers_30
+      progression: sequential
