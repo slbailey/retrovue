@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,21 @@ from uuid import UUID
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from retrovue.runtime.planning_pipeline import FillerAsset, MarkerInfo
+
+@dataclass
+class MarkerInfo:
+    """Lightweight marker data (no SQLAlchemy dependency)."""
+    kind: str           # e.g. "chapter"
+    offset_ms: int      # Offset from asset start in milliseconds
+    label: str = ""
+
+
+@dataclass
+class FillerAsset:
+    """Filler item resolved from AssetLibrary."""
+    asset_uri: str
+    duration_ms: int
+    asset_type: str = "filler"   # "filler", "promo", "ad"
 
 
 # Default traffic policy when no YAML config exists
