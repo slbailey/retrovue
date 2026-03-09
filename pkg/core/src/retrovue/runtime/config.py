@@ -124,7 +124,7 @@ class ChannelConfig:
     channel_id_int: int       # AIR gRPC ID (1, 2, 3...)
     name: str
     program_format: ProgramFormat
-    schedule_source: str      # blockplan only, e.g. "phase3"
+    schedule_source: str      # "dsl" only
     schedule_config: dict[str, Any] = field(default_factory=dict)
     blockplan_only: bool = False  # When True, only BlockPlanProducer is permitted
 
@@ -132,7 +132,7 @@ class ChannelConfig:
     def from_dict(cls, data: dict[str, Any]) -> ChannelConfig:
         """Deserialize from dict (e.g. loaded from JSON).
 
-        schedule_source is required and must be a blockplan schedule source (e.g. "phase3").
+        schedule_source is required and must be "dsl".
         No default; invalid values raise.
         """
         program_format_data = data.get("program_format", {})
@@ -158,20 +158,15 @@ class ChannelConfig:
         return config
 
 
-# Only blockplan schedule source is valid.
-BLOCKPLAN_SCHEDULE_SOURCE = "phase3"
-
-
 def valid_schedule_sources() -> tuple[str, ...]:
-    """Return the only allowed schedule_source values (blockplan-producing)."""
-    return (BLOCKPLAN_SCHEDULE_SOURCE, "dsl")
+    """Return the only allowed schedule_source values."""
+    return ("dsl",)
 
 
 def assert_schedule_source_valid(config: ChannelConfig) -> None:
     """
-    Raise ValueError if config.schedule_source is not a valid blockplan schedule source.
+    Raise ValueError if config.schedule_source is not valid.
 
-    No channel config may use schedule_source other than the blockplan one (e.g. "phase3").
     Call this at config load or use.
     """
     if config.schedule_source not in valid_schedule_sources():
@@ -231,13 +226,13 @@ class InlineChannelConfigProvider:
         return list(self._configs.keys())
 
 
-# Default channel config for tests/fallback (blockplan-only; no mock schedule)
+# Default channel config for tests/fallback
 MOCK_CHANNEL_CONFIG = ChannelConfig(
     channel_id="mock",
     channel_id_int=1,
     name="Mock Channel",
     program_format=DEFAULT_PROGRAM_FORMAT,
-    schedule_source=BLOCKPLAN_SCHEDULE_SOURCE,
+    schedule_source="dsl",
     schedule_config={},
 )
 
@@ -313,7 +308,6 @@ __all__ = [
     "RuntimeConfig",
     "DEFAULT_PROGRAM_FORMAT",
     "MOCK_CHANNEL_CONFIG",
-    "BLOCKPLAN_SCHEDULE_SOURCE",
     "valid_schedule_sources",
     "assert_schedule_source_valid",
 ]

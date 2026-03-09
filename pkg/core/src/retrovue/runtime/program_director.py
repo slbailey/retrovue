@@ -53,13 +53,11 @@ from retrovue.runtime.channel_stream import (
     generate_ts_stream_async,
 )
 from retrovue.runtime.config import (
-    BLOCKPLAN_SCHEDULE_SOURCE,
     ChannelConfig,
     ChannelConfigProvider,
     DEFAULT_PROGRAM_FORMAT,
     InlineChannelConfigProvider,
 )
-from retrovue.runtime.schedule_manager_service import ScheduleManagerBackedScheduleService
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -159,199 +157,6 @@ class ChannelManagerProvider(Protocol):
         ...
 
 
-# ---------------------------------------------------------------------------
-# Horizon adapters — bridge ScheduleManagerBackedScheduleService to HorizonManager protocols
-# ---------------------------------------------------------------------------
-
-
-class _EpgHorizonExtender:
-    """Adapts ScheduleManagerBackedScheduleService for HorizonManager's ScheduleExtender protocol.
-
-    Checks the resolved store for existence and calls
-    ScheduleManager.resolve_schedule_day() to extend EPG.
-    """
-
-    def __init__(self, schedule_service: ScheduleManagerBackedScheduleService, channel_id: str):
-        self._service = schedule_service
-        self._channel_id = channel_id
-
-    def epg_day_exists(self, broadcast_date) -> bool:
-        return self._service._resolved_store.exists(self._channel_id, broadcast_date)
-
-    def extend_epg_day(self, broadcast_date) -> None:
-        slots = self._service._schedules.get(self._channel_id, [])
-        if not slots:
-            return
-        resolution_time = datetime(
-            broadcast_date.year, broadcast_date.month, broadcast_date.day,
-            5, 0, 0, tzinfo=timezone.utc,
-        )
-        self._service._manager.resolve_schedule_day(
-            channel_id=self._channel_id,
-            programming_day_date=broadcast_date,
-            slots=slots,
-            resolution_time=resolution_time,
-        )
-
-
-class _ExecutionHorizonExtender:
-    """Adapts ScheduleManagerBackedScheduleService for HorizonManager's ExecutionExtender protocol.
-
-    Generates ExecutionEntry objects from resolved schedule data
-    without requiring the full planning pipeline infrastructure.
-    Ensures the broadcast date is resolved first, then builds
-    execution entries from ScheduleManager's program blocks.
-    Writes playlist artifact (.tlog + .tlog.jsonl) when extending.
-    """
-
-    def __init__(
-        self,
-        schedule_service: ScheduleManagerBackedScheduleService,
-        channel_id: str,
-        timezone_display: str = "UTC",
-    ):
-        self._service = schedule_service
-        self._channel_id = channel_id
-        self._timezone_display = timezone_display
-        self._logger = logging.getLogger(__name__)
-
-    def extend_execution_day(self, broadcast_date):
-        from retrovue.runtime.execution_window_store import (
-            ExecutionDayResult,
-            ExecutionEntry,
-        )
-
-        # Ensure day is resolved
-        if not self._service._resolved_store.exists(self._channel_id, broadcast_date):
-            slots = self._service._schedules.get(self._channel_id, [])
-            if slots:
-                resolution_time = datetime(
-                    broadcast_date.year, broadcast_date.month, broadcast_date.day,
-                    5, 0, 0, tzinfo=timezone.utc,
-                )
-                self._service._manager.resolve_schedule_day(
-                    channel_id=self._channel_id,
-                    programming_day_date=broadcast_date,
-                    slots=slots,
-                    resolution_time=resolution_time,
-                )
-
-        # Build execution entries from resolved program blocks
-        grid_minutes = self._service._grid_minutes
-        day_start_hour = self._service._programming_day_start_hour
-
-        day_start = datetime(
-            broadcast_date.year, broadcast_date.month, broadcast_date.day,
-            day_start_hour, 0, 0, tzinfo=timezone.utc,
-        )
-        day_end = day_start + timedelta(days=1)
-
-        entries = []
-        block_idx = 0
-        current = day_start
-        while current < day_end:
-            block = self._service._manager.get_program_at(self._channel_id, current)
-            start_ms = int(current.timestamp() * 1000)
-            end_ms = start_ms + grid_minutes * 60 * 1000
-
-            block_dur_ms = grid_minutes * 60 * 1000
-            segments = []
-            if block and block.segments:
-                for seg in block.segments:
-                    segments.append({
-                        "asset_uri": seg.file_path,
-                        "asset_start_offset_ms": int(seg.seek_offset_seconds * 1000),
-                        "segment_duration_ms": int(seg.duration_seconds * 1000),
-                        "segment_type": "episode",
-                    })
-
-            # Pad to fill block — this is a planning decision, not AIR's job.
-            # AIR must receive a gap-free segment list that sums to block_dur_ms.
-            content_ms = sum(s["segment_duration_ms"] for s in segments)
-            pad_ms = block_dur_ms - content_ms
-            if pad_ms > 0:
-                segments.append({
-                    "segment_duration_ms": pad_ms,
-                    "segment_type": "pad",
-                })
-
-            entries.append(ExecutionEntry(
-                block_id=f"{self._channel_id}-{broadcast_date.isoformat()}-b{block_idx:04d}",
-                block_index=block_idx,
-                start_utc_ms=start_ms,
-                end_utc_ms=end_ms,
-                segments=segments,
-                channel_id=self._channel_id,
-                programming_day_date=broadcast_date,
-            ))
-
-            current += timedelta(minutes=grid_minutes)
-            block_idx += 1
-
-        end_ms = entries[-1].end_utc_ms if entries else 0
-        self._logger.info(
-            "ExecutionHorizonExtender: Generated %d entries for %s (end_utc_ms=%d)",
-            len(entries), broadcast_date.isoformat(), end_ms,
-        )
-
-        # Write playlist artifact (TL-ART-001: write-once; ignore if exists)
-        if entries:
-            self._write_playlist_artifact(broadcast_date, entries)
-
-        return ExecutionDayResult(end_utc_ms=end_ms, entries=entries)
-
-    def _write_playlist_artifact(self, broadcast_date, entries):
-        """Build Playlist from entries and write .tlog + .tlog.jsonl."""
-        from retrovue.planning.playlist_artifact_writer import (
-            PlaylistArtifactExistsError,
-            PlaylistArtifactWriter,
-        )
-        from retrovue.runtime.planning_pipeline import Playlist, PlaylistEntry
-
-        grid_minutes = self._service._grid_minutes
-        tl_entries = [
-            PlaylistEntry(
-                block_id=e.block_id,
-                block_index=e.block_index,
-                start_utc_ms=e.start_utc_ms,
-                end_utc_ms=e.end_utc_ms,
-                segments=e.segments,
-            )
-            for e in entries
-        ]
-        lock_time = datetime(
-            broadcast_date.year, broadcast_date.month, broadcast_date.day,
-            5, 0, 0, tzinfo=timezone.utc,
-        )
-        playlist = Playlist(
-            channel_id=self._channel_id,
-            broadcast_date=broadcast_date,
-            entries=tl_entries,
-            is_locked=True,
-            metadata={
-                "grid_block_minutes": grid_minutes,
-                "locked_at": lock_time.isoformat(),
-            },
-        )
-        writer = PlaylistArtifactWriter()
-        try:
-            path = writer.write(
-                channel_id=self._channel_id,
-                broadcast_date=broadcast_date,
-                playlist=playlist,
-                timezone_display=self._timezone_display,
-                generated_utc=lock_time,
-            )
-            self._logger.info(
-                "Playlist artifact written: %s", path,
-            )
-        except PlaylistArtifactExistsError:
-            self._logger.debug(
-                "Playlist artifact already exists for %s %s (TL-ART-001)",
-                self._channel_id, broadcast_date.isoformat(),
-            )
-
-
 class ProgramDirector:
     """
     Global coordinator and policy layer for the entire broadcast system.
@@ -438,12 +243,6 @@ class ProgramDirector:
         self._managers: dict[str, Any] = {}
         self._managers_lock = threading.Lock()
         self._schedule_service: Optional[Any] = None
-        # Phase 5: Per-channel schedule services
-        self._schedule_manager_services: dict[str, ScheduleManagerBackedScheduleService] = {}
-        # Horizon management
-        self._horizon_managers: dict[str, Any] = {}
-        self._horizon_execution_stores: dict[str, Any] = {}
-        self._horizon_resolved_stores: dict[str, Any] = {}
         # Playlist Builder Daemons (Tier 2 — INV-PLAYLOG-HORIZON-001)
         self._playlog_daemons: dict[str, Any] = {}
         self._channel_config_provider: Optional[Any] = None
@@ -619,55 +418,16 @@ class ProgramDirector:
                 channel_id_int=1,
                 name="Test A/B",
                 program_format=DEFAULT_PROGRAM_FORMAT,
-                schedule_source=BLOCKPLAN_SCHEDULE_SOURCE,
+                schedule_source="dsl",
                 schedule_config={},
             )
             self._channel_config_provider = InlineChannelConfigProvider([test1_config])
 
         self._health_check_stop = threading.Event()
 
-    def _ensure_schedule_manager_service(
-        self, channel_id: str, channel_config: ChannelConfig,
-    ) -> ScheduleManagerBackedScheduleService:
-        """Get or create the ScheduleManagerBackedScheduleService for a channel.
-
-        Always returns the ScheduleManagerBackedScheduleService (not the horizon-backed one).
-        Used by both the normal schedule-service routing and by
-        _init_horizon_managers() which needs the underlying service
-        regardless of horizon mode.
-        """
-        if channel_id not in self._schedule_manager_services:
-            schedule_config = channel_config.schedule_config
-            programs_dir = Path(schedule_config.get("programs_dir", "/opt/retrovue/config/programs"))
-            schedules_dir = Path(schedule_config.get("schedules_dir", "/opt/retrovue/config/schedules"))
-            filler_path = schedule_config.get("filler_path", "/opt/retrovue/assets/filler.mp4")
-            filler_duration = schedule_config.get("filler_duration_seconds", 3650.0)
-            grid_minutes = schedule_config.get("grid_minutes", 30)
-
-            self._logger.info(
-                "[channel %s] Creating ScheduleManagerBackedScheduleService "
-                "(schedule_source=%s)",
-                channel_id,
-                channel_config.schedule_source,
-            )
-
-            service = ScheduleManagerBackedScheduleService(
-                clock=self._embedded_clock,
-                programs_dir=programs_dir,
-                schedules_dir=schedules_dir,
-                filler_path=filler_path,
-                filler_duration_seconds=filler_duration,
-                grid_minutes=grid_minutes,
-            )
-            self._schedule_manager_services[channel_id] = service
-
-        return self._schedule_manager_services[channel_id]
-
     def _get_schedule_service_for_channel(self, channel_id: str, channel_config: ChannelConfig) -> Any:
-        """
-        Get appropriate schedule service based on channel config and horizon mode.
+        """Get appropriate schedule service based on channel config.
 
-        INV-P5-001: Config-Driven Activation - schedule_source: "phase3" enables Phase 3 mode.
         Embedded mock A/B or grid takes precedence for those channel(s).
         """
         # Embedded mock A/B or grid: use the single embedded schedule service for that channel.
@@ -679,15 +439,7 @@ class ProgramDirector:
             if self._mock_schedule_grid_mode:
                 return self._schedule_service
 
-        schedule_source = channel_config.schedule_source
-        if schedule_source == "phase3":
-            return self._get_playlist_backed_service(channel_id, channel_config)
-        if schedule_source == "dsl":
-            return self._get_dsl_service(channel_id, channel_config)
-
-        raise ValueError(
-            f"No schedule service for schedule_source={schedule_source!r}"
-        )
+        return self._get_dsl_service(channel_id, channel_config)
 
     def _get_dsl_service(self, channel_id: str, channel_config: "ChannelConfig") -> Any:
         """Create or return a DslScheduleService for DSL-backed channels.
@@ -719,145 +471,6 @@ class ProgramDirector:
 
         setattr(self, key, svc)
         return svc
-
-    def _get_playlist_backed_service(self, channel_id: str, channel_config: ChannelConfig) -> Any:
-        """Create or return a PlaylistBackedScheduleService for phase3 channels."""
-        from retrovue.runtime.playlist_backed_schedule_service import PlaylistBackedScheduleService
-
-        # Return cached if exists
-        key = f"_hbs_{channel_id}"
-        cached = getattr(self, key, None)
-        if cached is not None:
-            return cached
-
-        schedule_config = channel_config.schedule_config
-        grid_minutes = schedule_config.get("grid_minutes", 30)
-        execution_store = self._horizon_execution_stores.get(channel_id)
-        resolved_store = self._horizon_resolved_stores.get(channel_id)
-
-        if execution_store is None:
-            self._logger.warning(
-                "[channel %s] No execution store in authoritative mode. "
-                "HorizonManager may not be initialized yet.",
-                channel_id,
-            )
-
-        service = PlaylistBackedScheduleService(
-            execution_store=execution_store,
-            resolved_store=resolved_store,
-            grid_block_minutes=grid_minutes,
-            channel_id=channel_id,
-        )
-        setattr(self, key, service)
-        return service
-
-    def _init_horizon_managers(self) -> None:
-        """Create and start HorizonManagers for Phase3 channels.
-
-        Called from start().  For each
-        Phase3 channel:
-        1. Creates ScheduleManagerBackedScheduleService and loads the schedule
-        2. Creates ExecutionWindowStore
-        3. Creates ScheduleExtender / ExecutionExtender adapters
-        4. Creates HorizonManager and runs evaluate_once() (readiness gate)
-        5. Locks all initial entries and starts the background thread
-        """
-        if self._channel_config_provider is None:
-            return
-
-        if not hasattr(self._channel_config_provider, "list_channel_ids"):
-            self._logger.warning(
-                "Channel config provider does not support list_channel_ids; "
-                "cannot initialize horizon managers",
-            )
-            return
-
-        from retrovue.runtime.execution_window_store import ExecutionWindowStore
-        from retrovue.runtime.horizon_manager import HorizonManager
-
-        for channel_id in self._channel_config_provider.list_channel_ids():
-            config = self._channel_config_provider.get_channel_config(channel_id)
-            if config is None or config.schedule_source != "phase3":
-                continue
-
-            self._logger.info(
-                "[channel %s] Initializing HorizonManager",
-                channel_id,
-            )
-
-            # Ensure ScheduleManagerBackedScheduleService exists (always needed for adapters)
-            phase3_service = self._ensure_schedule_manager_service(channel_id, config)
-            phase3_service.load_schedule(channel_id)
-
-            # Create stores
-            execution_store = ExecutionWindowStore()
-            self._horizon_execution_stores[channel_id] = execution_store
-            self._horizon_resolved_stores[channel_id] = phase3_service._resolved_store
-
-            schedule_config = config.schedule_config
-
-            # Create adapters
-            schedule_extender = _EpgHorizonExtender(phase3_service, channel_id)
-            execution_extender = _ExecutionHorizonExtender(
-                phase3_service,
-                channel_id,
-                timezone_display=schedule_config.get("timezone_display", "UTC"),
-            )
-
-            # Create HorizonManager
-            horizon_mgr = HorizonManager(
-                schedule_manager=schedule_extender,
-                planning_pipeline=execution_extender,
-                master_clock=self._embedded_clock,
-                min_epg_days=schedule_config.get("min_epg_days", 3),
-                min_execution_hours=schedule_config.get("min_execution_hours", 6),
-                evaluation_interval_seconds=schedule_config.get(
-                    "horizon_eval_interval_seconds", 30,
-                ),
-                programming_day_start_hour=schedule_config.get(
-                    "programming_day_start_hour", 6,
-                ),
-                execution_store=execution_store,
-            )
-
-            # Readiness gate: synchronous initial evaluation
-            horizon_mgr.evaluate_once()
-            report = horizon_mgr.get_health_report()
-            self._logger.info(
-                "[channel %s] HorizonManager readiness gate: "
-                "healthy=%s epg=%.1fh exec=%.1fh store_entries=%d",
-                channel_id,
-                report.is_healthy,
-                report.epg_depth_hours,
-                report.execution_depth_hours,
-                report.store_entry_count,
-            )
-
-            if not report.is_healthy:
-                raise RuntimeError(
-                    f"[channel {channel_id}] HorizonManager readiness gate "
-                    f"FAILED. epg={report.epg_depth_hours:.1f}h "
-                    f"exec={report.execution_depth_hours:.1f}h "
-                    f"(min_epg={report.min_epg_days}d "
-                    f"min_exec={report.min_execution_hours}h). "
-                    f"Cannot start with insufficient horizon depth.",
-                )
-
-            # Lock all initial entries for execution
-            locked = execution_store.lock_all()
-            if locked:
-                self._logger.info(
-                    "[channel %s] Locked %d execution entries", channel_id, locked,
-                )
-
-            # Start background evaluation thread
-            horizon_mgr.start()
-            self._horizon_managers[channel_id] = horizon_mgr
-
-        self._logger.info(
-            "HorizonManagers initialized: %d channels",
-            len(self._horizon_managers),
-        )
 
     def _prewarm_channel_schedules(self) -> None:
         """Pre-warm schedule data for all configured channels at server startup.
@@ -908,8 +521,7 @@ class ProgramDirector:
         maintains 2-3+ hours of fully-filled playout logs in
         PlaylistEvent (Postgres).
 
-        Called from start(), after _prewarm_channel_schedules() and
-        _init_horizon_managers.
+        Called from start(), after _prewarm_channel_schedules().
         """
         if self._channel_config_provider is None:
             return
@@ -923,7 +535,6 @@ class ProgramDirector:
             config = self._channel_config_provider.get_channel_config(channel_id)
             if config is None:
                 continue
-            # Only DSL channels for now (phase3 uses ExecutionWindowStore path)
             if config.schedule_source != "dsl":
                 continue
 
@@ -1382,7 +993,6 @@ class ProgramDirector:
                     from retrovue.infra.uow import session as uow_session
                     with uow_session() as db:
                         reconcile_channels(db, set(configured_ids))
-                    self._init_horizon_managers()
                     self._prewarm_channel_schedules()
                     self._init_playlog_daemons()
                     if self._health_check_stop is not None:
@@ -1509,18 +1119,6 @@ class ProgramDirector:
                     self._logger.warning("Error stopping evidence server: %s", e)
                 self._evidence_server = None
 
-            # Stop all HorizonManagers
-            for channel_id, hm in list(self._horizon_managers.items()):
-                try:
-                    hm.stop()
-                    self._logger.info(
-                        "[channel %s] HorizonManager stopped", channel_id,
-                    )
-                except Exception as e:
-                    self._logger.warning(
-                        "Error stopping HorizonManager for %s: %s", channel_id, e,
-                    )
-            self._horizon_managers.clear()
         else:
             # Non-embedded mode: stop evidence server (managers are external).
             if self._evidence_server is not None:
@@ -2088,121 +1686,6 @@ class ProgramDirector:
                 self._logger.exception("get_current_segment failed")
                 return Response(
                     content=str(e),
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
-        @self.fastapi_app.get("/debug/horizon/{channel_id}")
-        async def get_horizon_health(channel_id: str) -> Any:
-            """Horizon health report for a channel.
-
-            Returns HorizonManager health snapshot including EPG depth,
-            execution depth, compliance status, and store entry count.
-            """
-            hm = self._horizon_managers.get(channel_id)
-            if hm is None:
-                return Response(
-                    content=f"No HorizonManager for channel: {channel_id}",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-
-            try:
-                report = hm.get_health_report()
-                return {
-                    "channel_id": channel_id,
-                    "is_healthy": report.is_healthy,
-                    "epg_depth_hours": report.epg_depth_hours,
-                    "epg_compliant": report.epg_compliant,
-                    "epg_farthest_date": report.epg_farthest_date,
-                    "execution_depth_hours": report.execution_depth_hours,
-                    "execution_compliant": report.execution_compliant,
-                    "execution_window_end_utc_ms": report.execution_window_end_utc_ms,
-                    "min_epg_days": report.min_epg_days,
-                    "min_execution_hours": report.min_execution_hours,
-                    "evaluation_interval_seconds": report.evaluation_interval_seconds,
-                    "last_evaluation_utc_ms": report.last_evaluation_utc_ms,
-                    "store_entry_count": report.store_entry_count,
-                }
-            except Exception as e:
-                self._logger.exception("get_horizon_health failed for %s", channel_id)
-                return Response(
-                    content=str(e),
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
-        @self.fastapi_app.get("/api/epg/{channel_id}")
-        def get_epg(
-            channel_id: str,
-            start: Optional[str] = None,
-            end: Optional[str] = None,
-        ) -> Any:
-            """
-            Phase 5 contract: EPG endpoint for a channel.
-
-            INV-P5-004: EPG Endpoint Independence - works without active viewers.
-
-            Query params:
-                start: ISO 8601 start time (default: now)
-                end: ISO 8601 end time (default: start + 24 hours)
-
-            Returns:
-                JSON with EPG events for the time range.
-            """
-            # Get channel config
-            channel_config = None
-            if self._channel_config_provider is not None:
-                channel_config = self._channel_config_provider.get_channel_config(channel_id)
-
-            if channel_config is None:
-                return Response(
-                    content=f"Channel not found: {channel_id}",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-
-            # Only Phase 3 channels support EPG
-            if channel_config.schedule_source != "phase3":
-                return {"channel_id": channel_id, "events": [], "message": "EPG not available for this channel type"}
-
-            # Get Phase 3 schedule service (pre-warmed by _init_horizon_managers)
-            # INV-SCHEDULE-PREWARM-001: Do not call load_schedule() on request path.
-            try:
-                schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
-            except Exception as e:
-                self._logger.error("Error getting schedule service for EPG: %s", e)
-                return Response(
-                    content=f"Internal error: {e}",
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
-            # Parse time range
-            now = datetime.now(timezone.utc)
-            try:
-                if start:
-                    start_time = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                else:
-                    start_time = now
-                if end:
-                    end_time = datetime.fromisoformat(end.replace("Z", "+00:00"))
-                else:
-                    end_time = start_time + timedelta(hours=24)
-            except ValueError as e:
-                return Response(
-                    content=f"Invalid time format: {e}",
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Get EPG events
-            try:
-                events = schedule_service.get_epg_events(channel_id, start_time, end_time)
-                return {
-                    "channel_id": channel_id,
-                    "start_time": start_time.isoformat(),
-                    "end_time": end_time.isoformat(),
-                    "events": events,
-                }
-            except Exception as e:
-                self._logger.error("Error getting EPG events: %s", e)
-                return Response(
-                    content=f"Error getting EPG: {e}",
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
