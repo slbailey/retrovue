@@ -67,6 +67,7 @@ class IngestStats:
     assets_changed_enricher: int = 0
     assets_updated: int = 0
     duplicates_prevented: int = 0
+    assets_removed: int = 0
     assets_auto_ready: int = 0
     assets_needs_enrichment: int = 0
     assets_needs_review: int = 0
@@ -109,6 +110,7 @@ class CollectionIngestResult:
                 "assets_changed_content": self.stats.assets_changed_content,
                 "assets_changed_enricher": self.stats.assets_changed_enricher,
                 "assets_updated": self.stats.assets_updated,
+                "assets_removed": self.stats.assets_removed,
                 "duplicates_prevented": self.stats.duplicates_prevented,
                 "assets_auto_ready": self.stats.assets_auto_ready,
                 "assets_needs_enrichment": self.stats.assets_needs_enrichment,
@@ -399,7 +401,30 @@ class CollectionIngestService:
             pipeline = []
             pipeline_signature = []
 
-        
+        # INV-INTERSTITIAL-TYPE-STAMP-001: Auto-inject InterstitialTypeEnricher
+        # for filesystem collections whose name appears in the canonical mapping.
+        # This ensures every asset gets interstitial_type stamped from the
+        # collection name, regardless of manually configured enrichers.
+        try:
+            from ....adapters.enrichers.interstitial_type_enricher import (
+                COLLECTION_TYPE_MAP,
+                InterstitialTypeEnricher,
+            )
+            coll_name = getattr(collection, "name", "") or ""
+            if coll_name in COLLECTION_TYPE_MAP:
+                it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
+                # Prepend at priority -1 so it runs before any other enrichers
+                pipeline.insert(0, ("__interstitial_type__", -1, it_enricher))
+                pipeline_signature.insert(0, {
+                    "enricher_id": "__interstitial_type__",
+                    "priority": -1,
+                })
+        except Exception as _ite_exc:
+            logger.warning(
+                "interstitial_type_enricher_injection_failed",
+                collection=getattr(collection, "name", "?"),
+                error=str(_ite_exc),
+            )
 
         # Compute a stable checksum for the pipeline
         import json as _json
@@ -541,6 +566,9 @@ class CollectionIngestService:
             if score > 1.0:
                 return 1.0
             return score
+
+        # Track all canonical_key_hashes seen during discovery for reconciliation
+        seen_hashes: set[str] = set()
 
         for item in discovered_items or []:
             stats.assets_discovered += 1
@@ -756,6 +784,7 @@ class CollectionIngestService:
             try:
                 canonical_key = canonical_key_for(item, collection=collection, provider=provider)
                 canonical_key_hash = canonical_hash(canonical_key)
+                seen_hashes.add(canonical_key_hash)
             except IngestError as e:
                 stats.errors.append(str(e))
                 continue
@@ -791,20 +820,18 @@ class CollectionIngestService:
 
             confidence_val = _compute_confidence(item)
 
-            # Decide initial lifecycle by confidence
+            # INV-ASSET-APPROVAL-OPERATOR-ONLY-001: All new assets start in
+            # state="new" with approved_for_broadcast=False.  Confidence is
+            # informational only — it MUST NOT drive lifecycle or approval.
+            initial_state = "new"
+            initial_approved = False
+
+            # Bucket for reporting (informational, no lifecycle effect)
             if confidence_val >= auto_ready_threshold:
-                initial_state = "ready"
-                initial_approved = True
                 stats.assets_auto_ready += 1
             elif confidence_val >= review_threshold:
-                # Not auto-ready: remain NEW until enrichment actually runs
-                initial_state = "new"
-                initial_approved = False
                 stats.assets_needs_enrichment += 1
             else:
-                # Low confidence: also start NEW (no implicit enriching state)
-                initial_state = "new"
-                initial_approved = False
                 stats.assets_needs_review += 1
 
             asset = Asset(
@@ -931,6 +958,37 @@ class CollectionIngestService:
                 except Exception:
                     pass
                 created_assets.append(asset_record)
+
+        # ── Reconciliation: soft-delete assets no longer on disk ──────────
+        # Only for full collection ingest (no title/season/episode scope),
+        # and only when discovery returned at least one item (guard against
+        # importer failures that return an empty list, which would wipe all
+        # assets).
+        if scope == "collection" and seen_hashes and stats.assets_discovered > 0:
+            try:
+                stale_q = (
+                    self.db.query(Asset)
+                    .filter(
+                        Asset.collection_uuid == collection.uuid,
+                        Asset.is_deleted.is_(False),
+                        ~Asset.canonical_key_hash.in_(seen_hashes),
+                    )
+                )
+                stale_assets = stale_q.all()
+
+                for stale_asset in stale_assets:
+                    if not dry_run:
+                        stale_asset.is_deleted = True
+                        stale_asset.deleted_at = datetime.now(UTC)
+                    stats.assets_removed += 1
+                    logger.info(
+                        "ingest_reconcile_removed",
+                        asset_uuid=str(stale_asset.uuid),
+                        uri=stale_asset.uri,
+                        collection=collection.name,
+                    )
+            except Exception as exc:
+                stats.errors.append(f"reconciliation failed: {exc}")
 
         result = CollectionIngestResult(
             collection_id=str(collection.uuid),

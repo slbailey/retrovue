@@ -1394,6 +1394,12 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | BREAK-020 | INV-BREAK-010 | LAW-CONTENT-AUTHORITY | Chapter marker at 180s — no algorithmic break before 180s |
 | BREAK-021 | INV-BREAK-011 | LAW-GRID, LAW-CONTENT-AUTHORITY | Program runtime > grid duration — empty opportunities, budget <= 0 |
 | BREAK-022 | INV-BREAK-011 | LAW-GRID | Program runtime == grid duration — empty opportunities, budget == 0 |
+| BREAK-023 | INV-BREAK-012 | LAW-CONTENT-AUTHORITY | Primary segment present — no opportunity in its timeline range |
+| BREAK-024 | INV-BREAK-012 | LAW-CONTENT-AUTHORITY | All opportunities have position_ms outside primary segment range |
+| BREAK-025 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | V2 single-content block with chapter markers produces mid-content acts |
+| BREAK-026 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY | V2 multi-content block continues through _hydrate_compiled_segments |
+| BREAK-027 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY | V2 single-content without chapters uses algorithmic breaks |
+| BREAK-028 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY | V2 single-content movie type produces no mid-content breaks |
 
 ## Traffic Policy
 
@@ -1425,3 +1431,114 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | TRAFFIC-024 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | No play history — sorted by asset_id |
 | TRAFFIC-025 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | All excluded by type — select_next returns None |
 | TRAFFIC-026 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY | All excluded by cooldown — select_next returns None |
+
+---
+
+## Traffic DSL
+
+**Contract:** `docs/contracts/traffic_dsl.md`
+**Test file:** `pkg/core/tests/contracts/test_traffic_dsl.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TRAFFIC-DSL-001 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY | Channel with inventories and default_profile loads successfully |
+| TRAFFIC-DSL-002 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | Channel with inventories but no default_profile rejected |
+| TRAFFIC-DSL-003 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | default_profile referencing nonexistent profile rejected |
+| TRAFFIC-DSL-004 | INV-TRAFFIC-DSL-INVENTORY-TYPE-001 | LAW-ELIGIBILITY | Inventory with recognized asset_type accepted |
+| TRAFFIC-DSL-005 | INV-TRAFFIC-DSL-INVENTORY-TYPE-001 | LAW-ELIGIBILITY | Inventory with unrecognized asset_type rejected at load |
+| TRAFFIC-DSL-006 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-DERIVATION, LAW-CONTENT-AUTHORITY | Schedule block traffic_profile references existing profile |
+| TRAFFIC-DSL-007 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-DERIVATION | Schedule block traffic_profile references nonexistent profile rejected |
+| TRAFFIC-DSL-008 | INV-TRAFFIC-DSL-NO-PROGRAM-POLICY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Program definition with traffic fields rejected |
+| TRAFFIC-DSL-009 | INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Channel YAML with break position fields rejected |
+| TRAFFIC-DSL-010 | INV-TRAFFIC-DSL-INVENTORY-PLANNING-ONLY-001 | LAW-ELIGIBILITY, LAW-RUNTIME-AUTHORITY | Inventory resolution occurs at planning time, not during playout |
+| TRAFFIC-DSL-011 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | Block without traffic_profile inherits channel default |
+| TRAFFIC-DSL-012 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-CONTENT-AUTHORITY | Block with traffic_profile overrides channel default |
+| TRAFFIC-DSL-013 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config present → BreakConfig with matching fields |
+| TRAFFIC-DSL-014 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config absent → None returned |
+| TRAFFIC-DSL-015 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config empty → BreakConfig(0, 0, 0) |
+| TRAFFIC-DSL-016 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config partial → missing fields default to 0 |
+| TRAFFIC-DSL-017 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config wired into fill_ad_blocks → structured fill |
+| TRAFFIC-DSL-018 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | No break_config → fill_ad_blocks uses legacy flat fill |
+
+---
+
+## BreakPlan
+
+**Contract:** `docs/contracts/break_plan.md`
+**Test file:** `pkg/core/tests/contracts/test_break_plan.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| BREAKPLAN-001 | INV-BREAKPLAN-ORDERED-001 | LAW-DERIVATION, LAW-GRID | Opportunities in strictly ascending position_ms order |
+| BREAKPLAN-002 | INV-BREAKPLAN-ORDERED-001 | LAW-DERIVATION | No two opportunities share same position_ms |
+| BREAKPLAN-003 | INV-BREAKPLAN-POSITIONS-BOUNDED-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | All positions > 0 and < program_runtime_ms |
+| BREAKPLAN-004 | INV-BREAKPLAN-POSITIONS-BOUNDED-001 | LAW-GRID | No opportunity at position_ms == 0 |
+| BREAKPLAN-005 | INV-BREAKPLAN-POSITIONS-BOUNDED-001 | LAW-GRID | No opportunity at position_ms >= program_runtime_ms |
+| BREAKPLAN-006 | INV-BREAKPLAN-BUDGET-DERIVED-001 | LAW-GRID, LAW-DERIVATION | break_budget_ms == grid_duration_ms - program_runtime_ms |
+| BREAKPLAN-007 | INV-BREAKPLAN-ALLOCATION-BOUNDED-001 | LAW-GRID | Weight-derived allocations sum to <= break_budget_ms |
+| BREAKPLAN-008 | INV-BREAKPLAN-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-DERIVATION | BreakPlan fields unchanged after traffic fill |
+| BREAKPLAN-009 | INV-BREAKPLAN-IMMUTABLE-001 | LAW-IMMUTABILITY | Opportunity positions identical before and after traffic fill |
+| BREAKPLAN-010 | INV-BREAKPLAN-SOLE-AUTHORITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Traffic fill uses only BreakPlan opportunities |
+| BREAKPLAN-011 | INV-BREAKPLAN-EMPTY-VALID-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Empty BreakPlan accepted without error |
+| BREAKPLAN-012 | INV-BREAKPLAN-EMPTY-VALID-001 | LAW-GRID | Zero budget produces empty opportunities |
+| BREAKPLAN-013 | INV-BREAKPLAN-EMPTY-VALID-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Negative budget (bleed) produces empty opportunities |
+
+---
+
+## BreakStructure
+
+**Contract:** `docs/contracts/break_structure.md`
+**Test file:** `pkg/core/tests/contracts/test_break_structure.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| BREAKSTRUCTURE-001 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Full config: bumper → interstitial → station_id → bumper |
+| BREAKSTRUCTURE-002 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Station ID after interstitial, before from_break bumper |
+| BREAKSTRUCTURE-003 | INV-BREAKSTRUCTURE-BUDGET-EXACT-001 | LAW-GRID | Sum of slot durations equals allocated budget |
+| BREAKSTRUCTURE-004 | INV-BREAKSTRUCTURE-BUDGET-EXACT-001 | LAW-GRID | Zero budget produces empty slot list |
+| BREAKSTRUCTURE-005 | INV-BREAKSTRUCTURE-BUDGET-EXACT-001 | LAW-GRID | Budget conservation across range of allocations |
+| BREAKSTRUCTURE-006 | INV-BREAKSTRUCTURE-INTERSTITIAL-REQUIRED-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Positive budget always has interstitial slot |
+| BREAKSTRUCTURE-007 | INV-BREAKSTRUCTURE-INTERSTITIAL-REQUIRED-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Small budget sheds station_id then bumpers, keeps interstitial |
+| BREAKSTRUCTURE-008 | INV-BREAKSTRUCTURE-INTERSTITIAL-REQUIRED-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Station ID shed before bumpers when budget tight |
+| BREAKSTRUCTURE-009 | INV-BREAKSTRUCTURE-INTERSTITIAL-REQUIRED-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Tiny budget degenerates to single interstitial slot |
+| BREAKSTRUCTURE-010 | INV-BREAKSTRUCTURE-TRAFFIC-SCOPE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Non-interstitial slots have non-traffic fill rules |
+| BREAKSTRUCTURE-011 | INV-BREAKSTRUCTURE-TRAFFIC-SCOPE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Fill rules match slot types across all configs |
+| BREAKSTRUCTURE-012 | INV-BREAKSTRUCTURE-TRAFFIC-SCOPE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Bumpers and station IDs never have fill_rule='traffic' |
+| BREAKSTRUCTURE-013 | INV-BREAKSTRUCTURE-DETERMINISTIC-001 | LAW-DERIVATION | Same inputs produce identical structure |
+| BREAKSTRUCTURE-014 | INV-BREAKSTRUCTURE-NO-INVENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Structure only for BreakPlan opportunities |
+| BREAKSTRUCTURE-015 | INV-BREAKSTRUCTURE-NO-INVENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Zero-duration opportunity produces no structure |
+| BREAKSTRUCTURE-016 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Without bumpers: interstitial + station_id only |
+| BREAKSTRUCTURE-017 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Without station_id: bumpers + interstitial only |
+| BREAKSTRUCTURE-018 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Bare config: single interstitial slot |
+
+## Traffic Manager
+
+**Contract:** `docs/contracts/traffic_manager.md`
+**Test file:** `pkg/core/tests/contracts/test_traffic_manager.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TRAFFIC-FILL-STRUCT-001 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | With bumper config, output begins with bumper segment |
+| TRAFFIC-FILL-STRUCT-002 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Without bumper config, output is interstitial spots only |
+| TRAFFIC-FILL-STRUCT-003 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Output segment order matches BreakStructure slot order |
+| TRAFFIC-FILL-DEGRADE-001 | INV-TRAFFIC-FILL-BUMPER-DEGRADE-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | No bumper available: duration added to interstitial pool |
+| TRAFFIC-FILL-DEGRADE-002 | INV-TRAFFIC-FILL-BUMPER-DEGRADE-001 | LAW-GRID | Total duration unchanged when bumper degrades |
+| TRAFFIC-FILL-SID-001 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Station ID slot filled with station_id asset |
+| TRAFFIC-FILL-SID-002 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-CONTENT-AUTHORITY | Station ID position: after interstitial, before from_break bumper |
+| TRAFFIC-FILL-SID-003 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-GRID | Station ID degrade: no asset, duration merges to pool |
+| TRAFFIC-FILL-SID-004 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-CONTENT-AUTHORITY | Station ID bypasses traffic policy engine |
+| TRAFFIC-FILL-001 | INV-TRAFFIC-FILL-EXACT-001 | LAW-GRID | Assets + pad sum to allocated break duration |
+| TRAFFIC-FILL-002 | INV-TRAFFIC-FILL-EXACT-001 | LAW-GRID | Partial fill: assets + pad = allocated |
+| TRAFFIC-FILL-003 | INV-TRAFFIC-FILL-EXACT-001 | LAW-GRID | No assets: filler loop fills break exactly |
+| TRAFFIC-FILL-004 | INV-TRAFFIC-FILL-PAD-DISTRIBUTED-001 | LAW-GRID | 3 spots, 2000ms gap: ~667ms pads between spots |
+| TRAFFIC-FILL-005 | INV-TRAFFIC-FILL-PAD-DISTRIBUTED-001 | LAW-GRID | Indivisible gap: remainder applied to last items |
+| TRAFFIC-FILL-006 | INV-TRAFFIC-FILL-ORDER-001 | LAW-DERIVATION, LAW-CONTENT-AUTHORITY | Multi-break plan: fills in position_ms order |
+| TRAFFIC-FILL-007 | INV-TRAFFIC-FILL-NO-INVENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Filled segments only at BreakPlan positions |
+| TRAFFIC-FILL-008 | INV-TRAFFIC-FILL-ROTATION-ADVANCES-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Different asset selected in consecutive breaks |
+| TRAFFIC-FILL-009 | INV-TRAFFIC-FILL-ROTATION-ADVANCES-001 | LAW-ELIGIBILITY | Caller's original history list unchanged |
+| TRAFFIC-FILL-010 | INV-TRAFFIC-FILL-LATE-BIND-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | Compiler produces empty filler; fill at feed time |
+| TRAFFIC-FILL-011 | INV-TRAFFIC-FILL-FALLBACK-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | No library: static filler fills break exactly |
+| TRAFFIC-FILL-012 | INV-TRAFFIC-FILL-FALLBACK-001 | LAW-GRID | Filler shorter than break: wraps and fills exactly |
+| TRAFFIC-FILL-013 | INV-TRAFFIC-FILL-FALLBACK-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | No candidates: filler loop, no exception |
+| TRAFFIC-FILL-014 | INV-TRAFFIC-FILL-BUDGET-001 | LAW-GRID, LAW-DERIVATION | Sum of all break allocations <= break_budget_ms |
+| TRAFFIC-FILL-015 | INV-TRAFFIC-FILL-BUDGET-001 | LAW-GRID | Weight rounding across 5 breaks stays within budget |

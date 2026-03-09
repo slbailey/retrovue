@@ -4,11 +4,12 @@ Reads active ScheduleRevision + ordered ScheduleItems and converts them into the
 same serialized ScheduledBlock dict structure previously sourced from
 ProgramLogDay.program_log_json["segmented_blocks"].
 
-INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
-When a ScheduleItem carries compiled_segments in metadata_, the reader
-hydrates the ScheduledBlock directly from that structure, bypassing
-expand_program_block(). This preserves template-defined segment order
-(e.g. intro + movie) without runtime editorial reconstruction.
+V2 compiled_segments schema (canonical, stored in ScheduleItem.metadata_):
+    {"segment_type": str, "asset_id": str, "duration_ms": int}
+
+During hydration, asset_id is resolved to file URIs via CatalogAssetResolver.
+V1 segment fields (asset_uri, segment_duration_ms) are rejected at hydration
+time — their presence indicates stale data that must be purged and recompiled.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from retrovue.domain.entities import (
 )
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
 from retrovue.runtime.playout_log_expander import expand_program_block
+from retrovue.runtime.schedule_compiler import CompileError
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 from retrovue.runtime.dsl_schedule_service import (
     _deserialize_scheduled_block,
@@ -39,6 +41,8 @@ def expand_editorial_block(
     filler_uri: str,
     filler_duration_ms: int,
     asset_library: Any = None,
+    policy: Any = None,
+    break_config: Any = None,
 ) -> ScheduledBlock:
     """Canonical Tier-1 → Tier-2 block expansion pipeline.
 
@@ -59,6 +63,8 @@ def expand_editorial_block(
         filler_uri=filler_uri,
         filler_duration_ms=filler_duration_ms,
         asset_library=asset_library,
+        policy=policy,
+        break_config=break_config,
     )
 
 
@@ -68,26 +74,46 @@ def _hydrate_compiled_segments(
     asset_id: str,
     start_utc_ms: int,
     slot_duration_ms: int,
+    resolver: CatalogAssetResolver | None = None,
 ) -> ScheduledBlock:
-    """Build a ScheduledBlock from pre-compiled template segments.
+    """Build a ScheduledBlock from V2 compiled segments.
 
-    INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
-    Template-defined segments are authoritative. Runtime must not reshape
-    them. Post-content filler is appended only as slot completion behavior.
+    V2 compiled_segments schema (canonical):
+        {"segment_type": str, "asset_id": str, "duration_ms": int}
+
+    During hydration, asset_id is resolved to a file URI via the
+    CatalogAssetResolver. V1 segment fields (asset_uri, segment_duration_ms)
+    are rejected — their presence indicates stale V1 data that must be purged.
     """
     segments: list[ScheduledSegment] = []
     content_total_ms = 0
 
     for cs in compiled_segments:
+        # Guard: reject V1 segment schema fields
+        if "asset_uri" in cs or "segment_duration_ms" in cs:
+            v1_keys = [k for k in ("asset_uri", "segment_duration_ms") if k in cs]
+            raise CompileError(
+                f"V1 segment schema detected in compiled_segments: "
+                f"found keys {v1_keys}. V1 segment fields are no longer supported. "
+                f"Purge stale schedule data and recompile."
+            )
+
+        dur_ms = int(cs["duration_ms"])
+        seg_asset_id = cs.get("asset_id", "")
+
+        # Resolve asset_id → file URI via catalog
+        asset_uri = ""
+        if seg_asset_id and resolver is not None:
+            meta = resolver.lookup(seg_asset_id)
+            asset_uri = meta.file_uri or ""
+
         segments.append(ScheduledSegment(
             segment_type=cs["segment_type"],
-            asset_uri=cs["asset_uri"],
-            asset_start_offset_ms=int(cs.get("asset_start_offset_ms", 0)),
-            segment_duration_ms=int(cs["segment_duration_ms"]),
-            gain_db=cs.get("gain_db", 0.0),
-            is_primary=cs.get("is_primary", False),
+            asset_uri=asset_uri,
+            asset_start_offset_ms=0,
+            segment_duration_ms=dur_ms,
         ))
-        content_total_ms += cs["segment_duration_ms"]
+        content_total_ms += dur_ms
 
     # Post-content filler for remaining slot time (slot completion, not editorial)
     remaining_ms = max(0, slot_duration_ms - content_total_ms)
@@ -177,16 +203,56 @@ def load_segmented_blocks_from_active_revision(
         slot_duration_ms = int(item.duration_sec) * 1000
 
         # INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
-        # Template-derived blocks carry compiled_segments — use them directly
-        # instead of heuristic expansion via expand_program_block().
+        # Template-derived blocks carry compiled_segments.
         compiled_segments = meta.get("compiled_segments")
         if compiled_segments:
-            expanded = _hydrate_compiled_segments(
-                compiled_segments=compiled_segments,
-                asset_id=raw_asset_id,
-                start_utc_ms=start_utc_ms,
-                slot_duration_ms=slot_duration_ms,
-            )
+            # INV-BREAK-V2-SINGLE-CHAPTER-001: single-content blocks without
+            # intro/outro wrappers MUST route through expand_program_block()
+            # so chapter markers from the catalog produce mid-content breaks
+            # via the dedicated break detection stage (INV-BREAK-008).
+            content_segs = [
+                s for s in compiled_segments if s.get("segment_type") == "content"
+            ]
+            structural_segs = [
+                s for s in compiled_segments
+                if s.get("segment_type") in ("intro", "outro")
+            ]
+
+            if len(content_segs) == 1 and not structural_segs:
+                cs = content_segs[0]
+                seg_asset_id = cs.get("asset_id", raw_asset_id)
+                asset_meta = resolver.lookup(seg_asset_id)
+
+                chapter_ms = None
+                if asset_meta.chapter_markers_sec:
+                    chapter_ms = tuple(
+                        int(c * 1000)
+                        for c in asset_meta.chapter_markers_sec
+                        if c > 0
+                    )
+
+                channel_type = "movie" if item.content_type == "movie" else "network"
+
+                expanded = expand_program_block(
+                    asset_id=seg_asset_id,
+                    asset_uri=asset_meta.file_uri or "",
+                    start_utc_ms=start_utc_ms,
+                    slot_duration_ms=slot_duration_ms,
+                    episode_duration_ms=int(cs["duration_ms"]),
+                    chapter_markers_ms=chapter_ms,
+                    channel_type=channel_type,
+                    gain_db=asset_meta.loudness_gain_db,
+                )
+            else:
+                # Multi-segment blocks (accumulate, intro/outro): the segment
+                # structure itself defines break opportunities (INV-BREAK-004).
+                expanded = _hydrate_compiled_segments(
+                    compiled_segments=compiled_segments,
+                    asset_id=raw_asset_id,
+                    start_utc_ms=start_utc_ms,
+                    slot_duration_ms=slot_duration_ms,
+                    resolver=resolver,
+                )
         else:
             # Legacy path: heuristic expansion for non-template items
             asset_meta = resolver.lookup(raw_asset_id)

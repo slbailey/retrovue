@@ -74,6 +74,7 @@ class PlaylistBuilderDaemon:
         filler_duration_ms: int = 3_650_000,
         master_clock=None,
         channel_tz: str = "UTC",
+        dsl_path: str | None = None,
     ):
         self._channel_id = channel_id
         self._min_hours = min_hours
@@ -84,6 +85,27 @@ class PlaylistBuilderDaemon:
         self._filler_duration_ms = filler_duration_ms
         self._clock = master_clock
         self._channel_tz = ZoneInfo(channel_tz)
+
+        # Traffic policy + break config resolved from channel DSL
+        self._traffic_policy: Any = None
+        self._break_config: Any = None
+        if dsl_path:
+            try:
+                from pathlib import Path
+                from retrovue.runtime.dsl_schedule_service import parse_dsl
+                from retrovue.runtime.traffic_dsl import (
+                    resolve_break_config,
+                    resolve_traffic_policy,
+                )
+                dsl = parse_dsl(Path(dsl_path).read_text())
+                if "traffic" in dsl:
+                    self._traffic_policy = resolve_traffic_policy(dsl, {})
+                    self._break_config = resolve_break_config(dsl)
+            except Exception as exc:
+                logger.warning(
+                    "PlaylistBuilder[%s]: could not resolve traffic config: %s",
+                    channel_id, exc,
+                )
 
         # State
         self._consecutive_zero_fills: int = 0
@@ -360,6 +382,8 @@ class PlaylistBuilderDaemon:
                         filler_uri=self._filler_path,
                         filler_duration_ms=self._filler_duration_ms,
                         asset_library=self._get_asset_library(db=db),
+                        policy=self._traffic_policy,
+                        break_config=self._break_config,
                     )
 
                     # Write to PlaylistEvent
@@ -437,6 +461,8 @@ class PlaylistBuilderDaemon:
                 filler_uri=self._filler_path,
                 filler_duration_ms=self._filler_duration_ms,
                 asset_library=self._get_asset_library(db=db),
+                policy=self._traffic_policy,
+                break_config=self._break_config,
             )
             block_start_dt = datetime.fromtimestamp(
                 block["start_utc_ms"] / 1000.0, tz=timezone.utc
