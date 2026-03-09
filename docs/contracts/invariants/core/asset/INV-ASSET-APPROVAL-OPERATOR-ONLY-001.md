@@ -10,7 +10,7 @@ Broadcast approval is an editorial decision that requires human judgement. If th
 
 ## Guarantee
 
-`approved_for_broadcast` MUST be set to `TRUE` only by explicit operator action (via `asset_update.update_asset_review_status()`). The enrichment pipeline (`ingest_orchestrator.ingest_collection_assets()`) MUST NOT set `approved_for_broadcast = TRUE`.
+`approved_for_broadcast` MUST be set to `TRUE` only by explicit operator action (via `asset_update.update_asset_review_status()`). Neither the enrichment pipeline (`asset_enrich.enrich_asset()`) nor the ingest pipeline (`CollectionIngestService.ingest_collection()`) MUST set `approved_for_broadcast = TRUE`.
 
 ## Preconditions
 
@@ -34,6 +34,8 @@ Simulate a full enrichment cycle with valid probe data. Assert that the resultin
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — enrichment pipeline never assigns `approved_for_broadcast = True`
+- `pkg/core/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` resets `approved_for_broadcast = False` (canonical enforcement point)
+- `pkg/core/src/retrovue/cli/commands/_ops/collection_ingest_service.py` — `ingest_collection()` creates assets with `approved_for_broadcast = False`
+- `pkg/core/src/retrovue/cli/commands/_ops/source_ingest_service.py` — `ingest_source()` delegates to `CollectionIngestService`; no direct approval
 - `pkg/core/src/retrovue/usecases/asset_update.py` — `update_asset_review_status()` is the sole approval path
 - Error tag: `INV-ASSET-APPROVAL-OPERATOR-ONLY-001-VIOLATED`

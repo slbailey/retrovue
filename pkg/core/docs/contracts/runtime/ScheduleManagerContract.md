@@ -180,7 +180,7 @@ ChannelManager expects `list[dict]` per segment:
 ## 8. Runtime Architecture
 
 ```
-config/channels.json
+config/channels/*.yaml
     └─► schedule_source: "phase3"
             │
             ├─► ProgramDirector._init_horizon_managers()

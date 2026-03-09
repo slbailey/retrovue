@@ -127,10 +127,7 @@ Notes:
 
 - **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work, ensuring atomicity across all collections. If any collection ingest fails fatally, the entire source ingest operation MUST be rolled back.
 - For each eligible collection (`sync_enabled=true` AND `ingestible=true`), the ingest process follows the exact same rules as defined in the [Collection Ingest](CollectionIngestContract.md).
-- New Assets follow collection-level confidence scoring rules at creation time:
-  - If score ≥ `auto_ready_threshold`: create with `state=ready` and `approved_for_broadcast=true`.
-  - If `review_threshold` ≤ score < `auto_ready_threshold`: create with `state=enriching` and `approved_for_broadcast=false`.
-  - If score < `review_threshold`: create with `state=enriching`, `approved_for_broadcast=false`, and flag for operator attention.
+- New Assets follow the canonical lifecycle: all assets are created with `state='new'` and `approved_for_broadcast=False`. Confidence scoring is informational only and MUST NOT drive lifecycle or approval decisions. Promotion to `ready` occurs only through `enrich_asset()` after enrichment completes. Approval requires explicit operator action (INV-ASSET-APPROVAL-OPERATOR-ONLY-001).
 - Duplicate detection logic MUST prevent the creation of duplicate Asset records within each collection, following the Collection Ingest contract rules.
 - Any enrichment hooks MAY run during ingest per collection, following the same per-asset failure handling.
 - Assets created by this operation MUST NOT be marked as approved for broadcast automatically.

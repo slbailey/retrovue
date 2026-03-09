@@ -14,20 +14,40 @@ Traffic policy does not query databases. Traffic policy does not resolve assets.
 
 The policy layer is testable with no database, no filesystem, no scheduler dependencies.
 
+TrafficPolicy is the runtime form of a TrafficProfile declared in the Channel DSL (`traffic_dsl.md`). TrafficPolicy evaluates candidate interstitial assets but does not determine where breaks occur. Break placement is governed by `break_detection.md`.
+
+This contract does not define YAML structure, inventory declarations, profile naming, or profile resolution order. Those concerns are governed by `traffic_dsl.md`. This contract defines only the runtime evaluation semantics applied after configuration has been resolved.
+
+### Authority Boundary
+
+This contract owns:
+- Runtime candidate evaluation: type filtering, cooldown enforcement, daily cap, rotation sort
+- Filter evaluation order
+- Purity guarantee (no I/O, no mutation)
+- Edge case behavior (empty inputs, no eligible candidates)
+
+This contract does NOT own:
+- YAML structure or profile declarations (`traffic_dsl.md`)
+- Inventory resolution or candidate pool construction (`traffic_dsl.md`)
+- Profile naming, default_profile, or block-level override resolution (`traffic_dsl.md`)
+- Break opportunity identification or placement (`break_detection.md`)
+
 ---
 
 ## Domain Objects
 
 ### TrafficPolicy
 
-Configuration object declaring channel-level traffic rules.
+Runtime evaluation object containing resolved traffic rules. TrafficPolicy is the runtime form of a resolved TrafficProfile declared in the channel DSL (`traffic_dsl.md`). Inventory declarations, profile naming, default profile resolution, and block-level overrides are governed by `traffic_dsl.md` — this object receives the resolved result.
+
+A TrafficPolicy may apply at channel scope or at schedule-block scope, depending on how `traffic_dsl.md` resolution selected the profile. This contract is indifferent to scope — it evaluates candidates identically regardless of how the policy was resolved.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allowed_types` | list[str] | `["commercial", "promo", "station_id", "psa", "stinger", "bumper", "filler"]` | Interstitial types permitted on this channel. |
-| `default_cooldown_ms` | int | `3_600_000` | Minimum ms between re-plays of the same asset on this channel. |
+| `allowed_types` | list[str] | `["commercial", "promo", "station_id", "psa", "stinger", "bumper", "filler"]` | Interstitial types permitted for evaluation. When instantiated from a DSL TrafficProfile, the DSL-level default (union of inventory `asset_type` values) takes precedence over this structural default. |
+| `default_cooldown_ms` | int | `3_600_000` | Minimum ms between re-plays of the same asset. |
 | `type_cooldowns_ms` | dict[str, int] | `{}` | Per-type cooldown overrides in ms. |
-| `max_plays_per_day` | int | `0` | Max plays per asset per channel per channel traffic day. `0` = unlimited. |
+| `max_plays_per_day` | int | `0` | Max plays per asset per channel per traffic day. `0` = unlimited. |
 
 ### PlayRecord
 

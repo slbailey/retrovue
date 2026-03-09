@@ -157,6 +157,7 @@ Discovered collections from 'My Plex Server' (dry-run):
 - **B-8:** The command MUST obtain the importer for the Source's type.
 - **B-9:** The importer MUST expose a discovery capability that returns all collections (libraries, sections, folders, etc.) visible to that Source.
 - **B-10:** If the importer claims to support discovery but fails interface compliance (missing required discovery capability, raises interface violation), the command MUST exit with code 1 and emit a human-readable error.
+- **B-11:** For filesystem sources, collection discovery MUST enumerate the immediate subdirectories of the source's `base_path` and return one collection per subdirectory. Discovery MUST NOT recurse beyond the first level. Empty subdirectories MUST still be returned as collections. Symlinks that resolve to directories MUST be included. Non-directory entries (files) at the top level MUST be ignored.
 
 ---
 
@@ -186,7 +187,7 @@ Discovered collections from 'My Plex Server' (dry-run):
 ### Validation Errors
 
 - Source not found: "Error: Source 'invalid-source' not found"
-- Unsupported source type: "Error: Source type 'filesystem' not supported for discovery"
+- Unsupported source type: "Error: Source type '<type>' not supported for discovery"
 - Missing configuration: "Error: Plex source 'My Plex' missing base_url or token"
 - Unsupported source type: "Error: Source type does not support discovery"
 - Discovery capability failure: "Error: Source discovery failed"
@@ -220,6 +221,17 @@ retrovue source discover plex-5063d926
 retrovue source discover "My Plex Server" --json
 ```
 
+### Filesystem Discovery
+
+```bash
+# Discover collections from filesystem source (one per subdirectory)
+retrovue source discover "Interstitials"
+
+# Given base_path=/mnt/data/Interstitials with subdirs:
+#   bumpers/ commercials/ promos/ station_ids/
+# Discovers 4 collections: bumpers, commercials, promos, station_ids
+```
+
 ### Dry-run Testing
 
 ```bash
@@ -244,8 +256,8 @@ retrovue source discover "Test Source" --test-db --json
 
 ## Supported Source Types
 
-- **Plex**: Full collection discovery from Plex Media Server
-- **Filesystem**: Not supported (collections are directory-based)
+- **Plex**: Full collection discovery from Plex Media Server libraries
+- **Filesystem**: Collection discovery from immediate subdirectories of the source base path. Each subdirectory becomes a separate collection. Discovery does not recurse beyond the first level.
 
 ---
 
