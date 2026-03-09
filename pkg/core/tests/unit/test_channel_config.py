@@ -22,7 +22,6 @@ from retrovue.runtime.config import (
     DEFAULT_PROGRAM_FORMAT,
     MOCK_CHANNEL_CONFIG,
 )
-from retrovue.runtime.providers import FileChannelConfigProvider
 
 
 class TestProgramFormat:
@@ -179,86 +178,6 @@ class TestInlineChannelConfigProvider:
         assert "mock" in provider.list_channel_ids()
 
 
-class TestFileChannelConfigProvider:
-    """Tests for FileChannelConfigProvider."""
-
-    def test_load_valid_file(self):
-        """FileChannelConfigProvider loads valid JSON file."""
-        content = json.dumps({
-            "channels": [
-                {
-                    "channel_id": "test",
-                    "channel_id_int": 10,
-                    "name": "Test Channel",
-                    "program_format": {
-                        "video": {"width": 1920, "height": 1080, "frame_rate": "30/1"},
-                        "audio": {"sample_rate": 48000, "channels": 2},
-                    },
-                    "schedule_source": "phase3",
-                    "schedule_config": {},
-                }
-            ]
-        })
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(content)
-            f.flush()
-            path = Path(f.name)
-
-        try:
-            provider = FileChannelConfigProvider(path)
-            config = provider.get_channel_config("test")
-
-            assert config is not None
-            assert config.channel_id == "test"
-            assert config.channel_id_int == 10
-            assert config.name == "Test Channel"
-            assert "test" in provider.list_channel_ids()
-        finally:
-            path.unlink()
-
-    def test_missing_file(self):
-        """FileChannelConfigProvider handles missing file gracefully."""
-        provider = FileChannelConfigProvider(Path("/nonexistent/channels.json"))
-
-        assert provider.get_channel_config("mock") is None
-        assert provider.list_channel_ids() == []
-
-    def test_reload(self):
-        """reload() re-reads from file."""
-        content1 = json.dumps({
-            "channels": [
-                {"channel_id": "ch1", "channel_id_int": 1, "name": "Channel 1", "schedule_source": "phase3"}
-            ]
-        })
-        content2 = json.dumps({
-            "channels": [
-                {"channel_id": "ch2", "channel_id_int": 2, "name": "Channel 2", "schedule_source": "phase3"}
-            ]
-        })
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(content1)
-            f.flush()
-            path = Path(f.name)
-
-        try:
-            provider = FileChannelConfigProvider(path)
-            assert "ch1" in provider.list_channel_ids()
-            assert "ch2" not in provider.list_channel_ids()
-
-            # Update file
-            with open(path, "w") as f:
-                f.write(content2)
-
-            # Reload
-            provider.reload()
-            assert "ch1" not in provider.list_channel_ids()
-            assert "ch2" in provider.list_channel_ids()
-        finally:
-            path.unlink()
-
-
 class TestRuntimeConfig:
     """Tests for RuntimeConfig dataclass."""
 
@@ -267,7 +186,6 @@ class TestRuntimeConfig:
         config = RuntimeConfig()
         assert config.program_director_port == 8000
         assert config.channel_manager_port == 9000
-        assert config.channels_config == "config/channels.json"
         assert config.schedules_dir == "config/schedules"
 
     def test_load_from_file(self):
@@ -275,7 +193,6 @@ class TestRuntimeConfig:
         content = json.dumps({
             "program_director_port": 8080,
             "channel_manager_port": 9090,
-            "channels_config": "custom/channels.json",
             "schedules_dir": "custom/schedules",
         })
 
@@ -288,7 +205,6 @@ class TestRuntimeConfig:
             config = RuntimeConfig.load(path)
             assert config.program_director_port == 8080
             assert config.channel_manager_port == 9090
-            assert config.channels_config == "custom/channels.json"
             assert config.schedules_dir == "custom/schedules"
         finally:
             Path(path).unlink()
@@ -314,15 +230,12 @@ class TestRuntimeConfig:
             config = RuntimeConfig.load(path)
             assert config.program_director_port == 7000
             assert config.channel_manager_port == 9000  # default
-            assert config.channels_config == "config/channels.json"  # default
         finally:
             Path(path).unlink()
 
     def test_get_paths(self):
-        """get_channels_config_path() and get_schedules_dir_path() return Path objects."""
+        """get_schedules_dir_path() returns Path object."""
         config = RuntimeConfig(
-            channels_config="my/channels.json",
             schedules_dir="my/schedules",
         )
-        assert config.get_channels_config_path() == Path("my/channels.json")
         assert config.get_schedules_dir_path() == Path("my/schedules")

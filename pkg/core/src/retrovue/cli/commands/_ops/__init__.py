@@ -34,9 +34,6 @@ from .source_delete_ops import (
     source_is_protected_for_prod_delete,
 )
 from .source_ingest_service import (
-    CollectionIngestResult as SourceCollectionIngestResult,
-)
-from .source_ingest_service import (
     SourceIngestResult,
     SourceIngestService,
 )
@@ -69,6 +66,5 @@ __all__ = [
     # Source ingest service exports
     "SourceIngestResult",
     "SourceIngestService",
-    "SourceCollectionIngestResult",
     "resolve_source_selector_for_ingest",
 ]

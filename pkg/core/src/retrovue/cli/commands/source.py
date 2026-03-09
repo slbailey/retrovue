@@ -1576,95 +1576,85 @@ def source_ingest(
 ):
     """
     Ingest all sync-enabled, ingestible collections from a source.
-    
-    This command finds all collections that are both sync-enabled and ingestible,
-    then processes them using the ingest orchestrator.
-    
+
+    Delegates each eligible collection to CollectionIngestService, which
+    handles discovery, enrichment, and metadata persistence per the
+    Collection Ingest contract.
+
     Examples:
-        retrovue source --name "My Plex Server" ingest
-        retrovue source plex-5063d926 ingest
-        retrovue source "My Plex Server" ingest --json
+        retrovue source ingest "My Plex Server"
+        retrovue source ingest plex-5063d926 --json
+        retrovue source ingest "My Plex Server" --dry-run
     """
+    from ._ops.source_ingest_service import SourceIngestService
+
     with session() as db:
         try:
-            # Get the source first to validate it exists
+            # B-1: Resolve source
             source = _resolve_source_by_id(db, source_id)
             if not source:
                 typer.echo(f"Error: Source '{source_id}' not found", err=True)
                 raise typer.Exit(1)
-            
-            # Get sync-enabled, ingestible collections for this source
-            collections = db.query(Collection).filter(
+
+            # B-2: Early exit if no eligible collections
+            sync_collections = db.query(Collection).filter(
                 Collection.source_id == source.id,
-                Collection.sync_enabled
+                Collection.sync_enabled.is_(True),
             ).all()
-            
-            if not collections:
+
+            if not sync_collections:
                 typer.echo(f"No sync-enabled collections found for source '{source.name}'")
                 typer.echo("Use 'retrovue collection update <name> --sync-enable' to enable collections")
                 return
-            
-            # Filter to only ingestible collections using persisted field
-            ingestible_collections = []
-            for collection in collections:
-                if collection.ingestible:
-                    ingestible_collections.append(collection)
-                else:
-                    typer.echo(f"  Skipping '{collection.name}' - not ingestible (no valid local paths)")
-            
-            if not ingestible_collections:
+
+            ingestible = [c for c in sync_collections if c.ingestible]
+            if not ingestible:
+                for c in sync_collections:
+                    if not c.ingestible:
+                        typer.echo(f"  Skipping '{c.name}' - not ingestible (no valid local paths)")
                 typer.echo(f"No ingestible collections found for source '{source.name}'")
                 typer.echo("Configure path mappings and ensure local paths are accessible")
                 return
-            
-            
-            # Import the ingest orchestrator
-            from ...usecases.ingest_orchestrator import ingest_collection_assets
-            
-            # Process each ingestible collection
-            total_summary = {"total": 0, "enriched": 0, "skipped": 0, "failed": 0}
-            
-            for collection in ingestible_collections:
-                if dry_run:
-                    typer.echo(f"Would ingest collection: {collection.name}")
-                else:
-                    typer.echo(f"Ingesting collection: {collection.name}...")
-                    try:
-                        summary = ingest_collection_assets(db, collection)
-                        # Aggregate summaries
-                        for key in total_summary:
-                            total_summary[key] += summary.get(key, 0)
-                        
-                        typer.echo(f"  Processed: {summary['total']} assets")
-                        typer.echo(f"  Enriched: {summary['enriched']} assets")
-                        typer.echo(f"  Skipped: {summary['skipped']} assets")
-                        typer.echo(f"  Failed: {summary['failed']} assets")
-                    except Exception as e:
-                        typer.echo(f"  Error ingesting collection '{collection.name}': {e}", err=True)
-                        continue
-            
-            if dry_run:
-                typer.echo(f"Would ingest {len(ingestible_collections)} collections")
+
+            svc = SourceIngestService(db)
+            result = svc.ingest_source(source, dry_run=dry_run)
+            result_dict = result.to_dict()
+
+            if json_output:
+                typer.echo(json.dumps(result_dict, indent=2, default=str))
             else:
-                typer.echo("\nIngest complete:")
-                typer.echo(f"  Total assets processed: {total_summary['total']}")
-                typer.echo(f"  Successfully enriched: {total_summary['enriched']}")
-                typer.echo(f"  Skipped: {total_summary['skipped']}")
-                typer.echo(f"  Failed: {total_summary['failed']}")
-                
-                if json_output:
-                    import json
-                    result = {
-                        "source": {
-                            "id": str(source.id),
-                            "name": source.name,
-                            "type": source.type
-                        },
-                        "collections_ingested": len(ingestible_collections),
-                        "summary": total_summary
-                    }
-                    typer.echo(json.dumps(result, indent=2))
-                    
+                # Human-readable output
+                status = result_dict["status"]
+                stats = result_dict["stats"]
+                typer.echo(
+                    f"Source ingest {status}: "
+                    f"{result.collections_processed} collections processed"
+                    + (f", {result.collections_skipped} skipped" if result.collections_skipped else "")
+                )
+                for cr in result_dict.get("collection_results", []):
+                    cr_stats = cr.get("stats", {})
+                    typer.echo(
+                        f"  {cr['collection_name']}: "
+                        f"{cr_stats.get('assets_discovered', 0)} discovered, "
+                        f"{cr_stats.get('assets_ingested', 0)} ingested, "
+                        f"{cr_stats.get('assets_skipped', 0)} skipped"
+                    )
+                if result.errors:
+                    for err in result.errors:
+                        typer.echo(f"  Error: {err}", err=True)
+                typer.echo(
+                    f"\nTotals: "
+                    f"{stats['assets_discovered']} discovered, "
+                    f"{stats['assets_ingested']} ingested, "
+                    f"{stats['assets_skipped']} skipped"
+                )
+
+            # B-5: Exit code 2 for partial success
+            if result_dict["status"] == "partial":
+                raise typer.Exit(2)
+
+        except typer.Exit:
+            raise
         except Exception as e:
             typer.echo(f"Error ingesting from source: {e}", err=True)
             raise typer.Exit(1)

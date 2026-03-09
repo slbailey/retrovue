@@ -38,29 +38,23 @@ def _parse_uuid(value: Any) -> uuid_mod.UUID | None:
 
 
 def _infer_content_type(block: dict[str, Any]) -> str:
-    """Infer ScheduleItem.content_type from compiler block metadata.
+    """Infer ScheduleItem.content_type from V2 compiler block metadata.
 
-    INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
-    When compiled_segments is present (template-derived block), derive
-    content_type from the primary segment's source type. This eliminates
-    dependence on title heuristics for template blocks.
+    V2 blocks carry a selector dict with fill_mode. Long-form single-asset
+    programs (fill_mode=single with episode_duration > 1h) are movies.
+    Selector rating filters also indicate movie content.
 
-    Keep this conservative for legacy blocks; unknowns default to "episode".
+    Unknowns default to "episode".
     """
-    # Template-derived blocks: derive from compiled_segments primary source
-    compiled_segs = block.get("compiled_segments")
-    if compiled_segs:
-        for seg in compiled_segs:
-            if seg.get("is_primary"):
-                if seg.get("source_type") == "pool":
-                    return "movie"
-                return "episode"
-
     selector = block.get("selector")
     if isinstance(selector, dict):
-        # movie selector paths include duration/rating-oriented filters in practice
         if any(k in selector for k in ("rating_include", "rating_exclude", "max_duration_sec")):
             return "movie"
+
+    # Long-form content heuristic: episode_duration > 1 hour = movie
+    ep_dur = block.get("episode_duration_sec", 0)
+    if ep_dur and ep_dur > 3600:
+        return "movie"
 
     title = str(block.get("title") or "").lower()
     if "movie" in title:
@@ -149,8 +143,6 @@ def write_active_revision_from_compiled_schedule(
                 "collection_raw": block.get("collection"),
                 "selector": block.get("selector"),
                 "episode_duration_sec": block.get("episode_duration_sec"),
-                "template_id": block.get("template_id"),
-                "epg_title": block.get("epg_title"),
                 "compiled_segments": block.get("compiled_segments"),
             },
         )

@@ -1,14 +1,16 @@
 """Contract tests for INV-TIER2-EXPANSION-CANONICAL-001.
 
-All Tier-2 writers MUST call expand_editorial_block() with asset_library.
-Omitting asset_library causes silent fallback to static filler instead of
-real interstitials from the channel's traffic configuration.
+All Tier-2 writers MUST call expand_editorial_block() with asset_library
+and break_config. Omitting asset_library causes silent fallback to static
+filler. Omitting break_config causes legacy flat-fill instead of structured
+break expansion.
 
 Rules:
 1. rebuild_tier2() MUST pass asset_library to expand_editorial_block().
 2. PlaylistBuilderDaemon._extend_to_target() MUST pass asset_library to
    expand_editorial_block().
 3. Both writers MUST produce identical Tier-2 output for the same input.
+4. rebuild_tier2() MUST pass break_config to expand_editorial_block().
 """
 
 from __future__ import annotations
@@ -140,3 +142,38 @@ class TestRule3ExpansionEquivalence:
             "rebuild and daemon import different expand_editorial_block functions. "
             "Both MUST use the canonical function from schedule_items_reader."
         )
+
+
+# ---------------------------------------------------------------------------
+# Rule 4: rebuild_tier2 MUST pass break_config
+# ---------------------------------------------------------------------------
+
+class TestRule4RebuildPassesBreakConfig:
+    """Rule 4: rebuild_tier2() MUST pass break_config to expand_editorial_block()."""
+
+    def test_rebuild_tier2_passes_break_config(self):
+        """Inspect rebuild_tier2 source to verify expand_editorial_block()
+        is called with break_config keyword argument.
+
+        VIOLATION: rebuild_tier2() calls expand_editorial_block() without
+        break_config, causing fill_ad_blocks() to use legacy flat-fill
+        instead of structured break expansion.
+        """
+        from retrovue.usecases.schedule_rebuild import rebuild_tier2
+
+        source = textwrap.dedent(inspect.getsource(rebuild_tier2))
+        calls = _find_expand_editorial_block_calls(source)
+
+        assert calls, (
+            "INV-TIER2-EXPANSION-CANONICAL-001 Rule 4: "
+            "rebuild_tier2() does not call expand_editorial_block() at all."
+        )
+
+        for call in calls:
+            assert "break_config" in call["kwargs"], (
+                f"INV-TIER2-EXPANSION-CANONICAL-001 Rule 4: "
+                f"rebuild_tier2() calls expand_editorial_block() at line {call['line']} "
+                f"WITHOUT break_config kwarg. Found kwargs: {call['kwargs']}. "
+                f"All Tier-2 writers MUST pass break_config to produce "
+                f"structured breaks matching the runtime path."
+            )

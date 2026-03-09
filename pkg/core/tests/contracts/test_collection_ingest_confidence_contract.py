@@ -29,6 +29,7 @@ class TestCollectionIngestConfidenceContract:
         CONTRACT: Collection ingest JSON MUST include thresholds and confidence bucket stats.
         - thresholds: { "auto_ready": float, "review": float }
         - stats: assets_auto_ready, assets_needs_enrichment, assets_needs_review
+        Confidence buckets are INFORMATIONAL ONLY — they do not drive lifecycle.
         """
         # Arrange minimal DB context and collection
         mock_db_cm = MagicMock()
@@ -89,12 +90,13 @@ class TestCollectionIngestConfidenceContract:
     @patch("retrovue.cli.commands.collection._get_db_context")
     @patch("retrovue.cli.commands.collection.resolve_collection_selector")
     @patch("retrovue.cli.commands.collection.CollectionIngestService")
-    def test_verbose_created_assets_include_state_approval_confidence(
+    def test_verbose_created_assets_always_new_never_approved(
         self, mock_service_cls, mock_resolve, mock_get_db_ctx
     ):
         """
-        CONTRACT: With --verbose-assets, created_assets SHOULD include
-        state, approved_for_broadcast, and confidence values.
+        CONTRACT (INV-ASSET-APPROVAL-OPERATOR-ONLY-001): With --verbose-assets,
+        created_assets MUST always show state="new" and approved_for_broadcast=False.
+        Confidence is informational only and does not drive lifecycle.
         """
         mock_db_cm = MagicMock()
         mock_db = MagicMock()
@@ -131,16 +133,16 @@ class TestCollectionIngestConfidenceContract:
                     "uuid": "a1",
                     "source_uri": "file:///a.mp4",
                     "canonical_uri": "/media/a.mp4",
-                    "state": "ready",
-                    "approved_for_broadcast": True,
+                    "state": "new",
+                    "approved_for_broadcast": False,
                     "confidence": 0.97,
                 },
                 {
                     "uuid": "b2",
                     "source_uri": "file:///b.mp4",
                     "canonical_uri": "/media/b.mp4",
-                    "state": "ready",
-                    "approved_for_broadcast": True,
+                    "state": "new",
+                    "approved_for_broadcast": False,
                     "confidence": 0.91,
                 },
             ],
@@ -163,7 +165,8 @@ class TestCollectionIngestConfidenceContract:
 
         assert result.exit_code == 0
         data = json.loads(result.stdout)
-        assert data["created_assets"][0]["state"] == "ready"
-        assert data["created_assets"][0]["approved_for_broadcast"] is True
-        assert 0.0 <= data["created_assets"][0]["confidence"] <= 1.0
-
+        # INV-ASSET-APPROVAL-OPERATOR-ONLY-001: all assets start new, never approved
+        for asset in data["created_assets"]:
+            assert asset["state"] == "new"
+            assert asset["approved_for_broadcast"] is False
+            assert 0.0 <= asset["confidence"] <= 1.0

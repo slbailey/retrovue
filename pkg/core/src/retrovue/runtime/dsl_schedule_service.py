@@ -68,12 +68,15 @@ def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
         if s.is_primary:
             d["is_primary"] = True
         segments.append(d)
-    return {
+    d = {
         "block_id": block.block_id,
         "start_utc_ms": block.start_utc_ms,
         "end_utc_ms": block.end_utc_ms,
         "segments": segments,
     }
+    if block.traffic_profile:
+        d["traffic_profile"] = block.traffic_profile
+    return d
 
 
 def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
@@ -102,6 +105,7 @@ def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
             )
             for s in d["segments"]
         ),
+        traffic_profile=d.get("traffic_profile"),
     )
 
 
@@ -156,6 +160,9 @@ class DslScheduleService:
         # Cached channel timezone from DSL parse (avoids re-reading DSL file
         # on every Tier 2 miss in ensure_block_compiled).
         self._channel_tz = None
+
+        # Cached parsed channel DSL for traffic policy resolution.
+        self._channel_dsl: dict | None = None
 
         # INV-LOUDNESS-NORMALIZED-001: Background loudness measurement
         # Lazy backfill: unmeasured assets enqueue a background job on first encounter.
@@ -405,11 +412,36 @@ class DslScheduleService:
                 channel_id, e,
             )
 
+        # Resolve traffic policy and break config from channel DSL.
+        # Uses block.traffic_profile when present (block-level override),
+        # otherwise falls back to channel default_profile.
+        # Channels without a traffic section get policy=None → filler fallback.
+        traffic_policy = None
+        break_config = None
+        if self._channel_dsl and "traffic" in self._channel_dsl:
+            try:
+                from retrovue.runtime.traffic_dsl import (
+                    resolve_break_config,
+                    resolve_traffic_policy,
+                )
+                block_dict = {}
+                if block.traffic_profile:
+                    block_dict = {"traffic_profile": block.traffic_profile}
+                traffic_policy = resolve_traffic_policy(self._channel_dsl, block_dict)
+                break_config = resolve_break_config(self._channel_dsl)
+            except Exception as e:
+                logger.warning(
+                    "Could not resolve traffic config for %s: %s",
+                    channel_id, e,
+                )
+
         filled_block = fill_ad_blocks(
             block,
             filler_uri=self._filler_path,
             filler_duration_ms=self._filler_duration_ms,
             asset_library=asset_lib,
+            policy=traffic_policy,
+            break_config=break_config,
         )
 
         # Write to PlaylistEvent (idempotent via merge)
@@ -720,6 +752,7 @@ class DslScheduleService:
             # Read timezone from DSL
             dsl_text = Path(self._dsl_path).read_text()
             dsl = parse_dsl(dsl_text)
+            self._channel_dsl = dsl  # cache for traffic policy resolution
             tz_name = dsl.get("timezone", "UTC")
             try:
                 tz = ZoneInfo(tz_name)
@@ -770,19 +803,36 @@ class DslScheduleService:
           - movie_marathon: block_def["movie_marathon"] with start/end
         """
         from retrovue.runtime.schedule_compiler import (
-            _parse_duration,
             NETWORK_GRID_MINUTES,
             BROADCAST_DAY_START_HOUR,
         )
 
         grid_minutes = NETWORK_GRID_MINUTES
 
+        def _parse_duration(dur_str: str) -> timedelta:
+            import re
+            dur_str = dur_str.strip().lower()
+            hours = 0
+            minutes = 0
+            h_match = re.search(r'(\d+)\s*h', dur_str)
+            m_match = re.search(r'(\d+)\s*m', dur_str)
+            if h_match:
+                hours = int(h_match.group(1))
+            if m_match:
+                minutes = int(m_match.group(1))
+            if not h_match and not m_match:
+                try:
+                    hours = int(dur_str)
+                except ValueError:
+                    raise ValueError(f"Cannot parse duration: {dur_str!r}")
+            return timedelta(hours=hours, minutes=minutes)
+
         def _block_slots(block_def: dict) -> int:
             """Estimate episode slots for a single schedule entry."""
-            # Slot-style: explicit slots list
-            slots = block_def.get("slots", [])
-            if slots:
-                return len(slots)
+            # Slot-style: integer count or explicit slots list
+            slots = block_def.get("slots")
+            if slots is not None:
+                return slots if isinstance(slots, int) else len(slots)
 
             # Block-style: block with duration or start/end
             bb = block_def.get("block") or block_def.get("movie_marathon")
@@ -808,10 +858,6 @@ class DslScheduleService:
                     total_min = 24 * 60
 
                 return max(1, total_min // grid_minutes)
-
-            # Movie selector (single movie per block)
-            if "movie_selector" in block_def or "movie_block" in block_def:
-                return 1
 
             return 0
 
@@ -940,6 +986,7 @@ class DslScheduleService:
 
         dsl_text = Path(self._dsl_path).read_text()
         dsl = parse_dsl(dsl_text)
+        self._channel_dsl = dsl  # cache for traffic policy resolution
         dsl["broadcast_day"] = broadcast_day
 
         # Use cached resolver (Part 2B: avoid per-compile reload)
@@ -1028,6 +1075,7 @@ class DslScheduleService:
         )
         dsl_text = Path(self._dsl_path).read_text()
         dsl = parse_dsl(dsl_text)
+        self._channel_dsl = dsl  # cache for traffic policy resolution
         dsl["broadcast_day"] = broadcast_day
 
         # Use cached resolver (Part 2B: avoid per-compile reload)
@@ -1132,6 +1180,12 @@ class DslScheduleService:
                 channel_type=self._channel_type,
                 gain_db=gain_db,
             )
+
+            # Carry block-level traffic_profile from DSL through to ScheduledBlock
+            tp = block_def.get("traffic_profile")
+            if tp:
+                from dataclasses import replace
+                expanded = replace(expanded, traffic_profile=tp)
 
             blocks.append(expanded)
 

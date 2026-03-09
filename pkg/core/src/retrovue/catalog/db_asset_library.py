@@ -220,12 +220,12 @@ class DatabaseAssetLibrary:
     ) -> list[FillerAsset]:
         """Get interstitial assets respecting channel policy and cooldowns.
 
+        INV-INTERSTITIAL-TYPE-STAMP-001: Queries by editorial.interstitial_type,
+        NOT by collection name or collection UUID. Collection topology is
+        invisible to the traffic layer.
+
         Policy from YAML, cooldown state from DB.
         """
-        coll_uuid = self._get_interstitial_collection_uuid()
-        if not coll_uuid:
-            return []
-
         from retrovue.domain.entities import Asset, AssetEditorial
 
         policy = self._get_channel_policy()
@@ -233,6 +233,9 @@ class DatabaseAssetLibrary:
         cooled_uris = self._get_cooled_down_uris()
         capped_uuids = self._get_daily_capped_uuids()
 
+        # Query all assets that have interstitial_type stamped in editorial.
+        # The interstitial_type field is set by InterstitialTypeEnricher
+        # during ingest — only interstitial assets will have it.
         rows = (
             self._db.query(
                 Asset.uuid,
@@ -240,13 +243,13 @@ class DatabaseAssetLibrary:
                 Asset.duration_ms,
                 AssetEditorial.payload,
             )
-            .outerjoin(AssetEditorial, Asset.uuid == AssetEditorial.asset_uuid)
+            .join(AssetEditorial, Asset.uuid == AssetEditorial.asset_uuid)
             .filter(
-                Asset.collection_uuid == coll_uuid,
                 Asset.state == "ready",
                 Asset.duration_ms.isnot(None),
                 Asset.duration_ms > 0,
                 Asset.duration_ms <= max_duration_ms,
+                AssetEditorial.payload.has_key("interstitial_type"),
             )
             .all()
         )
@@ -257,7 +260,7 @@ class DatabaseAssetLibrary:
         candidates = []
         for asset_uuid, uri, duration_ms, payload in rows:
             editorial = payload or {}
-            interstitial_type = editorial.get("interstitial_type", "filler")
+            interstitial_type = editorial.get("interstitial_type")
 
             if interstitial_type not in allowed_types:
                 continue

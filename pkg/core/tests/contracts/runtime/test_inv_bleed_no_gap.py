@@ -33,92 +33,104 @@ UTC = timezone.utc
 
 
 def _make_marathon_resolver() -> StubAssetResolver:
-    """Build a resolver with movie pools for two consecutive marathons.
+    """Build a resolver with movie pools for two consecutive program blocks.
 
-    Pool A has movies ~100 min (ceil to 2h grid slot).
-    Pool B has movies ~80 min (ceil to 1.5h grid slot).
+    Horror pool: movies ~100 min (ceil to 2h grid slot at 30min grid).
+    Comedy pool: movies ~80 min (ceil to 1.5h grid slot at 30min grid).
     """
     r = StubAssetResolver()
 
-    # Pool A: horror movies (~100 min each = 6000s, grid-ceils to 7200s = 2h)
-    r.add("col.horror", AssetMetadata(
-        type="collection", duration_sec=0,
-        tags=("asset.movies.horror_a", "asset.movies.horror_b",
-              "asset.movies.horror_c", "asset.movies.horror_d",
-              "asset.movies.horror_e"),
-    ))
-    for mid in ("asset.movies.horror_a", "asset.movies.horror_b",
-                "asset.movies.horror_c", "asset.movies.horror_d",
-                "asset.movies.horror_e"):
+    horror_ids = ["asset.movies.horror_a", "asset.movies.horror_b",
+                  "asset.movies.horror_c", "asset.movies.horror_d",
+                  "asset.movies.horror_e"]
+    comedy_ids = ["asset.movies.comedy_a", "asset.movies.comedy_b",
+                  "asset.movies.comedy_c", "asset.movies.comedy_d"]
+
+    # Register pools so resolver.lookup("horror") works
+    r.register_pools({
+        "horror": {"match": {"type": "movie"}},
+        "comedy": {"match": {"type": "movie"}},
+    })
+    # Register collections so pool query returns correct assets
+    r.register_collection("horror_col", horror_ids)
+    r.register_collection("comedy_col", comedy_ids)
+
+    for mid in horror_ids:
         r.add(mid, AssetMetadata(type="movie", duration_sec=6000, rating="R",
                                  title=mid.split(".")[-1]))
-
-    # Pool B: comedy movies (~80 min each = 4800s, grid-ceils to 5400s = 1.5h)
-    r.add("col.comedy", AssetMetadata(
-        type="collection", duration_sec=0,
-        tags=("asset.movies.comedy_a", "asset.movies.comedy_b",
-              "asset.movies.comedy_c", "asset.movies.comedy_d"),
-    ))
-    for mid in ("asset.movies.comedy_a", "asset.movies.comedy_b",
-                "asset.movies.comedy_c", "asset.movies.comedy_d"):
+    for mid in comedy_ids:
         r.add(mid, AssetMetadata(type="movie", duration_sec=4800, rating="PG",
                                  title=mid.split(".")[-1]))
 
     return r
 
 
-def _two_marathon_dsl(
+def _two_block_dsl(
     m1_start: str = "06:00",
-    m1_end: str = "14:00",
-    m2_start: str = "14:00",
-    m2_end: str = "22:00",
+    m2_start: str = "08:00",
     m1_bleed: bool = True,
     m2_bleed: bool = True,
 ) -> dict:
-    """Build a DSL dict with two consecutive movie_marathon blocks."""
+    """Build a V2 DSL with two program blocks where bleed causes overlap.
+
+    Horror: grid_blocks=2 (1h nominal), 100-min movies → bleed to 2h each.
+    4 slots / 2 grid_blocks = 2 executions × 2h = 4h. Starts 06:00, ends 10:00.
+    Comedy: starts at 08:00 (overlaps horror). Compaction pushes it to 10:00.
+    When m2_bleed=False, comedy uses grid_blocks=4 (2h) so 80-min movies fit.
+    """
+    # When bleed is off, grid must be large enough to contain the asset.
+    # Comedy movies are 80 min; grid_blocks=2 (1h) is too small without bleed.
+    # grid_blocks=4 (2h) fits 80 min and slots=4 is a valid multiple (4/4=1).
+    comedy_grid = 2 if m2_bleed else 4
     return {
         "channel": "test-ch",
         "broadcast_day": "2026-03-01",
         "timezone": "UTC",
         "template": "network",
         "pools": {
-            "horror": {"match": {"type": "movie", "rating": {"include": ["R"]}}},
-            "comedy": {"match": {"type": "movie", "rating": {"include": ["PG"]}}},
+            "horror": {"match": {"type": "movie"}},
+            "comedy": {"match": {"type": "movie"}},
+        },
+        "programs": {
+            "horror_movie": {
+                "pool": "horror",
+                "grid_blocks": 2,
+                "fill_mode": "single",
+                "bleed": m1_bleed,
+            },
+            "comedy_movie": {
+                "pool": "comedy",
+                "grid_blocks": comedy_grid,
+                "fill_mode": "single",
+                "bleed": m2_bleed,
+            },
         },
         "schedule": {
             "all_day": [
                 {
-                    "movie_marathon": {
-                        "start": m1_start,
-                        "end": m1_end,
-                        "title": "Horror Marathon",
-                        "movie_selector": {"pool": "horror", "mode": "random"},
-                        "allow_bleed": m1_bleed,
-                    }
+                    "start": m1_start,
+                    "slots": 4,
+                    "program": "horror_movie",
+                    "progression": "random",
                 },
                 {
-                    "movie_marathon": {
-                        "start": m2_start,
-                        "end": m2_end,
-                        "title": "Comedy Marathon",
-                        "movie_selector": {"pool": "comedy", "mode": "random"},
-                        "allow_bleed": m2_bleed,
-                    }
+                    "start": m2_start,
+                    "slots": 4,
+                    "program": "comedy_movie",
+                    "progression": "random",
                 },
             ]
         },
     }
 
 
-def _three_marathon_dsl() -> dict:
-    """Build a DSL with THREE consecutive movie_marathon blocks that trigger
-    cascading bleed producing a full enclosure.
+def _three_block_dsl() -> dict:
+    """Build a V2 DSL with three overlapping program blocks.
 
-    All marathons use comedy pool (80 min movies → 1.5h grid slots).
-    8h / 1.5h = 5.33 → 6 blocks = 9h → each bleeds 1h.
-    Cascade amplifies: M1 bleeds 1h → M2 pushed 1h + its own 1h bleed = 2h cascade.
-    M3's first block (1.5h) is fully enclosed within M2's last pushed block (1.5h ending
-    at 00:00) because 22:00+1.5h=23:30 < 00:00.
+    All comedy, grid_blocks=2 (1h nominal), 80-min movies → bleed to 1.5h each.
+    Each block: 4 slots / 2 = 2 executions × 1.5h = 3h actual.
+    Block 1: 06:00 → ends 09:00. Block 2: 08:00 → pushed to 09:00, ends 12:00.
+    Block 3: 10:00 → pushed to 12:00, ends 15:00.
     """
     return {
         "channel": "test-ch",
@@ -126,36 +138,35 @@ def _three_marathon_dsl() -> dict:
         "timezone": "UTC",
         "template": "network",
         "pools": {
-            "comedy": {"match": {"type": "movie", "rating": {"include": ["PG"]}}},
+            "comedy": {"match": {"type": "movie"}},
+        },
+        "programs": {
+            "comedy_movie": {
+                "pool": "comedy",
+                "grid_blocks": 2,
+                "fill_mode": "single",
+                "bleed": True,
+            },
         },
         "schedule": {
             "all_day": [
                 {
-                    "movie_marathon": {
-                        "start": "06:00",
-                        "end": "14:00",
-                        "title": "Comedy Marathon 1",
-                        "movie_selector": {"pool": "comedy", "mode": "random"},
-                        "allow_bleed": True,
-                    }
+                    "start": "06:00",
+                    "slots": 4,
+                    "program": "comedy_movie",
+                    "progression": "random",
                 },
                 {
-                    "movie_marathon": {
-                        "start": "14:00",
-                        "end": "22:00",
-                        "title": "Comedy Marathon 2",
-                        "movie_selector": {"pool": "comedy", "mode": "random"},
-                        "allow_bleed": True,
-                    }
+                    "start": "08:00",
+                    "slots": 4,
+                    "program": "comedy_movie",
+                    "progression": "random",
                 },
                 {
-                    "movie_marathon": {
-                        "start": "22:00",
-                        "end": "06:00",
-                        "title": "Comedy Marathon 3",
-                        "movie_selector": {"pool": "comedy", "mode": "random"},
-                        "allow_bleed": True,
-                    }
+                    "start": "10:00",
+                    "slots": 4,
+                    "program": "comedy_movie",
+                    "progression": "random",
                 },
             ]
         },
@@ -180,7 +191,7 @@ class TestInvBleedNoGap001:
         """After compile_schedule(), every consecutive block pair satisfies
         block[i].end_at == block[i+1].start_at. No gaps, no overlaps."""
         resolver = _make_marathon_resolver()
-        dsl = _two_marathon_dsl()
+        dsl = _two_block_dsl()
         blocks = _compile(dsl, resolver)
 
         assert len(blocks) >= 3, f"Expected at least 3 blocks, got {len(blocks)}"
@@ -196,23 +207,16 @@ class TestInvBleedNoGap001:
             )
 
     def test_bleed_pushes_subsequent_blocks_forward(self):
-        """Marathon 2's first block start_at equals marathon 1's last block
-        end_at, not marathon 2's DSL-declared start time."""
+        """Block 2's first block start_at equals block 1's last block
+        end_at, not block 2's DSL-declared start time."""
         resolver = _make_marathon_resolver()
-        # M1: 06:00-14:00 with bleed, M2: 14:00-22:00
-        dsl = _two_marathon_dsl()
+        dsl = _two_block_dsl()
         blocks = _compile(dsl, resolver)
 
-        # Find first comedy block (marathon 2)
-        comedy_blocks = [b for b in blocks if b["title"] == "comedy_a"
-                         or "comedy" in b.get("title", "").lower()
-                         or b.get("collection") == "horror"  # sentinel
-                         ]
-        # More robust: look for the first block that's NOT horror
-        horror_titles = {"horror_a", "horror_b", "horror_c", "horror_d", "horror_e"}
+        # Find boundary between horror and comedy blocks using collection field
         first_m2_idx = None
         for i, b in enumerate(blocks):
-            if b["title"] not in horror_titles:
+            if b.get("collection") == "comedy":
                 first_m2_idx = i
                 break
 
@@ -222,7 +226,7 @@ class TestInvBleedNoGap001:
             )
             m2_start = datetime.fromisoformat(blocks[first_m2_idx]["start_at"])
             assert m2_start == prev_end, (
-                f"Marathon 2 first block starts at {m2_start.isoformat()}, "
+                f"Block 2 starts at {m2_start.isoformat()}, "
                 f"but previous block ends at {prev_end.isoformat()}"
             )
 
@@ -230,7 +234,7 @@ class TestInvBleedNoGap001:
         """Every block's start_at minute is divisible by grid_minutes.
         Every slot_duration_sec is a multiple of grid_minutes * 60."""
         resolver = _make_marathon_resolver()
-        dsl = _two_marathon_dsl()
+        dsl = _two_block_dsl()
         blocks = _compile(dsl, resolver)
 
         for b in blocks:
@@ -310,21 +314,18 @@ class TestInvBleedNoGap001:
         """When bleed creates an overlap, compaction pushes the next block
         forward — the resulting pair has no gap between them."""
         resolver = _make_marathon_resolver()
-        # M1 with bleed: 06:00-14:00, M2 starts at 14:00-22:00
-        # M1 will bleed past 14:00, and compaction shifts M2 forward
-        dsl = _two_marathon_dsl(m1_bleed=True, m2_bleed=False)
+        dsl = _two_block_dsl(m1_bleed=True, m2_bleed=False)
         blocks = _compile(dsl, resolver)
 
-        # Find the boundary between horror and comedy blocks
-        horror_titles = {"horror_a", "horror_b", "horror_c", "horror_d", "horror_e"}
+        # Find the boundary between horror and comedy blocks using collection
         boundary_idx = None
         for i, b in enumerate(blocks):
-            if b["title"] not in horror_titles:
+            if b.get("collection") == "comedy":
                 boundary_idx = i
                 break
 
         assert boundary_idx is not None and boundary_idx > 0, (
-            "Expected to find boundary between marathon blocks"
+            "Expected to find boundary between program blocks"
         )
 
         # At the boundary, there must be no gap
@@ -333,7 +334,7 @@ class TestInvBleedNoGap001:
         )
         m2_start = datetime.fromisoformat(blocks[boundary_idx]["start_at"])
         assert prev_end == m2_start, (
-            f"Gap at marathon boundary: prev ends {prev_end.isoformat()}, "
+            f"Gap at boundary: prev ends {prev_end.isoformat()}, "
             f"next starts {m2_start.isoformat()}"
         )
 
@@ -360,12 +361,12 @@ class TestInvBleedNoGap001:
         with pytest.raises(CompileError, match="not UTC"):
             _validate_grid_alignment([block], GRID_MINUTES)
 
-    def test_three_marathon_cascading_bleed(self):
-        """Three consecutive movie_marathon blocks with allow_bleed: true.
+    def test_three_block_cascading_bleed(self):
+        """Three overlapping program blocks with bleed: true.
         Cascading bleed across all three boundaries MUST compile successfully
         (no CompileError), producing contiguous grid-aligned output."""
         resolver = _make_marathon_resolver()
-        dsl = _three_marathon_dsl()
+        dsl = _three_block_dsl()
 
         # Must not raise CompileError
         blocks = _compile(dsl, resolver)
@@ -391,18 +392,11 @@ class TestInvBleedNoGap001:
                 f"Block '{b['title']}' start_at={b['start_at']} not grid-aligned"
             )
 
-        # Blocks span the full range: first starts at 06:00, last ends past 06:00 next day
+        # First block starts at 06:00
         first_start = datetime.fromisoformat(blocks[0]["start_at"])
-        last_end = datetime.fromisoformat(blocks[-1]["start_at"]) + timedelta(
-            seconds=blocks[-1]["slot_duration_sec"]
-        )
         day_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
-        next_day_start = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
         assert first_start == day_start, (
             f"First block starts at {first_start.isoformat()}, expected {day_start.isoformat()}"
-        )
-        assert last_end >= next_day_start, (
-            f"Last block ends at {last_end.isoformat()}, expected >= {next_day_start.isoformat()}"
         )
 
     def test_block_spanning_broadcast_day_not_split(self):

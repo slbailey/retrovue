@@ -12,7 +12,7 @@ import typer
 from pathlib import Path
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.runtime.config import RuntimeConfig
-from retrovue.runtime.providers import FileChannelConfigProvider, YamlChannelConfigProvider
+from retrovue.runtime.providers import YamlChannelConfigProvider
 
 app = typer.Typer(help="Retrovue Program Director commands")
 
@@ -77,19 +77,15 @@ def start(
     # CLI options override config file values (single port; no separate daemon)
     http_port = port if port is not None else runtime_config.program_director_port
 
-    # Load channel config provider — prefer YAML channels dir, fall back to channels.json
+    # Load channel config from YAML directory
     channel_config_provider = None
     yaml_channels_dir = Path("/opt/retrovue/config/channels")
     if yaml_channels_dir.is_dir():
         channel_config_provider = YamlChannelConfigProvider(yaml_channels_dir)
-    else:
-        channels_config_path = runtime_config.get_channels_config_path()
-        if channels_config_path.exists():
-            channel_config_provider = FileChannelConfigProvider(channels_config_path)
 
     if not mock_schedule_ab and not mock_schedule_grid and channel_config_provider is None:
         typer.echo(
-            "Error: Channel config is required. Create a channels config file (e.g. config/channels.json) "
+            "Error: Channel config is required. Create YAML channel files in config/channels/ "
             "or use --mock-schedule-ab / --mock-schedule-grid for testing.",
             err=True,
         )

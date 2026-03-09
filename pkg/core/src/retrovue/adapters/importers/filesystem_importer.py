@@ -143,34 +143,58 @@ class FilesystemImporter(BaseImporter):
 
     def list_collections(self, source_config: dict[str, Any]) -> list[dict[str, Any]]:
         """
-        Return a single collection representing all configured root paths.
+        Enumerate immediate subdirectories of each root path as collections.
 
-        This satisfies the interface expected by ``source_discover.py``
-        (``discover_collections``).  Each dict contains:
+        B-11: For filesystem sources, collection discovery enumerates
+        the immediate subdirectories of the source base path and returns
+        one collection per subdirectory. Discovery does not recurse beyond
+        the first level. Files at the top level are ignored.
 
-        - ``external_id``: stable hash-based ID derived from root_paths
-        - ``name``: the source_name
-        - ``type``: ``"interstitial"`` (default) or ``"directory"``
-        - ``locations``: list of root path strings
+        Each returned dict contains:
+
+        - ``external_id``: stable hash derived from the subdirectory's resolved path
+        - ``name``: the subdirectory basename
+        - ``type``: ``"directory"``
+        - ``locations``: single-element list with the subdirectory path
 
         Args:
             source_config: Unused for filesystem sources; kept for API parity.
 
         Returns:
-            A one-element list containing the collection descriptor.
+            List of collection descriptors, one per subdirectory.
         """
-        # Build a stable external_id from the sorted root paths
-        roots_key = "|".join(sorted(str(Path(p).resolve()) for p in self.root_paths))
-        external_id = hashlib.sha256(roots_key.encode()).hexdigest()[:16]
+        collections: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
 
-        return [
-            {
-                "external_id": external_id,
-                "name": self.source_name,
-                "type": "interstitial",
-                "locations": list(self.root_paths),
-            }
-        ]
+        for root_path in self.root_paths:
+            root = Path(root_path).resolve()
+            if not root.exists() or not root.is_dir():
+                continue
+
+            for child in sorted(root.iterdir()):
+                # Skip non-directories (files, special entries)
+                if not child.is_dir():
+                    continue
+                # Skip hidden directories unless include_hidden is set
+                if not self.include_hidden and child.name.startswith("."):
+                    continue
+
+                # Build a stable external_id from the resolved path
+                resolved = str(child.resolve())
+                external_id = hashlib.sha256(resolved.encode()).hexdigest()[:16]
+
+                if external_id in seen_ids:
+                    continue
+                seen_ids.add(external_id)
+
+                collections.append({
+                    "external_id": external_id,
+                    "name": child.name,
+                    "type": "directory",
+                    "locations": [str(child)],
+                })
+
+        return collections
 
     # ------------------------------------------------------------------
     # Discovery

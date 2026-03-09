@@ -191,33 +191,20 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
     """Start a channel directly without ProgramDirector - for testing socket connectivity."""
     import signal
     import sys
-    import json
     from pathlib import Path
     from retrovue.usecases.channel_manager_launch import launch_air, terminate_air
     from retrovue.runtime.config import ChannelConfig
 
-    # Load channel config — prefer YAML channels dir, fall back to channels.json
+    # Load channel config from YAML (single source of truth)
     yaml_dir = Path("/opt/retrovue/config/channels")
     if config_file:
-        config_path = Path(config_file)
-        if not config_path.exists():
-            typer.echo(f"Error: Channel config not found: {config_path}", err=True)
-            raise typer.Exit(1)
-        with open(config_path) as f:
-            channels_data = json.load(f)
-        all_channels = channels_data.get("channels", [])
-    elif yaml_dir.is_dir():
-        from retrovue.runtime.providers import YamlChannelConfigProvider
-        provider = YamlChannelConfigProvider(yaml_dir)
-        all_channels = provider.to_channels_list()
-    else:
-        config_path = Path("/opt/retrovue/config/channels.json")
-        if not config_path.exists():
-            typer.echo(f"Error: Channel config not found: {config_path}", err=True)
-            raise typer.Exit(1)
-        with open(config_path) as f:
-            channels_data = json.load(f)
-        all_channels = channels_data.get("channels", [])
+        yaml_dir = Path(config_file)
+    if not yaml_dir.is_dir():
+        typer.echo(f"Error: YAML channels directory not found: {yaml_dir}", err=True)
+        raise typer.Exit(1)
+    from retrovue.runtime.providers import YamlChannelConfigProvider
+    provider = YamlChannelConfigProvider(yaml_dir)
+    all_channels = provider.to_channels_list()
 
     # Find the channel
     channel_data = None

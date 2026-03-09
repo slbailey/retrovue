@@ -74,6 +74,7 @@ def rebuild_tier2(
     filler_duration_ms: int = 3_650_000,
     live_safe: bool = False,
     dry_run: bool = False,
+    channel_dsl: dict[str, Any] | None = None,
 ) -> RebuildResult:
     """Rebuild Tier-2 PlaylistEvent rows in a time window.
 
@@ -82,6 +83,10 @@ def rebuild_tier2(
       2. Delete PlaylistEvent rows in [start, end)
       3. Load Tier-1 blocks via load_segmented_blocks_from_active_revision
       4. Deserialize, fill ads, write back as PlaylistEvent
+
+    When channel_dsl is provided, resolves break_config and traffic policy
+    from the channel YAML so that structured break expansion matches the
+    runtime path (INV-TIER2-EXPANSION-CANONICAL-001).
 
     Does NOT modify Tier-1 ScheduleItems.
     """
@@ -143,6 +148,26 @@ def rebuild_tier2(
         )
         asset_library = None
 
+    # Resolve break_config and traffic policy from channel DSL
+    # INV-TIER2-EXPANSION-CANONICAL-001: rebuild path must match runtime path
+    break_config = None
+    traffic_policy = None
+    if channel_dsl is not None:
+        try:
+            from retrovue.runtime.traffic_dsl import (
+                resolve_break_config,
+                resolve_traffic_policy,
+            )
+            break_config = resolve_break_config(channel_dsl)
+            if "traffic" in channel_dsl:
+                traffic_policy = resolve_traffic_policy(channel_dsl, {})
+        except Exception as e:
+            logger.warning(
+                "rebuild_tier2[%s]: could not resolve traffic config "
+                "from channel DSL: %s",
+                channel_slug, e,
+            )
+
     # Step 4: load Tier-1, rebuild Tier-2
     while scan_date <= end_date:
         blocks = load_segmented_blocks_from_active_revision(
@@ -166,6 +191,8 @@ def rebuild_tier2(
                     filler_uri=filler_uri,
                     filler_duration_ms=filler_duration_ms,
                     asset_library=asset_library,
+                    policy=traffic_policy,
+                    break_config=break_config,
                 )
 
                 row = PlaylistEvent(

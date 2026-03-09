@@ -12,6 +12,7 @@ from typing import Any
 
 from .enrichers.base import Enricher, EnricherConfig, EnricherNotFoundError
 from .enrichers.ffprobe_enricher import FFprobeEnricher
+from .enrichers.interstitial_type_enricher import InterstitialTypeEnricher
 from .enrichers.loudness_enricher import LoudnessEnricher
 from .importers.base import DiscoveredItem, Importer, ImporterNotFoundError
 from .importers.filesystem_importer import FilesystemImporter
@@ -46,6 +47,7 @@ SOURCES = {
 # Available enricher classes
 ENRICHERS = {
     "ffprobe": FFprobeEnricher,
+    "interstitial-type": InterstitialTypeEnricher,
     "loudness": LoudnessEnricher,
 }
 

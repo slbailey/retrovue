@@ -70,31 +70,17 @@ def _mock_item_template(revision_id, slot_index=0):
     item.window_uuid = None
     item.metadata_ = {
         "title": "Weekend at Bernie's",
-        "template_id": "hbo_feature_with_intro",
-        "epg_title": "HBO Feature Presentation",
         "asset_id_raw": "movie-001",
         "compiled_segments": [
             {
                 "segment_type": "intro",
                 "asset_id": "intro-hbo-001",
-                "asset_uri": "/assets/intro-hbo-001.mp4",
-                "asset_start_offset_ms": 0,
-                "segment_duration_ms": 30000,
-                "source_type": "collection",
-                "source_name": "Intros",
-                "is_primary": False,
-                "gain_db": 0.0,
+                "duration_ms": 30000,
             },
             {
                 "segment_type": "content",
                 "asset_id": "movie-001",
-                "asset_uri": "/assets/movie-001.mp4",
-                "asset_start_offset_ms": 0,
-                "segment_duration_ms": 5400000,
-                "source_type": "pool",
-                "source_name": "hbo_movies",
-                "is_primary": True,
-                "gain_db": 0.0,
+                "duration_ms": 5400000,
             },
         ],
     }
@@ -187,21 +173,13 @@ class TestExplainCompiledSegments:
 
         result = explain_at(db, channel_slug="hbo-classics", at=BASE_DT)
 
-        assert result["expansion_path"] == "compiled_segments (template)"
+        assert result["expansion_path"] == "compiled_segments"
         assert "compiled_segments" in result
         segs = result["compiled_segments"]
         assert len(segs) == 2
         assert segs[0]["segment_type"] == "intro"
         assert segs[1]["segment_type"] == "content"
-        assert segs[1]["is_primary"] is True
-
-    def test_template_id_shown(self):
-        item = _mock_item_template(uuid.uuid4())
-        db, _, _ = _setup_db_for_explain(item)
-
-        result = explain_at(db, channel_slug="hbo-classics", at=BASE_DT)
-
-        assert result["schedule_item"]["template_id"] == "hbo_feature_with_intro"
+        assert segs[1]["asset_id"] == "movie-001"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,9 +195,9 @@ class TestExplainLegacy:
 
         result = explain_at(db, channel_slug="hbo-classics", at=BASE_DT)
 
-        assert result["expansion_path"] == "expand_program_block (legacy)"
-        assert "legacy_info" in result
-        assert result["legacy_info"]["asset_id_raw"] == "cheers-s03e12"
+        assert result["expansion_path"] == "expand_program_block"
+        assert "block_info" in result
+        assert result["block_info"]["asset_id_raw"] == "cheers-s03e12"
         assert "compiled_segments" not in result
 
 

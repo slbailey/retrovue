@@ -1,9 +1,8 @@
 """
 Tests for the Programming DSL Schedule Compiler (v2).
 
-Covers: parsing, validation, grid alignment, episode selection,
-template expansion, program-blocks-only output, schema validation,
-and hash determinism.
+Covers: parsing, validation, grid alignment, program assembly,
+program-blocks-only output, schema validation, and hash determinism.
 """
 
 from __future__ import annotations
@@ -23,11 +22,8 @@ from retrovue.runtime.schedule_compiler import (
     ProgramBlockOutput,
     ValidationError,
     compile_schedule,
-    expand_templates,
     get_channel_template,
     parse_dsl,
-    select_episode,
-    select_movie,
     validate_dsl,
     validate_program_blocks,
 )
@@ -48,6 +44,7 @@ SCHEMA_PATH = Path(__file__).parents[4] / "docs" / "contracts" / "core" / "progr
 def make_sitcom_resolver() -> StubAssetResolver:
     """Build a resolver with all assets needed for the weeknight sitcom fixture."""
     r = StubAssetResolver()
+    # Collection assets (for select_episode direct lookups)
     r.add("col.cozby_show_s3", AssetMetadata(
         type="collection", duration_sec=0,
         tags=("asset.episodes.coz_s3e01", "asset.episodes.coz_s3e02", "asset.episodes.coz_s3e03"),
@@ -60,6 +57,16 @@ def make_sitcom_resolver() -> StubAssetResolver:
         type="collection", duration_sec=0,
         tags=("asset.episodes.taxi_s2e01", "asset.episodes.taxi_s2e02"),
     ))
+    # Register collections for pool query resolution
+    r.register_collection("col.cozby_show_s3", [
+        "asset.episodes.coz_s3e01", "asset.episodes.coz_s3e02", "asset.episodes.coz_s3e03",
+    ])
+    r.register_collection("col.cheers_s6", [
+        "asset.episodes.cheers_s6e01", "asset.episodes.cheers_s6e02",
+    ])
+    r.register_collection("col.taxi_s2", [
+        "asset.episodes.taxi_s2e01", "asset.episodes.taxi_s2e02",
+    ])
     for ep in ("asset.episodes.coz_s3e01", "asset.episodes.coz_s3e02", "asset.episodes.coz_s3e03"):
         r.add(ep, AssetMetadata(type="episode", duration_sec=1320, rating="PG"))
     for ep in ("asset.episodes.cheers_s6e01", "asset.episodes.cheers_s6e02"):
@@ -84,6 +91,16 @@ def make_movie_resolver() -> StubAssetResolver:
         type="collection", duration_sec=0,
         tags=("asset.movies.alien", "asset.movies.thing"),
     ))
+    # Register collections for pool query resolution
+    r.register_collection("col.movies.blockbusters_70s_90s", [
+        "asset.movies.back_to_future", "asset.movies.indiana_jones",
+    ])
+    r.register_collection("col.movies.family_adventure", [
+        "asset.movies.goonies", "asset.movies.princess_bride",
+    ])
+    r.register_collection("col.movies.late_night_thrillers", [
+        "asset.movies.alien", "asset.movies.thing",
+    ])
     r.add("asset.movies.back_to_future", AssetMetadata(type="movie", duration_sec=6960, rating="PG"))
     r.add("asset.movies.indiana_jones", AssetMetadata(type="movie", duration_sec=6900, rating="PG"))
     r.add("asset.movies.goonies", AssetMetadata(type="movie", duration_sec=6840, rating="PG"))
@@ -104,8 +121,10 @@ class TestParser:
         dsl = parse_dsl(yaml_text)
         assert dsl["channel"] == "retro_prime"
         assert dsl["broadcast_day"] == "1989-10-12"
-        assert "templates" in dsl
-        assert "weeknight_sitcom_block" in dsl["templates"]
+        assert "pools" in dsl
+        assert "programs" in dsl
+        assert isinstance(dsl["schedule"]["thursday"], list)
+        assert len(dsl["schedule"]["thursday"]) == 3
 
     def test_parse_weekend_movie(self):
         yaml_text = (FIXTURES_DIR / "weekend_movie.yaml").read_text()
@@ -128,11 +147,11 @@ class TestValidation:
         assert any("broadcast_day" in e for e in errors)
         assert any("schedule" in e for e in errors)
 
-    def test_missing_asset_raises_error(self):
-        dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
+    def test_missing_schedule_raises_error(self):
+        dsl = {"channel": "test", "broadcast_day": "2024-01-01", "timezone": "UTC"}
         errors = validate_dsl(dsl, StubAssetResolver())
         assert len(errors) > 0
-        assert any("not found" in e for e in errors)
+        assert any("schedule" in e for e in errors)
 
     def test_valid_dsl_no_errors(self):
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
@@ -177,94 +196,6 @@ class TestGridAlignment:
         for block in plan["program_blocks"]:
             start = datetime.fromisoformat(block["start_at"])
             assert start.minute % 15 == 0, f"Block starts at :{start.minute}, not grid-aligned"
-
-    def test_off_grid_rejected(self):
-        """Off-grid start times must be rejected."""
-        from retrovue.runtime.schedule_compiler import validate_grid_alignment
-        errors = validate_grid_alignment("20:17", 30)
-        assert len(errors) == 1
-        assert "not aligned" in errors[0]
-
-
-# ---------------------------------------------------------------------------
-# Template expansion tests
-# ---------------------------------------------------------------------------
-
-
-class TestTemplateExpansion:
-    def test_expand_use_reference(self):
-        dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
-        expanded = expand_templates(dsl)
-        weeknights = expanded["schedule"]["weeknights"]
-        assert "use" not in weeknights
-        assert "slots" in weeknights
-        assert weeknights["start"] == "20:00"
-
-    def test_unknown_template_raises(self):
-        dsl = {
-            "channel": "test",
-            "broadcast_day": "2024-01-01",
-            "timezone": "UTC",
-            "schedule": {"day": {"use": "nonexistent_template"}},
-        }
-        with pytest.raises(CompileError, match="Unknown template"):
-            expand_templates(dsl)
-
-
-# ---------------------------------------------------------------------------
-# Episode selector tests
-# ---------------------------------------------------------------------------
-
-
-class TestEpisodeSelector:
-    def test_sequential_determinism(self):
-        resolver = make_sitcom_resolver()
-        ep1 = select_episode("col.cozby_show_s3", "sequential", resolver, seed=0)
-        ep2 = select_episode("col.cozby_show_s3", "sequential", resolver, seed=0)
-        assert ep1 == ep2
-
-    def test_sequential_different_seeds(self):
-        resolver = make_sitcom_resolver()
-        ep0 = select_episode("col.cozby_show_s3", "sequential", resolver, seed=0)
-        ep1 = select_episode("col.cozby_show_s3", "sequential", resolver, seed=1)
-        assert ep0 == "asset.episodes.coz_s3e01"
-        assert ep1 == "asset.episodes.coz_s3e02"
-
-    def test_random_determinism(self):
-        resolver = make_sitcom_resolver()
-        ep1 = select_episode("col.cheers_s6", "random", resolver, seed=42)
-        ep2 = select_episode("col.cheers_s6", "random", resolver, seed=42)
-        assert ep1 == ep2
-
-
-# ---------------------------------------------------------------------------
-# Movie selector tests
-# ---------------------------------------------------------------------------
-
-
-class TestMovieSelector:
-    def test_rating_filter(self):
-        resolver = make_movie_resolver()
-        movie = select_movie(
-            ["col.movies.blockbusters_70s_90s", "col.movies.family_adventure"],
-            resolver, rating_include=["PG"], seed=42,
-        )
-        meta = resolver.lookup(movie)
-        assert meta.rating == "PG"
-
-    def test_r_rated_filter(self):
-        resolver = make_movie_resolver()
-        movie = select_movie(
-            ["col.movies.late_night_thrillers"],
-            resolver, rating_include=["R"], seed=42,
-        )
-        meta = resolver.lookup(movie)
-        assert meta.rating == "R"
-
-    def test_no_candidates_raises(self):
-        resolver = make_movie_resolver()
-        with pytest.raises(AssetResolutionError):
-            select_movie(["col.movies.blockbusters_70s_90s"], resolver, rating_include=["NC-17"], seed=42)
 
 
 # ---------------------------------------------------------------------------
@@ -367,3 +298,12 @@ class TestFullCompilation:
         plan = compile_schedule(dsl, resolver, seed=42)
         for block in plan["program_blocks"]:
             assert block["slot_duration_sec"] >= block["episode_duration_sec"]
+
+    def test_compiled_segments_present(self):
+        """Every V2 program block must include compiled_segments."""
+        dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
+        resolver = make_sitcom_resolver()
+        plan = compile_schedule(dsl, resolver, seed=42)
+        for block in plan["program_blocks"]:
+            assert "compiled_segments" in block
+            assert len(block["compiled_segments"]) >= 1

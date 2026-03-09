@@ -17,11 +17,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
-from retrovue.runtime.schedule_compiler import (
-    CompileError,
-    compile_schedule,
-    parse_dsl,
-)
+from retrovue.runtime.schedule_compiler import CompileError
 from retrovue.runtime.schedule_items_reader import _hydrate_compiled_segments
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 from retrovue.runtime.playout_log_expander import expand_program_block
@@ -57,29 +53,17 @@ def _block_id(asset_id: str, start_ms: int) -> str:
 
 
 def _compiled_segments_hbo() -> list[dict]:
-    """Canonical HBO-style compiled segments: intro + primary movie."""
+    """Canonical HBO-style V2 compiled segments: intro + primary movie."""
     return [
         {
             "segment_type": "intro",
             "asset_id": "intro-hbo-001",
-            "asset_uri": "/assets/intro-hbo-001.mp4",
-            "asset_start_offset_ms": 0,
-            "segment_duration_ms": INTRO_DURATION_MS,
-            "source_type": "collection",
-            "source_name": "Intros",
-            "is_primary": False,
-            "gain_db": 0.0,
+            "duration_ms": INTRO_DURATION_MS,
         },
         {
             "segment_type": "content",
             "asset_id": "movie-001",
-            "asset_uri": "/assets/movie-001.mp4",
-            "asset_start_offset_ms": 0,
-            "segment_duration_ms": MOVIE_DURATION_MS,
-            "source_type": "pool",
-            "source_name": "hbo_movies",
-            "is_primary": True,
-            "gain_db": 0.0,
+            "duration_ms": MOVIE_DURATION_MS,
         },
     ]
 
@@ -88,12 +72,13 @@ def _hydrate_hbo_block(
     start_ms: int = BASE_MS,
     slot_ms: int = SLOT_DURATION_MS,
 ) -> ScheduledBlock:
-    """Hydrate an HBO-style block from compiled segments."""
+    """Hydrate an HBO-style block from V2 compiled segments."""
     return _hydrate_compiled_segments(
         compiled_segments=_compiled_segments_hbo(),
         asset_id="movie-001",
         start_utc_ms=start_ms,
         slot_duration_ms=slot_ms,
+        resolver=_make_hbo_resolver(),
     )
 
 
@@ -261,27 +246,15 @@ class TestPrimarySegmentAtomic:
             "Movie content segment must have is_primary=True"
         )
 
-    def test_hydrated_primary_segment_has_is_primary(self):
-        """Template-hydrated blocks must propagate is_primary from
-        compiled_segments to ScheduledSegment."""
+    def test_hydrated_content_segment_identified_by_type(self):
+        """V2-hydrated blocks identify the primary movie by segment_type='content'."""
         block = _hydrate_hbo_block()
 
-        primary_segs = [s for s in block.segments if s.is_primary]
-        assert len(primary_segs) == 1, (
-            f"Expected exactly 1 primary segment, got {len(primary_segs)}"
+        content_segs = [s for s in block.segments if s.segment_type == "content"]
+        assert len(content_segs) == 1, (
+            f"Expected exactly 1 content segment, got {len(content_segs)}"
         )
-        assert primary_segs[0].segment_type == "content"
-        assert primary_segs[0].segment_duration_ms == MOVIE_DURATION_MS
-
-    def test_non_primary_segments_not_marked(self):
-        """Intro and filler segments must not be marked is_primary."""
-        block = _hydrate_hbo_block()
-
-        for seg in block.segments:
-            if seg.segment_type in ("intro", "filler"):
-                assert seg.is_primary is False, (
-                    f"{seg.segment_type} segment should not be primary"
-                )
+        assert content_segs[0].segment_duration_ms == MOVIE_DURATION_MS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,240 +400,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 3 — INV-TEMPLATE-PRIMARY-SEGMENT-001: Template validation
-# ─────────────────────────────────────────────────────────────────────────────
-
-_TPL_ZERO_PRIMARY = """\
-channel: test-zero-primary
-broadcast_day: "2026-03-06"
-timezone: UTC
-
-templates:
-  bad_template:
-    segments:
-      - source:
-          type: collection
-          name: Intros
-        mode: random
-      - source:
-          type: collection
-          name: Bumpers
-        mode: random
-
-schedule:
-  all_day:
-    - type: template
-      name: bad_template
-      start: "06:00"
-      end: "14:00"
-"""
-
-_TPL_TWO_PRIMARY = """\
-channel: test-two-primary
-broadcast_day: "2026-03-06"
-timezone: UTC
-
-pools:
-  movies_a:
-    match:
-      type: movie
-  movies_b:
-    match:
-      type: movie
-
-templates:
-  double_pool:
-    segments:
-      - source:
-          type: pool
-          name: movies_a
-        primary: true
-        mode: random
-      - source:
-          type: pool
-          name: movies_b
-        primary: true
-        mode: random
-
-schedule:
-  all_day:
-    - type: template
-      name: double_pool
-      start: "06:00"
-      end: "14:00"
-"""
-
-_TPL_AMBIGUOUS_MULTI_POOL = """\
-channel: test-ambiguous-pool
-broadcast_day: "2026-03-06"
-timezone: UTC
-
-pools:
-  movies_a:
-    match:
-      type: movie
-  movies_b:
-    match:
-      type: movie
-
-templates:
-  ambiguous_pools:
-    segments:
-      - source:
-          type: pool
-          name: movies_a
-        mode: random
-      - source:
-          type: pool
-          name: movies_b
-        mode: random
-
-schedule:
-  all_day:
-    - type: template
-      name: ambiguous_pools
-      start: "06:00"
-      end: "14:00"
-"""
-
-
-class TestTemplateValidation:
-    """INV-TEMPLATE-PRIMARY-SEGMENT-001: Templates must resolve to
-    exactly one primary content segment."""
-
-    def test_zero_primary_segments_raises(self):
-        """Template with zero pool segments and no primary: true → CompileError."""
-        resolver = _make_hbo_resolver()
-        resolver.add_collection("Bumpers", ["intro-hbo-001"])
-
-        dsl = parse_dsl(_TPL_ZERO_PRIMARY)
-        with pytest.raises(CompileError, match="no pool segment"):
-            compile_schedule(dsl, resolver=resolver)
-
-    def test_two_explicit_primary_raises(self):
-        """Template with two segments marked primary: true → CompileError."""
-        resolver = _make_hbo_resolver()
-        resolver.add_pool("movies_a", ["movie-001"])
-        resolver.add_pool("movies_b", ["movie-001"])
-
-        dsl = parse_dsl(_TPL_TWO_PRIMARY)
-        with pytest.raises(CompileError, match="primary: true.*exactly one"):
-            compile_schedule(dsl, resolver=resolver)
-
-    def test_ambiguous_multiple_pools_raises(self):
-        """Template with multiple pool segments and no primary: true → CompileError."""
-        resolver = _make_hbo_resolver()
-        resolver.add_pool("movies_a", ["movie-001"])
-        resolver.add_pool("movies_b", ["movie-001"])
-
-        dsl = parse_dsl(_TPL_AMBIGUOUS_MULTI_POOL)
-        with pytest.raises(CompileError, match="pool segments.*primary: true"):
-            compile_schedule(dsl, resolver=resolver)
-
-    def test_single_pool_convention_succeeds(self):
-        """Template with exactly one pool segment (no explicit primary: true)
-        succeeds via convention fallback."""
-        resolver = _make_hbo_resolver()
-
-        hbo_yaml = """\
-channel: hbo-test
-broadcast_day: "2026-03-06"
-timezone: UTC
-
-pools:
-  hbo_movies:
-    match:
-      type: movie
-    max_duration_sec: 10800
-
-templates:
-  hbo_feature_with_intro:
-    segments:
-      - source:
-          type: collection
-          name: Intros
-        selection:
-          - type: tags
-            values: [hbo]
-        mode: random
-      - source:
-          type: pool
-          name: hbo_movies
-        mode: random
-
-schedule:
-  all_day:
-    - type: template
-      name: hbo_feature_with_intro
-      start: "06:00"
-      end: "14:00"
-      allow_bleed: true
-"""
-        dsl = parse_dsl(hbo_yaml)
-        result = compile_schedule(dsl, resolver=resolver)
-        blocks = result["program_blocks"]
-        assert len(blocks) > 0
-
-        # The movie segment must be identified as primary
-        for pb in blocks:
-            segs = pb["compiled_segments"]
-            primaries = [s for s in segs if s["is_primary"]]
-            assert len(primaries) == 1, (
-                f"Expected exactly 1 primary, got {len(primaries)}"
-            )
-
-    def test_explicit_primary_true_succeeds(self):
-        """Template with explicit primary: true on one segment succeeds."""
-        resolver = _make_hbo_resolver()
-
-        yaml_text = """\
-channel: explicit-primary-test
-broadcast_day: "2026-03-06"
-timezone: UTC
-
-pools:
-  hbo_movies:
-    match:
-      type: movie
-    max_duration_sec: 10800
-
-templates:
-  feature:
-    segments:
-      - source:
-          type: collection
-          name: Intros
-        selection:
-          - type: tags
-            values: [hbo]
-        mode: random
-      - source:
-          type: pool
-          name: hbo_movies
-        primary: true
-        mode: random
-
-schedule:
-  all_day:
-    - type: template
-      name: feature
-      start: "06:00"
-      end: "14:00"
-      allow_bleed: true
-"""
-        dsl = parse_dsl(yaml_text)
-        result = compile_schedule(dsl, resolver=resolver)
-        blocks = result["program_blocks"]
-        assert len(blocks) > 0
-
-        for pb in blocks:
-            segs = pb["compiled_segments"]
-            primaries = [s for s in segs if s["is_primary"]]
-            assert len(primaries) == 1
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test 4 — INV-MOVIE-REBUILD-EQUIVALENCE: Tier-2 rebuild parity
+# Test 3 — INV-MOVIE-REBUILD-EQUIVALENCE: Tier-2 rebuild parity
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestTier2RebuildParity:
@@ -674,14 +414,19 @@ class TestTier2RebuildParity:
         self, compiled_segments: list[dict],
     ) -> dict:
         """Minimal Tier-1 serialized block dict (as load_segmented_blocks
-        returns)."""
+        returns). Converts V2 compiled_segments to playout-level ScheduledBlock."""
+        resolver = _make_hbo_resolver()
         segs = []
         for cs in compiled_segments:
+            asset_id = cs.get("asset_id", "")
+            meta = resolver.lookup(asset_id) if asset_id else None
+            asset_uri = (meta.file_uri or "") if meta else ""
+            dur_ms = cs["duration_ms"]
             segs.append({
                 "segment_type": cs["segment_type"],
-                "asset_uri": cs["asset_uri"],
-                "asset_start_offset_ms": cs.get("asset_start_offset_ms", 0),
-                "segment_duration_ms": cs["segment_duration_ms"],
+                "asset_uri": asset_uri,
+                "asset_start_offset_ms": 0,
+                "segment_duration_ms": dur_ms,
                 "transition_in": "TRANSITION_NONE",
                 "transition_in_duration_ms": 0,
                 "transition_out": "TRANSITION_NONE",
@@ -689,7 +434,7 @@ class TestTier2RebuildParity:
             })
 
         # Post-content filler
-        content_total = sum(cs["segment_duration_ms"] for cs in compiled_segments)
+        content_total = sum(cs["duration_ms"] for cs in compiled_segments)
         remaining = SLOT_DURATION_MS - content_total
         if remaining > 0:
             segs.append({
