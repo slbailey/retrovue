@@ -3,22 +3,39 @@ broadcast_day: "1989-10-14"
 timezone: America/New_York
 template: premium_movie
 
+pools:
+  blockbusters:
+    match:
+      type: movie
+      collection: col.movies.blockbusters_70s_90s
+  family_adventure:
+    match:
+      type: movie
+      collection: col.movies.family_adventure
+  late_night:
+    match:
+      type: movie
+      collection: col.movies.late_night_thrillers
+
+programs:
+  primetime_movie:
+    pool: blockbusters
+    grid_blocks: 4
+    fill_mode: single
+    bleed: true
+  late_movie:
+    pool: late_night
+    grid_blocks: 4
+    fill_mode: single
+    bleed: true
+
 schedule:
   saturday:
     - start: "20:00"
-      movie_selector:
-        collections:
-          - col.movies.blockbusters_70s_90s
-          - col.movies.family_adventure
-        rating:
-          include: [PG, PG-13]
-        min_cooldown_days: 21
-        max_duration_sec: 7200
-    - start: "22:30"
-      movie_selector:
-        collections:
-          - col.movies.late_night_thrillers
-        rating:
-          include: [R]
-        min_cooldown_days: 45
-        max_duration_sec: 9000
+      slots: 4
+      program: primetime_movie
+      progression: random
+    - start: "22:00"
+      slots: 4
+      program: late_movie
+      progression: random

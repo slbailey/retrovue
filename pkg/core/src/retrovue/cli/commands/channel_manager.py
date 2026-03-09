@@ -11,7 +11,7 @@ import time
 import typer
 from pathlib import Path
 from retrovue.runtime.program_director import ProgramDirector
-from retrovue.runtime.providers import FileChannelConfigProvider, YamlChannelConfigProvider
+from retrovue.runtime.providers import YamlChannelConfigProvider
 
 app = typer.Typer(help="Retrovue Channel Manager commands (alias for program-director)")
 
@@ -19,19 +19,14 @@ YAML_CHANNELS_DIR = Path("/opt/retrovue/config/channels")
 
 
 def _build_config_provider(channel_config: str | None):
-    """Build the appropriate config provider, preferring YAML directory if it exists."""
-    # If explicit path given, use FileChannelConfigProvider
+    """Build the appropriate config provider from the YAML channels directory."""
+    # If explicit path given, treat as YAML directory
     if channel_config:
-        return FileChannelConfigProvider(Path(channel_config))
+        return YamlChannelConfigProvider(Path(channel_config))
 
-    # Prefer YAML auto-discovery directory
+    # YAML auto-discovery directory
     if YAML_CHANNELS_DIR.is_dir():
         return YamlChannelConfigProvider(YAML_CHANNELS_DIR)
-
-    # Fall back to channels.json
-    json_path = Path("/opt/retrovue/config/channels.json")
-    if json_path.exists():
-        return FileChannelConfigProvider(json_path)
 
     return None
 
@@ -42,13 +37,13 @@ def start(
     port: int = typer.Option(9000, help="Port to serve the HTTP API and TS streams"),
     channel_config: str = typer.Option(
         None,
-        help="Path to channels.json config file (default: /opt/retrovue/config/channels.json)",
+        help="Path to YAML channels directory (default: /opt/retrovue/config/channels)",
     ),
 ):
     """
     Starts the RetroVue Core runtime (ProgramDirector with embedded ChannelManager registry).
 
-    Alias for 'retrovue program-director start'. Requires channel config file (blockplan-only).
+    Alias for 'retrovue program-director start'. Requires YAML channel config.
     Default port is 9000 for backward compatibility; use program-director start for default 8000.
     """
     logging.basicConfig(
@@ -60,8 +55,8 @@ def start(
 
     if config_provider is None:
         typer.echo(
-            "Error: Channel config file is required (blockplan-only). "
-            "Create config/channels.json or pass --channel-config.",
+            "Error: Channel config is required. "
+            "Create YAML channel files in config/channels/.",
             err=True,
         )
         raise typer.Exit(1)
@@ -90,7 +85,7 @@ def start_channel_cmd(
     port: int = typer.Option(9000, help="Port to serve the HTTP API and TS streams"),
     channel_config: str = typer.Option(
         None,
-        help="Path to channels.json config file (default: /opt/retrovue/config/channels.json)",
+        help="Path to YAML channels directory (default: /opt/retrovue/config/channels)",
     ),
     grace_period: int = typer.Option(
         30,
@@ -120,7 +115,7 @@ def start_channel_cmd(
     config_provider = _build_config_provider(channel_config)
 
     if config_provider is None:
-        typer.echo("Error: Channel config file is required.", err=True)
+        typer.echo("Error: Channel config is required.", err=True)
         raise typer.Exit(1)
 
     program_director = ProgramDirector(

@@ -1,134 +1,106 @@
 """Contract tests for INV-SCHEDULE-SEQUENTIAL-ADVANCE-001.
 
-For channels using `mode: sequential`, consecutive broadcast days MUST
-advance the sequential counter so that episodes progress through the pool
+For channels using `progression: sequential`, consecutive broadcast days MUST
+advance the sequential cursor so that episodes progress through the pool
 across days rather than repeating from the start.
 
 Rules:
-1. _count_slots_in_dsl() MUST return >0 for any DSL that produces program
-   blocks, including block-style schedules with duration/start/end.
-2. Compiling two consecutive days with the same DSL MUST produce different
-   first episodes when the pool contains more episodes than one day's slots.
+1. A V2 DSL with slots > 0 MUST produce program blocks.
+2. Compiling two consecutive days with the same DSL and advancing cursors
+   MUST produce different first episodes when the pool is larger than
+   one day's slots.
 """
 
 import pytest
+from datetime import date, timedelta
 
 from retrovue.runtime.schedule_compiler import (
     compile_schedule,
     channel_seed,
     NETWORK_GRID_MINUTES,
+    parse_dsl,
 )
-from retrovue.runtime.asset_resolver import AssetMetadata, AssetResolver
+from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+from retrovue.runtime.progression_cursor import (
+    CursorStore,
+    ProgressionCursor,
+    ScheduleBlockIdentity,
+)
 
 
 # ---------------------------------------------------------------------------
 # Minimal test resolver with enough episodes to span multiple days
 # ---------------------------------------------------------------------------
 
-class _TestResolver(AssetResolver):
-    """Fake resolver with a configurable pool of sequential episodes."""
+def _make_sequential_resolver(n_episodes: int = 100) -> StubAssetResolver:
+    """Build a resolver with a large sequential episode pool."""
+    r = StubAssetResolver()
+    episode_ids = [f"ep-{i:04d}" for i in range(n_episodes)]
+    r.register_collection("test_pool", episode_ids)
+    r.register_pools({"test_pool": {"match": {"type": "episode"}}})
+    for eid in episode_ids:
+        r.add(eid, AssetMetadata(
+            type="episode", duration_sec=1440, title=f"Episode {eid}",
+        ))
+    return r
 
-    def __init__(self, n_episodes: int = 100):
-        self._episodes = [f"ep-{i:04d}" for i in range(n_episodes)]
 
-    def lookup(self, asset_id: str) -> AssetMetadata:
-        if asset_id == "test_pool":
-            return AssetMetadata(
-                type="pool",
-                duration_sec=0,
-                tags=tuple(self._episodes),
-            )
-        # Individual episode — 24-minute sitcom
-        return AssetMetadata(
-            type="episode",
-            duration_sec=1440,
-            title=f"Episode {asset_id}",
-        )
+_V2_SEQUENTIAL_DSL = {
+    "channel": "test-sequential-channel",
+    "broadcast_day": "2026-03-01",
+    "timezone": "UTC",
+    "template": "network",
+    "pools": {
+        "test_pool": {
+            "match": {"type": "episode"},
+        },
+    },
+    "programs": {
+        "marathon": {
+            "pool": "test_pool",
+            "grid_blocks": 1,
+            "fill_mode": "single",
+            "bleed": False,
+        },
+    },
+    "schedule": {
+        "all_day": [
+            {
+                "start": "06:00",
+                "slots": 36,  # 36 × 30min = 18h of programming
+                "program": "marathon",
+                "progression": "sequential",
+            },
+        ],
+    },
+}
+
+SLOTS_PER_DAY = 36
 
 
 # ---------------------------------------------------------------------------
-# Rule 1: _count_slots_in_dsl() returns >0 for block-style DSL
+# Rule 1: V2 DSL with slots > 0 produces program blocks
 # ---------------------------------------------------------------------------
 
 class TestRule1SlotCountPositive:
-    """Rule 1: _count_slots_in_dsl() MUST return >0 for block-style DSL."""
+    """Rule 1: A V2 DSL with slots > 0 MUST produce program blocks."""
 
-    def test_block_with_duration_returns_positive(self):
-        """Block-style DSL with duration: '24h' MUST produce a positive
-        slot count, not zero."""
-        from retrovue.runtime.dsl_schedule_service import DslScheduleService
-
-        dsl = {
-            "schedule": {
-                "all_day": [
-                    {
-                        "block": {
-                            "start": "06:00",
-                            "duration": "24h",
-                            "title": "Test",
-                            "pool": "test_pool",
-                            "mode": "sequential",
-                        }
-                    }
-                ]
-            }
-        }
-        count = DslScheduleService._count_slots_in_dsl(dsl)
-        assert count > 0, (
-            "INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 Rule 1: "
-            "_count_slots_in_dsl() returned 0 for block-style DSL with "
-            "duration='24h'. Block-style schedules MUST be counted by "
-            "computing total scheduled minutes divided by grid slot size."
+    def test_dsl_produces_blocks(self):
+        """V2 DSL with 36 slots MUST produce at least 1 program block."""
+        resolver = _make_sequential_resolver()
+        dsl = dict(_V2_SEQUENTIAL_DSL)
+        schedule = compile_schedule(dsl, resolver=resolver, seed=42)
+        assert len(schedule["program_blocks"]) > 0, (
+            "V2 DSL with slots=36 produced zero program blocks"
         )
 
-    def test_block_with_start_end_returns_positive(self):
-        """Block-style DSL with start/end MUST produce a positive slot count."""
-        from retrovue.runtime.dsl_schedule_service import DslScheduleService
-
-        dsl = {
-            "schedule": {
-                "all_day": [
-                    {
-                        "block": {
-                            "start": "06:00",
-                            "end": "18:00",
-                            "title": "Test",
-                            "pool": "test_pool",
-                            "mode": "sequential",
-                        }
-                    }
-                ]
-            }
-        }
-        count = DslScheduleService._count_slots_in_dsl(dsl)
-        assert count > 0, (
-            "INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 Rule 1: "
-            "_count_slots_in_dsl() returned 0 for block-style DSL with "
-            "start/end. Must compute duration from time range."
-        )
-
-    def test_movie_marathon_returns_positive(self):
-        """movie_marathon block MUST produce a positive slot count."""
-        from retrovue.runtime.dsl_schedule_service import DslScheduleService
-
-        dsl = {
-            "schedule": {
-                "all_day": [
-                    {
-                        "movie_marathon": {
-                            "start": "22:00",
-                            "end": "06:00",
-                            "title": "Late Movies",
-                            "movie_selector": {"pool": "movies"},
-                        }
-                    }
-                ]
-            }
-        }
-        count = DslScheduleService._count_slots_in_dsl(dsl)
-        assert count > 0, (
-            "INV-SCHEDULE-SEQUENTIAL-ADVANCE-001 Rule 1: "
-            "_count_slots_in_dsl() returned 0 for movie_marathon block."
+    def test_dsl_produces_expected_block_count(self):
+        """V2 DSL with 36 slots and grid_blocks=1 MUST produce 36 blocks."""
+        resolver = _make_sequential_resolver()
+        dsl = dict(_V2_SEQUENTIAL_DSL)
+        schedule = compile_schedule(dsl, resolver=resolver, seed=42)
+        assert len(schedule["program_blocks"]) == SLOTS_PER_DAY, (
+            f"Expected {SLOTS_PER_DAY} blocks, got {len(schedule['program_blocks'])}"
         )
 
 
@@ -143,60 +115,24 @@ class TestRule2ConsecutiveDaysDiffer:
     def test_day_n_and_day_n_plus_1_differ(self):
         """Compile day N and day N+1 for a sequential channel.
         The first program_block asset_id MUST differ between days."""
-        from retrovue.runtime.dsl_schedule_service import DslScheduleService
-
-        resolver = _TestResolver(n_episodes=100)
+        resolver = _make_sequential_resolver(n_episodes=100)
         seed = channel_seed("test-sequential-channel")
 
-        dsl = {
-            "channel": "test-sequential-channel",
-            "timezone": "UTC",
-            "template": "network_sitcom",
-            "pools": {
-                "test_pool": {
-                    "match": {"type": "episode"},
-                }
-            },
-            "schedule": {
-                "all_day": [
-                    {
-                        "block": {
-                            "start": "06:00",
-                            "duration": "24h",
-                            "title": "Test Marathon",
-                            "pool": "test_pool",
-                            "mode": "sequential",
-                        }
-                    }
-                ]
-            },
-        }
-
-        slots_per_day = DslScheduleService._count_slots_in_dsl(dsl)
-        assert slots_per_day > 0, "Precondition: slots_per_day must be >0"
-
-        # Compile day 60 (arbitrary) and day 61
-        from datetime import date, timedelta
         epoch = date(2026, 1, 1)
         day_a = epoch + timedelta(days=60)
         day_b = epoch + timedelta(days=61)
 
         def compile_day(broadcast_day: date) -> dict:
-            from retrovue.runtime.progression_cursor import (
-                CursorStore,
-                ProgressionCursor,
-                ScheduleBlockIdentity,
-            )
-            d = dict(dsl)
-            d["broadcast_day"] = broadcast_day.isoformat()
+            dsl = dict(_V2_SEQUENTIAL_DSL)
+            dsl["broadcast_day"] = broadcast_day.isoformat()
             day_offset = (broadcast_day - epoch).days
-            starting_counter = day_offset * slots_per_day
+            starting_counter = day_offset * SLOTS_PER_DAY
             cursor_store = CursorStore()
             identity = ScheduleBlockIdentity(
                 channel_id="test-sequential-channel",
                 schedule_layer="compilation",
                 start_time="00:00",
-                program_ref="test_pool",
+                program_ref="marathon",
             )
             cursor_store.save(ProgressionCursor(
                 identity=identity,
@@ -204,7 +140,7 @@ class TestRule2ConsecutiveDaysDiffer:
                 cycle=0,
             ))
             return compile_schedule(
-                d, resolver=resolver,
+                dsl, resolver=resolver,
                 cursor_store=cursor_store,
                 seed=seed,
             )

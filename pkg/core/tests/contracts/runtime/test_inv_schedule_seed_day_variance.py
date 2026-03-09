@@ -21,47 +21,37 @@ from retrovue.runtime.schedule_compiler import (
 
 
 # ---------------------------------------------------------------------------
-# Fixture: minimal movie-template DSL (HBO-Classics-like)
+# Fixture: minimal V2 movie DSL
 # ---------------------------------------------------------------------------
 
-_TEMPLATE_DSL_YAML = """\
+_V2_DSL_YAML = """\
 channel: test-movies
-channel_number: 99
-name: "Test Movies"
-channel_type: movie
+broadcast_day: "2026-03-01"
 timezone: America/New_York
-
-format:
-  video: { width: 1280, height: 720, frame_rate: "30000/1001" }
-  audio: { sample_rate: 48000, channels: 2 }
-  grid_minutes: 30
+template: network
 
 pools:
   test_pool:
     match:
       type: movie
-    max_duration_sec: 10800
 
-templates:
-  feature_presentation:
-    segments:
-      - source:
-          type: pool
-          name: test_pool
-        mode: random
+programs:
+  feature:
+    pool: test_pool
+    grid_blocks: 4
+    fill_mode: single
+    bleed: true
 
 schedule:
   all_day:
-    - type: template
-      name: feature_presentation
-      start: "08:00"
-      end: "16:00"
-      allow_bleed: true
-    - type: template
-      name: feature_presentation
-      start: "16:00"
-      end: "00:00"
-      allow_bleed: true
+    - start: "08:00"
+      slots: 8
+      program: feature
+      progression: random
+    - start: "16:00"
+      slots: 8
+      program: feature
+      progression: random
 """
 
 
@@ -80,14 +70,17 @@ def _make_movie_resolver() -> StubAssetResolver:
         ("asset.movies.film_i", "Film I", 6000),
         ("asset.movies.film_j", "Film J", 7100),
     ]
+    movie_ids = [aid for aid, _, _ in movies]
+    r.register_collection("test_pool", movie_ids)
+    r.register_pools({"test_pool": {"match": {"type": "movie"}}})
     for aid, title, dur in movies:
         r.add(aid, AssetMetadata(type="movie", duration_sec=dur, title=title))
     return r
 
 
 def _compile_day(broadcast_day: str) -> list[str]:
-    """Compile the template DSL for a given day, return ordered asset_id list."""
-    dsl = parse_dsl(_TEMPLATE_DSL_YAML)
+    """Compile the V2 DSL for a given day, return ordered asset_id list."""
+    dsl = parse_dsl(_V2_DSL_YAML)
     dsl["broadcast_day"] = broadcast_day
     resolver = _make_movie_resolver()
     seed = compilation_seed("test-movies", broadcast_day)
@@ -145,9 +138,9 @@ class TestInvScheduleSeedDayVariance001:
         assert run1 == run2
 
     def test_two_windows_same_day_differ(self):
-        """Two template windows at different start times on the same day
+        """Two schedule blocks at different start times on the same day
         MUST produce different movie sequences."""
-        dsl = parse_dsl(_TEMPLATE_DSL_YAML)
+        dsl = parse_dsl(_V2_DSL_YAML)
         dsl["broadcast_day"] = "2026-03-01"
         resolver = _make_movie_resolver()
         seed = compilation_seed("test-movies", "2026-03-01")

@@ -23,19 +23,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["epg"])
 
-CHANNELS_JSON = Path("/opt/retrovue/config/channels.json")
 YAML_CHANNELS_DIR = Path("/opt/retrovue/config/channels")
 
 
 def _load_channels() -> list[dict[str, Any]]:
-    # Prefer YAML auto-discovery directory
+    from retrovue.runtime.providers import YamlChannelConfigProvider
     if YAML_CHANNELS_DIR.is_dir():
-        from retrovue.runtime.providers import YamlChannelConfigProvider
-        provider = YamlChannelConfigProvider(YAML_CHANNELS_DIR)
-        return provider.to_channels_list()
-
-    with open(CHANNELS_JSON) as f:
-        return json.load(f)["channels"]
+        return YamlChannelConfigProvider(YAML_CHANNELS_DIR).to_channels_list()
+    return []
 
 
 def _count_slots_in_dsl(dsl: dict[str, Any]) -> int:

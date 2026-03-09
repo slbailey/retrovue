@@ -1,25 +1,63 @@
 """
 Use-case: reprobe one or more assets.
 
-Resets asset state, clears stale probed data, and re-runs the enrichment
-pipeline so that duration_ms and other technical metadata are refreshed
-from the actual file on disk.
+Delegates to the unified enrichment lifecycle in ``asset_enrich.enrich_asset()``
+so that reprobe and stale re-enrichment share the same contract:
+  - INV-ASSET-REPROBE-RESETS-APPROVAL-001
+  - INV-ASSET-REENRICH-RESETS-STALE-001
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Asset, AssetProbed, Collection, Marker, validate_state_transition
-from ..shared.types import MarkerKind
-from .ingest_orchestrator import ingest_collection_assets
+from ..adapters.registry import ENRICHERS
+from ..domain.entities import Asset, Collection
+from .asset_enrich import EnrichResult, enrich_asset
 
 logger = logging.getLogger(__name__)
+
+
+def _build_pipeline_for_collection(
+    db: Session, collection: Collection
+) -> list[tuple[int, str, Any]]:
+    """Build the enricher pipeline from a collection's config.
+
+    Returns a sorted list of (priority, enricher_id, instance) tuples.
+    """
+    from ..domain.entities import Enricher as EnricherRow
+
+    cfg = dict(getattr(collection, "config", {}) or {})
+    configured = cfg.get("enrichers", []) if isinstance(cfg.get("enrichers"), list) else []
+
+    pipeline: list[tuple[int, str, Any]] = []
+    for entry in configured:
+        try:
+            enricher_id = entry.get("enricher_id") if isinstance(entry, dict) else None
+            priority = int(entry.get("priority", 0)) if isinstance(entry, dict) else 0
+            if not enricher_id:
+                continue
+            row = (
+                db.query(EnricherRow)
+                .filter(EnricherRow.enricher_id == enricher_id)
+                .first()
+            )
+            if not row or getattr(row, "scope", "ingest") != "ingest":
+                continue
+            cls = ENRICHERS.get(row.type)
+            instance = cls(**(row.config or {})) if cls else None
+            if instance is None:
+                continue
+            pipeline.append((priority, enricher_id, instance))
+        except Exception:
+            continue
+
+    pipeline.sort(key=lambda t: (t[0], t[1]))
+    return pipeline
 
 
 def reprobe_asset(
@@ -28,8 +66,8 @@ def reprobe_asset(
     asset_uuid: str,
 ) -> dict[str, Any]:
     """
-    Re-probe a single asset: reset it to 'new', clear stale probed/marker
-    data, then run the collection's enrichment pipeline on it.
+    Re-probe a single asset: delegates to enrich_asset() which handles
+    the full lifecycle (clear stale data, re-enrich, promote/revert).
 
     Returns a summary dict with the asset uuid and result status.
     """
@@ -46,74 +84,23 @@ def reprobe_asset(
     if collection is None:
         raise ValueError(f"Asset {asset_uuid} has no collection")
 
-    # Capture old values for reporting
-    old_duration_ms = asset.duration_ms
-    old_state = asset.state
+    # Build the enricher pipeline from collection config
+    pipeline = _build_pipeline_for_collection(db, collection)
 
-    # 1. Clear stale probed metadata
-    probed_row = db.get(AssetProbed, asset.uuid)
-    if probed_row is not None:
-        db.delete(probed_row)
-
-    # 2. Clear chapter markers (they'll be recreated by ffprobe)
-    chapter_markers = [
-        m for m in (asset.markers or [])
-        if m.kind == MarkerKind.CHAPTER
-    ]
-    for m in chapter_markers:
-        db.delete(m)
-
-    # 3. Reset asset to 'new' so the orchestrator picks it up
-    #    Any state can transition to 'retired'; but for reprobe we go to 'new'.
-    #    This is a special reset: ready->new is not in the normal state machine,
-    #    so we use retired as an intermediate step only if needed. However, the
-    #    reprobe workflow is a privileged operation that resets the asset lifecycle,
-    #    so we bypass the normal state machine validation here (the asset is about
-    #    to be re-enriched from scratch).
-    asset.state = "new"
-    asset.approved_for_broadcast = False
-    asset.duration_ms = None
-    asset.video_codec = None
-    asset.audio_codec = None
-    asset.container = None
-    asset.updated_at = datetime.now(UTC)
-    db.flush()
-
-    # 4. Run the ingest orchestrator for this collection
-    #    It only processes assets in 'new' state, so only our reset asset runs.
-    #    To avoid re-probing OTHER new assets, we temporarily park them.
-    other_new = (
-        db.query(Asset)
-        .filter(
-            Asset.collection_uuid == collection.uuid,
-            Asset.state == "new",
-            Asset.uuid != asset.uuid,
-        )
-        .all()
-    )
-    for a in other_new:
-        a.state = "enriching"
-    db.flush()
-
-    try:
-        summary = ingest_collection_assets(db, collection)
-    finally:
-        # Restore the other assets
-        for a in other_new:
-            a.state = "new"
-        db.flush()
-
-    # Refresh asset from DB
-    db.refresh(asset)
+    # Delegate to the unified lifecycle
+    result: EnrichResult = enrich_asset(db, asset, pipeline)
 
     return {
         "uuid": str(asset.uuid),
         "uri": asset.uri,
-        "old_state": old_state,
-        "new_state": asset.state,
-        "old_duration_ms": old_duration_ms,
-        "new_duration_ms": asset.duration_ms,
-        "enrichment_summary": summary,
+        "old_state": result.old_state,
+        "new_state": result.new_state,
+        "old_duration_ms": result.old_duration_ms,
+        "new_duration_ms": result.new_duration_ms,
+        "enrichment_summary": {
+            "enriched": 1 if result.new_state in ("ready", "new") else 0,
+            "errors": result.enricher_errors,
+        },
     }
 
 

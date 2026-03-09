@@ -35,7 +35,7 @@ from retrovue.runtime.playlist_validator import PlaylistSeamError
 
 
 # Default paths (same as ProgramDirector / contract)
-DEFAULT_CHANNELS_CONFIG = Path("/opt/retrovue/config/channels.json")
+DEFAULT_CHANNELS_DIR = Path("/opt/retrovue/config/channels")
 DEFAULT_ARTIFACT_BASE_PATH = Path("/opt/retrovue/data/logs/transmission")
 DEFAULT_ASSET_CATALOG = Path("/opt/retrovue/config/asset_catalog.json")
 
@@ -56,7 +56,7 @@ def plan_day(
     channel_id: str,
     broadcast_date: date,
     *,
-    channels_config_path: Path = DEFAULT_CHANNELS_CONFIG,
+    channels_dir: Path = DEFAULT_CHANNELS_DIR,
     artifact_base_path: Path = DEFAULT_ARTIFACT_BASE_PATH,
     asset_catalog_path: Path | None = None,
 ) -> None:
@@ -74,13 +74,13 @@ def plan_day(
         start scheduler daemon
         modify horizon state beyond this day
     """
-    from retrovue.runtime.providers.file_config_provider import FileChannelConfigProvider
+    from retrovue.runtime.providers import YamlChannelConfigProvider
 
-    # Load channel config (same source as HorizonManager)
-    config_provider = FileChannelConfigProvider(channels_config_path)
+    # Load channel config from YAML (single source of truth)
+    config_provider = YamlChannelConfigProvider(channels_dir)
     channel_config = config_provider.get_channel_config(channel_id)
     if channel_config is None:
-        raise UnknownChannelError(f"Channel '{channel_id}' not found in {channels_config_path}")
+        raise UnknownChannelError(f"Channel '{channel_id}' not found in {channels_dir}")
 
     schedule_config = channel_config.schedule_config
     programs_dir = Path(schedule_config.get("programs_dir", "/opt/retrovue/config/programs"))

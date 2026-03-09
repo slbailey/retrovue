@@ -672,6 +672,7 @@ class ScheduledBlock:
     start_utc_ms: int
     end_utc_ms: int
     segments: tuple[ScheduledSegment, ...]  # tuple for true immutability
+    traffic_profile: str | None = None  # DSL block-level traffic_profile override
 
     def __post_init__(self):
         _enforce_int_ms(self.start_utc_ms, "ScheduledBlock.start_utc_ms")

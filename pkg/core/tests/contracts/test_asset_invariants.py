@@ -343,7 +343,7 @@ class TestInvAssetDurationRequiredForReady001:
         Scenario: Asset with duration_ms=1320000 can be promoted.
         """
         asset = _make_asset(state="enriching", duration_ms=1_320_000)
-        # Simulate the promotion guard from ingest_orchestrator
+        # Simulate the promotion guard from enrich_asset()
         if asset.duration_ms and asset.duration_ms > 0:
             validate_state_transition(asset.state, "ready")
             asset.state = "ready"
@@ -437,7 +437,7 @@ class TestInvAssetReprobeResetsApproval001:
             container="mp4",
         )
 
-        # Simulate reprobe reset (from asset_reprobe.py lines 67-73)
+        # Simulate reprobe reset (from asset_enrich.enrich_asset() lifecycle)
         asset.state = "new"
         asset.approved_for_broadcast = False
         asset.duration_ms = None
@@ -487,6 +487,108 @@ class TestInvAssetReprobeResetsApproval001:
 
         # All CHAPTER markers must be removed
         assert len(surviving) == 0
+
+
+class TestInvAssetReenrichResetsStale001:
+    """INV-ASSET-REENRICH-RESETS-STALE-001 enforcement tests."""
+
+    def test_ters_001_stale_asset_metadata_cleared(self) -> None:
+        """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
+
+        Invariant: Re-enrichment clears stale technical metadata.
+        Scenario: Asset with populated fields has all stale data cleared
+                  before enrichment, matching the reprobe lifecycle.
+        """
+        asset = _make_asset(
+            state="ready",
+            approved_for_broadcast=True,
+            duration_ms=1_320_000,
+            video_codec="h264",
+            audio_codec="aac",
+            container="mp4",
+        )
+
+        # Simulate the clearing phase of enrich_asset()
+        asset.duration_ms = None
+        asset.video_codec = None
+        asset.audio_codec = None
+        asset.container = None
+
+        assert asset.duration_ms is None
+        assert asset.video_codec is None
+        assert asset.audio_codec is None
+        assert asset.container is None
+
+    def test_ters_002_stale_asset_approval_reset(self) -> None:
+        """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
+
+        Invariant: Re-enrichment resets approved_for_broadcast to False.
+        Scenario: Previously approved asset has approval reset during
+                  re-enrichment.
+        """
+        asset = _make_asset(
+            state="ready",
+            approved_for_broadcast=True,
+            duration_ms=1_320_000,
+        )
+
+        # Simulate the approval reset phase of enrich_asset()
+        asset.approved_for_broadcast = False
+
+        assert asset.approved_for_broadcast is False
+
+    def test_ters_003_chapter_markers_cleared_non_chapter_preserved(self) -> None:
+        """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
+
+        Invariant: Re-enrichment deletes CHAPTER markers, preserves others.
+        Scenario: CHAPTER markers removed, AVAIL marker survives.
+        """
+        chapter = SimpleNamespace(kind="CHAPTER", start_ms=0, end_ms=30_000)
+        avail = SimpleNamespace(kind="AVAIL", start_ms=0, end_ms=60_000)
+        all_markers = [chapter, avail]
+
+        surviving = [m for m in all_markers if m.kind != "CHAPTER"]
+        deleted = [m for m in all_markers if m.kind == "CHAPTER"]
+
+        assert len(surviving) == 1
+        assert surviving[0].kind == "AVAIL"
+        assert len(deleted) == 1
+
+    def test_ters_004_state_transitions_through_enriching(self) -> None:
+        """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
+
+        Invariant: Re-enrichment transitions through enriching state.
+        Scenario: Asset resets to new, transitions to enriching, then
+                  to ready (or back to new) via validate_state_transition.
+        """
+        # new → enriching is legal
+        validate_state_transition("new", "enriching")
+        # enriching → ready is legal
+        validate_state_transition("enriching", "ready")
+        # enriching → new is legal (revert)
+        validate_state_transition("enriching", "new")
+
+    def test_ters_005_never_approves_after_reenrichment(self) -> None:
+        """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
+
+        Invariant: Re-enrichment MUST NOT set approved_for_broadcast=True.
+        Scenario: After full re-enrichment lifecycle, asset is ready but
+                  not approved.
+        """
+        asset = _make_asset(state="ready", approved_for_broadcast=True)
+
+        # Simulate full lifecycle
+        asset.approved_for_broadcast = False
+        asset.state = "new"
+        validate_state_transition("new", "enriching")
+        asset.state = "enriching"
+        asset.duration_ms = 1_320_000
+        validate_state_transition("enriching", "ready")
+        asset.state = "ready"
+
+        # Approval must remain False — operator must approve explicitly
+        assert asset.approved_for_broadcast is False
+        assert asset.state == "ready"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

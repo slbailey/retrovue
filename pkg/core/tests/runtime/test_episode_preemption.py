@@ -1,7 +1,8 @@
 """
-Tests for episode preemption in the Programming DSL compiler.
+Tests for episode duration vs grid slot behavior in the V2 compiler.
 
-When an episode's duration exceeds a grid slot, it preempts subsequent slots.
+When an episode's duration exceeds a grid slot, bleed expands the slot.
+When bleed is false, oversized episodes are rejected.
 """
 
 from __future__ import annotations
@@ -17,171 +18,157 @@ from retrovue.runtime.schedule_compiler import (
 )
 
 
-def _make_resolver_with_long_ep() -> StubAssetResolver:
-    """Resolver with a 60-minute episode in a 30-minute grid."""
+def _make_resolver() -> StubAssetResolver:
+    """Resolver with various episode durations."""
     r = StubAssetResolver()
-    # Pool with one 60-minute episode
+    # Drama: 60-minute episodes (exceed 30-min grid)
     r.add("col.drama", AssetMetadata(
         type="collection", duration_sec=0,
         tags=("ep.drama.1",),
     ))
+    r.register_collection("col.drama", ["ep.drama.1"])
     r.add("ep.drama.1", AssetMetadata(type="episode", duration_sec=3600, rating="PG"))
-    # Pool with normal 22-minute episodes
+
+    # Sitcom: 22-minute episodes (fit in 30-min grid)
     r.add("col.sitcom", AssetMetadata(
         type="collection", duration_sec=0,
         tags=("ep.sitcom.1", "ep.sitcom.2", "ep.sitcom.3"),
     ))
+    r.register_collection("col.sitcom", ["ep.sitcom.1", "ep.sitcom.2", "ep.sitcom.3"])
     for ep in ("ep.sitcom.1", "ep.sitcom.2", "ep.sitcom.3"):
         r.add(ep, AssetMetadata(type="episode", duration_sec=1320, rating="PG"))
+
+    # Medical: 45-minute episodes
+    r.add("col.medical", AssetMetadata(
+        type="collection", duration_sec=0,
+        tags=("ep.med.1",),
+    ))
+    r.register_collection("col.medical", ["ep.med.1"])
+    r.add("ep.med.1", AssetMetadata(type="episode", duration_sec=2700, rating="PG"))
     return r
 
 
-class TestEpisodePreemption:
-    def test_60min_ep_consumes_two_slots(self):
-        """A 60-minute episode in 30-minute grid consumes 2 slots, skipping the second slot def."""
+class TestBleedSlotExpansion:
+    def test_60min_ep_with_bleed_expands_slot(self):
+        """A 60-minute episode with bleed=true gets a 60-minute grid slot."""
         yaml_text = """
 channel: test
 broadcast_day: "2026-02-16"
 timezone: America/New_York
+pools:
+  drama:
+    match: { type: episode, collection: col.drama }
+programs:
+  p_drama:
+    pool: drama
+    grid_blocks: 1
+    fill_mode: single
+    bleed: true
 schedule:
   all_day:
     - start: "20:00"
-      slots:
-        - title: "Drama"
-          episode_selector:
-            pool: drama
-            mode: sequential
-        - title: "Sitcom A"
-          episode_selector:
-            pool: sitcom
-            mode: sequential
-        - title: "Sitcom B"
-          episode_selector:
-            pool: sitcom
-            mode: sequential
+      slots: 1
+      program: p_drama
+      progression: sequential
 """
-        resolver = _make_resolver_with_long_ep()
-        resolver.register_pools({
-            "drama": {"match": {"type": "episode"}},
-            "sitcom": {"match": {"type": "episode"}},
-        })
-        resolver.add("drama", AssetMetadata(type="collection", duration_sec=0, tags=("ep.drama.1",)))
-        resolver.add("sitcom", AssetMetadata(type="collection", duration_sec=0, tags=("ep.sitcom.1", "ep.sitcom.2", "ep.sitcom.3")))
-
+        resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
         plan = compile_schedule(dsl, resolver, seed=42)
-
         blocks = plan["program_blocks"]
-        # Drama (60min) consumes slots 0 and 1, then Sitcom B at slot 2
-        assert len(blocks) == 2
-        assert blocks[0]["title"] == "Drama"
-        assert blocks[0]["slot_duration_sec"] == 3600  # 2 * 30min
+        assert len(blocks) == 1
+        assert blocks[0]["slot_duration_sec"] == 3600  # expanded to fit 60min
         assert blocks[0]["episode_duration_sec"] == 3600
-        assert blocks[1]["title"] == "Sitcom B"
 
-    def test_45min_ep_gets_filler_padding(self):
-        """A 45-minute episode claims 2 grid slots (60min total), with 15min filler space."""
-        r = StubAssetResolver()
-        r.add("col.med", AssetMetadata(type="collection", duration_sec=0, tags=("ep.med.1",)))
-        r.add("ep.med.1", AssetMetadata(type="episode", duration_sec=2700, rating="PG"))
-        r.add("col.short", AssetMetadata(type="collection", duration_sec=0, tags=("ep.short.1",)))
-        r.add("ep.short.1", AssetMetadata(type="episode", duration_sec=1320, rating="PG"))
-        r.register_pools({
-            "med": {"match": {"type": "episode"}},
-            "short": {"match": {"type": "episode"}},
-        })
-        r.add("med", AssetMetadata(type="collection", duration_sec=0, tags=("ep.med.1",)))
-        r.add("short", AssetMetadata(type="collection", duration_sec=0, tags=("ep.short.1",)))
-
+    def test_45min_ep_with_bleed_gets_padded_slot(self):
+        """A 45-minute episode with bleed=true gets a 60-minute slot (ceil to grid)."""
         yaml_text = """
 channel: test
 broadcast_day: "2026-02-16"
 timezone: America/New_York
+pools:
+  medical:
+    match: { type: episode, collection: col.medical }
+programs:
+  p_med:
+    pool: medical
+    grid_blocks: 1
+    fill_mode: single
+    bleed: true
 schedule:
   all_day:
     - start: "20:00"
-      slots:
-        - title: "Medical"
-          episode_selector:
-            pool: med
-            mode: sequential
-        - title: "Skipped"
-          episode_selector:
-            pool: short
-            mode: sequential
-        - title: "Short"
-          episode_selector:
-            pool: short
-            mode: sequential
+      slots: 1
+      program: p_med
+      progression: sequential
 """
+        resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, r, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42)
         blocks = plan["program_blocks"]
-        # Medical (45min=2700s) consumes 2 slots → 3600s slot, then Short at slot 2
-        assert len(blocks) == 2
-        assert blocks[0]["title"] == "Medical"
-        assert blocks[0]["slot_duration_sec"] == 3600
+        assert len(blocks) == 1
+        assert blocks[0]["slot_duration_sec"] == 3600  # 45min ceil to 60min grid
         assert blocks[0]["episode_duration_sec"] == 2700
-        assert blocks[1]["title"] == "Short"
 
-    def test_normal_ep_no_preemption(self):
-        """A 22-minute episode in 30-minute grid does not preempt."""
-        r = StubAssetResolver()
-        r.add("col.s", AssetMetadata(type="collection", duration_sec=0, tags=("ep.s.1", "ep.s.2")))
-        for ep in ("ep.s.1", "ep.s.2"):
-            r.add(ep, AssetMetadata(type="episode", duration_sec=1320, rating="PG"))
-        r.register_pools({"s": {"match": {"type": "episode"}}})
-        r.add("s", AssetMetadata(type="collection", duration_sec=0, tags=("ep.s.1", "ep.s.2")))
-
+    def test_normal_ep_fits_in_slot(self):
+        """A 22-minute episode in 30-minute grid fits without expansion."""
         yaml_text = """
 channel: test
 broadcast_day: "2026-02-16"
 timezone: America/New_York
+pools:
+  sitcom:
+    match: { type: episode, collection: col.sitcom }
+programs:
+  p_sitcom:
+    pool: sitcom
+    grid_blocks: 1
+    fill_mode: single
+    bleed: false
 schedule:
   all_day:
     - start: "20:00"
-      slots:
-        - title: "Show A"
-          episode_selector: { pool: s, mode: sequential }
-        - title: "Show B"
-          episode_selector: { pool: s, mode: sequential }
+      slots: 2
+      program: p_sitcom
+      progression: sequential
 """
+        resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, r, seed=42)
-        assert len(plan["program_blocks"]) == 2
+        plan = compile_schedule(dsl, resolver, seed=42)
+        blocks = plan["program_blocks"]
+        assert len(blocks) == 2
+        for b in blocks:
+            assert b["slot_duration_sec"] == 1800  # 30min grid slot
+            assert b["episode_duration_sec"] == 1320  # 22min fits
 
-    def test_sequential_counter_only_increments_on_placement(self):
-        """Sequential counter increments per placed episode, not per slot."""
-        resolver = _make_resolver_with_long_ep()
-        resolver.register_pools({
-            "drama": {"match": {"type": "episode"}},
-            "sitcom": {"match": {"type": "episode"}},
-        })
-        resolver.add("drama", AssetMetadata(type="collection", duration_sec=0, tags=("ep.drama.1",)))
-        resolver.add("sitcom", AssetMetadata(type="collection", duration_sec=0, tags=("ep.sitcom.1", "ep.sitcom.2", "ep.sitcom.3")))
-
+    def test_sequential_cursor_advances_per_execution(self):
+        """Sequential cursor advances once per program execution."""
         yaml_text = """
 channel: test
 broadcast_day: "2026-02-16"
 timezone: America/New_York
+pools:
+  sitcom:
+    match: { type: episode, collection: col.sitcom }
+programs:
+  p_sitcom:
+    pool: sitcom
+    grid_blocks: 1
+    fill_mode: single
+    bleed: false
 schedule:
   all_day:
     - start: "20:00"
-      slots:
-        - title: "Drama"
-          episode_selector: { pool: drama, mode: sequential }
-        - title: "Sitcom"
-          episode_selector: { pool: sitcom, mode: sequential }
-        - title: "Sitcom"
-          episode_selector: { pool: sitcom, mode: sequential }
+      slots: 3
+      program: p_sitcom
+      progression: sequential
 """
         from retrovue.runtime.progression_cursor import CursorStore
+        resolver = _make_resolver()
         cursor_store = CursorStore()
         dsl = parse_dsl(yaml_text)
         plan = compile_schedule(dsl, resolver, seed=42, cursor_store=cursor_store)
-        # Drama placed (counter increments for drama pool)
-        # Slot 1 skipped (preempted) - sitcom counter NOT incremented
-        # Slot 2 placed - sitcom counter incremented once
-        # So sitcom counter should be 1, not 2
         blocks = plan["program_blocks"]
-        assert len(blocks) == 2
+        assert len(blocks) == 3
+        # Each block should have a different asset (sequential progression)
+        asset_ids = [b["asset_id"] for b in blocks]
+        assert asset_ids[0] != asset_ids[1]

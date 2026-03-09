@@ -44,7 +44,7 @@ def test_channel_list__lists_all_human():
     ]
     with patch("retrovue.cli.commands.channel.session") as mock_sess:
         mock_sess.return_value.__enter__.return_value = mock_db
-        res = runner.invoke(app, ["channel", "list", "--by-database"])
+        res = runner.invoke(app, ["channel", "list"])
     assert res.exit_code == 0
     out = res.stdout
     assert "Channels:" in out
@@ -60,7 +60,7 @@ def test_channel_list__lists_all_json():
     ]
     with patch("retrovue.cli.commands.channel.session") as mock_sess:
         mock_sess.return_value.__enter__.return_value = mock_db
-        res = runner.invoke(app, ["channel", "list", "--by-database", "--json"])
+        res = runner.invoke(app, ["channel", "list", "--json"])
     assert res.exit_code == 0
     assert '"status": "ok"' in res.stdout
     assert '"total": 1' in res.stdout

@@ -200,7 +200,7 @@ class YamlChannelConfigProvider:
         return list(self._configs.keys())
 
     def to_channels_list(self) -> list[dict[str, Any]]:
-        """Return channel configs as list of dicts (compatible with channels.json format)."""
+        """Return channel configs as list of dicts."""
         self._ensure_loaded()
         result = []
         for config in self._configs.values():

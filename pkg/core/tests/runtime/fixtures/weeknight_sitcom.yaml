@@ -4,26 +4,48 @@ timezone: America/New_York
 notes:
   vibe: "Water-cooler Thursday"
 
-templates:
-  weeknight_sitcom_block:
-    start: "20:00"
-    slots:
-      - title: "Cosby Show"
-        program: p.coz_s3
-        episode_selector:
-          collection: col.cozby_show_s3
-          mode: sequential
-      - title: "Cheers"
-        program: p.cheers_s6
-        episode_selector:
-          collection: col.cheers_s6
-          mode: random
-      - title: "Taxi"
-        program: p.taxi_s2
-        episode_selector:
-          collection: col.taxi_s2
-          mode: random
+pools:
+  cozby_show_s3:
+    match:
+      type: episode
+      collection: col.cozby_show_s3
+  cheers_s6:
+    match:
+      type: episode
+      collection: col.cheers_s6
+  taxi_s2:
+    match:
+      type: episode
+      collection: col.taxi_s2
+
+programs:
+  p_coz_s3:
+    pool: cozby_show_s3
+    grid_blocks: 1
+    fill_mode: single
+    bleed: false
+  p_cheers_s6:
+    pool: cheers_s6
+    grid_blocks: 1
+    fill_mode: single
+    bleed: false
+  p_taxi_s2:
+    pool: taxi_s2
+    grid_blocks: 1
+    fill_mode: single
+    bleed: false
 
 schedule:
-  weeknights:
-    use: weeknight_sitcom_block
+  thursday:
+    - start: "20:00"
+      slots: 1
+      program: p_coz_s3
+      progression: sequential
+    - start: "20:30"
+      slots: 1
+      program: p_cheers_s6
+      progression: random
+    - start: "21:00"
+      slots: 1
+      program: p_taxi_s2
+      progression: random

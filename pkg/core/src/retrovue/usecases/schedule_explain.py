@@ -118,22 +118,20 @@ def explain_at(
             "duration_sec": item.duration_sec,
             "content_type": item.content_type,
             "asset_id": str(item.asset_id) if item.asset_id else None,
-            "template_id": meta.get("template_id"),
             "title": meta.get("title"),
-            "epg_title": meta.get("epg_title"),
         },
     }
 
     if compiled_segments:
-        result["expansion_path"] = "compiled_segments (template)"
+        result["expansion_path"] = "compiled_segments"
         result["compiled_segments"] = compiled_segments
     else:
-        result["expansion_path"] = "expand_program_block (legacy)"
-        result["legacy_info"] = {
+        result["expansion_path"] = "expand_program_block"
+        result["block_info"] = {
             "asset_id_raw": meta.get("asset_id_raw"),
             "episode_duration_sec": meta.get("episode_duration_sec"),
             "selector": meta.get("selector"),
-            "note": "Block will be expanded at runtime via heuristic expansion",
+            "note": "Block will be expanded at runtime via Tier 2 playlog expander",
         }
 
     return result

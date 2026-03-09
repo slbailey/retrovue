@@ -20,7 +20,7 @@ from retrovue.planning.playlist_artifact_writer import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-CHANNELS_CONFIG = REPO_ROOT / "config" / "channels.json"
+CHANNELS_DIR = REPO_ROOT / "config" / "channels"
 ASSET_CATALOG = REPO_ROOT / "config" / "asset_catalog.json"
 
 
@@ -36,15 +36,15 @@ def artifact_dir(tmp_path: Path) -> Path:
 
 def test_plan_day_writes_tlog_and_jsonl(artifact_dir: Path) -> None:
     """Call plan_day(); assert .tlog and .tlog.jsonl exist."""
-    if not CHANNELS_CONFIG.exists():
-        pytest.skip("config/channels.json not found (run from repo root)")
+    if not CHANNELS_DIR.is_dir():
+        pytest.skip("config/channels/ directory not found (run from repo root)")
     if not ASSET_CATALOG.exists():
         pytest.skip("config/asset_catalog.json not found")
 
     plan_day(
         channel_id="cheers-24-7",
         broadcast_date=date(2026, 2, 13),
-        channels_config_path=CHANNELS_CONFIG,
+        channels_dir=CHANNELS_DIR,
         artifact_base_path=artifact_dir,
         asset_catalog_path=ASSET_CATALOG,
     )
@@ -63,15 +63,15 @@ def test_plan_day_writes_tlog_and_jsonl(artifact_dir: Path) -> None:
 
 def test_plan_day_second_call_raises_artifact_exists(artifact_dir: Path) -> None:
     """Call plan_day() twice for same channel+date; second raises PlaylistArtifactExistsError."""
-    if not CHANNELS_CONFIG.exists():
-        pytest.skip("config/channels.json not found")
+    if not CHANNELS_DIR.is_dir():
+        pytest.skip("config/channels/ directory not found")
     if not ASSET_CATALOG.exists():
         pytest.skip("config/asset_catalog.json not found")
 
     plan_day(
         channel_id="cheers-24-7",
         broadcast_date=date(2026, 2, 14),
-        channels_config_path=CHANNELS_CONFIG,
+        channels_dir=CHANNELS_DIR,
         artifact_base_path=artifact_dir,
         asset_catalog_path=ASSET_CATALOG,
     )
@@ -80,7 +80,7 @@ def test_plan_day_second_call_raises_artifact_exists(artifact_dir: Path) -> None
         plan_day(
             channel_id="cheers-24-7",
             broadcast_date=date(2026, 2, 14),
-            channels_config_path=CHANNELS_CONFIG,
+            channels_dir=CHANNELS_DIR,
             artifact_base_path=artifact_dir,
             asset_catalog_path=ASSET_CATALOG,
         )
@@ -93,8 +93,8 @@ def test_plan_day_second_call_raises_artifact_exists(artifact_dir: Path) -> None
 
 def test_plan_day_deterministic_same_tlog_bytes(artifact_dir: Path) -> None:
     """Delete artifact, run twice, byte-compare .tlog files; must be identical."""
-    if not CHANNELS_CONFIG.exists():
-        pytest.skip("config/channels.json not found")
+    if not CHANNELS_DIR.is_dir():
+        pytest.skip("config/channels/ directory not found")
     if not ASSET_CATALOG.exists():
         pytest.skip("config/asset_catalog.json not found")
 
@@ -106,7 +106,7 @@ def test_plan_day_deterministic_same_tlog_bytes(artifact_dir: Path) -> None:
     plan_day(
         channel_id=channel_id,
         broadcast_date=broadcast_date,
-        channels_config_path=CHANNELS_CONFIG,
+        channels_dir=CHANNELS_DIR,
         artifact_base_path=artifact_dir,
         asset_catalog_path=ASSET_CATALOG,
     )
@@ -118,7 +118,7 @@ def test_plan_day_deterministic_same_tlog_bytes(artifact_dir: Path) -> None:
     plan_day(
         channel_id=channel_id,
         broadcast_date=broadcast_date,
-        channels_config_path=CHANNELS_CONFIG,
+        channels_dir=CHANNELS_DIR,
         artifact_base_path=artifact_dir,
         asset_catalog_path=ASSET_CATALOG,
     )
@@ -153,14 +153,14 @@ def test_plan_day_cli_invalid_date_exits_nonzero() -> None:
 
 def test_plan_day_unknown_channel_raises(artifact_dir: Path) -> None:
     """plan_day() with unknown channel_id raises UnknownChannelError."""
-    if not CHANNELS_CONFIG.exists():
-        pytest.skip("config/channels.json not found")
+    if not CHANNELS_DIR.is_dir():
+        pytest.skip("config/channels/ directory not found")
 
     with pytest.raises(UnknownChannelError) as exc_info:
         plan_day(
             channel_id="nonexistent-channel-xyz",
             broadcast_date=date(2026, 2, 13),
-            channels_config_path=CHANNELS_CONFIG,
+            channels_dir=CHANNELS_DIR,
             artifact_base_path=artifact_dir,
         )
     assert "nonexistent-channel-xyz" in str(exc_info.value)

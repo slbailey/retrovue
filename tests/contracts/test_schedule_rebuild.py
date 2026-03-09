@@ -50,15 +50,20 @@ def _make_tier1_block(
     asset_id: str, start_ms: int, end_ms: int,
     *, compiled_segments: list | None = None,
 ) -> dict:
-    """Minimal Tier-1 segmented block dict (as returned by schedule_items_reader)."""
+    """Minimal Tier-1 segmented block dict (as returned by schedule_items_reader).
+
+    compiled_segments uses V2 schema (asset_id + duration_ms). This function
+    converts them to playout-level ScheduledSegment dicts (asset_uri + segment_duration_ms).
+    """
     segs = []
     if compiled_segments:
         for i, cs in enumerate(compiled_segments):
+            seg_asset_id = cs.get("asset_id", "")
             segs.append({
                 "segment_type": cs["segment_type"],
-                "asset_uri": cs["asset_uri"],
-                "asset_start_offset_ms": cs.get("asset_start_offset_ms", 0),
-                "segment_duration_ms": cs["segment_duration_ms"],
+                "asset_uri": f"/assets/{seg_asset_id}.mp4" if seg_asset_id else "",
+                "asset_start_offset_ms": 0,
+                "segment_duration_ms": cs["duration_ms"],
             })
     else:
         segs.append({
@@ -175,29 +180,26 @@ class TestCompiledSegmentsRebuild:
         """When Tier-1 items have compiled_segments, the rebuilt Tier-2 blocks
         must reflect the template segment structure (intro + content)."""
         from retrovue.runtime.schedule_items_reader import _hydrate_compiled_segments
+        from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+
+        resolver = StubAssetResolver()
+        resolver.add("intro-001", AssetMetadata(
+            type="intro", duration_sec=30, file_uri="/assets/intro-001.mp4",
+        ))
+        resolver.add("movie-001", AssetMetadata(
+            type="movie", duration_sec=5400, file_uri="/assets/movie-001.mp4",
+        ))
 
         compiled = [
             {
                 "segment_type": "intro",
                 "asset_id": "intro-001",
-                "asset_uri": "/assets/intro-001.mp4",
-                "asset_start_offset_ms": 0,
-                "segment_duration_ms": 30000,
-                "source_type": "collection",
-                "source_name": "Intros",
-                "is_primary": False,
-                "gain_db": 0.0,
+                "duration_ms": 30000,
             },
             {
                 "segment_type": "content",
                 "asset_id": "movie-001",
-                "asset_uri": "/assets/movie-001.mp4",
-                "asset_start_offset_ms": 0,
-                "segment_duration_ms": 5400000,
-                "source_type": "pool",
-                "source_name": "movies",
-                "is_primary": True,
-                "gain_db": 0.0,
+                "duration_ms": 5400000,
             },
         ]
 
@@ -206,6 +208,7 @@ class TestCompiledSegmentsRebuild:
             asset_id="movie-001",
             start_utc_ms=BASE_MS,
             slot_duration_ms=7200000,
+            resolver=resolver,
         )
 
         seg_types = [s.segment_type for s in block.segments]
@@ -222,19 +225,19 @@ class TestCompiledSegmentsRebuild:
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
 
-        # The Tier-1 block has compiled_segments (as returned by schedule_items_reader)
+        # The Tier-1 block has compiled_segments (V2 schema)
         block = _make_tier1_block(
             "movie-001", BASE_MS, BASE_MS + 7200000,
             compiled_segments=[
                 {
                     "segment_type": "intro",
-                    "asset_uri": "/assets/intro.mp4",
-                    "segment_duration_ms": 30000,
+                    "asset_id": "intro-001",
+                    "duration_ms": 30000,
                 },
                 {
                     "segment_type": "content",
-                    "asset_uri": "/assets/movie.mp4",
-                    "segment_duration_ms": 5400000,
+                    "asset_id": "movie-001",
+                    "duration_ms": 5400000,
                 },
             ],
         )
@@ -589,29 +592,26 @@ class TestTemplateBlocksWithFiller:
         intro + content + filler segments after fill_ad_blocks."""
         from retrovue.runtime.traffic_manager import fill_ad_blocks
         from retrovue.runtime.schedule_items_reader import _hydrate_compiled_segments
+        from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+
+        resolver = StubAssetResolver()
+        resolver.add("intro-001", AssetMetadata(
+            type="intro", duration_sec=30, file_uri="/assets/intro.mp4",
+        ))
+        resolver.add("movie-001", AssetMetadata(
+            type="movie", duration_sec=5400, file_uri="/assets/movie.mp4",
+        ))
 
         compiled = [
             {
                 "segment_type": "intro",
                 "asset_id": "intro-001",
-                "asset_uri": "/assets/intro.mp4",
-                "asset_start_offset_ms": 0,
-                "segment_duration_ms": 30_000,
-                "source_type": "collection",
-                "source_name": "Intros",
-                "is_primary": False,
-                "gain_db": 0.0,
+                "duration_ms": 30_000,
             },
             {
                 "segment_type": "content",
                 "asset_id": "movie-001",
-                "asset_uri": "/assets/movie.mp4",
-                "asset_start_offset_ms": 0,
-                "segment_duration_ms": 5_400_000,
-                "source_type": "pool",
-                "source_name": "movies",
-                "is_primary": True,
-                "gain_db": 0.0,
+                "duration_ms": 5_400_000,
             },
         ]
 
@@ -620,6 +620,7 @@ class TestTemplateBlocksWithFiller:
             asset_id="movie-001",
             start_utc_ms=BASE_MS,
             slot_duration_ms=7_200_000,
+            resolver=resolver,
         )
 
         filled = fill_ad_blocks(
