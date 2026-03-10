@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{CHANNEL_NAME}} — RetroVue</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-card: #13131a;
+    --bg-card-hover: #1a1a24;
+    --border: #1e1e2e;
+    --text-primary: #f0f0f5;
+    --text-secondary: #8888a0;
+    --text-dim: #55556a;
+    --accent: #7c5cfc;
+    --accent-glow: rgba(124, 92, 252, 0.15);
+    --green: #22c55e;
+    --green-dim: rgba(34, 197, 94, 0.15);
+    --red: #ef4444;
+    --red-dim: rgba(239, 68, 68, 0.12);
+    --amber: #f59e0b;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(124, 92, 252, 0.04) 0%, transparent 60%),
+      linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px);
+    background-size: 100% 100%, 60px 60px, 60px 60px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 48px 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+
+  .channel-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px 28px;
+    margin-bottom: 20px;
+  }
+
+  .channel-icon {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+  }
+
+  .channel-badge-text {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+
+  .header-sub {
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  /* Clock */
+  .clock-section {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  .clock-time {
+    font-size: 72px;
+    font-weight: 200;
+    letter-spacing: -2px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .clock-seconds {
+    font-weight: 300;
+    color: var(--text-secondary);
+  }
+
+  .clock-date {
+    font-size: 14px;
+    color: var(--text-dim);
+    font-weight: 400;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* Cards grid */
+  .cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    transition: border-color 0.3s, background 0.3s;
+  }
+
+  .card:hover {
+    background: var(--bg-card-hover);
+    border-color: #2a2a3e;
+  }
+
+  .card-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+
+  /* Now Playing card (full width) */
+  .card-now-playing {
+    grid-column: 1 / -1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card-now-playing::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), #a78bfa, var(--accent));
+    background-size: 200% 100%;
+    animation: shimmer 3s linear infinite;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  .now-playing-title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+    line-height: 1.2;
+  }
+
+  .now-playing-episode {
+    font-size: 15px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+
+  .now-playing-times {
+    display: flex;
+    gap: 24px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .time-label {
+    color: var(--text-dim);
+    margin-right: 6px;
+  }
+
+  .progress-bar {
+    margin-top: 16px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), #a78bfa);
+    border-radius: 2px;
+    transition: width 1s linear;
+  }
+
+  /* Viewer count card */
+  .viewer-count {
+    font-size: 64px;
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    transition: color 0.5s;
+  }
+
+  .viewer-count.has-viewers {
+    color: var(--green);
+  }
+
+  .viewer-count.no-viewers {
+    color: var(--text-dim);
+  }
+
+  .viewer-status {
+    font-size: 13px;
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    transition: background 0.5s, box-shadow 0.5s;
+  }
+
+  .status-dot.active {
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+    animation: pulse-dot 2s infinite;
+  }
+
+  .status-dot.idle {
+    background: var(--text-dim);
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .viewer-status-text {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  /* Channel status card */
+  .channel-status-value {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .channel-status-detail {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .status-running { color: var(--green); }
+  .status-idle { color: var(--amber); }
+
+  /* Watch button */
+  .watch-section {
+    margin-top: 16px;
+  }
+
+  .watch-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 18px 32px;
+    background: linear-gradient(135deg, var(--accent), #6d4de8);
+    border: none;
+    border-radius: 14px;
+    color: white;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.3s, opacity 0.3s;
+    letter-spacing: 0.3px;
+  }
+
+  .watch-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 30px rgba(124, 92, 252, 0.3);
+  }
+
+  .watch-btn:active {
+    transform: translateY(0);
+  }
+
+  .watch-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Powered by */
+  .footer {
+    text-align: center;
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .footer-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .footer-brand {
+    color: var(--text-secondary);
+    font-weight: 700;
+  }
+
+  /* Description */
+  .now-playing-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-top: 8px;
+    line-height: 1.5;
+    max-height: 40px;
+    overflow: hidden;
+  }
+
+  /* No data state */
+  .no-data {
+    color: var(--text-dim);
+    font-size: 15px;
+    font-style: italic;
+  }
+
+  /* Viewer change animation */
+  .viewer-change {
+    animation: viewer-bump 0.4s ease-out;
+  }
+
+  @keyframes viewer-bump {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .cards { grid-template-columns: 1fr; }
+    .clock-time { font-size: 48px; }
+    .container { padding: 32px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="channel-badge">
+      <div class="channel-icon">TV</div>
+      <span class="channel-badge-text">{{CHANNEL_NAME}}</span>
+    </div>
+    <div class="header-sub">Channel Dashboard</div>
+  </div>
+
+  <!-- Clock -->
+  <div class="clock-section">
+    <div class="clock-time" id="clock">
+      --:--<span class="clock-seconds">:--</span>
+    </div>
+    <div class="clock-date" id="clock-date">---</div>
+  </div>
+
+  <!-- Cards -->
+  <div class="cards">
+
+    <!-- Now Playing -->
+    <div class="card card-now-playing" id="now-playing-card">
+      <div class="card-label">Now Playing</div>
+      <div id="now-playing-content">
+        <div class="no-data">Loading schedule...</div>
+      </div>
+    </div>
+
+    <!-- Viewers -->
+    <div class="card">
+      <div class="card-label">Viewers</div>
+      <div class="viewer-count no-viewers" id="viewer-count">0</div>
+      <div class="viewer-status">
+        <span class="status-dot idle" id="viewer-dot"></span>
+        <span class="viewer-status-text" id="viewer-text">No one is watching</span>
+      </div>
+    </div>
+
+    <!-- Channel Status -->
+    <div class="card">
+      <div class="card-label">Channel Status</div>
+      <div class="channel-status-value status-idle" id="channel-status">Idle</div>
+      <div class="channel-status-detail" id="channel-detail">Schedule continues in background</div>
+    </div>
+
+  </div>
+
+  <!-- Watch Button -->
+  <div class="watch-section">
+    <button class="watch-btn" id="watch-btn" onclick="openPlayer()">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      Tune In
+    </button>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-text">Powered by <span class="footer-brand">RetroVue</span></div>
+  </div>
+
+</div>
+
+<script>
+const CHANNEL_ID = "{{CHANNEL_ID}}";
+let lastViewerCount = -1;
+let pollInterval = null;
+
+// ── Clock ──
+function updateClock() {
+  const now = new Date();
+  const h = now.getHours();
+  const m = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+
+  document.getElementById('clock').innerHTML =
+    `${h12}:${m}<span class="clock-seconds">:${s} ${ampm}</span>`;
+
+  const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+  document.getElementById('clock-date').textContent =
+    now.toLocaleDateString('en-US', opts);
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Format time ──
+function fmtTime(isoStr) {
+  if (!isoStr) return '--:--';
+  const d = new Date(isoStr);
+  const h = d.getHours() % 12 || 12;
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const ampm = d.getHours() >= 12 ? 'PM' : 'AM';
+  return `${h}:${m} ${ampm}`;
+}
+
+// ── Poll status ──
+async function pollStatus() {
+  try {
+    const resp = await fetch(`/channel/${CHANNEL_ID}/status`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // Viewer count
+    const vc = data.viewer_count || 0;
+    const vcEl = document.getElementById('viewer-count');
+    const dotEl = document.getElementById('viewer-dot');
+    const vtEl = document.getElementById('viewer-text');
+    const csEl = document.getElementById('channel-status');
+    const cdEl = document.getElementById('channel-detail');
+
+    if (vc !== lastViewerCount) {
+      vcEl.textContent = vc;
+      vcEl.classList.add('viewer-change');
+      setTimeout(() => vcEl.classList.remove('viewer-change'), 500);
+
+      if (vc > 0) {
+        vcEl.className = 'viewer-count has-viewers viewer-change';
+        dotEl.className = 'status-dot active';
+        vtEl.textContent = vc === 1 ? '1 viewer tuned in' : `${vc} viewers tuned in`;
+        csEl.textContent = 'Streaming';
+        csEl.className = 'channel-status-value status-running';
+        cdEl.textContent = 'Playout engine active';
+      } else {
+        vcEl.className = 'viewer-count no-viewers viewer-change';
+        dotEl.className = 'status-dot idle';
+        vtEl.textContent = 'No one is watching';
+        csEl.textContent = 'Idle';
+        csEl.className = 'channel-status-value status-idle';
+        cdEl.textContent = 'Schedule continues in background';
+      }
+      lastViewerCount = vc;
+    }
+
+    // Now playing
+    const np = data.now_playing;
+    const npEl = document.getElementById('now-playing-content');
+    if (np) {
+      let epLine = '';
+      if (np.episode_title) {
+        epLine = np.episode_title;
+        if (np.season != null && np.episode != null) {
+          epLine = `S${np.season} E${np.episode} — ${epLine}`;
+        }
+      }
+
+      let descLine = '';
+      if (np.description) {
+        descLine = `<div class="now-playing-desc">${np.description}</div>`;
+      }
+
+      npEl.innerHTML = `
+        <div class="now-playing-title">${np.title}</div>
+        ${epLine ? `<div class="now-playing-episode">${epLine}</div>` : ''}
+        <div class="now-playing-times">
+          <span><span class="time-label">Started</span>${fmtTime(np.start_time)}</span>
+          <span><span class="time-label">Ends</span>${fmtTime(np.end_time)}</span>
+          <span><span class="time-label">Duration</span>${np.duration_minutes} min</span>
+        </div>
+        ${descLine}
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: ${Math.min(np.progress_pct, 100)}%"></div>
+        </div>
+      `;
+    } else {
+      npEl.innerHTML = '<div class="no-data">No schedule data available</div>';
+    }
+
+  } catch (e) {
+    // Silent retry on next poll
+  }
+}
+
+pollInterval = setInterval(pollStatus, 2000);
+pollStatus();
+
+// ── Watch button ──
+function openPlayer() {
+  window.open(`/watch/${CHANNEL_ID}`, '_blank', 'width=960,height=600');
+}
+</script>
+</body>
+</html>
