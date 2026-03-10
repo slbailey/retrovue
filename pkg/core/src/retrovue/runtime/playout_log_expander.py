@@ -6,7 +6,8 @@ containing ScheduledSegments — the exact types ChannelManager consumes.
 
 Break placement is determined by channel_type (B-CT-1):
   - "network": Mid-content breaks via break detection pipeline (INV-BREAK-008)
-  - "movie": Post-content only — content plays uninterrupted, filler after
+  - "movie", "premium": Post-content only — content plays uninterrupted, filler after
+    (INV-CHANNEL-TYPE-PREMIUM-NO-MID-BREAK-001)
 
 INV-BREAK-008: Break positions are determined exclusively by detect_breaks().
 The expander does NOT contain inline chapter marker extraction or synthetic
@@ -77,7 +78,7 @@ def expand_program_block(
 
     Break placement is driven by channel_type (INV-CHANNEL-TYPE-BREAK-PLACEMENT):
       - "network": mid-content breaks (chapter markers or computed)
-      - "movie": single post-content filler block (no interruption)
+      - "movie", "premium": single post-content filler block (no interruption)
 
     Args:
         asset_id: Asset identifier (for block_id generation).
@@ -105,7 +106,7 @@ def expand_program_block(
             f"got {type(episode_duration_ms).__name__}: {episode_duration_ms!r}"
         )
 
-    if channel_type == "movie":
+    if channel_type in ("movie", "premium"):
         return _expand_movie(
             asset_id=asset_id,
             asset_uri=asset_uri,

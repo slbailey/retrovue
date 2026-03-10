@@ -597,6 +597,59 @@ class DslScheduleService:
 
         return filled_block
 
+    @staticmethod
+    def _resolve_cross_day_overlaps(blocks: list[ScheduledBlock]) -> list[ScheduledBlock]:
+        """INV-CROSS-DAY-CARRY-IN-001: Defense-in-depth guardrail.
+
+        After all days are compiled with effective_day_open_ms filtering,
+        this method should be a no-op.  If it finds overlaps, the compile-
+        time filtering missed something — log a warning so the root cause
+        can be investigated.
+
+        Precondition: *blocks* is sorted by start_utc_ms.
+        """
+        if not blocks:
+            return blocks
+
+        resolved: list[ScheduledBlock] = [blocks[0]]
+        for blk in blocks[1:]:
+            prev = resolved[-1]
+            if blk.start_utc_ms < prev.end_utc_ms:
+                # Should not happen if compile-time filtering is correct
+                logger.warning(
+                    "INV-CROSS-DAY-CARRY-IN-001 GUARDRAIL: Cross-day overlap "
+                    "detected at merge time — compile-time filtering should "
+                    "have prevented this. Dropping block %s [%d, %d) "
+                    "subsumed by %s [%d, %d)",
+                    blk.block_id, blk.start_utc_ms, blk.end_utc_ms,
+                    prev.block_id, prev.start_utc_ms, prev.end_utc_ms,
+                )
+                continue
+            resolved.append(blk)
+
+        return resolved
+
+    @staticmethod
+    def _compute_effective_day_open_ms(
+        broadcast_day: str,
+        day_start_hour: int,
+        tz_name: str,
+        active_carry_in_end_ms: int,
+    ) -> int:
+        """INV-CROSS-DAY-CARRY-IN-001: First legal block start time for a day.
+
+        effective_day_open_ms = max(broadcast_day_start_ms, active_carry_in_end_ms)
+
+        If there is no carry-in (active_carry_in_end_ms == 0), this returns
+        the broadcast day start so that no filtering occurs.
+        """
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tz_name)
+        bd = date.fromisoformat(broadcast_day)
+        day_start_dt = datetime(bd.year, bd.month, bd.day, day_start_hour, 0, tzinfo=tz)
+        broadcast_day_start_ms = int(day_start_dt.timestamp() * 1000)
+        return max(broadcast_day_start_ms, active_carry_in_end_ms)
+
     def _find_in_memory_block(self, utc_ms: int) -> ScheduledBlock | None:
         """Pure in-memory time-range lookup on the current compilation.
 
@@ -771,16 +824,30 @@ class DslScheduleService:
                 if day_str in self._compiled_days:
                     return
 
+            # INV-CROSS-DAY-CARRY-IN-001: Compute effective day open from
+            # the last block in the current horizon (the carry-in window).
+            tz_name = (self._channel_dsl or {}).get("timezone", "UTC")
+            effective_day_open_ms = self._compute_effective_day_open_ms(
+                day_str, self._day_start_hour, tz_name,
+                last_end_ms,  # active carry-in from current horizon
+            )
+
             logger.info(
                 "Extending DSL horizon: compiling %s for channel=%s "
-                "(remaining=%d min)",
+                "(remaining=%d min, effective_open=%d)",
                 day_str, channel_id, remaining_ms // 60000,
+                effective_day_open_ms,
             )
-            new_blocks = self._compile_day(channel_id, day_str)
+            new_blocks = self._compile_day(
+                channel_id, day_str,
+                effective_day_open_ms=effective_day_open_ms,
+            )
             if new_blocks:
                 with self._lock:
                     self._blocks.extend(new_blocks)
                     self._blocks.sort(key=lambda b: b.start_utc_ms)
+                    # Defense-in-depth guardrail
+                    self._blocks = self._resolve_cross_day_overlaps(self._blocks)
                     self._compiled_days.add(day_str)
                 logger.info(
                     "Horizon extended: +%d blocks for %s (total=%d)",
@@ -884,17 +951,54 @@ class DslScheduleService:
             else:
                 start_date = local_now.date()
 
+        # Resolve timezone for effective_day_open_ms computation.
+        # _channel_dsl / _channel_tz are already cached when
+        # _broadcast_day_override is False; need to ensure they exist
+        # in the override path too.
+        if self._channel_dsl is None:
+            dsl_text = Path(self._dsl_path).read_text()
+            self._channel_dsl = parse_dsl(dsl_text)
+        tz_name = self._channel_dsl.get("timezone", "UTC")
+        if self._channel_tz is None:
+            from zoneinfo import ZoneInfo
+            try:
+                self._channel_tz = ZoneInfo(tz_name)
+            except Exception:
+                self._channel_tz = timezone.utc
+
+        # INV-CROSS-DAY-CARRY-IN-001: Track the active carry-in window.
+        # active_carry_in_end_ms propagates forward across days — even
+        # when a day produces zero blocks (e.g. a movie that spans an
+        # entire broadcast day).
         all_blocks: list[ScheduledBlock] = []
+        active_carry_in_end_ms = 0
         for day_offset in range(HORIZON_DAYS):
             day = start_date + timedelta(days=day_offset)
             day_str = day.strftime("%Y-%m-%d")
             try:
-                blocks = self._compile_day(channel_id, day_str)
+                effective_day_open_ms = self._compute_effective_day_open_ms(
+                    day_str, self._day_start_hour, tz_name,
+                    active_carry_in_end_ms,
+                )
+                blocks = self._compile_day(
+                    channel_id, day_str,
+                    effective_day_open_ms=effective_day_open_ms,
+                )
                 all_blocks.extend(blocks)
                 self._compiled_days.add(day_str)
+                # Propagate carry-in: use max() so a long movie that
+                # spans multiple days keeps the window open.
+                if blocks:
+                    active_carry_in_end_ms = max(
+                        active_carry_in_end_ms, blocks[-1].end_utc_ms,
+                    )
+                # If no blocks were emitted (entire day subsumed by
+                # carry-in), active_carry_in_end_ms persists unchanged.
                 logger.debug(
-                    "Compiled day %s: %d blocks for channel=%s",
+                    "Compiled day %s: %d blocks for channel=%s "
+                    "(effective_open=%d, carry_in_end=%d)",
                     day_str, len(blocks), channel_id,
+                    effective_day_open_ms, active_carry_in_end_ms,
                 )
             except Exception as e:
                 logger.error(
@@ -903,6 +1007,9 @@ class DslScheduleService:
                 )
 
         all_blocks.sort(key=lambda b: b.start_utc_ms)
+        # INV-CROSS-DAY-CARRY-IN-001: Defense-in-depth — should be a no-op
+        # now that _compile_day filters carry-in blocks before persisting.
+        all_blocks = self._resolve_cross_day_overlaps(all_blocks)
         with self._lock:
             self._blocks = all_blocks
 
@@ -1090,12 +1197,21 @@ class DslScheduleService:
             logger.warning("Failed to read canonical EPG for %s/%s: %s", channel_id, window_start, e)
         return None
 
-    def _compile_day(self, channel_id: str, broadcast_day: str) -> list[ScheduledBlock]:
+    def _compile_day(
+        self, channel_id: str, broadcast_day: str,
+        effective_day_open_ms: int = 0,
+    ) -> list[ScheduledBlock]:
         """Compile a single broadcast day into filled ScheduledBlocks.
-        
+
         DB-first: checks for a locked cached schedule before compiling.
         Uses deterministic sequential counters based on day offset from epoch,
         so episodes are consistent regardless of compilation order.
+
+        INV-CROSS-DAY-CARRY-IN-001: ``effective_day_open_ms`` is the first
+        legal block start time for this broadcast day.  It equals
+        max(broadcast_day_start_ms, active_carry_in_end_ms).  Blocks that
+        start before this time are removed before persisting — they will
+        never air because the carry-in movie owns that time.
         """
         # DB-first: check cache
         cached = self._get_cached_schedule(channel_id, broadcast_day)
@@ -1130,6 +1246,29 @@ class DslScheduleService:
         # Expand each program block into segmented blocks
         # (content segments + empty filler placeholders)
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
+
+        # INV-CROSS-DAY-CARRY-IN-001: Remove blocks that start before this
+        # day's effective open time.  These blocks will never air — the
+        # carry-in movie owns that time.  Filter BEFORE persisting so
+        # ScheduleItems/EPG never show phantom blocks.
+        if effective_day_open_ms > 0:
+            before_count = len(blocks)
+            blocks = [b for b in blocks if b.start_utc_ms >= effective_day_open_ms]
+            dropped = before_count - len(blocks)
+            if dropped:
+                logger.info(
+                    "INV-CROSS-DAY-CARRY-IN-001: Removed %d phantom blocks "
+                    "from %s — effective_day_open_ms=%d (carry-in from "
+                    "prior day owns this time)",
+                    dropped, broadcast_day, effective_day_open_ms,
+                )
+                # Also filter program_blocks so ScheduleItems stay consistent
+                schedule["program_blocks"] = [
+                    pb for pb in schedule["program_blocks"]
+                    if int(
+                        datetime.fromisoformat(pb["start_at"]).timestamp() * 1000
+                    ) >= effective_day_open_ms
+                ]
 
         # INV-SCHEDULE-HORIZON-001: Persist segmented blocks alongside
         # program metadata so Tier 2 (Playlog Horizon Daemon) can consume

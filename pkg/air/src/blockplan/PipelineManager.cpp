@@ -1481,7 +1481,7 @@ void PipelineManager::Run() {
     const bool take_b = take && (next_seam_type_ == SeamType::kBlock);
     const bool take_segment = take && (next_seam_type_ == SeamType::kSegment);
 
-    // Policy B: TAKE_READINESS — log audio headroom at the moment of TAKE.
+    // Policy B: TAKE_READINESS — log audio headroom at the moment of TAKE (or defer).
     if (take_b && !take_rotated && preview_) {
       const bool met = (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs);
       { std::ostringstream oss;
@@ -1513,9 +1513,27 @@ void PipelineManager::Run() {
       segb_depth = segment_b_video_buffer_->DepthFrames();
     }
 
+    // INV-FENCE-TAKE-READY-001: Block take is only "ready" when B has met the same
+    // preroll threshold as segment seams (500 ms audio + primed video). Gate v_src
+    // and rotation so we do not pop from B or rotate until ready — avoids thin buffer
+    // at fence and "fast video + choppy audio" from buffer starvation.
+    const bool block_take_ready =
+        preview_ && preview_video_buffer_ &&
+        (preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs) && b_primed;
+
+    if (take_b && !take_rotated && preview_ && !block_take_ready) {
+      std::ostringstream oss;
+      oss << "[PipelineManager] BLOCK_TAKE_DEFERRED"
+          << " tick=" << session_frame_index
+          << " depth_ms=" << preview_audio_prime_depth_ms_
+          << " wanted_ms=" << kMinAudioPrimeMs
+          << " b_primed=" << b_primed;
+      Logger::Info(oss.str());
+    }
+
     VideoLookaheadBuffer* v_src = nullptr;
-    if (take_b && preview_video_buffer_) {
-      v_src = preview_video_buffer_.get();        // Block swap: B buffers
+    if (take_b && block_take_ready && preview_video_buffer_) {
+      v_src = preview_video_buffer_.get();        // Block swap: B buffers (only when ready)
     } else if (take_segment && segment_b_video_buffer_) {
       // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Only read from incoming segment's
       // buffer when it is eligible for swap. Reading from B when B is not eligible
@@ -1541,7 +1559,8 @@ void PipelineManager::Run() {
             << " eligible=" << (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection) ? "true" : "false");
         Logger::Info(oss.str()); }
     } else if (take_b) {
-      v_src = preview_video_buffer_.get();         // Block swap: may be null
+      // Block fence but B not ready: leave v_src null so cascade uses pad until next tick.
+      v_src = nullptr;
     } else {
       v_src = video_buffer_.get();                 // No swap: A buffers
     }
@@ -1713,30 +1732,8 @@ void PipelineManager::Run() {
       cadence_diag_bypass_++;
     }
 
-    // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
-    if (session_frame_index - cadence_diag_last_log_tick_ >= 300) {
-      auto now_wall = std::chrono::system_clock::now();
-      auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          now_wall.time_since_epoch()).count();
-      { std::ostringstream oss;
-        oss << "[PipelineManager] CADENCE_DIAG"
-            << " tick=" << session_frame_index
-            << " wall_ms=" << epoch_ms
-            << " enabled=" << frame_selection_cadence_enabled_
-            << " advance=" << cadence_diag_advance_
-            << " repeat=" << cadence_diag_repeat_
-            << " bypass=" << cadence_diag_bypass_
-            << " v_src=" << (v_src ? "non-null" : "null")
-            << " take_b=" << take_b
-            << " budget=" << frame_selection_cadence_budget_num_
-            << " threshold=" << frame_selection_cadence_budget_den_
-            << " increment=" << frame_selection_cadence_increment_
-            << " y_crc=" << std::hex << last_good_y_crc32_ << std::dec
-            << " seg=" << current_segment_index_
-            << " decision=" << take_source_char;
-        Logger::Info(oss.str()); }
-      cadence_diag_last_log_tick_ = session_frame_index;
-    }
+    // CADENCE_DIAG is logged after the cascade (see below) so decision= reflects actual
+    // output: A=content live, B=content preview, R=repeat, H=hold, S=standby, P=pad.
 
     // ==================================================================
     // INV-CADENCE-SEAM-ADVANCE-001: When the incoming segment is eligible
@@ -1987,6 +1984,33 @@ void PipelineManager::Run() {
       case TakeDecision::kPad:      take_source_char = 'P'; break;
     }
 
+    // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
+    // Log after take_source_char is set so decision= is correct. A=content live, B=content preview,
+    // R=repeat (cadence), H=hold, S=standby, P=pad (not "presentation").
+    if (session_frame_index - cadence_diag_last_log_tick_ >= 300) {
+      auto now_wall = std::chrono::system_clock::now();
+      auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now_wall.time_since_epoch()).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] CADENCE_DIAG"
+            << " tick=" << session_frame_index
+            << " wall_ms=" << epoch_ms
+            << " enabled=" << frame_selection_cadence_enabled_
+            << " advance=" << cadence_diag_advance_
+            << " repeat=" << cadence_diag_repeat_
+            << " bypass=" << cadence_diag_bypass_
+            << " v_src=" << (v_src ? "non-null" : "null")
+            << " take_b=" << take_b
+            << " budget=" << frame_selection_cadence_budget_num_
+            << " threshold=" << frame_selection_cadence_budget_den_
+            << " increment=" << frame_selection_cadence_increment_
+            << " y_crc=" << std::hex << last_good_y_crc32_ << std::dec
+            << " seg=" << current_segment_index_
+            << " decision=" << take_source_char << " (A=live B=preview R=repeat P=pad)";
+        Logger::Info(oss.str()); }
+      cadence_diag_last_log_tick_ = session_frame_index;
+    }
+
     // ==================================================================
     // SEAM_TICK_EMISSION_AUDIT — INV-TRANSITION-005 disambiguation.
     // Emitted only on segment seam ticks (take_segment == true).
@@ -2132,6 +2156,24 @@ void PipelineManager::Run() {
         break;
     }
 #endif
+    {
+      auto wall_now = std::chrono::system_clock::now();
+      int64_t wall_clock_now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          wall_now.time_since_epoch()).count();
+      int64_t expected_emit_time_ms = session_epoch_utc_ms_ +
+          (session_frame_index * 1000 * ctx_->fps.den) / ctx_->fps.num;
+      int64_t delta_ms = wall_clock_now_ms - expected_emit_time_ms;
+      const int repeat_flag = (decision == TakeDecision::kRepeat) ? 1 : 0;
+      std::ostringstream oss;
+      oss << "[PipelineManager] EMIT_FRAME"
+          << " source_frame_index=" << session_frame_index
+          << " repeat=" << repeat_flag
+          << " ptr=" << std::hex << reinterpret_cast<uintptr_t>(chosen_video) << std::dec
+          << " wall_clock_now=" << wall_clock_now_ms
+          << " expected_emit_time=" << expected_emit_time_ms
+          << " delta_ms=" << delta_ms;
+      Logger::Info(oss.str());
+    }
     session_encoder->encodeFrame(*chosen_video, video_pts_90k);
 
     // INV-PAD-PRODUCER: Log TAKE pad/content transitions (rate-limited).
@@ -2218,7 +2260,12 @@ void PipelineManager::Run() {
     // ==================================================================
     const bool fence_fired_b_missing = take_b && !take_rotated && !committed_b_frame_this_tick
                                        && !degraded_take_active_;
-    if (take_b && !take_rotated && (committed_b_frame_this_tick || fence_fired_b_missing)) {
+    // INV-FENCE-TAKE-READY-001: Do not rotate when B exists but is not ready; output pad
+    // and re-evaluate next tick so B can reach kMinAudioPrimeMs + primed before we take.
+    const bool may_rotate =
+        committed_b_frame_this_tick ||
+        (fence_fired_b_missing && (!preview_ || block_take_ready));
+    if (take_b && !take_rotated && may_rotate) {
       take_rotated = true;
 
       // Step 1: Request cleanup of previous fence's deferred fill (reaper performs join).
