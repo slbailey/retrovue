@@ -363,6 +363,46 @@ class ProgramDirector:
                 return YamlChannelConfigProvider(yaml_dir).to_channels_list()
             return []
 
+    def _reload_config(self) -> dict[str, Any]:
+        """Reload channel YAML configs, invalidating all config caches.
+
+        The next schedule compilation, horizon expansion, or traffic fill
+        will re-read the YAML from disk.
+        """
+        reloaded: list[str] = []
+
+        # 1. Reload YamlChannelConfigProvider (channel list, format, etc.)
+        if self._channel_config_provider is not None and hasattr(
+            self._channel_config_provider, "reload"
+        ):
+            self._channel_config_provider.reload()
+            reloaded.append("channel_config_provider")
+            self._logger.info("[reload] Channel config provider reloaded")
+
+        # 2. Invalidate all cached DslScheduleService._channel_dsl
+        #    so the next compilation re-reads the YAML from disk.
+        for attr_name in list(vars(self)):
+            if attr_name.startswith("_dsl_"):
+                svc = getattr(self, attr_name, None)
+                if svc is not None and hasattr(svc, "_channel_dsl"):
+                    svc._channel_dsl = None
+                    channel_id = attr_name[5:]  # strip "_dsl_" prefix
+                    reloaded.append(f"dsl:{channel_id}")
+                    self._logger.info(
+                        "[reload] DSL config cache invalidated for channel %s",
+                        channel_id,
+                    )
+
+        self._logger.info(
+            "[reload] Config reload complete: %d caches invalidated",
+            len(reloaded),
+        )
+        return {
+            "status": "ok",
+            "reloaded": reloaded,
+            "message": f"Reloaded {len(reloaded)} config caches",
+        }
+
     def _init_embedded_registry(
         self, channel_config_provider: Optional[Any] = None
     ) -> None:
@@ -1722,6 +1762,16 @@ class ProgramDirector:
                     content=str(e),
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
+
+        @self.fastapi_app.post("/admin/reload-config")
+        async def reload_config() -> dict[str, Any]:
+            """Reload channel YAML configs without restarting the server.
+
+            Invalidates all config caches so the next schedule compilation,
+            horizon expansion, or traffic fill picks up the new YAML.
+            """
+            result = self._reload_config()
+            return result
 
         @self.fastapi_app.post("/admin/emergency")
         async def emergency_override() -> dict[str, Any]:
