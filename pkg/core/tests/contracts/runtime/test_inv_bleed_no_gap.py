@@ -96,13 +96,11 @@ def _two_block_dsl(
                 "pool": "horror",
                 "grid_blocks": 2,
                 "fill_mode": "single",
-                "bleed": m1_bleed,
             },
             "comedy_movie": {
                 "pool": "comedy",
                 "grid_blocks": comedy_grid,
                 "fill_mode": "single",
-                "bleed": m2_bleed,
             },
         },
         "schedule": {
@@ -112,12 +110,14 @@ def _two_block_dsl(
                     "slots": 4,
                     "program": "horror_movie",
                     "progression": "random",
+                    "bleed": m1_bleed,
                 },
                 {
                     "start": m2_start,
                     "slots": 4,
                     "program": "comedy_movie",
                     "progression": "random",
+                    "bleed": m2_bleed,
                 },
             ]
         },
@@ -145,7 +145,6 @@ def _three_block_dsl() -> dict:
                 "pool": "comedy",
                 "grid_blocks": 2,
                 "fill_mode": "single",
-                "bleed": True,
             },
         },
         "schedule": {
@@ -155,18 +154,21 @@ def _three_block_dsl() -> dict:
                     "slots": 4,
                     "program": "comedy_movie",
                     "progression": "random",
+                    "bleed": True,
                 },
                 {
                     "start": "08:00",
                     "slots": 4,
                     "program": "comedy_movie",
                     "progression": "random",
+                    "bleed": True,
                 },
                 {
                     "start": "10:00",
                     "slots": 4,
                     "program": "comedy_movie",
                     "progression": "random",
+                    "bleed": True,
                 },
             ]
         },

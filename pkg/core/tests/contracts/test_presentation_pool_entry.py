@@ -73,7 +73,6 @@ def _assemble(resolver, presentation, seed=42):
             "pool": "movies_g",
             "grid_blocks": 4,
             "fill_mode": "single",
-            "bleed": True,
             "presentation": presentation,
         },
         pool_name="movies_g",
@@ -81,6 +80,7 @@ def _assemble(resolver, presentation, seed=42):
         progression="random",
         grid_minutes=30,
         resolver=resolver,
+        bleed=True,
         seed=seed,
     )
 

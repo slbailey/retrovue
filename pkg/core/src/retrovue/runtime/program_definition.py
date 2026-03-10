@@ -58,7 +58,6 @@ class ProgramDefinition:
     pool: str
     grid_blocks: int
     fill_mode: str
-    bleed: bool
     intro: str | None = None
     outro: str | None = None
     presentation: list | None = None
@@ -116,7 +115,7 @@ def validate_schedule_block(
 
     Enforces:
         INV-PROGRAM-GRID-001 — slots must be a multiple of grid_blocks.
-        INV-PROGRAM-SEPARATION-001 — no inline assembly fields.
+        INV-PROGRAM-SEPARATION-001 — no inline assembly fields (except bleed).
     """
     # INV-PROGRAM-SEPARATION-001: block must reference a program
     block_program = getattr(block, "program", None)
@@ -126,7 +125,9 @@ def validate_schedule_block(
         )
 
     # INV-PROGRAM-SEPARATION-001: reject inline assembly fields
-    for forbidden in ("fill_mode", "bleed", "pool", "intro", "outro"):
+    # Note: bleed is intentionally NOT in the forbidden list — it belongs
+    # on the schedule block, not the program definition.
+    for forbidden in ("fill_mode", "pool", "intro", "outro"):
         val = getattr(block, forbidden, None)
         if val is not None:
             raise ValidationFault(
@@ -202,12 +203,17 @@ def assemble_program(
     pool: Any,
     *,
     grid_minutes: int,
+    bleed: bool = False,
     block_start_ms: int = 0,
     intro_asset: Any | None = None,
     outro_asset: Any | None = None,
     presentation_assets: list[Any] | None = None,
 ) -> AssemblyResult:
     """Assemble content for a single program execution.
+
+    Args:
+        bleed: Whether the program may overrun its grid allocation.
+            This is a schedule-block-level decision, not a program property.
 
     Enforces:
         INV-PROGRAM-FILL-001 — single mode selects exactly one asset.
@@ -271,11 +277,11 @@ def assemble_program(
 
     if program.fill_mode == "single":
         segments = _assemble_single(
-            eligible, grid_ms, wrapper_ms, program.bleed,
+            eligible, grid_ms, wrapper_ms, bleed,
         )
     elif program.fill_mode == "accumulate":
         segments = _assemble_accumulate(
-            eligible, grid_ms, wrapper_ms, program.bleed,
+            eligible, grid_ms, wrapper_ms, bleed,
         )
     else:
         raise AssemblyFault(

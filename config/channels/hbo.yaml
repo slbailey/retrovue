@@ -60,6 +60,11 @@ pools:
       type: movie
       rating: R
 
+  scifi_movies:
+    match:
+      type: movie
+      genres: "Science Fiction"
+
 # -----------------------------
 # PROGRAM DEFINITIONS
 # -----------------------------
@@ -70,7 +75,6 @@ programs:
     pool: movies_g
     grid_blocks_max: 5
     fill_mode: single
-    bleed: true
     presentation:
       - pool: intros
       - pool: G_ratings_cards
@@ -79,7 +83,6 @@ programs:
     pool: movies_pg
     grid_blocks_max: 5
     fill_mode: single
-    bleed: true
     presentation:
       - pool: intros
       - pool: PG_ratings_cards
@@ -88,7 +91,6 @@ programs:
     pool: movies_pg13
     grid_blocks_max: 5
     fill_mode: single
-    bleed: true
     presentation:
       - pool: intros
       - pool: PG13_ratings_cards
@@ -97,10 +99,16 @@ programs:
     pool: movies_r
     grid_blocks_max: 5
     fill_mode: single
-    bleed: true
     presentation:
       - pool: intros
       - pool: R_ratings_cards
+
+  hbo_scifi_movies:
+    pool: scifi_movies
+    grid_blocks_max: 5
+    fill_mode: single
+    presentation:
+      - pool: intros
 
 # -----------------------------
 # TRAFFIC CONFIG
@@ -138,12 +146,22 @@ schedule:
       slots: 8
       program: [hbo_movies_g]
       progression: random
+      bleed: true
     - start: "10:00"
       slots: 20
       program: [hbo_movies_pg, hbo_movies_pg13]
       progression: random
+      bleed: true
     - start: "20:00"
       slots: 20
       program: [hbo_movies_pg, hbo_movies_pg13, hbo_movies_r]
       progression: random
+      bleed: true
+
+  sunday:
+    - start: "14:00"
+    - slots: 5
+      program: scifi_movies
+      progression: random
+      bleed: true
 

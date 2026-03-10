@@ -79,7 +79,6 @@ def _make_program(
     pool: str = "movies",
     grid_blocks: int = 2,
     fill_mode: str = "single",
-    bleed: bool = False,
     intro: str | None = None,
     outro: str | None = None,
     presentation: list[str] | None = None,
@@ -89,7 +88,6 @@ def _make_program(
         pool=pool,
         grid_blocks=grid_blocks,
         fill_mode=fill_mode,
-        bleed=bleed,
         intro=intro,
         outro=outro,
         presentation=presentation,
@@ -156,12 +154,12 @@ class TestInvPresentationSinglePrimary001:
         # INV-PRESENTATION-SINGLE-PRIMARY-001 — empty presentation stack
         # produces exactly one content segment; no presentation segments.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=[],
         )
         pool = _make_pool(50, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         presentation_segments = [s for s in result.segments if s.segment_type == "presentation"]
@@ -174,7 +172,7 @@ class TestInvPresentationSinglePrimary001:
         # segment_type="presentation", never "content"; only one content
         # segment exists.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["rating_card", "feature_bumper"],
         )
         pool = _make_pool(50, name="movies")
@@ -183,6 +181,7 @@ class TestInvPresentationSinglePrimary001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=[rating, bumper],
         )
 
@@ -196,7 +195,7 @@ class TestInvPresentationSinglePrimary001:
         # INV-PRESENTATION-SINGLE-PRIMARY-001 — when converted to a
         # ScheduledBlock, exactly one segment has is_primary=True.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["rating_card", "studio_logo"],
         )
         pool = _make_pool(50, name="movies")
@@ -205,6 +204,7 @@ class TestInvPresentationSinglePrimary001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=[rating, logo],
         )
 
@@ -235,7 +235,7 @@ class TestInvPresentationPrecedesPrimary001:
         # INV-PRESENTATION-PRECEDES-PRIMARY-001 — single presentation segment
         # appears at index 0; content follows at index 1.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["hbo_intro"],
         )
         pool = _make_pool(50, name="movies")
@@ -243,6 +243,7 @@ class TestInvPresentationPrecedesPrimary001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=[hbo],
         )
 
@@ -255,7 +256,7 @@ class TestInvPresentationPrecedesPrimary001:
         # INV-PRESENTATION-PRECEDES-PRIMARY-001 — three presentation segments
         # appear in exact declared order [rating, feature, logo] before content.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["rating_card", "feature_bumper", "studio_logo"],
         )
         pool = _make_pool(50, name="movies")
@@ -267,6 +268,7 @@ class TestInvPresentationPrecedesPrimary001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=assets,
         )
 
@@ -284,7 +286,7 @@ class TestInvPresentationPrecedesPrimary001:
         # INV-PRESENTATION-PRECEDES-PRIMARY-001 — no filler, pad, or content
         # segment may appear between presentation segments and the primary.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["bumper_a", "bumper_b"],
         )
         pool = _make_pool(50, name="movies")
@@ -295,6 +297,7 @@ class TestInvPresentationPrecedesPrimary001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=assets,
         )
 
@@ -329,7 +332,7 @@ class TestInvPresentationFirstContentIdentity001:
         # must come from the first segment_type="content", not from
         # presentation segments.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["rating_card", "feature_bumper"],
         )
         pool = _make_pool(50, name="movies")
@@ -340,6 +343,7 @@ class TestInvPresentationFirstContentIdentity001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=assets,
         )
 
@@ -363,7 +367,7 @@ class TestInvPresentationFirstContentIdentity001:
         # segment must be the first segment with segment_type="content".
         # No presentation segment may have segment_type="content".
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["logo"],
         )
         pool = _make_pool(50, name="movies")
@@ -371,6 +375,7 @@ class TestInvPresentationFirstContentIdentity001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=[logo],
         )
 
@@ -405,7 +410,7 @@ class TestInvPresentationGridBudget001:
         # in a 60-minute grid leaves only 55 minutes for content.
         # A 58-minute asset must be rejected (5 + 58 = 63 > 60).
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=False,
+            fill_mode="single", grid_blocks=2,
             presentation=["feature_bumper"],
         )
         pool = _make_pool(58, name="movies")
@@ -422,7 +427,7 @@ class TestInvPresentationGridBudget001:
         # INV-PRESENTATION-GRID-BUDGET-001 — a 5-minute presentation segment
         # in a 60-minute grid allows a 54-minute asset (5 + 54 = 59 <= 60).
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=False,
+            fill_mode="single", grid_blocks=2,
             presentation=["feature_bumper"],
         )
         pool = _make_pool(54, name="movies")
@@ -441,7 +446,7 @@ class TestInvPresentationGridBudget001:
         # INV-PRESENTATION-GRID-BUDGET-001 — multiple presentation segments:
         # 3min + 2min = 5min overhead. 56-minute asset rejected (5+56=61 > 60).
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=False,
+            fill_mode="single", grid_blocks=2,
             presentation=["rating_card", "studio_logo"],
         )
         pool = _make_pool(56, name="movies")
@@ -515,7 +520,7 @@ class TestInvPresentationNotFiller001:
         # INV-PRESENTATION-NOT-FILLER-001 — every presentation segment
         # has a non-empty asset_uri and segment_type="presentation".
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             presentation=["rating_card", "feature_bumper"],
         )
         pool = _make_pool(50, name="movies")
@@ -526,6 +531,7 @@ class TestInvPresentationNotFiller001:
 
         result = assemble_program(
             prog, pool, grid_minutes=GRID_MINUTES,
+            bleed=True,
             presentation_assets=assets,
         )
 
@@ -698,7 +704,6 @@ class TestPresentationIntroMutualExclusion:
             _make_program(
                 fill_mode="single",
                 grid_blocks=2,
-                bleed=True,
                 intro="legacy_intro",
                 presentation=["rating_card", "feature_bumper"],
             )

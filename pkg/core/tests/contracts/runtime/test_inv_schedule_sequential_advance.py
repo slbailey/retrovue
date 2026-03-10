@@ -67,7 +67,6 @@ _V2_SEQUENTIAL_DSL = {
             "pool": "test_pool",
             "grid_blocks": 1,
             "fill_mode": "single",
-            "bleed": False,
         },
     },
     "schedule": {

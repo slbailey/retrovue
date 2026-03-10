@@ -153,7 +153,6 @@ programs:
     pool: cheers
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 schedule:
   all_day:
     - start: "20:00"
@@ -180,7 +179,6 @@ programs:
     pool: cheers
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 schedule:
   all_day:
     - start: "06:00"

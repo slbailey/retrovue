@@ -325,11 +325,13 @@ def _compile_program_block(
           slots: 48
           program: cheers_30
           progression: sequential
+          bleed: true
 
     Pipeline: Schedule Resolver → Program Resolution → Program Assembly
 
     Delegates to program_assembly.assemble_schedule_block() for fill_mode,
-    bleed, grid_blocks, and intro/outro handling.
+    grid_blocks, and intro/outro handling. Bleed is a schedule-block-level
+    decision, read from block_def and passed to assembly.
     """
     from retrovue.runtime.program_assembly import assemble_schedule_block
     from retrovue.runtime.program_definition import AssemblyFault
@@ -339,6 +341,7 @@ def _compile_program_block(
     if not isinstance(slots, int):
         slots = len(slots)
     progression = block_def.get("progression", "sequential")
+    bleed = block_def.get("bleed", False)
 
     # Episode progression DSL fields (canonical contract: episode_progression.md)
     run_id = block_def.get("run_id")
@@ -423,6 +426,7 @@ def _compile_program_block(
                 progression=progression,
                 grid_minutes=grid_minutes,
                 resolver=resolver,
+                bleed=bleed,
                 seed=wseed + exec_idx,
                 channel_id=channel_id,
                 broadcast_day=broadcast_day,
@@ -451,7 +455,7 @@ def _compile_program_block(
                 slot_duration = needed_blocks * slot_sec
 
                 # Bleed: if content exceeds even the capped slot, expand
-                if prog_def.get("bleed", False) and result.total_runtime_ms > slot_duration * 1000:
+                if bleed and result.total_runtime_ms > slot_duration * 1000:
                     slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
                     needed_blocks = slot_duration // slot_sec
 
@@ -501,6 +505,7 @@ def _compile_program_block(
                 progression=progression,
                 grid_minutes=grid_minutes,
                 resolver=resolver,
+                bleed=bleed,
                 seed=wseed + exec_idx,  # vary seed per execution
                 channel_id=channel_id,
                 broadcast_day=broadcast_day,
@@ -526,7 +531,7 @@ def _compile_program_block(
                 grid_blocks = prog_def.get("grid_blocks", 1)
                 slot_duration = grid_blocks * grid_minutes * 60
 
-                if prog_def.get("bleed", False) and result.total_runtime_ms > slot_duration * 1000:
+                if bleed and result.total_runtime_ms > slot_duration * 1000:
                     slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
 
                 block = ProgramBlockOutput(

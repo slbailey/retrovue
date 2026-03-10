@@ -60,9 +60,9 @@ class FakeScheduleBlock:
     slots: int
     program: str
     progression: str = "sequential"
+    bleed: bool | None = None  # Schedule-block-level bleed control
     # Assembly-level fields that must NOT appear on schedule blocks.
     fill_mode: str | None = None
-    bleed: bool | None = None
     pool: str | None = None
     intro: str | None = None
     outro: str | None = None
@@ -87,7 +87,6 @@ def _make_program(
     pool: str = "movies",
     grid_blocks: int = 2,
     fill_mode: str = "single",
-    bleed: bool = False,
     intro: str | None = None,
     outro: str | None = None,
 ) -> ProgramDefinition:
@@ -96,7 +95,6 @@ def _make_program(
         pool=pool,
         grid_blocks=grid_blocks,
         fill_mode=fill_mode,
-        bleed=bleed,
         intro=intro,
         outro=outro,
     )
@@ -144,10 +142,10 @@ class TestInvProgramFill001:
     # Tier: 2 | Scheduling logic invariant
     def test_single_fill_selects_one_asset(self):
         # INV-PROGRAM-FILL-001 — single mode produces exactly one content asset
-        prog = _make_program(fill_mode="single", grid_blocks=2, bleed=True)
+        prog = _make_program(fill_mode="single", grid_blocks=2)
         pool = _make_pool(50, 45, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         assert len(content_segments) == 1
@@ -178,11 +176,11 @@ class TestInvProgramFill002:
         # grid_blocks=2 → target = 60min. Three 25-min assets: first two = 50min
         # (under), third brings to 75min (meets). Expect 3 assets.
         prog = _make_program(
-            fill_mode="accumulate", grid_blocks=2, bleed=True,
+            fill_mode="accumulate", grid_blocks=2,
         )
         pool = _make_pool(25, 25, 25, 25, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         # 25+25=50 < 60, 25+25+25=75 >= 60 → stop at 3
@@ -194,11 +192,11 @@ class TestInvProgramFill002:
         # grid_blocks=2 → target = 60min. 55-min + 10-min = 65 (meets).
         # A trailing 5-min asset must NOT be added.
         prog = _make_program(
-            fill_mode="accumulate", grid_blocks=2, bleed=True,
+            fill_mode="accumulate", grid_blocks=2,
         )
         pool = _make_pool(55, 10, 5, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         total_ms = sum(s.duration_ms for s in content_segments)
@@ -223,7 +221,7 @@ class TestInvProgramBleed001:
         # 2-slot (60-min) program → asset rejected, next tried.
         # Only a 55-min asset fits.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=False,
+            fill_mode="single", grid_blocks=2,
         )
         pool = FakePool(
             name="movies",
@@ -233,7 +231,7 @@ class TestInvProgramBleed001:
             ],
         )
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=False)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         assert len(content_segments) == 1
@@ -246,11 +244,11 @@ class TestInvProgramBleed001:
         # 30+25=55 < 60. Adding 20 → 75 > 60 → excluded.
         # Total must be <= 60min.
         prog = _make_program(
-            fill_mode="accumulate", grid_blocks=2, bleed=False,
+            fill_mode="accumulate", grid_blocks=2,
         )
         pool = _make_pool(30, 25, 20, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=False)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         total_ms = sum(s.duration_ms for s in content_segments)
@@ -272,11 +270,11 @@ class TestInvProgramBleed002:
         # INV-PROGRAM-BLEED-002 — bleed=true, single mode, 90-min asset in
         # 2-slot (60-min) program → accepted, not truncated.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
         )
         pool = _make_pool(90, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         assert len(content_segments) == 1
@@ -299,11 +297,11 @@ class TestInvProgramBleed003:
         # INV-PROGRAM-BLEED-003 — bleeding program ends at actual_end;
         # next block must start exactly there.
         prog = _make_program(
-            name="movie", fill_mode="single", grid_blocks=2, bleed=True,
+            name="movie", fill_mode="single", grid_blocks=2,
         )
         pool = _make_pool(90, name="movies")
 
-        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+        result = assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
         # Scheduled start was grid-slot 0. Grid allocation = 60min.
         # Actual runtime = 90min. Next block must start at 90min offset.
@@ -317,18 +315,18 @@ class TestInvProgramBleed003:
         # Block A: starts at 0, ends at 90min.
         # Block B: must start at exactly 90min.
         prog_a = _make_program(
-            name="movie_a", fill_mode="single", grid_blocks=2, bleed=True,
+            name="movie_a", fill_mode="single", grid_blocks=2,
         )
         prog_b = _make_program(
-            name="movie_b", fill_mode="single", grid_blocks=2, bleed=True,
+            name="movie_b", fill_mode="single", grid_blocks=2,
         )
         pool = _make_pool(90, 85, name="movies")
 
         result_a = assemble_program(
-            prog_a, pool, grid_minutes=GRID_MINUTES, block_start_ms=0,
+            prog_a, pool, grid_minutes=GRID_MINUTES, bleed=True, block_start_ms=0,
         )
         result_b = assemble_program(
-            prog_b, pool, grid_minutes=GRID_MINUTES,
+            prog_b, pool, grid_minutes=GRID_MINUTES, bleed=True,
             block_start_ms=result_a.next_block_start_offset_ms,
         )
 
@@ -431,7 +429,7 @@ class TestInvProgramIntroOutro001:
         # INV-PROGRAM-INTRO-OUTRO-001 — 5-min intro + 58-min asset = 63min,
         # exceeds 60-min grid with bleed=false → no fitting asset → AssemblyFault.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=False,
+            fill_mode="single", grid_blocks=2,
             intro="intro_asset",
         )
         pool = _make_pool(58, name="movies")
@@ -439,7 +437,7 @@ class TestInvProgramIntroOutro001:
 
         with pytest.raises(AssemblyFault):
             assemble_program(
-                prog, pool, grid_minutes=GRID_MINUTES,
+                prog, pool, grid_minutes=GRID_MINUTES, bleed=False,
                 intro_asset=intro_asset,
             )
 
@@ -448,7 +446,7 @@ class TestInvProgramIntroOutro001:
         # INV-PROGRAM-INTRO-OUTRO-001 — 58-min asset + 5-min outro = 63min,
         # exceeds 60-min grid with bleed=false → no fitting asset → AssemblyFault.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=False,
+            fill_mode="single", grid_blocks=2,
             outro="outro_asset",
         )
         pool = _make_pool(58, name="movies")
@@ -456,7 +454,7 @@ class TestInvProgramIntroOutro001:
 
         with pytest.raises(AssemblyFault):
             assemble_program(
-                prog, pool, grid_minutes=GRID_MINUTES,
+                prog, pool, grid_minutes=GRID_MINUTES, bleed=False,
                 outro_asset=outro_asset,
             )
 
@@ -465,7 +463,7 @@ class TestInvProgramIntroOutro001:
         # INV-PROGRAM-INTRO-OUTRO-001 — bleed=true: intro + content + outro
         # durations all count toward total_runtime_ms.
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             intro="intro_asset", outro="outro_asset",
         )
         pool = _make_pool(55, name="movies")
@@ -473,7 +471,7 @@ class TestInvProgramIntroOutro001:
         outro_asset = FakeAsset(asset_id="outro_asset", duration_ms=_ms(4))
 
         result = assemble_program(
-            prog, pool, grid_minutes=GRID_MINUTES,
+            prog, pool, grid_minutes=GRID_MINUTES, bleed=True,
             intro_asset=intro_asset,
             outro_asset=outro_asset,
         )
@@ -495,7 +493,7 @@ class TestInvProgramAssemblyEligible001:
     # Tier: 2 | Scheduling logic invariant
     def test_assembly_rejects_ineligible_asset(self):
         # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — asset with state != ready excluded
-        prog = _make_program(fill_mode="single", grid_blocks=2, bleed=True)
+        prog = _make_program(fill_mode="single", grid_blocks=2)
         pool = FakePool(
             name="movies",
             assets=[
@@ -506,12 +504,12 @@ class TestInvProgramAssemblyEligible001:
         )
 
         with pytest.raises(AssemblyFault):
-            assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+            assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
     # Tier: 2 | Scheduling logic invariant
     def test_assembly_rejects_unapproved_asset(self):
         # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — asset with approved=false excluded
-        prog = _make_program(fill_mode="single", grid_blocks=2, bleed=True)
+        prog = _make_program(fill_mode="single", grid_blocks=2)
         pool = FakePool(
             name="movies",
             assets=[
@@ -523,13 +521,13 @@ class TestInvProgramAssemblyEligible001:
         )
 
         with pytest.raises(AssemblyFault):
-            assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
+            assemble_program(prog, pool, grid_minutes=GRID_MINUTES, bleed=True)
 
     # Tier: 2 | Scheduling logic invariant
     def test_ineligible_intro_rejected(self):
         # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — ineligible intro asset → fault
         prog = _make_program(
-            fill_mode="single", grid_blocks=2, bleed=True,
+            fill_mode="single", grid_blocks=2,
             intro="bad_intro",
         )
         pool = _make_pool(50, name="movies")
@@ -540,7 +538,7 @@ class TestInvProgramAssemblyEligible001:
 
         with pytest.raises(AssemblyFault):
             assemble_program(
-                prog, pool, grid_minutes=GRID_MINUTES,
+                prog, pool, grid_minutes=GRID_MINUTES, bleed=True,
                 intro_asset=intro_asset,
             )
 
@@ -575,12 +573,13 @@ class TestInvProgramSeparation001:
             validate_schedule_block(block, prog, grid_minutes=GRID_MINUTES)
 
     # Tier: 2 | Scheduling logic invariant
-    def test_schedule_block_rejects_inline_bleed(self):
-        # INV-PROGRAM-SEPARATION-001 — schedule block with inline bleed → reject
+    def test_schedule_block_accepts_inline_bleed(self):
+        # Bleed is a schedule-block-level decision, NOT an assembly field.
+        # Schedule blocks with bleed MUST be accepted.
         prog = _make_program()
         block = FakeScheduleBlock(
             start="20:00", slots=4, program=prog.name, bleed=True,
         )
 
-        with pytest.raises(ValidationFault):
-            validate_schedule_block(block, prog, grid_minutes=GRID_MINUTES)
+        # Must not raise — bleed belongs on the schedule block
+        validate_schedule_block(block, prog, grid_minutes=GRID_MINUTES)

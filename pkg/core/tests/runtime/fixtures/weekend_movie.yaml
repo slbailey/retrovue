@@ -22,12 +22,10 @@ programs:
     pool: blockbusters
     grid_blocks: 4
     fill_mode: single
-    bleed: true
   late_movie:
     pool: late_night
     grid_blocks: 4
     fill_mode: single
-    bleed: true
 
 schedule:
   saturday:
@@ -35,7 +33,9 @@ schedule:
       slots: 4
       program: primetime_movie
       progression: random
+      bleed: true
     - start: "22:00"
       slots: 4
       program: late_movie
       progression: random
+      bleed: true
