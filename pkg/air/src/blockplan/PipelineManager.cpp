@@ -664,7 +664,7 @@ void PipelineManager::Run() {
   enc_config.fps_den = ctx_->fps.den;
   enc_config.enable_audio = true;
   enc_config.gop_size = 90;      // I-frame every 3 seconds
-  enc_config.bitrate = 2000000;  // 2 Mbps
+  enc_config.bitrate = 5000000;  // 5 Mbps
 
   auto session_encoder =
       std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);
