@@ -486,7 +486,7 @@ namespace retrovue
       config.target_fps = program_format.GetFrameRateAsDouble();
       config.target_width = program_format.video.width;
       config.target_height = program_format.video.height;
-      config.bitrate = 5000000;
+      config.bitrate = 8000000;  // 8 Mbps
       config.gop_size = 30;
 
       std::string sink_name = "channel-" + std::to_string(channel_id) + "-mpeg-ts";
