@@ -1892,6 +1892,123 @@ class ProgramDirector:
             return {"broadcast_day": broadcast_day, "entries": all_entries}
 
 
+        @self.fastapi_app.get("/channel/{channel_id}/status")
+        def channel_status(channel_id: str) -> dict[str, Any]:
+            """Real-time channel status for demo/dashboard pages.
+
+            Returns current program, viewer count, and timing info.
+            """
+            from zoneinfo import ZoneInfo
+            from retrovue.runtime.dsl_schedule_service import DslScheduleService
+            from retrovue.runtime.catalog_resolver import CatalogAssetResolver
+            from retrovue.infra.uow import session
+
+            tz = ZoneInfo("America/New_York")
+            now = datetime.now(tz)
+
+            viewer_count = self._get_pre_warmed_viewer_count(channel_id)
+
+            # Determine channel name
+            channel_name = channel_id
+            try:
+                channels = self._load_channels_list()
+                for ch in channels:
+                    if ch["channel_id"] == channel_id:
+                        channel_name = ch.get("name", channel_id)
+                        break
+            except Exception:
+                pass
+
+            # Find what's playing now from EPG
+            now_playing = None
+            try:
+                if now.hour < 6:
+                    broadcast_day = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+                else:
+                    broadcast_day = now.strftime("%Y-%m-%d")
+
+                from datetime import date as _date_type
+                _bd = _date_type.fromisoformat(broadcast_day)
+                window_start = datetime(_bd.year, _bd.month, _bd.day, 6, 0, tzinfo=tz)
+                window_end = window_start + timedelta(hours=24)
+
+                blocks = DslScheduleService.get_canonical_epg(
+                    channel_id, window_start, window_end
+                )
+                if blocks:
+                    with session() as db:
+                        resolver = CatalogAssetResolver(db)
+
+                    for block in blocks:
+                        start_dt = datetime.fromisoformat(block["start_at"])
+                        if start_dt.tzinfo is None:
+                            start_dt = start_dt.replace(tzinfo=tz)
+                        slot_sec = block["slot_duration_sec"]
+                        ep_sec = block.get("episode_duration_sec", slot_sec)
+                        end_dt = start_dt + timedelta(seconds=slot_sec)
+
+                        if start_dt <= now < end_dt:
+                            title = block.get("title", "Untitled")
+                            episode_title = ""
+                            season = None
+                            episode = None
+                            description = ""
+                            for cat_entry in resolver._catalog:
+                                if cat_entry.canonical_id == block["asset_id"]:
+                                    title = cat_entry.series_title or title
+                                    episode_title = getattr(cat_entry, "title", "") or ""
+                                    season = cat_entry.season
+                                    episode = cat_entry.episode
+                                    description = getattr(cat_entry, "description", "") or ""
+                                    break
+
+                            now_playing = {
+                                "title": title,
+                                "episode_title": episode_title,
+                                "season": season,
+                                "episode": episode,
+                                "description": description,
+                                "start_time": start_dt.astimezone(tz).isoformat(),
+                                "end_time": end_dt.astimezone(tz).isoformat(),
+                                "duration_minutes": round(ep_sec / 60, 1),
+                                "slot_minutes": round(slot_sec / 60, 1),
+                                "progress_pct": round(
+                                    (now - start_dt).total_seconds() / slot_sec * 100, 1
+                                ),
+                            }
+                            break
+            except Exception as e:
+                self._logger.debug("Status EPG lookup error: %s", e)
+
+            return {
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "viewer_count": viewer_count,
+                "now_playing": now_playing,
+                "server_time": now.isoformat(),
+            }
+
+
+        @self.fastapi_app.get("/demo/{channel_id}", response_class=HTMLResponse)
+        async def demo_page(channel_id: str) -> HTMLResponse:
+            """Serve the channel demo/continuity page."""
+            channel_name = channel_id
+            try:
+                channels = self._load_channels_list()
+                for ch in channels:
+                    if ch["channel_id"] == channel_id:
+                        channel_name = ch.get("name", channel_id)
+                        break
+            except Exception:
+                pass
+
+            html_path = Path("/opt/retrovue/pkg/core/templates/demo/channel.html")
+            html = html_path.read_text()
+            html = html.replace("{{CHANNEL_ID}}", channel_id)
+            html = html.replace("{{CHANNEL_NAME}}", channel_name)
+            return HTMLResponse(content=html)
+
+
         # --- HLS Endpoints ---
 
         @self.fastapi_app.get("/hls/{channel_id}/live.m3u8")
