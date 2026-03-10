@@ -20,6 +20,7 @@ from .commands import (
     channel,
     channel_manager,
     collection,
+    config,
     enricher,
     producer,
     program_director,
@@ -119,6 +120,13 @@ router.register(
     schedule.app,
     help_text="Schedule listing and rescheduling operations",
     doc_path="schedule.md",
+)
+
+router.register(
+    "config",
+    config.app,
+    help_text="Configuration management (reload YAML configs)",
+    doc_path="config.md",
 )
 
 
