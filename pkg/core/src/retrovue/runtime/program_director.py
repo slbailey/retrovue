@@ -1086,14 +1086,12 @@ class ProgramDirector:
         # Stop all HLS writers
         self._hls_manager.stop_all()
 
-        # Stop all fanout buffers
+        # INV-TEARDOWN-SIGNAL-BEFORE-KILL: Signal all fanout stop events first
+        # so reader loops see _stop_event when AIR sockets close, avoiding
+        # spurious reconnect attempts during shutdown.
         with self._fanout_lock:
-            for channel_id, fanout in list(self._fanout_buffers.items()):
-                try:
-                    fanout.stop()
-                except Exception as e:
-                    self._logger.warning("Error stopping fanout buffer for channel %s: %s", channel_id, e)
-            self._fanout_buffers.clear()
+            for fanout in self._fanout_buffers.values():
+                fanout.signal_stop()
 
         # Embedded mode: stop health-check thread and tear down all managers (including AIR).
         # Stop channel managers (and thus PlayoutSession/AIR) before stopping the Evidence
@@ -1118,6 +1116,16 @@ class ProgramDirector:
                         manager.active_producer = None
                 self._managers.clear()
 
+        # Now do the full fanout stop (join threads, close resources).
+        with self._fanout_lock:
+            for channel_id, fanout in list(self._fanout_buffers.items()):
+                try:
+                    fanout.stop()
+                except Exception as e:
+                    self._logger.warning("Error stopping fanout buffer for channel %s: %s", channel_id, e)
+            self._fanout_buffers.clear()
+
+        if self._channel_manager_provider is None:
             # Stop evidence server after AIR has been stopped (no remaining clients).
             if self._evidence_server is not None:
                 try:
