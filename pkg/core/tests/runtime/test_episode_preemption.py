@@ -63,13 +63,13 @@ programs:
     pool: drama
     grid_blocks: 1
     fill_mode: single
-    bleed: true
 schedule:
   all_day:
     - start: "20:00"
       slots: 1
       program: p_drama
       progression: sequential
+      bleed: true
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
@@ -93,13 +93,13 @@ programs:
     pool: medical
     grid_blocks: 1
     fill_mode: single
-    bleed: true
 schedule:
   all_day:
     - start: "20:00"
       slots: 1
       program: p_med
       progression: sequential
+      bleed: true
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
@@ -123,7 +123,6 @@ programs:
     pool: sitcom
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 schedule:
   all_day:
     - start: "20:00"
@@ -154,7 +153,6 @@ programs:
     pool: sitcom
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 schedule:
   all_day:
     - start: "20:00"

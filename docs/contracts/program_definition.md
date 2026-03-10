@@ -30,7 +30,6 @@ A ProgramDefinition MUST be defined before any schedule block may reference it. 
 | `pool` | pool reference | Yes | The content pool from which assets are drawn. |
 | `grid_blocks` | positive integer | Yes | Number of grid slots this program targets per execution. |
 | `fill_mode` | `single` \| `accumulate` | Yes | How assets are assembled to fill the grid target. |
-| `bleed` | boolean | Yes | Whether the program may overrun its grid allocation. |
 | `intro` | asset reference | No | Segment prepended before content. |
 | `outro` | asset reference | No | Segment appended after content. |
 
@@ -40,8 +39,9 @@ A ProgramDefinition MUST be defined before any schedule block may reference it. 
 - `pool` MUST reference a defined pool. A ProgramDefinition referencing an undefined pool is invalid.
 - `grid_blocks` MUST be a positive integer (>= 1).
 - `fill_mode` MUST be exactly `single` or `accumulate`. No other values are permitted.
-- `bleed` MUST be explicitly set. There is no default.
 - `intro` and `outro`, when present, MUST reference assets that satisfy `LAW-ELIGIBILITY` at assembly time.
+
+**Note:** `bleed` is NOT a ProgramDefinition field. Bleed is a schedule-block-level decision — see "Bleed Rules" below.
 
 ---
 
@@ -100,14 +100,12 @@ Each execution targets exactly `grid_blocks * grid_minutes` of wall-clock time (
 
 ## Bleed Rules
 
-Bleed determines whether a program's actual runtime may exceed its grid allocation.
+Bleed determines whether a program's actual runtime may exceed its grid allocation. Bleed is a schedule-block-level decision, not a program property. This allows the same program to bleed in one time slot and not in another.
 
-- `bleed: true` — The program's assembled content may exceed `grid_blocks * grid_minutes`. The overrun shifts all subsequent schedule blocks forward by the bleed amount. No content is truncated.
-- `bleed: false` — The program's assembled content MUST NOT exceed `grid_blocks * grid_minutes`. Content that would cause an overrun MUST be rejected during assembly (`single` mode) or excluded from accumulation (`accumulate` mode). Remaining time within the grid allocation is filled by break budget.
+- `bleed: true` on the schedule block — The assembled content may exceed `grid_blocks * grid_minutes`. The overrun shifts all subsequent schedule blocks forward by the bleed amount. No content is truncated.
+- `bleed: false` (or omitted, which defaults to false) — The assembled content MUST NOT exceed `grid_blocks * grid_minutes`. Content that would cause an overrun MUST be rejected during assembly (`single` mode) or excluded from accumulation (`accumulate` mode). Remaining time within the grid allocation is filled by break budget.
 
-Bleed is a property of the ProgramDefinition, not of the asset, pool, or schedule block. The schedule block does not override bleed.
-
-A program with `bleed: true` and `fill_mode: accumulate` — the final accumulated asset may cause the total to exceed the grid. This is the only permitted overrun path for accumulate mode.
+A schedule block with `bleed: true` and `fill_mode: accumulate` — the final accumulated asset may cause the total to exceed the grid. This is the only permitted overrun path for accumulate mode.
 
 ---
 
@@ -126,6 +124,7 @@ Schedule blocks reference ProgramDefinitions by name. The schedule block provide
 - `start` — when the program begins (grid-aligned, per `LAW-GRID`)
 - `slots` — total grid slots allocated
 - `progression` — how assets are selected from the pool (`sequential`, `random`, `shuffle`)
+- `bleed` — whether the program may overrun its grid allocation (default: false)
 - `cooldown_hours` — optional cooldown constraint on asset reuse
 
 The ProgramDefinition provides:
@@ -133,12 +132,11 @@ The ProgramDefinition provides:
 - `pool` — which assets are candidates
 - `grid_blocks` — per-execution grid target
 - `fill_mode` — how assets fill the target
-- `bleed` — whether overrun is permitted
 - `intro` / `outro` — wrapper segments
 
-The schedule block owns timing and progression. The ProgramDefinition owns assembly and fill behavior. Neither may encroach on the other's domain.
+The schedule block owns timing, progression, and bleed. The ProgramDefinition owns assembly and fill behavior.
 
-A schedule block MUST NOT embed assembly logic (fill mode, bleed, pool selection). A ProgramDefinition MUST NOT encode timing, progression, or cooldown rules.
+A schedule block MUST NOT embed assembly logic (fill mode, pool selection). A ProgramDefinition MUST NOT encode timing, progression, bleed, or cooldown rules.
 
 ---
 
@@ -180,25 +178,25 @@ Derived From: `LAW-GRID`, `LAW-CONTENT-AUTHORITY`
 
 ---
 
-### INV-PROGRAM-BLEED-001 — Non-bleeding programs must not exceed grid allocation
+### INV-PROGRAM-BLEED-001 — Non-bleeding schedule blocks must not exceed grid allocation
 
 Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-GRID`
 
-**Guarantee:** A ProgramDefinition with `bleed: false` MUST NOT produce assembled content whose total runtime (including intro/outro) exceeds `grid_blocks * grid_minutes`.
+**Guarantee:** A schedule block with `bleed: false` (or bleed omitted) MUST NOT produce assembled content whose total runtime (including intro/outro) exceeds `grid_blocks * grid_minutes`.
 
 **Violation:** A non-bleeding program execution whose total assembled runtime exceeds its grid allocation. This is an assembly fault.
 
 ---
 
-### INV-PROGRAM-BLEED-002 — Bleeding programs may exceed grid allocation
+### INV-PROGRAM-BLEED-002 — Bleeding schedule blocks may exceed grid allocation
 
 Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-GRID`, `LAW-CONTENT-AUTHORITY`
 
-**Guarantee:** A ProgramDefinition with `bleed: true` MUST permit assembled content whose total runtime (including intro/outro) exceeds `grid_blocks * grid_minutes`. No content is truncated. The overrun amount is the difference between the assembled runtime and the grid allocation.
+**Guarantee:** A schedule block with `bleed: true` MUST permit assembled content whose total runtime (including intro/outro) exceeds `grid_blocks * grid_minutes`. No content is truncated. The overrun amount is the difference between the assembled runtime and the grid allocation.
 
 **Violation:** A bleeding program execution that truncates or rejects content solely because it exceeds the grid allocation.
 
@@ -210,7 +208,7 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-GRID`, `LAW-DERIVATION`
 
-**Guarantee:** When a program with `bleed: true` overruns its grid allocation, the next schedule block's actual start time MUST equal the bleeding program's actual end time. No gap or overlap is permitted at the bleed seam.
+**Guarantee:** When a schedule block with `bleed: true` overruns its grid allocation, the next schedule block's actual start time MUST equal the bleeding program's actual end time. No gap or overlap is permitted at the bleed seam.
 
 **Violation:** A gap or overlap between a bleeding program's end and the next block's actual start.
 
@@ -282,9 +280,9 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** Schedule blocks MUST reference a ProgramDefinition by name. Schedule blocks MUST NOT contain inline fill_mode, bleed, pool, intro, or outro fields. All assembly logic MUST reside in the ProgramDefinition.
+**Guarantee:** Schedule blocks MUST reference a ProgramDefinition by name. Schedule blocks MUST NOT contain inline fill_mode, pool, intro, or outro fields. All assembly logic MUST reside in the ProgramDefinition. `bleed` is a schedule-block-level field and is explicitly permitted on schedule blocks.
 
-**Violation:** A schedule block that specifies assembly-level fields (fill_mode, bleed, pool, intro, outro) instead of referencing a ProgramDefinition.
+**Violation:** A schedule block that specifies assembly-level fields (fill_mode, pool, intro, outro) instead of referencing a ProgramDefinition.
 
 ---
 
@@ -320,4 +318,4 @@ pkg/core/tests/contracts/test_program_definition.py
 | `test_ineligible_intro_rejected` | INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 | Ineligible intro asset fails assembly. |
 | `test_schedule_block_must_reference_program` | INV-PROGRAM-SEPARATION-001 | Schedule block without program reference rejected. |
 | `test_schedule_block_rejects_inline_fill_mode` | INV-PROGRAM-SEPARATION-001 | Schedule block with inline `fill_mode` rejected. |
-| `test_schedule_block_rejects_inline_bleed` | INV-PROGRAM-SEPARATION-001 | Schedule block with inline `bleed` rejected. |
+| `test_schedule_block_accepts_inline_bleed` | INV-PROGRAM-SEPARATION-001 | Schedule block with `bleed` accepted (bleed is a schedule-block field). |

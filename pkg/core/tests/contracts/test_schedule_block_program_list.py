@@ -74,14 +74,15 @@ class TestProgramListAcceptance:
         # A non-empty list of valid program refs produces blocks.
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
-            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
+            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 8,
             "program": ["pg_movie", "pg13_movie"],
             "progression": "random",
+            "bleed": True,
         }
 
         blocks = _compile(resolver, block_def, programs)
@@ -107,13 +108,14 @@ class TestProgramListAcceptance:
         # A plain string still works as before (backward compat).
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 4,
             "program": "pg_movie",
             "progression": "random",
+            "bleed": True,
         }
 
         blocks = _compile(resolver, block_def, programs)
@@ -134,13 +136,14 @@ class TestProgramListResolution:
         # One member not in programs dict → reject.
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 4,
             "program": ["pg_movie", "nonexistent"],
             "progression": "random",
+            "bleed": True,
         }
 
         with pytest.raises((AssemblyFault, ValueError, KeyError)):
@@ -161,14 +164,15 @@ class TestProgramListUniformGrid:
         # Programs with different grid_blocks → reject.
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
-            "pg13_short": {"pool": "movies_pg13", "grid_blocks": 2, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
+            "pg13_short": {"pool": "movies_pg13", "grid_blocks": 2, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 4,
             "program": ["pg_movie", "pg13_short"],
             "progression": "random",
+            "bleed": True,
         }
 
         with pytest.raises((AssemblyFault, ValueError)):
@@ -179,14 +183,15 @@ class TestProgramListUniformGrid:
         # All programs same grid_blocks → accept.
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
-            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
+            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 8,
             "program": ["pg_movie", "pg13_movie"],
             "progression": "random",
+            "bleed": True,
         }
 
         blocks = _compile(resolver, block_def, programs)
@@ -207,14 +212,15 @@ class TestProgramListPerExecution:
         # With 2 programs and 2 executions, both programs may appear.
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
-            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
+            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 8,
             "program": ["pg_movie", "pg13_movie"],
             "progression": "random",
+            "bleed": True,
         }
 
         blocks = _compile(resolver, block_def, programs)
@@ -229,14 +235,15 @@ class TestProgramListPerExecution:
         # Same seed → same selections.
         resolver = _default_resolver()
         programs = {
-            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
-            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single", "bleed": True},
+            "pg_movie": {"pool": "movies_pg", "grid_blocks": 4, "fill_mode": "single"},
+            "pg13_movie": {"pool": "movies_pg13", "grid_blocks": 4, "fill_mode": "single"},
         }
         block_def = {
             "start": "10:00",
             "slots": 8,
             "program": ["pg_movie", "pg13_movie"],
             "progression": "random",
+            "bleed": True,
         }
 
         blocks_a = _compile(resolver, block_def, programs, seed=99)
@@ -291,7 +298,6 @@ class TestGridBlocksMaxGreedyPacking:
                 "pool": "movies_pg",
                 "grid_blocks_max": 5,
                 "fill_mode": "single",
-                "bleed": True,
             },
         }
         block_def = {
@@ -299,6 +305,7 @@ class TestGridBlocksMaxGreedyPacking:
             "slots": 10,
             "program": "pg_movie",
             "progression": "random",
+            "bleed": True,
         }
 
         blocks = _compile(resolver, block_def, programs)
@@ -328,12 +335,12 @@ class TestGridBlocksMaxGreedyPacking:
                 "pool": "movies_pg",
                 "grid_blocks_max": 5,
                 "fill_mode": "single",
-                "bleed": True,
             },
         }
         block_def = {
             "start": "10:00",
             "slots": 9,  # exactly 3 movies × 3 blocks
+            "bleed": True,
             "program": "pg_movie",
             "progression": "random",
         }
@@ -357,7 +364,6 @@ class TestGridBlocksMaxGreedyPacking:
                 "pool": "movies_pg",
                 "grid_blocks_max": 5,
                 "fill_mode": "single",
-                "bleed": True,
             },
         }
         block_def = {
@@ -365,6 +371,7 @@ class TestGridBlocksMaxGreedyPacking:
             "slots": 7,
             "program": "pg_movie",
             "progression": "random",
+            "bleed": True,
         }
 
         # Must not raise
@@ -381,13 +388,11 @@ class TestGridBlocksMaxGreedyPacking:
                 "pool": "movies_pg",
                 "grid_blocks_max": 5,
                 "fill_mode": "single",
-                "bleed": True,
             },
             "pg13_movie": {
                 "pool": "movies_pg13",
                 "grid_blocks_max": 4,
                 "fill_mode": "single",
-                "bleed": True,
             },
         }
         block_def = {
@@ -395,6 +400,7 @@ class TestGridBlocksMaxGreedyPacking:
             "slots": 10,
             "program": ["pg_movie", "pg13_movie"],
             "progression": "random",
+            "bleed": True,
         }
 
         with pytest.raises((AssemblyFault, ValueError)):

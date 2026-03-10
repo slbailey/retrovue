@@ -29,7 +29,6 @@ programs:
     pool: cheers
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 
 # -----------------------------
 # TRAFFIC CONFIG

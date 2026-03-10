@@ -238,7 +238,7 @@ class TestPipelineIntegration:
 
         results = assemble_schedule_block(
             program_ref="half_hour",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=1,
             progression="sequential",
@@ -277,7 +277,7 @@ class TestPipelineIntegration:
         # Compile for March 9 (7 days after anchor → occurrence=7).
         results = assemble_schedule_block(
             program_ref="half_hour",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=1,
             progression="sequential",
@@ -305,7 +305,7 @@ class TestPipelineIntegration:
         def compile_day(broadcast_day: str) -> str:
             results = assemble_schedule_block(
                 program_ref="marathon",
-                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=1,
                 progression="sequential",
@@ -347,7 +347,7 @@ class TestPipelineIntegration:
         def compile_block(run_id: str, program_ref: str) -> str:
             results = assemble_schedule_block(
                 program_ref=program_ref,
-                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=1,
                 progression="sequential",
@@ -376,7 +376,7 @@ class TestPipelineIntegration:
 
         results = assemble_schedule_block(
             program_ref="half_hour",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=3,
             progression="sequential",
@@ -408,7 +408,7 @@ class TestPipelineIntegration:
             # emissions_per_occurrence=4: single block with 4 executions per day
             results = assemble_schedule_block(
                 program_ref="marathon",
-                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=4,
                 progression="sequential",
@@ -455,7 +455,7 @@ class TestPipelineIntegration:
         # 2026-03-09 is a Monday — matches weekday pattern.
         results = assemble_schedule_block(
             program_ref="strip",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=1,
             progression="sequential",
@@ -496,7 +496,7 @@ class TestPipelineIntegration:
             # emissions_per_occurrence=6: 3 (block A) + 3 (block B) per day
             results = assemble_schedule_block(
                 program_ref="cheers_30",
-                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=3,
                 progression="sequential",
@@ -548,7 +548,7 @@ class TestPipelineIntegration:
         def compile_at(start_time: str) -> str:
             results = assemble_schedule_block(
                 program_ref="sitcoms_30",
-                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=1,
                 progression="sequential",
@@ -587,7 +587,7 @@ class TestPipelineIntegration:
         def compile_with_rid(run_id: str, prior: int, epo: int) -> str:
             results = assemble_schedule_block(
                 program_ref="cheers_30",
-                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=1,
                 progression="sequential",
@@ -652,7 +652,6 @@ class TestCompileScheduleEmissions:
                     "pool": "sitcoms",
                     "grid_blocks": 1,
                     "fill_mode": "single",
-                    "bleed": False,
                 },
             },
             "schedule": {

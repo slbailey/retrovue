@@ -6,7 +6,7 @@ Derived From: `LAW-LIVENESS`, `LAW-GRID`
 
 ## Purpose
 
-When `allow_bleed` causes a program block to extend past its declared window, the compiler MUST resolve the overlap by compacting — pushing subsequent blocks forward to the bleed block's grid-aligned end. Without compaction, consecutive marathon blocks with bleed create time gaps that violate `LAW-LIVENESS` (continuous emission) and produce padded dead air.
+When `bleed: true` on a schedule block causes a program block to extend past its declared window, the compiler MUST resolve the overlap by compacting — pushing subsequent blocks forward to the bleed block's grid-aligned end. Without compaction, consecutive marathon blocks with bleed create time gaps that violate `LAW-LIVENESS` (continuous emission) and produce padded dead air.
 
 ## Guarantee
 
@@ -29,7 +29,7 @@ The schedule compiler MUST emit a strictly contiguous, non-overlapping, grid-ali
 
 ## Deterministic Testability
 
-Construct two consecutive `movie_marathon` blocks with `allow_bleed: true` where marathon 1 bleeds past its boundary. Verify: (1) no gaps between blocks, (2) marathon 2's first block starts at marathon 1's last block end, (3) all blocks are grid-aligned, (4) fully enclosed overlaps are resolved by push-forward, (5) gaps raise, (6) non-UTC timestamps raise, (7) blocks spanning broadcast-day boundaries are not split.
+Construct two consecutive schedule blocks with `bleed: true` where the first block bleeds past its boundary. Verify: (1) no gaps between blocks, (2) marathon 2's first block starts at marathon 1's last block end, (3) all blocks are grid-aligned, (4) fully enclosed overlaps are resolved by push-forward, (5) gaps raise, (6) non-UTC timestamps raise, (7) blocks spanning broadcast-day boundaries are not split.
 
 ## Failure Semantics
 

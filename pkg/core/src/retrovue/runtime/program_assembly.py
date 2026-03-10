@@ -1,9 +1,10 @@
 """Program Assembly — V2 pipeline stage (channel_dsl.md §5–§6).
 
 Bridges schedule compilation (progression, timing) with program definition
-(fill_mode, bleed, intro/outro). Receives a resolved schedule block and
-program definition, queries assets from the pool via the resolver, applies
-progression ordering, and delegates to assemble_program for fill/bleed logic.
+(fill_mode, intro/outro) and schedule block (bleed). Receives a resolved
+schedule block and program definition, queries assets from the pool via
+the resolver, applies progression ordering, and delegates to
+assemble_program for fill/bleed logic.
 
 Entry point: assemble_schedule_block()
 """
@@ -85,6 +86,7 @@ def assemble_schedule_block(
     progression: str,
     grid_minutes: int,
     resolver: AssetResolver,
+    bleed: bool = False,
     seed: int | None = None,
     channel_id: str = "",
     broadcast_day: str = "",
@@ -110,7 +112,6 @@ def assemble_schedule_block(
     grid_blocks_max = program_def.get("grid_blocks_max")
     is_dynamic = grid_blocks_max is not None
     fill_mode = program_def.get("fill_mode", "single")
-    bleed = program_def.get("bleed", False)
     intro_ref = program_def.get("intro")
     outro_ref = program_def.get("outro")
     presentation_refs = program_def.get("presentation")
@@ -133,7 +134,6 @@ def assemble_schedule_block(
         pool=pool_name,
         grid_blocks=grid_blocks,
         fill_mode=fill_mode,
-        bleed=bleed,
         intro=intro_ref,
         outro=outro_ref,
         presentation=presentation_refs,
@@ -167,7 +167,6 @@ def assemble_schedule_block(
             fill_mode=fill_mode,
             grid_blocks=grid_blocks,
             grid_minutes=grid_minutes,
-            bleed=bleed,
             seed=seed,
             broadcast_day=broadcast_day,
             schedule_layer=schedule_layer,
@@ -195,6 +194,7 @@ def assemble_schedule_block(
             prog,
             pool,
             grid_minutes=grid_minutes,
+            bleed=bleed,
             block_start_ms=running_offset_ms,
             intro_asset=intro_asset,
             outro_asset=outro_asset,
@@ -281,7 +281,6 @@ def _apply_progression(
     fill_mode: str,
     grid_blocks: int,
     grid_minutes: int,
-    bleed: bool,
     seed: int | None,
     broadcast_day: str = "",
     schedule_layer: str = "all_day",

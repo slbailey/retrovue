@@ -40,7 +40,6 @@ programs:
     pool: test_pool
     grid_blocks: 4
     fill_mode: single
-    bleed: true
 
 schedule:
   all_day:
@@ -48,10 +47,12 @@ schedule:
       slots: 8
       program: feature
       progression: random
+      bleed: true
     - start: "16:00"
       slots: 8
       program: feature
       progression: random
+      bleed: true
 """
 
 

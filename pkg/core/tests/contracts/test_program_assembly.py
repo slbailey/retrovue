@@ -58,7 +58,7 @@ class TestAssemblyGridValidation:
         with pytest.raises(AssemblyFault, match="INV-PROGRAM-GRID-001"):
             assemble_schedule_block(
                 program_ref="test",
-                program_def={"pool": "sitcoms", "grid_blocks": 2, "fill_mode": "single", "bleed": False},
+                program_def={"pool": "sitcoms", "grid_blocks": 2, "fill_mode": "single"},
                 pool_name="sitcoms",
                 slots=3,
                 progression="sequential",
@@ -70,7 +70,7 @@ class TestAssemblyGridValidation:
         resolver = _resolver_with_episodes("sitcoms", [1500])
         results = assemble_schedule_block(
             program_ref="test",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=4,
             progression="sequential",
@@ -92,7 +92,7 @@ class TestAssemblySingleFill:
         resolver = _resolver_with_episodes("sitcoms", [1500, 1400, 1600])
         results = assemble_schedule_block(
             program_ref="half_hour",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=2,
             progression="sequential",
@@ -111,12 +111,13 @@ class TestAssemblySingleFill:
         with pytest.raises(AssemblyFault):
             assemble_schedule_block(
                 program_ref="test",
-                program_def={"pool": "empty", "grid_blocks": 1, "fill_mode": "single", "bleed": True},
+                program_def={"pool": "empty", "grid_blocks": 1, "fill_mode": "single"},
                 pool_name="empty",
                 slots=1,
                 progression="sequential",
                 grid_minutes=GRID_MINUTES,
                 resolver=resolver,
+                bleed=True,
             )
 
 
@@ -134,7 +135,8 @@ class TestAssemblyAccumulateFill:
         resolver = _resolver_with_episodes("sitcoms", [1500, 1500, 1500, 1500])
         results = assemble_schedule_block(
             program_ref="hour_block",
-            program_def={"pool": "sitcoms", "grid_blocks": 2, "fill_mode": "accumulate", "bleed": True},
+            program_def={"pool": "sitcoms", "grid_blocks": 2, "fill_mode": "accumulate"},
+                bleed=True,
             pool_name="sitcoms",
             slots=2,
             progression="sequential",
@@ -153,7 +155,8 @@ class TestAssemblyAccumulateFill:
         resolver = _resolver_with_episodes("sitcoms", [2000, 1700, 500])
         results = assemble_schedule_block(
             program_ref="hour_block",
-            program_def={"pool": "sitcoms", "grid_blocks": 2, "fill_mode": "accumulate", "bleed": True},
+            program_def={"pool": "sitcoms", "grid_blocks": 2, "fill_mode": "accumulate"},
+                bleed=True,
             pool_name="sitcoms",
             slots=2,
             progression="sequential",
@@ -177,7 +180,7 @@ class TestAssemblyNoBleed:
         resolver = _resolver_with_episodes("sitcoms", [2000, 1500])
         results = assemble_schedule_block(
             program_ref="test",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=1,
             progression="sequential",
@@ -202,7 +205,8 @@ class TestAssemblyBleed:
         resolver = _resolver_with_episodes("sitcoms", [2500])
         results = assemble_schedule_block(
             program_ref="test",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": True},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
+                bleed=True,
             pool_name="sitcoms",
             slots=1,
             progression="sequential",
@@ -231,7 +235,7 @@ class TestAssemblyIntroOutro:
             program_ref="test",
             program_def={
                 "pool": "sitcoms", "grid_blocks": 1,
-                "fill_mode": "single", "bleed": True,
+                "fill_mode": "single",
                 "intro": "my_intro",
             },
             pool_name="sitcoms",
@@ -239,6 +243,7 @@ class TestAssemblyIntroOutro:
             progression="sequential",
             grid_minutes=GRID_MINUTES,
             resolver=resolver,
+            bleed=True,
         )
         assert len(results) == 1
         # 30s intro + 1500s content = 1530s
@@ -260,7 +265,7 @@ class TestAssemblyProgression:
         resolver = _resolver_with_episodes("sitcoms", [1500, 1400, 1600])
         results = assemble_schedule_block(
             program_ref="half_hour",
-            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single", "bleed": False},
+            program_def={"pool": "sitcoms", "grid_blocks": 1, "fill_mode": "single"},
             pool_name="sitcoms",
             slots=3,
             progression="sequential",

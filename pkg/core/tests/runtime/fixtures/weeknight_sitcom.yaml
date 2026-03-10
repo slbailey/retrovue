@@ -23,17 +23,14 @@ programs:
     pool: cozby_show_s3
     grid_blocks: 1
     fill_mode: single
-    bleed: false
   p_cheers_s6:
     pool: cheers_s6
     grid_blocks: 1
     fill_mode: single
-    bleed: false
   p_taxi_s2:
     pool: taxi_s2
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 
 schedule:
   thursday:

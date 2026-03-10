@@ -53,7 +53,6 @@ def _prog(name: str = "test_prog", grid_blocks: int = 2) -> ProgramDefinition:
         pool="movies",
         grid_blocks=grid_blocks,
         fill_mode="single",
-        bleed=False,
     )
 
 
@@ -236,16 +235,6 @@ class TestInvSblockProgram004:
             _resolve_and_validate(block, programs)
 
     # Tier: 2 | Scheduling logic invariant
-    def test_inline_bleed_rejected(self):
-        # INV-SBLOCK-PROGRAM-004 — schedule block with bleed field → reject
-        prog = _prog()
-        block = _block(program=prog.name, slots=4, bleed=True)
-        programs = _programs_by_name(prog)
-
-        with pytest.raises(ValidationFault):
-            _resolve_and_validate(block, programs)
-
-    # Tier: 2 | Scheduling logic invariant
     def test_inline_intro_rejected(self):
         # INV-SBLOCK-PROGRAM-004 — schedule block with intro field → reject
         prog = _prog()
@@ -334,7 +323,6 @@ class TestInvSblockProgram003GridBlocksMax:
             grid_blocks=0,
             grid_blocks_max=5,
             fill_mode="single",
-            bleed=True,
         )
         block = _block(program=prog.name, slots=7)
         programs = _programs_by_name(prog)
@@ -351,7 +339,6 @@ class TestInvSblockProgram003GridBlocksMax:
             grid_blocks=0,
             grid_blocks_max=5,
             fill_mode="single",
-            bleed=True,
         )
         block = _block(program=prog.name, slots=1)
         programs = _programs_by_name(prog)
@@ -369,5 +356,4 @@ class TestInvSblockProgram003GridBlocksMax:
                 grid_blocks=4,
                 grid_blocks_max=5,
                 fill_mode="single",
-                bleed=True,
             )
