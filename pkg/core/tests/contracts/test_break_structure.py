@@ -76,6 +76,7 @@ def _slot_order_valid(slots: list[BreakSlot] | tuple[BreakSlot, ...]) -> bool:
 class TestSlotOrdering:
     """Slots must follow canonical order."""
 
+    # Tier: 1 | Structural invariant
     def test_slots_follow_canonical_order(self):
         """Full config produces correct sequence: bumper → interstitial → sid → bumper."""
         structure = build_break_structure(
@@ -91,6 +92,7 @@ class TestSlotOrdering:
         assert "interstitial" in types
         assert "station_id" in types
 
+    # Tier: 1 | Structural invariant
     def test_station_id_after_interstitial_before_from_bumper(self):
         """Station ID appears after interstitial pool, before from_break bumper."""
         structure = build_break_structure(
@@ -103,6 +105,7 @@ class TestSlotOrdering:
         fb_idx = types.index("from_break_bumper")
         assert interstitial_idx < sid_idx < fb_idx
 
+    # Tier: 1 | Structural invariant
     def test_no_bumpers_configured(self):
         """Without bumpers: interstitial + station_id only."""
         structure = build_break_structure(
@@ -116,6 +119,7 @@ class TestSlotOrdering:
         assert "station_id" in types
         assert _slot_order_valid(structure.slots)
 
+    # Tier: 1 | Structural invariant
     def test_no_station_id_configured(self):
         """Without station_id: bumpers + interstitial only."""
         structure = build_break_structure(
@@ -127,6 +131,7 @@ class TestSlotOrdering:
         assert "interstitial" in types
         assert _slot_order_valid(structure.slots)
 
+    # Tier: 1 | Structural invariant
     def test_bare_config(self):
         """No structural elements: single interstitial slot."""
         structure = build_break_structure(
@@ -144,6 +149,7 @@ class TestSlotOrdering:
 class TestBudgetExact:
     """Slot durations must sum to allocated budget."""
 
+    # Tier: 1 | Structural invariant
     def test_slot_durations_sum_to_budget(self):
         """Full config budget is conserved."""
         budget = 60000
@@ -155,6 +161,7 @@ class TestBudgetExact:
         assert total == budget
         assert structure.total_duration_ms == budget
 
+    # Tier: 1 | Structural invariant
     def test_zero_budget_empty_structure(self):
         """Zero budget produces no slots."""
         structure = build_break_structure(
@@ -164,6 +171,7 @@ class TestBudgetExact:
         assert len(structure.slots) == 0
         assert structure.total_duration_ms == 0
 
+    # Tier: 1 | Structural invariant
     @pytest.mark.parametrize("budget", [5000, 10000, 15000, 30000, 90000, 120000])
     def test_various_budgets_conserved(self, budget: int):
         """Budget conservation holds across a range of allocations."""
@@ -174,6 +182,7 @@ class TestBudgetExact:
         total = sum(s.duration_ms for s in structure.slots)
         assert total == budget
 
+    # Tier: 1 | Structural invariant
     def test_bare_config_budget_conserved(self):
         """Budget conserved with no structural slots configured."""
         budget = 45000
@@ -192,6 +201,7 @@ class TestBudgetExact:
 class TestInterstitialRequired:
     """At least one interstitial slot must exist for positive budgets."""
 
+    # Tier: 1 | Structural invariant
     def test_at_least_one_interstitial_slot(self):
         """Positive budget always has interstitial slot."""
         structure = build_break_structure(
@@ -201,6 +211,7 @@ class TestInterstitialRequired:
         interstitial_slots = [s for s in structure.slots if s.slot_type == "interstitial"]
         assert len(interstitial_slots) >= 1
 
+    # Tier: 1 | Structural invariant
     def test_optional_slots_shed_before_interstitial(self):
         """Small budget sheds station_id then bumpers, keeps interstitial."""
         structure = build_break_structure(
@@ -210,6 +221,7 @@ class TestInterstitialRequired:
         interstitial_slots = [s for s in structure.slots if s.slot_type == "interstitial"]
         assert len(interstitial_slots) >= 1
 
+    # Tier: 1 | Structural invariant
     def test_budget_too_small_for_structure(self):
         """Tiny budget degenerates to single interstitial."""
         structure = build_break_structure(
@@ -220,6 +232,7 @@ class TestInterstitialRequired:
         assert structure.slots[0].slot_type == "interstitial"
         assert structure.slots[0].duration_ms == 500
 
+    # Tier: 1 | Structural invariant
     def test_station_id_shed_before_bumpers(self):
         """Station ID is shed before bumpers when budget is tight."""
         # Budget = 7000, structural = 3000+3000+5000 = 11000
@@ -242,6 +255,7 @@ class TestInterstitialRequired:
 class TestTrafficScope:
     """Traffic manager fills only interstitial slots."""
 
+    # Tier: 1 | Structural invariant
     def test_traffic_fills_only_interstitial_slots(self):
         """Non-interstitial slots have non-traffic fill rules."""
         structure = build_break_structure(
@@ -256,6 +270,7 @@ class TestTrafficScope:
             elif slot.slot_type == "station_id":
                 assert slot.fill_rule == "station_id"
 
+    # Tier: 1 | Structural invariant
     def test_fill_rules_match_slot_types(self):
         """Every slot type maps to the correct fill rule across configs."""
         for config in [FULL_CONFIG, NO_BUMPERS, NO_STATION_ID, BARE_CONFIG]:
@@ -271,6 +286,7 @@ class TestTrafficScope:
                 elif slot.slot_type == "station_id":
                     assert slot.fill_rule == "station_id"
 
+    # Tier: 1 | Structural invariant
     def test_bumpers_and_station_ids_not_traffic(self):
         """Bumpers and station IDs must never have fill_rule='traffic'."""
         structure = build_break_structure(
@@ -289,6 +305,7 @@ class TestTrafficScope:
 class TestDeterministic:
     """Same inputs must produce identical structure."""
 
+    # Tier: 1 | Structural invariant
     def test_deterministic_output(self):
         """Repeated calls produce identical results."""
         results = [
@@ -314,6 +331,7 @@ class TestDeterministic:
 class TestNoInvent:
     """BreakStructure must not create breaks beyond BreakPlan."""
 
+    # Tier: 1 | Structural invariant
     def test_no_invented_breaks(self):
         """build_break_structure structures a single break, not more."""
         structure = build_break_structure(
@@ -322,6 +340,7 @@ class TestNoInvent:
         )
         assert structure.total_duration_ms == 60000
 
+    # Tier: 1 | Structural invariant
     def test_zero_budget_no_slots(self):
         """Zero-duration opportunity produces no structure at all."""
         structure = build_break_structure(

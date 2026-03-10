@@ -121,6 +121,7 @@ def _spec(template_id: str, start_offset_s: int = 0, duration_s: int = 3_600) ->
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Tier: 1 | Structural invariant
 def test_non_state_fields_unchanged_after_additive_build():
     """Non-state fields of a committed ScheduledEntry are not modified by
     a subsequent build_horizon call that encounters the same WindowKey.
@@ -159,6 +160,7 @@ def test_non_state_fields_unchanged_after_additive_build():
     assert still.committed_at_ms == saved["committed_at_ms"]
 
 
+# Tier: 1 | Structural invariant
 def test_rebuild_issues_new_window_uuid():
     """rebuild_window creates a replacement entry with a different window_uuid.
 
@@ -184,6 +186,7 @@ def test_rebuild_issues_new_window_uuid():
     )
 
 
+# Tier: 1 | Structural invariant
 def test_rebuild_replaces_entry_object_not_mutates():
     """After rebuild_window, the new entry in ScheduleRegistry is a different
     object from the one that was there before rebuild.
@@ -207,6 +210,7 @@ def test_rebuild_replaces_entry_object_not_mutates():
     )
 
 
+# Tier: 1 | Structural invariant
 def test_rebuild_old_entry_unreachable_via_registry():
     """After rebuild_window, the old ScheduledEntry object is no longer
     accessible through ScheduleRegistry for the same WindowKey.
@@ -230,6 +234,7 @@ def test_rebuild_old_entry_unreachable_via_registry():
     )
 
 
+# Tier: 1 | Structural invariant
 def test_rebuild_blocked_window_resets_all_blocked_fields():
     """rebuild_window on a BLOCKED entry produces a COMMITTED entry with
     state == COMMITTED and all blocked_* fields set to None.
@@ -269,6 +274,7 @@ def test_rebuild_blocked_window_resets_all_blocked_fields():
     )
 
 
+# Tier: 1 | Structural invariant
 def test_window_uuid_values_are_unique_across_distinct_commits():
     """Each call to build_horizon for a distinct WindowKey produces a unique
     window_uuid.  UUIDs are never reused within a channel's commit history.

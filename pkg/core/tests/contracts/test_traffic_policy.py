@@ -70,6 +70,7 @@ DAY_START_MS = 9_900_000_000  # arbitrary channel traffic day start
 class TestAllowedTypeFiltering:
     """TRAFFIC-001..004: Candidates filtered by allowed_types."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_disallowed_type_excluded(self):
         """TRAFFIC-001: Candidate with disallowed type is excluded."""
         policy = _policy(allowed_types=["promo"])
@@ -77,6 +78,7 @@ class TestAllowedTypeFiltering:
         result = evaluate_candidates(candidates, policy, [], NOW_MS, DAY_START_MS)
         assert result == []
 
+    # Tier: 2 | Scheduling logic invariant
     def test_allowed_type_passes(self):
         """TRAFFIC-002: Candidate with allowed type passes."""
         policy = _policy(allowed_types=["commercial"])
@@ -85,6 +87,7 @@ class TestAllowedTypeFiltering:
         assert len(result) == 1
         assert result[0].asset_id == "ad1"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_allowed_types_excludes_all(self):
         """TRAFFIC-003: Empty allowed_types excludes all candidates."""
         policy = _policy(allowed_types=[])
@@ -95,6 +98,7 @@ class TestAllowedTypeFiltering:
         result = evaluate_candidates(candidates, policy, [], NOW_MS, DAY_START_MS)
         assert result == []
 
+    # Tier: 2 | Scheduling logic invariant
     def test_mixed_types_only_allowed_survive(self):
         """TRAFFIC-004: Only candidates with allowed types survive."""
         policy = _policy(allowed_types=["promo"])
@@ -116,6 +120,7 @@ class TestAllowedTypeFiltering:
 class TestCooldownEnforcement:
     """TRAFFIC-005..009: Cooldown blocks recently played assets."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_within_cooldown_excluded(self):
         """TRAFFIC-005: Asset played within default cooldown is excluded."""
         policy = _policy(default_cooldown_ms=3_600_000)
@@ -124,6 +129,7 @@ class TestCooldownEnforcement:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert result == []
 
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_outside_cooldown_passes(self):
         """TRAFFIC-006: Asset played outside cooldown window passes."""
         policy = _policy(default_cooldown_ms=3_600_000)
@@ -133,6 +139,7 @@ class TestCooldownEnforcement:
         assert len(result) == 1
         assert result[0].asset_id == "ad1"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_type_cooldown_overrides_default(self):
         """TRAFFIC-007: Type-specific cooldown overrides default cooldown."""
         policy = _policy(
@@ -145,6 +152,7 @@ class TestCooldownEnforcement:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert len(result) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_zero_cooldown_skips_filter(self):
         """TRAFFIC-008: Zero default cooldown with no type overrides skips cooldown."""
         policy = _policy(default_cooldown_ms=0, type_cooldowns_ms={})
@@ -153,6 +161,7 @@ class TestCooldownEnforcement:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert len(result) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_type_cooldown_only_applies_to_that_type(self):
         """TRAFFIC-028: Type cooldown does not bleed to other types."""
         policy = _policy(
@@ -172,6 +181,7 @@ class TestCooldownEnforcement:
         assert "promo1" in ids
         assert "ad1" not in ids
 
+    # Tier: 2 | Scheduling logic invariant
     def test_most_recent_play_determines_cooldown(self):
         """TRAFFIC-009: Multiple plays — most recent determines cooldown."""
         policy = _policy(default_cooldown_ms=3_600_000)
@@ -192,6 +202,7 @@ class TestCooldownEnforcement:
 class TestDailyCapEnforcement:
     """TRAFFIC-010..013: Daily cap limits per-asset plays per channel traffic day."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_at_cap_excluded(self):
         """TRAFFIC-010: Asset at daily cap is excluded."""
         policy = _policy(max_plays_per_day=3)
@@ -204,6 +215,7 @@ class TestDailyCapEnforcement:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert result == []
 
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_below_cap_passes(self):
         """TRAFFIC-011: Asset below daily cap passes."""
         policy = _policy(max_plays_per_day=3)
@@ -215,6 +227,7 @@ class TestDailyCapEnforcement:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert len(result) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_zero_cap_disables_enforcement(self):
         """TRAFFIC-012: max_plays_per_day=0 disables cap entirely."""
         policy = _policy(max_plays_per_day=0)
@@ -223,6 +236,7 @@ class TestDailyCapEnforcement:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert len(result) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_plays_before_day_start_not_counted(self):
         """TRAFFIC-013: Plays before day_start_ms are not counted toward cap."""
         policy = _policy(max_plays_per_day=2)
@@ -244,6 +258,7 @@ class TestDailyCapEnforcement:
 class TestRotation:
     """TRAFFIC-014..016, TRAFFIC-021, TRAFFIC-023..024: Deterministic rotation."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_least_recently_played_first(self):
         """TRAFFIC-014: Least-recently-played candidate selected first."""
         policy = _policy(default_cooldown_ms=0)
@@ -256,6 +271,7 @@ class TestRotation:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert [c.asset_id for c in result] == ["ad2", "ad3", "ad1"]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_never_played_preferred(self):
         """TRAFFIC-015: Never-played candidates preferred over played."""
         policy = _policy(default_cooldown_ms=0)
@@ -264,6 +280,7 @@ class TestRotation:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert result[0].asset_id == "ad2"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_equal_history_sorted_by_asset_id(self):
         """TRAFFIC-016: Equal play history — sorted by asset_id lexical order."""
         policy = _policy(default_cooldown_ms=0)
@@ -278,6 +295,7 @@ class TestRotation:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert [c.asset_id for c in result] == ["aa", "bb", "cc"]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_round_robin_across_selections(self):
         """TRAFFIC-021: Three rounds of select_next produce round-robin."""
         policy = _policy(default_cooldown_ms=0)
@@ -294,6 +312,7 @@ class TestRotation:
         # All three distinct assets selected
         assert len(set(picks)) == 3
 
+    # Tier: 2 | Scheduling logic invariant
     def test_different_candidate_order_same_result(self):
         """TRAFFIC-023: Different candidate input order produces same output order."""
         policy = _policy(default_cooldown_ms=0)
@@ -317,6 +336,7 @@ class TestRotation:
 
         assert ids_a == ids_b == ids_c
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_history_sorted_by_asset_id(self):
         """TRAFFIC-024: No play history — candidates sorted by asset_id."""
         policy = _policy(default_cooldown_ms=0)
@@ -333,6 +353,7 @@ class TestRotation:
 class TestFilterOrder:
     """TRAFFIC-017: Type filter applied before cooldown."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_mixed_filter_exclusions(self):
         """TRAFFIC-029: Each candidate excluded by a different filter; only clean one survives."""
         policy = _policy(
@@ -353,6 +374,7 @@ class TestFilterOrder:
         result = evaluate_candidates(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert [c.asset_id for c in result] == ["ad4"]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_type_filter_before_cooldown(self):
         """TRAFFIC-017: Asset with wrong type never reaches cooldown check."""
         policy = _policy(
@@ -374,6 +396,7 @@ class TestFilterOrder:
 class TestPurity:
     """TRAFFIC-018: evaluate_candidates does not mutate inputs."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_inputs_not_mutated(self):
         """TRAFFIC-018: Original candidates and history are unchanged after evaluation."""
         policy = _policy(default_cooldown_ms=0)
@@ -397,18 +420,21 @@ class TestPurity:
 class TestEmptyInputs:
     """TRAFFIC-019..020: Empty candidates and empty history handling."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_candidates_returns_empty(self):
         """TRAFFIC-019: Empty candidates -> empty result."""
         policy = _policy()
         result = evaluate_candidates([], policy, [], NOW_MS, DAY_START_MS)
         assert result == []
 
+    # Tier: 2 | Scheduling logic invariant
     def test_select_next_empty_returns_none(self):
         """TRAFFIC-019: select_next with empty candidates -> None."""
         policy = _policy()
         result = select_next([], policy, [], NOW_MS, DAY_START_MS)
         assert result is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_duplicate_candidates_handled(self):
         """TRAFFIC-030: Duplicate candidate IDs are preserved, not deduped."""
         policy = _policy(default_cooldown_ms=0)
@@ -421,6 +447,7 @@ class TestEmptyInputs:
         ids = [c.asset_id for c in result]
         assert ids.count("ad1") == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_history_all_pass(self):
         """TRAFFIC-020: Empty play_history — all candidates pass cooldown and cap."""
         policy = _policy(default_cooldown_ms=3_600_000, max_plays_per_day=5)
@@ -437,6 +464,7 @@ class TestEmptyInputs:
 class TestNoEligibleAsset:
     """TRAFFIC-025..026: select_next returns None when no candidates pass."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_all_excluded_by_type_returns_none(self):
         """TRAFFIC-025: All excluded by type -> select_next returns None."""
         policy = _policy(allowed_types=["promo"])
@@ -447,6 +475,7 @@ class TestNoEligibleAsset:
         result = select_next(candidates, policy, [], NOW_MS, DAY_START_MS)
         assert result is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_all_excluded_by_cooldown_returns_none(self):
         """TRAFFIC-026: All in cooldown -> select_next returns None."""
         policy = _policy(default_cooldown_ms=3_600_000)
@@ -458,6 +487,7 @@ class TestNoEligibleAsset:
         result = select_next(candidates, policy, history, NOW_MS, DAY_START_MS)
         assert result is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_all_excluded_by_cap_returns_none(self):
         """All at daily cap -> select_next returns None."""
         policy = _policy(max_plays_per_day=1, default_cooldown_ms=0)

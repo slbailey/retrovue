@@ -80,6 +80,7 @@ def _make_aligned_pair(
 class TestInvPlaylistEventTimeline001:
     """INV-PLAYLIST-EVENT-TIMELINE-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_event_matches_schedule_item(self) -> None:
         """PlaylistEvent start/end must equal ScheduleItem start_at/end_at."""
         start = datetime(2025, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
@@ -101,6 +102,7 @@ class TestInvPlaylistEventTimeline001:
             f"!= SI.end_at={expected_end_ms}"
         )
 
+    # Tier: 1 | Structural invariant
     def test_event_duration_equals_slot(self) -> None:
         """PlaylistEvent duration must equal ScheduleItem slot_duration_sec * 1000."""
         start = datetime(2025, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
@@ -117,6 +119,7 @@ class TestInvPlaylistEventTimeline001:
             f"!= SI slot={expected_duration_ms}ms"
         )
 
+    # Tier: 1 | Structural invariant
     def test_shifted_start_detected(self) -> None:
         """A PlaylistEvent with shifted start violates the invariant."""
         start = datetime(2025, 3, 1, 20, 0, 0, tzinfo=timezone.utc)
@@ -140,6 +143,7 @@ class TestInvPlaylistEventTimeline001:
             "Expected shifted start to be detected"
         )
 
+    # Tier: 1 | Structural invariant
     def test_shifted_end_detected(self) -> None:
         """A PlaylistEvent with shifted end violates the invariant."""
         start = datetime(2025, 3, 1, 20, 0, 0, tzinfo=timezone.utc)

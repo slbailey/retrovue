@@ -107,12 +107,12 @@ All criteria are AND-combined. Array values are OR within that field.
 | `episode` | `int \| int[] \| range` | Episode number(s). Same syntax as `season`. |
 | `genre` | `string[]` | Any of these genres (future — requires genre tagging) |
 | `year_range` | `[int, int]` | Inclusive year range (future — requires year metadata) |
-| `rating` | `object` | `{ include: [...], exclude: [...] }` — content rating filter |
+| `rating` | `string \| string[] \| object` | Bare string (`"PG"`), list (`["PG", "PG-13"]`), or object (`{ include: [...], exclude: [...] }`). Bare strings and lists are normalized to `{ include: [...] }` at evaluation time. |
 | `max_duration_sec` | `int` | Maximum episode/movie duration |
 | `min_duration_sec` | `int` | Minimum episode/movie duration |
 | `source` | `string` | Source name filter (e.g., "Plex") |
 | `collection` | `string` | Source collection name filter (e.g., "TV Shows") |
-| `tags` | `string[]` | Custom tags (future — requires tag system) |
+| `tags` | `string \| string[]` | Asset must have all specified tags. Single string or list; all values are AND-combined. Tags are populated by the ingest pipeline (path segments, enrichers, operator). |
 
 ### Range Syntax
 

@@ -79,6 +79,7 @@ def _make_scheduled_block(
 class TestNoDurationConstantsInExecution:
     """INV-EXEC-NO-STRUCTURE-001: BlockPlanProducer must not define block duration."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_default_block_duration_ms_class_attr(self):
         """BlockPlanProducer has no DEFAULT_BLOCK_DURATION_MS class attribute."""
         assert not hasattr(BlockPlanProducer, "DEFAULT_BLOCK_DURATION_MS"), (
@@ -86,6 +87,7 @@ class TestNoDurationConstantsInExecution:
             "BlockPlanProducer still has DEFAULT_BLOCK_DURATION_MS"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_block_duration_ms_instance_attr(self):
         """BlockPlanProducer instances have no _block_duration_ms field."""
         producer = _make_producer()
@@ -94,6 +96,7 @@ class TestNoDurationConstantsInExecution:
             "BlockPlanProducer instance still has _block_duration_ms"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_execution_store_attr(self):
         """BlockPlanProducer instances have no _execution_store field."""
         producer = _make_producer()
@@ -102,6 +105,7 @@ class TestNoDurationConstantsInExecution:
             "BlockPlanProducer instance still has _execution_store"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_playout_plan_attr(self):
         """BlockPlanProducer instances have no _playout_plan field."""
         producer = _make_producer()
@@ -119,25 +123,30 @@ class TestNoDurationConstantsInExecution:
 class TestScheduledBlockImmutability:
     """ScheduledBlock must be frozen (immutable)."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_frozen_start(self):
         b = _make_scheduled_block()
         with pytest.raises(AttributeError):
             b.start_utc_ms = 999  # type: ignore[misc]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_frozen_end(self):
         b = _make_scheduled_block()
         with pytest.raises(AttributeError):
             b.end_utc_ms = 999  # type: ignore[misc]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_frozen_block_id(self):
         b = _make_scheduled_block()
         with pytest.raises(AttributeError):
             b.block_id = "modified"  # type: ignore[misc]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_duration_property(self):
         b = _make_scheduled_block(start_utc_ms=1000, end_utc_ms=31_000)
         assert b.duration_ms == 30_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_segments_is_tuple(self):
         b = _make_scheduled_block()
         assert isinstance(b.segments, tuple), (
@@ -153,6 +162,7 @@ class TestScheduledBlockImmutability:
 class TestGenerateNextBlockTyped:
     """_generate_next_block takes ScheduledBlock, not dict."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_generate_from_scheduled_block(self):
         producer = _make_producer()
         sb = _make_scheduled_block(
@@ -168,6 +178,7 @@ class TestGenerateNextBlockTyped:
         assert block.segments[0]["asset_uri"] == "assets/A.mp4"
         assert block.segments[0]["segment_duration_ms"] == 10_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_generate_preserves_timing(self):
         """Block timing must come from ScheduledBlock, not computed."""
         producer = _make_producer()
@@ -189,6 +200,7 @@ class TestGenerateNextBlockTyped:
 class TestBlockTimingFromScheduleService:
     """Block duration is defined by schedule service, not execution."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_resolve_returns_scheduled_block(self):
         svc = FakeScheduleService(
             channel_id="svc-test",
@@ -201,6 +213,7 @@ class TestBlockTimingFromScheduleService:
         assert isinstance(sb, ScheduledBlock)
         assert sb.duration_ms == 1_800_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_resolve_at_returns_scheduled_block(self):
         svc = FakeScheduleService(
             channel_id="svc-test",
@@ -212,6 +225,7 @@ class TestBlockTimingFromScheduleService:
         assert sb.start_utc_ms == 0
         assert sb.end_utc_ms == 30_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_schedule_service_returns_none(self):
         producer = BlockPlanProducer(
             channel_id="no-svc",
@@ -230,6 +244,7 @@ class TestBlockTimingFromScheduleService:
 class TestJipOffsetWithinBlock:
     """INV-EXEC-OFFSET-001: Execution MAY compute offsets within a block."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jip_offset_shortens_first_block(self):
         producer = _make_producer()
         sb = _make_scheduled_block(start_utc_ms=0, end_utc_ms=10_000)
@@ -239,6 +254,7 @@ class TestJipOffsetWithinBlock:
         assert block.end_utc_ms == 10_000
         assert block.end_utc_ms - block.start_utc_ms == 7_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jip_zero_produces_full_block(self):
         producer = _make_producer()
         sb = _make_scheduled_block(start_utc_ms=0, end_utc_ms=10_000)
@@ -255,6 +271,7 @@ class TestJipOffsetWithinBlock:
 class TestNoGridAlignmentInExecution:
     """INV-EXEC-NO-BOUNDARY-001: Execution MAY NOT compute block boundaries."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_contiguous_blocks_from_service(self):
         """Blocks generated from schedule service are contiguous."""
         svc = FakeScheduleService(
@@ -295,6 +312,7 @@ class TestEndToEndThirtyMinuteBlockRegression:
     - Segment durations sum to block durations for both blocks
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_thirty_minute_blocks_with_jip_at_ten_minutes(self):
         svc = FakeScheduleService(
             channel_id="regression-30m",
@@ -357,15 +375,18 @@ class TestEndToEndThirtyMinuteBlockRegression:
 class TestMissingScheduleDataPolicy:
     """INV-BLOCKPLAN-HORIZON-MISS: Missing schedule data is a horizon failure, not execution panic."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_resolve_returns_none_when_no_service(self):
         producer = BlockPlanProducer(channel_id="no-svc", schedule_service=None, clock=_TEST_CLOCK)
         producer._next_block_start_ms = 0
         assert producer._resolve_plan_for_block() is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_resolve_at_returns_none_when_no_service(self):
         producer = BlockPlanProducer(channel_id="no-svc", schedule_service=None, clock=_TEST_CLOCK)
         assert producer._resolve_plan_for_block_at(12345) is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_feed_ahead_skips_on_none_no_crash(self):
         """When schedule data is missing, _feed_ahead skips without crashing."""
         from retrovue.runtime.channel_manager import _FeedState

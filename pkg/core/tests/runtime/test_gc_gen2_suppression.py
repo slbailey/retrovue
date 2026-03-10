@@ -60,6 +60,7 @@ def _allocate_containers(n: int) -> None:
 # Violation proof — xfail, non-gating documentation
 # ---------------------------------------------------------------------------
 
+# Tier: 1 | Structural invariant
 @pytest.mark.xfail(
     strict=False,
     reason=(
@@ -110,6 +111,7 @@ def test_gc_gen2_fires_without_suppression() -> None:
 # Invariant proof — required, must pass unconditionally
 # ---------------------------------------------------------------------------
 
+# Tier: 1 | Structural invariant
 def test_gc_gen2_suppressed_after_threshold_setting() -> None:
     """
     INV-GC-AUTOGEN2-SUPPRESSED-001  [required]

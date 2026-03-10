@@ -95,6 +95,7 @@ EXECUTION_TS_MS = 1_735_689_600_000  # 2025-01-01T00:00:00Z
 class TestInvCursor001:
     """INV-CURSOR-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_sequential_cursor_required_before_selection(self):
         # INV-CURSOR-001 — sequential selection without resolved cursor → PlanningFault
         identity = _identity()
@@ -106,6 +107,7 @@ class TestInvCursor001:
                 progression="sequential",
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_sequential_cursor_loaded_before_selection(self):
         # INV-CURSOR-001 — sequential selection with loaded cursor proceeds
         identity = _identity()
@@ -130,6 +132,7 @@ class TestInvCursor001:
 class TestInvCursor002:
     """INV-CURSOR-002"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_advances_one_position(self):
         # INV-CURSOR-002 — single execution: position 0 → 1
         identity = _identity()
@@ -144,6 +147,7 @@ class TestInvCursor002:
 
         assert result.cursor.position == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_advances_once_per_execution(self):
         # INV-CURSOR-002 — two executions: position 0 → 1 → 2
         identity = _identity()
@@ -163,6 +167,7 @@ class TestInvCursor002:
         )
         assert r2.cursor.position == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_does_not_skip(self):
         # INV-CURSOR-002 — 3 executions from 0 yields position exactly 3
         identity = _identity()
@@ -189,6 +194,7 @@ class TestInvCursor002:
 class TestInvCursor003:
     """INV-CURSOR-003"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_wraps_at_pool_size(self):
         # INV-CURSOR-003 — after POOL_SIZE advances, position wraps to 0
         identity = _identity()
@@ -204,6 +210,7 @@ class TestInvCursor003:
 
         assert cursor.position == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_increments_cycle_on_wrap(self):
         # INV-CURSOR-003 — cycle increments by 1 on wrap
         identity = _identity()
@@ -231,6 +238,7 @@ class TestInvCursor003:
 class TestInvCursor004:
     """INV-CURSOR-004"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shuffle_order_stable_within_cycle(self):
         # INV-CURSOR-004 — same seed and cycle produce same order
         identity = _identity()
@@ -241,6 +249,7 @@ class TestInvCursor004:
 
         assert order_a == order_b
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shuffle_order_not_regenerated_mid_cycle(self):
         # INV-CURSOR-004 — advancing within a cycle does not change order
         identity = _identity()
@@ -274,6 +283,7 @@ class TestInvCursor004:
 class TestInvCursor005:
     """INV-CURSOR-005"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shuffle_reshuffles_on_new_cycle(self):
         # INV-CURSOR-005 — new cycle produces different ordering (pool > 1 element)
         identity = _identity()
@@ -296,6 +306,7 @@ class TestInvCursor005:
 
         assert order_cycle_0 != order_cycle_1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shuffle_new_cycle_different_seed(self):
         # INV-CURSOR-005 — consecutive cycle seeds differ
         identity = _identity()
@@ -316,6 +327,7 @@ class TestInvCursor005:
 class TestInvCursor006:
     """INV-CURSOR-006"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_survives_restart(self):
         # INV-CURSOR-006 — persisted cursor loaded after simulated restart
         store = FakeCursorStore()
@@ -341,6 +353,7 @@ class TestInvCursor006:
         assert loaded.position == cursor.position
         assert loaded.cycle == cursor.cycle
 
+    # Tier: 2 | Scheduling logic invariant
     def test_restart_does_not_reset_position(self):
         # INV-CURSOR-006 — position after restart equals position before restart
         store = FakeCursorStore()
@@ -378,6 +391,7 @@ class TestInvCursor006:
 class TestInvCursor007:
     """INV-CURSOR-007"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_random_ignores_cursor_state(self):
         # INV-CURSOR-007 — random selection unchanged by cursor presence
         identity = _identity()
@@ -403,6 +417,7 @@ class TestInvCursor007:
 
         assert asset_no_cursor == asset_with_cursor
 
+    # Tier: 2 | Scheduling logic invariant
     def test_random_selection_without_cursor(self):
         # INV-CURSOR-007 — random selection succeeds with no persisted cursor
         identity = _identity()
@@ -427,6 +442,7 @@ class TestInvCursor007:
 class TestInvCursor008:
     """INV-CURSOR-008"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_initializes_at_zero(self):
         # INV-CURSOR-008 — new cursor has position=0, cycle=0
         identity = _identity()
@@ -435,6 +451,7 @@ class TestInvCursor008:
         assert cursor.position == 0
         assert cursor.cycle == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_initialization_deterministic(self):
         # INV-CURSOR-008 — two independent initializations produce identical state
         identity = _identity()

@@ -260,6 +260,50 @@ void TickProducer::AssignBlock(const FedBlock& block) {
             << " input_fps=" << input_fps_num_ << "/" << input_fps_den_
             << " fps_num=" << output_fps_.num << " fps_den=" << output_fps_.den
             << std::endl;
+
+  // BLOCK_FRAME_AUDIT: Verify segment durations sum to block duration.
+  // Mismatch here means Core's block construction has duration math errors,
+  // causing content to play at wrong speed (e.g. 1.25x for 24fps content).
+  {
+    int64_t sum_segment_ms = 0;
+    for (const auto& seg : block.segments) {
+      sum_segment_ms += seg.segment_duration_ms;
+    }
+    // Compute expected frames from segment sum (same formula as frames_per_block).
+    int64_t seg_sum_frames = (sum_segment_ms * output_fps_.num + output_fps_.den * 1000 - 1)
+                             / (output_fps_.den * 1000);
+    int64_t delta_frames = seg_sum_frames - frames_per_block_;
+    int64_t block_duration_ms = block.end_utc_ms - block.start_utc_ms;
+    int64_t duration_delta_ms = sum_segment_ms - block_duration_ms;
+    std::cout << "[TickProducer] BLOCK_FRAME_AUDIT"
+              << " block_id=" << block.block_id
+              << " block_duration_ms=" << block_duration_ms
+              << " sum_segment_ms=" << sum_segment_ms
+              << " duration_delta_ms=" << duration_delta_ms
+              << " expected_frames=" << frames_per_block_
+              << " sum_segment_frames=" << seg_sum_frames
+              << " delta_frames=" << delta_frames;
+    if (delta_frames != 0) {
+      std::cout << " *** MISMATCH ***";
+    }
+    std::cout << std::endl;
+
+    // Per-segment breakdown for diagnosis.
+    for (size_t i = 0; i < block.segments.size(); ++i) {
+      const auto& seg = block.segments[i];
+      int64_t seg_frames = (seg.segment_duration_ms * output_fps_.num + output_fps_.den * 1000 - 1)
+                           / (output_fps_.den * 1000);
+      std::cout << "[TickProducer] SEGMENT_DURATION_AUDIT"
+                << " block_id=" << block.block_id
+                << " segment_index=" << i
+                << " segment_type=" << static_cast<int>(seg.segment_type)
+                << " duration_ms=" << seg.segment_duration_ms
+                << " frames=" << seg_frames
+                << " offset_ms=" << seg.asset_start_offset_ms
+                << " asset=" << seg.asset_uri
+                << std::endl;
+    }
+  }
 }
 
 void TickProducer::SetLogicalSegmentIndex(int32_t index) {

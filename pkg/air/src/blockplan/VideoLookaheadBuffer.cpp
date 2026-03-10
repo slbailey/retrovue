@@ -289,23 +289,23 @@ void VideoLookaheadBuffer::FillLoop() {
     my_audio_gen = audio_buffer->CurrentGeneration();
   }
 
-  // --- Cadence setup: use ResampleMode from TickProducer (rational detection) ---
-  // Decode rate is bounded by source cadence (e.g. ~23.976 decodes/sec for 24fps assets).
-  // We do NOT chase output tick rate; TickLoop performs repeat-vs-advance and only pops
-  // on advance ticks, so buffer drain rate matches source cadence and FillLoop is not
-  // forced to decode at 30/sec for 24fps content.
-  // INV-FPS-MAPPING: decode_budget / input_fps-derived budgeting ONLY when mode==CADENCE.
-  // OFF and DROP must not use input_fps for decode gating; they decode every tick.
-  bool cadence_active = (resample_mode_ == ResampleMode::CADENCE);
+  // --- FillLoop cadence: DISABLED (INV-CADENCE-SINGLE-AUTHORITY) ---
+  // Frame cadence decisions must occur only at the clock domain where frames
+  // are emitted to the output stream.  That authority is the TickLoop
+  // (PipelineManager), which implements advance-vs-repeat cadence and only
+  // pops from the buffer on advance ticks (~24 pops/sec for 24fps content).
+  //
+  // The FillLoop is condvar-driven: it wakes once per consumer pop, so its
+  // natural iteration rate already matches the source fps.  A Bresenham
+  // cadence gate HERE would double-count with the TickLoop cadence, skipping
+  // ~20% of decode opportunities and reducing unique frame throughput from
+  // 24fps to ~19.2fps (content plays at 0.8× speed).
+  //
+  // cadence_active is forced false so the gate at line ~690 always passes.
+  bool cadence_active = false;
   using Wide = __int128;
   Wide cadence_budget_num = 0;
   Wide cadence_budget_den = 1;
-  if (cadence_active && output_fps_.num > 0 && output_fps_.den > 0 &&
-      input_fps_.num > 0 && input_fps_.den > 0) {
-    cadence_budget_num = static_cast<Wide>(output_fps_.num) * static_cast<Wide>(input_fps_.den);
-    cadence_budget_den = static_cast<Wide>(input_fps_.num) * static_cast<Wide>(output_fps_.den);
-  }
-  // OFF: 1:1 decode every tick. DROP: TickProducer decodes step internally, we decode every tick.
 
   // Pre-build silence template for hold-last / cadence-repeat ticks.
   // One tick demands at most ceil(48000 / output_fps) samples.

@@ -61,6 +61,7 @@ def _build_service(*blocks: ScheduledBlock) -> DslScheduleService:
 class TestInvTier2CompilationConsistency001:
     """INV-TIER2-COMPILATION-CONSISTENCY-001 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_get_block_at_returns_current_compilation_not_stale_txlog(self):
         """get_block_at() MUST return a block from the current in-memory
         compilation, not a stale PlaylistEvent entry from a prior compilation.
@@ -119,6 +120,7 @@ class TestInvTier2CompilationConsistency001:
             f"PlaylistEvent instead of c2-a from current compilation"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_consecutive_blocks_are_contiguous(self):
         """Consecutive get_block_at() calls MUST return contiguous blocks,
         even when stale PlaylistEvent entries exist from a prior compilation.

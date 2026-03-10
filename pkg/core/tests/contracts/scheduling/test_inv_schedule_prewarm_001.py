@@ -47,6 +47,7 @@ def _find_calls_in_source(source: str, call_names: set[str]) -> list[str]:
 class TestInvSchedulePrewarm001:
     """INV-SCHEDULE-PREWARM-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_get_or_create_manager_no_load_schedule(self):
         """_get_or_create_manager() MUST NOT call load_schedule() or _build_initial().
 
@@ -64,6 +65,7 @@ class TestInvSchedulePrewarm001:
             f"calls {violations!r} — schedule compilation on viewer-join path"
         )
 
+    # Tier: 1 | Structural invariant
     def test_get_dsl_service_no_load_schedule(self):
         """_get_dsl_service() MUST NOT call load_schedule() or _build_initial().
 
@@ -81,6 +83,7 @@ class TestInvSchedulePrewarm001:
             f"calls {violations!r} — schedule compilation in service factory"
         )
 
+    # Tier: 1 | Structural invariant
     def test_prewarm_method_calls_load_schedule(self):
         """_prewarm_channel_schedules() MUST exist and MUST call load_schedule().
 

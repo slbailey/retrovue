@@ -139,6 +139,7 @@ def _setup_db_for_explain(item):
 
 class TestExplainFindsItem:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_finds_item_covering_time(self):
         """explain_at returns the ScheduleItem whose time range covers the target."""
         item = _mock_item_template(uuid.uuid4())
@@ -150,6 +151,7 @@ class TestExplainFindsItem:
         assert result["schedule_item"]["slot_index"] == 0
         assert result["schedule_item"]["title"] == "Weekend at Bernie's"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_returns_error_for_unknown_channel(self):
         db = MagicMock()
         db.query.return_value.filter.return_value.first.return_value = None
@@ -166,6 +168,7 @@ class TestExplainFindsItem:
 
 class TestExplainCompiledSegments:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_compiled_segments_in_result(self):
         """Template blocks include compiled_segments in explain output."""
         item = _mock_item_template(uuid.uuid4())
@@ -188,6 +191,7 @@ class TestExplainCompiledSegments:
 
 class TestExplainLegacy:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_legacy_block_expansion_path(self):
         """Legacy blocks show expand_program_block path."""
         item = _mock_item_legacy(uuid.uuid4())
@@ -226,6 +230,7 @@ def _setup_db_for_preview(db, row):
 
 class TestPreviewSegmentList:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_returns_segments(self):
         """preview_at returns a list of segments with all required fields."""
         db = MagicMock()
@@ -251,6 +256,7 @@ class TestPreviewSegmentList:
         assert s["asset_uri"] == "/test.mp4"
         assert s["duration_ms"] == 3600000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_returns_error_when_no_block(self):
         db = MagicMock()
         _setup_db_for_preview(db, None)
@@ -264,6 +270,7 @@ class TestPreviewSegmentList:
 
 class TestPreviewCompiledSegments:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_compiled_segments_produce_intro_and_content(self):
         """Tier-2 blocks with intro + content segments are rendered correctly."""
         db = MagicMock()
@@ -291,6 +298,7 @@ class TestPreviewCompiledSegments:
 
 class TestPreviewLegacy:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_legacy_block_segments_shown(self):
         """Tier-2 blocks with content + filler are rendered correctly."""
         db = MagicMock()
@@ -317,11 +325,14 @@ class TestPreviewLegacy:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestFormatDuration:
+    # Tier: 2 | Scheduling logic invariant
     def test_seconds_only(self):
         assert _format_duration(30000) == "30s"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_minutes_and_seconds(self):
         assert _format_duration(90000) == "1m30s"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_hours(self):
         assert _format_duration(5400000) == "1h30m00s"

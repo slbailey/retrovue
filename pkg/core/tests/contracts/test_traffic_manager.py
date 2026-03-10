@@ -180,6 +180,7 @@ class TestFillExactDuration:
     """INV-TRAFFIC-FILL-EXACT-001: Sum of filled segment durations must
     exactly equal the break's allocated duration."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_exact_duration(self):
         """Assets + pad sum to allocated break duration."""
         break_ms = 120_000  # 2 minutes
@@ -204,6 +205,7 @@ class TestFillExactDuration:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_partial_fill_pad_exact(self):
         """Partial fill: assets + pad = allocated duration."""
         break_ms = 120_000
@@ -224,6 +226,7 @@ class TestFillExactDuration:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_fill_filler_exact(self):
         """No assets: filler loop fills break exactly."""
         break_ms = 90_000  # 1.5 minutes
@@ -248,6 +251,7 @@ class TestPadDistribution:
     """INV-TRAFFIC-FILL-PAD-DISTRIBUTED-001: Leftover time distributed as
     even inter-spot pads. Remainder goes to last items."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_pad_distributed_evenly(self):
         """3 spots with 2000ms gap → ~667ms pads between spots."""
         break_ms = 92_000  # 3×30s spots = 90s, 2000ms leftover
@@ -277,6 +281,7 @@ class TestPadDistribution:
         for d in pad_durations:
             assert d in (base, base + 1)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_pad_remainder_to_last(self):
         """Indivisible gap: extra ms applied to last items first."""
         break_ms = 92_000
@@ -314,6 +319,7 @@ class TestFillOrder:
     """INV-TRAFFIC-FILL-ORDER-001: Break opportunities processed in
     BreakPlan order, never reordered or skipped."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_opportunities_filled_in_order(self):
         """Multi-break plan: fills processed in position_ms order."""
         # Create a block with two filler placeholders
@@ -355,6 +361,7 @@ class TestNoInventedBreaks:
     """INV-TRAFFIC-FILL-NO-INVENT-001: Traffic fill must only produce
     segments at positions defined by the existing filler placeholders."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_invented_break_positions(self):
         """Filled segments only appear where filler placeholders existed."""
         break_ms = 60_000
@@ -397,6 +404,7 @@ class TestRotationAdvances:
     """INV-TRAFFIC-FILL-ROTATION-ADVANCES-001: Asset selection advances
     across breaks within a block."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_rotation_advances_across_breaks(self):
         """Different assets selected in consecutive breaks when multiple available."""
         break_1_ms = 30_000
@@ -422,6 +430,7 @@ class TestRotationAdvances:
             # With rotation, the two breaks should get different assets
             assert ads[0].asset_uri != ads[1].asset_uri
 
+    # Tier: 2 | Scheduling logic invariant
     def test_play_history_not_mutated(self):
         """Caller's original play_history list must not be modified."""
         break_ms = 30_000
@@ -454,6 +463,7 @@ class TestLateBind:
     """INV-TRAFFIC-FILL-LATE-BIND-001: Schedule compiler produces empty
     filler placeholders. Traffic fill occurs at feed time."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_late_bind_empty_placeholders(self):
         """Block arrives with empty filler placeholders (asset_uri='')."""
         block = _block_with_filler(60_000)
@@ -465,6 +475,7 @@ class TestLateBind:
         assert len(fillers) == 1
         assert fillers[0].segment_duration_ms == 60_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_late_bind_fill_replaces_placeholder(self):
         """fill_ad_blocks replaces empty placeholders with concrete segments."""
         break_ms = 60_000
@@ -495,6 +506,7 @@ class TestFallback:
     """INV-TRAFFIC-FILL-FALLBACK-001: When no interstitials are available,
     fall back to static filler file. No error, exact duration."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fallback_fills_exactly(self):
         """No library: static filler fills break exactly."""
         break_ms = 90_000
@@ -508,6 +520,7 @@ class TestFallback:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fallback_wraps_filler(self):
         """Filler shorter than break: wraps and fills exactly."""
         break_ms = 75_000  # 2.5x the 30s filler
@@ -526,6 +539,7 @@ class TestFallback:
         for f in fillers:
             assert f.asset_uri == FILLER_URI
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fallback_no_error(self):
         """No candidates: no exception, produces valid segments."""
         break_ms = 60_000
@@ -547,6 +561,7 @@ class TestFallback:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fallback_produces_valid_segments(self):
         """Fallback segments have valid segment_type and asset_uri."""
         break_ms = 45_000
@@ -571,6 +586,7 @@ class TestBudgetCompliance:
     """INV-TRAFFIC-FILL-BUDGET-001: Total filled duration across all breaks
     must not exceed break budget."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_total_fill_within_budget(self):
         """Sum of all break allocations <= break_budget_ms."""
         break_budget = 120_000  # total budget across all breaks
@@ -596,6 +612,7 @@ class TestBudgetCompliance:
         assert total <= break_budget
         assert total == break_budget  # exact match expected
 
+    # Tier: 2 | Scheduling logic invariant
     def test_rounding_does_not_overshoot(self):
         """Weight rounding across 5 breaks stays within budget."""
         # 5 breaks of varying size, total = 150_000ms
@@ -622,6 +639,7 @@ class TestBudgetCompliance:
         # Each break individually should be exact
         assert total == total_budget
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_total_duration_preserved(self):
         """Total block duration (content + breaks) unchanged after fill."""
         break_ms = 90_000
@@ -683,6 +701,7 @@ class TestDslDerivedPolicy:
     """DSL-derived TrafficPolicy flows into fill_ad_blocks and affects
     asset selection via the policy's allowed_types filter."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_dsl_policy_filters_by_allowed_types(self):
         """Policy from DSL restricts which asset types are selected."""
         # DSL allows only "promo" — commercials must be excluded
@@ -722,6 +741,7 @@ class TestDslDerivedPolicy:
                 f"Expected only promos, got {ad.asset_uri}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_default_profile_used_when_no_block_override(self):
         """Block without traffic_profile uses the channel default_profile."""
         dsl = _cheers_channel_dsl(
@@ -765,6 +785,7 @@ class TestDslDerivedPolicy:
                 f"Expected only bumpers from default profile, got {ad.asset_uri}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_override_changes_selection(self):
         """Block with traffic_profile override uses the override profile."""
         dsl = _cheers_channel_dsl(
@@ -812,6 +833,7 @@ class TestDslDerivedPolicy:
                 f"Expected only promos from primetime override, got {ad.asset_uri}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_traffic_section_uses_structural_defaults(self):
         """Channel without traffic section falls back to static filler."""
         dsl_no_traffic = {
@@ -837,6 +859,7 @@ class TestDslDerivedPolicy:
         for seg in filled:
             assert seg.asset_uri == FILLER_URI
 
+    # Tier: 2 | Scheduling logic invariant
     def test_dsl_policy_exact_fill_invariant_holds(self):
         """DSL-derived policy still satisfies INV-TRAFFIC-FILL-EXACT-001."""
         dsl = _cheers_channel_dsl()
@@ -904,16 +927,19 @@ class TestBlockLevelTrafficProfile:
     """Block-level traffic_profile override is preserved on ScheduledBlock
     and produces a different TrafficPolicy than the channel default."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_scheduled_block_carries_traffic_profile(self):
         """ScheduledBlock.traffic_profile field is preserved."""
         block = _block_with_filler_and_profile(60_000, traffic_profile="primetime")
         assert block.traffic_profile == "primetime"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_scheduled_block_default_traffic_profile_is_none(self):
         """ScheduledBlock without override has traffic_profile=None."""
         block = _block_with_filler(60_000)
         assert block.traffic_profile is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_override_produces_different_policy_than_default(self):
         """Block override resolves a different TrafficPolicy than default."""
         dsl = _cheers_channel_dsl(
@@ -937,6 +963,7 @@ class TestBlockLevelTrafficProfile:
         assert override_policy.allowed_types == ["promo"]
         assert override_policy.max_plays_per_day == 12
 
+    # Tier: 2 | Scheduling logic invariant
     def test_override_affects_asset_selection(self):
         """Block with traffic_profile override selects different assets."""
         dsl = _cheers_channel_dsl(
@@ -992,6 +1019,7 @@ class TestBlockLevelTrafficProfile:
         for ad in ads_override:
             assert ad.asset_uri.startswith("promo")
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_preserves_traffic_profile_on_result(self):
         """fill_ad_blocks preserves traffic_profile on the returned block."""
         block = _block_with_filler_and_profile(60_000, traffic_profile="primetime")
@@ -1002,6 +1030,7 @@ class TestBlockLevelTrafficProfile:
         )
         assert result.traffic_profile == "primetime"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_override_uses_default(self):
         """Block without traffic_profile uses channel default_profile."""
         dsl = _cheers_channel_dsl(
@@ -1050,6 +1079,7 @@ class TestStructuredFill:
     """INV-TRAFFIC-FILL-STRUCTURED-001: Filler placeholders are expanded
     through BreakStructure before filling."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_structured_fill_produces_bumper_then_spots(self):
         """With bumper config and bumper assets, output begins with bumper."""
         break_ms = 60_000
@@ -1087,6 +1117,7 @@ class TestStructuredFill:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_structured_fill_interstitial_pool_only(self):
         """Without bumper config, output is interstitial spots only (no bumpers)."""
         break_ms = 60_000
@@ -1114,6 +1145,7 @@ class TestStructuredFill:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_structured_fill_slot_order_preserved(self):
         """Output segment order matches BreakStructure: bumper → spots → bumper."""
         break_ms = 60_000
@@ -1144,6 +1176,7 @@ class TestStructuredFill:
         for s in non_pad[1:-1]:
             assert s.segment_type != "bumper"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_break_config_backward_compatible(self):
         """Without break_config parameter, fill_ad_blocks works as before."""
         break_ms = 60_000
@@ -1174,6 +1207,7 @@ class TestBumperDegrade:
     """INV-TRAFFIC-FILL-BUMPER-DEGRADE-001: Unfilled bumper slots degrade
     to interstitial pool. Budget is conserved."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bumper_degrade_merges_to_pool(self):
         """No bumper available: bumper duration added to interstitial pool."""
         break_ms = 60_000
@@ -1205,6 +1239,7 @@ class TestBumperDegrade:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bumper_degrade_budget_conserved(self):
         """Total duration unchanged when bumper degrades."""
         break_ms = 90_000
@@ -1227,6 +1262,7 @@ class TestBumperDegrade:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_partial_bumper_degrade(self):
         """One bumper available, one not — partial degradation."""
         break_ms = 60_000
@@ -1265,6 +1301,7 @@ class TestBumperDegrade:
 class TestStationIdStructuredFill:
     """Station ID slots are filled by dedicated selection, not traffic policy."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_station_id_slot_filled(self):
         """With station_id config and assets, station_id segment appears."""
         break_ms = 60_000
@@ -1300,6 +1337,7 @@ class TestStationIdStructuredFill:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_station_id_position_after_interstitial(self):
         """Station ID appears after interstitial content, before from_break bumper."""
         break_ms = 60_000
@@ -1337,6 +1375,7 @@ class TestStationIdStructuredFill:
         assert sid_idx > 0  # not first
         assert sid_idx < len(non_pad) - 1  # not last (from_break bumper is last)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_station_id_degrade_no_asset(self):
         """No station_id asset available: duration merges into interstitial pool."""
         break_ms = 60_000
@@ -1373,6 +1412,7 @@ class TestStationIdStructuredFill:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_station_id_not_in_traffic_policy(self):
         """Station ID selection bypasses traffic policy engine."""
         break_ms = 60_000
@@ -1412,6 +1452,7 @@ class TestStructuralSlotShortfall:
     shorter than its allocated slot, the shortfall degrades into the
     interstitial pool so the total break duration remains exact."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_undersized_bumper_shortfall_degrades_to_pool(self):
         """Bumper asset shorter than slot → shortfall fills with interstitials."""
         break_ms = 60_000
@@ -1448,6 +1489,7 @@ class TestStructuralSlotShortfall:
         assert len(bumpers) == 2
         assert all(b.segment_duration_ms == 4608 for b in bumpers)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_undersized_station_id_shortfall_degrades_to_pool(self):
         """Station ID asset shorter than slot → shortfall fills with interstitials."""
         break_ms = 60_000

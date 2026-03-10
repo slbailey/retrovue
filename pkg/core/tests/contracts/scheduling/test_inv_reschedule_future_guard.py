@@ -68,12 +68,14 @@ def _mock_db(tier1_revision=None, tier1_items=None, tier2_row=None):
 
 
 class TestInvRescheduleFutureGuard001:
+    # Tier: 2 | Scheduling logic invariant
     def test_tier1_past_revision_rejected(self):
         rev = _mk_revision(NOW - timedelta(hours=1))
         db = _mock_db(tier1_revision=rev, tier1_items=[_mk_item(rev.id, start=NOW - timedelta(hours=1))])
         with pytest.raises(RescheduleRejectedError, match="INV-RESCHEDULE-FUTURE-GUARD-001"):
             reschedule_by_id(db, identifier=str(rev.id), now=NOW)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_tier1_future_revision_accepted(self):
         rev = _mk_revision(NOW + timedelta(hours=1))
         items = [_mk_item(rev.id, slot=0, start=NOW + timedelta(hours=1))]
@@ -82,12 +84,14 @@ class TestInvRescheduleFutureGuard001:
         assert result["status"] == "ok"
         assert result["tier"] == "1"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_tier1_missing_items_rejected(self):
         rev = _mk_revision(NOW + timedelta(hours=1))
         db = _mock_db(tier1_revision=rev, tier1_items=[])
         with pytest.raises(RescheduleRejectedError, match="INV-RESCHEDULE-FUTURE-GUARD-001"):
             reschedule_by_id(db, identifier=str(rev.id), now=NOW)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_tier2_past_block_rejected(self):
         row = SimpleNamespace(
             block_id="b1", channel_slug="test-channel", broadcast_day=date(2026, 3, 4),
@@ -97,6 +101,7 @@ class TestInvRescheduleFutureGuard001:
         with pytest.raises(RescheduleRejectedError, match="INV-RESCHEDULE-FUTURE-GUARD-001"):
             reschedule_by_id(db, identifier="b1", now=NOW)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_tier2_future_block_accepted(self):
         row = SimpleNamespace(
             block_id="b2", channel_slug="test-channel", broadcast_day=date(2026, 3, 4),

@@ -59,18 +59,21 @@ def _find_hash_calls_in_file(filepath: Path) -> list[str]:
 class TestInvScheduleSeedDeterministic001:
     """INV-SCHEDULE-SEED-DETERMINISTIC-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_seed_is_deterministic(self):
         """channel_seed('showtime-cinema') called twice returns same value."""
         s1 = channel_seed("showtime-cinema")
         s2 = channel_seed("showtime-cinema")
         assert s1 == s2, f"Seeds differ: {s1} != {s2}"
 
+    # Tier: 1 | Structural invariant
     def test_seed_matches_hashlib(self):
         """Result equals int(hashlib.sha256(b'showtime-cinema').hexdigest(), 16) % 100000."""
         expected = int(hashlib.sha256(b"showtime-cinema").hexdigest(), 16) % 100000
         actual = channel_seed("showtime-cinema")
         assert actual == expected, f"channel_seed returned {actual}, expected {expected}"
 
+    # Tier: 1 | Structural invariant
     def test_different_channels_different_seeds(self):
         """Two different channel_ids produce different seeds."""
         s1 = channel_seed("showtime-cinema")
@@ -80,6 +83,7 @@ class TestInvScheduleSeedDeterministic001:
             f"showtime-cinema={s1}, retro-prime={s2}"
         )
 
+    # Tier: 1 | Structural invariant
     def test_no_builtin_hash_in_seed_callsites(self):
         """No hash() calls exist in dsl_schedule_service.py, program_director.py,
         or epg.py. All channel seed derivation MUST use channel_seed()."""

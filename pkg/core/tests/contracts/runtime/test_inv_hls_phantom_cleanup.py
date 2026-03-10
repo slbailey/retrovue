@@ -98,6 +98,7 @@ def _find_attr_method_calls(tree: ast.AST, attr: str, method: str) -> list[int]:
 class TestInvHlsPhantomCleanup:
     """INV-HLS-PHANTOM-CLEANUP-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_hls_playlist_no_unconditional_activity_update(self):
         """hls_playlist() MUST NOT unconditionally update _hls_last_activity.
 
@@ -165,6 +166,7 @@ class TestInvHlsPhantomCleanup:
             f"timestamp, preventing phantom idle timeout."
         )
 
+    # Tier: 1 | Structural invariant
     def test_hls_segment_no_early_activity_update(self):
         """hls_segment() MUST NOT update _hls_last_activity before the
         success path (get_segment() returning data).
@@ -192,6 +194,7 @@ class TestInvHlsPhantomCleanup:
             f"BEFORE get_segment() at line {first_get_segment}."
         )
 
+    # Tier: 1 | Structural invariant
     def test_hls_playlist_cleans_up_on_startup_failure(self):
         """hls_playlist() MUST call seg.stop() when startup fails (no fanout).
 
@@ -211,6 +214,7 @@ class TestInvHlsPhantomCleanup:
             "that blocks all future startup attempts"
         )
 
+    # Tier: 1 | Structural invariant
     def test_hls_playlist_cleans_up_phantom_session_on_failure(self):
         """hls_playlist() MUST remove the phantom session from
         _hls_phantom_sessions when startup fails.
@@ -232,6 +236,7 @@ class TestInvHlsPhantomCleanup:
             "on startup failure"
         )
 
+    # Tier: 1 | Structural invariant
     def test_hls_playlist_sets_initial_activity_during_phantom_creation(self):
         """hls_playlist() MUST set _hls_last_activity when creating a phantom,
         so the drain thread has a valid initial baseline.

@@ -77,6 +77,7 @@ def _fake_block_dict(block_id: str, start_ms: int, end_ms: int, segments_count: 
 class TestRule3BatchMethodExists:
     """Rule 3: _batch_block_exists_in_txlog(block_ids) MUST exist and return set[str]."""
 
+    # Tier: 1 | Structural invariant
     def test_method_exists(self):
         daemon = _make_daemon()
         assert hasattr(daemon, "_batch_block_exists_in_txlog"), (
@@ -92,6 +93,7 @@ class TestRule3BatchMethodExists:
 class TestRule1BatchedExistenceCheck:
     """Rule 1: _extend_to_target() MUST NOT call _block_exists_in_txlog per-block."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_extend_does_not_call_per_block_exists(self):
         """When extending over multiple candidate blocks, the per-block
         _block_exists_in_txlog MUST NOT be called. Instead, the batched
@@ -138,6 +140,7 @@ class TestRule1BatchedExistenceCheck:
 class TestRule2GilYield:
     """Rule 2: _extend_to_target() MUST yield GIL after each block fill."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_sleep_called_after_each_fill(self):
         """After filling each block, time.sleep() MUST be called to yield GIL."""
         daemon = _make_daemon()
@@ -171,6 +174,7 @@ class TestRule2GilYield:
         for s in sleep_calls:
             assert s > 0, f"time.sleep({s}) is not a meaningful GIL yield"
 
+    # Tier: 1 | Structural invariant
     def test_yield_duration_sufficient(self):
         """Rule 2: GIL yield in _extend_to_target() MUST be >= 10ms.
 
@@ -216,6 +220,7 @@ class TestRule2GilYield:
 class TestRule4EvaluationJitter:
     """Rule 4: _run_loop() wait MUST include a random jitter component."""
 
+    # Tier: 1 | Structural invariant
     def test_run_loop_uses_random_jitter(self):
         """AST structural: _run_loop() MUST contain a random.uniform call.
 
@@ -255,6 +260,7 @@ class TestRule4EvaluationJitter:
             "No random.uniform call found in _run_loop() source."
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jitter_varies_across_cycles(self):
         """Behavioral: _run_loop() wait timeouts MUST vary across cycles.
 

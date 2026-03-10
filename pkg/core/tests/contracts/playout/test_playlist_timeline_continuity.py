@@ -47,6 +47,7 @@ def _generate_playlist_events(schedule_items: list[dict]) -> list[dict]:
 class TestInvPlaylistTimelineContinuity001:
     """INV-PLAYLIST-TIMELINE-CONTINUITY-001 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_playlist_events_have_no_gaps(self):
         """Adjacent PlaylistEvents must have no gap between them.
 
@@ -67,6 +68,7 @@ class TestInvPlaylistTimelineContinuity001:
                 f"end={end_i}, next_start={start_next}, delta={start_next - end_i}ms"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_playlist_events_have_no_overlaps(self):
         """Adjacent PlaylistEvents must not overlap.
 
@@ -91,6 +93,7 @@ class TestInvPlaylistTimelineContinuity001:
 class TestInvPlaylistTimeAnchor006:
     """INV-PLAYLIST-TIME-ANCHOR-006 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_first_event_anchored_to_schedule_item_start(self):
         """The first PlaylistEvent must start exactly at ScheduleItem.start_utc_ms."""
         si = _make_schedule_item(start_utc_ms=1_000_000_000_000)

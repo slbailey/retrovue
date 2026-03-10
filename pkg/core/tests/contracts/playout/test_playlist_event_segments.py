@@ -98,6 +98,7 @@ def _make_three_act_event() -> PlaylistEventStub:
 class TestInvPlaylistEventSegmentCoverage002:
     """INV-PLAYLIST-EVENT-SEGMENT-COVERAGE-002 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_segments_cover_block(self) -> None:
         """Sum of segment durations must exactly equal block duration."""
         pe = _make_content_filler_event()
@@ -109,6 +110,7 @@ class TestInvPlaylistEventSegmentCoverage002:
             f"delta={segment_sum - pe.block_duration_ms}ms"
         )
 
+    # Tier: 1 | Structural invariant
     def test_segments_cover_block_multi_act(self) -> None:
         """Coverage holds for multi-act events with ad breaks."""
         pe = _make_three_act_event()
@@ -120,6 +122,7 @@ class TestInvPlaylistEventSegmentCoverage002:
             f"delta={segment_sum - pe.block_duration_ms}ms"
         )
 
+    # Tier: 1 | Structural invariant
     def test_positive_segment_durations(self) -> None:
         """Every segment must have segment_duration_ms > 0."""
         pe = _make_content_filler_event()
@@ -129,6 +132,7 @@ class TestInvPlaylistEventSegmentCoverage002:
                 f"segment[{i}] has non-positive duration={seg['segment_duration_ms']}ms"
             )
 
+    # Tier: 1 | Structural invariant
     def test_nonempty_segment_list(self) -> None:
         """Segment list must not be empty."""
         pe = _make_content_filler_event()
@@ -137,6 +141,7 @@ class TestInvPlaylistEventSegmentCoverage002:
             "segment list is empty"
         )
 
+    # Tier: 1 | Structural invariant
     def test_underfill_detected(self) -> None:
         """Segment sum less than block duration is a coverage violation."""
         pe = PlaylistEventStub(
@@ -152,6 +157,7 @@ class TestInvPlaylistEventSegmentCoverage002:
             "Expected underfill to be detected"
         )
 
+    # Tier: 1 | Structural invariant
     def test_overfill_detected(self) -> None:
         """Segment sum greater than block duration is a coverage violation."""
         pe = PlaylistEventStub(
@@ -175,6 +181,7 @@ class TestInvPlaylistEventSegmentCoverage002:
 class TestInvPlaylistEventSegmentOrder003:
     """INV-PLAYLIST-EVENT-SEGMENT-ORDER-003 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_segments_contiguous(self) -> None:
         """Each segment's implicit end equals the next segment's implicit start."""
         pe = _make_content_filler_event()
@@ -192,6 +199,7 @@ class TestInvPlaylistEventSegmentOrder003:
                     f"gap at segment[{i}]: end={seg_end} != next_start={next_start}"
                 )
 
+    # Tier: 1 | Structural invariant
     def test_segments_contiguous_multi_act(self) -> None:
         """Contiguity holds for multi-act events."""
         pe = _make_three_act_event()
@@ -207,6 +215,7 @@ class TestInvPlaylistEventSegmentOrder003:
             f"final cursor={cursor_ms} != block_end={pe.end_utc_ms}"
         )
 
+    # Tier: 1 | Structural invariant
     def test_segments_ordered(self) -> None:
         """Segments tile from block start to block end without gaps."""
         pe = _make_content_filler_event()
@@ -222,6 +231,7 @@ class TestInvPlaylistEventSegmentOrder003:
             f"segments tile end={cursor_ms} != block_end={pe.end_utc_ms}"
         )
 
+    # Tier: 1 | Structural invariant
     def test_first_segment_starts_at_block_start(self) -> None:
         """The first segment's implicit start is PE.start_utc_ms."""
         pe = _make_content_filler_event()
@@ -233,6 +243,7 @@ class TestInvPlaylistEventSegmentOrder003:
             f"first segment start={first_implicit_start} != block_start={pe.start_utc_ms}"
         )
 
+    # Tier: 1 | Structural invariant
     def test_last_segment_ends_at_block_end(self) -> None:
         """The last segment's implicit end is PE.end_utc_ms."""
         pe = _make_content_filler_event()

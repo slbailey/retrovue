@@ -92,6 +92,7 @@ SLOTS_PER_DAY = 36
 class TestRule1SlotCountPositive:
     """Rule 1: A V2 DSL with slots > 0 MUST produce program blocks."""
 
+    # Tier: 1 | Structural invariant
     def test_dsl_produces_blocks(self):
         """V2 DSL with 36 slots MUST produce at least 1 program block."""
         resolver = _make_sequential_resolver()
@@ -101,6 +102,7 @@ class TestRule1SlotCountPositive:
             "V2 DSL with slots=36 produced zero program blocks"
         )
 
+    # Tier: 1 | Structural invariant
     def test_dsl_produces_expected_block_count(self):
         """V2 DSL with 36 slots and grid_blocks=1 MUST produce 36 blocks."""
         resolver = _make_sequential_resolver()
@@ -119,6 +121,7 @@ class TestRule2ConsecutiveDaysDiffer:
     """Rule 2: Compiling two consecutive days MUST produce different first
     episodes when the pool is larger than one day's slots."""
 
+    # Tier: 1 | Structural invariant
     def test_day_n_and_day_n_plus_1_differ(self):
         """Compile day N and day N+1 for a sequential channel.
         The first program_block asset_id MUST differ between days."""

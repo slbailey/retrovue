@@ -106,6 +106,7 @@ def _resolve_and_validate(
 class TestInvSblockProgram001:
     """INV-SBLOCK-PROGRAM-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_program_reference_rejected(self):
         # INV-SBLOCK-PROGRAM-001 — empty string program field → reject
         block = _block(program="")
@@ -114,6 +115,7 @@ class TestInvSblockProgram001:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_missing_program_reference_rejected(self):
         # INV-SBLOCK-PROGRAM-001 — null program field → reject
         block = _block(program=None)
@@ -122,6 +124,7 @@ class TestInvSblockProgram001:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_valid_program_reference_accepted(self):
         # INV-SBLOCK-PROGRAM-001 — non-empty program field → accept
         prog = _prog()
@@ -143,6 +146,7 @@ class TestInvSblockProgram001:
 class TestInvSblockProgram002:
     """INV-SBLOCK-PROGRAM-002"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_undefined_program_rejected(self):
         # INV-SBLOCK-PROGRAM-002 — reference to nonexistent program → reject
         block = _block(program="ghost_program")
@@ -151,6 +155,7 @@ class TestInvSblockProgram002:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_defined_program_resolves(self):
         # INV-SBLOCK-PROGRAM-002 — reference to existing program → resolves
         prog = _prog(name="weekend_movie")
@@ -171,6 +176,7 @@ class TestInvSblockProgram002:
 class TestInvSblockProgram003:
     """INV-SBLOCK-PROGRAM-003"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_slots_not_multiple_rejected(self):
         # INV-SBLOCK-PROGRAM-003 — slots=5, grid_blocks=2 → not a multiple → reject
         prog = _prog(grid_blocks=2)
@@ -180,6 +186,7 @@ class TestInvSblockProgram003:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_slots_exact_multiple_accepted(self):
         # INV-SBLOCK-PROGRAM-003 — slots=4, grid_blocks=2 → exact multiple → accept
         prog = _prog(grid_blocks=2)
@@ -188,6 +195,7 @@ class TestInvSblockProgram003:
 
         _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_slots_equal_grid_blocks_accepted(self):
         # INV-SBLOCK-PROGRAM-003 — slots=2, grid_blocks=2 → single execution → accept
         prog = _prog(grid_blocks=2)
@@ -207,6 +215,7 @@ class TestInvSblockProgram003:
 class TestInvSblockProgram004:
     """INV-SBLOCK-PROGRAM-004"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_inline_pool_rejected(self):
         # INV-SBLOCK-PROGRAM-004 — schedule block with pool field → reject
         prog = _prog()
@@ -216,6 +225,7 @@ class TestInvSblockProgram004:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_inline_fill_mode_rejected(self):
         # INV-SBLOCK-PROGRAM-004 — schedule block with fill_mode field → reject
         prog = _prog()
@@ -225,6 +235,7 @@ class TestInvSblockProgram004:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_inline_bleed_rejected(self):
         # INV-SBLOCK-PROGRAM-004 — schedule block with bleed field → reject
         prog = _prog()
@@ -234,6 +245,7 @@ class TestInvSblockProgram004:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_inline_intro_rejected(self):
         # INV-SBLOCK-PROGRAM-004 — schedule block with intro field → reject
         prog = _prog()
@@ -243,6 +255,7 @@ class TestInvSblockProgram004:
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_inline_outro_rejected(self):
         # INV-SBLOCK-PROGRAM-004 — schedule block with outro field → reject
         prog = _prog()
@@ -263,6 +276,7 @@ class TestInvSblockProgram004:
 class TestInvSblockProgram005:
     """INV-SBLOCK-PROGRAM-005"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_valid_progression_sequential(self):
         # INV-SBLOCK-PROGRAM-005 — progression: sequential → accept
         prog = _prog()
@@ -271,6 +285,7 @@ class TestInvSblockProgram005:
 
         _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_valid_progression_random(self):
         # INV-SBLOCK-PROGRAM-005 — progression: random → accept
         prog = _prog()
@@ -279,6 +294,7 @@ class TestInvSblockProgram005:
 
         _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_valid_progression_shuffle(self):
         # INV-SBLOCK-PROGRAM-005 — progression: shuffle → accept
         prog = _prog()
@@ -287,6 +303,7 @@ class TestInvSblockProgram005:
 
         _resolve_and_validate(block, programs)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_invalid_progression_rejected(self):
         # INV-SBLOCK-PROGRAM-005 — progression: alphabetical → reject
         prog = _prog()
@@ -295,3 +312,62 @@ class TestInvSblockProgram005:
 
         with pytest.raises(ValidationFault):
             _resolve_and_validate(block, programs)
+
+
+# ===========================================================================
+# INV-SBLOCK-PROGRAM-003 — grid_blocks_max variant
+# Slots are a budget when grid_blocks_max is set; no modulus check.
+# ===========================================================================
+
+
+@pytest.mark.contract
+class TestInvSblockProgram003GridBlocksMax:
+    """INV-SBLOCK-PROGRAM-003 — grid_blocks_max relaxation"""
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_grid_blocks_max_slots_not_multiple_accepted(self):
+        # With grid_blocks_max, slots=7 is valid even though 7 is not
+        # a multiple of grid_blocks_max=5. Slots is just a budget.
+        prog = ProgramDefinition(
+            name="movie_prog",
+            pool="movies",
+            grid_blocks=0,
+            grid_blocks_max=5,
+            fill_mode="single",
+            bleed=True,
+        )
+        block = _block(program=prog.name, slots=7)
+        programs = _programs_by_name(prog)
+
+        # Must not raise — slots is a budget, not a multiple.
+        _resolve_and_validate(block, programs)
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_grid_blocks_max_single_slot_accepted(self):
+        # Even a single slot is valid — the movie may just bleed.
+        prog = ProgramDefinition(
+            name="movie_prog",
+            pool="movies",
+            grid_blocks=0,
+            grid_blocks_max=5,
+            fill_mode="single",
+            bleed=True,
+        )
+        block = _block(program=prog.name, slots=1)
+        programs = _programs_by_name(prog)
+
+        _resolve_and_validate(block, programs)
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_grid_blocks_and_grid_blocks_max_mutually_exclusive(self):
+        # A ProgramDefinition MUST NOT have both grid_blocks > 0 AND
+        # grid_blocks_max set. They are mutually exclusive.
+        with pytest.raises((ValueError, ValidationFault)):
+            ProgramDefinition(
+                name="bad_prog",
+                pool="movies",
+                grid_blocks=4,
+                grid_blocks_max=5,
+                fill_mode="single",
+                bleed=True,
+            )

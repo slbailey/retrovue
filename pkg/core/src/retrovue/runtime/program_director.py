@@ -1129,6 +1129,24 @@ class ProgramDirector:
                     self._logger.warning("Error stopping evidence server: %s", e)
                 self._evidence_server = None
 
+        # Shut down DslScheduleService background resources (loudness executor)
+        for attr_name in list(vars(self)):
+            if attr_name.startswith("_dsl_"):
+                svc = getattr(self, attr_name, None)
+                if svc is not None and hasattr(svc, "shutdown"):
+                    try:
+                        svc.shutdown()
+                    except Exception as e:
+                        self._logger.warning("Error shutting down %s: %s", attr_name, e)
+
+        # Stop PlaylistBuilderDaemons
+        for channel_id, daemon in list(self._playlog_daemons.items()):
+            try:
+                daemon.stop()
+            except Exception as e:
+                self._logger.warning("Error stopping PlaylistBuilderDaemon %s: %s", channel_id, e)
+        self._playlog_daemons.clear()
+
         self._logger.debug("ProgramDirector stopped")
 
     def get_system_health(self) -> SystemHealth:

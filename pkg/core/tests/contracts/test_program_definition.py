@@ -112,6 +112,7 @@ def _make_program(
 class TestInvProgramGrid001:
     """INV-PROGRAM-GRID-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_slots_must_be_multiple_of_grid_blocks(self):
         # INV-PROGRAM-GRID-001 — slots=5, grid_blocks=2 → not a multiple → reject
         prog = _make_program(grid_blocks=2)
@@ -120,6 +121,7 @@ class TestInvProgramGrid001:
         with pytest.raises(ValidationFault):
             validate_schedule_block(block, prog, grid_minutes=GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_slots_exact_multiple_accepted(self):
         # INV-PROGRAM-GRID-001 — slots=4, grid_blocks=2 → exact multiple → accept
         prog = _make_program(grid_blocks=2)
@@ -139,6 +141,7 @@ class TestInvProgramGrid001:
 class TestInvProgramFill001:
     """INV-PROGRAM-FILL-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_single_fill_selects_one_asset(self):
         # INV-PROGRAM-FILL-001 — single mode produces exactly one content asset
         prog = _make_program(fill_mode="single", grid_blocks=2, bleed=True)
@@ -149,6 +152,7 @@ class TestInvProgramFill001:
         content_segments = [s for s in result.segments if s.segment_type == "content"]
         assert len(content_segments) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_single_fill_rejects_zero_assets(self):
         # INV-PROGRAM-FILL-001 — single mode with empty pool raises AssemblyFault
         prog = _make_program(fill_mode="single", grid_blocks=2)
@@ -168,6 +172,7 @@ class TestInvProgramFill001:
 class TestInvProgramFill002:
     """INV-PROGRAM-FILL-002"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_accumulate_stops_at_grid_target(self):
         # INV-PROGRAM-FILL-002 — accumulate stops once running total meets target
         # grid_blocks=2 → target = 60min. Three 25-min assets: first two = 50min
@@ -183,6 +188,7 @@ class TestInvProgramFill002:
         # 25+25=50 < 60, 25+25+25=75 >= 60 → stop at 3
         assert len(content_segments) == 3
 
+    # Tier: 2 | Scheduling logic invariant
     def test_accumulate_does_not_overshoot(self):
         # INV-PROGRAM-FILL-002 — must not add assets past the first one to meet target
         # grid_blocks=2 → target = 60min. 55-min + 10-min = 65 (meets).
@@ -211,6 +217,7 @@ class TestInvProgramFill002:
 class TestInvProgramBleed001:
     """INV-PROGRAM-BLEED-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_bleed_rejects_overlong_single(self):
         # INV-PROGRAM-BLEED-001 — bleed=false, single mode, 90-min asset in
         # 2-slot (60-min) program → asset rejected, next tried.
@@ -232,6 +239,7 @@ class TestInvProgramBleed001:
         assert len(content_segments) == 1
         assert content_segments[0].asset_id == "fits"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_bleed_accumulate_excludes_overflow(self):
         # INV-PROGRAM-BLEED-001 — bleed=false, accumulate mode.
         # grid_blocks=2 → 60min target. Assets: 30, 25, 20.
@@ -259,6 +267,7 @@ class TestInvProgramBleed001:
 class TestInvProgramBleed002:
     """INV-PROGRAM-BLEED-002"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bleed_allows_overrun(self):
         # INV-PROGRAM-BLEED-002 — bleed=true, single mode, 90-min asset in
         # 2-slot (60-min) program → accepted, not truncated.
@@ -285,6 +294,7 @@ class TestInvProgramBleed002:
 class TestInvProgramBleed003:
     """INV-PROGRAM-BLEED-003"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bleed_shifts_next_block_start(self):
         # INV-PROGRAM-BLEED-003 — bleeding program ends at actual_end;
         # next block must start exactly there.
@@ -300,6 +310,7 @@ class TestInvProgramBleed003:
         assert result.total_runtime_ms == _ms(90)
         assert result.next_block_start_offset_ms == _ms(90)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bleed_seam_no_gap_no_overlap(self):
         # INV-PROGRAM-BLEED-003 — verify no gap/overlap at the seam.
         # Two consecutive bleeding programs: each 90min in 60min slots.
@@ -337,6 +348,7 @@ class TestInvProgramBleed003:
 class TestInvProgramPool001:
     """INV-PROGRAM-POOL-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_undefined_pool_rejected(self):
         # INV-PROGRAM-POOL-001 — pool reference to nonexistent pool → ValidationFault
         prog = _make_program(pool="nonexistent_pool")
@@ -358,6 +370,7 @@ class TestInvProgramPool001:
 class TestInvProgramPool002:
     """INV-PROGRAM-POOL-002"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_pool_raises_assembly_fault(self):
         # INV-PROGRAM-POOL-002 — pool exists but has zero eligible assets
         prog = _make_program(fill_mode="single", grid_blocks=2)
@@ -387,6 +400,7 @@ class TestInvProgramPool002:
 class TestInvProgramIdentity001:
     """INV-PROGRAM-IDENTITY-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_duplicate_program_name_rejected(self):
         # INV-PROGRAM-IDENTITY-001 — two programs with same name → ValidationFault
         prog_a = _make_program(name="movie_night", pool="movies")
@@ -412,6 +426,7 @@ class TestInvProgramIdentity001:
 class TestInvProgramIntroOutro001:
     """INV-PROGRAM-INTRO-OUTRO-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_intro_duration_included_in_grid_calc(self):
         # INV-PROGRAM-INTRO-OUTRO-001 — 5-min intro + 58-min asset = 63min,
         # exceeds 60-min grid with bleed=false → no fitting asset → AssemblyFault.
@@ -428,6 +443,7 @@ class TestInvProgramIntroOutro001:
                 intro_asset=intro_asset,
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_outro_duration_included_in_grid_calc(self):
         # INV-PROGRAM-INTRO-OUTRO-001 — 58-min asset + 5-min outro = 63min,
         # exceeds 60-min grid with bleed=false → no fitting asset → AssemblyFault.
@@ -444,6 +460,7 @@ class TestInvProgramIntroOutro001:
                 outro_asset=outro_asset,
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_intro_outro_included_in_bleed_calc(self):
         # INV-PROGRAM-INTRO-OUTRO-001 — bleed=true: intro + content + outro
         # durations all count toward total_runtime_ms.
@@ -475,6 +492,7 @@ class TestInvProgramIntroOutro001:
 class TestInvProgramAssemblyEligible001:
     """INV-PROGRAM-ASSEMBLY-ELIGIBLE-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_assembly_rejects_ineligible_asset(self):
         # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — asset with state != ready excluded
         prog = _make_program(fill_mode="single", grid_blocks=2, bleed=True)
@@ -490,6 +508,7 @@ class TestInvProgramAssemblyEligible001:
         with pytest.raises(AssemblyFault):
             assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_assembly_rejects_unapproved_asset(self):
         # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — asset with approved=false excluded
         prog = _make_program(fill_mode="single", grid_blocks=2, bleed=True)
@@ -506,6 +525,7 @@ class TestInvProgramAssemblyEligible001:
         with pytest.raises(AssemblyFault):
             assemble_program(prog, pool, grid_minutes=GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_ineligible_intro_rejected(self):
         # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — ineligible intro asset → fault
         prog = _make_program(
@@ -535,6 +555,7 @@ class TestInvProgramAssemblyEligible001:
 class TestInvProgramSeparation001:
     """INV-PROGRAM-SEPARATION-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_block_must_reference_program(self):
         # INV-PROGRAM-SEPARATION-001 — schedule block with no program → reject
         block = FakeScheduleBlock(start="20:00", slots=4, program="")
@@ -542,6 +563,7 @@ class TestInvProgramSeparation001:
         with pytest.raises(ValidationFault):
             validate_schedule_block(block, program=None, grid_minutes=GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_block_rejects_inline_fill_mode(self):
         # INV-PROGRAM-SEPARATION-001 — schedule block with inline fill_mode → reject
         prog = _make_program()
@@ -552,6 +574,7 @@ class TestInvProgramSeparation001:
         with pytest.raises(ValidationFault):
             validate_schedule_block(block, prog, grid_minutes=GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_block_rejects_inline_bleed(self):
         # INV-PROGRAM-SEPARATION-001 — schedule block with inline bleed → reject
         prog = _make_program()

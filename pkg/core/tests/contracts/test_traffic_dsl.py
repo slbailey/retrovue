@@ -140,6 +140,7 @@ class TestDefaultProfileRequired:
     """INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001: Every channel with a traffic
     section must include a default_profile that resolves to an existing profile."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_missing_default_profile_rejected(self):
         """Traffic section with inventories but no default_profile is invalid."""
         dsl = _channel_dsl(
@@ -150,6 +151,7 @@ class TestDefaultProfileRequired:
         with pytest.raises((ValueError, KeyError)):
             validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_default_profile_references_nonexistent_rejected(self):
         """default_profile naming a profile not in traffic.profiles is invalid."""
         dsl = _channel_dsl(
@@ -160,6 +162,7 @@ class TestDefaultProfileRequired:
         with pytest.raises((ValueError, KeyError)):
             validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_valid_default_profile_accepted(self):
         """default_profile referencing an existing profile passes validation."""
         dsl = _channel_dsl(
@@ -181,6 +184,7 @@ class TestInventoryTypeRecognized:
     """INV-TRAFFIC-DSL-INVENTORY-TYPE-001: Inventory asset_type must be one
     of the recognized interstitial types."""
 
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("valid_type", sorted(RECOGNIZED_INTERSTITIAL_TYPES))
     def test_recognized_type_accepted(self, valid_type: str):
         """Each recognized interstitial type is accepted."""
@@ -191,6 +195,7 @@ class TestInventoryTypeRecognized:
         )
         validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("bad_type", ["unknown", "movie", "episode", "ad", ""])
     def test_unrecognized_type_rejected(self, bad_type: str):
         """Unrecognized asset_type is rejected at load time."""
@@ -214,6 +219,7 @@ class TestProfileRefValid:
     """INV-TRAFFIC-DSL-PROFILE-REF-VALID-001: Every traffic_profile reference
     on a schedule block must name an existing profile."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_block_valid_profile_accepted(self):
         """Schedule block referencing an existing profile passes."""
         dsl = _channel_dsl(
@@ -236,6 +242,7 @@ class TestProfileRefValid:
         )
         validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_block_dangling_profile_rejected(self):
         """Schedule block referencing a nonexistent profile is rejected."""
         dsl = _channel_dsl(
@@ -256,6 +263,7 @@ class TestProfileRefValid:
         with pytest.raises((ValueError, KeyError)):
             validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_default_profile_resolution(self):
         """Block without traffic_profile resolves to default_profile."""
         dsl = _channel_dsl(
@@ -283,6 +291,7 @@ class TestNoProgramPolicy:
     """INV-TRAFFIC-DSL-NO-PROGRAM-POLICY-001: Program definitions must not
     include traffic policy fields."""
 
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("field", sorted(TRAFFIC_POLICY_FIELDS))
     def test_program_with_traffic_field_rejected(self, field: str):
         """Program definition carrying a traffic policy field is rejected."""
@@ -303,6 +312,7 @@ class TestNoProgramPolicy:
         with pytest.raises(ValueError):
             validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_program_without_traffic_fields_accepted(self):
         """Clean program definition passes validation."""
         dsl = _channel_dsl(
@@ -323,6 +333,7 @@ class TestPlacementFromBreaks:
     """INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001: The DSL must not declare
     break positions, counts, or timing. Placement comes from break_detection."""
 
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("field", sorted(BREAK_PLACEMENT_FIELDS))
     def test_break_placement_field_in_schedule_rejected(self, field: str):
         """Schedule block with break placement field is rejected."""
@@ -344,6 +355,7 @@ class TestPlacementFromBreaks:
         with pytest.raises(ValueError):
             validate_traffic_dsl(dsl)
 
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("field", sorted(BREAK_PLACEMENT_FIELDS))
     def test_break_placement_field_in_program_rejected(self, field: str):
         """Program definition with break placement field is rejected."""
@@ -376,6 +388,7 @@ class TestInventoryPlanningOnly:
     a planning-time operation. The resolved candidate list must be a
     materialized set passed to the traffic manager, not a runtime query."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_resolve_inventory_returns_materialized_list(self):
         """resolve_inventory_types returns a plain list, not a query/generator."""
         dsl = _channel_dsl(
@@ -390,6 +403,7 @@ class TestInventoryPlanningOnly:
         # Must be a concrete collection, not a lazy query
         assert isinstance(result, (list, set, frozenset, tuple))
 
+    # Tier: 2 | Scheduling logic invariant
     def test_resolve_inventory_contains_declared_types(self):
         """Resolved inventory types reflect declared asset_type values."""
         dsl = _channel_dsl(
@@ -415,6 +429,7 @@ class TestAllowedTypesDefault:
     """When allowed_types is omitted from a profile, it resolves to the union
     of all asset_type values declared across the channel's inventories."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_omitted_allowed_types_uses_inventory_union(self):
         """Profile without allowed_types gets union of inventory types."""
         dsl = _channel_dsl(
@@ -437,6 +452,7 @@ class TestAllowedTypesDefault:
         # The resolved profile's allowed_types must be the union
         assert set(profile["allowed_types"]) == {"promo", "bumper", "station_id"}
 
+    # Tier: 2 | Scheduling logic invariant
     def test_explicit_allowed_types_not_overridden(self):
         """Profile with explicit allowed_types keeps its declaration."""
         dsl = _channel_dsl(
@@ -489,6 +505,7 @@ class TestBreakConfigResolve:
     """INV-TRAFFIC-DSL-BREAK-CONFIG-001: traffic.break_config resolves to
     BreakConfig or None."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_config_present_resolves_to_break_config(self):
         """break_config in YAML produces BreakConfig with matching fields."""
         dsl = _channel_dsl_with_break_config({
@@ -502,6 +519,7 @@ class TestBreakConfigResolve:
         assert result.from_break_bumper_ms == 3000
         assert result.station_id_ms == 5000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_config_absent_returns_none(self):
         """No break_config in YAML produces None."""
         dsl = _channel_dsl(
@@ -512,6 +530,7 @@ class TestBreakConfigResolve:
         result = resolve_break_config(dsl)
         assert result is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_config_empty_returns_zero_defaults(self):
         """Empty break_config produces BreakConfig(0, 0, 0)."""
         dsl = _channel_dsl_with_break_config({})
@@ -521,6 +540,7 @@ class TestBreakConfigResolve:
         assert result.from_break_bumper_ms == 0
         assert result.station_id_ms == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_config_partial_fields_default_to_zero(self):
         """Partial break_config defaults missing fields to 0."""
         dsl = _channel_dsl_with_break_config({
@@ -532,6 +552,7 @@ class TestBreakConfigResolve:
         assert result.from_break_bumper_ms == 0
         assert result.station_id_ms == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_traffic_section_returns_none(self):
         """Channel with no traffic section at all returns None."""
         dsl = {
@@ -583,6 +604,7 @@ class TestBreakConfigWiring:
     """INV-TRAFFIC-DSL-BREAK-CONFIG-001: break_config from YAML flows through
     resolve_break_config into fill_ad_blocks, producing structured fill."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_config_from_yaml_produces_structured_fill(self):
         """break_config present → structured fill with bumper segments."""
         dsl = _channel_dsl_with_break_config({
@@ -622,6 +644,7 @@ class TestBreakConfigWiring:
         total = sum(s.segment_duration_ms for s in result.segments)
         assert total == 60_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_break_config_produces_legacy_flat_fill(self):
         """No break_config → legacy fill with no bumper segments."""
         dsl = _channel_dsl(

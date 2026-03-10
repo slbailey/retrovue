@@ -42,6 +42,7 @@ SLOT_MS = 1_800_000           # 30 minutes
 class TestInvPlaylistEventSingleParent004:
     """INV-PLAYLIST-EVENT-SINGLE-PARENT-004 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_playlist_event_has_schedule_item(self) -> None:
         """Every PlaylistEvent must have a non-null schedule_item_id."""
         pe = PlaylistEventStub(
@@ -63,6 +64,7 @@ class TestInvPlaylistEventSingleParent004:
             f"block_id={pe.block_id} has empty schedule_item_id"
         )
 
+    # Tier: 1 | Structural invariant
     def test_null_schedule_item_detected(self) -> None:
         """A PlaylistEvent with null schedule_item_id violates the invariant."""
         pe = PlaylistEventStub(
@@ -79,6 +81,7 @@ class TestInvPlaylistEventSingleParent004:
             "Expected null schedule_item_id to be detectable"
         )
 
+    # Tier: 1 | Structural invariant
     def test_empty_schedule_item_detected(self) -> None:
         """A PlaylistEvent with empty-string schedule_item_id violates the invariant."""
         pe = PlaylistEventStub(
@@ -95,6 +98,7 @@ class TestInvPlaylistEventSingleParent004:
             "Expected empty schedule_item_id to be detectable"
         )
 
+    # Tier: 1 | Structural invariant
     def test_valid_reference_is_non_null_string(self) -> None:
         """A valid schedule_item_id is a non-empty string."""
         pe = PlaylistEventStub(

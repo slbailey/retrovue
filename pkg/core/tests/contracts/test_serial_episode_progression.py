@@ -176,6 +176,7 @@ class TestDailyStripProgression:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_001_anchor_date_selects_anchor_episode(
         self, daily_run: SerialRun,
     ) -> None:
@@ -186,6 +187,7 @@ class TestDailyStripProgression:
             f"anchor_episode_index (0), got {idx}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_001_sequential_daily_progression(
         self, daily_run: SerialRun,
     ) -> None:
@@ -206,6 +208,7 @@ class TestDailyStripProgression:
                 f"episode {want}, got {got}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_001_second_week_continues(
         self, daily_run: SerialRun,
     ) -> None:
@@ -237,6 +240,7 @@ class TestWeeklyShowProgression:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_001_weekly_progression(
         self, weekly_monday_run: SerialRun,
     ) -> None:
@@ -254,6 +258,7 @@ class TestWeeklyShowProgression:
                 f"episode {want}, got {got}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_006_non_matching_days_ignored(
         self, weekly_monday_run: SerialRun,
     ) -> None:
@@ -296,6 +301,7 @@ class TestSchedulerDowntime:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_002_daily_downtime_skips_correctly(
         self, weekday_run: SerialRun,
     ) -> None:
@@ -318,6 +324,7 @@ class TestSchedulerDowntime:
             f"episode 4 (Mon=0,Tue=1,Wed=2,Thu=3,Fri=4), got {fri}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_002_full_week_downtime(
         self, weekday_run: SerialRun,
     ) -> None:
@@ -350,6 +357,7 @@ class TestOutOfOrderResolution:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_006_resolve_friday_before_tuesday(
         self, daily_run: SerialRun,
     ) -> None:
@@ -366,6 +374,7 @@ class TestOutOfOrderResolution:
         assert fri == 4, f"INV-SERIAL-006 VIOLATION: Friday expected 4, got {fri}"
         assert tue == 1, f"INV-SERIAL-006 VIOLATION: Tuesday expected 1, got {tue}"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_001_repeated_resolution_identical(
         self, daily_run: SerialRun,
     ) -> None:
@@ -398,6 +407,7 @@ class TestSeasonBoundaryRollover:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_008_crosses_season_boundary(
         self, daily_run: SerialRun,
     ) -> None:
@@ -416,6 +426,7 @@ class TestSeasonBoundaryRollover:
             f"index 22 (S02E01), got {idx}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_008_last_episode_of_season(
         self, daily_run: SerialRun,
     ) -> None:
@@ -448,6 +459,7 @@ class TestWrapPolicy:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_004_wrap_cycles_back(
         self, five_episode_run: SerialRun,
     ) -> None:
@@ -463,6 +475,7 @@ class TestWrapPolicy:
         idx = resolve_serial_episode(run, date(2026, 3, 8), episode_count=5)
         assert idx == 1, f"WP-001 VIOLATION: expected wrap to 1, got {idx}"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_004_hold_last_repeats_final(self) -> None:
         """WP-002: hold_last repeats the last episode indefinitely."""
         run = SerialRun(
@@ -482,6 +495,7 @@ class TestWrapPolicy:
         idx_far = resolve_serial_episode(run, date(2026, 4, 1), episode_count=5)
         assert idx_far == 4, f"WP-002 VIOLATION: expected hold at 4, got {idx_far}"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_004_stop_returns_filler(self) -> None:
         """WP-003: stop returns FILLER after last episode."""
         run = SerialRun(
@@ -509,6 +523,7 @@ class TestWrapPolicy:
             f"WP-003 VIOLATION: expected FILLER long after exhaustion, got {idx_far}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_004_last_valid_episode_before_exhaustion(self) -> None:
         """All three policies agree on the last valid episode."""
         anchor = date(2026, 3, 2)
@@ -539,12 +554,14 @@ class TestWrapPolicy:
 class TestAnchorValidation:
     """Anchor date must match the placement day pattern."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_007_anchor_on_matching_day(self) -> None:
         """INV-SERIAL-007: Anchor on Monday for a weekday strip is valid."""
         anchor = date(2026, 3, 2)  # Monday
         assert anchor.weekday() == 0  # Monday
         assert (1 << anchor.weekday()) & WEEKDAY != 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_007_anchor_on_non_matching_day_is_invalid(self) -> None:
         """INV-SERIAL-007: Anchor on Saturday for a weekday strip is invalid."""
         anchor = date(2026, 3, 7)  # Saturday
@@ -553,6 +570,7 @@ class TestAnchorValidation:
             "INV-SERIAL-007 VIOLATION: Saturday bit must not be set in weekday mask"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_007_anchor_on_sunday_for_weekend_strip(self) -> None:
         """INV-SERIAL-007: Anchor on Sunday for a weekend strip is valid."""
         anchor = date(2026, 3, 8)  # Sunday
@@ -568,6 +586,7 @@ class TestAnchorValidation:
 class TestPlacementIdentityStability:
     """Two runs with different placement identities are independent."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_005_same_show_different_times_independent(self) -> None:
         """PI-002: Bonanza at 10:00 and Bonanza at 23:00 are separate strips."""
         morning = SerialRun(
@@ -598,6 +617,7 @@ class TestPlacementIdentityStability:
         assert night_idx == 53, f"Night strip expected 53, got {night_idx}"
         assert morning_idx != night_idx
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_005_same_time_different_days_independent(self) -> None:
         """PI-002: Bonanza weekday and Movies weekend at 10:00 are separate."""
         weekday_strip = SerialRun(
@@ -635,41 +655,50 @@ class TestPlacementIdentityStability:
 class TestOccurrenceCounter:
     """Direct tests of count_occurrences()."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_002_anchor_equals_target_returns_zero(self) -> None:
         """OC-002: [anchor, anchor) is empty, returns 0."""
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 2), DAILY) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_003_single_day_interval(self) -> None:
         """OC-003: [Mon, Tue) contains one day (Monday)."""
         # Monday, DAILY mask
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 3), DAILY) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_003_single_day_non_matching(self) -> None:
         """OC-003: [Mon, Tue) with WEEKEND mask contains zero matching days."""
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 3), WEEKEND) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_full_week_daily(self) -> None:
         """OC-001: 7 days with daily mask = 7 occurrences."""
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 9), DAILY) == 7
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_full_week_weekday(self) -> None:
         """OC-001: 7 days with weekday mask = 5 occurrences (Mon-Fri)."""
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 9), WEEKDAY) == 5
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_full_week_weekend(self) -> None:
         """OC-001: 7 days starting Monday with weekend mask = 2 (Sat+Sun)."""
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 9), WEEKEND) == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_two_weeks_mwf(self) -> None:
         """OC-001: 14 days with Mon/Wed/Fri mask = 6 occurrences."""
         assert count_occurrences(date(2026, 3, 2), date(2026, 3, 16), MWF) == 6
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_004_deterministic_same_call_twice(self) -> None:
         """OC-004: Same inputs always produce same output."""
         a = count_occurrences(date(2026, 3, 2), date(2026, 6, 15), WEEKDAY)
         b = count_occurrences(date(2026, 3, 2), date(2026, 6, 15), WEEKDAY)
         assert a == b
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_005_large_range_is_efficient(self) -> None:
         """OC-005: 10 years of daily occurrences computed without iteration."""
         anchor = date(2026, 1, 1)
@@ -678,15 +707,18 @@ class TestOccurrenceCounter:
         expected = (target - anchor).days  # Every day matches
         assert result == expected
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_target_before_anchor_returns_zero(self) -> None:
         """OC-003: target <= anchor returns 0."""
         assert count_occurrences(date(2026, 3, 9), date(2026, 3, 2), DAILY) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_partial_week_from_wednesday(self) -> None:
         """OC-001: [Wed, Mon) = Wed,Thu,Fri,Sat,Sun = 5 days."""
         # With weekday mask: Wed, Thu, Fri = 3
         assert count_occurrences(date(2026, 3, 4), date(2026, 3, 9), WEEKDAY) == 3
 
+    # Tier: 2 | Scheduling logic invariant
     def test_OC_001_monday_only_across_multiple_weeks(self) -> None:
         """OC-001: Monday-only mask across 3 weeks = 3 Mondays."""
         # [Mar 2, Mar 23) = 21 days = 3 full weeks, 3 Mondays
@@ -713,6 +745,7 @@ class TestMWFStripProgression:
             wrap_policy=WRAP,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_001_mwf_progression(self, mwf_run: SerialRun) -> None:
         """INV-SERIAL-001: Mon→E00, Wed→E01, Fri→E02, next Mon→E03."""
         cases = {
@@ -730,6 +763,7 @@ class TestMWFStripProgression:
                 f"expected {want}, got {got}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_002_mwf_downtime(self, mwf_run: SerialRun) -> None:
         """INV-SERIAL-002: Offline for 2 weeks, third Monday correct."""
         # [Mar 2, Mar 16) = 14 days = 2 weeks.  MWF per week = 3.  2*3 = 6.
@@ -747,6 +781,7 @@ class TestMWFStripProgression:
 class TestAnchorEpisodeOffset:
     """Anchor can start at a non-zero episode index."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_003_non_zero_anchor_index(self) -> None:
         """INV-SERIAL-003: If anchor_episode_index=10, anchor date → E10."""
         run = SerialRun(
@@ -767,6 +802,7 @@ class TestAnchorEpisodeOffset:
         # Day 7 (Sun) → occ=5, raw=15
         assert resolve_serial_episode(run, date(2026, 3, 7), episode_count=200) == 15
 
+    # Tier: 2 | Scheduling logic invariant
     def test_INV_SERIAL_003_anchor_index_with_wrap(self) -> None:
         """INV-SERIAL-003 + WP-001: Non-zero anchor wraps correctly."""
         run = SerialRun(
@@ -794,6 +830,7 @@ class TestAnchorEpisodeOffset:
 class TestMultipleStripsOnChannel:
     """Multiple concurrent strips on the same channel, fully independent."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_PI_002_three_strips_no_interference(self) -> None:
         """PI-002: Three strips on KVUE progress independently."""
         bonanza_morning = SerialRun(

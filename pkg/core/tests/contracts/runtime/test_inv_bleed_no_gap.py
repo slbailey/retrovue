@@ -187,6 +187,7 @@ def _compile(dsl: dict, resolver: StubAssetResolver) -> list[dict]:
 class TestInvBleedNoGap001:
     """INV-BLEED-NO-GAP-001 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_consecutive_marathons_with_bleed_are_contiguous(self):
         """After compile_schedule(), every consecutive block pair satisfies
         block[i].end_at == block[i+1].start_at. No gaps, no overlaps."""
@@ -206,6 +207,7 @@ class TestInvBleedNoGap001:
                 f"and block {i+1} (starts {start_next.isoformat()})"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bleed_pushes_subsequent_blocks_forward(self):
         """Block 2's first block start_at equals block 1's last block
         end_at, not block 2's DSL-declared start time."""
@@ -230,6 +232,7 @@ class TestInvBleedNoGap001:
                 f"but previous block ends at {prev_end.isoformat()}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_all_blocks_are_grid_aligned(self):
         """Every block's start_at minute is divisible by grid_minutes.
         Every slot_duration_sec is a multiple of grid_minutes * 60."""
@@ -249,6 +252,7 @@ class TestInvBleedNoGap001:
                 f"not a multiple of {SLOT_SEC}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fully_enclosed_overlap_pushes_forward(self):
         """Construct input where one block is fully enclosed within another.
         Compaction MUST push the enclosed block forward (not raise)."""
@@ -282,6 +286,7 @@ class TestInvBleedNoGap001:
         # No overlap
         assert compacted[0].end_at() <= compacted[1].start_at
 
+    # Tier: 2 | Scheduling logic invariant
     def test_grid_misalignment_raises(self):
         """Construct a ProgramBlockOutput with non-grid-aligned start_at.
         Validation MUST raise CompileError."""
@@ -294,6 +299,7 @@ class TestInvBleedNoGap001:
         with pytest.raises(CompileError, match="[Gg]rid violation"):
             _validate_grid_alignment([block], GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_post_compaction_revalidation(self):
         """After compaction produces output, _validate_grid_alignment runs
         again and passes. Verifies no silent misalignment from shifting."""
@@ -310,6 +316,7 @@ class TestInvBleedNoGap001:
         # Both grid-aligned, no overlap — validation should pass
         _validate_grid_alignment([b1, b2], GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_compaction_eliminates_overlap_gaps(self):
         """When bleed creates an overlap, compaction pushes the next block
         forward — the resulting pair has no gap between them."""
@@ -338,6 +345,7 @@ class TestInvBleedNoGap001:
             f"next starts {m2_start.isoformat()}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_naive_datetime_raises(self):
         """Construct a ProgramBlockOutput with timezone-naive start_at.
         Validation MUST raise CompileError."""
@@ -349,6 +357,7 @@ class TestInvBleedNoGap001:
         with pytest.raises(CompileError, match="not UTC"):
             _validate_grid_alignment([block], GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_non_utc_timezone_raises(self):
         """Construct a ProgramBlockOutput with start_at in US/Eastern.
         Validation MUST raise CompileError."""
@@ -361,6 +370,7 @@ class TestInvBleedNoGap001:
         with pytest.raises(CompileError, match="not UTC"):
             _validate_grid_alignment([block], GRID_MINUTES)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_three_block_cascading_bleed(self):
         """Three overlapping program blocks with bleed: true.
         Cascading bleed across all three boundaries MUST compile successfully
@@ -399,6 +409,7 @@ class TestInvBleedNoGap001:
             f"First block starts at {first_start.isoformat()}, expected {day_start.isoformat()}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_spanning_broadcast_day_not_split(self):
         """One block 05:00-07:00 UTC, broadcast day boundary at 06:00.
         Assert exactly one ProgramBlockOutput — day boundaries do not split blocks."""

@@ -34,18 +34,22 @@ from retrovue.adapters.importers.base import DiscoveredItem
 class TestGainDbIsTargetMinusMeasured:
     """Rule 7: gain_db MUST be computed as target_lufs - integrated_lufs."""
 
+    # Tier: 1 | Structural invariant
     def test_loud_asset(self) -> None:
         """Loud asset (-20.3 LUFS) → negative gain (-3.7 dB)."""
         assert compute_gain_db(-20.3) == pytest.approx(-3.7)
 
+    # Tier: 1 | Structural invariant
     def test_quiet_asset(self) -> None:
         """Quiet asset (-28.1 LUFS) → positive gain (+4.1 dB)."""
         assert compute_gain_db(-28.1) == pytest.approx(4.1)
 
+    # Tier: 1 | Structural invariant
     def test_already_normalized(self) -> None:
         """Asset already at -24.0 LUFS → zero gain."""
         assert compute_gain_db(-24.0) == pytest.approx(0.0)
 
+    # Tier: 1 | Structural invariant
     def test_target_is_minus_24(self) -> None:
         """Target MUST be -24.0 LUFS (ATSC A/85)."""
         assert TARGET_LUFS == -24.0
@@ -59,17 +63,20 @@ class TestGainDbIsTargetMinusMeasured:
 class TestUnmeasuredAssetGetsZeroGain:
     """Rule 5: Asset without loudness in probed → segment gain_db = 0.0."""
 
+    # Tier: 1 | Structural invariant
     def test_no_probed(self) -> None:
         """Asset with no probed data → gain_db = 0.0."""
         from retrovue.adapters.enrichers.loudness_enricher import get_gain_db_from_probed
         assert get_gain_db_from_probed(None) == 0.0
 
+    # Tier: 1 | Structural invariant
     def test_probed_without_loudness(self) -> None:
         """Asset with probed data but no loudness key → gain_db = 0.0."""
         from retrovue.adapters.enrichers.loudness_enricher import get_gain_db_from_probed
         probed = {"duration_ms": 120000, "video": {"codec": "h264"}}
         assert get_gain_db_from_probed(probed) == 0.0
 
+    # Tier: 1 | Structural invariant
     def test_probed_with_empty_loudness(self) -> None:
         """Asset with empty loudness dict → gain_db = 0.0."""
         from retrovue.adapters.enrichers.loudness_enricher import get_gain_db_from_probed
@@ -85,6 +92,7 @@ class TestUnmeasuredAssetGetsZeroGain:
 class TestUnmeasuredAssetEnqueuesMeasurement:
     """Rule 5: Asset without loudness → background measurement job enqueued."""
 
+    # Tier: 1 | Structural invariant
     def test_enqueue_called_for_unmeasured(self) -> None:
         """When probed has no loudness, enqueue_measurement MUST be called."""
         from retrovue.adapters.enrichers.loudness_enricher import (
@@ -94,6 +102,7 @@ class TestUnmeasuredAssetEnqueuesMeasurement:
         probed = {"duration_ms": 120000}
         assert needs_loudness_measurement(probed) is True
 
+    # Tier: 1 | Structural invariant
     def test_no_enqueue_for_measured(self) -> None:
         """When probed has loudness.gain_db, no measurement needed."""
         from retrovue.adapters.enrichers.loudness_enricher import needs_loudness_measurement
@@ -109,11 +118,13 @@ class TestUnmeasuredAssetEnqueuesMeasurement:
 class TestMeasuredAssetCarriesGain:
     """Rule 6: Asset with stored loudness.gain_db → segment carries that value."""
 
+    # Tier: 1 | Structural invariant
     def test_gain_from_probed(self) -> None:
         from retrovue.adapters.enrichers.loudness_enricher import get_gain_db_from_probed
         probed = {"loudness": {"integrated_lufs": -20.3, "gain_db": -3.7, "target_lufs": -24.0}}
         assert get_gain_db_from_probed(probed) == pytest.approx(-3.7)
 
+    # Tier: 1 | Structural invariant
     def test_positive_gain_from_probed(self) -> None:
         from retrovue.adapters.enrichers.loudness_enricher import get_gain_db_from_probed
         probed = {"loudness": {"integrated_lufs": -28.1, "gain_db": 4.1, "target_lufs": -24.0}}
@@ -137,6 +148,7 @@ class TestAllContentTypesSameTarget:
             ("filler", -30.0, 6.0),
         ],
     )
+    # Tier: 1 | Structural invariant
     def test_same_target_for_all_types(
         self, content_type: str, integrated_lufs: float, expected_gain: float
     ) -> None:
@@ -153,6 +165,7 @@ class TestEnricherPersistsLoudnessToProbed:
     """Rule 6: LoudnessEnricher writes integrated_lufs and gain_db to probed payload."""
 
     @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
+    # Tier: 1 | Structural invariant
     def test_enricher_writes_loudness(self, mock_run: MagicMock) -> None:
         """After measurement, probed MUST contain loudness.integrated_lufs and loudness.gain_db."""
         # Simulate ffmpeg ebur128 output
@@ -194,6 +207,7 @@ class TestBackgroundMeasurementPersistsResult:
     """Rule 6: Background job completion → probed payload updated with loudness data."""
 
     @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
+    # Tier: 1 | Structural invariant
     def test_measurement_produces_valid_payload(self, mock_run: MagicMock) -> None:
         """Background measurement produces a dict suitable for merging into probed."""
         mock_run.return_value = MagicMock(

@@ -84,6 +84,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 1: AST structural --
 
+    # Tier: 3 | Integration simulation
     def test_channel_manager_has_recovery_handler(self):
         """ChannelManager source MUST contain a method that checks viewer_count
         in response to producer session end."""
@@ -121,6 +122,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 2: stopped with viewers schedules restart --
 
+    # Tier: 3 | Integration simulation
     def test_stopped_with_viewers_schedules_restart(self):
         """reason='stopped', viewer_count=1 → Timer created targeting recovery."""
         manager = _make_channel_manager(viewer_count=1)
@@ -139,6 +141,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 3: last_viewer_left → no restart --
 
+    # Tier: 3 | Integration simulation
     def test_last_viewer_left_no_restart(self):
         """reason='last_viewer_left', viewer_count=0 → no Timer."""
         manager = _make_channel_manager(viewer_count=0)
@@ -149,6 +152,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 4: lookahead_exhausted → no restart --
 
+    # Tier: 3 | Integration simulation
     def test_lookahead_exhausted_no_restart(self):
         """reason='lookahead_exhausted', viewer_count=1 → no Timer.
         Schedule exhaustion is not a transient failure."""
@@ -160,6 +164,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 5: stopped with zero viewers → no restart --
 
+    # Tier: 3 | Integration simulation
     def test_stopped_zero_viewers_no_restart(self):
         """reason='stopped', viewer_count=0 → no Timer."""
         manager = _make_channel_manager(viewer_count=0)
@@ -170,6 +175,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 6: error with viewers → schedules restart --
 
+    # Tier: 3 | Integration simulation
     def test_error_with_viewers_schedules_restart(self):
         """reason='error', viewer_count=1 → Timer created."""
         manager = _make_channel_manager(viewer_count=1)
@@ -185,6 +191,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 7: backoff increases --
 
+    # Tier: 3 | Integration simulation
     def test_backoff_increases(self):
         """Consecutive failures → Timer delays are bounded and increasing."""
         manager = _make_channel_manager(viewer_count=1)
@@ -218,6 +225,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 8: max attempts gives up --
 
+    # Tier: 3 | Integration simulation
     def test_max_attempts_gives_up(self):
         """After max consecutive failures → no more Timers created."""
         manager = _make_channel_manager(viewer_count=1)
@@ -244,6 +252,7 @@ class TestInvChannelLivenessRecovery001:
 
     # -- Test 9: recovery counter resets on successful start --
 
+    # Tier: 3 | Integration simulation
     def test_recovery_counter_resets_on_successful_start(self):
         """After _ensure_producer_running succeeds → counter resets to 0,
         next failure uses base delay."""

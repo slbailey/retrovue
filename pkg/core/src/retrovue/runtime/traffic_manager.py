@@ -19,15 +19,19 @@ between spots (INV-BREAK-PAD-DISTRIBUTED-001).
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from retrovue.runtime.break_structure import BreakConfig, build_break_structure
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+from retrovue.runtime.traffic_inventory import apply_category_ordering
 from retrovue.runtime.traffic_policy import (
     PlayRecord,
     TrafficCandidate,
     TrafficPolicy,
-    select_next,
+    evaluate_candidates,
 )
 
 if TYPE_CHECKING:
@@ -133,13 +137,50 @@ def fill_ad_blocks(
         else:
             new_segments.append(seg)
 
-    return ScheduledBlock(
+    filled = ScheduledBlock(
         block_id=block.block_id,
         start_utc_ms=block.start_utc_ms,
         end_utc_ms=block.end_utc_ms,
         segments=tuple(new_segments),
         traffic_profile=block.traffic_profile,
     )
+
+    # INV-BLOCK-SEGMENT-CONSERVATION-001: Verify segment sum == block duration
+    # after Tier-2 fill.  If overflow, trim final non-content segment to fit.
+    block_duration_ms = filled.end_utc_ms - filled.start_utc_ms
+    sum_segment_ms = sum(s.segment_duration_ms for s in filled.segments)
+    delta_ms = sum_segment_ms - block_duration_ms
+    if delta_ms > 0:
+        import logging
+        _log = logging.getLogger(__name__)
+        _log.warning(
+            "INV-BLOCK-SEGMENT-CONSERVATION-001: trimming overflow "
+            "block_id=%s sum_segment_ms=%d block_duration_ms=%d "
+            "delta_ms=%d",
+            filled.block_id, sum_segment_ms, block_duration_ms, delta_ms,
+        )
+        # Trim the last non-content segment (filler/pad) to absorb overflow.
+        trimmed = list(filled.segments)
+        for i in range(len(trimmed) - 1, -1, -1):
+            seg = trimmed[i]
+            if seg.segment_type in ("filler", "padding") and seg.segment_duration_ms > delta_ms:
+                trimmed[i] = ScheduledSegment(
+                    segment_type=seg.segment_type,
+                    asset_uri=seg.asset_uri,
+                    asset_start_offset_ms=seg.asset_start_offset_ms,
+                    segment_duration_ms=seg.segment_duration_ms - delta_ms,
+                    gain_db=seg.gain_db,
+                )
+                filled = ScheduledBlock(
+                    block_id=filled.block_id,
+                    start_utc_ms=filled.start_utc_ms,
+                    end_utc_ms=filled.end_utc_ms,
+                    segments=tuple(trimmed),
+                    traffic_profile=filled.traffic_profile,
+                )
+                break
+
+    return filled
 
 
 def _assert_no_filler_before_primary(
@@ -415,8 +456,9 @@ def _fill_break_with_interstitials(
     Fill a single ad break with interstitials from the asset library.
 
     When a TrafficPolicy is provided, candidates are evaluated through
-    the traffic policy engine (select_next) which enforces allowed types,
-    cooldowns, daily caps, and deterministic rotation.
+    the traffic policy engine (evaluate_candidates) which enforces allowed
+    types, cooldowns, daily caps, and deterministic rotation, then reordered
+    by apply_category_ordering for break-level category diversity.
 
     When no policy is provided, falls back to candidates[0] (legacy).
 
@@ -436,6 +478,7 @@ def _fill_break_with_interstitials(
         )
     remaining_ms = break_duration_ms
     picks: list[tuple[str, int, str]] = []  # (uri, duration_ms, asset_type)
+    break_categories: list[str | None] = []  # category of each pick in this break
     history = play_history if play_history is not None else []
 
     while remaining_ms > 0:
@@ -452,14 +495,27 @@ def _fill_break_with_interstitials(
                     asset_id=c.asset_uri,
                     asset_type=c.asset_type,
                     duration_ms=c.duration_ms,
+                    asset_category=getattr(c, "asset_category", None),
                 )
                 for c in candidates
             ]
-            picked = select_next(
+            # Stage 2: filter + rotation sort
+            ordered = evaluate_candidates(
                 traffic_candidates, policy, history, now_ms, day_start_ms,
             )
-            if picked is None:
+            logger.debug(
+                "break fill: remaining_ms=%d eligible_candidates=%d",
+                remaining_ms, len(ordered),
+            )
+            # Stage 3: category diversity + separation ordering
+            ordered = apply_category_ordering(ordered, break_categories)
+            if not ordered:
                 break
+            picked = ordered[0]
+            logger.debug(
+                "selected_candidate: id=%s category=%r",
+                picked.asset_id, picked.asset_category,
+            )
             # Record the play so rotation advances within this block
             history.append(PlayRecord(
                 asset_id=picked.asset_id,
@@ -467,10 +523,12 @@ def _fill_break_with_interstitials(
                 played_at_ms=now_ms,
             ))
             picks.append((picked.asset_id, picked.duration_ms, picked.asset_type))
+            break_categories.append(picked.asset_category)
             remaining_ms -= picked.duration_ms
         else:
             pick = candidates[0]
             picks.append((pick.asset_uri, pick.duration_ms, pick.asset_type))
+            break_categories.append(getattr(pick, "asset_category", None))
             remaining_ms -= pick.duration_ms
 
     if not picks:

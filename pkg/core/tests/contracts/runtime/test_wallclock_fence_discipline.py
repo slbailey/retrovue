@@ -221,6 +221,7 @@ class TestBlockTimestampsAreUTC:
     """INV-WALLCLOCK-FENCE-001/005: Blocks must have start_utc_ms and
     end_utc_ms as real UTC epoch milliseconds."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_timestamps_are_utc_epoch(self):
         """After anchoring to a UTC epoch, blocks have UTC-range timestamps."""
         clock = FakeMasterClock(initial_utc_ms=1_738_987_500_000)  # ~Feb 2026
@@ -246,6 +247,7 @@ class TestBlockTimestampsAreUTC:
         )
         assert block_b.end_utc_ms == block_b.start_utc_ms + 30_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_blocks_chain_correctly_from_anchor(self):
         """Sequential blocks have contiguous UTC timestamps."""
         clock = FakeMasterClock(initial_utc_ms=1_000_000_000_000)
@@ -268,6 +270,7 @@ class TestBlockTimestampsAreUTC:
                 "a real UTC epoch value."
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_timestamps_not_relative(self):
         """Blocks must NOT have near-zero timestamps (the pre-fix bug)."""
         clock = FakeMasterClock(initial_utc_ms=1_738_987_500_000)
@@ -291,6 +294,7 @@ class TestNoCompletionBeforeStart:
     """INV-WALLCLOCK-FENCE-003: BlockCompleted must not be processed for
     a block whose scheduled_start_ts is in the future."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_completion_before_start(self):
         """Seed at t=100s with 30s blocks. Grid-aligned start at 90s."""
         epoch = 100_000  # 100 seconds in ms
@@ -318,6 +322,7 @@ class TestNoCompletionBeforeStart:
         assert len(model._rejection_log) == 1
         assert model._rejection_log[0][1] == "before_start"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_completion_accepted_after_start(self):
         """Block A completion is accepted when now >= start_utc_ms."""
         epoch = 100_000
@@ -345,6 +350,7 @@ class TestNoPastDueCascade:
     """INV-WALLCLOCK-FENCE-005/006: No cascade of completions when
     session starts with stale or past-due timestamps."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_past_due_cascade_on_session_start(self):
         """Simulate stale anchor: _next_block_start_ms far in the past.
         Start a session at t=1000s. Assert no immediate completions."""
@@ -370,6 +376,7 @@ class TestNoPastDueCascade:
         # (block A hasn't played yet, AIR fence hasn't fired)
         assert len(model._completion_log) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_stale_anchor_recovery(self):
         """If _next_block_start_ms is stale, recompute from clock."""
         clock = FakeMasterClock(initial_utc_ms=1_000_000)
@@ -388,6 +395,7 @@ class TestNoPastDueCascade:
             "grid-aligned now (990000)."
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fresh_anchor_not_recomputed(self):
         """A fresh anchor (block end in the future) should not be recomputed."""
         clock = FakeMasterClock(initial_utc_ms=1_000_000)
@@ -399,6 +407,7 @@ class TestNoPastDueCascade:
             "Fresh anchor should not be recomputed."
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_start_always_uses_fresh_anchor(self):
         """Even if old state has stale anchor, start() overwrites it."""
         clock = FakeMasterClock(initial_utc_ms=2_000_000)
@@ -423,6 +432,7 @@ class TestOnlyActiveBlocksCanComplete:
     """INV-WALLCLOCK-FENCE-002: Completion events for unknown or
     already-completed blocks must be rejected."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_unknown_block_rejected(self):
         """Calling on_block_complete with an unknown block_id is rejected."""
         clock = FakeMasterClock(initial_utc_ms=1_000_000)
@@ -436,6 +446,7 @@ class TestOnlyActiveBlocksCanComplete:
         )
         assert model._rejection_log[-1][1] == "not_active"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_prior_session_blocks_rejected(self):
         """Blocks from a prior session (block IDs 16/17) cannot complete
         in a new session."""
@@ -461,6 +472,7 @@ class TestOnlyActiveBlocksCanComplete:
             "block from prior session."
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_duplicate_completion_rejected(self):
         """Completing the same block twice is rejected."""
         clock = FakeMasterClock(initial_utc_ms=1_000_000)
@@ -478,6 +490,7 @@ class TestOnlyActiveBlocksCanComplete:
         assert model.on_block_complete(block_a.block_id) is False
         assert model._rejection_log[-1][1] == "duplicate"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_active_block_completes_successfully(self):
         """A block that was seeded/fed and is active can complete."""
         clock = FakeMasterClock(initial_utc_ms=1_000_000)
@@ -500,6 +513,7 @@ class TestOneCompletionPerTick:
     """INV-WALLCLOCK-FENCE-004: At most one completion per callback
     invocation, even if time has jumped far ahead."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_one_completion_per_tick(self):
         """Step clock beyond end_ts by 300s. Each on_block_complete call
         processes exactly one block."""
@@ -527,6 +541,7 @@ class TestOneCompletionPerTick:
         assert accepted
         assert len(model._completion_log) == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_while_loop_cascade(self):
         """Verify the model does NOT have a while loop that auto-completes
         multiple past-due blocks."""
@@ -557,6 +572,7 @@ class TestJIPDoesNotShiftTiming:
     asset_start_offset_ms only.  Block duration is always full.
     Block start is grid-aligned."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jip_does_not_shift_schedule_timing(self):
         """Block A with JIP offset has full block duration; only segment is reduced."""
         epoch = 1_738_987_500_000  # ~Feb 2026, grid-aligned to 30s
@@ -595,6 +611,7 @@ class TestJIPDoesNotShiftTiming:
         assert block_b.duration_ms == 30_000
         assert block_b.end_utc_ms == block_a.end_utc_ms + 30_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jip_completion_at_scheduled_end(self):
         """Block A with JIP completes at its full-duration end, not reduced."""
         epoch = 1_738_987_500_000
@@ -613,6 +630,7 @@ class TestJIPDoesNotShiftTiming:
         accepted = model.on_block_complete(block_a.block_id)
         assert accepted
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_jip_full_duration(self):
         """Without JIP, block A has full duration and segment equals block."""
         epoch = 1_738_987_500_000
@@ -627,6 +645,7 @@ class TestJIPDoesNotShiftTiming:
         assert block_a.asset_start_offset_ms == 0
         assert block_a.segment_duration_ms == 30_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_duration_never_reduced_by_jip(self):
         """Block duration MUST always equal block_duration_ms, regardless of JIP offset."""
         epoch = 1_738_987_500_000

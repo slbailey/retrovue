@@ -35,6 +35,7 @@ from retrovue.runtime.traffic_manager import fill_ad_blocks
 class TestScheduledSegmentTimeType:
     """INV-TIME-TYPE-001: ScheduledSegment rejects float ms at construction."""
 
+    # Tier: 1 | Structural invariant
     def test_float_segment_duration_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*segment_duration_ms"):
             ScheduledSegment(
@@ -44,6 +45,7 @@ class TestScheduledSegmentTimeType:
                 segment_duration_ms=5000.0,
             )
 
+    # Tier: 1 | Structural invariant
     def test_float_asset_start_offset_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*asset_start_offset_ms"):
             ScheduledSegment(
@@ -53,6 +55,7 @@ class TestScheduledSegmentTimeType:
                 segment_duration_ms=5000,
             )
 
+    # Tier: 1 | Structural invariant
     def test_float_transition_in_duration_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*transition_in_duration_ms"):
             ScheduledSegment(
@@ -63,6 +66,7 @@ class TestScheduledSegmentTimeType:
                 transition_in_duration_ms=500.0,
             )
 
+    # Tier: 1 | Structural invariant
     def test_float_transition_out_duration_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*transition_out_duration_ms"):
             ScheduledSegment(
@@ -73,6 +77,7 @@ class TestScheduledSegmentTimeType:
                 transition_out_duration_ms=500.0,
             )
 
+    # Tier: 1 | Structural invariant
     def test_int_values_accepted(self):
         """Regression guard: int values still work."""
         seg = ScheduledSegment(
@@ -94,6 +99,7 @@ class TestScheduledSegmentTimeType:
 class TestScheduledBlockTimeType:
     """INV-TIME-TYPE-001: ScheduledBlock rejects float timestamps at construction."""
 
+    # Tier: 1 | Structural invariant
     def test_float_start_utc_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*start_utc_ms"):
             ScheduledBlock(
@@ -103,6 +109,7 @@ class TestScheduledBlockTimeType:
                 segments=(),
             )
 
+    # Tier: 1 | Structural invariant
     def test_float_end_utc_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*end_utc_ms"):
             ScheduledBlock(
@@ -112,6 +119,7 @@ class TestScheduledBlockTimeType:
                 segments=(),
             )
 
+    # Tier: 1 | Structural invariant
     def test_int_values_accepted(self):
         block = ScheduledBlock(
             block_id="blk-test",
@@ -129,6 +137,7 @@ class TestScheduledBlockTimeType:
 class TestBlockPlanTimeType:
     """INV-TIME-TYPE-001: BlockPlan rejects float timestamps at construction."""
 
+    # Tier: 1 | Structural invariant
     def test_float_start_utc_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*start_utc_ms"):
             BlockPlan(
@@ -138,6 +147,7 @@ class TestBlockPlanTimeType:
                 end_utc_ms=1005000,
             )
 
+    # Tier: 1 | Structural invariant
     def test_float_end_utc_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*end_utc_ms"):
             BlockPlan(
@@ -147,6 +157,7 @@ class TestBlockPlanTimeType:
                 end_utc_ms=1005000.0,
             )
 
+    # Tier: 1 | Structural invariant
     def test_from_dict_coerces_to_int(self):
         """from_dict is a deserialization boundary — it int()-casts."""
         bp = BlockPlan.from_dict({
@@ -166,6 +177,7 @@ class TestBlockPlanTimeType:
 class TestExpandProgramBlockTimeType:
     """INV-TIME-TYPE-001: expand_program_block rejects float ms parameters."""
 
+    # Tier: 1 | Structural invariant
     def test_float_slot_duration_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*slot_duration_ms"):
             expand_program_block(
@@ -176,6 +188,7 @@ class TestExpandProgramBlockTimeType:
                 episode_duration_ms=1320000,
             )
 
+    # Tier: 1 | Structural invariant
     def test_float_episode_duration_ms_rejected(self):
         with pytest.raises(TypeError, match="INV-TIME-TYPE-001.*episode_duration_ms"):
             expand_program_block(
@@ -186,6 +199,7 @@ class TestExpandProgramBlockTimeType:
                 episode_duration_ms=1320000.0,
             )
 
+    # Tier: 1 | Structural invariant
     def test_int_values_produce_int_segments(self):
         """When inputs are int, all output segments have int ms fields."""
         block = expand_program_block(
@@ -210,6 +224,7 @@ class TestExpandProgramBlockTimeType:
 class TestFillAdBlocksTimeType:
     """INV-TIME-TYPE-001: fill_ad_blocks rejects float filler_duration_ms."""
 
+    # Tier: 1 | Structural invariant
     def test_float_filler_duration_ms_rejected(self):
         block = ScheduledBlock(
             block_id="blk-test",
@@ -237,6 +252,7 @@ class TestFillAdBlocksTimeType:
                 filler_duration_ms=30000.0,
             )
 
+    # Tier: 1 | Structural invariant
     def test_int_fill_produces_correct_total(self):
         """With all-int inputs, filled segments sum to block duration."""
         block = ScheduledBlock(
@@ -271,6 +287,7 @@ class TestCallbackExceptionSafety:
     """INV-CALLBACK-EXCEPTION-SAFETY-001: on_block_started exceptions must
     not crash the playout session event loop."""
 
+    # Tier: 1 | Structural invariant
     def test_on_block_started_exception_is_caught(self):
         """Verify the try/except pattern exists in playout_session.py."""
         import inspect

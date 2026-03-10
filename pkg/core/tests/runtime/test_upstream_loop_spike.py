@@ -40,6 +40,7 @@ from retrovue.runtime.channel_stream import _classify_upstream_spike
 _THRESHOLD_MS = 150.0
 
 
+# Tier: 1 | Structural invariant
 def test_scheduling_jitter_is_not_a_work_spike():
     """
     INV-HTTP-UPSTREAM-SPIKE-001  [required]
@@ -75,6 +76,7 @@ def test_scheduling_jitter_is_not_a_work_spike():
         )
 
 
+# Tier: 1 | Structural invariant
 def test_slow_recv_is_a_work_spike():
     """recv-dominated spike MUST be classified as 'work_spike'."""
     result = _classify_upstream_spike(
@@ -87,6 +89,7 @@ def test_slow_recv_is_a_work_spike():
     assert result == "work_spike"
 
 
+# Tier: 1 | Structural invariant
 def test_slow_put_is_a_work_spike():
     """put-dominated spike (ring buffer contention) MUST be classified as 'work_spike'."""
     result = _classify_upstream_spike(
@@ -99,6 +102,7 @@ def test_slow_put_is_a_work_spike():
     assert result == "work_spike"
 
 
+# Tier: 1 | Structural invariant
 def test_fast_iteration_is_no_spike():
     """Below-threshold iterations MUST be 'no_spike'."""
     result = _classify_upstream_spike(
@@ -111,6 +115,7 @@ def test_fast_iteration_is_no_spike():
     assert result == "no_spike"
 
 
+# Tier: 1 | Structural invariant
 def test_combined_recv_put_exceeding_threshold_is_work_spike():
     """recv+put combined exceeding threshold MUST be 'work_spike' even if select is also slow."""
     result = _classify_upstream_spike(
@@ -123,6 +128,7 @@ def test_combined_recv_put_exceeding_threshold_is_work_spike():
     assert result == "work_spike"
 
 
+# Tier: 1 | Structural invariant
 def test_work_just_below_threshold_is_scheduling_jitter():
     """recv+put just below threshold but total > threshold → 'scheduling_jitter'."""
     result = _classify_upstream_spike(

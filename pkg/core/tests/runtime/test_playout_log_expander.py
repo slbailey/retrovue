@@ -17,6 +17,7 @@ START_MS = 1_000_000_000_000  # arbitrary UTC ms
 
 
 class TestChapterMarkers:
+    # Tier: 2 | Scheduling logic invariant
     def test_chapter_markers_create_acts(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -30,6 +31,7 @@ class TestChapterMarkers:
         assert len(acts) == 4
         assert len(fillers) == 3
 
+    # Tier: 2 | Scheduling logic invariant
     def test_chapter_marker_act_durations(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -41,6 +43,7 @@ class TestChapterMarkers:
         for act in acts:
             assert act.segment_duration_ms == 330_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_chapter_marker_seek_offsets(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -54,6 +57,7 @@ class TestChapterMarkers:
         assert acts[2].asset_start_offset_ms == 660_000
         assert acts[3].asset_start_offset_ms == 990_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_content_segments_reference_asset(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -67,6 +71,7 @@ class TestChapterMarkers:
 
 
 class TestAlgorithmicBreaks:
+    # Tier: 2 | Scheduling logic invariant
     def test_no_markers_produces_algorithmic_breaks(self):
         """detect_breaks produces 2 algorithmic breaks for 22min in 30min slot."""
         block = expand_program_block(
@@ -80,6 +85,7 @@ class TestAlgorithmicBreaks:
         assert len(acts) == 3
         assert len(fillers) == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_algorithmic_acts_non_uniform(self):
         """Algorithmic breaks use non-uniform spacing (first act longest)."""
         block = expand_program_block(
@@ -94,6 +100,7 @@ class TestAlgorithmicBreaks:
 
 
 class TestAdBlockDurations:
+    # Tier: 2 | Scheduling logic invariant
     def test_weighted_ad_block_split(self):
         """INV-BREAK-WEIGHT-001: filler durations proportional to weights."""
         block = expand_program_block(
@@ -106,6 +113,7 @@ class TestAdBlockDurations:
         # 480_000ms budget, weights [1,2,3] → [80_000, 160_000, 240_000]
         assert [f.segment_duration_ms for f in fillers] == [80_000, 160_000, 240_000]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_ad_time_when_episode_fills_slot(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -118,6 +126,7 @@ class TestAdBlockDurations:
 
 
 class TestBlockMetadata:
+    # Tier: 2 | Scheduling logic invariant
     def test_block_times(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -128,6 +137,7 @@ class TestBlockMetadata:
         assert block.end_utc_ms == START_MS + 1_800_000
         assert block.duration_ms == 1_800_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_id_deterministic(self):
         b1 = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -142,6 +152,7 @@ class TestBlockMetadata:
         assert b1.block_id == b2.block_id
         assert b1.block_id.startswith("blk-")
 
+    # Tier: 2 | Scheduling logic invariant
     def test_filler_placeholders_have_empty_uri(self):
         """Unfilled filler segments have empty asset_uri."""
         block = expand_program_block(
@@ -156,6 +167,7 @@ class TestBlockMetadata:
 
 
 class TestEdgeCases:
+    # Tier: 2 | Scheduling logic invariant
     def test_no_breaks_when_episode_fills_slot(self):
         """INV-BREAK-011: zero budget → empty break plan → no filler."""
         block = expand_program_block(
@@ -169,6 +181,7 @@ class TestEdgeCases:
         assert len(fillers) == 0
         assert acts[0].segment_duration_ms == 1_320_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_chapter_markers_falls_back_to_algorithmic(self):
         """Empty chapter markers tuple → algorithmic break detection."""
         block = expand_program_block(
@@ -181,6 +194,7 @@ class TestEdgeCases:
         # detect_breaks: 2 algorithmic breaks → 3 content segments
         assert len(acts) == 3
 
+    # Tier: 2 | Scheduling logic invariant
     def test_segment_order(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -191,6 +205,7 @@ class TestEdgeCases:
         types = [s.segment_type for s in block.segments]
         assert types == ["content", "filler", "content", "filler", "content"]
 
+    # Tier: 1 | Structural invariant
     def test_segments_are_frozen(self):
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
@@ -202,6 +217,7 @@ class TestEdgeCases:
         with pytest.raises(AttributeError):
             block.segments[0].segment_type = "x"  # type: ignore[misc]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_total_segment_duration_equals_slot(self):
         """Sum of all segment durations must equal slot duration."""
         block = expand_program_block(

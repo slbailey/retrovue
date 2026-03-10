@@ -81,7 +81,7 @@ def _make_tier1_block(
     }
 
 
-def _fake_expand(sb_dict, *, filler_uri, filler_duration_ms, asset_library=None):
+def _fake_expand(sb_dict, *, filler_uri, filler_duration_ms, asset_library=None, **kwargs):
     """Stub for expand_editorial_block that returns a MagicMock block."""
     fake = MagicMock()
     fake.block_id = sb_dict["block_id"]
@@ -96,10 +96,12 @@ def _fake_expand(sb_dict, *, filler_uri, filler_duration_ms, asset_library=None)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestBroadcastDate:
+    # Tier: 2 | Scheduling logic invariant
     def test_after_day_start(self):
         dt = datetime(2026, 3, 6, 12, 0, tzinfo=timezone.utc)
         assert _broadcast_date_for(dt) == date(2026, 3, 6)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_before_day_start(self):
         dt = datetime(2026, 3, 6, 3, 0, tzinfo=timezone.utc)
         assert _broadcast_date_for(dt) == date(2026, 3, 5)
@@ -111,6 +113,7 @@ class TestBroadcastDate:
 
 class TestTier2RebuildReplacesBlocks:
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_deletes_and_rebuilds(self, mock_load, mock_expand):
@@ -149,6 +152,7 @@ class TestTier2RebuildReplacesBlocks:
 
 class TestTier1Unchanged:
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_no_tier1_writes(self, mock_load, mock_expand):
@@ -176,6 +180,7 @@ class TestTier1Unchanged:
 
 class TestCompiledSegmentsRebuild:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_compiled_segments_honored_via_hydration(self):
         """When Tier-1 items have compiled_segments, the rebuilt Tier-2 blocks
         must reflect the template segment structure (intro + content)."""
@@ -217,6 +222,7 @@ class TestCompiledSegmentsRebuild:
         # Filler should follow
         assert "filler" in seg_types
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_rebuild_with_compiled_segments_block(self, mock_load, mock_expand):
@@ -283,6 +289,7 @@ class TestCompiledSegmentsRebuild:
 
 class TestDryRun:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_dry_run_counts_without_deleting(self):
         """dry_run=True must count deletable rows but not actually delete."""
         db = MagicMock()
@@ -312,6 +319,7 @@ class TestDryRun:
 
 class TestLiveSafe:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_live_safe_shifts_start_past_playing_block(self):
         """When start falls inside a playing block, live-safe shifts start
         to end of that block."""
@@ -354,6 +362,7 @@ class TestLiveSafe:
         assert result.live_safe_skipped is True
         assert result.start_utc_ms == playing_end
 
+    # Tier: 2 | Scheduling logic invariant
     def test_live_safe_no_shift_when_not_playing(self):
         """When no block is currently playing, live-safe is a no-op."""
         db = MagicMock()
@@ -387,6 +396,7 @@ class TestLiveSafe:
 
 class TestWindowBoundary:
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_non_overlapping_blocks_excluded(self, mock_load, mock_expand):
@@ -422,6 +432,7 @@ class TestWindowBoundary:
         assert result.rebuilt == 1
         assert mock_expand.call_count == 1
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_block_overlapping_window_start_is_rebuilt(self, mock_load, mock_expand):
@@ -474,6 +485,7 @@ FILLER_DURATION_MS = 60_000
 
 class TestFillerArgsPassedToExpandEditorialBlock:
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_filler_args_forwarded(self, mock_load, mock_expand):
@@ -505,8 +517,11 @@ class TestFillerArgsPassedToExpandEditorialBlock:
             filler_uri=FILLER_URI,
             filler_duration_ms=FILLER_DURATION_MS,
             asset_library=ANY,
+            policy=ANY,
+            break_config=ANY,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_default_filler_args(self, mock_load, mock_expand):
@@ -535,6 +550,8 @@ class TestFillerArgsPassedToExpandEditorialBlock:
             filler_uri="/opt/retrovue/assets/filler.mp4",
             filler_duration_ms=3_650_000,
             asset_library=ANY,
+            policy=ANY,
+            break_config=ANY,
         )
 
 
@@ -544,6 +561,7 @@ class TestFillerArgsPassedToExpandEditorialBlock:
 
 class TestFillerPlaceholdersFilled:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_ad_blocks_replaces_empty_filler(self):
         """fill_ad_blocks replaces empty filler placeholders with the filler URI."""
         from retrovue.runtime.traffic_manager import fill_ad_blocks
@@ -587,6 +605,7 @@ class TestFillerPlaceholdersFilled:
 
 class TestTemplateBlocksWithFiller:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_template_block_intro_content_filler(self):
         """Template-derived blocks with compiled_segments produce
         intro + content + filler segments after fill_ad_blocks."""
@@ -645,6 +664,7 @@ class TestTemplateBlocksWithFiller:
 
 class TestNoExceptionsDuringRebuild:
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_rebuild_completes_without_errors(self, mock_load, mock_expand):

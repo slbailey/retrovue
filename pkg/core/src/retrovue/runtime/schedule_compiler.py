@@ -332,12 +332,12 @@ def _compile_program_block(
     bleed, grid_blocks, and intro/outro handling.
     """
     from retrovue.runtime.program_assembly import assemble_schedule_block
+    from retrovue.runtime.program_definition import AssemblyFault
 
     start_str = block_def.get("start", "06:00")
     slots = block_def.get("slots", 1)
     if not isinstance(slots, int):
         slots = len(slots)
-    program_ref = block_def.get("program", "")
     progression = block_def.get("progression", "sequential")
 
     # Episode progression DSL fields (canonical contract: episode_progression.md)
@@ -345,79 +345,215 @@ def _compile_program_block(
     exhaustion_policy = block_def.get("exhaustion", "wrap")
     schedule_layer = block_def.get("_schedule_layer", "all_day")
 
-    prog_def = programs.get(program_ref, {})
-    pool = prog_def.get("pool", program_ref)
+    # INV-SBLOCK-PROGRAM-001: normalize program field to list
+    program_field = block_def.get("program", "")
+    if isinstance(program_field, str):
+        program_refs = [program_field] if program_field else []
+    elif isinstance(program_field, list):
+        program_refs = program_field
+    else:
+        program_refs = []
+
+    # INV-SBLOCK-PROGRAM-001: non-empty program reference required
+    if not program_refs:
+        raise AssemblyFault(
+            "INV-SBLOCK-PROGRAM-001: schedule block 'program' must be "
+            "a non-empty string or non-empty list of strings"
+        )
+
+    # INV-SBLOCK-PROGRAM-002: all members must resolve
+    for ref in program_refs:
+        if ref not in programs:
+            raise AssemblyFault(
+                f"INV-SBLOCK-PROGRAM-002: program '{ref}' not found in "
+                f"program definitions"
+            )
+
+    # INV-SBLOCK-PROGRAM-006: uniform grid sizing across list.
+    # All programs must use the same sizing mode (all grid_blocks or all
+    # grid_blocks_max) and the same value.
+    is_dynamic = any(programs[ref].get("grid_blocks_max") is not None for ref in program_refs)
+    if is_dynamic:
+        gbm_values = {programs[ref].get("grid_blocks_max") for ref in program_refs}
+        # All must have grid_blocks_max set
+        if None in gbm_values:
+            raise AssemblyFault(
+                "INV-SBLOCK-PROGRAM-006: program list mixes grid_blocks and "
+                "grid_blocks_max — all must use the same sizing mode"
+            )
+        if len(gbm_values) > 1:
+            raise AssemblyFault(
+                f"INV-SBLOCK-PROGRAM-006: program list has mismatched "
+                f"grid_blocks_max values: {gbm_values}"
+            )
+        uniform_grid_blocks_max = gbm_values.pop()
+    else:
+        grid_blocks_values = {programs[ref].get("grid_blocks", 1) for ref in program_refs}
+        if len(grid_blocks_values) > 1:
+            raise AssemblyFault(
+                f"INV-SBLOCK-PROGRAM-006: program list has mismatched grid_blocks "
+                f"values: {grid_blocks_values}"
+            )
 
     current_time = _parse_time(start_str, broadcast_day, tz_name)
 
     # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
     wseed = _window_seed(seed, start_str)
+    rng = __import__("random").Random(wseed)
 
-    # Delegate to Program Assembly (channel_dsl.md §5)
-    assembly_results = assemble_schedule_block(
-        program_ref=program_ref,
-        program_def=prog_def,
-        pool_name=pool,
-        slots=slots,
-        progression=progression,
-        grid_minutes=grid_minutes,
-        resolver=resolver,
-        seed=wseed,
-        channel_id=channel_id,
-        broadcast_day=broadcast_day,
-        schedule_layer=schedule_layer,
-        start_time=start_str,
-        run_id=run_id,
-        exhaustion_policy=exhaustion_policy,
-        run_store=run_store,
-        emissions_per_occurrence=emissions_per_occurrence,
-        prior_same_day_emissions=prior_same_day_emissions,
-    )
-
-    # Convert AssemblyResults into ProgramBlockOutputs
     blocks: list[ProgramBlockOutput] = []
-    for result in assembly_results:
-        # Primary content asset is the first "content" segment
-        content_segments = [
-            s for s in result.segments if s.segment_type == "content"
-        ]
-        if not content_segments:
-            continue
 
-        primary = content_segments[0]
-        ep_meta = resolver.lookup(primary.asset_id)
-        grid_blocks = prog_def.get("grid_blocks", 1)
-        slot_duration = grid_blocks * grid_minutes * 60
+    if is_dynamic:
+        # Greedy packing: fill slots budget by selecting movies one at a
+        # time. Each movie takes ceil(duration / grid_slot) blocks.
+        remaining_slots = slots
+        exec_idx = 0
+        slot_sec = grid_minutes * 60
 
-        # If bleed, slot_duration must cover actual runtime
-        if prog_def.get("bleed", False) and result.total_runtime_ms > slot_duration * 1000:
-            slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
+        while remaining_slots > 0:
+            chosen_ref = rng.choice(program_refs) if len(program_refs) > 1 else program_refs[0]
+            prog_def = programs[chosen_ref]
+            pool = prog_def.get("pool", chosen_ref)
 
-        block = ProgramBlockOutput(
-            title=ep_meta.title or program_ref,
-            asset_id=primary.asset_id,
-            start_at=current_time,
-            slot_duration_sec=slot_duration,
-            episode_duration_sec=ep_meta.duration_sec,
-            collection=pool,
-            selector={
-                "mode": progression,
-                "pool": pool,
-                "program": program_ref,
-                "fill_mode": prog_def.get("fill_mode", "single"),
-            },
-            compiled_segments=[
-                {
-                    "segment_type": s.segment_type,
-                    "asset_id": s.asset_id,
-                    "duration_ms": s.duration_ms,
-                }
-                for s in result.segments
-            ],
-            traffic_profile=block_def.get("traffic_profile"),
-        )
-        blocks.append(block)
-        current_time = block.end_at()
+            assembly_results = assemble_schedule_block(
+                program_ref=chosen_ref,
+                program_def=prog_def,
+                pool_name=pool,
+                slots=1,  # single execution — dynamic mode
+                progression=progression,
+                grid_minutes=grid_minutes,
+                resolver=resolver,
+                seed=wseed + exec_idx,
+                channel_id=channel_id,
+                broadcast_day=broadcast_day,
+                schedule_layer=schedule_layer,
+                start_time=start_str,
+                run_id=run_id,
+                exhaustion_policy=exhaustion_policy,
+                run_store=run_store,
+                emissions_per_occurrence=emissions_per_occurrence,
+                prior_same_day_emissions=prior_same_day_emissions + exec_idx,
+            )
+
+            for result in assembly_results:
+                content_segments = [
+                    s for s in result.segments if s.segment_type == "content"
+                ]
+                if not content_segments:
+                    continue
+
+                primary = content_segments[0]
+                ep_meta = resolver.lookup(primary.asset_id)
+
+                # Dynamic slot sizing: ceil(total_runtime / grid_slot)
+                needed_blocks = max(1, -(-result.total_runtime_ms // (slot_sec * 1000)))
+                needed_blocks = min(needed_blocks, uniform_grid_blocks_max, remaining_slots)
+                slot_duration = needed_blocks * slot_sec
+
+                # Bleed: if content exceeds even the capped slot, expand
+                if prog_def.get("bleed", False) and result.total_runtime_ms > slot_duration * 1000:
+                    slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
+                    needed_blocks = slot_duration // slot_sec
+
+                block = ProgramBlockOutput(
+                    title=ep_meta.title or chosen_ref,
+                    asset_id=primary.asset_id,
+                    start_at=current_time,
+                    slot_duration_sec=slot_duration,
+                    episode_duration_sec=ep_meta.duration_sec,
+                    collection=pool,
+                    selector={
+                        "mode": progression,
+                        "pool": pool,
+                        "program": chosen_ref,
+                        "fill_mode": prog_def.get("fill_mode", "single"),
+                    },
+                    compiled_segments=[
+                        {
+                            "segment_type": s.segment_type,
+                            "asset_id": s.asset_id,
+                            "duration_ms": s.duration_ms,
+                        }
+                        for s in result.segments
+                    ],
+                    traffic_profile=block_def.get("traffic_profile"),
+                )
+                blocks.append(block)
+                current_time = block.end_at()
+                remaining_slots -= needed_blocks
+
+            exec_idx += 1
+    else:
+        # Fixed grid_blocks: divide slots evenly (original behavior).
+        uniform_grid_blocks = grid_blocks_values.pop()
+        executions = slots // uniform_grid_blocks
+
+        for exec_idx in range(executions):
+            chosen_ref = rng.choice(program_refs) if len(program_refs) > 1 else program_refs[0]
+            prog_def = programs[chosen_ref]
+            pool = prog_def.get("pool", chosen_ref)
+
+            assembly_results = assemble_schedule_block(
+                program_ref=chosen_ref,
+                program_def=prog_def,
+                pool_name=pool,
+                slots=uniform_grid_blocks,  # single execution worth of slots
+                progression=progression,
+                grid_minutes=grid_minutes,
+                resolver=resolver,
+                seed=wseed + exec_idx,  # vary seed per execution
+                channel_id=channel_id,
+                broadcast_day=broadcast_day,
+                schedule_layer=schedule_layer,
+                start_time=start_str,
+                run_id=run_id,
+                exhaustion_policy=exhaustion_policy,
+                run_store=run_store,
+                emissions_per_occurrence=emissions_per_occurrence,
+                prior_same_day_emissions=prior_same_day_emissions + exec_idx,
+            )
+
+            # Convert AssemblyResults into ProgramBlockOutputs
+            for result in assembly_results:
+                content_segments = [
+                    s for s in result.segments if s.segment_type == "content"
+                ]
+                if not content_segments:
+                    continue
+
+                primary = content_segments[0]
+                ep_meta = resolver.lookup(primary.asset_id)
+                grid_blocks = prog_def.get("grid_blocks", 1)
+                slot_duration = grid_blocks * grid_minutes * 60
+
+                if prog_def.get("bleed", False) and result.total_runtime_ms > slot_duration * 1000:
+                    slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
+
+                block = ProgramBlockOutput(
+                    title=ep_meta.title or chosen_ref,
+                    asset_id=primary.asset_id,
+                    start_at=current_time,
+                    slot_duration_sec=slot_duration,
+                    episode_duration_sec=ep_meta.duration_sec,
+                    collection=pool,
+                    selector={
+                        "mode": progression,
+                        "pool": pool,
+                        "program": chosen_ref,
+                        "fill_mode": prog_def.get("fill_mode", "single"),
+                    },
+                    compiled_segments=[
+                        {
+                            "segment_type": s.segment_type,
+                            "asset_id": s.asset_id,
+                            "duration_ms": s.duration_ms,
+                        }
+                        for s in result.segments
+                    ],
+                    traffic_profile=block_def.get("traffic_profile"),
+                )
+                blocks.append(block)
+                current_time = block.end_at()
 
     return blocks
 
@@ -582,9 +718,14 @@ def compile_schedule(
             _block_executions.append(0)
             continue
 
-        prog_ref = block_def.get("program", "")
+        prog_field = block_def.get("program", "")
+        if isinstance(prog_field, list):
+            prog_ref = prog_field[0] if prog_field else ""
+        else:
+            prog_ref = prog_field
         prog_def = programs_defs.get(prog_ref, {})
         grid_blocks = prog_def.get("grid_blocks", 1)
+        grid_blocks_max = prog_def.get("grid_blocks_max")
         b_slots = block_def.get("slots", 1)
         if not isinstance(b_slots, int):
             b_slots = len(b_slots)
@@ -594,6 +735,11 @@ def compile_schedule(
             _block_run_ids.append(None)
             _block_executions.append(0)
             continue
+
+        # Dynamic grid programs: execution count unknown upfront.
+        # Use 1 as conservative estimate for emission counting.
+        if grid_blocks_max is not None:
+            grid_blocks = 1
 
         b_run_id = block_def.get("run_id")
         b_layer = block_def.get("_schedule_layer", "all_day")

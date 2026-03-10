@@ -80,6 +80,7 @@ def _sample_schedule() -> dict:
     }
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_stage2_dual_write_supersedes_then_writes_deterministic_slot_indices():
     channel = Channel(id=uuid_mod.uuid4(), slug="retro1", title="Retro 1")
     db = _FakeDB(channel=channel)
@@ -109,6 +110,7 @@ def test_stage2_dual_write_supersedes_then_writes_deterministic_slot_indices():
     assert items[0].schedule_revision_id == revisions[0].id
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_stage2_dual_write_skips_unknown_channel_for_backward_compat():
     db = _FakeDB(channel=None)
 
@@ -123,6 +125,7 @@ def test_stage2_dual_write_skips_unknown_channel_for_backward_compat():
     assert db.added == []
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_channel_active_pointer_upserted_on_activation():
     channel = Channel(id=uuid_mod.uuid4(), slug="retro1", title="Retro 1")
     db = _FakeDB(channel=channel)

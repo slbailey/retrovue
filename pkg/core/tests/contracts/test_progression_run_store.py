@@ -39,6 +39,7 @@ from retrovue.runtime.schedule_compiler import compile_schedule
 @pytest.mark.contract
 class TestRunCreation:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_create_returns_serial_run_info(self):
         """create() returns a SerialRunInfo snapshot."""
         store = InMemoryProgressionRunStore()
@@ -56,6 +57,7 @@ class TestRunCreation:
         assert info.placement_days == DAILY
         assert info.wrap_policy == "wrap"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_create_sets_anchor_episode_index(self):
         """create() preserves the anchor_episode_index."""
         store = InMemoryProgressionRunStore()
@@ -70,6 +72,7 @@ class TestRunCreation:
         )
         assert info.anchor_episode_index == 5
 
+    # Tier: 2 | Scheduling logic invariant
     def test_create_with_different_exhaustion_policies(self):
         """create() correctly maps exhaustion_policy to wrap_policy."""
         store = InMemoryProgressionRunStore()
@@ -94,11 +97,13 @@ class TestRunCreation:
 @pytest.mark.contract
 class TestRunLookup:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_load_nonexistent_returns_none(self):
         """load() returns None for an unknown run_id."""
         store = InMemoryProgressionRunStore()
         assert store.load("ch", "nonexistent") is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_load_after_create_returns_same_record(self):
         """load() returns the same record created by create()."""
         store = InMemoryProgressionRunStore()
@@ -114,6 +119,7 @@ class TestRunLookup:
         loaded = store.load("test-ch", "run-1")
         assert loaded == created
 
+    # Tier: 2 | Scheduling logic invariant
     def test_load_is_channel_scoped(self):
         """Runs with the same run_id on different channels are independent."""
         store = InMemoryProgressionRunStore()
@@ -128,6 +134,7 @@ class TestRunLookup:
         )
         assert store.load("ch-b", "shared-name") is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_multiple_runs_per_channel(self):
         """A channel can have multiple runs with different run_ids."""
         store = InMemoryProgressionRunStore()
@@ -165,6 +172,7 @@ class TestRunLookup:
 @pytest.mark.contract
 class TestRunReuse:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_same_store_reuses_run_across_days(self):
         """Compiling multiple broadcast days with the same store reuses
         the run created on the first compilation.
@@ -218,6 +226,7 @@ def _resolver_with_episodes(
 @pytest.mark.contract
 class TestPipelineIntegration:
 
+    # Tier: 2 | Scheduling logic invariant
     def test_auto_creates_run_on_first_compilation(self):
         """assemble_schedule_block creates a run in the store if none exists.
 
@@ -247,6 +256,7 @@ class TestPipelineIntegration:
         assert loaded is not None
         assert loaded.anchor_date == _MIGRATION_EPOCH
 
+    # Tier: 2 | Scheduling logic invariant
     def test_reuses_existing_run(self):
         """assemble_schedule_block reuses an existing run from the store."""
         store = InMemoryProgressionRunStore()
@@ -281,6 +291,7 @@ class TestPipelineIntegration:
         content = [s for s in results[0].segments if s.segment_type == "content"]
         assert content[0].asset_id == "ep-001"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_anchor_stability_across_compilations(self):
         """Compiling for day N, then day N+1, uses the same epoch anchor.
         Episodes advance by exactly 1 between consecutive days.
@@ -324,6 +335,7 @@ class TestPipelineIntegration:
         loaded = store.load("test-ch", run_id)
         assert loaded.anchor_date == _MIGRATION_EPOCH
 
+    # Tier: 2 | Scheduling logic invariant
     def test_explicit_run_id_shared_across_blocks(self):
         """Two blocks sharing an explicit run_id resolve the same episode.
 
@@ -356,6 +368,7 @@ class TestPipelineIntegration:
         # Same run_id → same episode (shared progression).
         assert ep_a == ep_b
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_run_store_defaults_to_inmemory(self):
         """When run_store is None, a transient InMemoryProgressionRunStore
         is created per call. Episodes still resolve correctly."""
@@ -377,6 +390,7 @@ class TestPipelineIntegration:
         asset_ids = [r.segments[0].asset_id for r in results]
         assert asset_ids == ["ep-000", "ep-001", "ep-002"]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_multi_execution_daily_stride(self):
         """With N executions per day, day D+1 must start where day D left off.
 
@@ -428,6 +442,7 @@ class TestPipelineIntegration:
             f"got {eps_day2[0]}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_weekday_placement_anchor_matches_pattern(self):
         """When placement is weekday-only, anchor matches the pattern.
         The epoch (Monday) matches weekday, so anchor = epoch.
@@ -461,6 +476,7 @@ class TestPipelineIntegration:
         assert loaded.placement_days == WEEKDAY
         assert (1 << loaded.anchor_date.weekday()) & WEEKDAY != 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shared_run_id_same_day_blocks(self):
         """Two blocks sharing an explicit run_id on the same day produce
         contiguous, non-overlapping episode sequences.
@@ -519,6 +535,7 @@ class TestPipelineIntegration:
         day2_first_idx = int(all_day2[0].split("-")[1])
         assert day2_first_idx == day1_last_idx + 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_derived_run_id_uses_start_time(self):
         """Blocks at different start times (no explicit run_id) produce
         independent progressions via distinct derived run_ids.
@@ -558,6 +575,7 @@ class TestPipelineIntegration:
         assert run_06 is not None, "06:00 run should exist"
         assert run_16 is not None, "16:00 run should exist"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_explicit_shared_run_id_shares_progression(self):
         """Blocks with the same explicit run_id share progression state.
 
@@ -605,6 +623,7 @@ class TestCompileScheduleEmissions:
     """Tests that compile_schedule correctly computes emissions_per_occurrence
     and prior_same_day_emissions for blocks sharing a run_id."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shared_run_id_via_compile_schedule(self):
         """Two blocks sharing run_id in a DSL schedule produce contiguous
         episode sequences across days via compile_schedule.
