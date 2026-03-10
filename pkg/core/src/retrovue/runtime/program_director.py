@@ -81,7 +81,7 @@ class HLSAccessFilter(logging.Filter):
     Error responses (status >= 400) are still logged.
     """
 
-    _QUIET_PREFIXES = ("/hls/", "/api/epg")
+    _QUIET_PREFIXES = ("/hls/", "/api/epg", "/discover.json", "/lineup_status.json")
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
@@ -840,6 +840,14 @@ class ProgramDirector:
         if manager is not None:
             self._logger.info("[channel %s] ChannelManager idle (producer stopped)", channel_id)
             manager.stop_channel()
+            # Signal the fanout stop event *before* killing the producer so
+            # that when AIR's socket closes and the reader gets EOF it sees
+            # _stop_event already set and exits cleanly instead of attempting
+            # a spurious reconnect (INV-TEARDOWN-SIGNAL-BEFORE-KILL).
+            with self._managers_lock:
+                fanout = self._fanout_buffers.get(channel_id)
+            if fanout is not None:
+                fanout.signal_stop()
             if manager.active_producer:
                 self._logger.info("[channel %s] Force-stopping producer (terminating Air)", channel_id)
                 try:
