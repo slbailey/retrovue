@@ -250,6 +250,33 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   input_fps_den_ = input_fps.den;
   UpdateResampleMode();
 
+  diag_emit_count_ = 0;
+  diag_decode_emit_count_ = 0;
+
+  // DIAG: Movie playback defect — log exact mode chosen for this block (diagnostic only).
+  {
+    const char* mode_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :
+        (resample_mode_ == ResampleMode::DROP) ? "DROP" : "CADENCE";
+    const bool jip_or_offset = (first_seg.asset_start_offset_ms > 0);
+    std::ostringstream oss;
+    oss << "[TickProducer] DIAG_ASSIGN_BLOCK"
+        << " block_id=" << block.block_id
+        << " asset_uri=" << first_seg.asset_uri
+        << " asset_start_offset_ms=" << first_seg.asset_start_offset_ms
+        << " current_segment_index=" << current_segment_index_
+        << " logical_segment_index=" << logical_segment_index_
+        << " input_fps_num=" << input_fps_num_
+        << " input_fps_den=" << input_fps_den_
+        << " output_fps_num=" << output_fps_.num
+        << " output_fps_den=" << output_fps_.den
+        << " resample_mode=" << mode_str
+        << " drop_step=" << drop_step_
+        << " InputFramePeriodMs=" << InputFramePeriodMs()
+        << " decoder_fps_source=n/a"
+        << " jip_or_nonzero_offset=" << (jip_or_offset ? "Y" : "N");
+    retrovue::util::Logger::Info(oss.str());
+  }
+
   state_ = State::kReady;
 
   std::cout << "[TickProducer] Block assigned: " << block.block_id
@@ -525,6 +552,14 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     primed_frame_.reset();
     block_ct_ms_ = frame.block_ct_ms;  // PTS-derived from PrimeFirstFrame; do not use CtMs(frame_index_)
     frame_index_++;
+    diag_emit_count_++;
+    if (diag_emit_count_ <= 12) {
+      std::ostringstream oss;
+      oss << "[TickProducer] DIAG_TRYGET_PATH"
+          << " emit_index=" << diag_emit_count_
+          << " path=PRIMED";
+      retrovue::util::Logger::Info(oss.str());
+    }
     return frame;
   }
 
@@ -535,6 +570,14 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     buffered_frames_.pop_front();
     block_ct_ms_ = frame.block_ct_ms;
     frame_index_++;
+    diag_emit_count_++;
+    if (diag_emit_count_ <= 12) {
+      std::ostringstream oss;
+      oss << "[TickProducer] DIAG_TRYGET_PATH"
+          << " emit_index=" << diag_emit_count_
+          << " path=BUFFERED";
+      retrovue::util::Logger::Info(oss.str());
+    }
     return frame;
   }
 
@@ -565,11 +608,43 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     const int64_t tick_pts_us = CtUs(this_tick_index);
     first->video.metadata.pts = tick_pts_us;
     first->video.metadata.dts = tick_pts_us;
+
+    diag_emit_count_++;
+    if (diag_emit_count_ <= 12) {
+      int audio_samples = 0;
+      for (const auto& af : first->audio) audio_samples += af.nb_samples;
+      std::ostringstream oss;
+      oss << "[TickProducer] DIAG_TRYGET_DROP"
+          << " emit_index=" << diag_emit_count_
+          << " DROP_active=1"
+          << " drop_step=" << drop_step_
+          << " input_frames_decoded=" << drop_step_
+          << " emitted_pts_us=" << tick_pts_us
+          << " emitted_ct_ms=" << first->block_ct_ms
+          << " audio_harvested=Y"
+          << " audio_frames=" << static_cast<int>(first->audio.size())
+          << " audio_samples=" << audio_samples;
+      retrovue::util::Logger::Info(oss.str());
+    }
     return first;
   }
 
   // OFF / CADENCE: one decode per output tick.
-  return DecodeNextFrameRaw();
+  auto fd = DecodeNextFrameRaw();
+  if (fd) {
+    diag_emit_count_++;
+    if (diag_emit_count_ <= 12) {
+      const char* path_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :
+          (resample_mode_ == ResampleMode::DROP) ? "DROP" : "CADENCE";
+      std::ostringstream oss;
+      oss << "[TickProducer] DIAG_TRYGET_PATH"
+          << " emit_index=" << diag_emit_count_
+          << " path=" << path_str;
+      retrovue::util::Logger::Info(oss.str());
+    }
+    return fd;
+  }
+  return std::nullopt;
 }
 
 // =============================================================================
@@ -752,7 +827,28 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
   // INV-TRANSITION-004: Apply segment transition fade (shared code path).
   ApplySegmentTransitionFade(result, ct_before);
 
-  if (advance_output_state) frame_index_++;
+  if (advance_output_state) {
+    diag_decode_emit_count_++;
+    if (diag_decode_emit_count_ <= 12) {
+      const char* mode_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :
+          (resample_mode_ == ResampleMode::DROP) ? "DROP" : "CADENCE";
+      std::ostringstream oss;
+      oss << "[TickProducer] DIAG_DECODE_EMIT"
+          << " asset_uri=" << current_asset_uri_
+          << " frame_index=" << diag_decode_emit_count_
+          << " decoded_pts_ms=" << decoded_pts_ms
+          << " seg_first_pts_ms=" << seg_first_pts_ms_
+          << " seg_start_ct=" << seg_start_ct
+          << " ct_before=" << ct_before
+          << " block_ct_ms=" << block_ct_ms_
+          << " next_frame_offset_ms=" << next_frame_offset_ms_
+          << " InputFramePeriodMs=" << InputFramePeriodMs()
+          << " resample_mode=" << mode_str
+          << " drop_step=" << drop_step_;
+      retrovue::util::Logger::Info(oss.str());
+    }
+    frame_index_++;
+  }
   return result;
 }
 
@@ -836,6 +932,8 @@ void TickProducer::Reset() {
   frame_index_ = 0;
   seg_first_pts_ms_ = -1;
   open_generation_ = 0;
+  diag_emit_count_ = 0;
+  diag_decode_emit_count_ = 0;
   state_ = State::kEmpty;
 }
 

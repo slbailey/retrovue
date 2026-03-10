@@ -247,6 +247,11 @@ class TickProducer : public producers::IProducer,
   // Monotonic counter: incremented each time a segment decoder is opened.
   // Logged for correlation across segment transitions.
   int32_t open_generation_ = 0;
+
+  // Diagnostic only: first N emitted frames after AssignBlock (movie playback defect).
+  // Not used for behavior; reset in AssignBlock.
+  int diag_emit_count_ = 0;
+  int diag_decode_emit_count_ = 0;
 };
 
 }  // namespace retrovue::blockplan

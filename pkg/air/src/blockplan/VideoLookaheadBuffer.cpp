@@ -624,50 +624,10 @@ void VideoLookaheadBuffer::FillLoop() {
 #endif
         }
       }
-      // MEM_WATCHDOG: rate-limited — once per second, or when depth changes by >5, or when state changes.
-      {
-        auto now = std::chrono::steady_clock::now();
-        int depth;
-        int64_t pushes;
-        int64_t pops;
-        int64_t drops;
-        const char* filling_state_cstr;
-        { std::lock_guard<std::mutex> lock(mutex_);
-          depth = static_cast<int>(frames_.size());
-          pushes = total_pushed_;
-          pops = total_popped_;
-          drops = drops_total_;
-        }
-        const bool is_bootstrap_phase = fill_phase_.load(std::memory_order_relaxed) ==
-            static_cast<int>(FillPhase::kBootstrap);
-        const bool filling = steady_filling_.load(std::memory_order_relaxed);
-        filling_state_cstr = is_bootstrap_phase ? "bootstrap"
-            : (filling ? "steady_decoding" : "steady_parked");
-        std::string filling_state_str(filling_state_cstr);
-        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_fill_log_).count();
-        const bool depth_delta = (last_watchdog_depth_ >= 0 && std::abs(depth - last_watchdog_depth_) > 5);
-        const bool state_changed = (last_watchdog_state_ != filling_state_str);
-        const bool should_log = (elapsed_ms >= 10000) || depth_delta || state_changed;
-        if (should_log) {
-          last_fill_log_ = now;
-          last_watchdog_depth_ = depth;
-          last_watchdog_state_ = filling_state_str;
-          std::ostringstream oss;
-          oss << "[MEM_WATCHDOG VideoBuffer:" << buffer_label_ << "]"
-              << " depth=" << depth
-              << " target=" << target_depth_frames_
-              << " hard_cap=" << hard_cap_frames_
-              << " filling_state=" << filling_state_cstr
-              << " pushes_total=" << pushes
-              << " pops_total=" << pops
-              << " drops_total=" << drops;
-          if (depth > hard_cap_frames_ || (drops == 0 && depth > target_depth_frames_ * 4)) {
-            Logger::Warn(oss.str());
-          } else {
-            Logger::Info(oss.str());
-          }
-        }
-      }
+      // MEM_WATCHDOG: rate-limited — disabled to reduce log volume.
+      (void)last_fill_log_;
+      (void)last_watchdog_depth_;
+      (void)last_watchdog_state_;
     }
 
     // Re-check stop after depth/condvar decision.
