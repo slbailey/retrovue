@@ -2097,6 +2097,52 @@ class ProgramDirector:
                 media_type="application/xml",
             )
 
+        # --- Plex HDHomeRun Virtual Tuner Endpoints ---
+        # INV-PLEX-DISCOVERY-001, INV-PLEX-LINEUP-001,
+        # INV-PLEX-TUNER-STATUS-001, INV-PLEX-XMLTV-001
+        # These endpoints present existing RetroVue services in HDHomeRun
+        # format so Plex discovers channels via its DVR tuner protocol.
+
+        @self.fastapi_app.get("/discover.json")
+        def plex_discover(request: Request):
+            """HDHomeRun device discovery — INV-PLEX-DISCOVERY-001."""
+            from retrovue.integrations.plex.models import make_discover_payload
+
+            channels = self._load_channels_list()
+            base_url = str(request.base_url).rstrip("/")
+            return make_discover_payload(
+                base_url=base_url,
+                tuner_count=len(channels),
+            )
+
+        @self.fastapi_app.get("/lineup.json")
+        def plex_lineup(request: Request):
+            """HDHomeRun channel lineup — INV-PLEX-LINEUP-001."""
+            from retrovue.integrations.plex.models import make_lineup_entry
+
+            channels = self._load_channels_list()
+            base_url = str(request.base_url).rstrip("/")
+            return [
+                make_lineup_entry(
+                    channel_id=ch["channel_id"],
+                    channel_name=ch["name"],
+                    base_url=base_url,
+                )
+                for ch in channels
+            ]
+
+        @self.fastapi_app.get("/lineup_status.json")
+        def plex_lineup_status():
+            """Tuner scan status — INV-PLEX-TUNER-STATUS-001."""
+            from retrovue.integrations.plex.models import LINEUP_STATUS
+
+            return dict(LINEUP_STATUS)
+
+        @self.fastapi_app.post("/lineup.post")
+        def plex_lineup_post():
+            """Plex channel scan trigger (POST) — no-op for virtual tuner."""
+            return Response(status_code=200)
+
     def _start_http_server(self) -> None:
         """Start the HTTP server in a background thread."""
         if self._server_thread and self._server_thread.is_alive():
