@@ -55,8 +55,8 @@ A named, reusable traffic policy configuration declared in the channel DSL.
 |-------|------|---------|-------------|
 | `name` | string | — | Profile identifier, unique per channel. |
 | `allowed_types` | list[str] | union of `asset_type` values from channel inventories | Interstitial types permitted under this profile. |
-| `default_cooldown_ms` | int | `3_600_000` | Minimum ms between re-plays of the same asset. |
-| `type_cooldowns_ms` | dict[str, int] | `{}` | Per-type cooldown overrides. |
+| `default_cooldown_seconds` | int | `3_600` | Minimum seconds between re-plays of the same asset. |
+| `type_cooldowns_seconds` | dict[str, int] | `{}` | Per-type cooldown overrides in seconds. |
 | `max_plays_per_day` | int | `0` | Max plays per asset per channel per traffic day. `0` = unlimited. |
 
 A TrafficProfile is the declarative form of a `TrafficPolicy` runtime object (defined in `traffic_policy.md`). Each resolved TrafficProfile is instantiated as a `TrafficPolicy` with identical field names and semantics. The DSL declares the configuration; `traffic_policy.md` defines how the runtime object evaluates candidates against that configuration.
@@ -106,14 +106,14 @@ traffic:
   profiles:
     default:
       allowed_types: [promo, station_id, bumper]
-      default_cooldown_ms: 3600000
+      default_cooldown_seconds: 3600
       max_plays_per_day: 8
 
     primetime:
       allowed_types: [promo, station_id]
-      default_cooldown_ms: 1800000
-      type_cooldowns_ms:
-        station_id: 900000
+      default_cooldown_seconds: 1800
+      type_cooldowns_seconds:
+        station_id: 900
       max_plays_per_day: 12
 ```
 
@@ -360,7 +360,7 @@ traffic:
   profiles:
     default:
       allowed_types: [promo]
-      default_cooldown_ms: 3600000
+      default_cooldown_seconds: 3600
       max_plays_per_day: 8
 
   default_profile: default

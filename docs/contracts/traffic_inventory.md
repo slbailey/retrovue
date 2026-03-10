@@ -137,7 +137,7 @@ Candidate Pool
 [1] Type Filter ── allowed_types
      │
      ▼
-[2] Cooldown Filter ── play history + cooldown_ms
+[2] Cooldown Filter ── play history + cooldown_seconds
      │
      ▼
 [3] Daily Cap Filter ── play history + day_start_ms + max_plays_per_day

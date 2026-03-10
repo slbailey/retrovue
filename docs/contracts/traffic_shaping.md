@@ -48,7 +48,7 @@ The set of interstitial assets that are eligible for traffic selection at a give
 
 ### Traffic Policy
 
-A resolved set of channel-level traffic rules that govern candidate filtering and selection. Contains `allowed_types`, `default_cooldown_ms`, `type_cooldowns_ms`, and `max_plays_per_day`. Instantiated from a TrafficProfile declared in the channel DSL.
+A resolved set of channel-level traffic rules that govern candidate filtering and selection. Contains `allowed_types`, `default_cooldown_seconds`, `type_cooldowns_seconds`, and `max_plays_per_day`. Instantiated from a TrafficProfile declared in the channel DSL.
 
 ### Play History
 
@@ -129,7 +129,7 @@ The `max_duration_ms` parameter specifying the maximum asset duration that fits 
 
 **CD-1.** A candidate MUST be excluded if a `PlayRecord` exists for the same `asset_id` where `now_ms - played_at_ms` is less than the applicable cooldown.
 
-**CD-2.** The applicable cooldown for a candidate is `policy.type_cooldowns_ms[asset_type]` if the key exists, otherwise `policy.default_cooldown_ms`.
+**CD-2.** The applicable cooldown for a candidate is `policy.type_cooldowns_seconds[asset_type]` if the key exists, otherwise `policy.default_cooldown_seconds`.
 
 **CD-3.** If the applicable cooldown is zero or negative, no cooldown applies to that candidate.
 
@@ -202,8 +202,8 @@ Traffic shaping depends on exactly these metadata fields. No additional metadata
 | `PlayRecord.asset_type` | `traffic_play_log` table | Type-specific cooldown lookup (CD-2) |
 | `PlayRecord.played_at_ms` | `traffic_play_log` table | Cooldown window (CD-1), daily cap boundary (DC-1), rotation sort (RT-1) |
 | `TrafficPolicy.allowed_types` | Channel YAML via `traffic_dsl.md` | Type filtering (TF-1) |
-| `TrafficPolicy.default_cooldown_ms` | Channel YAML via `traffic_dsl.md` | Cooldown fallback (CD-2) |
-| `TrafficPolicy.type_cooldowns_ms` | Channel YAML via `traffic_dsl.md` | Per-type cooldown (CD-2) |
+| `TrafficPolicy.default_cooldown_seconds` | Channel YAML via `traffic_dsl.md` | Cooldown fallback (CD-2) |
+| `TrafficPolicy.type_cooldowns_seconds` | Channel YAML via `traffic_dsl.md` | Per-type cooldown (CD-2) |
 | `TrafficPolicy.max_plays_per_day` | Channel YAML via `traffic_dsl.md` | Daily cap (DC-1) |
 
 ---
@@ -219,7 +219,7 @@ Candidate Pool
 [1] Type Filter ── allowed_types
      │
      ▼
-[2] Cooldown Filter ── play history + cooldown_ms
+[2] Cooldown Filter ── play history + cooldown_seconds
      │
      ▼
 [3] Daily Cap Filter ── play history + day_start_ms + max_plays_per_day
@@ -321,11 +321,11 @@ When `DatabaseAssetLibrary` is constructed without a `channel_slug`, cooldown an
 
 ### Cooldown Enforcement
 
-- A candidate played 1 hour ago with `default_cooldown_ms=3_600_000` MUST pass cooldown (exactly at boundary).
-- A candidate played 59 minutes ago with `default_cooldown_ms=3_600_000` MUST be excluded.
+- A candidate played 1 hour ago with `default_cooldown_seconds=3_600` MUST pass cooldown (exactly at boundary).
+- A candidate played 59 minutes ago with `default_cooldown_seconds=3_600` MUST be excluded.
 - A candidate with a type-specific cooldown MUST use the type cooldown, not the default.
 - A candidate with no play history MUST pass cooldown.
-- A candidate with `default_cooldown_ms=0` and no type-specific cooldown MUST pass cooldown regardless of history.
+- A candidate with `default_cooldown_seconds=0` and no type-specific cooldown MUST pass cooldown regardless of history.
 
 ### Daily Play Cap
 

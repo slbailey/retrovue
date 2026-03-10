@@ -27,8 +27,8 @@ RECOGNIZED_INTERSTITIAL_TYPES = frozenset({
 
 # Traffic policy fields that MUST NOT appear on program definitions
 TRAFFIC_POLICY_FIELDS = frozenset({
-    "allowed_types", "cooldown", "default_cooldown_ms",
-    "type_cooldowns_ms", "max_plays_per_day", "traffic_profile",
+    "allowed_types", "cooldown", "default_cooldown_seconds",
+    "type_cooldowns_seconds", "max_plays_per_day", "traffic_profile",
 })
 
 # Break placement fields that MUST NOT appear in the DSL
@@ -95,7 +95,7 @@ def _profile(**overrides) -> dict:
     """Build a single profile entry."""
     defaults = {
         "allowed_types": ["promo", "station_id"],
-        "default_cooldown_ms": 3_600_000,
+        "default_cooldown_seconds": 3_600,
         "max_plays_per_day": 0,
     }
     defaults.update(overrides)
@@ -441,7 +441,7 @@ class TestAllowedTypesDefault:
             profiles={
                 "default": {
                     # allowed_types deliberately omitted
-                    "default_cooldown_ms": 3_600_000,
+                    "default_cooldown_seconds": 3_600,
                     "max_plays_per_day": 0,
                 },
             },

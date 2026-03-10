@@ -61,8 +61,8 @@ GRID_DURATION_MS = 1_800_000  # 30-minute grid block
 def _policy(**overrides) -> TrafficPolicy:
     defaults = dict(
         allowed_types=["commercial", "promo", "filler"],
-        default_cooldown_ms=0,
-        type_cooldowns_ms={},
+        default_cooldown_seconds=0,
+        type_cooldowns_seconds={},
         max_plays_per_day=0,
     )
     defaults.update(overrides)
@@ -685,7 +685,7 @@ def _cheers_channel_dsl(
             "profiles": profiles or {
                 "default": {
                     "allowed_types": ["promo", "station_id", "bumper"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
             },
@@ -709,7 +709,7 @@ class TestDslDerivedPolicy:
             profiles={
                 "default": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
             },
@@ -748,12 +748,12 @@ class TestDslDerivedPolicy:
             profiles={
                 "default": {
                     "allowed_types": ["bumper"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
                 "primetime": {
                     "allowed_types": ["promo", "bumper"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
             },
@@ -792,12 +792,12 @@ class TestDslDerivedPolicy:
             profiles={
                 "default": {
                     "allowed_types": ["bumper"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
                 "primetime": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
             },
@@ -946,12 +946,12 @@ class TestBlockLevelTrafficProfile:
             profiles={
                 "default": {
                     "allowed_types": ["bumper"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
                 "primetime": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 12,
                 },
             },
@@ -970,12 +970,12 @@ class TestBlockLevelTrafficProfile:
             profiles={
                 "default": {
                     "allowed_types": ["bumper"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
                 "primetime": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
             },
@@ -1037,12 +1037,12 @@ class TestBlockLevelTrafficProfile:
             profiles={
                 "default": {
                     "allowed_types": ["station_id"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
                 "primetime": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 0,
+                    "default_cooldown_seconds": 0,
                     "max_plays_per_day": 0,
                 },
             },
