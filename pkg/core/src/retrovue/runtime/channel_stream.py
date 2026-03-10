@@ -846,6 +846,15 @@ class ChannelStream:
         self._fanout_thread.start()
         self._logger.debug("ChannelStream started (upstream+fanout) for channel %s", self.channel_id)
 
+    def signal_stop(self) -> None:
+        """Signal the stop event without joining threads or closing resources.
+
+        Call this *before* tearing down the producer/AIR so that the reader
+        loop sees the event immediately when the socket EOF arrives, avoiding
+        a spurious reconnect attempt.
+        """
+        self._stop_event.set()
+
     def stop(self) -> None:
         """
         Stop upstream and fanout threads. Close UDS only on explicit stop
