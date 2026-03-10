@@ -96,24 +96,28 @@ def _compile_day(broadcast_day: str) -> list[str]:
 class TestInvScheduleSeedDayVariance001:
     """INV-SCHEDULE-SEED-DAY-VARIANCE-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_compilation_seed_deterministic(self):
         """Same (channel, day) always returns same seed."""
         s1 = compilation_seed("hbo-classics", "2026-03-01")
         s2 = compilation_seed("hbo-classics", "2026-03-01")
         assert s1 == s2
 
+    # Tier: 1 | Structural invariant
     def test_compilation_seed_varies_by_day(self):
         """Different broadcast_day → different seed."""
         s1 = compilation_seed("hbo-classics", "2026-03-01")
         s2 = compilation_seed("hbo-classics", "2026-03-02")
         assert s1 != s2
 
+    # Tier: 1 | Structural invariant
     def test_compilation_seed_varies_by_channel(self):
         """Different channel_id → different seed."""
         s1 = compilation_seed("hbo-classics", "2026-03-01")
         s2 = compilation_seed("showtime-cinema", "2026-03-01")
         assert s1 != s2
 
+    # Tier: 1 | Structural invariant
     def test_compilation_seed_uses_hashlib(self):
         """Seed matches expected hashlib formula."""
         expected = int(
@@ -121,6 +125,7 @@ class TestInvScheduleSeedDayVariance001:
         ) % (2**31)
         assert compilation_seed("hbo-classics", "2026-03-01") == expected
 
+    # Tier: 1 | Structural invariant
     def test_different_days_produce_different_movies(self):
         """Compiling the same channel on two different days MUST produce
         different movie selections."""
@@ -130,6 +135,7 @@ class TestInvScheduleSeedDayVariance001:
             "Same movie selections on different days — seed is not day-varying"
         )
 
+    # Tier: 1 | Structural invariant
     def test_same_day_produces_identical_movies(self):
         """Compiling the same channel on the same day twice MUST produce
         identical output (deterministic rebuild)."""
@@ -137,6 +143,7 @@ class TestInvScheduleSeedDayVariance001:
         run2 = _compile_day("2026-03-01")
         assert run1 == run2
 
+    # Tier: 1 | Structural invariant
     def test_two_windows_same_day_differ(self):
         """Two schedule blocks at different start times on the same day
         MUST produce different movie sequences."""

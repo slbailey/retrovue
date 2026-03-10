@@ -16,6 +16,7 @@ from retrovue.runtime.program_director import HLSAccessFilter
 class TestInvHlsQuietPolling:
     """INV-HLS-QUIET-POLLING-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_filter_suppresses_hls_playlist_requests(self):
         """GET /hls/{channel_id}/live.m3u8 MUST NOT pass the filter."""
         f = HLSAccessFilter()
@@ -30,6 +31,7 @@ class TestInvHlsQuietPolling:
         )
         assert f.filter(record) is False
 
+    # Tier: 1 | Structural invariant
     def test_filter_suppresses_hls_segment_requests(self):
         """GET /hls/{channel_id}/seg_XXXXX.ts MUST NOT pass the filter."""
         f = HLSAccessFilter()
@@ -44,6 +46,7 @@ class TestInvHlsQuietPolling:
         )
         assert f.filter(record) is False
 
+    # Tier: 1 | Structural invariant
     def test_filter_passes_non_hls_requests(self):
         """Non-HLS requests MUST pass the filter."""
         f = HLSAccessFilter()
@@ -58,6 +61,7 @@ class TestInvHlsQuietPolling:
         )
         assert f.filter(record) is True
 
+    # Tier: 1 | Structural invariant
     def test_filter_passes_channel_ts_stream(self):
         """Direct TS stream requests MUST pass the filter."""
         f = HLSAccessFilter()
@@ -72,6 +76,7 @@ class TestInvHlsQuietPolling:
         )
         assert f.filter(record) is True
 
+    # Tier: 1 | Structural invariant
     def test_filter_passes_hls_error_responses(self):
         """HLS requests with error status codes MUST pass the filter."""
         f = HLSAccessFilter()
@@ -86,6 +91,7 @@ class TestInvHlsQuietPolling:
         )
         assert f.filter(record) is True
 
+    # Tier: 1 | Structural invariant
     def test_filter_handles_non_tuple_args(self):
         """Filter MUST not crash on unexpected log record formats."""
         f = HLSAccessFilter()

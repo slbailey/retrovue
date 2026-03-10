@@ -24,6 +24,7 @@ from retrovue.domain.tag_normalization import normalize_tag, normalize_tag_set
 class TestRuleTagRoundTrip:
     """Rule 1: normalize_tag(tag) is stable under a second application."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_lowercase_string_is_stable(self):
         """A pre-normalized tag must be returned verbatim."""
         tag = "hbo"
@@ -33,6 +34,7 @@ class TestRuleTagRoundTrip:
             f"normalize_tag({tag!r}) changed a normalized tag: got {result!r}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_normalization_is_idempotent(self):
         """Applying normalize_tag twice MUST yield the same result as once."""
         raw = "  HBO Max  "
@@ -43,6 +45,7 @@ class TestRuleTagRoundTrip:
             f"normalize_tag is not idempotent: once={once!r}, twice={twice!r}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_assetag_model_accepts_normalized_tag(self):
         """AssetTag must be constructible with a normalized tag value."""
         asset_id = uuid.uuid4()
@@ -52,6 +55,7 @@ class TestRuleTagRoundTrip:
             f"AssetTag.tag round-trip failed: {tag_obj.tag!r}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_normalize_tag_set_deduplicates(self):
         """normalize_tag_set must deduplicate normalized duplicates."""
         result = normalize_tag_set(["HBO", "hbo", "  HBO  "])
@@ -60,6 +64,7 @@ class TestRuleTagRoundTrip:
             f"normalize_tag_set did not deduplicate: {result!r}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_normalize_tag_set_sorts(self):
         """normalize_tag_set must return a sorted list."""
         result = normalize_tag_set(["zebra", "apple", "mango"])
@@ -76,6 +81,7 @@ class TestRuleTagRoundTrip:
 class TestRuleTagNotOnlyInJsonb:
     """Rule 2: AssetTag model exists and is the canonical storage mechanism."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_assetag_class_exists_with_required_columns(self):
         """AssetTag MUST exist with asset_uuid, tag, source, created_at columns."""
         assert hasattr(AssetTag, "__tablename__"), (
@@ -92,6 +98,7 @@ class TestRuleTagNotOnlyInJsonb:
                 f"AssetTag is missing required column {col!r}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_has_tags_relationship(self):
         """Asset.tags relationship MUST exist to support eager/lazy loading."""
         from retrovue.domain.entities import Asset
@@ -99,6 +106,7 @@ class TestRuleTagNotOnlyInJsonb:
             "INV-ASSET-TAG-PERSISTENCE-001 Rule 2: Asset has no 'tags' relationship"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_assetag_primary_key_is_composite(self):
         """Primary key MUST be (asset_uuid, tag) — ensures uniqueness per asset."""
         pk_cols = {c.name for c in AssetTag.__table__.primary_key.columns}
@@ -107,6 +115,7 @@ class TestRuleTagNotOnlyInJsonb:
             f"Expected PK (asset_uuid, tag), got {pk_cols}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_assetag_source_has_default(self):
         """source column MUST have a server_default (operator is default provenance)."""
         source_col = AssetTag.__table__.c["source"]

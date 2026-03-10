@@ -215,7 +215,7 @@ def load_segmented_blocks_from_active_revision(
             ]
             structural_segs = [
                 s for s in compiled_segments
-                if s.get("segment_type") in ("intro", "outro")
+                if s.get("segment_type") in ("intro", "outro", "presentation")
             ]
 
             if len(content_segs) == 1 and not structural_segs:

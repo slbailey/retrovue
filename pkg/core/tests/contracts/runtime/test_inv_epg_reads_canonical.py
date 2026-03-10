@@ -110,6 +110,7 @@ def _make_schedule_item(
 class TestInvEpgReadsCanonical001:
     """INV-EPG-READS-CANONICAL-SCHEDULE-001 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_epg_module_does_not_import_compile_schedule(self):
         """The /api/epg handler in program_director.py MUST NOT call
         compile_schedule(). Verified via AST inspection."""
@@ -139,6 +140,7 @@ class TestInvEpgReadsCanonical001:
             + "\n".join(f"  - {v}" for v in violations)
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_get_canonical_epg_returns_cached_blocks(self):
         """get_canonical_epg reads from active ScheduleRevision/ScheduleItems
         without calling compile_schedule()."""
@@ -169,6 +171,7 @@ class TestInvEpgReadsCanonical001:
         assert len(result) == 24
         assert result[0]["asset_id"] == "asset.movie_1"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_get_canonical_epg_returns_none_when_not_cached(self):
         """When no channel exists, get_canonical_epg() returns None."""
         window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
@@ -187,6 +190,7 @@ class TestInvEpgReadsCanonical001:
 
         assert result is None
 
+    # Tier: 2 | Scheduling logic invariant
     def test_get_canonical_epg_includes_carry_in_block(self):
         """A ScheduleItem from the previous day that overlaps the window
         MUST be included in the EPG output."""

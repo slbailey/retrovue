@@ -48,6 +48,7 @@ def _generate_playlist_events(schedule_items: list[dict]) -> list[dict]:
 class TestInvPlaylistContentIdentity005:
     """INV-PLAYLIST-CONTENT-IDENTITY-005 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_content_event_asset_matches_schedule_item(self):
         """Every content-kind PlaylistEvent must carry the same asset_id
         as the ScheduleItem it derives from.

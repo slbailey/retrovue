@@ -17,6 +17,7 @@ def _build_service_for_purge() -> DslScheduleService:
 
 
 class TestPurgeExpiredTier1:
+    # Tier: 2 | Scheduling logic invariant
     def test_deletes_rows_older_than_cutoff(self):
         svc = _build_service_for_purge()
         mock_db = MagicMock()
@@ -29,6 +30,7 @@ class TestPurgeExpiredTier1:
 
 
 class TestPurgeExpiredTier2:
+    # Tier: 2 | Scheduling logic invariant
     def test_deletes_rows_older_than_4h(self):
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
         daemon = PlaylistBuilderDaemon.__new__(PlaylistBuilderDaemon)
@@ -47,6 +49,7 @@ class TestPurgeExpiredTier2:
 
 
 class TestSaveCompiledScheduleUpsert:
+    # Tier: 2 | Scheduling logic invariant
     def test_writes_relational_revision(self):
         svc = _build_service_for_purge()
         new_schedule = {"program_blocks": [{"start_at": "2026-03-01T12:00:00+00:00", "slot_duration_sec": 1800, "asset_id": "test-asset"}]}
@@ -58,6 +61,7 @@ class TestSaveCompiledScheduleUpsert:
             svc._save_compiled_schedule("test-channel", "2026-03-01", new_schedule, "new-hash")
         mock_write.assert_called_once()
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_program_log_day_add(self):
         svc = _build_service_for_purge()
         with patch("retrovue.runtime.dsl_schedule_service.session") as mock_session, \

@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 
+# Tier: 1 | Structural invariant
 def test_inv_switch_boundary_timing_protocol_includes_boundary_fields():
     """SwitchToLiveRequest must include target_boundary_time_ms and issued_at_time_ms (Core declares boundary)."""
     from retrovue.runtime.playout_session import playout_pb2

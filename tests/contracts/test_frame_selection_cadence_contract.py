@@ -220,6 +220,7 @@ OUTPUT_30_DEN_SAME = 1001
 class TestCadenceAccumulatorOrientation:
     """INV-CADENCE-POP-004: Accumulator orientation."""
 
+    # Tier: 1 | Structural invariant
     def test_increment_less_than_threshold_for_24_to_30(self):
         """
         For 24000/1001 → 30000/1001:
@@ -241,6 +242,7 @@ class TestCadenceAccumulatorOrientation:
             f"for correct 4:1 advance:repeat ratio"
         )
 
+    # Tier: 1 | Structural invariant
     def test_advance_repeat_ratio_over_5_ticks(self):
         """
         Over exactly 5 ticks at 24→30, expect 4 ADVANCE + 1 REPEAT.
@@ -257,6 +259,7 @@ class TestCadenceAccumulatorOrientation:
         assert advances == 4, f"Expected 4 ADVANCE in 5 ticks, got {advances}: {decisions}"
         assert repeats == 1, f"Expected 1 REPEAT in 5 ticks, got {repeats}: {decisions}"
 
+    # Tier: 1 | Structural invariant
     def test_advance_repeat_ratio_over_50_ticks(self):
         """Over 50 ticks: expect 40 ADVANCE + 10 REPEAT."""
         acc = CadenceAccumulator(
@@ -277,6 +280,7 @@ class TestCadencePopInvariant:
     INV-CADENCE-POP-002: Source consumption equals advance count.
     """
 
+    # Tier: 1 | Structural invariant
     def test_pop_count_equals_advance_count(self):
         """
         INV-CADENCE-POP-002: Over 1500 ticks (50 seconds at 30fps),
@@ -292,6 +296,7 @@ class TestCadencePopInvariant:
             f"REPEAT ticks are consuming source frames."
         )
 
+    # Tier: 1 | Structural invariant
     def test_no_pop_on_repeat_ticks(self):
         """
         INV-CADENCE-POP-001: TryPopFrame must NEVER be called on REPEAT ticks.
@@ -307,6 +312,7 @@ class TestCadencePopInvariant:
             f"{result['pop_on_repeat'][:10]}..."
         )
 
+    # Tier: 1 | Structural invariant
     def test_buggy_cascade_violates_pop_invariant(self):
         """
         Verify that the buggy simulation DOES violate INV-CADENCE-POP-001.
@@ -338,6 +344,7 @@ class TestCadencePopInvariant:
 class TestConsumptionRatio:
     """INV-CADENCE-POP-003: Consumption ratio matches FPS ratio."""
 
+    # Tier: 1 | Structural invariant
     def test_consumption_ratio_24_to_30(self):
         """
         Over N output ticks with cadence enabled:
@@ -363,6 +370,7 @@ class TestConsumptionRatio:
             f"(tolerance: 0.001)"
         )
 
+    # Tier: 1 | Structural invariant
     def test_consumption_ratio_exact_for_integer_fps_ratio(self):
         """
         When input/output FPS have an exact integer ratio (24/30 = 4/5),
@@ -381,6 +389,7 @@ class TestConsumptionRatio:
                 f"expected {expected_pops} pops, got {result['pop_count']}"
             )
 
+    # Tier: 1 | Structural invariant
     def test_buggy_consumption_ratio_is_1_0(self):
         """
         Buggy cascade consumes at output rate → ratio = 1.0, not 0.8.
@@ -406,6 +415,7 @@ class TestConsumptionRatio:
 class TestLongRunStability:
     """Long-run stability: cadence correctness over extended periods."""
 
+    # Tier: 1 | Structural invariant
     def test_10000_ticks_stability(self):
         """
         Over 10,000 ticks (~333 seconds at 30fps), all invariants hold:
@@ -440,6 +450,7 @@ class TestLongRunStability:
         assert result["advance_count"] == 8000
         assert result["repeat_count"] == 2000
 
+    # Tier: 1 | Structural invariant
     def test_accumulator_budget_bounded(self):
         """
         The Bresenham budget must stay bounded: 0 ≤ budget < threshold.
@@ -464,6 +475,7 @@ class TestLongRunStability:
 class TestEdgeCases:
     """Edge cases for cadence behavior."""
 
+    # Tier: 1 | Structural invariant
     def test_same_fps_all_advance(self):
         """
         When input_fps == output_fps, every tick is ADVANCE (no repeats).
@@ -482,6 +494,7 @@ class TestEdgeCases:
             )
         assert acc.repeat_count == 0
 
+    # Tier: 1 | Structural invariant
     def test_25_to_30_cadence(self):
         """
         25fps → 30fps: ratio = 25/30 = 5/6.
@@ -498,6 +511,7 @@ class TestEdgeCases:
         assert acc.advance_count == 50
         assert acc.repeat_count == 10
 
+    # Tier: 1 | Structural invariant
     def test_60_to_30_cadence_half(self):
         """
         60fps input → 30fps output is NOT a cadence case (input faster than output).

@@ -77,6 +77,7 @@ class TestInvPlanEligibleAssetsOnly001:
     Derived from: LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY.
     """
 
+    # Tier: 1 | Structural invariant
     def test_reject_ineligible_asset_in_zone(self):
         """INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 -- negative
 
@@ -111,6 +112,7 @@ class TestInvPlanEligibleAssetsOnly001:
             "does not carry the constitutional invariant name."
         )
 
+    # Tier: 1 | Structural invariant
     def test_accept_eligible_assets_in_zone(self):
         """INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 -- positive
 
@@ -139,6 +141,7 @@ class TestInvPlanEligibleAssetsOnly001:
             zones, asset_eligibility_checker=checker
         )
 
+    # Tier: 1 | Structural invariant
     def test_reject_mixed_eligible_and_ineligible(self):
         """INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 -- negative (mixed)
 
@@ -170,6 +173,7 @@ class TestInvPlanEligibleAssetsOnly001:
         assert "INV-PLAN-ELIGIBLE-ASSETS-ONLY-001" in msg
         assert "asset-bad-001" in msg
 
+    # Tier: 1 | Structural invariant
     def test_skip_check_when_no_resolver(self):
         """INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 -- no resolver
 

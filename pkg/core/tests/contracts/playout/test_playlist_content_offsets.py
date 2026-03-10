@@ -26,6 +26,7 @@ def _generate_playlist_events(schedule_items: list[dict]) -> list[dict]:
 
 
 class TestInvPlaylistContentOffset003:
+    # Tier: 2 | Scheduling logic invariant
     def test_content_offsets_increase_monotonically(self):
         si = _make_schedule_item(ad_break_offsets_ms=[2_700_000])
         events = _generate_playlist_events([si])
@@ -33,6 +34,7 @@ class TestInvPlaylistContentOffset003:
         for i in range(len(content_events) - 1):
             assert content_events[i + 1].get("offset_ms", 0) >= content_events[i].get("offset_ms", 0)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_content_events_cover_asset_in_order(self):
         si = _make_schedule_item(episode_duration_ms=5_400_000, ad_break_offsets_ms=[1_800_000, 3_600_000])
         events = _generate_playlist_events([si])

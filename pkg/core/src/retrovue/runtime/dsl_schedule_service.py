@@ -17,7 +17,9 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.thread import _worker, _threads_queues
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,35 @@ from typing import Any
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
 from retrovue.runtime.playout_log_expander import expand_program_block
+
+
+class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor whose worker threads are daemon threads.
+
+    Prevents in-flight background tasks (e.g. loudness measurement) from
+    blocking process exit on Ctrl-C.
+    """
+
+    def _adjust_thread_count(self):
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, q=self._work_queue):
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            thread_name = '%s_%d' % (self._thread_name_prefix or self,
+                                     num_threads)
+            t = threading.Thread(name=thread_name, target=_worker,
+                                 args=(weakref.ref(self, weakref_cb),
+                                       self._work_queue,
+                                       self._initializer,
+                                       self._initargs))
+            t.daemon = True
+            t.start()
+            self._threads.add(t)
+            _threads_queues[t] = self._work_queue
 from retrovue.runtime.traffic_manager import fill_ad_blocks
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
 from retrovue.adapters.enrichers.loudness_enricher import needs_loudness_measurement
@@ -79,34 +110,70 @@ def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
     return d
 
 
+# INV-BLOCK-SEGMENT-CONSERVATION-001: 1 frame at 29.97fps, rounded up.
+FRAME_TOLERANCE_MS = 40
+
+
 def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
     """Deserialize a dict back into a ScheduledBlock.
 
     INV-SCHEDULE-HORIZON-001: Used by Tier 2 (Playlog Horizon Daemon)
     and _hydrate_schedule to reconstruct blocks from DB cache.
+
+    INV-BLOCK-SEGMENT-CONSERVATION-001: Rejects blocks where segment
+    durations violate conservation (delta > FRAME_TOLERANCE_MS or any
+    segment has non-positive duration).
     """
     from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
-    return ScheduledBlock(
+
+    segments = tuple(
+        ScheduledSegment(
+            segment_type=s["segment_type"],
+            asset_uri=s.get("asset_uri", ""),
+            asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
+            segment_duration_ms=int(s.get("segment_duration_ms", 0)),
+            transition_in=s.get("transition_in", "TRANSITION_NONE"),
+            transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
+            transition_out=s.get("transition_out", "TRANSITION_NONE"),
+            transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
+            gain_db=s.get("gain_db", 0.0),
+            is_primary=s.get("is_primary", False),
+        )
+        for s in d["segments"]
+    )
+
+    # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject negative segment durations.
+    for seg in segments:
+        if seg.segment_duration_ms < 1:
+            raise ValueError(
+                f"INV-BLOCK-SEGMENT-CONSERVATION-001: Negative or zero "
+                f"segment duration — block={d['block_id']} "
+                f"segment_type={seg.segment_type} "
+                f"duration_ms={seg.segment_duration_ms}"
+            )
+
+    block = ScheduledBlock(
         block_id=d["block_id"],
         start_utc_ms=d["start_utc_ms"],
         end_utc_ms=d["end_utc_ms"],
-        segments=tuple(
-            ScheduledSegment(
-                segment_type=s["segment_type"],
-                asset_uri=s.get("asset_uri", ""),
-                asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
-                segment_duration_ms=int(s.get("segment_duration_ms", 0)),
-                transition_in=s.get("transition_in", "TRANSITION_NONE"),
-                transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
-                transition_out=s.get("transition_out", "TRANSITION_NONE"),
-                transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
-                gain_db=s.get("gain_db", 0.0),
-                is_primary=s.get("is_primary", False),
-            )
-            for s in d["segments"]
-        ),
+        segments=segments,
         traffic_profile=d.get("traffic_profile"),
     )
+
+    # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject overstuffed/understuffed
+    # blocks beyond frame tolerance.
+    block_duration_ms = block.end_utc_ms - block.start_utc_ms
+    sum_segment_ms = sum(s.segment_duration_ms for s in block.segments)
+    delta_ms = sum_segment_ms - block_duration_ms
+    if abs(delta_ms) > FRAME_TOLERANCE_MS:
+        raise ValueError(
+            f"INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 data — "
+            f"block={block.block_id} sum={sum_segment_ms}ms "
+            f"duration={block_duration_ms}ms delta={delta_ms}ms "
+            f"segment_count={len(block.segments)} stage=deserialization"
+        )
+
+    return block
 
 
 class DslScheduleService:
@@ -171,6 +238,17 @@ class DslScheduleService:
         self._loudness_lock = threading.Lock()
         self._loudness_executor: ThreadPoolExecutor | None = None
 
+    def shutdown(self) -> None:
+        """Shut down background resources (loudness executor).
+
+        Called by ProgramDirector.stop() to ensure the process can exit
+        without waiting for in-flight loudness measurements to complete.
+        """
+        with self._loudness_lock:
+            if self._loudness_executor is not None:
+                self._loudness_executor.shutdown(wait=False, cancel_futures=True)
+                self._loudness_executor = None
+
     def _enqueue_loudness_measurement(self, asset_id: str, file_path: str) -> None:
         """INV-LOUDNESS-NORMALIZED-001 Rule 5: Enqueue background loudness measurement.
 
@@ -182,8 +260,8 @@ class DslScheduleService:
                 return  # Already in-flight
             self._loudness_pending.add(asset_id)
             if self._loudness_executor is None:
-                self._loudness_executor = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix="loudness-measure"
+                self._loudness_executor = _DaemonThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="loudness-measure",
                 )
 
         self._loudness_executor.submit(self._run_loudness_measurement, asset_id, file_path)
@@ -378,16 +456,36 @@ class DslScheduleService:
                             transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
                             gain_db=s.get("gain_db", 0.0),
                         ))
-                    logger.debug(
-                        "INV-TIER2-AUTHORITY-001: block %s already compiled (channel=%s)",
-                        block.block_id, channel_id,
-                    )
-                    return ScheduledBlock(
+                    cached = ScheduledBlock(
                         block_id=row.block_id,
                         start_utc_ms=row.start_utc_ms,
                         end_utc_ms=row.end_utc_ms,
                         segments=tuple(segments),
                     )
+
+                    # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject stale row.
+                    cached_dur = cached.end_utc_ms - cached.start_utc_ms
+                    cached_sum = sum(
+                        s.segment_duration_ms for s in cached.segments
+                    )
+                    if abs(cached_sum - cached_dur) > FRAME_TOLERANCE_MS:
+                        logger.warning(
+                            "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 "
+                            "row in ensure_block_compiled — block=%s sum=%dms "
+                            "duration=%dms delta=%dms segment_count=%d "
+                            "stage=deserialization. Deleting to recompile.",
+                            block.block_id, cached_sum, cached_dur,
+                            cached_sum - cached_dur, len(cached.segments),
+                        )
+                        db.delete(row)
+                        db.commit()
+                        # Fall through to recompile below
+                    else:
+                        logger.debug(
+                            "INV-TIER2-AUTHORITY-001: block %s already compiled (channel=%s)",
+                            block.block_id, channel_id,
+                        )
+                        return cached
         except Exception as e:
             logger.warning(
                 "INV-TIER2-AUTHORITY-001: DB check failed for block=%s: %s — compiling anyway",
@@ -549,18 +647,39 @@ class DslScheduleService:
                         gain_db=s.get("gain_db", 0.0),
                     ))
 
+                filled = ScheduledBlock(
+                    block_id=row.block_id,
+                    start_utc_ms=row.start_utc_ms,
+                    end_utc_ms=row.end_utc_ms,
+                    segments=tuple(segments),
+                )
+
+                # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject stale row and
+                # delete it so ensure_block_compiled recompiles correctly.
+                block_dur = filled.end_utc_ms - filled.start_utc_ms
+                seg_sum = sum(
+                    s.segment_duration_ms for s in filled.segments
+                )
+                if abs(seg_sum - block_dur) > FRAME_TOLERANCE_MS:
+                    logger.warning(
+                        "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 "
+                        "row invalidated — block=%s sum=%dms duration=%dms "
+                        "delta=%dms segment_count=%d stage=deserialization. "
+                        "Deleting to force recompile.",
+                        block_id, seg_sum, block_dur, seg_sum - block_dur,
+                        len(filled.segments),
+                    )
+                    db.delete(row)
+                    db.commit()
+                    return None
+
                 logger.debug(
                     "INV-CHANNEL-NO-COMPILE-001: Tier 2 hit for "
                     "block=%s (%d segs)",
                     row.block_id, len(segments),
                 )
 
-                return ScheduledBlock(
-                    block_id=row.block_id,
-                    start_utc_ms=row.start_utc_ms,
-                    end_utc_ms=row.end_utc_ms,
-                    segments=tuple(segments),
-                )
+                return filled
 
         except Exception as e:
             logger.warning(
@@ -1112,6 +1231,8 @@ class DslScheduleService:
         PlaylistEvent. ChannelManager reads filled blocks from PlaylistEvent.
 
         INV-PLAYLOG-PREFILL-001: Ad selection at Tier 2, not compile time or feed time.
+        INV-PRESENTATION-PRECEDES-PRIMARY-001: When compiled_segments contains
+        presentation entries, they are hydrated and prepended to the expanded block.
         """
         blocks: list[ScheduledBlock] = []
         for block_def in schedule["program_blocks"]:
@@ -1142,6 +1263,32 @@ class DslScheduleService:
             ):
                 self._enqueue_loudness_measurement(asset_id, asset_uri)
 
+            # INV-PRESENTATION-PRECEDES-PRIMARY-001: Hydrate presentation segments
+            # from compiled_segments and prepend them to the expanded block.
+            presentation_segs: list[ScheduledSegment] = []
+            compiled_segments = block_def.get("compiled_segments")
+            if compiled_segments:
+                for cs in compiled_segments:
+                    if cs.get("segment_type") == "presentation":
+                        pres_id = cs.get("asset_id", "")
+                        pres_meta = resolver.lookup(pres_id)
+                        pres_uri = self._resolve_uri(pres_meta.file_uri)
+                        presentation_segs.append(ScheduledSegment(
+                            segment_type="presentation",
+                            asset_uri=pres_uri,
+                            asset_start_offset_ms=0,
+                            segment_duration_ms=int(cs["duration_ms"]),
+                        ))
+
+            # INV-BLOCK-SEGMENT-CONSERVATION-001: Presentation segments consume
+            # block time.  Subtract their total from the slot budget so
+            # content + filler + presentation sums to exactly block_duration_ms.
+            full_slot_ms = int(block_def["slot_duration_sec"] * 1000)
+            presentation_total_ms = sum(
+                s.segment_duration_ms for s in presentation_segs
+            )
+            content_slot_ms = full_slot_ms - presentation_total_ms
+
             # Expand into acts + ad breaks (empty filler placeholders — Tier 1 data).
             # INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 (PlaylistBuilderDaemon),
             # not here at compile time and not at feed time.
@@ -1149,18 +1296,48 @@ class DslScheduleService:
                 asset_id=asset_id,
                 asset_uri=asset_uri,
                 start_utc_ms=start_utc_ms,
-                slot_duration_ms=int(block_def["slot_duration_sec"] * 1000),
+                slot_duration_ms=content_slot_ms,
                 episode_duration_ms=int(block_def["episode_duration_sec"] * 1000),
                 chapter_markers_ms=chapter_ms,
                 channel_type=self._channel_type,
                 gain_db=gain_db,
             )
 
+            # Prepend presentation segments and restore full block duration.
+            if presentation_segs:
+                from dataclasses import replace
+                expanded = replace(
+                    expanded,
+                    segments=tuple(presentation_segs) + expanded.segments,
+                    end_utc_ms=start_utc_ms + full_slot_ms,
+                )
+
             # Carry block-level traffic_profile from DSL through to ScheduledBlock
             tp = block_def.get("traffic_profile")
             if tp:
                 from dataclasses import replace
                 expanded = replace(expanded, traffic_profile=tp)
+
+            # INV-BLOCK-SEGMENT-CONSERVATION-001: Verify segment sum == block duration.
+            block_duration_ms = expanded.end_utc_ms - expanded.start_utc_ms
+            sum_segment_ms = sum(
+                s.segment_duration_ms for s in expanded.segments
+            )
+            delta_ms = sum_segment_ms - block_duration_ms
+            if delta_ms != 0:
+                logger.error(
+                    "INV-BLOCK-SEGMENT-CONSERVATION-001 VIOLATION: "
+                    "block_id=%s sum_segment_ms=%d block_duration_ms=%d "
+                    "delta_ms=%d presentation_ms=%d",
+                    expanded.block_id, sum_segment_ms, block_duration_ms,
+                    delta_ms, presentation_total_ms,
+                )
+            else:
+                logger.debug(
+                    "BLOCK_PLAN_INVARIANT_CHECK block_id=%s "
+                    "sum_segment_ms=%d block_duration_ms=%d delta_ms=0",
+                    expanded.block_id, sum_segment_ms, block_duration_ms,
+                )
 
             blocks.append(expanded)
 

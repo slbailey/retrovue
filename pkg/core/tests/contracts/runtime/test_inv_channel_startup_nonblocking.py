@@ -86,6 +86,7 @@ def _create_manager_via_pd(pd, channel_id: str = "test-ch"):
 class TestInvChannelStartupNonblocking001:
     """INV-CHANNEL-STARTUP-NONBLOCKING-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_manager_survives_teardown(self):
         """_stop_channel_internal() MUST NOT remove ChannelManager from _managers.
 
@@ -111,6 +112,7 @@ class TestInvChannelStartupNonblocking001:
         assert surviving_manager._channel_state == "STOPPED"
         assert surviving_manager.active_producer is None
 
+    # Tier: 1 | Structural invariant
     def test_retune_after_teardown_skips_build_initial(self):
         """After teardown, _get_or_create_manager() MUST NOT call _build_initial().
 
@@ -137,6 +139,7 @@ class TestInvChannelStartupNonblocking001:
         # INV: load_schedule (which calls _build_initial) MUST NOT have been called
         fake_svc.load_schedule.assert_not_called()
 
+    # Tier: 1 | Structural invariant
     def test_build_initial_idempotent(self):
         """_build_initial() MUST be idempotent: if blocks are already loaded,
         it MUST return without recompilation.
@@ -167,6 +170,7 @@ class TestInvChannelStartupNonblocking001:
         assert len(svc._blocks) == 1
         assert svc._blocks[0] is fake_block
 
+    # Tier: 1 | Structural invariant
     def test_startup_executor_is_bounded(self):
         """ProgramDirector MUST have a bounded _startup_executor.
 

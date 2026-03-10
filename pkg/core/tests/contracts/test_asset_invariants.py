@@ -105,6 +105,7 @@ def _is_schedulable(asset: SimpleNamespace) -> bool:
 class TestInvAssetApprovedImpliesReady001:
     """INV-ASSET-APPROVED-IMPLIES-READY-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_taair_001_ready_approved_valid(self) -> None:
         """INV-ASSET-APPROVED-IMPLIES-READY-001 — positive
 
@@ -114,6 +115,7 @@ class TestInvAssetApprovedImpliesReady001:
         asset = _make_asset(state="ready", approved_for_broadcast=True, duration_ms=1_320_000)
         _check_approved_implies_ready(asset)  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_taair_002_new_approved_rejected(self) -> None:
         """INV-ASSET-APPROVED-IMPLIES-READY-001 — negative
 
@@ -124,6 +126,7 @@ class TestInvAssetApprovedImpliesReady001:
         with pytest.raises(ValueError, match="INV-ASSET-APPROVED-IMPLIES-READY-001-VIOLATED"):
             _check_approved_implies_ready(asset)
 
+    # Tier: 1 | Structural invariant
     def test_taair_003_enriching_approved_rejected(self) -> None:
         """INV-ASSET-APPROVED-IMPLIES-READY-001 — negative
 
@@ -134,6 +137,7 @@ class TestInvAssetApprovedImpliesReady001:
         with pytest.raises(ValueError, match="INV-ASSET-APPROVED-IMPLIES-READY-001-VIOLATED"):
             _check_approved_implies_ready(asset)
 
+    # Tier: 1 | Structural invariant
     def test_taair_004_ready_not_approved_valid(self) -> None:
         """INV-ASSET-APPROVED-IMPLIES-READY-001 — positive
 
@@ -147,6 +151,7 @@ class TestInvAssetApprovedImpliesReady001:
 class TestInvAssetSoftdeleteSync001:
     """INV-ASSET-SOFTDELETE-SYNC-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tsds_001_deleted_with_timestamp_valid(self) -> None:
         """INV-ASSET-SOFTDELETE-SYNC-001 — positive
 
@@ -159,6 +164,7 @@ class TestInvAssetSoftdeleteSync001:
         )
         _check_softdelete_sync(asset)  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tsds_002_not_deleted_no_timestamp_valid(self) -> None:
         """INV-ASSET-SOFTDELETE-SYNC-001 — positive
 
@@ -168,6 +174,7 @@ class TestInvAssetSoftdeleteSync001:
         asset = _make_asset(is_deleted=False, deleted_at=None)
         _check_softdelete_sync(asset)  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tsds_003_deleted_no_timestamp_rejected(self) -> None:
         """INV-ASSET-SOFTDELETE-SYNC-001 — negative
 
@@ -178,6 +185,7 @@ class TestInvAssetSoftdeleteSync001:
         with pytest.raises(ValueError, match="INV-ASSET-SOFTDELETE-SYNC-001-VIOLATED"):
             _check_softdelete_sync(asset)
 
+    # Tier: 1 | Structural invariant
     def test_tsds_004_not_deleted_with_timestamp_rejected(self) -> None:
         """INV-ASSET-SOFTDELETE-SYNC-001 — negative
 
@@ -195,6 +203,7 @@ class TestInvAssetSoftdeleteSync001:
 class TestInvAssetCanonicalKeyFormat001:
     """INV-ASSET-CANONICAL-KEY-FORMAT-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tckf_001_valid_sha256_hex(self) -> None:
         """INV-ASSET-CANONICAL-KEY-FORMAT-001 — positive
 
@@ -204,6 +213,7 @@ class TestInvAssetCanonicalKeyFormat001:
         valid_hash = "a1b2c3d4e5f6" + "0" * 52  # 64 hex chars
         _check_canonical_key_format(valid_hash)  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tckf_002_too_short_rejected(self) -> None:
         """INV-ASSET-CANONICAL-KEY-FORMAT-001 — negative
 
@@ -214,6 +224,7 @@ class TestInvAssetCanonicalKeyFormat001:
         with pytest.raises(ValueError, match="INV-ASSET-CANONICAL-KEY-FORMAT-001-VIOLATED"):
             _check_canonical_key_format(short_hash)
 
+    # Tier: 1 | Structural invariant
     def test_tckf_003_too_long_rejected(self) -> None:
         """INV-ASSET-CANONICAL-KEY-FORMAT-001 — negative
 
@@ -224,6 +235,7 @@ class TestInvAssetCanonicalKeyFormat001:
         with pytest.raises(ValueError, match="INV-ASSET-CANONICAL-KEY-FORMAT-001-VIOLATED"):
             _check_canonical_key_format(long_hash)
 
+    # Tier: 1 | Structural invariant
     def test_tckf_004_non_hex_rejected(self) -> None:
         """INV-ASSET-CANONICAL-KEY-FORMAT-001 — negative
 
@@ -234,6 +246,7 @@ class TestInvAssetCanonicalKeyFormat001:
         with pytest.raises(ValueError, match="INV-ASSET-CANONICAL-KEY-FORMAT-001-VIOLATED"):
             _check_canonical_key_format(bad_hash)
 
+    # Tier: 1 | Structural invariant
     def test_tckf_005_uppercase_rejected(self) -> None:
         """INV-ASSET-CANONICAL-KEY-FORMAT-001 — negative
 
@@ -248,6 +261,7 @@ class TestInvAssetCanonicalKeyFormat001:
 class TestInvAssetStateMachine001:
     """INV-ASSET-STATE-MACHINE-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tasm_001_new_to_enriching(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — positive
 
@@ -256,6 +270,7 @@ class TestInvAssetStateMachine001:
         """
         validate_state_transition("new", "enriching")  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tasm_002_enriching_to_ready(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — positive
 
@@ -264,6 +279,7 @@ class TestInvAssetStateMachine001:
         """
         validate_state_transition("enriching", "ready")  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tasm_003_enriching_to_new_revert(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — positive
 
@@ -272,6 +288,7 @@ class TestInvAssetStateMachine001:
         """
         validate_state_transition("enriching", "new")  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tasm_004_any_to_retired(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — positive
 
@@ -281,6 +298,7 @@ class TestInvAssetStateMachine001:
         for state in ("new", "enriching", "ready"):
             validate_state_transition(state, "retired")  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tasm_005_new_to_ready_rejected(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — negative
 
@@ -290,6 +308,7 @@ class TestInvAssetStateMachine001:
         with pytest.raises(ValueError, match="INV-ASSET-STATE-MACHINE-001-VIOLATED"):
             validate_state_transition("new", "ready")
 
+    # Tier: 1 | Structural invariant
     def test_tasm_006_ready_to_new_rejected(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — negative
 
@@ -299,6 +318,7 @@ class TestInvAssetStateMachine001:
         with pytest.raises(ValueError, match="INV-ASSET-STATE-MACHINE-001-VIOLATED"):
             validate_state_transition("ready", "new")
 
+    # Tier: 1 | Structural invariant
     def test_tasm_007_ready_to_enriching_rejected(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — negative
 
@@ -308,6 +328,7 @@ class TestInvAssetStateMachine001:
         with pytest.raises(ValueError, match="INV-ASSET-STATE-MACHINE-001-VIOLATED"):
             validate_state_transition("ready", "enriching")
 
+    # Tier: 1 | Structural invariant
     def test_tasm_008_same_state_noop(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — positive
 
@@ -317,6 +338,7 @@ class TestInvAssetStateMachine001:
         for state in ("new", "enriching", "ready", "retired"):
             validate_state_transition(state, state)  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tasm_009_retired_to_anything_rejected(self) -> None:
         """INV-ASSET-STATE-MACHINE-001 — negative
 
@@ -336,6 +358,7 @@ class TestInvAssetStateMachine001:
 class TestInvAssetDurationRequiredForReady001:
     """INV-ASSET-DURATION-REQUIRED-FOR-READY-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tdrr_001_valid_duration_promotes(self) -> None:
         """INV-ASSET-DURATION-REQUIRED-FOR-READY-001 — positive
 
@@ -349,6 +372,7 @@ class TestInvAssetDurationRequiredForReady001:
             asset.state = "ready"
         assert asset.state == "ready"
 
+    # Tier: 1 | Structural invariant
     def test_tdrr_002_none_duration_stays_new(self) -> None:
         """INV-ASSET-DURATION-REQUIRED-FOR-READY-001 — negative
 
@@ -363,6 +387,7 @@ class TestInvAssetDurationRequiredForReady001:
             asset.state = "new"
         assert asset.state == "new"
 
+    # Tier: 1 | Structural invariant
     def test_tdrr_003_zero_duration_stays_new(self) -> None:
         """INV-ASSET-DURATION-REQUIRED-FOR-READY-001 — negative
 
@@ -381,6 +406,7 @@ class TestInvAssetDurationRequiredForReady001:
 class TestInvAssetApprovalOperatorOnly001:
     """INV-ASSET-APPROVAL-OPERATOR-ONLY-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_taoo_001_enrichment_never_approves(self) -> None:
         """INV-ASSET-APPROVAL-OPERATOR-ONLY-001 — positive
 
@@ -402,6 +428,7 @@ class TestInvAssetApprovalOperatorOnly001:
         # The enrichment pipeline MUST NOT have set approved_for_broadcast
         assert asset.approved_for_broadcast is False
 
+    # Tier: 1 | Structural invariant
     def test_taoo_002_enrichment_setting_approved_is_violation(self) -> None:
         """INV-ASSET-APPROVAL-OPERATOR-ONLY-001 — negative
 
@@ -422,6 +449,7 @@ class TestInvAssetApprovalOperatorOnly001:
 class TestInvAssetReprobeResetsApproval001:
     """INV-ASSET-REPROBE-RESETS-APPROVAL-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_trra_001_reprobe_clears_all_stale_data(self) -> None:
         """INV-ASSET-REPROBE-RESETS-APPROVAL-001 — positive
 
@@ -452,6 +480,7 @@ class TestInvAssetReprobeResetsApproval001:
         assert asset.audio_codec is None
         assert asset.container is None
 
+    # Tier: 1 | Structural invariant
     def test_trra_002_non_chapter_markers_survive(self) -> None:
         """INV-ASSET-REPROBE-RESETS-APPROVAL-001 — positive
 
@@ -471,6 +500,7 @@ class TestInvAssetReprobeResetsApproval001:
         assert len(deleted) == 1
         assert deleted[0].kind == "CHAPTER"
 
+    # Tier: 1 | Structural invariant
     def test_trra_003_chapter_markers_removed(self) -> None:
         """INV-ASSET-REPROBE-RESETS-APPROVAL-001 — negative
 
@@ -492,6 +522,7 @@ class TestInvAssetReprobeResetsApproval001:
 class TestInvAssetReenrichResetsStale001:
     """INV-ASSET-REENRICH-RESETS-STALE-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_ters_001_stale_asset_metadata_cleared(self) -> None:
         """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
 
@@ -519,6 +550,7 @@ class TestInvAssetReenrichResetsStale001:
         assert asset.audio_codec is None
         assert asset.container is None
 
+    # Tier: 1 | Structural invariant
     def test_ters_002_stale_asset_approval_reset(self) -> None:
         """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
 
@@ -537,6 +569,7 @@ class TestInvAssetReenrichResetsStale001:
 
         assert asset.approved_for_broadcast is False
 
+    # Tier: 1 | Structural invariant
     def test_ters_003_chapter_markers_cleared_non_chapter_preserved(self) -> None:
         """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
 
@@ -554,6 +587,7 @@ class TestInvAssetReenrichResetsStale001:
         assert surviving[0].kind == "AVAIL"
         assert len(deleted) == 1
 
+    # Tier: 1 | Structural invariant
     def test_ters_004_state_transitions_through_enriching(self) -> None:
         """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
 
@@ -568,6 +602,7 @@ class TestInvAssetReenrichResetsStale001:
         # enriching → new is legal (revert)
         validate_state_transition("enriching", "new")
 
+    # Tier: 1 | Structural invariant
     def test_ters_005_never_approves_after_reenrichment(self) -> None:
         """INV-ASSET-REENRICH-RESETS-STALE-001 — positive
 
@@ -599,6 +634,7 @@ class TestInvAssetReenrichResetsStale001:
 class TestInvAssetProbeOnlyFieldAuthority001:
     """INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tpfa_001_non_probe_authoritative_valid(self) -> None:
         """INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 — positive
 
@@ -622,6 +658,7 @@ class TestInvAssetProbeOnlyFieldAuthority001:
         sidecar = EpisodeSidecar.model_validate(sidecar_data)
         assert sidecar.title == "Test Episode"
 
+    # Tier: 1 | Structural invariant
     def test_tpfa_002_runtime_seconds_authoritative_rejected(self) -> None:
         """INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 — negative
 
@@ -645,6 +682,7 @@ class TestInvAssetProbeOnlyFieldAuthority001:
         with pytest.raises(ValueError, match="Probe-only fields cannot be authoritative"):
             EpisodeSidecar.model_validate(sidecar_data)
 
+    # Tier: 1 | Structural invariant
     def test_tpfa_003_video_codec_authoritative_rejected(self) -> None:
         """INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 — negative
 
@@ -668,6 +706,7 @@ class TestInvAssetProbeOnlyFieldAuthority001:
         with pytest.raises(ValueError, match="Probe-only fields cannot be authoritative"):
             EpisodeSidecar.model_validate(sidecar_data)
 
+    # Tier: 1 | Structural invariant
     def test_tpfa_004_probe_fields_present_but_not_authoritative_valid(self) -> None:
         """INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 — positive
 
@@ -697,6 +736,7 @@ class TestInvAssetProbeOnlyFieldAuthority001:
 class TestInvAssetDurationContractualTruth001:
     """INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tdct_001_duration_set_at_enrichment(self) -> None:
         """INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001 — positive
 
@@ -717,6 +757,7 @@ class TestInvAssetDurationContractualTruth001:
         planning_duration = asset.duration_ms
         assert planning_duration == probed_duration_ms
 
+    # Tier: 1 | Structural invariant
     def test_tdct_002_asset_library_returns_stored_value(self) -> None:
         """INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001 — positive
 
@@ -738,6 +779,7 @@ class TestInvAssetDurationContractualTruth001:
 class TestInvAssetMarkerBounds001:
     """INV-ASSET-MARKER-BOUNDS-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tamb_001_valid_marker_within_bounds(self) -> None:
         """INV-ASSET-MARKER-BOUNDS-001 — positive
 
@@ -750,6 +792,7 @@ class TestInvAssetMarkerBounds001:
             asset_duration_ms=1_320_000,
         )  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tamb_002_marker_at_boundaries(self) -> None:
         """INV-ASSET-MARKER-BOUNDS-001 — positive
 
@@ -762,6 +805,7 @@ class TestInvAssetMarkerBounds001:
             asset_duration_ms=1_320_000,
         )  # must not raise
 
+    # Tier: 1 | Structural invariant
     def test_tamb_003_end_exceeds_duration_rejected(self) -> None:
         """INV-ASSET-MARKER-BOUNDS-001 — negative
 
@@ -775,6 +819,7 @@ class TestInvAssetMarkerBounds001:
                 asset_duration_ms=1_320_000,
             )
 
+    # Tier: 1 | Structural invariant
     def test_tamb_004_negative_start_rejected(self) -> None:
         """INV-ASSET-MARKER-BOUNDS-001 — negative
 
@@ -797,6 +842,7 @@ class TestInvAssetMarkerBounds001:
 class TestInvAssetSchedulableTripleGate001:
     """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_tstg_001_all_three_conditions_schedulable(self) -> None:
         """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 — positive
 
@@ -811,6 +857,7 @@ class TestInvAssetSchedulableTripleGate001:
         )
         assert _is_schedulable(asset) is True
 
+    # Tier: 1 | Structural invariant
     def test_tstg_002_deleted_not_schedulable(self) -> None:
         """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 — negative
 
@@ -825,6 +872,7 @@ class TestInvAssetSchedulableTripleGate001:
         )
         assert _is_schedulable(asset) is False
 
+    # Tier: 1 | Structural invariant
     def test_tstg_003_not_approved_not_schedulable(self) -> None:
         """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 — negative
 
@@ -839,6 +887,7 @@ class TestInvAssetSchedulableTripleGate001:
         )
         assert _is_schedulable(asset) is False
 
+    # Tier: 1 | Structural invariant
     def test_tstg_004_not_ready_not_schedulable(self) -> None:
         """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 — negative
 
@@ -852,6 +901,7 @@ class TestInvAssetSchedulableTripleGate001:
         )
         assert _is_schedulable(asset) is False
 
+    # Tier: 1 | Structural invariant
     def test_tstg_005_enriching_not_schedulable(self) -> None:
         """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 — negative
 
@@ -865,6 +915,7 @@ class TestInvAssetSchedulableTripleGate001:
         )
         assert _is_schedulable(asset) is False
 
+    # Tier: 1 | Structural invariant
     def test_tstg_006_all_permutations(self) -> None:
         """INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001 — exhaustive
 
@@ -895,6 +946,7 @@ class TestInvAssetSchedulableTripleGate001:
 class TestInvAssetLibraryPlanningOnly001:
     """INV-ASSET-LIBRARY-PLANNING-ONLY-001 enforcement tests."""
 
+    # Tier: 1 | Structural invariant
     def test_talp_001_no_asset_library_in_channel_manager(self) -> None:
         """INV-ASSET-LIBRARY-PLANNING-ONLY-001 — positive
 
@@ -917,6 +969,7 @@ class TestInvAssetLibraryPlanningOnly001:
                 f"channel_manager.py imports {term!r}"
             )
 
+    # Tier: 1 | Structural invariant
     def test_talp_002_no_asset_library_in_playout_session(self) -> None:
         """INV-ASSET-LIBRARY-PLANNING-ONLY-001 — positive
 

@@ -70,6 +70,7 @@ def _source_contains_attr_call(source: str, obj_attr: str, method: str) -> bool:
 class TestInvChannelStartupConcurrency001:
     """INV-CHANNEL-STARTUP-CONCURRENCY-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_stream_channel_has_semaphore_guard(self):
         """stream_channel() MUST check _startup_semaphore.locked() before startup.
 
@@ -89,6 +90,7 @@ class TestInvChannelStartupConcurrency001:
             "no fail-fast guard for startup stampede"
         )
 
+    # Tier: 1 | Structural invariant
     def test_hls_playlist_has_semaphore_guard(self):
         """hls_playlist() MUST check _startup_semaphore.locked() before startup.
 
@@ -108,6 +110,7 @@ class TestInvChannelStartupConcurrency001:
             "no fail-fast guard for startup stampede"
         )
 
+    # Tier: 1 | Structural invariant
     def test_startup_semaphore_and_executor_bounded(self):
         """ProgramDirector MUST have _startup_semaphore and _startup_executor
         both bounded to STARTUP_CAP.

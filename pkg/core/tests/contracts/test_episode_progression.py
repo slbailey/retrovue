@@ -103,12 +103,14 @@ def _resolve(run: SerialRunInfo, target: date, episode_count: int = EPISODE_COUN
 class TestDeterminism:
     """Validates INV-EPISODE-PROGRESSION-001 — Deterministic episode selection."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_anchor_date_selects_anchor_episode(self) -> None:
         """EP-DETERM-001: Anchor date resolves to anchor episode index."""
         # Validates INV-EPISODE-PROGRESSION-001
         run = _make_run(anchor_date=MON_JAN_06, anchor_episode_index=0)
         assert _resolve(run, MON_JAN_06) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_daily_sequential_progression(self) -> None:
         """EP-DETERM-002: Daily sequential progression Mon→E0, Tue→E1, Wed→E2."""
         # Validates INV-EPISODE-PROGRESSION-001
@@ -119,6 +121,7 @@ class TestDeterminism:
         assert _resolve(run, THU_JAN_09) == 3
         assert _resolve(run, FRI_JAN_10) == 4
 
+    # Tier: 2 | Scheduling logic invariant
     def test_second_week_continues(self) -> None:
         """EP-DETERM-003: Progression crosses week boundary without reset."""
         # Validates INV-EPISODE-PROGRESSION-001
@@ -126,6 +129,7 @@ class TestDeterminism:
         assert _resolve(run, SUN_JAN_12) == 6   # End of week 1
         assert _resolve(run, MON_JAN_13) == 7   # Start of week 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_repeated_resolution_identical(self) -> None:
         """EP-DETERM-004: Same date resolved twice yields identical result."""
         # Validates INV-EPISODE-PROGRESSION-001
@@ -139,6 +143,7 @@ class TestDeterminism:
 class TestRestartInvariance:
     """Validates INV-EPISODE-PROGRESSION-002 — Restart invariance."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_scheduler_downtime_daily(self) -> None:
         """EP-RESTART-001: Scheduler offline Tue–Thu; Friday selects correct episode.
 
@@ -156,6 +161,7 @@ class TestRestartInvariance:
         # Friday must still be correct.
         assert _resolve(run, FRI_JAN_10) == 4
 
+    # Tier: 2 | Scheduling logic invariant
     def test_scheduler_downtime_full_week(self) -> None:
         """EP-RESTART-002: Scheduler offline full week; next compilation correct."""
         # Validates INV-EPISODE-PROGRESSION-002
@@ -169,6 +175,7 @@ class TestRestartInvariance:
 class TestMonotonicAdvancement:
     """Validates INV-EPISODE-PROGRESSION-003 — Monotonic ordered advancement."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_daily_monotonic(self) -> None:
         """EP-MONO-001: Each day's episode index ≥ previous day's."""
         # Validates INV-EPISODE-PROGRESSION-003
@@ -179,6 +186,7 @@ class TestMonotonicAdvancement:
                 f"Day {i}: episode {indices[i]} < previous {indices[i - 1]}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_non_zero_anchor_index(self) -> None:
         """EP-MONO-002: anchor_episode_index=10 → anchor date selects E10."""
         # Validates INV-EPISODE-PROGRESSION-003
@@ -186,6 +194,7 @@ class TestMonotonicAdvancement:
         assert _resolve(run, MON_JAN_06) == 10
         assert _resolve(run, TUE_JAN_07) == 11
 
+    # Tier: 2 | Scheduling logic invariant
     def test_out_of_order_resolution(self) -> None:
         """EP-MONO-003: Resolving Friday before Tuesday produces same results."""
         # Validates INV-EPISODE-PROGRESSION-001, INV-EPISODE-PROGRESSION-003
@@ -207,6 +216,7 @@ class TestMonotonicAdvancement:
 class TestPlacementIsolation:
     """Validates INV-EPISODE-PROGRESSION-004 — Placement isolation."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_same_show_different_times_independent(self) -> None:
         """EP-ISOLATE-001: Bonanza at 10:00 and 23:00 are separate runs."""
         # Validates INV-EPISODE-PROGRESSION-004
@@ -223,6 +233,7 @@ class TestPlacementIsolation:
         # Different anchor_episode_index → different result on same day.
         assert _resolve(run_10am, WED_JAN_08) != _resolve(run_11pm, WED_JAN_08)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_same_show_different_days_independent(self) -> None:
         """EP-ISOLATE-002: Weekday and weekend runs are separate."""
         # Validates INV-EPISODE-PROGRESSION-004
@@ -238,6 +249,7 @@ class TestPlacementIsolation:
         # Sunday for weekend run: 2nd weekend day → E1.
         assert _resolve(weekend_run, SUN_JAN_12) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_three_strips_no_interference(self) -> None:
         """EP-ISOLATE-003: Three concurrent runs progress independently."""
         # Validates INV-EPISODE-PROGRESSION-004
@@ -251,6 +263,7 @@ class TestPlacementIsolation:
         assert _resolve(run_b, target) == 12   # 10 + 2
         assert _resolve(run_c, target) == 52   # 50 + 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shared_run_id_same_episode(self) -> None:
         """EP-ISOLATE-004: Two blocks with same run_id resolve same episode."""
         # Validates INV-EPISODE-PROGRESSION-004
@@ -265,6 +278,7 @@ class TestPlacementIsolation:
 
         assert block_a_result == block_b_result == 3
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shared_run_same_day_same_episode(self) -> None:
         """EP-SHARED-001 (part 1): Two blocks at different times sharing run_id
         resolve identical episode for same broadcast day."""
@@ -281,6 +295,7 @@ class TestPlacementIsolation:
         result_18 = _resolve(shared_run, WED_JAN_08)
         assert result_08 == result_18 == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_shared_run_time_shifted_same_episode(self) -> None:
         """EP-SHARED-001 (part 2): 06:00 and 18:00 blocks sharing run_id resolve
         identical episode; block start time does not influence selection."""
@@ -311,6 +326,7 @@ class TestPlacementIsolation:
 class TestDayPatternFidelity:
     """Validates INV-EPISODE-PROGRESSION-005 — Day-pattern fidelity."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_weekly_progression(self) -> None:
         """EP-DAYPATTERN-001: Weekly placement advances once per week."""
         # Validates INV-EPISODE-PROGRESSION-005
@@ -320,6 +336,7 @@ class TestDayPatternFidelity:
         assert _resolve(run, MON_JAN_13) == 1
         assert _resolve(run, MON_JAN_20) == 2
 
+    # Tier: 2 | Scheduling logic invariant
     def test_weekday_only_skips_weekends(self) -> None:
         """EP-DAYPATTERN-002: Weekday placement: Fri→E4, next Mon→E5."""
         # Validates INV-EPISODE-PROGRESSION-005
@@ -330,6 +347,7 @@ class TestDayPatternFidelity:
         # Sat and Sun are not occurrences.  Next Mon must be E5, not E7.
         assert _resolve(run, MON_JAN_13) == 5
 
+    # Tier: 2 | Scheduling logic invariant
     def test_mwf_progression(self) -> None:
         """EP-DAYPATTERN-003: Mon/Wed/Fri placement skips Tue/Thu/Sat/Sun."""
         # Validates INV-EPISODE-PROGRESSION-005
@@ -349,6 +367,7 @@ class TestDayPatternFidelity:
 class TestExhaustionPolicies:
     """Validates INV-EPISODE-PROGRESSION-006 — Exhaustion policy correctness."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_wrap_cycles_back(self) -> None:
         """EP-EXHAUST-001: `wrap` returns to episode 0 after catalog exhaustion."""
         # Validates INV-EPISODE-PROGRESSION-006
@@ -368,6 +387,7 @@ class TestExhaustionPolicies:
         # Day 6 → 1.
         assert _resolve(run, MON_JAN_06 + timedelta(days=6), catalog_size) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_hold_last_repeats_final(self) -> None:
         """EP-EXHAUST-002: `hold_last` repeats final episode indefinitely."""
         # Validates INV-EPISODE-PROGRESSION-006
@@ -385,6 +405,7 @@ class TestExhaustionPolicies:
         assert _resolve(run, MON_JAN_06 + timedelta(days=10), catalog_size) == 4
         assert _resolve(run, MON_JAN_06 + timedelta(days=100), catalog_size) == 4
 
+    # Tier: 2 | Scheduling logic invariant
     def test_stop_returns_filler(self) -> None:
         """EP-EXHAUST-003: `stop` returns FILLER after last episode."""
         # Validates INV-EPISODE-PROGRESSION-006
@@ -401,6 +422,7 @@ class TestExhaustionPolicies:
         assert _resolve(run, MON_JAN_06 + timedelta(days=5), catalog_size) is FILLER
         assert _resolve(run, MON_JAN_06 + timedelta(days=100), catalog_size) is FILLER
 
+    # Tier: 2 | Scheduling logic invariant
     def test_all_policies_agree_before_exhaustion(self) -> None:
         """EP-EXHAUST-004: Last valid episode is the same under all three policies."""
         # Validates INV-EPISODE-PROGRESSION-006
@@ -426,6 +448,7 @@ class TestSeasonTransparency:
     (INV-EPISODE-PROGRESSION-003).  There is no season-aware code path.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_season_boundary_rollover(self) -> None:
         """EP-SEASON-001: Episode index crosses S01→S02 without special handling.
 
@@ -460,6 +483,7 @@ class TestEPGStability:
     and calendar-only computation (INV-EPISODE-PROGRESSION-012).
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_epg_recomputation_stable(self) -> None:
         """EP-EPG-001: Recompiling same day produces same episode identity.
 
@@ -482,6 +506,7 @@ class TestEPGStability:
 class TestMultiExecutionSequencing:
     """Validates INV-EPISODE-PROGRESSION-009 — Multi-execution sequencing."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_multi_execution_consecutive_episodes(self) -> None:
         """EP-MULTI-001: Block with 3 executions selects E_n, E_n+1, E_n+2.
 
@@ -508,6 +533,7 @@ class TestMultiExecutionSequencing:
 
         assert execution_episodes == [3, 4, 5]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_multi_execution_does_not_affect_next_day(self) -> None:
         """EP-MULTI-002: Next day base episode is from calendar, not offset.
 
@@ -531,6 +557,7 @@ class TestMultiExecutionSequencing:
 class TestScheduleEditContinuity:
     """Validates INV-EPISODE-PROGRESSION-010 — Schedule edit continuity."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_schedule_edit_preserves_progression(self) -> None:
         """EP-EDIT-001: Changing start time with same run_id continues progression.
 
@@ -563,6 +590,7 @@ class TestScheduleEditContinuity:
         # Day 6 (Saturday): must be E5, not E0.
         assert _resolve(run_after_edit, SAT_JAN_11) == 5
 
+    # Tier: 2 | Scheduling logic invariant
     def test_run_id_change_resets_progression(self) -> None:
         """EP-EDIT-002: Changing run_id creates new run with fresh anchor.
 
@@ -597,6 +625,7 @@ class TestScheduleEditContinuity:
 class TestAnchorValidation:
     """Validates INV-EPISODE-PROGRESSION-011 — Anchor validity."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_anchor_on_non_matching_day_rejected(self) -> None:
         """EP-ANCHOR-001: Anchor on Saturday for weekday mask is rejected.
 
@@ -615,21 +644,25 @@ class TestAnchorValidation:
 class TestCalendarMath:
     """Validates INV-EPISODE-PROGRESSION-012 — Calendar-only computation."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_occurrence_counter_anchor_equals_target(self) -> None:
         """EP-CALENDAR-001: [anchor, anchor) returns 0."""
         # Validates INV-EPISODE-PROGRESSION-012
         assert count_occurrences(MON_JAN_06, MON_JAN_06, DAILY) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_occurrence_counter_single_day(self) -> None:
         """EP-CALENDAR-002: [Mon, Tue) with daily mask returns 1."""
         # Validates INV-EPISODE-PROGRESSION-012
         assert count_occurrences(MON_JAN_06, TUE_JAN_07, DAILY) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_occurrence_counter_full_week(self) -> None:
         """EP-CALENDAR-003: 7 days with daily mask returns 7."""
         # Validates INV-EPISODE-PROGRESSION-012
         assert count_occurrences(MON_JAN_06, MON_JAN_13, DAILY) == 7
 
+    # Tier: 2 | Scheduling logic invariant
     def test_occurrence_counter_large_range(self) -> None:
         """EP-CALENDAR-004: 10-year range computed in bounded time."""
         # Validates INV-EPISODE-PROGRESSION-012

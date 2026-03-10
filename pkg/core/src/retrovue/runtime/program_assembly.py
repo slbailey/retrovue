@@ -107,19 +107,27 @@ def assemble_schedule_block(
         AssemblyFault: if any execution cannot assemble valid content.
     """
     grid_blocks = program_def.get("grid_blocks", 1)
+    grid_blocks_max = program_def.get("grid_blocks_max")
+    is_dynamic = grid_blocks_max is not None
     fill_mode = program_def.get("fill_mode", "single")
     bleed = program_def.get("bleed", False)
     intro_ref = program_def.get("intro")
     outro_ref = program_def.get("outro")
+    presentation_refs = program_def.get("presentation")
 
     # INV-PROGRAM-GRID-001: slots must be exact multiple of grid_blocks
-    if grid_blocks <= 0 or slots % grid_blocks != 0:
-        raise AssemblyFault(
-            f"INV-PROGRAM-GRID-001: slots ({slots}) is not a multiple of "
-            f"grid_blocks ({grid_blocks}) for program '{program_ref}'"
-        )
+    # (only for fixed-grid programs; dynamic uses slots as budget)
+    if is_dynamic:
+        grid_blocks = 0  # signal dynamic mode to ProgramDefinition
+        executions = 1   # greedy loop handled by caller
+    else:
+        if grid_blocks <= 0 or slots % grid_blocks != 0:
+            raise AssemblyFault(
+                f"INV-PROGRAM-GRID-001: slots ({slots}) is not a multiple of "
+                f"grid_blocks ({grid_blocks}) for program '{program_ref}'"
+            )
+        executions = slots // grid_blocks
 
-    executions = slots // grid_blocks
     prog = ProgramDefinition(
         name=program_ref,
         pool=pool_name,
@@ -128,6 +136,8 @@ def assemble_schedule_block(
         bleed=bleed,
         intro=intro_ref,
         outro=outro_ref,
+        presentation=presentation_refs,
+        grid_blocks_max=grid_blocks_max,
     )
 
     # Resolve intro/outro assets if referenced
@@ -174,6 +184,13 @@ def assemble_schedule_block(
         pool_assets = _build_pool_assets(ordered_ids, resolver)
         pool = _ProgressionPool(name=pool_name, assets=pool_assets)
 
+        # Resolve presentation entries per execution (pool entries may vary)
+        presentation_assets = None
+        if presentation_refs:
+            presentation_assets = _resolve_presentation_entries(
+                presentation_refs, resolver, rng,
+            )
+
         result = assemble_program(
             prog,
             pool,
@@ -181,6 +198,7 @@ def assemble_schedule_block(
             block_start_ms=running_offset_ms,
             intro_asset=intro_asset,
             outro_asset=outro_asset,
+            presentation_assets=presentation_assets,
         )
 
         results.append(result)
@@ -192,6 +210,38 @@ def assemble_schedule_block(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_presentation_entries(
+    entries: list,
+    resolver: AssetResolver,
+    rng: random.Random,
+) -> list[_PoolAsset]:
+    """Resolve a mixed list of presentation entries to assets.
+
+    Each entry is either:
+      - str: direct asset reference → resolver.lookup()
+      - dict with "pool" key: pool reference → resolver.resolve_pool() + rng.choice()
+    """
+    assets: list[_PoolAsset] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            assets.append(_resolve_wrapper_asset(entry, resolver))
+        elif isinstance(entry, dict) and "pool" in entry:
+            pool_name = entry["pool"]
+            candidates = resolver.resolve_pool(pool_name)
+            if not candidates:
+                raise AssemblyFault(
+                    f"Presentation pool '{pool_name}' matched 0 assets"
+                )
+            chosen_id = rng.choice(candidates)
+            assets.append(_resolve_wrapper_asset(chosen_id, resolver))
+        else:
+            raise AssemblyFault(
+                f"Invalid presentation entry: {entry!r} "
+                f"(expected string or {{pool: '...'}})"
+            )
+    return assets
 
 
 def _resolve_wrapper_asset(

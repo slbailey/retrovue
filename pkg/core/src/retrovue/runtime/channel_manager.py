@@ -2177,6 +2177,26 @@ class BlockPlanProducer(Producer):
             len(plan_segments), jip_offset_ms,
         )
 
+        # INV-BLOCK-SEGMENT-CONSERVATION-001: Stage 5 (feed time) check.
+        # Segment ms sum must equal block duration within frame tolerance.
+        block_dur_ms = block.end_utc_ms - block.start_utc_ms
+        seg_sum_ms = sum(s["segment_duration_ms"] for s in plan_segments)
+        frame_delta_ms = seg_sum_ms - block_dur_ms
+        if abs(frame_delta_ms) > 40:  # FRAME_TOLERANCE_MS
+            self._logger.error(
+                "INV-BLOCK-SEGMENT-CONSERVATION-001 VIOLATION block_id=%s "
+                "block_duration_ms=%d sum_segment_ms=%d delta_ms=%d "
+                "segment_count=%d stage=feed",
+                block.block_id, block_dur_ms, seg_sum_ms,
+                frame_delta_ms, len(plan_segments),
+            )
+        else:
+            self._logger.debug(
+                "INV-BLOCK-SEGMENT-CONSERVATION-001 OK block_id=%s "
+                "block_duration_ms=%d sum_segment_ms=%d delta_ms=%d",
+                block.block_id, block_dur_ms, seg_sum_ms, frame_delta_ms,
+            )
+
         return block
 
     def _advance_cursor(self, block: "BlockPlan"):

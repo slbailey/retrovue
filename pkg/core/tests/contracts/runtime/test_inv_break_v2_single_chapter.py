@@ -191,6 +191,7 @@ class TestSingleContentWithChapters:
         item = _build_fake_item(compiled_segments=compiled)
         return item, resolver
 
+    # Tier: 2 | Scheduling logic invariant
     def test_hydrate_alone_produces_monolithic_content(self):
         """_hydrate_compiled_segments alone (without routing) still produces
         a single content segment. This confirms the routing gate is needed."""
@@ -207,6 +208,7 @@ class TestSingleContentWithChapters:
             "_hydrate_compiled_segments must produce 1 content segment (no chapter logic)"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fixed_routing_produces_chapter_acts(self):
         """After fix: 3 chapter markers → 4 content acts with filler between."""
         item, resolver = self._make_fixtures()
@@ -228,6 +230,7 @@ class TestSingleContentWithChapters:
             f"Expected ≥3 filler segments between acts, got {len(filler_segs)}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fixed_routing_content_offsets(self):
         """Content segments have correct asset_start_offset_ms at chapter positions."""
         item, resolver = self._make_fixtures()
@@ -243,6 +246,7 @@ class TestSingleContentWithChapters:
         assert content_segs[2]["asset_start_offset_ms"] == 720_000
         assert content_segs[3]["asset_start_offset_ms"] == 1_080_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fixed_routing_same_asset_uri(self):
         """All content segments reference the same file."""
         item, resolver = self._make_fixtures()
@@ -265,6 +269,7 @@ class TestMultiContentBypassesChapterExpansion:
     """BREAK-026: Multi-content compiled_segments continues through
     _hydrate_compiled_segments, preserving segment structure."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_multi_content_not_resplit(self):
         compiled = [
             {"segment_type": "content", "asset_id": "ep-001", "duration_ms": 700_000},
@@ -303,6 +308,7 @@ class TestSingleContentNoChapters:
     """BREAK-027: Single-content without chapter markers still gets
     algorithmic break placement (not all post-content)."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_chapters_still_produces_mid_content_breaks(self):
         compiled = [
             {"segment_type": "content", "asset_id": "ep-001", "duration_ms": 1_440_000},
@@ -335,6 +341,7 @@ class TestMovieTypeNoMidBreaks:
     """BREAK-028: Movie-type single-content block produces no
     mid-content breaks, even with chapter markers."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_movie_type_single_content_no_mid_breaks(self):
         compiled = [
             {"segment_type": "content", "asset_id": "movie-001", "duration_ms": 5_400_000},

@@ -107,6 +107,7 @@ class _SimulatedAir:
             self.read_socket = None
 
 
+# Tier: 3 | Integration simulation
 def test_channel_stream_stop_interrupts_blocking_factory():
     """
     INV-CHANNEL-STREAM-SHUTDOWN-001
@@ -171,6 +172,7 @@ def test_channel_stream_stop_interrupts_blocking_factory():
         air.stop()
 
 
+# Tier: 3 | Integration simulation
 def test_channel_stream_reconnect_on_eof():
     """
     INV-CHANNEL-STREAM-RECONNECT-001
@@ -242,6 +244,7 @@ def test_channel_stream_reconnect_on_eof():
         air.stop()
 
 
+# Tier: 3 | Integration simulation
 def test_channel_stream_reconnect_factory_transient_failure():
     """
     Factory may temporarily fail (RuntimeError) during recovery swap.

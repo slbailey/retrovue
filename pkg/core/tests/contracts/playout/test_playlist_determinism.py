@@ -47,6 +47,7 @@ def _generate_playlist_events(schedule_items: list[dict]) -> list[dict]:
 class TestInvPlaylistHorizonDeterminism007:
     """INV-PLAYLIST-HORIZON-DETERMINISM-007 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_playlist_generation_is_deterministic(self):
         """Generating PlaylistEvents twice from identical inputs must
         produce identical results.

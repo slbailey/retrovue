@@ -182,6 +182,7 @@ class TestJipOffsetWithinBlockRange:
     strictly less than the active entry's resolved duration.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_uniform_plan_various_times(self):
         """Offset is in bounds for a uniform-duration plan at many time points."""
         _require_compute_jip()
@@ -212,6 +213,7 @@ class TestJipOffsetWithinBlockRange:
                 f"for now_ms={now_ms}, index={index}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_variable_plan_various_times(self):
         """Offset is in bounds when entries have heterogeneous durations."""
         _require_compute_jip()
@@ -228,6 +230,7 @@ class TestJipOffsetWithinBlockRange:
                 f"for now_ms={now_ms}, index={index} (variable plan)"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_single_entry_plan(self):
         """Single-entry plan: index always 0, offset wraps within entry."""
         _require_compute_jip()
@@ -253,6 +256,7 @@ class TestJipDeterministicMapping:
     Also verifies correct index selection for known positions in the cycle.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_same_inputs_same_outputs(self):
         """10 identical calls produce identical (index, offset) pairs."""
         _require_compute_jip()
@@ -270,6 +274,7 @@ class TestJipDeterministicMapping:
                 f"INV-JIP-BP-003: call {i} returned {result}, expected {first_result}"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_known_positions_uniform(self):
         """Verify exact index and offset for known cycle positions."""
         _require_compute_jip()
@@ -297,6 +302,7 @@ class TestJipDeterministicMapping:
                 f"expected ({exp_idx}, {exp_off})"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_known_positions_variable(self):
         """Correct index for heterogeneous durations (25s + 5s + 20s = 50s)."""
         _require_compute_jip()
@@ -327,6 +333,7 @@ class TestJipDeterministicMapping:
                 f"expected ({exp_idx}, {exp_off}) [variable plan]"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_nonzero_cycle_origin(self):
         """Non-zero cycle_origin shifts the reference correctly."""
         _require_compute_jip()
@@ -356,6 +363,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
     sequence that start() performs.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_first_block_offset_second_block_clean(self):
         """block_a.offset == jip_offset, block_b.offset == 0."""
         producer = _make_producer()
@@ -379,6 +387,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
             f"got {block_b.segments[0]['asset_start_offset_ms']}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_first_block_duration_immutable(self):
         """INV-JIP-FIRST-BLOCK-001: first block is partial [now, fence_end)."""
         producer = _make_producer()
@@ -400,6 +409,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
             f"got {block_a.segments[0]['segment_duration_ms']}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_second_block_full_duration(self):
         """block_b uses full entry duration (no reduction)."""
         producer = _make_producer()
@@ -415,6 +425,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
             f"got {block_b.duration_ms}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_entry_with_base_offset_adds_jip(self):
         """JIP offset adds to the entry's own asset_start_offset_ms."""
         producer = _make_producer()
@@ -439,6 +450,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
             f"got {block_a.segments[0]['segment_duration_ms']}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_zero_offset_produces_full_block(self):
         """JIP offset 0 means no modification — full block, original offset."""
         producer = _make_producer()
@@ -451,6 +463,7 @@ class TestJipAppliesOffsetOnlyToFirstSeededBlock:
         assert block_a.duration_ms == 10_000
         assert block_a.segments[0]["segment_duration_ms"] == 10_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_presentation_time_contiguous(self):
         """block_b.start_utc_ms == block_a.end_utc_ms (no gap)."""
         producer = _make_producer()
@@ -483,6 +496,7 @@ class TestJipCursorStateAfterSeed:
     next-block generation with no rewinds or skips.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cursor_points_to_correct_next_entry(self):
         """
         JIP at entry 1 → seed B(partial), C(full) → cursor at entry 0.
@@ -509,6 +523,7 @@ class TestJipCursorStateAfterSeed:
             f"Next block should be A.mp4, got {block_c.segments[0]['asset_uri']}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_next_block_start_ms_contiguous(self):
         """_next_block_start_ms == block_b.end_utc_ms."""
         producer = _make_producer()
@@ -530,6 +545,7 @@ class TestJipCursorStateAfterSeed:
         block_c = _generate_next(producer, plan)
         assert block_c.start_utc_ms == block_b.end_utc_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_full_sequence_no_gaps(self):
         """
         Generate 5 blocks from JIP point — verify contiguous timeline
@@ -581,6 +597,7 @@ class TestJipCursorStateAfterSeed:
         # First block's segment matches partial duration
         assert blocks[0].segments[0]["segment_duration_ms"] == 3_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_variable_duration_cursor(self):
         """Cursor is correct with heterogeneous entry durations."""
         producer = _make_producer()
@@ -622,6 +639,7 @@ class TestJipNoPollingOrTimerRetry:
     join path.  No timers, sleeps, or polling loops.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_compute_jip_does_not_sleep(self, monkeypatch):
         """time.sleep is never called by compute_jip_position."""
         _require_compute_jip()
@@ -636,6 +654,7 @@ class TestJipNoPollingOrTimerRetry:
             f"{len(sleep_calls)} time(s)"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_compute_jip_does_not_create_threads(self, monkeypatch):
         """No Thread or Timer is created during JIP computation."""
         _require_compute_jip()
@@ -656,6 +675,7 @@ class TestJipNoPollingOrTimerRetry:
             f"{len(threads_created)} thread(s)"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_generate_with_jip_does_not_sleep(self, monkeypatch):
         """Block generation with JIP offset does not sleep."""
         sleep_calls = []
@@ -683,6 +703,7 @@ class TestBurnInTripwirePlaylistNotSet:
     The burn-in path enforces that _playlist is None on the manager.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_producer_has_no_playlist_attribute(self):
         """BlockPlanProducer must not own a _playlist field."""
         producer = _make_producer()
@@ -691,6 +712,7 @@ class TestBurnInTripwirePlaylistNotSet:
             "JIP operates on ScheduledBlock objects only."
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jip_works_with_scheduled_block(self):
         """
         JIP block generation succeeds with only a ScheduledBlock.
@@ -722,6 +744,7 @@ class TestJipSteadyStateFeedingUnchanged:
     control paths into the steady-state loop.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_on_block_complete_after_jip_is_normal(self):
         """
         _on_block_complete after JIP seed generates the correct next block
@@ -751,6 +774,7 @@ class TestJipSteadyStateFeedingUnchanged:
             f"got {next_block.duration_ms}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_pending_block_slot_not_affected_by_jip(self):
         """JIP seed does not leave anything in _pending_block."""
         producer = _make_producer()
@@ -775,6 +799,7 @@ class TestJipSteadyStateFeedingUnchanged:
 class TestJipEdgeCases:
     """Additional edge-case tests derived from the contract."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_plan_returns_zero_zero(self):
         """Empty playout_plan produces (0, 0) — no-JIP fallback."""
         _require_compute_jip()
@@ -784,6 +809,7 @@ class TestJipEdgeCases:
             f"Empty plan should produce (0, 0), got ({index}, {offset})"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_now_before_origin(self):
         """
         If now_utc_ms < cycle_origin_utc_ms, the elapsed time is negative.
@@ -824,6 +850,7 @@ class TestBlockAlignmentUnderJip:
     so subsequent blocks inherit aligned starts.
     """
 
+    # Tier: 2 | Scheduling logic invariant
     def test_jip_block_end_aligned(self):
         """Block A (JIP): end sits on grid boundary; start is at now."""
         block_dur = 10_000
@@ -842,6 +869,7 @@ class TestBlockAlignmentUnderJip:
         )
         assert block_a.duration_ms == 7_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_block_b_aligned_after_jip_block_a(self):
         """Block B inherits block A's end; both must be aligned."""
         block_dur = 10_000
@@ -863,6 +891,7 @@ class TestBlockAlignmentUnderJip:
             f"{block_b.start_utc_ms} not aligned to {block_dur}ms"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_30min_jip_at_19_01_into_19_00_block(self):
         """
         Regression scenario: join at 19:01 into a 19:00 block.

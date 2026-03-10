@@ -185,6 +185,7 @@ Frame selection cadence must reflect the live source FPS at all times. See [Cade
 | **INV-CADENCE-SOURCE-SYNC-002** | Every producer transition (session start, all fence rotation paths, padded-gap-exit) MUST reinitialize cadence from new live source FPS before next tick | `PipelineManager` | Semantic |
 | **INV-CADENCE-SOURCE-SYNC-003** | Every intra-block segment swap MUST refresh cadence from new segment's source FPS before next tick | `PipelineManager` | Semantic |
 | **INV-CADENCE-SOURCE-SYNC-004** | Stale cadence causes observable speed error (source_fps / output_fps relative speed); always a defect | `PipelineManager` | Semantic |
+| **INV-CADENCE-SINGLE-AUTHORITY** | Frame cadence decisions (advance vs repeat) must occur only at the clock domain where frames are emitted to the output stream (TickLoop / PipelineManager). Decoder and buffer layers must not apply cadence logic. Dual cadence causes multiplicative rate error (e.g. 24²/29.97 = 19.2fps = 0.8× speed). | `PipelineManager` | Semantic (Broadcast-Grade) |
 
 ### Block Boundary Authorities (Canonical Model)
 

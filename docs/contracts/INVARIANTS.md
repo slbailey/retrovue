@@ -189,6 +189,41 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 
 Canonical contract: [episode_progression.md](episode_progression.md)
 
+### Scheduling — Program Presentation
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-PRESENTATION-SINGLE-PRIMARY-001 | [invariants/core/program-presentation/INV-PRESENTATION-SINGLE-PRIMARY-001.md](invariants/core/program-presentation/INV-PRESENTATION-SINGLE-PRIMARY-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-PRESENTATION-PRECEDES-PRIMARY-001 | [invariants/core/program-presentation/INV-PRESENTATION-PRECEDES-PRIMARY-001.md](invariants/core/program-presentation/INV-PRESENTATION-PRECEDES-PRIMARY-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001 | [invariants/core/program-presentation/INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001.md](invariants/core/program-presentation/INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-PRESENTATION-GRID-BUDGET-001 | [invariants/core/program-presentation/INV-PRESENTATION-GRID-BUDGET-001.md](invariants/core/program-presentation/INV-PRESENTATION-GRID-BUDGET-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-PRESENTATION-NOT-FILLER-001 | [invariants/core/program-presentation/INV-PRESENTATION-NOT-FILLER-001.md](invariants/core/program-presentation/INV-PRESENTATION-NOT-FILLER-001.md) | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY |
+| INV-PRESENTATION-BREAK-INVISIBLE-001 | [invariants/core/program-presentation/INV-PRESENTATION-BREAK-INVISIBLE-001.md](invariants/core/program-presentation/INV-PRESENTATION-BREAK-INVISIBLE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+Canonical contract: [program_presentation.md](program_presentation.md)
+
+### Scheduling — Programming Pools
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-POOL-RATING-NORMALIZE-001 | [invariants/core/programming-pools/INV-POOL-RATING-NORMALIZE-001.md](invariants/core/programming-pools/INV-POOL-RATING-NORMALIZE-001.md) | LAW-DERIVATION |
+| INV-POOL-TAGS-FILTER-001 | [invariants/core/programming-pools/INV-POOL-TAGS-FILTER-001.md](invariants/core/programming-pools/INV-POOL-TAGS-FILTER-001.md) | LAW-DERIVATION |
+
+Canonical contract: [core/programming_pools.md](core/programming_pools.md)
+
+### Scheduling — Schedule Block Program Reference
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-SBLOCK-PROGRAM-001 | [schedule_block_program_reference.md](schedule_block_program_reference.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-SBLOCK-PROGRAM-002 | [schedule_block_program_reference.md](schedule_block_program_reference.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-SBLOCK-PROGRAM-003 | [schedule_block_program_reference.md](schedule_block_program_reference.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-SBLOCK-PROGRAM-004 | [schedule_block_program_reference.md](schedule_block_program_reference.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-SBLOCK-PROGRAM-005 | [schedule_block_program_reference.md](schedule_block_program_reference.md) | LAW-CONTENT-AUTHORITY |
+| INV-SBLOCK-PROGRAM-006 | [schedule_block_program_reference.md](schedule_block_program_reference.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+
+Canonical contract: [schedule_block_program_reference.md](schedule_block_program_reference.md)
+
 ### Scheduling — Schedule Lifecycle
 
 | Invariant | File | Derived From |
@@ -291,6 +326,23 @@ Canonical contract: [episode_progression.md](episode_progression.md)
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | [invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md](invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md) | LAW-LIVENESS |
 | INV-DAEMON-SESSION-SCOPE-001 | [invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md](invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md) | LAW-LIVENESS |
 | INV-BREAK-V2-SINGLE-CHAPTER-001 | [invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md](invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+### Playout — ScheduledBlock Pipeline
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-PLAYLIST-TIMELINE-CONTINUITY-001 | [invariants/core/playout/INV-PLAYLIST-TIMELINE-CONTINUITY-001.md](invariants/core/playout/INV-PLAYLIST-TIMELINE-CONTINUITY-001.md) | LAW-TIMELINE |
+| INV-PLAYLIST-SEMANTIC-SPLIT-002 | [invariants/core/playout/INV-PLAYLIST-SEMANTIC-SPLIT-002.md](invariants/core/playout/INV-PLAYLIST-SEMANTIC-SPLIT-002.md) | LAW-DERIVATION |
+| INV-PLAYLIST-EVENT-SEGMENT-COVERAGE-002 | [invariants/core/playout/INV-PLAYLIST-EVENT-SEGMENT-COVERAGE-002.md](invariants/core/playout/INV-PLAYLIST-EVENT-SEGMENT-COVERAGE-002.md) | LAW-TIMELINE |
+| INV-PLAYLIST-EVENT-SEGMENT-ORDER-003 | [invariants/core/playout/INV-PLAYLIST-EVENT-SEGMENT-ORDER-003.md](invariants/core/playout/INV-PLAYLIST-EVENT-SEGMENT-ORDER-003.md) | LAW-DERIVATION |
+| INV-PLAYLIST-DURATION-COVERAGE-004 | [invariants/core/playout/INV-PLAYLIST-DURATION-COVERAGE-004.md](invariants/core/playout/INV-PLAYLIST-DURATION-COVERAGE-004.md) | LAW-GRID, LAW-TIMELINE |
+| INV-PLAYLIST-EVENT-SINGLE-PARENT-004 | [invariants/core/playout/INV-PLAYLIST-EVENT-SINGLE-PARENT-004.md](invariants/core/playout/INV-PLAYLIST-EVENT-SINGLE-PARENT-004.md) | LAW-DERIVATION |
+| INV-PLAYLIST-CONTENT-IDENTITY-005 | [invariants/core/playout/INV-PLAYLIST-CONTENT-IDENTITY-005.md](invariants/core/playout/INV-PLAYLIST-CONTENT-IDENTITY-005.md) | LAW-CONTENT-AUTHORITY |
+| INV-PLAYLIST-TIME-ANCHOR-006 | [invariants/core/playout/INV-PLAYLIST-TIME-ANCHOR-006.md](invariants/core/playout/INV-PLAYLIST-TIME-ANCHOR-006.md) | LAW-CLOCK |
+| INV-PLAYLIST-HORIZON-DETERMINISM-007 | [invariants/core/playout/INV-PLAYLIST-HORIZON-DETERMINISM-007.md](invariants/core/playout/INV-PLAYLIST-HORIZON-DETERMINISM-007.md) | LAW-DERIVATION |
+| INV-PLAYLIST-CONTENT-OFFSET-003 | [invariants/core/playout/INV-PLAYLIST-CONTENT-OFFSET-003.md](invariants/core/playout/INV-PLAYLIST-CONTENT-OFFSET-003.md) | LAW-TIMELINE |
+| INV-PLAYLIST-EVENT-TIMELINE-001 | [invariants/core/playout/INV-PLAYLIST-EVENT-TIMELINE-001.md](invariants/core/playout/INV-PLAYLIST-EVENT-TIMELINE-001.md) | LAW-TIMELINE |
+| INV-BLOCK-SEGMENT-CONSERVATION-001 | [invariants/core/playout/INV-BLOCK-SEGMENT-CONSERVATION-001.md](invariants/core/playout/INV-BLOCK-SEGMENT-CONSERVATION-001.md) | LAW-GRID, LAW-TIMELINE |
 
 ---
 

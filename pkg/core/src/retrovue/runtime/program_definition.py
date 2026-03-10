@@ -61,6 +61,29 @@ class ProgramDefinition:
     bleed: bool
     intro: str | None = None
     outro: str | None = None
+    presentation: list | None = None
+    grid_blocks_max: int | None = None
+
+    def __post_init__(self) -> None:
+        # Contract: program_presentation.md — mutual exclusion
+        if self.intro is not None and self.presentation is not None:
+            raise ValueError(
+                "ProgramDefinition MUST NOT declare both 'intro' and "
+                "'presentation' simultaneously"
+            )
+        # INV-SBLOCK-PROGRAM-003: grid_blocks and grid_blocks_max are
+        # mutually exclusive. grid_blocks > 0 means fixed allocation;
+        # grid_blocks_max means dynamic (greedy packing).
+        if self.grid_blocks > 0 and self.grid_blocks_max is not None:
+            raise ValueError(
+                "ProgramDefinition MUST NOT declare both 'grid_blocks' > 0 "
+                "and 'grid_blocks_max'. Use one or the other."
+            )
+
+    @property
+    def is_dynamic_grid(self) -> bool:
+        """True when this program uses greedy grid packing (grid_blocks_max)."""
+        return self.grid_blocks_max is not None
 
     def grid_duration_ms(self, grid_minutes: int) -> int:
         return self.grid_blocks * grid_minutes * 60 * 1000
@@ -121,16 +144,23 @@ def validate_schedule_block(
         )
 
     # INV-PROGRAM-GRID-001: slots must be exact multiple of grid_blocks
+    # (only applies to fixed-grid programs; dynamic grid_blocks_max
+    # programs use slots as a budget — no modulus check).
     slots = getattr(block, "slots", 0)
-    if slots <= 0 or program.grid_blocks <= 0:
+    if slots <= 0:
         raise ValidationFault(
-            "INV-PROGRAM-GRID-001: slots and grid_blocks must be positive"
+            "INV-PROGRAM-GRID-001: slots must be positive"
         )
-    if slots % program.grid_blocks != 0:
-        raise ValidationFault(
-            f"INV-PROGRAM-GRID-001: slots ({slots}) is not a multiple of "
-            f"grid_blocks ({program.grid_blocks})"
-        )
+    if not program.is_dynamic_grid:
+        if program.grid_blocks <= 0:
+            raise ValidationFault(
+                "INV-PROGRAM-GRID-001: grid_blocks must be positive"
+            )
+        if slots % program.grid_blocks != 0:
+            raise ValidationFault(
+                f"INV-PROGRAM-GRID-001: slots ({slots}) is not a multiple of "
+                f"grid_blocks ({program.grid_blocks})"
+            )
 
 
 def validate_channel_programs(
@@ -175,6 +205,7 @@ def assemble_program(
     block_start_ms: int = 0,
     intro_asset: Any | None = None,
     outro_asset: Any | None = None,
+    presentation_assets: list[Any] | None = None,
 ) -> AssemblyResult:
     """Assemble content for a single program execution.
 
@@ -187,6 +218,8 @@ def assemble_program(
         INV-PROGRAM-POOL-002 — empty eligible pool raises fault.
         INV-PROGRAM-ASSEMBLY-ELIGIBLE-001 — only eligible assets.
         INV-PROGRAM-INTRO-OUTRO-001 — intro/outro in runtime calc.
+        INV-PRESENTATION-GRID-BUDGET-001 — presentation deducted from grid.
+        INV-PRESENTATION-PRECEDES-PRIMARY-001 — presentation before content.
     """
     grid_ms = program.grid_duration_ms(grid_minutes)
 
@@ -199,6 +232,15 @@ def assemble_program(
         raise AssemblyFault(
             "INV-PROGRAM-ASSEMBLY-ELIGIBLE-001: outro asset is not eligible"
         )
+
+    # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001: check presentation asset eligibility
+    if presentation_assets:
+        for pa in presentation_assets:
+            if not _is_eligible(pa):
+                raise AssemblyFault(
+                    "INV-PROGRAM-ASSEMBLY-ELIGIBLE-001: presentation asset "
+                    f"'{getattr(pa, 'asset_id', '?')}' is not eligible"
+                )
 
     # Get eligible assets from pool
     if hasattr(pool, "eligible_assets"):
@@ -215,7 +257,15 @@ def assemble_program(
     # Compute wrapper overhead (INV-PROGRAM-INTRO-OUTRO-001)
     intro_ms = getattr(intro_asset, "duration_ms", 0) if intro_asset else 0
     outro_ms = getattr(outro_asset, "duration_ms", 0) if outro_asset else 0
-    wrapper_ms = intro_ms + outro_ms
+
+    # INV-PRESENTATION-GRID-BUDGET-001: presentation durations deducted
+    presentation_ms = 0
+    if presentation_assets:
+        presentation_ms = sum(
+            getattr(pa, "duration_ms", 0) for pa in presentation_assets
+        )
+
+    wrapper_ms = intro_ms + outro_ms + presentation_ms
 
     segments: list[AssemblySegment] = []
 
@@ -231,6 +281,18 @@ def assemble_program(
         raise AssemblyFault(
             f"Unknown fill_mode: {program.fill_mode!r}"
         )
+
+    # INV-PRESENTATION-PRECEDES-PRIMARY-001: prepend presentation stack
+    if presentation_assets:
+        for i, pa in enumerate(presentation_assets):
+            segments.insert(
+                i,
+                AssemblySegment(
+                    asset_id=getattr(pa, "asset_id", f"presentation-{i}"),
+                    duration_ms=getattr(pa, "duration_ms", 0),
+                    segment_type="presentation",
+                ),
+            )
 
     # Prepend intro / append outro
     if intro_asset is not None:

@@ -114,6 +114,7 @@ def _make_continuous_segment_packets(
 class TestHLSSegmentDiscontinuityField:
     """Rule 3: HLSSegment MUST have a discontinuity field of type bool."""
 
+    # Tier: 1 | Structural invariant
     def test_hls_segment_has_discontinuity_field(self):
         from retrovue.streaming.hls_writer import HLSSegment
         import dataclasses
@@ -137,6 +138,7 @@ class TestPlaylistEmitsDiscontinuityTag:
     """Rule 2: _generate_playlist() MUST emit #EXT-X-DISCONTINUITY before
     the #EXTINF line of any discontinuous segment."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_playlist_emits_discontinuity_tag(self):
         """Feed synthetic TS packets with a PCR discontinuity mid-stream.
         The playlist MUST contain #EXT-X-DISCONTINUITY before the affected segment."""
@@ -193,6 +195,7 @@ class TestPlaylistEmitsDiscontinuityTag:
 class TestNoSpuriousDiscontinuity:
     """Rule 4: Segments with continuous PCR MUST NOT be marked discontinuous."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_spurious_discontinuity_on_continuous_pcr(self):
         """Feed only continuous-PCR packets. The playlist MUST NOT contain
         #EXT-X-DISCONTINUITY."""

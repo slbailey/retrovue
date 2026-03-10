@@ -122,6 +122,7 @@ def _template_entry(
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Tier: 2 | Scheduling logic invariant
 def test_commit_template_window_populates_index():
     """After build_horizon for a type:template entry, its WindowKey appears
     in TemplateReferenceIndex._index[template_id].
@@ -142,6 +143,7 @@ def test_commit_template_window_populates_index():
     )
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_rebuild_to_different_template_swaps_index_entry():
     """Rebuilding a window to reference a different template:
     - old template_id's WindowKey is removed from the index
@@ -178,6 +180,7 @@ def test_rebuild_to_different_template_swaps_index_entry():
     )
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_committed_to_blocked_transition_preserves_index_entry():
     """When ProgramDirector marks a window BLOCKED (simulating VAL-T2-001),
     the WindowKey must remain in TemplateReferenceIndex.
@@ -208,6 +211,7 @@ def test_committed_to_blocked_transition_preserves_index_entry():
     )
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_rebuild_to_pool_type_removes_from_index():
     """Rebuilding a template-type window to a pool-type entry removes
     the WindowKey from TemplateReferenceIndex.  Pool entries are not tracked.
@@ -235,6 +239,7 @@ def test_rebuild_to_pool_type_removes_from_index():
     )
 
 
+# Tier: 2 | Scheduling logic invariant
 def test_index_list_sorted_ascending_by_wall_start_ms():
     """The WindowKey list per template_id in the index is sorted ascending
     by wall_start_ms.  Sorted order is the contract for 'earliest affected

@@ -11,7 +11,7 @@ Pool match criteria (from the Programming Pools contract):
   - season: int | list[int] | range (e.g., "2..10", [1, "3..6", 9])
   - episode: int | list[int] | range
   - max_duration_sec / min_duration_sec: int
-  - rating: { include: [...], exclude: [...] }
+  - rating: str | list[str] | { include: [...], exclude: [...] }
   - source: str (source name filter)
   - collection: str (source collection name filter)
 
@@ -80,6 +80,31 @@ def _expand_range_value(value: Any) -> set[int] | None:
         return result
 
     return _parse_one(value)
+
+
+def _normalize_tags_match(tags_cfg: Any) -> list[str]:
+    """Normalize pool tags match value to a list of lowercase strings.
+
+    INV-POOL-TAGS-FILTER-001: accepts bare string or list of strings.
+    Returns a list of lowercase tag strings for AND-combined matching.
+    """
+    if isinstance(tags_cfg, str):
+        return [tags_cfg.lower()]
+    return [t.lower() for t in tags_cfg]
+
+
+def _normalize_rating_match(rating_cfg: Any) -> dict[str, list[str]]:
+    """Normalize pool rating match value to canonical dict form.
+
+    INV-POOL-RATING-NORMALIZE-001: accepts bare string, list of strings,
+    or dict with include/exclude keys. Returns dict with include/exclude.
+    """
+    if isinstance(rating_cfg, str):
+        return {"include": [rating_cfg]}
+    if isinstance(rating_cfg, list):
+        return {"include": list(rating_cfg)}
+    # Already a dict — pass through
+    return rating_cfg
 
 
 @dataclass
@@ -178,7 +203,8 @@ class CatalogAssetResolver:
             series_title = editorial.get("series_title", "")
             season_raw = editorial.get("season_number")
             episode_raw = editorial.get("episode_number")
-            rating = editorial.get("content_rating")
+            rating_raw = editorial.get("content_rating")
+            rating = rating_raw.get("code") if isinstance(rating_raw, dict) else rating_raw
 
             season = int(season_raw) if season_raw is not None else None
             episode_num = int(episode_raw) if episode_raw is not None else None
@@ -197,8 +223,27 @@ class CatalogAssetResolver:
             probed = probed_payloads.get(uuid_str)
             loudness_gain = get_gain_db_from_probed(probed)
             asset_tag_list = tuple(sorted(asset_tags.get(uuid_str, [])))
+
+            # Detect asset type from collection config or editorial data
+            col_config = {}
+            col_obj = None
+            for c in collections:
+                if str(c.uuid) == col_uuid:
+                    col_obj = c
+                    col_config = c.config or {}
+                    break
+            coll_type = col_config.get("type", "")
+            interstitial_type = editorial.get("interstitial_type")
+            has_episode_data = series_title and season is not None and episode_num is not None
+            if interstitial_type:
+                detected_type = interstitial_type
+            elif coll_type == "movie" or (not has_episode_data and editorial.get("title") and not series_title):
+                detected_type = "movie"
+            else:
+                detected_type = "episode"
+
             meta = AssetMetadata(
-                type="episode",
+                type=detected_type,
                 duration_sec=duration_sec,
                 title=display_title,
                 tags=asset_tag_list,
@@ -221,21 +266,6 @@ class CatalogAssetResolver:
                 series_slug = _slugify(series_title)
                 slug = f"asset.{series_slug}.s{season:02d}e{episode_num:02d}"
                 self._aliases[slug] = uuid_str
-
-            # Detect asset type from collection config or editorial data
-            col_config = {}
-            col_obj = None
-            for c in collections:
-                if str(c.uuid) == col_uuid:
-                    col_obj = c
-                    col_config = c.config or {}
-                    break
-            coll_type = col_config.get("type", "")
-            has_episode_data = series_title and season is not None and episode_num is not None
-            if coll_type == "movie" or (not has_episode_data and editorial.get("title") and not series_title):
-                detected_type = "movie"
-            else:
-                detected_type = "episode"
 
             # Extract genres and year
             genres_raw = editorial.get("genres", [])
@@ -368,9 +398,10 @@ class CatalogAssetResolver:
         if min_dur is not None:
             results = [e for e in results if e.duration_sec >= int(min_dur)]
 
-        # Filter: rating
+        # Filter: rating (INV-POOL-RATING-NORMALIZE-001)
         rating_cfg = match.get("rating")
         if rating_cfg:
+            rating_cfg = _normalize_rating_match(rating_cfg)
             include = rating_cfg.get("include")
             exclude = rating_cfg.get("exclude")
             if include:
@@ -403,6 +434,15 @@ class CatalogAssetResolver:
                 results = [e for e in results if e.production_year is not None and yr_start <= e.production_year <= yr_end]
             except (ValueError, IndexError):
                 pass
+
+        # Filter: tags (INV-POOL-TAGS-FILTER-001)
+        tags_cfg = match.get("tags")
+        if tags_cfg:
+            required = _normalize_tags_match(tags_cfg)
+            results = [
+                e for e in results
+                if all(t in {tag.lower() for tag in e.meta.tags} for t in required)
+            ]
 
         # Sort: episodes by series/season/episode, default stable
         results.sort(key=lambda e: (

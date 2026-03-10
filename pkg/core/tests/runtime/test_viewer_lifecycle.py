@@ -106,6 +106,7 @@ class TestViewerLifecycle:
         cm.set_blockplan_mode(True)
         return cm
 
+    # Tier: 3 | Integration simulation
     def test_air_not_started_without_viewers(self):
         """INV-VIEWER-LIFECYCLE-001: AIR is not started until first viewer joins."""
         cm = self.create_channel_manager()
@@ -115,6 +116,7 @@ class TestViewerLifecycle:
         assert cm.runtime_state.viewer_count == 0
         assert cm.runtime_state.producer_status == "stopped"
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     def test_air_starts_on_first_viewer(self, mock_start):
         """INV-VIEWER-LIFECYCLE-001: AIR starts on first viewer (0→1)."""
@@ -128,6 +130,7 @@ class TestViewerLifecycle:
         assert cm.runtime_state.viewer_count == 1
         mock_start.assert_called_once()
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     def test_air_starts_exactly_once_for_n_viewers(self, mock_start):
         """INV-VIEWER-LIFECYCLE-001: AIR starts exactly once for N viewers."""
@@ -142,6 +145,7 @@ class TestViewerLifecycle:
         assert mock_start.call_count == 1
         assert cm.runtime_state.viewer_count == 3
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     @patch.object(BlockPlanProducer, 'stop', return_value=True)
     def test_air_stops_on_last_viewer(self, mock_stop, mock_start):
@@ -161,6 +165,7 @@ class TestViewerLifecycle:
         cm.viewer_leave("viewer-2")
         assert cm.runtime_state.viewer_count == 0
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     def test_rapid_join_leave_no_double_start(self, mock_start):
         """Rapid join/leave does not double-start."""
@@ -177,6 +182,7 @@ class TestViewerLifecycle:
         # But the producer's internal state prevents double-start
         assert cm.runtime_state.viewer_count == 1
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     @patch.object(BlockPlanProducer, 'stop', return_value=True)
     def test_viewer_joining_after_stop_triggers_fresh_session(self, mock_stop, mock_start):
@@ -198,6 +204,7 @@ class TestViewerLifecycle:
         # (start called twice - once per session)
         assert mock_start.call_count == 2
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     def test_concurrent_viewer_joins_thread_safe(self, mock_start):
         """Concurrent viewer joins are thread-safe."""
@@ -225,6 +232,7 @@ class TestViewerLifecycle:
         # Start should only be called once (for first viewer)
         assert mock_start.call_count == 1
 
+    # Tier: 3 | Integration simulation
     @patch.object(BlockPlanProducer, 'start', return_value=True)
     @patch.object(BlockPlanProducer, 'stop', return_value=True)
     def test_concurrent_viewer_churn_thread_safe(self, mock_stop, mock_start):
@@ -259,6 +267,7 @@ class TestViewerLifecycle:
 class TestBlockPlanProducer:
     """Unit tests for BlockPlanProducer."""
 
+    # Tier: 1 | Structural invariant
     def test_producer_starts_only_once(self):
         """BlockPlanProducer.start() is idempotent."""
         producer = BlockPlanProducer(
@@ -290,6 +299,7 @@ class TestBlockPlanProducer:
                 assert result2 is True  # Returns True but doesn't restart
                 assert producer._start_count == 1  # Count doesn't change
 
+    # Tier: 1 | Structural invariant
     def test_producer_stops_only_once(self):
         """BlockPlanProducer.stop() is idempotent."""
         producer = BlockPlanProducer(
@@ -318,6 +328,7 @@ class TestBlockPlanProducer:
         assert result2 is True
         assert producer._stop_count == 1  # Count doesn't change
 
+    # Tier: 1 | Structural invariant
     def test_producer_health_reflects_state(self):
         """Producer health accurately reflects running state."""
         producer = BlockPlanProducer(
@@ -353,6 +364,7 @@ class TestLingerGracePeriod:
         self.schedule_service = MockScheduleService()
         self.program_director = MockProgramDirector()
 
+    # Tier: 3 | Integration simulation
     @patch.object(ChannelManager, '_ensure_producer_running')
     def test_linger_defers_teardown_with_event_loop(self, mock_ensure):
         """INV-VIEWER-LIFECYCLE-002: With event loop, last viewer triggers linger, not immediate teardown."""
@@ -382,6 +394,7 @@ class TestLingerGracePeriod:
         finally:
             loop.close()
 
+    # Tier: 3 | Integration simulation
     @patch.object(ChannelManager, '_ensure_producer_running')
     def test_linger_skips_without_event_loop(self, mock_ensure):
         """Without event loop, last viewer causes immediate teardown (LINGER_SKIP)."""
@@ -400,6 +413,7 @@ class TestLingerGracePeriod:
         # Without event loop, linger cannot be scheduled
         assert cm._linger_handle is None
 
+    # Tier: 1 | Structural invariant
     def test_event_loop_passed_in_get_or_create_manager(self):
         """INV-VIEWER-LIFECYCLE-002: ProgramDirector must pass event_loop to ChannelManager.
 

@@ -39,6 +39,7 @@ class FillerAsset:
     asset_uri: str
     duration_ms: int
     asset_type: str = "filler"   # "filler", "promo", "ad"
+    asset_category: str | None = None
 
 
 # Default traffic policy when no YAML config exists
@@ -288,6 +289,7 @@ class DatabaseAssetLibrary:
                 asset_uri=uri,
                 duration_ms=duration_ms,
                 asset_type=interstitial_type,
+                asset_category=editorial.get("interstitial_category"),
             ))
 
         random.shuffle(candidates)

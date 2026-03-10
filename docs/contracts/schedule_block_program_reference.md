@@ -26,6 +26,15 @@ A ScheduleBlock is a time-positioned instruction within a schedule layer. It spe
 
 A ProgramReference is the `program` field on a ScheduleBlock. It is a string matching a ProgramDefinition's `name` within the same channel configuration. The reference is resolved during schedule compilation.
 
+### Grid Sizing Modes
+
+A ProgramDefinition declares one of two mutually exclusive grid sizing modes:
+
+- **`grid_blocks`** (fixed): The program occupies exactly this many grid slots per execution. Slots MUST be an exact multiple of `grid_blocks`.
+- **`grid_blocks_max`** (dynamic): Each execution takes `ceil(actual_content_duration / grid_slot)` blocks, capped at `grid_blocks_max`. Slots is a budget consumed greedily — no modulus constraint. Remaining slots after the last full execution may be consumed by a final execution that bleeds past the budget (governed by `bleed`).
+
+A ProgramDefinition MUST NOT declare both `grid_blocks > 0` and `grid_blocks_max`.
+
 ---
 
 ## ScheduleBlock Fields
@@ -34,7 +43,7 @@ A ProgramReference is the `program` field on a ScheduleBlock. It is a string mat
 |-------|------|----------|-------------|
 | `start` | time string | Yes | Grid-aligned start time for this block. |
 | `slots` | positive integer | Yes | Number of grid slots allocated. |
-| `program` | string | Yes | ProgramDefinition name reference. |
+| `program` | string \| string[] | Yes | ProgramDefinition name reference, or list of names (one selected per execution via seeded RNG). |
 | `progression` | `sequential` \| `random` \| `shuffle` | Yes | How assets are selected from the program's pool. |
 | `cooldown_hours` | positive number | No | Minimum hours before an asset may repeat in this block. |
 
@@ -54,7 +63,9 @@ The following fields MUST NOT appear on a ScheduleBlock. They are assembly conce
 
 ## ProgramReference
 
-The `program` field is a non-empty string that MUST match the `name` field of exactly one ProgramDefinition in the channel configuration.
+The `program` field is either a non-empty string or a non-empty list of strings. Each string MUST match the `name` field of exactly one ProgramDefinition in the channel configuration.
+
+When `program` is a list, the scheduler selects one ProgramDefinition per execution using the block's seeded RNG. All ProgramDefinitions referenced in the list MUST have the same `grid_blocks` value so that slot validation is uniform.
 
 A ProgramReference is opaque — it carries no assembly semantics. The schedule block does not know or control what the referenced program does internally. It only knows the program's `grid_blocks` value for slot validation.
 
@@ -65,12 +76,13 @@ A ProgramReference is opaque — it carries no assembly semantics. The schedule 
 Resolution occurs during schedule compilation, before any assembly takes place.
 
 1. The scheduler reads the schedule block's `program` field.
-2. The scheduler looks up the ProgramDefinition by name in the channel's program namespace.
-3. If no ProgramDefinition with that name exists, resolution fails with a validation fault.
-4. If the ProgramDefinition is found, the scheduler validates slot compatibility (`slots % program.grid_blocks == 0`).
-5. The resolved ProgramDefinition is passed to assembly.
+2. If `program` is a string, it is treated as a single-element list.
+3. The scheduler looks up each ProgramDefinition by name in the channel's program namespace. If any name does not resolve, resolution fails with a validation fault.
+4. All resolved ProgramDefinitions MUST have the same `grid_blocks` value. Mismatched `grid_blocks` is a validation fault.
+5. The scheduler validates slot compatibility (`slots % grid_blocks == 0`).
+6. For each execution, the scheduler selects one ProgramDefinition from the list using the block's seeded RNG. The selected program is passed to assembly.
 
-Resolution MUST be deterministic. The same channel configuration MUST produce the same resolution result.
+Resolution MUST be deterministic. The same channel configuration and seed MUST produce the same resolution and selection results.
 
 ---
 
@@ -118,9 +130,9 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** Every ScheduleBlock MUST contain a non-empty `program` field referencing a ProgramDefinition by name. A schedule block with an empty or missing program reference is invalid.
+**Guarantee:** Every ScheduleBlock MUST contain a non-empty `program` field. The field is either a non-empty string or a non-empty list of strings, each referencing a ProgramDefinition by name. A schedule block with an empty, null, or absent program reference is invalid.
 
-**Violation:** A ScheduleBlock where the `program` field is empty, null, or absent. This is a planning fault.
+**Violation:** A ScheduleBlock where the `program` field is empty, null, absent, or an empty list. This is a planning fault.
 
 ---
 
@@ -130,9 +142,9 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** The `program` field on a ScheduleBlock MUST resolve to exactly one ProgramDefinition in the channel configuration. Resolution failure is a planning fault.
+**Guarantee:** Every program name in the `program` field MUST resolve to a ProgramDefinition in the channel configuration. Resolution failure is a planning fault.
 
-**Violation:** A ScheduleBlock whose `program` field does not match any ProgramDefinition's `name` in the channel configuration.
+**Violation:** A ScheduleBlock whose `program` field contains any name that does not match a ProgramDefinition in the channel configuration.
 
 ---
 
@@ -142,9 +154,11 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-GRID`, `LAW-CONTENT-AUTHORITY`
 
-**Guarantee:** A ScheduleBlock's `slots` MUST be an exact positive integer multiple of the resolved ProgramDefinition's `grid_blocks`. This ensures the program executes a whole number of times within the allocated slots.
+**Guarantee:** When the resolved ProgramDefinition uses fixed grid sizing (`grid_blocks`), the ScheduleBlock's `slots` MUST be an exact positive integer multiple of `grid_blocks`. This ensures the program executes a whole number of times within the allocated slots.
 
-**Violation:** A ScheduleBlock where `slots % program.grid_blocks != 0`. This is a planning fault.
+When the ProgramDefinition uses dynamic grid sizing (`grid_blocks_max`), `slots` is a budget consumed greedily. No modulus constraint applies. `slots` MUST be a positive integer.
+
+**Violation:** A ScheduleBlock where `grid_blocks` is set and `slots % program.grid_blocks != 0`. This is a planning fault.
 
 ---
 
@@ -157,6 +171,18 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 **Guarantee:** A ScheduleBlock MUST NOT contain any of the following fields: `pool`, `fill_mode`, `bleed`, `intro`, `outro`. These are assembly concerns owned exclusively by ProgramDefinition.
 
 **Violation:** A ScheduleBlock that specifies any assembly-level field. This is a planning fault.
+
+---
+
+### INV-SBLOCK-PROGRAM-006 — Program list must have uniform grid_blocks
+
+Status: Invariant
+Authority Level: Planning
+Derived From: `LAW-GRID`, `LAW-CONTENT-AUTHORITY`
+
+**Guarantee:** When the `program` field is a list, all referenced ProgramDefinitions MUST use the same grid sizing mode and value. If all use `grid_blocks`, the values MUST be identical. If all use `grid_blocks_max`, the values MUST be identical. Mixing `grid_blocks` and `grid_blocks_max` within a program list is not permitted.
+
+**Violation:** A ScheduleBlock whose `program` list references ProgramDefinitions with differing grid sizing values, or that mixes `grid_blocks` and `grid_blocks_max` programs. This is a planning fault.
 
 ---
 
@@ -199,3 +225,9 @@ pkg/core/tests/contracts/test_schedule_block_program_reference.py
 | `test_valid_progression_random` | INV-SBLOCK-PROGRAM-005 | `progression: random` accepted. |
 | `test_valid_progression_shuffle` | INV-SBLOCK-PROGRAM-005 | `progression: shuffle` accepted. |
 | `test_invalid_progression_rejected` | INV-SBLOCK-PROGRAM-005 | `progression: alphabetical` rejected. |
+| `test_program_list_accepted` | INV-SBLOCK-PROGRAM-001 | `program: [prog_a, prog_b]` accepted when both programs are defined. |
+| `test_program_list_empty_rejected` | INV-SBLOCK-PROGRAM-001 | `program: []` rejected as empty. |
+| `test_program_list_undefined_member_rejected` | INV-SBLOCK-PROGRAM-002 | One member of the list not matching a ProgramDefinition rejected. |
+| `test_program_list_mismatched_grid_blocks_rejected` | INV-SBLOCK-PROGRAM-006 | Programs in list with different `grid_blocks` rejected. |
+| `test_program_list_selects_per_execution` | INV-SBLOCK-PROGRAM-002 | Each execution in a multi-execution block selects from the list. |
+| `test_program_list_selection_is_seeded` | INV-SBLOCK-PROGRAM-002 | Same seed produces same program selections across executions. |

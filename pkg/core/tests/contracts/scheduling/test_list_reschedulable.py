@@ -59,6 +59,7 @@ def _mock_db(revisions=None, items_by_rev=None, tier2_rows=None):
 
 
 class TestListReschedulable:
+    # Tier: 2 | Scheduling logic invariant
     def test_returns_future_tier1_from_active_revision(self):
         r = _revision()
         it = _item(r.id, 0, NOW + timedelta(hours=1))
@@ -67,6 +68,7 @@ class TestListReschedulable:
         assert result["status"] == "ok"
         assert len(result["tier1"]) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_returns_future_tier2(self):
         row = SimpleNamespace(
             block_id="b1", channel_slug="hbo-classics", broadcast_day=date(2026, 3, 4),
@@ -76,6 +78,7 @@ class TestListReschedulable:
         result = list_reschedulable(db, now=NOW)
         assert len(result["tier2"]) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_tier1_order_follows_slot_index(self):
         r = _revision()
         a = _item(r.id, 0, NOW + timedelta(hours=1))
@@ -84,6 +87,7 @@ class TestListReschedulable:
         result = list_reschedulable(db, now=NOW)
         assert len(result["tier1"]) == 1
 
+    # Tier: 2 | Scheduling logic invariant
     def test_tier_filter(self):
         db = _mock_db()
         result = list_reschedulable(db, now=NOW, tier="1")

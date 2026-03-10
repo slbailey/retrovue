@@ -136,6 +136,7 @@ class TestProgramSourceAccepted:
 
     # CONTRACT: INV-ASSET-RESOLUTION-DISPATCH-001
     # type: program must not raise InvalidSourceTypeError.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_type_is_accepted(self):
         _, InvalidSourceTypeError, _ = _import_source_resolver()
         resolver = _make_resolver()
@@ -147,6 +148,7 @@ class TestProgramSourceAccepted:
 
     # CONTRACT: INV-ASSET-RESOLUTION-DISPATCH-001
     # type: program dispatches to program resolution, not pool or collection.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_does_not_dispatch_to_pool(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -168,6 +170,7 @@ class TestProgramSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Program resolution returns a list.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_returns_list(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -177,6 +180,7 @@ class TestProgramSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-PROGRAM-RESOLVE-001
     # All episodes in the program are present in the result.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_returns_all_episodes(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -188,6 +192,7 @@ class TestProgramSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-PROGRAM-RESOLVE-001
     # Result has exactly as many elements as the program has episodes.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_returns_correct_count(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -195,6 +200,7 @@ class TestProgramSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Every element is a valid asset ID string in the catalog.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_elements_are_asset_ids(self):
         resolver = _make_resolver()
         catalog = _build_catalog()
@@ -209,6 +215,7 @@ class TestProgramSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # The resolver never returns Program objects — only asset ID strings.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_result_contains_no_program_objects(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -231,6 +238,7 @@ class TestProgramResolutionOrder:
 
     # CONTRACT: INV-ASSET-RESOLUTION-PROGRAM-ORDER-001
     # Episodes are ordered by (season, episode) ascending.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_order_matches_episode_sequence(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -247,6 +255,7 @@ class TestProgramResolutionOrder:
 
     # CONTRACT: INV-ASSET-RESOLUTION-PROGRAM-ORDER-001
     # Season boundaries are respected: all S01 before all S02.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_season_order(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -258,6 +267,7 @@ class TestProgramResolutionOrder:
 
     # CONTRACT: INV-ASSET-RESOLUTION-PROGRAM-ORDER-001
     # Order is deterministic across invocations.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_order_is_deterministic(self):
         resolver = _make_resolver()
         result1 = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -275,6 +285,7 @@ class TestProgramFailures:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Unknown program name is a hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_unknown_program_raises(self):
         resolver = _make_resolver()
         with pytest.raises(KeyError) as exc_info:
@@ -283,6 +294,7 @@ class TestProgramFailures:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Program with zero episodes is a hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_program_raises(self):
         _, _, AssetResolutionError = _import_source_resolver()
         resolver = _make_resolver()
@@ -292,6 +304,7 @@ class TestProgramFailures:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Program resolution never returns None.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_never_returns_none(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -299,6 +312,7 @@ class TestProgramFailures:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Program with episode referencing non-existent asset is a hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_with_bad_asset_ref_raises(self):
         SourceResolver, _, AssetResolutionError = _import_source_resolver()
         bad_programs = {
@@ -326,6 +340,7 @@ class TestProgramNormalizationGuarantees:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Program source returns List[str] just like collection and pool.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_returns_list_of_strings(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})
@@ -335,6 +350,7 @@ class TestProgramNormalizationGuarantees:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # No result element is a dict, tuple, or complex object.
+    # Tier: 2 | Scheduling logic invariant
     def test_program_elements_are_not_complex_objects(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "program", "name": "Seinfeld"})

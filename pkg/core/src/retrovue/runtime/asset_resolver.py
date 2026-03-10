@@ -52,6 +52,18 @@ class AssetResolver(Protocol):
         """
         ...
 
+    def resolve_pool(self, pool_name: str) -> list[str]:
+        """
+        Resolve a named pool to its matching asset IDs.
+
+        Returns:
+            Ordered list of matching asset IDs.
+
+        Raises:
+            KeyError: If pool_name is not registered.
+        """
+        ...
+
 
 class StubAssetResolver:
     """
@@ -101,6 +113,16 @@ class StubAssetResolver:
 
         raise KeyError(f"Asset not found: {asset_id}")
 
+    def resolve_pool(self, pool_name: str) -> list[str]:
+        """Resolve a named pool to matching asset IDs."""
+        if pool_name not in self._pools:
+            raise KeyError(f"Pool not found: {pool_name}")
+        match = self._pools[pool_name].get("match", {})
+        asset_ids = self.query(match)
+        if not asset_ids:
+            raise KeyError(f"Pool '{pool_name}' matched 0 assets")
+        return asset_ids
+
     def query(self, match: dict[str, Any]) -> list[str]:
         """Simple query implementation for tests — filters by type, collection, and tags."""
         # Collection filter: return only assets in the named collection
@@ -137,6 +159,16 @@ class StubAssetResolver:
                 if "include" in rating_cfg and meta.rating not in rating_cfg["include"]:
                     continue
                 if "exclude" in rating_cfg and meta.rating in rating_cfg["exclude"]:
+                    continue
+
+            # Filter: tags (AND-combined, case-insensitive)
+            tags_cfg = match.get("tags")
+            if tags_cfg:
+                if isinstance(tags_cfg, str):
+                    tags_cfg = [tags_cfg]
+                required = {t.lower() for t in tags_cfg}
+                asset_tags = {t.lower() for t in meta.tags}
+                if not required.issubset(asset_tags):
                     continue
 
             results.append(asset_id)

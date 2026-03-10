@@ -149,6 +149,7 @@ class TestPrimarySegmentAtomic:
     """INV-MOVIE-PRIMARY-ATOMIC: A primary segment on a movie channel
     MUST NOT be split, interrupted, or internally segmented."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_hydrated_block_has_intro_and_primary(self):
         """expand_editorial_block (via _hydrate_compiled_segments) produces
         exactly two content segments: intro + primary movie."""
@@ -160,6 +161,7 @@ class TestPrimarySegmentAtomic:
             f"got {len(content_segs)}: {[s.segment_type for s in content_segs]}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_primary_segment_duration_matches_source_asset(self):
         """The primary segment duration MUST equal the source movie
         asset duration — no splitting, no truncation."""
@@ -172,6 +174,7 @@ class TestPrimarySegmentAtomic:
             f"!= source asset {MOVIE_DURATION_MS}ms"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_filler_between_intro_and_primary(self):
         """No filler or ad segment may appear between intro and primary."""
         block = _hydrate_hbo_block()
@@ -185,6 +188,7 @@ class TestPrimarySegmentAtomic:
             f"Segment order: {seg_types}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_expand_movie_legacy_single_content_segment(self):
         """Legacy expand_program_block(channel_type='movie') produces
         a single uninterrupted content segment."""
@@ -205,6 +209,7 @@ class TestPrimarySegmentAtomic:
         assert content_segs[0].segment_duration_ms == MOVIE_DURATION_MS
         assert content_segs[0].asset_start_offset_ms == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_expand_movie_no_mid_content_filler(self):
         """expand_program_block(channel_type='movie') must not produce
         any filler segments before the content segment ends."""
@@ -228,6 +233,7 @@ class TestPrimarySegmentAtomic:
                     f"Segments: {[s.segment_type for s in block.segments]}"
                 )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_expand_movie_sets_is_primary(self):
         """expand_program_block(channel_type='movie') must mark the content
         segment with is_primary=True."""
@@ -246,6 +252,7 @@ class TestPrimarySegmentAtomic:
             "Movie content segment must have is_primary=True"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_hydrated_content_segment_identified_by_type(self):
         """V2-hydrated blocks identify the primary movie by segment_type='content'."""
         block = _hydrate_hbo_block()
@@ -265,6 +272,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
     """INV-MOVIE-TRAFFIC-POST-ONLY: TrafficManager may only insert content
     AFTER the primary segment has completed (in post-content filler slots)."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_ad_blocks_does_not_increase_content_count(self):
         """fill_ad_blocks must not increase the number of content segments."""
         block = _hydrate_hbo_block()
@@ -283,6 +291,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
             f"{len(content_before)} to {len(content_after)}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_ad_blocks_preserves_primary_duration(self):
         """fill_ad_blocks must not alter the primary content segment's duration."""
         block = _hydrate_hbo_block()
@@ -297,6 +306,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
         assert len(content_segs) == 1
         assert content_segs[0].segment_duration_ms == MOVIE_DURATION_MS
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_ad_blocks_preserves_intro_segment(self):
         """fill_ad_blocks must not alter the intro segment."""
         block = _hydrate_hbo_block()
@@ -311,6 +321,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
         assert len(intro_segs) == 1
         assert intro_segs[0].segment_duration_ms == INTRO_DURATION_MS
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_ad_blocks_only_modifies_filler_placeholders(self):
         """fill_ad_blocks must only touch segments with segment_type='filler'
         and empty asset_uri. Non-filler segments must be passed through."""
@@ -338,6 +349,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
             f"After:  {non_filler_after}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_fill_ad_blocks_rejects_filler_before_primary(self):
         """fill_ad_blocks must raise ValueError if a filler placeholder appears
         before the primary segment — INV-MOVIE-PRIMARY-ATOMIC guard."""
@@ -376,6 +388,7 @@ class TestTrafficManagerDoesNotSplitPrimary:
                 filler_duration_ms=FILLER_DURATION_MS,
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_filler_appears_only_after_all_content(self):
         """After fill_ad_blocks, filled filler segments must appear only
         after all content and intro segments have completed."""
@@ -455,6 +468,7 @@ class TestTier2RebuildParity:
             "segments": segs,
         }
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_rebuild_uses_same_loader_as_daemon(
@@ -492,6 +506,7 @@ class TestTier2RebuildParity:
             "rebuild_tier2 must call load_segmented_blocks_from_active_revision"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_rebuild_calls_expand_editorial_block(
@@ -531,8 +546,11 @@ class TestTier2RebuildParity:
             filler_uri=FILLER_URI,
             filler_duration_ms=FILLER_DURATION_MS,
             asset_library=ANY,
+            policy=ANY,
+            break_config=ANY,
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_direct_expansion_matches_hydration_structure(self):
         """The segment structure from _hydrate_compiled_segments must match
         what expand_program_block(channel_type='movie') would produce for
@@ -574,6 +592,7 @@ class TestTier2RebuildParity:
         assert len(legacy_content) == 1
         assert hydrated_content[0].segment_duration_ms == legacy_content[0].segment_duration_ms
 
+    # Tier: 2 | Scheduling logic invariant
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_rebuild_writes_segment_structure_to_playlist_event(

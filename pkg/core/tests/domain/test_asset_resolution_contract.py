@@ -144,6 +144,7 @@ class TestCollectionSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # The resolver always returns List[Asset], not a Collection object.
+    # Tier: 2 | Scheduling logic invariant
     def test_collection_returns_list(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "collection", "name": "Intros"})
@@ -153,6 +154,7 @@ class TestCollectionSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-COLLECTION-QUERY-001
     # Collection source returns all assets belonging to that collection.
+    # Tier: 2 | Scheduling logic invariant
     def test_collection_returns_all_member_assets(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "collection", "name": "Intros"})
@@ -160,6 +162,7 @@ class TestCollectionSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Every element in the result is an asset ID that exists in the catalog.
+    # Tier: 2 | Scheduling logic invariant
     def test_collection_elements_are_asset_ids(self):
         resolver = _make_resolver()
         catalog = _build_catalog()
@@ -171,6 +174,7 @@ class TestCollectionSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # The resolver never returns a Collection object — only asset IDs.
+    # Tier: 2 | Scheduling logic invariant
     def test_collection_result_contains_no_collection_objects(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "collection", "name": "Intros"})
@@ -181,6 +185,7 @@ class TestCollectionSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-COLLECTION-QUERY-001
     # A different collection returns its own members, not another's.
+    # Tier: 2 | Scheduling logic invariant
     def test_collection_movies_returns_movie_assets(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "collection", "name": "Movies"})
@@ -197,6 +202,7 @@ class TestPoolSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Pool resolution returns a list, not a Pool object.
+    # Tier: 2 | Scheduling logic invariant
     def test_pool_returns_list(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "pool", "name": "hbo_movies"})
@@ -206,6 +212,7 @@ class TestPoolSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-POOL-QUERY-001
     # Pool match criteria are evaluated against the catalog.
+    # Tier: 2 | Scheduling logic invariant
     def test_pool_returns_matching_assets(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "pool", "name": "hbo_movies"})
@@ -220,6 +227,7 @@ class TestPoolSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Pool result elements are asset ID strings.
+    # Tier: 2 | Scheduling logic invariant
     def test_pool_elements_are_asset_ids(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "pool", "name": "hbo_movies"})
@@ -239,6 +247,7 @@ class TestAssetSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Even a direct asset reference returns List[Asset], not a bare asset.
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_returns_list(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "asset", "id": "intro-hbo-001"})
@@ -246,6 +255,7 @@ class TestAssetSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # Direct asset reference returns exactly one element.
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_returns_single_element(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "asset", "id": "intro-hbo-001"})
@@ -254,6 +264,7 @@ class TestAssetSourceResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Referencing a non-existent asset is a hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_asset_not_found_raises(self):
         resolver = _make_resolver()
         with pytest.raises(KeyError):
@@ -270,6 +281,7 @@ class TestInvalidSourceType:
 
     # CONTRACT: INV-ASSET-RESOLUTION-DISPATCH-001
     # The resolver rejects source types it does not recognize.
+    # Tier: 2 | Scheduling logic invariant
     def test_unknown_type_raises(self):
         _, InvalidSourceTypeError = _import_source_resolver()
         resolver = _make_resolver()
@@ -278,6 +290,7 @@ class TestInvalidSourceType:
 
     # CONTRACT: INV-ASSET-RESOLUTION-DISPATCH-001
     # Missing type key is also an error.
+    # Tier: 2 | Scheduling logic invariant
     def test_missing_type_raises(self):
         _, InvalidSourceTypeError = _import_source_resolver()
         resolver = _make_resolver()
@@ -286,6 +299,7 @@ class TestInvalidSourceType:
 
     # CONTRACT: INV-ASSET-RESOLUTION-DISPATCH-001
     # Empty source dict is an error.
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_source_raises(self):
         _, InvalidSourceTypeError = _import_source_resolver()
         resolver = _make_resolver()
@@ -303,6 +317,7 @@ class TestEmptyResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Empty collection → hard failure, not an empty list or None.
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_collection_raises(self):
         resolver = _make_resolver()
         with pytest.raises(Exception) as exc_info:
@@ -312,6 +327,7 @@ class TestEmptyResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Pool that matches nothing → hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_empty_pool_raises(self):
         resolver = _make_resolver()
         with pytest.raises(Exception) as exc_info:
@@ -320,6 +336,7 @@ class TestEmptyResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Unknown collection name → hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_unknown_collection_raises(self):
         resolver = _make_resolver()
         with pytest.raises(Exception):
@@ -327,6 +344,7 @@ class TestEmptyResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # Unknown pool name → hard failure.
+    # Tier: 2 | Scheduling logic invariant
     def test_unknown_pool_raises(self):
         resolver = _make_resolver()
         with pytest.raises(KeyError):
@@ -334,6 +352,7 @@ class TestEmptyResolution:
 
     # CONTRACT: INV-ASSET-RESOLUTION-EMPTY-FAIL-001
     # The resolver never returns None.
+    # Tier: 2 | Scheduling logic invariant
     def test_resolver_never_returns_none(self):
         resolver = _make_resolver()
         result = _resolve(resolver, {"type": "collection", "name": "Intros"})
@@ -350,6 +369,7 @@ class TestNormalizationGuarantees:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # All source types produce the same output type.
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("source", [
         {"type": "collection", "name": "Intros"},
         {"type": "pool", "name": "hbo_movies"},
@@ -364,6 +384,7 @@ class TestNormalizationGuarantees:
 
     # CONTRACT: INV-ASSET-RESOLUTION-NORMALIZE-001
     # No result element is a dict, tuple, or complex object — only plain strings.
+    # Tier: 2 | Scheduling logic invariant
     @pytest.mark.parametrize("source", [
         {"type": "collection", "name": "Movies"},
         {"type": "pool", "name": "hbo_movies"},

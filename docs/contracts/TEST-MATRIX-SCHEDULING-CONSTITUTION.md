@@ -9,7 +9,7 @@
 
 **Permitted laws (exhaustive):** `LAW-ELIGIBILITY` · `LAW-GRID` · `LAW-CONTENT-AUTHORITY` · `LAW-DERIVATION` · `LAW-RUNTIME-AUTHORITY` · `LAW-IMMUTABILITY`
 
-**Test file target:** `pkg/core/tests/contracts/test_scheduling_constitution.py`
+**Test file target:** Tests are distributed across domain-specific files in `pkg/core/tests/contracts/` and subdirectories (`runtime/`, `scheduling/`, `playout/`). There is no single monolithic test file.
 
 **Marker:** `@pytest.mark.contract`
 
@@ -31,7 +31,25 @@ ScheduleDay (ResolvedScheduleDay) is a derived grouping of ScheduleItems by broa
 
 ---
 
-## 2. Deterministic Execution Model
+## 2. Verification Tier Model
+
+Every test in this matrix belongs to exactly one of three verification tiers. The tiers form a cost pyramid: Tier 1 tests are the cheapest and most numerous, Tier 3 tests are the most expensive and fewest. CI pipelines SHOULD gate on lower tiers first and only advance to higher tiers when the cheaper tiers pass.
+
+### Tier 1 — Structural invariants
+
+Tier 1 tests verify that domain objects, type constraints, and architectural boundaries are correct at construction time. Their scope is a single function call, dataclass instantiation, or AST inspection — no scheduling pipeline, no database, no clock. A Tier 1 test that takes more than 50 ms or imports a scheduler component is misclassified.
+
+### Tier 2 — Scheduling logic invariants
+
+Tier 2 tests exercise the scheduling derivation chain end-to-end within a single deterministic invocation: compilation, expansion, traffic fill, break detection, episode resolution, and assembly. Their scope spans multiple components but all inputs are injected and all outputs are deterministic — no clock advancement, no threads, no runtime loops. A Tier 2 test may use in-memory stores or test doubles but MUST complete in under 2 seconds on CI hardware.
+
+### Tier 3 — Runtime and integration simulations
+
+Tier 3 tests validate dynamic behavior under simulated time progression, including horizon management, liveness recovery, and multi-subsystem interaction across the full derivation chain. Their scope requires `FakeAdvancingClock.advance_ms()`, threading, or asyncio event loops to drive state transitions that cannot be tested with a single synchronous call. A Tier 3 test may take up to 30 seconds and MUST still be fully deterministic — no wall-clock reads, no real sleeps.
+
+---
+
+## 3. Deterministic Execution Model
 
 All tests operate under these constraints:
 
@@ -47,7 +65,7 @@ All tests operate under these constraints:
 
 ---
 
-## 3. Fixtures and Test Doubles
+## 4. Fixtures and Test Doubles
 
 ### 3.1 Clock
 
@@ -112,17 +130,43 @@ All scheduling services under test must expose:
 
 ---
 
-## 4. Implementation Status
+## 5. Verification Tier Classification
+
+Every test in this matrix is classified into exactly one verification tier (see §2 for the tier model). The subsections below list the characteristics used to assign a test to its tier.
+
+### Tier 1 — Structural invariants
+
+Pure object validation, schema checks, AST inspection, or deterministic functions. No DB access, no scheduler daemon, no runtime loops. These tests verify that data structures, type constraints, and architectural boundaries hold at construction time.
+
+**Characteristics:** frozen dataclass rejection, modular arithmetic on boundaries, AST import scanning, in-memory store guards.
+
+### Tier 2 — Scheduling logic invariants
+
+Scheduling logic across components — compiler, expander, traffic fill, assembly, episode progression. May involve in-memory DB or scheduler logic, but remains deterministic and fast. These tests verify that the scheduling derivation chain produces correct outputs from given inputs.
+
+**Characteristics:** `compile_schedule`, `expand_program_block`, `fill_ad_blocks`, `assemble_schedule_block`, traffic policy evaluation, break detection, episode resolution.
+
+### Tier 3 — Runtime and integration simulations
+
+Clock progression, runtime loops, multi-threaded interaction, lookahead simulation, or multi-subsystem scenarios spanning the full derivation chain. These tests verify dynamic behavior under simulated time advancement.
+
+**Characteristics:** `FakeAdvancingClock.advance_ms()`, threading, `asyncio`, horizon evaluation cycles, recovery backoff, cross-layer constitutional scenarios.
+
+---
+
+## 6. Implementation Status
 
 ### Blocker Invariants (ENFORCED)
 
-These invariants have structural enforcement in production code and passing contract tests.
+These invariants have structural enforcement in production code and passing contract tests, organized by verification tier.
+
+#### Tier 1 — Structural
 
 | Invariant | Tests | Status | Enforcement Location |
 |---|---|---|---|
+| INV-ASRUN-IMMUTABLE-001 | 3 (mutation + deletion + creation) | **PASS** | `AsRunEvent` is `@dataclass(frozen=True)`; `log_playout_end()` uses `dataclasses.replace()` |
 | INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001 | 2 (negative + positive) | **PASS** | `ExecutionWindowStore.add_entries()` rejects entries missing `channel_id` or `programming_day_date` |
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | 2 (negative + positive) | **PASS** | `InMemoryResolvedStore.delete()` checks `ExecutionWindowStore.has_entries_for()` before deletion |
-| INV-ASRUN-IMMUTABLE-001 | 3 (mutation + deletion + creation) | **PASS** | `AsRunEvent` is `@dataclass(frozen=True)`; `log_playout_end()` uses `dataclasses.replace()` |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | 6 (TOR-001..004 + 2 inline) | **PASS** | `InMemoryOverrideStore.persist()` called before artifact mutation in `operator_override()` and `publish_atomic_replace()` |
 | INV-PLAN-FULL-COVERAGE-001 | 4 (gap reject + exact tile + pds≠00:00 reject + pds≠00:00 tile) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
 | INV-PLAN-NO-ZONE-OVERLAP-001 | 4 (overlap reject + day-filter pass + mutation-induced overlap + precedence) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
@@ -136,31 +180,44 @@ These invariants have structural enforcement in production code and passing cont
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | 3 (locked reject + past reject + override accept) | **PASS** | `ExecutionWindowStore.replace_entry()` with lock/past-window guards |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | 2 (AST import check + attribute inspection) | **PASS** | Structural: no AIR imports in `schedule_manager.py` / `schedule_manager_service.py`; tests verify via AST inspection |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | 3 (off-grid reject + pds rollover accept + cross-midnight accept) | **PASS** | `validate_transmission_log_grid_alignment()` in `transmission_log_validator.py` |
-| INV-BLEED-NO-GAP-001 | 11 (contiguity + compaction + grid alignment + enclosed overlap pushes forward + misalignment + revalidation + gap + naive dt + non-UTC + day boundary + three-marathon cascade) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | 4 (deterministic + hashlib match + different channels + no builtin hash) | **PASS** | `channel_seed()` in `schedule_compiler.py` |
-| INV-MARATHON-CROSSMIDNIGHT-001 | 4 (produces blocks + start after 22:00 + end resolves next day + fills window) | **PASS** | Cross-midnight detection in `_compile_movie_marathon()` in `schedule_compiler.py` |
 | INV-CHANNEL-STARTUP-NONBLOCKING-001 | 4 (manager survives teardown + retune skips build_initial + build_initial idempotent + startup executor bounded) | **PASS** | `_stop_channel_internal()` preserves manager; `_build_initial()` idempotency guard; bounded `_startup_executor` in `program_director.py` |
 | INV-SCHEDULE-PREWARM-001 | 3 (AST: no load_schedule in _get_or_create_manager + AST: no load_schedule in _get_dsl_service + prewarm method exists and calls load_schedule) | **PASS** | `_get_dsl_service()` creates without loading; `_prewarm_channel_schedules()` loads at startup; `_get_or_create_manager()` assumes schedule ready |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | 3 (AST: stream_channel has semaphore locked check + AST: hls_playlist has semaphore locked check + startup_semaphore and executor are bounded) | **PASS** | `_startup_semaphore` caps concurrent startups; `_startup_executor` bounded thread pool; handlers fail-fast 503 at capacity |
+
+#### Tier 2 — Scheduling Logic
+
+| Invariant | Tests | Status | Enforcement Location |
+|---|---|---|---|
+| INV-BLEED-NO-GAP-001 | 11 (contiguity + compaction + grid alignment + enclosed overlap pushes forward + misalignment + revalidation + gap + naive dt + non-UTC + day boundary + three-marathon cascade) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
+| INV-MARATHON-CROSSMIDNIGHT-001 | 4 (produces blocks + start after 22:00 + end resolves next day + fills window) | **PASS** | Cross-midnight detection in `_compile_movie_marathon()` in `schedule_compiler.py` |
+| INV-TIER2-COMPILATION-CONSISTENCY-001 | 2 (current compilation not stale + consecutive blocks contiguous) | **PASS** | `get_block_at()` returns current compilation; `_compile_and_cache()` in `dsl_schedule_service.py` |
+
+#### Tier 3 — Runtime and Integration
+
+| Invariant | Tests | Status | Enforcement Location |
+|---|---|---|---|
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | 9 (AST structural + recovery scheduling + backoff + max attempts + counter reset) | **PASS** | `_on_producer_session_end()` and `_attempt_recovery()` in `channel_manager.py` |
 
 ### Aspirational Tests (NOT YET IMPLEMENTED)
 
-All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-STRESS-*, HORIZON-*, CONST-*) are roadmap items. They define the target behavior for future enforcement work. SCHED-PLAN-001 through SCHED-PLAN-006 are now enforced (see Blocker Invariants above).
+All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-STRESS-*, HORIZON-*, CONST-*) are roadmap items. They define the target behavior for future enforcement work. SCHED-PLAN-001 through SCHED-PLAN-006 are now enforced (see Blocker Invariants above).
 
 ---
 
-## 5. Invariant → Test Mapping
+## 7. Invariant → Test Mapping
 
 ### Blocker Tests (Implemented)
 
+#### Tier 1 — Structural
+
 | Invariant | Test Class | Test Method(s) | Status |
 |---|---|---|---|
+| INV-ASRUN-IMMUTABLE-001 | `TestInvAsrunImmutable001` | `test_..._reject_mutation`, `test_..._reject_deletion`, `test_..._valid_creation` | PASS |
 | INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001 | `TestInvExecutionDerivedFromScheduleday001` | `test_..._reject_without_lineage`, `test_..._valid_lineage` | PASS |
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | `TestInvDerivationAnchorProtected001` | `test_..._reject_delete_with_downstream`, `test_..._allow_delete_without_downstream` | PASS |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | `TestInvOverrideRecordPrecedesArtifact001` (inline) | `test_..._reject_without_record`, `test_..._atomicity` | PASS |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | `TestInvOverrideRecordPrecedesArtifact001` (TOR) | `test_tor_001_record_created_before_artifact`, `test_tor_002_persist_failure_prevents_artifact`, `test_tor_003_execution_window_override_atomicity`, `test_tor_004_no_silent_artifact_without_record` | PASS |
-| INV-ASRUN-IMMUTABLE-001 | `TestInvAsrunImmutable001` | `test_..._reject_mutation`, `test_..._reject_deletion`, `test_..._valid_creation` | PASS |
 | INV-PLAN-FULL-COVERAGE-001 | `TestInvPlanFullCoverage001` | `test_..._reject_gap`, `test_..._accept_exact_tile`, `test_..._reject_gap_with_pds_0600`, `test_..._accept_tile_with_pds_0600` | PASS |
 | INV-PLAN-NO-ZONE-OVERLAP-001 | `TestInvPlanNoZoneOverlap001` | `test_..._reject_overlapping_zones`, `test_..._allow_mutually_exclusive_days`, `test_..._reject_mutation_induced_overlap`, `test_..._precedence_over_gap` | PASS |
 | INV-PLAN-GRID-ALIGNMENT-001 | `TestInvPlanGridAlignment001` | `test_..._reject_off_grid_start`, `test_..._reject_off_grid_duration`, `test_..._valid_alignment`, `test_..._reject_off_grid_zone_end`, `test_..._reject_off_grid_zone_start`, `test_..._reject_off_grid_zone_duration`, `test_..._accept_aligned_zone` | PASS |
@@ -178,10 +235,24 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-CHANNEL-STARTUP-NONBLOCKING-001 | `TestInvChannelStartupNonblocking001` | `test_manager_survives_teardown`, `test_retune_after_teardown_skips_build_initial`, `test_build_initial_idempotent`, `test_startup_executor_is_bounded` | PASS |
 | INV-SCHEDULE-PREWARM-001 | `TestInvSchedulePrewarm001` | `test_get_or_create_manager_no_load_schedule`, `test_get_dsl_service_no_load_schedule`, `test_prewarm_method_calls_load_schedule` | PASS |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | `TestInvChannelStartupConcurrency001` | `test_stream_channel_has_semaphore_guard`, `test_hls_playlist_has_semaphore_guard`, `test_startup_semaphore_and_executor_bounded` | PASS |
+
+#### Tier 2 — Scheduling Logic
+
+| Invariant | Test Class | Test Method(s) | Status |
+|---|---|---|---|
+| INV-BLEED-NO-GAP-001 | `TestInvBleedNoGap001` | 11 tests (contiguity, compaction, grid alignment, bleed resolution, day boundary, cascade) | PASS |
+| INV-MARATHON-CROSSMIDNIGHT-001 | `TestInvMarathonCrossmidnight001` | 4 tests (produces blocks, start after 22:00, end resolves next day, fills window) | PASS |
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | `TestInvTier2CompilationConsistency001` | `test_get_block_at_returns_current_compilation_not_stale_txlog`, `test_consecutive_blocks_are_contiguous` | PASS |
+
+#### Tier 3 — Runtime and Integration
+
+| Invariant | Test Class | Test Method(s) | Status |
+|---|---|---|---|
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | `TestInvChannelLivenessRecovery001` | `test_channel_manager_has_recovery_handler`, `test_stopped_with_viewers_schedules_restart`, `test_last_viewer_left_no_restart`, `test_lookahead_exhausted_no_restart`, `test_stopped_zero_viewers_no_restart`, `test_error_with_viewers_schedules_restart`, `test_backoff_increases`, `test_max_attempts_gives_up`, `test_recovery_counter_resets_on_successful_start` | PASS |
 
-### Full Matrix (Aspirational)
+### Full Matrix (Aspirational + Implemented)
+
+#### Tier 1 — Structural
 
 | Invariant | Test ID(s) | Layer |
 |---|---|---|
@@ -191,27 +262,26 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | SCHED-PLAN-007, SCHED-PLAN-008 | SchedulePlan |
 | INV-SCHEDULEDAY-ONE-PER-DATE-001 | SCHED-DAY-001, SCHED-DAY-002 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-IMMUTABLE-001 | SCHED-DAY-003, SCHED-DAY-004 | ResolvedScheduleDay |
-| INV-SCHEDULEDAY-NO-GAPS-001 | SCHED-DAY-005, SCHED-DAY-006 | ResolvedScheduleDay |
-| INV-SCHEDULEDAY-LEAD-TIME-001 | SCHED-DAY-007, SCHED-DAY-008 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | SCHED-DAY-009, SCHED-DAY-010 | ResolvedScheduleDay |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | SCHED-DAY-011, SCHED-DAY-012 | ResolvedScheduleDay |
-| INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | ExecutionEntry |
-| INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | ExecutionEntry |
-| INV-EXECUTIONENTRY-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | ExecutionEntry |
+| INV-SCHEDULEDAY-LEAD-TIME-001 | SCHED-DAY-007, SCHED-DAY-008 | ResolvedScheduleDay |
 | INV-EXECUTIONENTRY-NO-GAPS-001 | PLAYLOG-006, PLAYLOG-007 | ExecutionEntry |
 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | PLAYLOG-008, PLAYLOG-009 | ExecutionEntry |
 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | PLAYLOG-IMMUT-001, PLAYLOG-IMMUT-002, PLAYLOG-IMMUT-003 | ExecutionEntry |
-| INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | PLAYLOG-BATCHED-001, PLAYLOG-BATCHED-002, PLAYLOG-BATCHED-003, PLAYLOG-BATCHED-004, PLAYLOG-BATCHED-005, PLAYLOG-BATCHED-006 | PlaylistEvent |
-| INV-HLS-DISCONTINUITY-MARKER-001 | HLS-DISCONT-001, HLS-DISCONT-002, HLS-DISCONT-003 | Runtime — HLS |
-| INV-NO-FOREIGN-CONTENT-001 | CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003 | Cross-cutting |
 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003 | PlaylistEvent |
-| INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
-| INV-NO-MID-PROGRAM-CUT-001 | CROSS-001, CROSS-002 | Cross-cutting |
-| INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 | INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 | ARCH-BOUNDARY-001, ARCH-BOUNDARY-002 | Cross-cutting |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | TOR-001, TOR-002, TOR-003, TOR-004 | Cross-cutting |
-| INV-BLEED-NO-GAP-001 | BLEED-001..011 | ScheduleCompiler |
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | SEED-001..004 | ScheduleCompiler |
+| INV-BLOCK-SEGMENT-CONSERVATION-001 | BLOCK-CONSERVATION-001..004 | ScheduledBlock |
+| INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 (structural) | PLAYLOG-BATCHED-003, PLAYLOG-BATCHED-004, PLAYLOG-BATCHED-005 | PlaylistEvent |
+| INV-HLS-DISCONTINUITY-MARKER-001 (structural) | HLS-DISCONT-001 | Runtime — HLS |
+
+#### Tier 2 — Scheduling Logic
+
+| Invariant | Test ID(s) | Layer |
+|---|---|---|
+| INV-SCHEDULEDAY-NO-GAPS-001 | SCHED-DAY-005, SCHED-DAY-006 | ResolvedScheduleDay |
+| INV-BLEED-NO-GAP-001 | BLEED-001..011 | ScheduleCompiler |
 | INV-MARATHON-CROSSMIDNIGHT-001 | XMID-001..004 | ScheduleCompiler |
 | INV-EPISODE-PROGRESSION-001 | EP-DETERM-001..004 | EpisodeProgression |
 | INV-EPISODE-PROGRESSION-002 | EP-RESTART-001, EP-RESTART-002 | EpisodeProgression |
@@ -223,12 +293,29 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-EPISODE-PROGRESSION-010 | EP-EDIT-001, EP-EDIT-002 | EpisodeProgression |
 | INV-EPISODE-PROGRESSION-011 | EP-ANCHOR-001 | EpisodeProgression |
 | INV-EPISODE-PROGRESSION-012 | EP-CALENDAR-001..004 | EpisodeProgression |
+| INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | PLAYLOG-001 | ExecutionEntry |
+| INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | PLAYLOG-002, PLAYLOG-003 | ExecutionEntry |
+| INV-NO-FOREIGN-CONTENT-001 | CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003 | Cross-cutting |
+| INV-NO-MID-PROGRAM-CUT-001 | CROSS-001, CROSS-002 | Cross-cutting |
+| INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
+| INV-HLS-DISCONTINUITY-MARKER-001 (logic) | HLS-DISCONT-002, HLS-DISCONT-003 | Runtime — HLS |
+| INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 (logic) | PLAYLOG-BATCHED-001, PLAYLOG-BATCHED-002, PLAYLOG-BATCHED-006 | PlaylistEvent |
+
+#### Tier 3 — Runtime and Integration
+
+| Invariant | Test ID(s) | Layer |
+|---|---|---|
+| INV-EXECUTIONENTRY-LOOKAHEAD-001 | PLAYLOG-004, PLAYLOG-005 | ExecutionEntry |
+| INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | HORIZON-001, HORIZON-002 | ExecutionEntry |
+| INV-CHANNEL-LIVENESS-RECOVERY-001 | (9 tests — see Blocker Tests above) | Runtime |
 
 ---
 
-## 6. Layer-Specific Test Definitions
+## 8. Layer-Specific Test Definitions
 
-### 6.1 Blocker Tests (Implemented)
+### 8.1 Tier 1 — Structural Invariants
+
+Tests in this section verify object construction guards, frozen dataclass immutability, in-memory store constraints, AST-based architectural boundaries, and static validation functions. No scheduler, no clock advancement, no runtime loops.
 
 ---
 
@@ -337,7 +424,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.2 SchedulePlan Tests
+### 8.2 Tier 2 — Scheduling Logic Invariants
+
+Tests in this section exercise the scheduling derivation chain — compiler, expander, traffic fill, assembly, episode progression, break detection, and cross-layer derivation validation. All use deterministic inputs and produce deterministic outputs. No clock advancement or runtime loops.
 
 ---
 
@@ -453,7 +542,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.3 ScheduleDay Tests
+### 8.2.1 ScheduleDay Tests
 
 ---
 
@@ -607,7 +696,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.4 ExecutionEntry Tests
+### 8.2.2 ExecutionEntry Tests
 
 ---
 
@@ -737,7 +826,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.5 ExecutionEntry Lock Window Tests
+### 8.2.3 ExecutionEntry Lock Window Tests
 
 ---
 
@@ -783,7 +872,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.7 PlaylistBuilderDaemon Batched TxCheck Tests
+### 8.2.4 PlaylistBuilderDaemon Batched TxCheck Tests
 
 ---
 
@@ -871,7 +960,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.6a Runtime — HLS
+### 8.2.5 Runtime — HLS
 
 ---
 
@@ -917,7 +1006,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.6 PlaylistEvent Grid Alignment Tests
+### 8.2.6 PlaylistEvent Grid Alignment Tests
 
 ---
 
@@ -963,7 +1052,67 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.7 Cross-Cutting Tests
+### 8.2.7 ScheduledBlock Segment Conservation Tests
+
+---
+
+### BLOCK-CONSERVATION-001: Overstuffed block rejected at deserialization boundary
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-BLOCK-SEGMENT-CONSERVATION-001 |
+| **Derived Law(s)** | LAW-GRID, LAW-TIMELINE |
+| **Scenario** | A ScheduledBlock serialized to PlaylistEvent has presentation segments whose duration was not deducted from the filler budget. When deserialized, the segment sum exceeds the block duration by 79,000ms (well beyond FRAME_TOLERANCE_MS=40). The deserialization boundary must reject the block. |
+| **Clock Setup** | None (pure data validation). |
+| **Stimulus / Actions** | 1. Construct a block dict with 79,000ms presentation + 6,535,000ms content + 665,000ms filler in a 7,200,000ms envelope (sum=7,279,000 > 7,200,000). 2. Pass to `_deserialize_scheduled_block()`. |
+| **Assertions** | `ValueError` raised with `INV-BLOCK-SEGMENT-CONSERVATION` in the message. The overstuffed block is never returned. |
+| **Failure Classification** | Persistence |
+
+---
+
+### BLOCK-CONSERVATION-002: Correctly budgeted block survives deserialization
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-BLOCK-SEGMENT-CONSERVATION-001 |
+| **Derived Law(s)** | LAW-GRID, LAW-TIMELINE |
+| **Scenario** | A ScheduledBlock with presentation segments correctly deducted from filler budget (sum == block duration) round-trips through serialization and deserialization. |
+| **Clock Setup** | None (pure data validation). |
+| **Stimulus / Actions** | 1. Construct a block dict with 79,000ms presentation + 6,535,000ms content + 586,000ms filler in a 7,200,000ms envelope (sum=7,200,000). 2. Pass to `_deserialize_scheduled_block()`. |
+| **Assertions** | Block is returned. `sum(segment_duration_ms) == end_utc_ms - start_utc_ms`. |
+| **Failure Classification** | N/A (positive path) |
+
+---
+
+### BLOCK-CONSERVATION-003: Sub-frame drift within tolerance passes
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-BLOCK-SEGMENT-CONSERVATION-001 |
+| **Derived Law(s)** | LAW-GRID, LAW-TIMELINE |
+| **Scenario** | A ScheduledBlock has segment sum that differs from block duration by 1ms (sub-frame rounding). This is within `FRAME_TOLERANCE_MS=40` and MUST pass. |
+| **Clock Setup** | None (pure data validation). |
+| **Stimulus / Actions** | 1. Construct a block dict with segment sum = block_duration + 1ms. 2. Pass to `_deserialize_scheduled_block()`. |
+| **Assertions** | Block is returned without error. 1ms delta is within frame tolerance. |
+| **Failure Classification** | N/A (positive path) |
+
+---
+
+### BLOCK-CONSERVATION-004: Negative segment duration rejected
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-BLOCK-SEGMENT-CONSERVATION-001 |
+| **Derived Law(s)** | LAW-GRID, LAW-TIMELINE |
+| **Scenario** | A ScheduledBlock contains a segment with negative duration. Even if the total sum equals the block duration, a negative segment is always a defect. |
+| **Clock Setup** | None (pure data validation). |
+| **Stimulus / Actions** | 1. Construct a block dict with segments including one with `segment_duration_ms = -1000`. Total sum equals block duration via cancellation. 2. Pass to `_deserialize_scheduled_block()`. |
+| **Assertions** | `ValueError` raised. Negative segment durations MUST NOT pass validation. |
+| **Failure Classification** | Generation |
+
+---
+
+### 8.2.8 Cross-Cutting Tests
 
 ---
 
@@ -1023,7 +1172,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.8 Foreign Content Injection Tests
+### 8.2.9 Foreign Content Injection Tests
 
 ---
 
@@ -1069,7 +1218,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.9 Grid Boundary Stress Tests
+### 8.2.10 Grid Boundary Stress Tests
 
 ---
 
@@ -1129,7 +1278,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-### 6.10 Horizon Tests
+### 8.3 Tier 3 — Runtime and Integration Simulations
+
+Tests in this section require clock progression (`FakeAdvancingClock.advance_ms()`), runtime loop simulation, multi-threaded interaction, or multi-subsystem scenarios spanning the full derivation chain. These validate dynamic behavior under simulated broadcast conditions.
 
 ---
 
@@ -1161,7 +1312,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-## 7. Cross-Layer Constitutional Scenarios
+### 8.3.1 Cross-Layer Constitutional Scenarios
 
 ---
 
@@ -1263,9 +1414,11 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-## 8. Test ID Index
+## 9. Test ID Index
 
 ### Blocker Tests (Implemented)
+
+#### Tier 1 — Structural
 
 | Test ID | Invariant(s) | Law(s) | Summary | Status |
 |---|---|---|---|---|
@@ -1282,7 +1435,9 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Entry crossing programming_day_start rollover accepted | **PASS** |
 | PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight adjacent entries with no micro-gap accepted | **PASS** |
 
-### Full Matrix (Aspirational)
+### Full Matrix (Aspirational + Implemented)
+
+#### Tier 1 — Structural
 
 | Test ID | Invariant(s) | Law(s) | Summary |
 |---|---|---|---|
@@ -1298,71 +1453,89 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | SCHED-DAY-002 | INV-SCHEDULEDAY-ONE-PER-DATE-001, INV-SCHEDULEDAY-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-DERIVATION | Force-regen replaces atomically |
 | SCHED-DAY-003 | INV-SCHEDULEDAY-IMMUTABLE-001 | LAW-IMMUTABILITY | In-place mutation rejected |
 | SCHED-DAY-004 | INV-SCHEDULEDAY-IMMUTABLE-001 | LAW-IMMUTABILITY | Manual override creates new record with ref |
-| SCHED-DAY-005 | INV-SCHEDULEDAY-NO-GAPS-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-RUNTIME-AUTHORITY | ScheduleDay generation with plan gap raises fault |
-| SCHED-DAY-006 | INV-SCHEDULEDAY-NO-GAPS-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Full-coverage plan generates gap-free day |
 | SCHED-DAY-007 | INV-SCHEDULEDAY-LEAD-TIME-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Missing ScheduleDay at D-2 raises violation |
 | SCHED-DAY-008 | INV-SCHEDULEDAY-LEAD-TIME-001 | LAW-DERIVATION | ScheduleDay at D-4 satisfies lead time |
 | SCHED-DAY-009 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | LAW-DERIVATION, LAW-CONTENT-AUTHORITY | Unanchored ScheduleDay rejected |
 | SCHED-DAY-010 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ScheduleDay references superseded record |
-| PLAYLOG-001 | INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Ineligible asset replaced at window extension |
-| PLAYLOG-002 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | ExecutionEntry timestamps match injected clock |
-| PLAYLOG-003 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Different injected clocks produce different timestamps |
-| PLAYLOG-004 | INV-EXECUTIONENTRY-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Lookahead shortfall (< min_execution_hours) triggers extension |
-| PLAYLOG-005 | INV-EXECUTIONENTRY-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Depth at exactly min_execution_hours is compliant |
+| SCHED-DAY-011 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday slot at 06:00 rejected with Monday carry-in at 07:00 |
+| SCHED-DAY-012 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday first slot opens at carry-in end_utc |
 | PLAYLOG-006 | INV-EXECUTIONENTRY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY | Gap in ExecutionEntry sequence detected and faulted |
-| PLAYLOG-007 | INV-EXECUTIONENTRY-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION | ExecutionEntry gap traced to upstream ResolvedScheduleDay gap |
+| PLAYLOG-007 | INV-EXECUTIONENTRY-NO-GAPS-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION | ExecutionEntry gap traced to upstream gap |
 | PLAYLOG-008 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY | Unanchored ExecutionEntry rejected |
-| PLAYLOG-009 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ExecutionEntry accepted without PlaylistEventEntry ref |
-| PLAYLOG-IMMUT-001 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked ExecutionEntry mutation without override rejected |
-| PLAYLOG-IMMUT-002 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window ExecutionEntry mutation rejected unconditionally |
-| PLAYLOG-IMMUT-003 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Valid atomic override inside locked window accepted |
-| PLAYLOG-BATCHED-001 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Extend uses batched existence check, not per-block queries |
-| PLAYLOG-BATCHED-002 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yielded after each block fill |
-| PLAYLOG-BATCHED-003 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _batch_block_exists_in_txlog method exists and returns set[str] |
-| PLAYLOG-BATCHED-004 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yield duration sufficient (>= 10ms) |
-| PLAYLOG-BATCHED-005 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _run_loop() uses random.uniform for evaluation jitter |
-| PLAYLOG-BATCHED-006 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Evaluation wait jitter varies across cycles |
-| HLS-DISCONT-001 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | HLSSegment has discontinuity field |
-| HLS-DISCONT-002 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | Playlist emits #EXT-X-DISCONTINUITY on PCR jump |
-| HLS-DISCONT-003 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | No spurious discontinuity on continuous PCR |
-| PLAYLIST-GRID-001 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid PlaylistEventEntry boundary rejected |
-| PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover alignment passes |
-| PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight entry has no hidden micro-gap |
-| CROSS-001 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | Breakpoint-free program not cut in PlaylistEvent |
-| CROSS-002 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | 120-min longform spans 4 blocks without mid-cut |
-| CROSS-003 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | AsRun without ExecutionEntry ref rejected |
-| CROSS-004 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full chain traversable Plan→ResolvedScheduleDay→PlaylistEvent→ExecutionEntry→AsRun |
-| CROSS-FOREIGN-001 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | ResolvedScheduleDay slot with foreign asset rejected |
-| CROSS-FOREIGN-002 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | PlaylistEventEntry with foreign asset rejected |
-| CROSS-FOREIGN-003 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | ExecutionEntry with foreign asset rejected |
-| GRID-STRESS-001 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-GRID | programming_day_start rollover produces aligned boundary |
-| GRID-STRESS-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Calendar midnight produces no fractional-minute boundary |
-| GRID-STRESS-003 | INV-PLAN-GRID-ALIGNMENT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Zone spanning midnight has aligned boundaries on both sides |
-| GRID-STRESS-004 | INV-NO-MID-PROGRAM-CUT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID, LAW-DERIVATION | Longform spanning programming_day_start produces no off-grid fence |
-| HORIZON-001 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Extension triggered by clock progression only |
-| HORIZON-002 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | No extension when depth >= min_execution_hours |
-| CONST-001 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001, INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full derivation chain integrity Plan→ResolvedScheduleDay→PlaylistEvent→ExecutionEntry→AsRun |
-| CONST-002 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY | Eligibility change mid-cycle propagation |
-| CONST-003 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-IMMUTABILITY, LAW-DERIVATION | Immutability cascade: locked / past / future / atomic boundary |
-| CONST-004 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-RUNTIME-AUTHORITY | Planning artifacts do not drive playout directly |
-| CONST-005 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-EXECUTIONENTRY-NO-GAPS-001 | LAW-GRID | Off-grid fault cascades independently at every layer |
-| CONST-006 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Override record persisted before override artifact |
-| CONST-007 | INV-EXECUTIONENTRY-LOOKAHEAD-001, INV-EXECUTIONENTRY-NO-GAPS-001, INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Lookahead gap-free over 4h deterministic clock run |
-| CROSSDAY-001 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | ExecutionEntry spanning 06:00 boundary persists as single record |
-| CROSSDAY-002 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | AsRun record not duplicated for cross-boundary ExecutionEntry |
-| CROSSDAY-003 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-IMMUTABILITY | Day-close operation does not mutate committed cross-boundary ExecutionEntry |
-| CROSSDAY-004 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for ending day references source ExecutionEntry ID |
-| CROSSDAY-005 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Broadcast-day row for starting day references same source ExecutionEntry ID |
-| CROSSDAY-006 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION | Projection row with null source record ID rejected |
-| CROSSDAY-007 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION | Projection row interval not subset of source record interval rejected |
-| CROSSDAY-008 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday slot starting at 06:00 rejected when Monday carry-in ends at 07:00 |
-| CROSSDAY-009 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Tuesday first slot correctly opens at carry-in end_utc |
-| CROSSDAY-010 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-DERIVATION | Carry-in slot ID appears only in Monday ScheduleDay, not duplicated in Tuesday |
-| CROSSDAY-011 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Single ExecutionEntry returned for every instant within cross-boundary interval |
-| CROSSDAY-012 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Two ExecutionEntrys covering overlapping 06:00–06:30 interval rejected |
-| CROSSDAY-013 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001, INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | Boundary event does not produce dual authority at DAY_BOUNDARY instant |
+| PLAYLOG-009 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Override ExecutionEntry accepted |
+| PLAYLOG-IMMUT-001 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Locked ExecutionEntry mutation rejected |
+| PLAYLOG-IMMUT-002 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Past-window mutation rejected unconditionally |
+| PLAYLOG-IMMUT-003 | INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Valid atomic override accepted |
+| PLAYLIST-GRID-001 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Off-grid boundary rejected |
+| PLAYLIST-GRID-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | programming_day_start rollover passes |
+| PLAYLIST-GRID-003 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Cross-midnight no micro-gap |
+| BLOCK-CONSERVATION-001 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID, LAW-TIMELINE | Overstuffed block rejected |
+| BLOCK-CONSERVATION-002 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID, LAW-TIMELINE | Correctly budgeted block passes |
+| BLOCK-CONSERVATION-003 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID, LAW-TIMELINE | Sub-frame drift within tolerance passes |
+| BLOCK-CONSERVATION-004 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID, LAW-TIMELINE | Negative segment duration rejected |
+| PLAYLOG-BATCHED-003 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _batch_block_exists_in_txlog exists (structural) |
+| PLAYLOG-BATCHED-004 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yield duration sufficient (AST scan) |
+| PLAYLOG-BATCHED-005 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | _run_loop uses random.uniform (AST scan) |
+| HLS-DISCONT-001 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | HLSSegment has discontinuity field (structural) |
+| SEED-001..004 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | LAW-LIVENESS, LAW-CONTENT-AUTHORITY | Deterministic seed, hashlib match, channel isolation, no builtin hash |
 
-## Reschedule Operations
+#### Tier 2 — Scheduling Logic
+
+| Test ID | Invariant(s) | Law(s) | Summary |
+|---|---|---|---|
+| SCHED-DAY-005 | INV-SCHEDULEDAY-NO-GAPS-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-RUNTIME-AUTHORITY | ScheduleDay with plan gap raises fault |
+| SCHED-DAY-006 | INV-SCHEDULEDAY-NO-GAPS-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Full-coverage plan generates gap-free day |
+| PLAYLOG-001 | INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Ineligible asset replaced at extension |
+| PLAYLOG-002 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Timestamps match injected clock |
+| PLAYLOG-003 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Different clocks produce different timestamps |
+| PLAYLOG-BATCHED-001 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Extend uses batched check |
+| PLAYLOG-BATCHED-002 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yielded after each fill |
+| PLAYLOG-BATCHED-006 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Jitter varies across cycles |
+| HLS-DISCONT-002 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | Discontinuity emitted on PCR jump |
+| HLS-DISCONT-003 | INV-HLS-DISCONTINUITY-MARKER-001 | LAW-DECODABILITY, LAW-LIVENESS | No spurious discontinuity on continuous PCR |
+| CROSS-001 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | Breakpoint-free program not cut |
+| CROSS-002 | INV-NO-MID-PROGRAM-CUT-001 | LAW-DERIVATION, LAW-GRID | 120-min longform spans 4 blocks |
+| CROSS-003 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | AsRun without ExecutionEntry ref rejected |
+| CROSS-004 | INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full chain traversable |
+| CROSS-FOREIGN-001 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Foreign asset in ScheduleDay rejected |
+| CROSS-FOREIGN-002 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Foreign asset in PlaylistEvent rejected |
+| CROSS-FOREIGN-003 | INV-NO-FOREIGN-CONTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Foreign asset in ExecutionEntry rejected |
+| GRID-STRESS-001 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001 | LAW-GRID | programming_day_start rollover aligned |
+| GRID-STRESS-002 | INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Calendar midnight no fractional-minute |
+| GRID-STRESS-003 | INV-PLAN-GRID-ALIGNMENT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID | Zone spanning midnight aligned both sides |
+| GRID-STRESS-004 | INV-NO-MID-PROGRAM-CUT-001, INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001 | LAW-GRID, LAW-DERIVATION | Longform spanning PDS no off-grid fence |
+| BLEED-001..011 | INV-BLEED-NO-GAP-001 | LAW-LIVENESS, LAW-GRID | Bleed contiguity, compaction, day boundary |
+| XMID-001..004 | INV-MARATHON-CROSSMIDNIGHT-001 | LAW-GRID, LAW-LIVENESS | Cross-midnight marathon detection |
+| CROSSDAY-001..003 | INV-EXECUTIONENTRY-CROSSDAY-NOT-SPLIT-001 | LAW-RUNTIME-AUTHORITY, LAW-IMMUTABILITY | Cross-day entry unsplit |
+| CROSSDAY-004..007 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY | Projection traceable |
+| CROSSDAY-008..010 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | LAW-GRID, LAW-DERIVATION | Seam no overlap at carry-in |
+| CROSSDAY-011..013 | INV-EXECUTIONENTRY-SINGLE-AUTHORITY-AT-TIME-001 | LAW-RUNTIME-AUTHORITY | Single authority at every instant |
+| RESCHED-001..007 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Future guard for reschedule operations |
+| RESCHED-008..011 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Cascade preserves past, deletes future |
+
+#### Tier 3 — Runtime and Integration
+
+| Test ID | Invariant(s) | Law(s) | Summary |
+|---|---|---|---|
+| PLAYLOG-004 | INV-EXECUTIONENTRY-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Lookahead shortfall triggers extension |
+| PLAYLOG-005 | INV-EXECUTIONENTRY-LOOKAHEAD-001 | LAW-RUNTIME-AUTHORITY | Depth at min_execution_hours is compliant |
+| HORIZON-001 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Extension triggered by clock progression only |
+| HORIZON-002 | INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | No extension when depth sufficient |
+| CONST-001 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001, INV-ASRUN-TRACEABILITY-001 | LAW-DERIVATION | Full derivation chain integrity |
+| CONST-002 | INV-PLAN-ELIGIBLE-ASSETS-ONLY-001, INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY | Eligibility change mid-cycle |
+| CONST-003 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001, INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-IMMUTABILITY, LAW-DERIVATION | Immutability cascade |
+| CONST-004 | INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001 | LAW-RUNTIME-AUTHORITY | Planning artifacts do not drive playout |
+| CONST-005 | INV-PLAN-GRID-ALIGNMENT-001, INV-SCHEDULEDAY-NO-GAPS-001, INV-EXECUTIONENTRY-NO-GAPS-001 | LAW-GRID | Off-grid fault cascades at every layer |
+| CONST-006 | INV-SCHEDULEDAY-IMMUTABLE-001, INV-EXECUTIONENTRY-LOCKED-IMMUTABLE-001 | LAW-IMMUTABILITY | Override record persisted before artifact |
+| CONST-007 | INV-EXECUTIONENTRY-LOOKAHEAD-001, INV-EXECUTIONENTRY-NO-GAPS-001, INV-EXECUTIONENTRY-LOOKAHEAD-ENFORCED-001 | LAW-RUNTIME-AUTHORITY | Lookahead gap-free over 4h clock run |
+
+---
+
+### Domain-Specific Test Tables
+
+The following domain tables group tests by functional area. Each test is classified by tier within the tier-structured tables above.
+
+#### Reschedule Operations (Tier 2)
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1378,7 +1551,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | RESCHED-010 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different channel |
 | RESCHED-011 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different broadcast_day |
 
-## Break Detection
+#### Break Detection (Tier 2)
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1410,8 +1583,11 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | BREAK-026 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY | V2 multi-content block continues through _hydrate_compiled_segments |
 | BREAK-027 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY | V2 single-content without chapters uses algorithmic breaks |
 | BREAK-028 | INV-BREAK-V2-SINGLE-CHAPTER-001 | LAW-CONTENT-AUTHORITY | V2 single-content movie type produces no mid-content breaks |
+| BREAK-029 | INV-BREAK-002 | LAW-CONTENT-AUTHORITY | Clustered chapter markers all emitted (no dedup) |
+| BREAK-030 | INV-BREAK-002 | LAW-CONTENT-AUTHORITY | Chapter markers at exact segment boundaries ignored |
+| BREAK-031 | INV-BREAK-004 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Accumulate with intro — boundary count correct |
 
-## Traffic Policy
+#### Traffic Policy (Tier 2)
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1441,10 +1617,14 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | TRAFFIC-024 | INV-TRAFFIC-ROTATION-001 | LAW-CONTENT-AUTHORITY | No play history — sorted by asset_id |
 | TRAFFIC-025 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | All excluded by type — select_next returns None |
 | TRAFFIC-026 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY | All excluded by cooldown — select_next returns None |
+| TRAFFIC-027 | INV-TRAFFIC-NONE-001 | LAW-ELIGIBILITY | All excluded by daily cap — select_next returns None |
+| TRAFFIC-028 | INV-TRAFFIC-COOLDOWN-001 | LAW-ELIGIBILITY | Type-specific cooldown only applies to that type |
+| TRAFFIC-029 | INV-TRAFFIC-FILTER-ORDER-001 | LAW-DERIVATION | Mixed filter exclusions — all filters applied in order |
+| TRAFFIC-030 | INV-TRAFFIC-ROTATION-001 | LAW-ELIGIBILITY | Duplicate candidates handled correctly |
 
 ---
 
-## Traffic DSL
+#### Traffic DSL (Tier 2)
 
 **Contract:** `docs/contracts/traffic_dsl.md`
 **Test file:** `pkg/core/tests/contracts/test_traffic_dsl.py`
@@ -1469,13 +1649,18 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | TRAFFIC-DSL-016 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config partial → missing fields default to 0 |
 | TRAFFIC-DSL-017 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | break_config wired into fill_ad_blocks → structured fill |
 | TRAFFIC-DSL-018 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | No break_config → fill_ad_blocks uses legacy flat fill |
+| TRAFFIC-DSL-019 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | Program without traffic fields accepted (positive path) |
+| TRAFFIC-DSL-020 | INV-TRAFFIC-DSL-INVENTORY-PLANNING-ONLY-001 | LAW-ELIGIBILITY | Resolved inventory contains declared asset types |
+| TRAFFIC-DSL-021 | INV-TRAFFIC-DSL-INVENTORY-TYPE-001 | LAW-ELIGIBILITY | Omitted allowed_types uses inventory union |
+| TRAFFIC-DSL-022 | INV-TRAFFIC-DSL-INVENTORY-TYPE-001 | LAW-ELIGIBILITY | Explicit allowed_types not overridden by inventory |
+| TRAFFIC-DSL-023 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | No traffic section returns None |
 
 ---
 
-## BreakPlan
+#### BreakPlan (Tier 1)
 
 **Contract:** `docs/contracts/break_plan.md`
-**Test file:** `pkg/core/tests/contracts/test_break_plan.py`
+**Test file:** `pkg/core/tests/contracts/test_break_plan.py` — **NOT YET CREATED.** BREAKPLAN-001..013 are aspirational.
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1495,7 +1680,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 
 ---
 
-## BreakStructure
+#### BreakStructure (Tier 1)
 
 **Contract:** `docs/contracts/break_structure.md`
 **Test file:** `pkg/core/tests/contracts/test_break_structure.py`
@@ -1521,7 +1706,7 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | BREAKSTRUCTURE-017 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Without station_id: bumpers + interstitial only |
 | BREAKSTRUCTURE-018 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Bare config: single interstitial slot |
 
-## Traffic Manager
+#### Traffic Manager (Tier 2)
 
 **Contract:** `docs/contracts/traffic_manager.md`
 **Test file:** `pkg/core/tests/contracts/test_traffic_manager.py`
@@ -1552,8 +1737,25 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | TRAFFIC-FILL-013 | INV-TRAFFIC-FILL-FALLBACK-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | No candidates: filler loop, no exception |
 | TRAFFIC-FILL-014 | INV-TRAFFIC-FILL-BUDGET-001 | LAW-GRID, LAW-DERIVATION | Sum of all break allocations <= break_budget_ms |
 | TRAFFIC-FILL-015 | INV-TRAFFIC-FILL-BUDGET-001 | LAW-GRID | Weight rounding across 5 breaks stays within budget |
+| TRAFFIC-FILL-016 | INV-TRAFFIC-FILL-FALLBACK-001 | LAW-GRID | Fallback produces valid segments |
+| TRAFFIC-FILL-017 | INV-TRAFFIC-FILL-EXACT-001 | LAW-GRID | Block total duration preserved after fill |
+| TRAFFIC-FILL-DSL-001 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | DSL policy filters by allowed_types |
+| TRAFFIC-FILL-DSL-002 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | Default profile used when no block override |
+| TRAFFIC-FILL-DSL-003 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-CONTENT-AUTHORITY | Block override changes asset selection |
+| TRAFFIC-FILL-DSL-004 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | No traffic section uses structural defaults |
+| TRAFFIC-FILL-DSL-005 | INV-TRAFFIC-FILL-EXACT-001 | LAW-GRID | DSL policy exact fill invariant holds |
+| TRAFFIC-FILL-DSL-006 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-CONTENT-AUTHORITY | Scheduled block carries traffic_profile |
+| TRAFFIC-FILL-DSL-007 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | Scheduled block default traffic_profile is None |
+| TRAFFIC-FILL-DSL-008 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-CONTENT-AUTHORITY | Override produces different policy than default |
+| TRAFFIC-FILL-DSL-009 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-CONTENT-AUTHORITY | Override affects asset selection |
+| TRAFFIC-FILL-DSL-010 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | LAW-CONTENT-AUTHORITY | Fill preserves traffic_profile on result |
+| TRAFFIC-FILL-DSL-011 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | LAW-CONTENT-AUTHORITY | No override uses default |
+| TRAFFIC-FILL-COMPAT-001 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | LAW-CONTENT-AUTHORITY | No break_config backward compatible |
+| TRAFFIC-FILL-DEGRADE-003 | INV-TRAFFIC-FILL-BUMPER-DEGRADE-001 | LAW-GRID | Partial bumper degrade |
+| TRAFFIC-FILL-DEGRADE-004 | INV-TRAFFIC-FILL-BUMPER-DEGRADE-001 | LAW-GRID | Undersized bumper shortfall degrades to pool |
+| TRAFFIC-FILL-SID-005 | INV-TRAFFIC-FILL-STRUCTURED-001 | LAW-GRID | Undersized station ID shortfall degrades to pool |
 
-### Episode Progression
+#### Episode Progression (Tier 2)
 
 **Test file:** `pkg/core/tests/contracts/test_episode_progression.py`
 
@@ -1591,3 +1793,108 @@ All test definitions in sections 5–6 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | EP-CALENDAR-002 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | `count_occurrences` with daily mask over 1 day returns 1 |
 | EP-CALENDAR-003 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | `count_occurrences` with daily mask over 7 days returns 7 |
 | EP-CALENDAR-004 | INV-EPISODE-PROGRESSION-012 | LAW-DERIVATION | 10-year range computed in bounded time |
+| EP-EXHAUST-005 | INV-EPISODE-PROGRESSION-006 | LAW-CONTENT-AUTHORITY | Season boundary rollover handled correctly |
+| EP-DETERM-005 | INV-EPISODE-PROGRESSION-001 | LAW-DERIVATION | EPG recomputation produces stable results |
+
+---
+
+#### Program Presentation Stack (Tier 2)
+
+**Contract:** `docs/contracts/program_presentation.md`
+**Test file:** `pkg/core/tests/contracts/test_program_presentation.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| PRES-EMPTY-001 | INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Program with empty presentation stack assembles with primary content only; exactly one `is_primary=True` segment |
+| PRES-SINGLE-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001, INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Single presentation segment appears before primary content; presentation has `is_primary=False` |
+| PRES-ORDER-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Multiple presentation segments appear in declared order before primary content |
+| PRES-BUDGET-001 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Presentation durations reduce available grid budget; oversized content rejected with `bleed: false` |
+| PRES-BUDGET-002 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Content that fits within remaining budget (after presentation overhead) is accepted |
+| PRES-IDENTITY-001 | INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Editorial identity extracted from first `segment_type="content"` segment, not presentation segments |
+| PRES-IDENTITY-002 | INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | No presentation segment has `segment_type="content"` |
+| PRES-FILLER-001 | INV-PRESENTATION-NOT-FILLER-001 | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY | Presentation segments before primary content do not trigger `_assert_no_filler_before_primary` |
+| PRES-FILLER-002 | INV-PRESENTATION-NOT-FILLER-001 | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY | Every presentation segment has non-empty `asset_uri` and `segment_type="presentation"` |
+| PRES-BREAK-001 | INV-PRESENTATION-BREAK-INVISIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Break detection produces no opportunities at presentation-to-content boundaries |
+| PRES-POOL-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool entry resolves to exactly one asset from the named pool |
+| PRES-POOL-002 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same seed produces same pool selection; different seeds differ |
+| PRES-POOL-003 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Mixed asset and pool entries resolve in declared order |
+| PRES-MULTI-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Multiple presentation before primary — no crash |
+| PRES-BREAK-002 | INV-PRESENTATION-BREAK-INVISIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Presentation invisible but content breaks preserved |
+| PRES-REJECT-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Presentation and intro co-existence rejected |
+| PRES-BUDGET-003 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Multiple presentation segments — budget sum applies |
+
+---
+
+#### Programming Pool — Rating Match Normalization (Tier 1)
+
+**Test file:** `pkg/core/tests/contracts/test_pool_rating_normalize.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POOL-RATING-001 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | Bare string `rating: "PG"` matches the same assets as `rating: { include: ["PG"] }` |
+| POOL-RATING-002 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | List `rating: ["PG", "PG-13"]` matches the same assets as `rating: { include: ["PG", "PG-13"] }` |
+| POOL-RATING-003 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | Dict form `rating: { include: ["R"], exclude: ["NC-17"] }` passes through unchanged |
+| POOL-RATING-004 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | Bare string rating returns correct subset; non-matching ratings excluded |
+| POOL-RATING-005 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | All three syntaxes produce identical result sets for the same rating value |
+| POOL-RATING-006 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | Dict with include-only passes through unchanged |
+| POOL-RATING-007 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | Dict with exclude-only passes through unchanged |
+| POOL-RATING-008 | INV-POOL-RATING-NORMALIZE-001 | LAW-DERIVATION | List matches multiple ratings correctly |
+
+---
+
+#### Programming Pool — Tags Filter (Tier 1)
+
+**Test file:** `pkg/core/tests/contracts/test_pool_tags_filter.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POOL-TAGS-001 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Single tag filter matches assets with that tag |
+| POOL-TAGS-002 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Multi-tag filter matches only assets with ALL specified tags (AND semantics) |
+| POOL-TAGS-003 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Asset missing any one required tag is excluded |
+| POOL-TAGS-004 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Tag comparison is case-insensitive |
+| POOL-TAGS-005 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Bare string `tags: "hbo"` normalized to list and matched |
+| POOL-TAGS-006 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Ratings card subset matching |
+| POOL-TAGS-007 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | String input normalized to list |
+| POOL-TAGS-008 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | List input passes through unchanged |
+| POOL-TAGS-009 | INV-POOL-TAGS-FILTER-001 | LAW-DERIVATION | Tag values lowercased during normalization |
+
+---
+
+#### Presentation Pool Entry Resolution (Tier 2)
+
+**Contract:** `docs/contracts/program_presentation.md`
+**Test file:** `pkg/core/tests/contracts/test_presentation_pool_entry.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| PRES-POOL-001 | INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Pool entry `{pool: "intros"}` resolves to exactly one asset |
+| PRES-POOL-002 | INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-DERIVATION | Same seed produces same pool entry selection |
+| PRES-POOL-003 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Mixed asset + pool entries resolve in declared order |
+| PRES-POOL-004 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID | Pool-resolved presentation assets contribute to grid budget |
+| PRES-POOL-005 | INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Two pool entries each resolve independently |
+| PRES-POOL-006 | INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-ELIGIBILITY | Empty pool raises AssemblyFault |
+| PRES-POOL-007 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Content segment follows presentation regardless of entry type |
+
+---
+
+#### Schedule Block Program Reference — Program List (Tier 2)
+
+**Contract:** `docs/contracts/schedule_block_program_reference.md`
+**Test file:** `pkg/core/tests/contracts/test_schedule_block_program_list.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| SBLOCK-LIST-001 | INV-SBLOCK-PROGRAM-001 | LAW-CONTENT-AUTHORITY | `program: [prog_a, prog_b]` accepted when both programs defined |
+| SBLOCK-LIST-002 | INV-SBLOCK-PROGRAM-001 | LAW-CONTENT-AUTHORITY | `program: []` rejected as empty |
+| SBLOCK-LIST-003 | INV-SBLOCK-PROGRAM-001 | LAW-CONTENT-AUTHORITY | `program: "single_ref"` backward compat still works |
+| SBLOCK-LIST-004 | INV-SBLOCK-PROGRAM-002 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Undefined member in program list rejected |
+| SBLOCK-LIST-005 | INV-SBLOCK-PROGRAM-006 | LAW-GRID, LAW-CONTENT-AUTHORITY | Programs with different grid_blocks rejected |
+| SBLOCK-LIST-006 | INV-SBLOCK-PROGRAM-006 | LAW-GRID, LAW-CONTENT-AUTHORITY | Programs with uniform grid_blocks accepted |
+| SBLOCK-LIST-007 | INV-SBLOCK-PROGRAM-002 | LAW-CONTENT-AUTHORITY | Per-execution selection from program list |
+| SBLOCK-LIST-008 | INV-SBLOCK-PROGRAM-002 | LAW-DERIVATION | Same seed produces same program selections |
+| SBLOCK-GBM-001 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | `grid_blocks_max` program — slots not multiple is accepted |
+| SBLOCK-GBM-002 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | `grid_blocks_max` program — single slot accepted — **NOT YET IMPLEMENTED** |
+| SBLOCK-GBM-003 | INV-SBLOCK-PROGRAM-003 | LAW-GRID, LAW-CONTENT-AUTHORITY | `grid_blocks` and `grid_blocks_max` mutually exclusive — **NOT YET IMPLEMENTED** |
+| SBLOCK-GBM-004 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | Short movie takes fewer blocks than max |
+| SBLOCK-GBM-005 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | Greedy packing fills budget with right-sized slots |
+| SBLOCK-GBM-006 | INV-SBLOCK-PROGRAM-006 | LAW-GRID, LAW-CONTENT-AUTHORITY | Mismatched `grid_blocks_max` in program list rejected |

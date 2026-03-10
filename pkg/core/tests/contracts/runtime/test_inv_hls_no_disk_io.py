@@ -185,6 +185,7 @@ def io_tripwires():
 class TestInvHlsNoDiskIo:
     """INV-HLS-NO-DISK-IO-001 contract tests."""
 
+    # Tier: 1 | Structural invariant
     def test_feed_with_io_tripwires_raises_on_any_disk_access(self, io_tripwires):
         """Full lifecycle under IO tripwires — no disk I/O occurs."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=5)
@@ -206,6 +207,7 @@ class TestInvHlsNoDiskIo:
         seg.stop()
         # If we reach here, no AssertionError from tripwires = no disk I/O
 
+    # Tier: 1 | Structural invariant
     def test_get_playlist_returns_valid_m3u8(self):
         """After first segment finalized, get_playlist() returns valid M3U8."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=10)
@@ -225,6 +227,7 @@ class TestInvHlsNoDiskIo:
         # Should contain a segment name
         assert re.search(r"seg_\d{5}\.ts", playlist)
 
+    # Tier: 1 | Structural invariant
     def test_get_segment_returns_ts_bytes(self):
         """get_segment() returns bytes starting with TS sync byte."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=10)
@@ -248,6 +251,7 @@ class TestInvHlsNoDiskIo:
         assert len(data) > 0
         assert data[0] == TS_SYNC_BYTE
 
+    # Tier: 1 | Structural invariant
     def test_expired_segment_returns_none(self):
         """Evicted segments return None from get_segment()."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=3)
@@ -262,6 +266,7 @@ class TestInvHlsNoDiskIo:
         # Latest segments should exist
         assert seg.get_segment("seg_00004.ts") is not None
 
+    # Tier: 1 | Structural invariant
     def test_memory_bounded_and_media_sequence_in_playlist(self):
         """With max_segments=5, feeding 20 segments retains exactly 5.
         Media sequence and playlist content reflect evictions."""
@@ -288,6 +293,7 @@ class TestInvHlsNoDiskIo:
                 break
         assert first_seg_line == "seg_00015.ts"
 
+    # Tier: 1 | Structural invariant
     def test_stop_without_finalize(self):
         """Stop with partial data does not finalize a segment."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=10)
@@ -300,6 +306,7 @@ class TestInvHlsNoDiskIo:
         seg.stop()
         assert seg.get_playlist() is None
 
+    # Tier: 1 | Structural invariant
     def test_playlist_ready_signaling(self):
         """has_playlist() and wait_for_playlist() work correctly."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=10)
@@ -313,6 +320,7 @@ class TestInvHlsNoDiskIo:
         assert seg.has_playlist() is True
         assert seg.wait_for_playlist(0) is True
 
+    # Tier: 1 | Structural invariant
     def test_concurrent_feed_and_read(self):
         """Concurrent feed and read operations don't deadlock or corrupt state."""
         seg = HLSSegmenter("test-ch", target_duration=2.0, max_segments=5)

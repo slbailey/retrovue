@@ -110,6 +110,30 @@ a source where `source_fps ≠ output_fps`, the cadence is not active
 If the consumption rate equals a prior source's FPS instead of the
 current source's FPS, the cadence is stale from a prior producer.
 
+### INV-CADENCE-SINGLE-AUTHORITY: Cadence authority belongs to the output clock domain
+
+Frame cadence decisions (advance vs repeat) MUST occur only at the clock
+domain where frames are emitted to the output stream.  In this
+architecture, that authority is the **TickLoop** (`PipelineManager`).
+
+Decoder and buffer layers (e.g. `VideoLookaheadBuffer` FillLoop) MUST
+NOT apply independent cadence logic.  The FillLoop is condvar-driven: it
+wakes when the consumer pops a frame, so its natural iteration rate
+already matches the source FPS.
+
+**Violation mode:** When both TickLoop and FillLoop apply cadence, the
+rate reduction is **multiplicative**.  For 24fps source / 29.97fps
+output:
+
+- TickLoop cadence: advance ratio = 24/29.97 ≈ 0.8008
+- FillLoop cadence: decode ratio = 24/29.97 ≈ 0.8008
+- Net unique frame rate = 29.97 × 0.8008 × 0.8008 = 19.2fps
+- Content plays at 19.2/24 = **0.8× speed** (equivalently, movie takes
+  1.25× longer)
+
+This is always a defect.  Cadence is a clock-domain concern, not a
+buffer-fill concern.
+
 ## Cross-Reference
 
 | Related Contract | Relationship |

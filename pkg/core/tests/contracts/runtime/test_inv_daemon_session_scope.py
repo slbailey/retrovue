@@ -140,6 +140,7 @@ class _SessionCounter:
 class TestRule1SingleSessionPerCycle:
     """Rule 1: evaluate_once() MUST open at most one database session."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_evaluate_once_opens_at_most_one_session(self):
         """When evaluate_once() runs an evaluation cycle that fills blocks,
         the total number of session checkouts MUST be at most 1.
@@ -202,6 +203,7 @@ class TestRule2HelpersAcceptDbParam:
         "_write_to_txlog",
         "_purge_expired_tier2",
     ])
+    # Tier: 2 | Scheduling logic invariant
     def test_method_accepts_db_param(self, method_name):
         """Each DB helper MUST accept an optional `db` keyword argument."""
         import inspect
@@ -231,6 +233,7 @@ class TestRule2HelpersAcceptDbParam:
 class TestRule3ExtendNoOwnSessions:
     """Rule 3: _extend_to_target() MUST NOT open sessions internally."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_extend_to_target_has_db_parameter(self):
         """_extend_to_target() MUST accept a `db` parameter so
         evaluate_once() can pass its session through.
@@ -248,6 +251,7 @@ class TestRule3ExtendNoOwnSessions:
             f"evaluate_once(). Found parameters: {list(sig.parameters.keys())}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_extend_to_target_passes_db_to_helpers(self):
         """_extend_to_target() MUST forward its db param to _get_asset_library
         and _write_to_txlog.
@@ -294,6 +298,7 @@ class TestRule3ExtendNoOwnSessions:
 class TestRule4BoundedConcurrentConnections:
     """Rule 4: N concurrent daemons MUST use at most N connections."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_concurrent_daemons_bounded_connections(self):
         """Run 4 daemons in parallel threads. Peak concurrent session
         checkouts MUST be at most 4 (one per daemon thread).

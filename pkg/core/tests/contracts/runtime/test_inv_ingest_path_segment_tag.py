@@ -42,6 +42,7 @@ def _tag_labels(importer: FilesystemImporter, file_path: Path) -> list[str]:
 class TestRuleAllSegmentsEmitted:
     """Rule 1: All path segment components between root and file parent are emitted."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_two_deep_path_yields_two_tags(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 1:
@@ -61,6 +62,7 @@ class TestRuleAllSegmentsEmitted:
             f"Expected {{'hbo', '1982'}}, got {tag_values}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_single_deep_path_yields_one_tag(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 1:
@@ -88,6 +90,7 @@ class TestRuleAllSegmentsEmitted:
 class TestRuleNoSegmentDropped:
     """Rule 2: Every intermediate directory component must produce a tag."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_three_deep_path_yields_three_tags(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 2:
@@ -119,6 +122,7 @@ class TestRuleNoSegmentDropped:
 class TestRuleNormalization:
     """Rule 3: Directory names must be normalized before becoming tags."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_uppercase_dir_name_normalized(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 3:
@@ -140,6 +144,7 @@ class TestRuleNormalization:
             f"INV-INGEST-PATH-SEGMENT-TAG-001 Rule 3: un-normalized 'HBO' must not appear"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_whitespace_in_dir_name_normalized(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 3:
@@ -166,6 +171,7 @@ class TestRuleNormalization:
 class TestRuleOnlyBetweenRootAndParent:
     """Rule 4: Root directory and file stem must not appear as tags."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_root_dir_not_a_tag(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 4:
@@ -186,6 +192,7 @@ class TestRuleOnlyBetweenRootAndParent:
             f"Root dir name '{root_name}' must not appear as a tag, got {tag_values}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_file_name_not_a_tag(self, tmp_path):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 4:
@@ -215,6 +222,7 @@ class TestRuleOnlyBetweenRootAndParent:
 class TestRuleDisabledByDefault:
     """Rule 5: Without tag_from_path_segments=True, the flag is inactive."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_flag_defaults_to_false(self):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 5:
@@ -231,6 +239,7 @@ class TestRuleDisabledByDefault:
             f"tag_from_path_segments must default to False, got {imp.tag_from_path_segments!r}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_method_exists(self):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 5:

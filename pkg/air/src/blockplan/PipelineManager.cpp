@@ -2898,6 +2898,28 @@ void PipelineManager::Run() {
         // cadence so duration is preserved (e.g. 23.976→30 upsample after 30→30 segment).
         RefreshFrameSelectionCadenceFromLiveSource("segment_swap");
 
+        // SEGMENT_CLOCK_AUDIT: Log fps metadata at segment boundary for 1.25x speed diagnosis.
+        {
+          ITickProducer* audit_tp = AsTickProducer(live_.get());
+          RationalFps decoder_fps = audit_tp->GetInputRationalFps();
+          RationalFps snapped_fps = decoder_fps.IsValid()
+              ? SnapToStandardRationalFps(decoder_fps) : decoder_fps;
+          std::string seg_asset = (current_segment_index_ >= 0 &&
+              current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()))
+              ? live_parent_block_.segments[current_segment_index_].asset_uri : "unknown";
+          std::ostringstream oss;
+          oss << "[PipelineManager] SEGMENT_CLOCK_AUDIT"
+              << " tick=" << session_frame_index
+              << " segment_index=" << current_segment_index_
+              << " asset=" << seg_asset
+              << " decoder_fps=" << decoder_fps.num << "/" << decoder_fps.den
+              << " snapped_fps=" << snapped_fps.num << "/" << snapped_fps.den
+              << " output_fps=" << ctx_->fps.num << "/" << ctx_->fps.den
+              << " cadence_enabled=" << frame_selection_cadence_enabled_
+              << " resample_mode=" << static_cast<int>(audit_tp->GetResampleMode());
+          Logger::Info(oss.str());
+        }
+
         // INV-SEAM-AUDIO-001: only after commit may tick loop consume segment-B audio.
         segment_swap_committed = true;
         a_src = SelectAudioSourceForTick(
@@ -3721,6 +3743,57 @@ void PipelineManager::Run() {
           fence_audio_pad_warning_this_tick, pad_frame_emitted_this_tick);
     }
 
+    // FRAME_RATE_AUDIT + CLOCK_DRIFT_AUDIT: every ~1 second for 1.25x speed diagnosis.
+    // All integer arithmetic — no float/double (INV-FPS-RATIONAL-001).
+    if (session_frame_index > 0 && (session_frame_index % 30 == 0)) {
+      auto audit_now = std::chrono::steady_clock::now();
+      auto wall_now = std::chrono::system_clock::now();
+      auto wall_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          wall_now.time_since_epoch()).count();
+      // FRAME_RATE_AUDIT: track actual emission rate (integer: fps_x1000 = frames*1e9/elapsed_us).
+      {
+        static thread_local int64_t audit_prev_tick = 0;
+        static thread_local std::chrono::steady_clock::time_point audit_prev_time{};
+        if (audit_prev_tick > 0) {
+          int64_t tick_delta = session_frame_index - audit_prev_tick;
+          int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+              audit_now - audit_prev_time).count();
+          // actual_fps_x1000 = tick_delta * 1000000 / elapsed_us (millifps, integer)
+          int64_t actual_fps_x1000 = (elapsed_us > 0)
+              ? (tick_delta * 1000000LL / elapsed_us) : 0;
+          // expected_fps_x1000 = fps.num * 1000 / fps.den
+          int64_t expected_fps_x1000 = (ctx_->fps.den > 0)
+              ? (ctx_->fps.num * 1000LL / ctx_->fps.den) : 0;
+          std::ostringstream oss;
+          oss << "[PipelineManager] FRAME_RATE_AUDIT"
+              << " tick=" << session_frame_index
+              << " wall_ms=" << wall_epoch_ms
+              << " frames_last_interval=" << tick_delta
+              << " actual_fps_x1000=" << actual_fps_x1000
+              << " expected_fps_x1000=" << expected_fps_x1000
+              << " elapsed_us=" << elapsed_us;
+          Logger::Info(oss.str());
+        }
+        audit_prev_tick = session_frame_index;
+        audit_prev_time = audit_now;
+      }
+      // CLOCK_DRIFT_AUDIT: video vs audio PTS alignment (integer: delta in 90kHz units + ms).
+      {
+        int64_t av_delta_90k = video_pts_90k - audio_pts_90k;
+        // av_delta_ms_x100 = av_delta_90k * 100000 / 90000 (centims, avoids float)
+        int64_t av_delta_ms_x100 = av_delta_90k * 100000LL / 90000LL;
+        std::ostringstream oss;
+        oss << "[PipelineManager] CLOCK_DRIFT_AUDIT"
+            << " tick=" << session_frame_index
+            << " video_pts_90k=" << video_pts_90k
+            << " audio_pts_90k=" << audio_pts_90k
+            << " av_delta_90k=" << av_delta_90k
+            << " av_delta_ms_x100=" << av_delta_ms_x100
+            << " audio_samples_emitted=" << audio_samples_emitted;
+        Logger::Info(oss.str());
+      }
+    }
+
     session_frame_index++;
   }
 
@@ -4095,6 +4168,25 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
           << " output_fps=" << output_fps.num << "/" << output_fps.den;
       Logger::Info(oss.str()); }
   }
+
+  // SEGMENT_CLOCK_AUDIT: Log fps metadata at block start for 1.25x speed diagnosis.
+  {
+    std::string seg_asset = (!live_parent_block_.segments.empty() &&
+        current_segment_index_ >= 0 &&
+        current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()))
+        ? live_parent_block_.segments[current_segment_index_].asset_uri : "unknown";
+    std::ostringstream oss;
+    oss << "[PipelineManager] SEGMENT_CLOCK_AUDIT"
+        << " tick=0"
+        << " segment_index=" << current_segment_index_
+        << " asset=" << seg_asset
+        << " decoder_fps=" << raw_fps.num << "/" << raw_fps.den
+        << " snapped_fps=" << input_fps.num << "/" << input_fps.den
+        << " output_fps=" << output_fps.num << "/" << output_fps.den
+        << " cadence_enabled=" << frame_selection_cadence_enabled_
+        << " resample_mode=" << static_cast<int>(tp->GetResampleMode());
+    Logger::Info(oss.str());
+  }
 }
 
 // =============================================================================
@@ -4144,12 +4236,59 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
     did_sanitize = true;
   }
 
-  if (!did_sanitize && new_fps == last_source_fps_) {
-    return;  // No change, no log.
+  // Segment swaps always reset cadence phase; FPS equality must not skip reset.
+  const bool force_reset = (reason && std::strcmp(reason, "segment_swap") == 0);
+  // Defensive: zero accumulator on segment swap before any early-return, so phase
+  // bugs cannot return if someone later reintroduces an early-return path.
+  if (force_reset) {
+    frame_selection_cadence_budget_num_ = 0;
+  }
+
+  // INV-CADENCE-SOURCE-AUTHORITY-001: Audit log to verify incoming decoder fps
+  // authority at segment swap.  Proves or disproves stale-fps early-return.
+  const bool would_early_return =
+      (!did_sanitize && new_fps == last_source_fps_ && !force_reset);
+  {
+    const bool old_cadence_enabled = frame_selection_cadence_enabled_;
+    const char* old_mode = old_cadence_enabled ? "ACTIVE" : "DISABLED";
+    std::string from_asset = "unknown";
+    std::string to_asset = "unknown";
+    int32_t from_seg = current_segment_index_ - 1;
+    if (from_seg >= 0 && from_seg < static_cast<int32_t>(live_parent_block_.segments.size()))
+      from_asset = live_parent_block_.segments[from_seg].asset_uri;
+    if (current_segment_index_ >= 0 && current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()))
+      to_asset = live_parent_block_.segments[current_segment_index_].asset_uri;
+    std::ostringstream oss;
+    oss << "[PipelineManager] CADENCE_SWAP_AUDIT"
+        << " reason=" << reason
+        << " from_segment=" << from_seg
+        << " to_segment=" << current_segment_index_
+        << " incoming_decoder_open=" << tp->HasDecoder()
+        << " incoming_decoder_fps=" << raw_fps.num << "/" << raw_fps.den
+        << " reported_input_fps=" << new_fps.num << "/" << new_fps.den
+        << " last_source_fps=" << last_source_fps_.num << "/" << last_source_fps_.den
+        << " old_mode=" << old_mode
+        << " new_mode=" << ((!did_sanitize && new_fps == last_source_fps_)
+            ? old_mode
+            : ((new_fps == output_fps) ? "DISABLED" : "ACTIVE"))
+        << " early_return=" << would_early_return
+        << " force_reset=" << force_reset
+        << " did_sanitize=" << did_sanitize
+        << " no_decoder=" << no_decoder
+        << " from_asset=" << from_asset
+        << " to_asset=" << to_asset;
+    Logger::Info(oss.str());
+  }
+
+  if (would_early_return) {
+    return;
   }
 
   RationalFps old_fps = last_source_fps_;
   last_source_fps_ = new_fps;
+
+  // Always reset cadence accumulator so phase starts clean at seam (no leakage).
+  frame_selection_cadence_budget_num_ = 0;
 
   // Cadence is DISABLED only when source and output FPS are exactly equal (after
   // normalization), or when segment is explicitly rate-conformed (no flag yet).
@@ -4160,7 +4299,6 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
   if (!source_equals_output && output_fps.num > 0 && output_fps.den > 0 &&
       new_fps.num > 0 && new_fps.den > 0) {
     frame_selection_cadence_enabled_ = true;
-    frame_selection_cadence_budget_num_ = 0;
     frame_selection_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * new_fps.den;
     frame_selection_cadence_increment_ = static_cast<int64_t>(new_fps.num) * output_fps.den;
   } else {

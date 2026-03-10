@@ -45,6 +45,7 @@ class TrafficCandidate:
     asset_id: str
     asset_type: str
     duration_ms: int
+    asset_category: str | None = None
 
 
 def evaluate_candidates(

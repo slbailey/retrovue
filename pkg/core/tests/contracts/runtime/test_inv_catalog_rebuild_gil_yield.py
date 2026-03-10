@@ -28,6 +28,7 @@ import pytest
 class TestRule1SleepExists:
     """Rule 1: _load() MUST contain time.sleep(>=0.010)."""
 
+    # Tier: 1 | Structural invariant
     def test_sleep_present_with_sufficient_duration(self):
         """AST scan: _load() MUST contain at least one time.sleep() call
         with an argument >= 0.010 (10ms minimum GIL yield)."""
@@ -68,6 +69,7 @@ class TestRule2ConditionalInsideLoop:
     """Rule 2: The time.sleep() yield MUST be inside a loop node and
     guarded by a conditional (batch/modulo check)."""
 
+    # Tier: 1 | Structural invariant
     def test_sleep_nested_in_loop(self):
         """AST structural: time.sleep() MUST be nested inside a For or
         While node within _load()."""
@@ -97,6 +99,7 @@ class TestRule2ConditionalInsideLoop:
             "The yield MUST occur inside the asset-processing loop."
         )
 
+    # Tier: 1 | Structural invariant
     def test_sleep_guarded_by_conditional(self):
         """AST structural: time.sleep() inside the loop MUST be guarded
         by an If node (batch boundary check), not called unconditionally

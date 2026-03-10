@@ -115,6 +115,7 @@ def _with_intro_outro(
 class TestInvBreak001:
     """INV-BREAK-001"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_detect_breaks_from_assembly_result(self):
         # INV-BREAK-001 — detect_breaks accepts an AssemblyResult and returns a BreakPlan
         assembly = _single_content(duration_ms=1_320_000)  # 22 minutes
@@ -126,6 +127,7 @@ class TestInvBreak001:
         assert plan.program_runtime_ms == 1_320_000
         assert plan.grid_duration_ms == grid_ms
 
+    # Tier: 2 | Scheduling logic invariant
     def test_rejects_raw_asset_duration(self):
         # INV-BREAK-001 — detect_breaks signature requires assembly_result, not raw duration
         sig = inspect.signature(detect_breaks)
@@ -147,6 +149,7 @@ class TestInvBreak001:
 class TestInvBreak002:
     """INV-BREAK-002"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_chapter_markers_emit_chapter_breaks(self):
         # INV-BREAK-002 — 3 chapter markers → 3 chapter-source opportunities
         assembly = _single_content(
@@ -162,6 +165,7 @@ class TestInvBreak002:
         assert chapter_opps[1].position_ms == 720_000
         assert chapter_opps[2].position_ms == 1_080_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_boundary_breaks_coexist_with_chapter_breaks(self):
         # INV-BREAK-002 — accumulate program with chapters on one segment
         # produces both chapter and boundary opportunities
@@ -190,6 +194,7 @@ class TestInvBreak002:
         boundary_opps = [o for o in plan.opportunities if o.source == "boundary"]
         assert any(o.position_ms == 600_000 for o in boundary_opps)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_algorithmic_does_not_override_chapter(self):
         # INV-BREAK-002 — when chapter markers present on single content segment,
         # no algorithmic break at the same position
@@ -220,6 +225,7 @@ class TestInvBreak002:
 class TestInvBreak003:
     """INV-BREAK-003"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_algorithmic_not_in_protected_zone(self):
         # INV-BREAK-003 — all algorithmic breaks >= 20% of runtime
         assembly = _single_content(duration_ms=1_320_000)  # 22 min
@@ -234,6 +240,7 @@ class TestInvBreak003:
                 f"falls within protected zone (ends at {protected_end}ms)"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_chapter_breaks_allowed_in_protected_zone(self):
         # INV-BREAK-003 — chapter marker at 5% of runtime is emitted;
         # protected zone does not apply to chapter-source breaks
@@ -263,6 +270,7 @@ class TestInvBreak003:
 class TestInvBreak004:
     """INV-BREAK-004"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_accumulate_boundaries_emitted(self):
         # INV-BREAK-004 — 3 content segments → exactly 2 boundary opportunities
         assembly = _accumulate_content(400_000, 400_000, 400_000)  # 3 × ~6.7 min
@@ -276,6 +284,7 @@ class TestInvBreak004:
         positions = sorted(o.position_ms for o in boundary_opps)
         assert positions == [400_000, 800_000]
 
+    # Tier: 2 | Scheduling logic invariant
     def test_single_segment_no_boundary_breaks(self):
         # INV-BREAK-004 — single content segment → 0 boundary opportunities
         assembly = _single_content(duration_ms=1_320_000)
@@ -285,6 +294,7 @@ class TestInvBreak004:
         boundary_opps = [o for o in plan.opportunities if o.source == "boundary"]
         assert len(boundary_opps) == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_five_segments_four_boundaries(self):
         # INV-BREAK-004 — 5 content segments → exactly 4 boundary opportunities
         assembly = _accumulate_content(300_000, 300_000, 300_000, 300_000, 300_000)
@@ -308,6 +318,7 @@ class TestInvBreak004:
 class TestInvBreak005:
     """INV-BREAK-005"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_budget_from_assembled_runtime(self):
         # INV-BREAK-005 — budget = grid_duration - total_runtime,
         # including intro + outro in runtime
@@ -325,6 +336,7 @@ class TestInvBreak005:
         assert plan.break_budget_ms == expected_budget
         assert plan.program_runtime_ms == 1_290_000
 
+    # Tier: 2 | Scheduling logic invariant
     def test_budget_not_from_single_asset(self):
         # INV-BREAK-005 — accumulate program: budget uses sum of all segments,
         # not just the first segment's duration
@@ -348,6 +360,7 @@ class TestInvBreak005:
 class TestInvBreak006:
     """INV-BREAK-006"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_plan_is_sole_authority(self):
         # INV-BREAK-006 — BreakPlan contains all information traffic fill needs:
         # opportunities list, break_budget_ms, grid_duration_ms, program_runtime_ms.
@@ -372,6 +385,7 @@ class TestInvBreak006:
             assert hasattr(opp, "weight")
             assert opp.weight > 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_break_plan_opportunities_ordered(self):
         # INV-BREAK-006 — opportunities must be in timeline order
         assembly = _accumulate_content(400_000, 400_000, 400_000)
@@ -394,6 +408,7 @@ class TestInvBreak006:
 class TestInvBreak007:
     """INV-BREAK-007"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_algorithmic_spacing_non_uniform(self):
         # INV-BREAK-007 — 3+ algorithmic breaks: first interval > last interval
         # Use a long single-asset program with no chapter markers to force
@@ -423,6 +438,7 @@ class TestInvBreak007:
             f"last interval ({intervals[-1]}ms). Intervals: {intervals}"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_two_algorithmic_breaks_not_equal(self):
         # INV-BREAK-007 — 2 algorithmic breaks: intervals must differ
         assembly = _single_content(duration_ms=1_320_000)  # 22 min
@@ -441,6 +457,7 @@ class TestInvBreak007:
                 "INV-BREAK-007: equal algorithmic spacing is prohibited"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_weight_increases_toward_end(self):
         # INV-BREAK-007 — algorithmic break weights increase monotonically
         assembly = _single_content(duration_ms=2_400_000)  # 40 min
@@ -470,6 +487,7 @@ class TestInvBreak007:
 class TestInvBreak008:
     """INV-BREAK-008"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_detect_breaks_callable_independently(self):
         # INV-BREAK-008 — detect_breaks is importable from retrovue.runtime.break_detection
         # and callable without importing playout_log_expander or traffic_manager.
@@ -481,6 +499,7 @@ class TestInvBreak008:
 
         assert isinstance(plan, BreakPlan)
 
+    # Tier: 2 | Scheduling logic invariant
     def test_detect_breaks_does_not_import_expander(self):
         # INV-BREAK-008 — break_detection module must not depend on playout_log_expander
         import retrovue.runtime.break_detection as bd_module
@@ -500,6 +519,7 @@ class TestInvBreak008:
 class TestInvBreak009:
     """INV-BREAK-009"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_break_in_intro(self):
         # INV-BREAK-009 — no break opportunity falls within intro timeline range
         assembly = _with_intro_outro(
@@ -517,6 +537,7 @@ class TestInvBreak009:
                 f"intro segment (0–{intro_end_ms}ms)"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_break_in_outro(self):
         # INV-BREAK-009 — no break opportunity falls within outro timeline range
         assembly = _with_intro_outro(
@@ -535,6 +556,7 @@ class TestInvBreak009:
                 f"outro segment ({outro_start_ms}–{outro_end_ms}ms)"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_break_at_intro_content_seam(self):
         # INV-BREAK-009 — intro-to-content transition is NOT a boundary break
         assembly = _with_intro_outro(
@@ -552,6 +574,7 @@ class TestInvBreak009:
             "INV-BREAK-009: intro-to-content seam must not be a boundary break"
         )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_no_break_at_content_outro_seam(self):
         # INV-BREAK-009 — content-to-outro transition is NOT a boundary break
         assembly = _with_intro_outro(
@@ -580,6 +603,7 @@ class TestInvBreak009:
 class TestInvBreak010:
     """INV-BREAK-010"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cold_open_respected(self):
         # INV-BREAK-010 — chapter marker at 180s; no algorithmic break before 180s
         # in that segment's contribution to the program timeline.
@@ -599,6 +623,7 @@ class TestInvBreak010:
                 f"violates cold open (first chapter marker at {first_chapter}ms)"
             )
 
+    # Tier: 2 | Scheduling logic invariant
     def test_cold_open_per_segment(self):
         # INV-BREAK-010 — in accumulate mode, cold open applies per segment.
         # First segment has chapter at 120s, second has no markers.
@@ -636,6 +661,7 @@ class TestInvBreak010:
 class TestInvBreak011:
     """INV-BREAK-011"""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bleed_program_empty_plan(self):
         # INV-BREAK-011 — program runtime > grid duration → empty opportunities
         assembly = _single_content(
@@ -648,6 +674,7 @@ class TestInvBreak011:
         assert len(plan.opportunities) == 0
         assert plan.break_budget_ms <= 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_zero_budget_empty_plan(self):
         # INV-BREAK-011 — program runtime == grid duration → empty opportunities
         assembly = _single_content(duration_ms=GRID_30_MIN_MS)
@@ -657,6 +684,7 @@ class TestInvBreak011:
         assert len(plan.opportunities) == 0
         assert plan.break_budget_ms == 0
 
+    # Tier: 2 | Scheduling logic invariant
     def test_bleed_with_markers_still_empty(self):
         # INV-BREAK-011 — even with chapter markers, bleed means no breaks
         assembly = _single_content(
@@ -682,6 +710,7 @@ class TestInvBreak011:
 class TestBreakDetectionEdgeCases:
     """Additional edge cases from the contract."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_clustered_chapter_markers_all_emitted(self):
         # Contract edge case: clustered markers within 30s must all be emitted
         assembly = _single_content(
@@ -699,6 +728,7 @@ class TestBreakDetectionEdgeCases:
         assert 620_000 in chapter_positions
         assert 1_000_000 in chapter_positions
 
+    # Tier: 2 | Scheduling logic invariant
     def test_chapter_markers_at_boundaries_ignored(self):
         # Contract: markers at position 0 or segment boundary are ignored
         assembly = _single_content(
@@ -715,6 +745,7 @@ class TestBreakDetectionEdgeCases:
         assert 1_320_000 not in chapter_positions, "Marker at segment boundary must be ignored"
         assert 660_000 in chapter_positions, "Interior marker must be emitted"
 
+    # Tier: 2 | Scheduling logic invariant
     def test_accumulate_with_intro_boundaries_correct(self):
         # Accumulate with intro: only content-to-content seams are boundaries.
         # Intro-to-content seam must NOT be a boundary.

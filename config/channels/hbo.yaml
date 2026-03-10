@@ -1,0 +1,129 @@
+channel: hbo
+channel_number: 3
+name: "Home Box Office"
+channel_type: premium
+timezone: America/New_York
+
+format:
+  video: { width: 1280, height: 720, frame_rate: "30000/1001" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+# -----------------------------
+# CONTENT POOLS
+# -----------------------------
+
+pools:
+
+  intros:
+    match:
+      type: bumper
+      tags: [hbo,presentation,intros]
+
+  G_ratings_cards:
+    match:
+      type: bumper
+      tags: [hbo,presentation,ratings_cards,G]
+
+  PG_ratings_cards:
+    match:
+      type: bumper
+      tags: [hbo,presentation,ratings_cards,PG]
+
+  PG13_ratings_cards:
+    match:
+      type: bumper
+      tags: [hbo,presentation,ratings_cards,PG13]
+
+  R_ratings_cards:
+    match:
+      type: bumper
+      tags: [hbo,presentation,ratings_cards,R]
+
+  movies_g:
+    match:
+      type: movie
+      rating: G
+
+  movies_pg:
+    match:
+      type: movie
+      rating: PG
+
+  movies_pg13:
+    match:
+      type: movie
+      rating: PG-13
+
+  movies_r:
+    match:
+      type: movie
+      rating: R
+
+# -----------------------------
+# PROGRAM DEFINITIONS
+# -----------------------------
+
+programs:
+
+  hbo_movies_g:
+    pool: movies_g
+    grid_blocks_max: 5
+    fill_mode: single
+    bleed: true
+    presentation:
+      - pool: intros
+      - pool: G_ratings_cards
+
+  hbo_movies_pg:
+    pool: movies_pg
+    grid_blocks_max: 5
+    fill_mode: single
+    bleed: true
+    presentation:
+      - pool: intros
+      - pool: PG_ratings_cards
+
+  hbo_movies_pg13:
+    pool: movies_pg13
+    grid_blocks_max: 5
+    fill_mode: single
+    bleed: true
+    presentation:
+      - pool: intros
+      - pool: PG13_ratings_cards
+
+  hbo_movies_r:
+    pool: movies_r
+    grid_blocks_max: 5
+    fill_mode: single
+    bleed: true
+    presentation:
+      - pool: intros
+      - pool: R_ratings_cards
+
+# -----------------------------
+# TRAFFIC CONFIG
+# -----------------------------
+
+
+# -----------------------------
+# SCHEDULE
+# -----------------------------
+
+schedule:
+
+  all_day:
+    - start: "06:00"
+      slots: 8
+      program: [hbo_movies_g]
+      progression: random
+    - start: "10:00"
+      slots: 20
+      program: [hbo_movies_pg, hbo_movies_pg13]
+      progression: random
+    - start: "20:00"
+      slots: 20
+      program: [hbo_movies_pg, hbo_movies_pg13, hbo_movies_r]
+      progression: random
+

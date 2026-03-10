@@ -48,6 +48,7 @@ def _generate_playlist_events(schedule_items: list[dict]) -> list[dict]:
 class TestInvPlaylistDurationCoverage004:
     """INV-PLAYLIST-DURATION-COVERAGE-004 contract tests."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_playlist_events_cover_schedule_item_duration(self):
         """Sum of all PlaylistEvent durations must equal the slot duration.
 

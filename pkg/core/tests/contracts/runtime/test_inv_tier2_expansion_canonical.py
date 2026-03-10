@@ -52,6 +52,7 @@ def _find_expand_editorial_block_calls(source: str) -> list[dict]:
 class TestRule1RebuildPassesAssetLibrary:
     """Rule 1: rebuild_tier2() MUST pass asset_library to expand_editorial_block()."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_rebuild_tier2_passes_asset_library(self):
         """Inspect rebuild_tier2 source to verify expand_editorial_block()
         is called with asset_library keyword argument.
@@ -88,6 +89,7 @@ class TestRule1RebuildPassesAssetLibrary:
 class TestRule2DaemonPassesAssetLibrary:
     """Rule 2: _extend_to_target() MUST pass asset_library to expand_editorial_block()."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_extend_to_target_passes_asset_library(self):
         """Inspect _extend_to_target source to verify expand_editorial_block()
         is called with asset_library keyword argument."""
@@ -119,6 +121,7 @@ class TestRule2DaemonPassesAssetLibrary:
 class TestRule3ExpansionEquivalence:
     """Rule 3: rebuild and daemon MUST produce identical Tier-2 for same input."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_both_writers_use_same_function(self):
         """Both rebuild_tier2 and daemon MUST import expand_editorial_block
         from the same module (retrovue.runtime.schedule_items_reader)."""
@@ -151,6 +154,7 @@ class TestRule3ExpansionEquivalence:
 class TestRule4RebuildPassesBreakConfig:
     """Rule 4: rebuild_tier2() MUST pass break_config to expand_editorial_block()."""
 
+    # Tier: 2 | Scheduling logic invariant
     def test_rebuild_tier2_passes_break_config(self):
         """Inspect rebuild_tier2 source to verify expand_editorial_block()
         is called with break_config keyword argument.
