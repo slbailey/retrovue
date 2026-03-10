@@ -23,8 +23,8 @@ RECOGNIZED_INTERSTITIAL_TYPES = frozenset({
 })
 
 _TRAFFIC_POLICY_FIELDS = frozenset({
-    "allowed_types", "cooldown", "default_cooldown_ms",
-    "type_cooldowns_ms", "max_plays_per_day", "traffic_profile",
+    "allowed_types", "cooldown", "default_cooldown_seconds",
+    "type_cooldowns_seconds", "max_plays_per_day", "traffic_profile",
 })
 
 _BREAK_PLACEMENT_FIELDS = frozenset({
@@ -174,7 +174,7 @@ def resolve_traffic_policy(channel_yaml: dict, block: dict) -> TrafficPolicy:
     profile = resolve_traffic_profile(channel_yaml, block)
     return TrafficPolicy(
         allowed_types=profile["allowed_types"],
-        default_cooldown_ms=profile.get("default_cooldown_ms", 3_600_000),
-        type_cooldowns_ms=profile.get("type_cooldowns_ms", {}),
+        default_cooldown_seconds=profile.get("default_cooldown_seconds", 3_600),
+        type_cooldowns_seconds=profile.get("type_cooldowns_seconds", {}),
         max_plays_per_day=profile.get("max_plays_per_day", 0),
     )

@@ -13,10 +13,15 @@ between storage topology and editorial semantics.
 
 from __future__ import annotations
 
+import re
+from pathlib import PurePosixPath
 from typing import Any
 
 from ..importers.base import DiscoveredItem
 from .base import BaseEnricher, EnricherConfig, EnricherConfigurationError, EnricherError
+
+# Pattern: "Title (N)" where N is one or more digits, at end of stem.
+_VARIANT_SUFFIX_RE = re.compile(r"\s*\(\d+\)$")
 
 
 # Canonical interstitial types recognized by the traffic system.
@@ -45,6 +50,21 @@ COLLECTION_TYPE_MAP: dict[str, str] = {
     "shortform": "shortform",
     "oddities": "filler",
 }
+
+
+def _extract_cooldown_group(path_uri: str) -> str | None:
+    """Derive cooldown_group from a filename with a variant suffix.
+
+    "Die Hard (1).mp4" → "Die Hard"
+    "Die Hard (2).mp4" → "Die Hard"
+    "Some Trailer.mp4" → None  (no variant suffix, no group)
+
+    INV-TRAFFIC-GROUP-COOLDOWN-001: Group is derived from filename only.
+    """
+    stem = PurePosixPath(path_uri).stem
+    if _VARIANT_SUFFIX_RE.search(stem):
+        return _VARIANT_SUFFIX_RE.sub("", stem).strip()
+    return None
 
 
 class InterstitialTypeEnricher(BaseEnricher):
@@ -80,9 +100,12 @@ class InterstitialTypeEnricher(BaseEnricher):
                 f"'{self._collection_name}' has no canonical type mapping"
             ) from None
 
-        # Merge editorial: preserve existing fields, stamp type
+        # Merge editorial: preserve existing fields, stamp type + group
         base_editorial = dict(discovered_item.editorial or {})
         base_editorial["interstitial_type"] = canonical_type
+        cooldown_group = _extract_cooldown_group(discovered_item.path_uri)
+        if cooldown_group is not None:
+            base_editorial["cooldown_group"] = cooldown_group
 
         return DiscoveredItem(
             path_uri=discovered_item.path_uri,

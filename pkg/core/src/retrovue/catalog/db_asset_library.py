@@ -40,6 +40,7 @@ class FillerAsset:
     duration_ms: int
     asset_type: str = "filler"   # "filler", "promo", "ad"
     asset_category: str | None = None
+    cooldown_group: str | None = None
 
 
 # Default traffic policy when no YAML config exists
@@ -47,7 +48,7 @@ DEFAULT_TRAFFIC_POLICY: dict[str, Any] = {
     "allowed_types": ["commercial", "promo", "station_id", "psa",
                        "stinger", "bumper", "filler"],
     "default_cooldown_seconds": 3600,
-    "type_cooldowns": {},
+    "type_cooldowns_seconds": {},
     "max_plays_per_day": 0,
 }
 
@@ -134,20 +135,24 @@ class DatabaseAssetLibrary:
 
         return self._policy
 
-    def _get_cooled_down_uris(self) -> set[str]:
-        """Get asset URIs still in cooldown on this channel (from DB)."""
+    def _get_cooled_down_uris(self) -> tuple[set[str], set[str]]:
+        """Get asset URIs and cooldown groups still in cooldown (from DB).
+
+        Returns (cooled_uris, cooled_groups) so callers can exclude both
+        individual assets and all members of a cooled group.
+        """
         if not self._channel_slug:
-            return set()
+            return set(), set()
 
         from retrovue.domain.entities import TrafficPlayLog
 
         policy = self._get_channel_policy()
         max_cooldown = max(
             policy.get("default_cooldown_seconds", 3600),
-            max((policy.get("type_cooldowns") or {}).values(), default=0),
+            max((policy.get("type_cooldowns_seconds") or {}).values(), default=0),
         )
         if max_cooldown <= 0:
-            return set()
+            return set(), set()
 
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_cooldown)
 
@@ -155,22 +160,27 @@ class DatabaseAssetLibrary:
             TrafficPlayLog.asset_uri,
             TrafficPlayLog.asset_type,
             TrafficPlayLog.played_at,
+            TrafficPlayLog.cooldown_group,
         ).filter(
             TrafficPlayLog.channel_slug == self._channel_slug,
             TrafficPlayLog.played_at >= cutoff,
         ).all()
 
-        cooled = set()
+        cooled_uris: set[str] = set()
+        cooled_groups: set[str] = set()
         now = datetime.now(timezone.utc)
-        type_cooldowns = policy.get("type_cooldowns") or {}
+        type_cooldowns = policy.get("type_cooldowns_seconds") or {}
         default_cd = policy.get("default_cooldown_seconds", 3600)
 
-        for uri, asset_type, played_at in recent_plays:
+        for uri, asset_type, played_at, group in recent_plays:
             cooldown_secs = type_cooldowns.get(asset_type, default_cd)
             if (now - played_at).total_seconds() < cooldown_secs:
-                cooled.add(uri)
+                if group:
+                    cooled_groups.add(group)
+                else:
+                    cooled_uris.add(uri)
 
-        return cooled
+        return cooled_uris, cooled_groups
 
     def _get_daily_capped_uuids(self) -> set[str]:
         """Get asset UUIDs that hit their daily play cap on this channel."""
@@ -246,7 +256,7 @@ class DatabaseAssetLibrary:
 
         policy = self._get_channel_policy()
         allowed_types = set(policy.get("allowed_types", []))
-        cooled_uris = self._get_cooled_down_uris()
+        cooled_uris, cooled_groups = self._get_cooled_down_uris()
         capped_uuids = self._get_daily_capped_uuids()
 
         # Query all assets that have interstitial_type stamped in editorial.
@@ -278,9 +288,13 @@ class DatabaseAssetLibrary:
             editorial = payload or {}
             interstitial_type = editorial.get("interstitial_type")
 
+            cooldown_group = editorial.get("cooldown_group")
+
             if interstitial_type not in allowed_types:
                 continue
-            if uri in cooled_uris:
+            if cooldown_group and cooldown_group in cooled_groups:
+                continue
+            if not cooldown_group and uri in cooled_uris:
                 continue
             if str(asset_uuid) in capped_uuids:
                 continue
@@ -290,6 +304,7 @@ class DatabaseAssetLibrary:
                 duration_ms=duration_ms,
                 asset_type=interstitial_type,
                 asset_category=editorial.get("interstitial_category"),
+                cooldown_group=editorial.get("cooldown_group"),
             ))
 
         random.shuffle(candidates)
@@ -304,6 +319,7 @@ class DatabaseAssetLibrary:
         break_index: int | None = None,
         block_id: str | None = None,
         played_at: datetime | None = None,
+        cooldown_group: str | None = None,
     ) -> None:
         """Record an interstitial play for cooldown tracking (writes to DB)."""
         if not self._channel_slug:
@@ -320,5 +336,6 @@ class DatabaseAssetLibrary:
             break_index=break_index,
             block_id=block_id,
             duration_ms=duration_ms,
+            cooldown_group=cooldown_group,
         )
         self._db.add(log)

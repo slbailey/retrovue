@@ -18,15 +18,15 @@ class TrafficPolicy:
     """Channel-level traffic rules."""
 
     allowed_types: list[str]
-    default_cooldown_ms: int = 3_600_000
-    type_cooldowns_ms: dict[str, int] | None = None
+    default_cooldown_seconds: int = 3_600
+    type_cooldowns_seconds: dict[str, int] | None = None
     max_plays_per_day: int = 0
 
     def __post_init__(self) -> None:
         if self.allowed_types is None:
             object.__setattr__(self, "allowed_types", [])
-        if self.type_cooldowns_ms is None:
-            object.__setattr__(self, "type_cooldowns_ms", {})
+        if self.type_cooldowns_seconds is None:
+            object.__setattr__(self, "type_cooldowns_seconds", {})
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class PlayRecord:
     asset_id: str
     asset_type: str
     played_at_ms: int
+    cooldown_group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,17 @@ class TrafficCandidate:
     asset_type: str
     duration_ms: int
     asset_category: str | None = None
+    cooldown_group: str | None = None
+
+
+def _cooldown_key_of_candidate(c: TrafficCandidate) -> str:
+    """Cooldown key: cooldown_group if set, else asset_id."""
+    return c.cooldown_group or c.asset_id
+
+
+def _cooldown_key_of_record(r: PlayRecord) -> str:
+    """Cooldown key: cooldown_group if set, else asset_id."""
+    return r.cooldown_group or r.asset_id
 
 
 def evaluate_candidates(
@@ -58,33 +70,40 @@ def evaluate_candidates(
     """Return eligible candidates sorted by rotation priority.
 
     Filters applied in order: allowed type, cooldown, daily cap, rotation sort.
+
+    INV-TRAFFIC-GROUP-COOLDOWN-001: Cooldown and rotation use cooldown_group
+    as the key when present, asset_id otherwise.  Playing any asset in a group
+    cools the entire group.
     """
     if not candidates:
         return []
 
     allowed = set(policy.allowed_types)
-    type_cooldowns = policy.type_cooldowns_ms or {}
+    type_cooldowns = policy.type_cooldowns_seconds or {}
 
-    # Precompute history lookups: O(history) once, then O(1) per candidate.
+    # Precompute history lookups keyed by cooldown group.
     last_play: dict[str, int] = {}
     daily_count: dict[str, int] = {}
     for r in play_history:
-        last_play[r.asset_id] = max(last_play.get(r.asset_id, -1), r.played_at_ms)
+        key = _cooldown_key_of_record(r)
+        last_play[key] = max(last_play.get(key, -1), r.played_at_ms)
         if r.played_at_ms >= day_start_ms:
-            daily_count[r.asset_id] = daily_count.get(r.asset_id, 0) + 1
+            daily_count[key] = daily_count.get(key, 0) + 1
 
     # Step 1: Allowed type filter
     eligible = [c for c in candidates if c.asset_type in allowed]
 
-    # Step 2: Cooldown filter
-    if policy.default_cooldown_ms > 0 or type_cooldowns:
+    # Step 2: Cooldown filter (policy stores seconds, timestamps are epoch-ms)
+    if policy.default_cooldown_seconds > 0 or type_cooldowns:
         cooled: list[TrafficCandidate] = []
         for c in eligible:
-            cooldown_ms = type_cooldowns.get(c.asset_type, policy.default_cooldown_ms)
-            if cooldown_ms <= 0:
+            cooldown_s = type_cooldowns.get(c.asset_type, policy.default_cooldown_seconds)
+            if cooldown_s <= 0:
                 cooled.append(c)
                 continue
-            most_recent = last_play.get(c.asset_id)
+            cooldown_ms = cooldown_s * 1000
+            key = _cooldown_key_of_candidate(c)
+            most_recent = last_play.get(key)
             if most_recent is None or now_ms - most_recent >= cooldown_ms:
                 cooled.append(c)
         eligible = cooled
@@ -93,12 +112,13 @@ def evaluate_candidates(
     if policy.max_plays_per_day > 0:
         capped: list[TrafficCandidate] = []
         for c in eligible:
-            if daily_count.get(c.asset_id, 0) < policy.max_plays_per_day:
+            key = _cooldown_key_of_candidate(c)
+            if daily_count.get(key, 0) < policy.max_plays_per_day:
                 capped.append(c)
         eligible = capped
 
     # Step 4: Rotation sort — least-recently-played first, ties by asset_id
-    eligible.sort(key=lambda c: (last_play.get(c.asset_id, -1), c.asset_id))
+    eligible.sort(key=lambda c: (last_play.get(_cooldown_key_of_candidate(c), -1), c.asset_id))
     return eligible
 
 

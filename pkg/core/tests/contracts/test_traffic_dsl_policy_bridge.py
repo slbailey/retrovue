@@ -45,8 +45,8 @@ def _channel_dsl(
             "profiles": profiles or {
                 "default": {
                     "allowed_types": ["promo", "station_id"],
-                    "default_cooldown_ms": 3_600_000,
-                    "type_cooldowns_ms": {},
+                    "default_cooldown_seconds": 3_600,
+                    "type_cooldowns_seconds": {},
                     "max_plays_per_day": 0,
                 },
             },
@@ -89,14 +89,14 @@ class TestDefaultProfileResolution:
             profiles={
                 "default": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 1_800_000,
+                    "default_cooldown_seconds": 1_800,
                     "max_plays_per_day": 5,
                 },
             },
         )
         policy = resolve_traffic_policy(dsl, _block())
         assert policy.allowed_types == ["promo"]
-        assert policy.default_cooldown_ms == 1_800_000
+        assert policy.default_cooldown_seconds == 1_800
         assert policy.max_plays_per_day == 5
 
 
@@ -113,12 +113,12 @@ class TestBlockOverride:
             profiles={
                 "default": {
                     "allowed_types": ["promo", "station_id"],
-                    "default_cooldown_ms": 3_600_000,
+                    "default_cooldown_seconds": 3_600,
                     "max_plays_per_day": 0,
                 },
                 "primetime": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 900_000,
+                    "default_cooldown_seconds": 900,
                     "max_plays_per_day": 12,
                 },
             },
@@ -126,7 +126,7 @@ class TestBlockOverride:
         block = _block(traffic_profile="primetime")
         policy = resolve_traffic_policy(dsl, block)
         assert policy.allowed_types == ["promo"]
-        assert policy.default_cooldown_ms == 900_000
+        assert policy.default_cooldown_seconds == 900
         assert policy.max_plays_per_day == 12
 
 
@@ -148,7 +148,7 @@ class TestAllowedTypesDefault:
             },
             profiles={
                 "default": {
-                    "default_cooldown_ms": 3_600_000,
+                    "default_cooldown_seconds": 3_600,
                     "max_plays_per_day": 0,
                     # allowed_types deliberately omitted
                 },
@@ -171,28 +171,28 @@ class TestTypeCooldowns:
             profiles={
                 "default": {
                     "allowed_types": ["promo", "station_id"],
-                    "default_cooldown_ms": 3_600_000,
-                    "type_cooldowns_ms": {"station_id": 900_000},
+                    "default_cooldown_seconds": 3_600,
+                    "type_cooldowns_seconds": {"station_id": 900},
                     "max_plays_per_day": 0,
                 },
             },
         )
         policy = resolve_traffic_policy(dsl, _block())
-        assert policy.type_cooldowns_ms == {"station_id": 900_000}
+        assert policy.type_cooldowns_seconds == {"station_id": 900}
 
     def test_empty_type_cooldowns(self):
         dsl = _channel_dsl(
             profiles={
                 "default": {
                     "allowed_types": ["promo"],
-                    "default_cooldown_ms": 3_600_000,
-                    "type_cooldowns_ms": {},
+                    "default_cooldown_seconds": 3_600,
+                    "type_cooldowns_seconds": {},
                     "max_plays_per_day": 0,
                 },
             },
         )
         policy = resolve_traffic_policy(dsl, _block())
-        assert policy.type_cooldowns_ms == {}
+        assert policy.type_cooldowns_seconds == {}
 
 
 # ===========================================================================
@@ -208,16 +208,16 @@ class TestFieldMapping:
             profiles={
                 "default": {
                     "allowed_types": ["commercial", "promo", "bumper"],
-                    "default_cooldown_ms": 7_200_000,
-                    "type_cooldowns_ms": {"bumper": 300_000},
+                    "default_cooldown_seconds": 7_200,
+                    "type_cooldowns_seconds": {"bumper": 300},
                     "max_plays_per_day": 10,
                 },
             },
         )
         policy = resolve_traffic_policy(dsl, _block())
         assert policy.allowed_types == ["commercial", "promo", "bumper"]
-        assert policy.default_cooldown_ms == 7_200_000
-        assert policy.type_cooldowns_ms == {"bumper": 300_000}
+        assert policy.default_cooldown_seconds == 7_200
+        assert policy.type_cooldowns_seconds == {"bumper": 300}
         assert policy.max_plays_per_day == 10
 
     def test_defaults_applied_for_missing_optional_fields(self):
@@ -231,6 +231,6 @@ class TestFieldMapping:
         )
         policy = resolve_traffic_policy(dsl, _block())
         assert policy.allowed_types == ["promo"]
-        assert policy.default_cooldown_ms == 3_600_000
-        assert policy.type_cooldowns_ms == {}
+        assert policy.default_cooldown_seconds == 3_600
+        assert policy.type_cooldowns_seconds == {}
         assert policy.max_plays_per_day == 0

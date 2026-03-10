@@ -84,10 +84,10 @@ traffic:
         - promo
         - trailer
 
-      default_cooldown_ms: 3600000
+      default_cooldown_seconds: 3600
 
-      type_cooldowns_ms:
-        trailer: 7200000
+      type_cooldowns_seconds:
+        trailer: 7200
 
       max_plays_per_day: 0
 

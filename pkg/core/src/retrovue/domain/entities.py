@@ -1156,10 +1156,12 @@ class TrafficPlayLog(Base):
     break_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     block_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_group: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (
         Index("ix_traffic_play_log_channel_played", "channel_slug", "played_at"),
         Index("ix_traffic_play_log_channel_asset", "channel_slug", "asset_uuid", "played_at"),
+        Index("ix_traffic_play_log_channel_group", "channel_slug", "cooldown_group", "played_at"),
     )
 
     def __repr__(self) -> str:

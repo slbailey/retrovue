@@ -106,6 +106,26 @@ programs:
 # TRAFFIC CONFIG
 # -----------------------------
 
+traffic:
+
+  inventories:
+    trailers:
+      match:
+        type: trailer
+      asset_type: trailer
+
+    teasers:
+      match:
+        type: teaser
+      asset_type: teaser
+
+  default_profile: hbo_premium
+
+  profiles:
+    hbo_premium:
+      allowed_types: [trailer, teaser]
+      default_cooldown_seconds: 3600
+      max_plays_per_day: 0
 
 # -----------------------------
 # SCHEDULE

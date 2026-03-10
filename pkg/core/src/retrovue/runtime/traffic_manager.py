@@ -496,6 +496,7 @@ def _fill_break_with_interstitials(
                     asset_type=c.asset_type,
                     duration_ms=c.duration_ms,
                     asset_category=getattr(c, "asset_category", None),
+                    cooldown_group=getattr(c, "cooldown_group", None),
                 )
                 for c in candidates
             ]
@@ -521,6 +522,7 @@ def _fill_break_with_interstitials(
                 asset_id=picked.asset_id,
                 asset_type=picked.asset_type,
                 played_at_ms=now_ms,
+                cooldown_group=picked.cooldown_group,
             ))
             picks.append((picked.asset_id, picked.duration_ms, picked.asset_type))
             break_categories.append(picked.asset_category)

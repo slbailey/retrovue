@@ -45,8 +45,8 @@ A TrafficPolicy may apply at channel scope or at schedule-block scope, depending
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `allowed_types` | list[str] | `["commercial", "promo", "station_id", "psa", "stinger", "bumper", "filler"]` | Interstitial types permitted for evaluation. When instantiated from a DSL TrafficProfile, the DSL-level default (union of inventory `asset_type` values) takes precedence over this structural default. |
-| `default_cooldown_ms` | int | `3_600_000` | Minimum ms between re-plays of the same asset. |
-| `type_cooldowns_ms` | dict[str, int] | `{}` | Per-type cooldown overrides in ms. |
+| `default_cooldown_seconds` | int | `3_600` | Minimum seconds between re-plays of the same asset. |
+| `type_cooldowns_seconds` | dict[str, int] | `{}` | Per-type cooldown overrides in seconds. |
 | `max_plays_per_day` | int | `0` | Max plays per asset per channel per traffic day. `0` = unlimited. |
 
 ### PlayRecord
@@ -111,7 +111,7 @@ A candidate MUST be excluded if its `asset_type` is not in `policy.allowed_types
 
 ### INV-TRAFFIC-COOLDOWN-001 — Asset cooldown enforcement
 
-A candidate MUST be excluded if a `PlayRecord` exists for the same `asset_id` where `now_ms - played_at_ms < applicable_cooldown_ms`. The applicable cooldown is `policy.type_cooldowns_ms[asset_type]` if present, otherwise `policy.default_cooldown_ms`. If `default_cooldown_ms` is `0` and no type-specific cooldown exists, no cooldown applies.
+A candidate MUST be excluded if a `PlayRecord` exists for the same `asset_id` where `now_ms - played_at_ms < applicable_cooldown_seconds * 1000`. The applicable cooldown is `policy.type_cooldowns_seconds[asset_type]` if present, otherwise `policy.default_cooldown_seconds`. If `default_cooldown_seconds` is `0` and no type-specific cooldown exists, no cooldown applies.
 
 ### INV-TRAFFIC-DAILY-CAP-001 — Daily play cap enforcement
 
@@ -151,8 +151,8 @@ For each candidate:
 
 For each candidate that passed the type filter:
 - Find all `PlayRecord` entries where `record.asset_id == candidate.asset_id`.
-- Determine `cooldown_ms`: use `policy.type_cooldowns_ms[candidate.asset_type]` if the key exists, otherwise `policy.default_cooldown_ms`.
-- If `cooldown_ms > 0` and any matching record has `now_ms - record.played_at_ms < cooldown_ms`, exclude.
+- Determine `cooldown_seconds`: use `policy.type_cooldowns_seconds[candidate.asset_type]` if the key exists, otherwise `policy.default_cooldown_seconds`.
+- If `cooldown_seconds > 0` and any matching record has `now_ms - record.played_at_ms < cooldown_seconds * 1000`, exclude.
 
 ### Daily Cap Filter
 
@@ -179,7 +179,7 @@ Sort surviving candidates deterministically by least-recent play:
 | All candidates in cooldown | Empty result. `select_next` returns `None`. |
 | All candidates at daily cap | Empty result. `select_next` returns `None`. |
 | `max_plays_per_day = 0` | Cap filter is skipped entirely. |
-| `default_cooldown_ms = 0`, no type cooldowns | Cooldown filter is skipped entirely. |
+| `default_cooldown_seconds = 0`, no type cooldowns | Cooldown filter is skipped entirely. |
 | Single candidate | Returns that candidate if it passes all filters. |
 | Multiple candidates, identical history | Sorted by `asset_id` lexical order. |
 | Candidate list in different order | Same result — rotation is deterministic. |

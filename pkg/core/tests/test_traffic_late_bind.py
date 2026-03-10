@@ -74,6 +74,8 @@ def _make_filler_asset(uri: str, duration_ms: int, asset_type: str = "commercial
     asset.asset_uri = uri
     asset.duration_ms = duration_ms
     asset.asset_type = asset_type
+    asset.asset_category = None
+    asset.cooldown_group = None
     return asset
 
 
@@ -460,7 +462,7 @@ class TestTrafficPolicyIntegration:
 
         policy = TrafficPolicy(
             allowed_types=["commercial"],
-            default_cooldown_ms=3_600_000,
+            default_cooldown_seconds=3_600,
         )
         now_ms = 10_000_000_000
         day_start_ms = 9_900_000_000
@@ -495,7 +497,7 @@ class TestTrafficPolicyIntegration:
 
         policy = TrafficPolicy(
             allowed_types=["commercial"],  # promo not allowed
-            default_cooldown_ms=0,
+            default_cooldown_seconds=0,
         )
 
         filled = fill_ad_blocks(
@@ -528,7 +530,7 @@ class TestTrafficPolicyIntegration:
 
         policy = TrafficPolicy(
             allowed_types=["commercial"],
-            default_cooldown_ms=0,
+            default_cooldown_seconds=0,
         )
 
         filled = fill_ad_blocks(
@@ -559,7 +561,7 @@ class TestTrafficPolicyIntegration:
 
         policy = TrafficPolicy(
             allowed_types=["commercial"],
-            default_cooldown_ms=3_600_000,
+            default_cooldown_seconds=3_600,
         )
         now_ms = 10_000_000_000
         # ad1 in cooldown — select_next will return None
