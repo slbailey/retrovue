@@ -782,11 +782,29 @@ void PipelineManager::Run() {
     if (wctx->sink->IsDetached() || wctx->sink->IsClosed()) {
       return AVERROR(EPIPE);
     }
+    auto avio_enter = std::chrono::steady_clock::now();
     if (wctx->sink->WaitAndConsumeBytes(
             reinterpret_cast<const uint8_t*>(buf),
             static_cast<size_t>(buf_size),
             std::chrono::milliseconds(kAvioWaitMs))) {
       wctx->bytes_written += buf_size;
+      // AVIO_BLOCK_DIAG: Log when write callback blocked for >1ms
+      auto avio_exit = std::chrono::steady_clock::now();
+      int64_t blocked_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          avio_exit - avio_enter).count();
+      if (blocked_us > 1000) {
+        int64_t enter_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            avio_enter.time_since_epoch()).count();
+        int64_t exit_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            avio_exit.time_since_epoch()).count();
+        std::ostringstream oss;
+        oss << "[PipelineManager] AVIO_BLOCK_DIAG:"
+            << " enter_us=" << enter_us
+            << " exit_us=" << exit_us
+            << " blocked_us=" << blocked_us
+            << " bytes=" << buf_size;
+        Logger::Info(oss.str());
+      }
       return buf_size;
     }
     // Timed out or closed — Hook A: first write failure diagnostic; Hook C: detach to stop spiral
@@ -830,8 +848,17 @@ void PipelineManager::Run() {
         << "fps, open_ms=" << encoder_open_ms;
     Logger::Info(oss.str()); }
 
-  // Output timing left at encoder default (enabled). EncoderPipeline gates
-  // output by PTS vs wall clock when output_timing_enabled_ is true.
+  // INV-PACING-SINGLE-AUTHORITY: OutputClock is the sole real-time pacer.
+  // Disable EncoderPipeline's independent GateOutputTiming to prevent
+  // double-pacing with misaligned steady_clock anchors (GateOutputTiming
+  // anchors on first encoded packet during bootstrap; OutputClock anchors
+  // at clock->Start() after bootstrap).  The anchor skew causes packets
+  // to be released faster than real-time after ~1-2 seconds of playback.
+  session_encoder->SetOutputTimingEnabled(false);
+  { std::ostringstream oss;
+    oss << "[PipelineManager] INV-PACING-SINGLE-AUTHORITY: GateOutputTiming disabled"
+        << " (OutputClock is sole real-time pacer)";
+    Logger::Info(oss.str()); }
 
   // Disable EncoderPipeline's independent audio silence injection
   // (INV-P9-AUDIO-LIVENESS).  PipelineManager is the sole audio authority:
@@ -1230,18 +1257,6 @@ void PipelineManager::Run() {
     }
   }
 
-  // INV-AUDIO-BOOTSTRAP-GATE-001: Audio depth satisfied (or no producer) —
-  // allow TS emission to socket.  Placed after the audio gate and outside
-  // the state-ready conditional so it fires unconditionally.
-  socket_sink->OpenEmissionGate();
-  { std::ostringstream oss;
-    oss << "[PipelineManager] INV-AUDIO-BOOTSTRAP-GATE-001: emission gate opened"
-        << " audio_depth_ms=" << audio_buffer_->DepthMs();
-    Logger::Info(oss.str()); }
-  { std::ostringstream oss;
-    oss << "[PipelineManager] STREAM_READY";
-    Logger::Info(oss.str()); }
-
   // ========================================================================
   // 5b. START OUTPUT CLOCK (monotonic epoch) — after audio depth gate.
   // INV-TICK-MONOTONIC-UTC-ANCHOR-001: Tick deadline enforcement anchored
@@ -1286,6 +1301,40 @@ void PipelineManager::Run() {
       EnforceNextSeamInvariant(session_frame_index, "fence_epoch_resync");
     }
   }
+
+  // ========================================================================
+  // 5c. OPEN EMISSION GATE — after clock->Start().
+  // INV-PACING-SINGLE-AUTHORITY + INV-AUDIO-BOOTSTRAP-GATE-001:
+  //
+  // The emission gate MUST open AFTER clock->Start() so that:
+  //   1. The OutputClock epoch is established before any bytes reach the socket.
+  //   2. Bootstrap-encoded packets (PAT/PMT, primed frames) are held behind
+  //      the gate and not burst-delivered to the client.
+  //   3. The first bytes the client receives are paced by OutputClock from
+  //      tick 0 onward — no backlog dump.
+  //
+  // Previously the gate opened before clock->Start(), creating a window
+  // where queued bootstrap bytes flushed instantly, causing decoder clock
+  // confusion and playback acceleration after ~1-2 seconds.
+  // ========================================================================
+  {
+    size_t queued_bytes = socket_sink->GetCurrentBufferSize();
+    socket_sink->OpenEmissionGate();
+    auto clock_start_mono = std::chrono::steady_clock::now();
+    int64_t clock_start_mono_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        clock_start_mono.time_since_epoch()).count();
+    { std::ostringstream oss;
+      oss << "[PipelineManager] INV-PACING-SINGLE-AUTHORITY: emission gate opened"
+          << " clock_start_mono_us=" << clock_start_mono_us
+          << " queued_bytes_at_gate_open=" << queued_bytes
+          << " audio_depth_ms=" << audio_buffer_->DepthMs()
+          << " gate_output_timing=disabled"
+          << " pacing_authority=OutputClock";
+      Logger::Info(oss.str()); }
+  }
+  { std::ostringstream oss;
+    oss << "[PipelineManager] STREAM_READY";
+    Logger::Info(oss.str()); }
   // P3.3: Seam transition tracking
   std::string prev_completed_block_id;
   int64_t fence_session_frame = -1;
@@ -1307,6 +1356,11 @@ void PipelineManager::Run() {
   // Rate-limited: one log line per transition, not per frame.
   bool prev_was_pad = false;
 
+  // INV-PACING-SINGLE-AUTHORITY: First-frame diagnostic — log once on first
+  // video and audio encode to prove clock alignment.
+  bool pacing_diag_first_video_logged = false;
+  bool pacing_diag_first_audio_logged = false;
+
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
     // Hook A: set thread-local tick/block so write callback can log on first EPIPE
@@ -1319,6 +1373,10 @@ void PipelineManager::Run() {
 
     (void)clock->WaitForFrame(session_frame_index);
     auto wake_time = std::chrono::steady_clock::now();
+    int64_t deadline_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        deadline.time_since_epoch()).count();
+    int64_t wait_return_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        wake_time.time_since_epoch()).count();
 
     if (tick_is_late) {
       std::lock_guard<std::mutex> lock(metrics_mutex_);
@@ -1708,18 +1766,24 @@ void PipelineManager::Run() {
     const bool a_was_primed = (v_src == video_buffer_.get()) ? a_primed : false;
 
     // ========================================================================
-    // Frame-selection cadence: repeat-vs-advance (TickLoop only). Tick grid is
-    // fixed by session output FPS; this block only decides advance vs repeat.
+    // INV-RESAMPLE-DETERMINISM-001: Time-based frame selection (TickLoop only).
+    // Tick grid is fixed by session output FPS; this block only decides advance
+    // vs repeat.  Stateless: SourceFrameForTick(N) compared to N-1.
     // Repeat ticks must NOT call TryPopFrame — re-encode last_good_video_frame_
     // so FillLoop is not forced to match output tick rate (e.g. 24fps → ~24 decodes/sec).
     // ========================================================================
     bool should_advance_video = true;
     bool is_cadence_repeat = false;
 
-    if (frame_selection_cadence_enabled_ && !take_b && v_src) {
-      frame_selection_cadence_budget_num_ += frame_selection_cadence_increment_;
-      if (frame_selection_cadence_budget_num_ >= frame_selection_cadence_budget_den_) {
-        frame_selection_cadence_budget_num_ -= frame_selection_cadence_budget_den_;
+    if (resample_enabled_ && !take_b && v_src) {
+      int64_t curr_src = SourceFrameForTick(resample_tick_,
+          resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_);
+      int64_t prev_src = (resample_tick_ > 0)
+          ? SourceFrameForTick(resample_tick_ - 1,
+                resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_)
+          : -1;
+      resample_tick_++;
+      if (curr_src > prev_src) {
         should_advance_video = true;
         cadence_diag_advance_++;
       } else {
@@ -1995,15 +2059,15 @@ void PipelineManager::Run() {
         oss << "[PipelineManager] CADENCE_DIAG"
             << " tick=" << session_frame_index
             << " wall_ms=" << epoch_ms
-            << " enabled=" << frame_selection_cadence_enabled_
+            << " enabled=" << resample_enabled_
             << " advance=" << cadence_diag_advance_
             << " repeat=" << cadence_diag_repeat_
             << " bypass=" << cadence_diag_bypass_
             << " v_src=" << (v_src ? "non-null" : "null")
             << " take_b=" << take_b
-            << " budget=" << frame_selection_cadence_budget_num_
-            << " threshold=" << frame_selection_cadence_budget_den_
-            << " increment=" << frame_selection_cadence_increment_
+            << " resample_tick=" << resample_tick_
+            << " in_fps=" << resample_in_num_ << "/" << resample_in_den_
+            << " out_fps=" << resample_out_num_ << "/" << resample_out_den_
             << " y_crc=" << std::hex << last_good_y_crc32_ << std::dec
             << " seg=" << current_segment_index_
             << " decision=" << take_source_char << " (A=live B=preview R=repeat P=pad)";
@@ -2058,7 +2122,7 @@ void PipelineManager::Run() {
             << " y_crc32=" << chosen_y_crc
             << " y_plane_mean=" << chosen_y_mean
             << " last_good_y_crc32=" << last_good_y_crc32_
-            << " cadence_enabled=" << (frame_selection_cadence_enabled_ ? 1 : 0)
+            << " cadence_enabled=" << (resample_enabled_ ? 1 : 0)
             << " cadence_repeat=" << (is_cadence_repeat ? 1 : 0);
         Logger::Info(oss.str()); }
     }
@@ -2175,6 +2239,21 @@ void PipelineManager::Run() {
       Logger::Info(oss.str());
     }
     session_encoder->encodeFrame(*chosen_video, video_pts_90k);
+
+    // INV-PACING-SINGLE-AUTHORITY: First video frame diagnostic.
+    if (!pacing_diag_first_video_logged) {
+      pacing_diag_first_video_logged = true;
+      auto first_v_wall = std::chrono::steady_clock::now();
+      int64_t first_v_mono_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          first_v_wall.time_since_epoch()).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PACING_DIAG: first_video_encode"
+            << " tick=" << session_frame_index
+            << " video_pts_90k=" << video_pts_90k
+            << " wall_mono_us=" << first_v_mono_us
+            << " sink_queued_bytes=" << socket_sink->GetCurrentBufferSize();
+        Logger::Info(oss.str()); }
+    }
 
     // INV-PAD-PRODUCER: Log TAKE pad/content transitions (rate-limited).
     switch (decision) {
@@ -2962,7 +3041,7 @@ void PipelineManager::Run() {
               << " decoder_fps=" << decoder_fps.num << "/" << decoder_fps.den
               << " snapped_fps=" << snapped_fps.num << "/" << snapped_fps.den
               << " output_fps=" << ctx_->fps.num << "/" << ctx_->fps.den
-              << " cadence_enabled=" << frame_selection_cadence_enabled_
+              << " cadence_enabled=" << resample_enabled_
               << " resample_mode=" << static_cast<int>(audit_tp->GetResampleMode());
           Logger::Info(oss.str());
         }
@@ -3206,6 +3285,33 @@ void PipelineManager::Run() {
             blockplan::ApplyGainS16(audio_out, linear_gain);
           }
         }
+        // PRE_ENCODE_DIAG: Verify audio_out data right before encodeAudioFrame.
+        {
+          static int pre_enc_diag_count = 0;
+          if (pre_enc_diag_count < 20) {
+            const int16_t* pe = reinterpret_cast<const int16_t*>(audio_out.data.data());
+            int pe_total = audio_out.nb_samples * audio_out.channels;
+            int16_t pe_min = 0, pe_max = 0;
+            for (int i = 0; i < pe_total; ++i) {
+              if (pe[i] < pe_min) pe_min = pe[i];
+              if (pe[i] > pe_max) pe_max = pe[i];
+            }
+            float diag_gain_db = 0.0f;
+            if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
+              diag_gain_db = live_parent_block_.segments[current_segment_index_].gain_db;
+            }
+            std::cout << "[PRE_ENCODE_DIAG] call#" << pre_enc_diag_count
+                      << " nb_samples=" << audio_out.nb_samples
+                      << " data_ptr=" << static_cast<const void*>(audio_out.data.data())
+                      << " data_bytes=" << audio_out.data.size()
+                      << " s16_min=" << pe_min << " s16_max=" << pe_max
+                      << " gain_db=" << diag_gain_db
+                      << " seg_idx=" << current_segment_index_
+                      << " is_pad=" << IsPadDecision(decision)
+                      << std::endl;
+            pre_enc_diag_count++;
+          }
+        }
         session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, IsPadDecision(decision));
         audio_samples_emitted += samples_this_tick;
         audio_buffer_samples_emitted += samples_this_tick;
@@ -3306,6 +3412,44 @@ void PipelineManager::Run() {
     // buffered; flushing drains them in global DTS order.
     // See: docs/contracts/mux_interleaver.md
     session_encoder->FlushMuxInterleaver();
+
+    // INV-PACING-SINGLE-AUTHORITY: First audio frame diagnostic.
+    if (!pacing_diag_first_audio_logged && audio_frames_this_tick > 0) {
+      pacing_diag_first_audio_logged = true;
+      auto first_a_wall = std::chrono::steady_clock::now();
+      int64_t first_a_mono_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          first_a_wall.time_since_epoch()).count();
+      { std::ostringstream oss;
+        oss << "[PipelineManager] PACING_DIAG: first_audio_encode"
+            << " tick=" << session_frame_index
+            << " audio_pts_90k=" << audio_pts_90k
+            << " wall_mono_us=" << first_a_mono_us
+            << " sink_queued_bytes=" << socket_sink->GetCurrentBufferSize();
+        Logger::Info(oss.str()); }
+    }
+
+    // TICK_TIMING_DIAG: Measure encode/mux duration and late-start per tick.
+    // Proves or falsifies burst-delivery hypothesis.
+    {
+      auto encode_done = std::chrono::steady_clock::now();
+      int64_t encode_done_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          encode_done.time_since_epoch()).count();
+      int64_t encode_dur_us = encode_done_us - wait_return_us;
+      int64_t late_by_us = wait_return_us - deadline_us;
+      // Log first 90 ticks (~3s at 29.97fps) then every 300th tick
+      if (session_frame_index < 90 || (session_frame_index % 300 == 0) || late_by_us > 5000) {
+        std::ostringstream oss;
+        oss << "[PipelineManager] TICK_TIMING_DIAG:"
+            << " tick=" << session_frame_index
+            << " deadline_us=" << deadline_us
+            << " wait_return_us=" << wait_return_us
+            << " encode_done_us=" << encode_done_us
+            << " encode_dur_us=" << encode_dur_us
+            << " late_by_us=" << late_by_us
+            << " sink_queued_bytes=" << socket_sink->GetCurrentBufferSize();
+        Logger::Info(oss.str());
+      }
+    }
 
     // OUT-SEG-005b: Update max consecutive fallback ticks metric.
     if (current_consecutive_fallback_ticks > 0) {
@@ -4141,7 +4285,7 @@ static constexpr int64_t kCadenceSourceFpsMaxNum = 120;
 static constexpr int64_t kCadenceSourceFpsMaxDen = 1;
 
 // =============================================================================
-// InitFrameSelectionCadenceForLiveBlock — set frame_selection_cadence_* from live block input FPS.
+// InitFrameSelectionCadenceForLiveBlock — set resample params from live block input FPS.
 // Tick grid is fixed by session output FPS (house format). This function only updates
 // repeat-vs-advance policy (frame-selection cadence). Call after StartFilling when the
 // live block has just been set (first block or post-rotation).
@@ -4191,10 +4335,16 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
 
   if (!source_equals_output && input_fps.num > 0 && input_fps.den > 0 &&
       output_fps.num > 0 && output_fps.den > 0) {
-    frame_selection_cadence_enabled_ = true;
-    frame_selection_cadence_budget_num_ = 0;
-    frame_selection_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * input_fps.den;
-    frame_selection_cadence_increment_ = static_cast<int64_t>(input_fps.num) * output_fps.den;
+    resample_enabled_ = true;
+    // Start at tick 1, not 0: the first cadence-evaluated tick after priming
+    // must behave like Bresenham's first step (budget starts at 0, adds increment,
+    // which for upsample ratios is < threshold → REPEAT).  SourceFrameForTick(1)
+    // vs SourceFrameForTick(0) produces the same decision as Bresenham step 1.
+    resample_tick_ = 1;
+    resample_in_num_ = input_fps.num;
+    resample_in_den_ = input_fps.den;
+    resample_out_num_ = output_fps.num;
+    resample_out_den_ = output_fps.den;
     cadence_diag_advance_ = 0;
     cadence_diag_repeat_ = 0;
     cadence_diag_bypass_ = 0;
@@ -4203,11 +4353,10 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
       oss << "[PipelineManager] FRAME_SELECTION_CADENCE_INIT"
           << " input_fps=" << input_fps.num << "/" << input_fps.den
           << " output_fps=" << output_fps.num << "/" << output_fps.den
-          << " increment=" << frame_selection_cadence_increment_
-          << " threshold=" << frame_selection_cadence_budget_den_;
+          << " resample_model=time_based";
       Logger::Info(oss.str()); }
   } else {
-    frame_selection_cadence_enabled_ = false;
+    resample_enabled_ = false;
     { std::ostringstream oss;
       oss << "[PipelineManager] FRAME_SELECTION_CADENCE_DISABLED"
           << " source_equals_output=" << source_equals_output
@@ -4230,10 +4379,28 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
         << " decoder_fps=" << raw_fps.num << "/" << raw_fps.den
         << " snapped_fps=" << input_fps.num << "/" << input_fps.den
         << " output_fps=" << output_fps.num << "/" << output_fps.den
-        << " cadence_enabled=" << frame_selection_cadence_enabled_
+        << " cadence_enabled=" << resample_enabled_
         << " resample_mode=" << static_cast<int>(tp->GetResampleMode());
     Logger::Info(oss.str());
   }
+}
+
+// =============================================================================
+// INV-RESAMPLE-DETERMINISM-001: Pure time-based source frame mapping.
+// Returns floor(tick * in_num * out_den / (out_num * in_den)).
+// Uses 128-bit intermediates to prevent overflow.
+// =============================================================================
+
+int64_t PipelineManager::SourceFrameForTick(int64_t tick,
+                                             int64_t in_num, int64_t in_den,
+                                             int64_t out_num, int64_t out_den) {
+  if (tick <= 0 || in_num <= 0 || in_den <= 0 || out_num <= 0 || out_den <= 0) {
+    return 0;
+  }
+  using Wide = __int128;
+  Wide numerator = static_cast<Wide>(tick) * static_cast<Wide>(in_num) * static_cast<Wide>(out_den);
+  Wide denominator = static_cast<Wide>(out_num) * static_cast<Wide>(in_den);
+  return static_cast<int64_t>(numerator / denominator);
 }
 
 // =============================================================================
@@ -4283,12 +4450,12 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
     did_sanitize = true;
   }
 
-  // Segment swaps always reset cadence phase; FPS equality must not skip reset.
+  // Segment swaps always reset resample epoch; FPS equality must not skip reset.
   const bool force_reset = (reason && std::strcmp(reason, "segment_swap") == 0);
-  // Defensive: zero accumulator on segment swap before any early-return, so phase
+  // Defensive: zero resample tick on segment swap before any early-return, so phase
   // bugs cannot return if someone later reintroduces an early-return path.
   if (force_reset) {
-    frame_selection_cadence_budget_num_ = 0;
+    resample_tick_ = 1;
   }
 
   // INV-CADENCE-SOURCE-AUTHORITY-001: Audit log to verify incoming decoder fps
@@ -4296,7 +4463,7 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
   const bool would_early_return =
       (!did_sanitize && new_fps == last_source_fps_ && !force_reset);
   {
-    const bool old_cadence_enabled = frame_selection_cadence_enabled_;
+    const bool old_cadence_enabled = resample_enabled_;
     const char* old_mode = old_cadence_enabled ? "ACTIVE" : "DISABLED";
     std::string from_asset = "unknown";
     std::string to_asset = "unknown";
@@ -4334,8 +4501,9 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
   RationalFps old_fps = last_source_fps_;
   last_source_fps_ = new_fps;
 
-  // Always reset cadence accumulator so phase starts clean at seam (no leakage).
-  frame_selection_cadence_budget_num_ = 0;
+  // Always reset resample tick so phase starts clean at seam (no leakage).
+  // Start at 1: first cadence-evaluated tick matches Bresenham's first step.
+  resample_tick_ = 1;
 
   // Cadence is DISABLED only when source and output FPS are exactly equal (after
   // normalization), or when segment is explicitly rate-conformed (no flag yet).
@@ -4345,11 +4513,13 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
 
   if (!source_equals_output && output_fps.num > 0 && output_fps.den > 0 &&
       new_fps.num > 0 && new_fps.den > 0) {
-    frame_selection_cadence_enabled_ = true;
-    frame_selection_cadence_budget_den_ = static_cast<int64_t>(output_fps.num) * new_fps.den;
-    frame_selection_cadence_increment_ = static_cast<int64_t>(new_fps.num) * output_fps.den;
+    resample_enabled_ = true;
+    resample_in_num_ = new_fps.num;
+    resample_in_den_ = new_fps.den;
+    resample_out_num_ = output_fps.num;
+    resample_out_den_ = output_fps.den;
   } else {
-    frame_selection_cadence_enabled_ = false;
+    resample_enabled_ = false;
   }
 
   { std::ostringstream oss;

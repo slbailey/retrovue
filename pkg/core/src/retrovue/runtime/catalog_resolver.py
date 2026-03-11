@@ -436,12 +436,14 @@ class CatalogAssetResolver:
                 pass
 
         # Filter: tags (INV-POOL-TAGS-FILTER-001)
+        # Backward-compatible: plain DSL tags match namespaced DB tags
         tags_cfg = match.get("tags")
         if tags_cfg:
+            from retrovue.domain.tag_normalization import expand_tag_match_set
             required = _normalize_tags_match(tags_cfg)
             results = [
                 e for e in results
-                if all(t in {tag.lower() for tag in e.meta.tags} for t in required)
+                if all(t in expand_tag_match_set(set(e.meta.tags)) for t in required)
             ]
 
         # Sort: episodes by series/season/episode, default stable

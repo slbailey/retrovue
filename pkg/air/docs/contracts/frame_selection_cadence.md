@@ -55,37 +55,45 @@ Tolerance: ±0.001 over 1000+ ticks.
 is consumed at the source rate, output ticks occur at the output rate, and the
 cadence accumulator bridges the two by inserting repeat frames.
 
-### INV-CADENCE-POP-004: Accumulator Orientation
+### INV-RESAMPLE-DETERMINISM-001: Time-Based Frame Selection
 
-The Bresenham accumulator MUST use:
+Frame selection MUST use a deterministic time-domain mapping. For output tick N
+with source FPS `in_num/in_den` and output FPS `out_num/out_den`:
 
 ```
-increment = input_fps.num × output_fps.den
-threshold = output_fps.num × input_fps.den
+source_frame_index(N) = floor(N × in_num × out_den / (out_num × in_den))
 ```
 
-With `increment < threshold`, the accumulator crosses the threshold on 4 out of
-5 ticks (for 24→30), producing the correct ADVANCE:REPEAT ratio.
+The advance-vs-repeat decision is:
+- **ADVANCE** when `source_frame_index(N) > source_frame_index(N-1)`
+- **REPEAT** when `source_frame_index(N) == source_frame_index(N-1)`
 
-**Rationale:** Inverting increment and threshold would produce the wrong ratio.
-The current orientation is verified correct by the CADENCE_DIAG counters.
+This mapping is:
+1. **Pure** — depends only on N and the two FPS values; no accumulated state.
+2. **Monotonically non-decreasing** — `source_frame_index(N) >= source_frame_index(N-1)`.
+3. **Integer-arithmetic only** — 128-bit intermediates, no floating-point.
+
+**Rationale:** A stateless time-mapping produces identical cadence patterns to the
+former Bresenham accumulator but eliminates accumulated state that must be carefully
+reset across segment and block boundaries. The advance/repeat ratio is mathematically
+identical: for 24000/1001 → 30000/1001, `floor(N×4/5)` produces 4 advances per 5
+ticks (ratio 0.8), matching the Bresenham accumulator exactly.
+
+**Supersedes:** INV-CADENCE-POP-004 (Bresenham accumulator orientation).
 
 ## Observable Behavior
 
-| Metric | Correct | Incorrect (current bug) |
-|--------|---------|------------------------|
-| Advance:Repeat ratio | 4:1 per 5 ticks | 4:1 per 5 ticks (correct) |
-| Buffer pops per second | 24 (= source fps) | 30 (= output fps) |
-| Content playback speed | 1.0× | 1.25× |
-| Audio sync | Correct | Correct (audio is authoritative) |
-
-The accumulator decision ratio is correct. The violation is in enforcement:
-the pipeline pops frames on ticks where the accumulator said REPEAT.
+| Metric | Expected |
+|--------|----------|
+| Advance:Repeat ratio | 4:1 per 5 ticks (24→30) |
+| Buffer pops per second | 24 (= source fps) |
+| Content playback speed | 1.0× |
+| Audio sync | Correct (audio is continuous per tick) |
 
 ## Test Strategy
 
-Tests operate on a deterministic simulation of the cadence accumulator and a
-mock video buffer. No FFmpeg, no real-time pacing.
+Unit tests verify `SourceFrameForTick()` produces identical advance/repeat
+decisions to the former Bresenham accumulator over 100,000+ ticks for all
+standard FPS pairs.
 
-See: `pkg/air/tests/contracts/frame_selection_cadence_contract_tests.cpp`
-See: `tests/contracts/test_frame_selection_cadence_contract.py`
+See: `pkg/air/tests/contracts/BlockPlan/TimeBasedResamplingContractTests.cpp`

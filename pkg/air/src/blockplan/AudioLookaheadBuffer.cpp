@@ -51,6 +51,27 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
       Logger::Warn(oss.str()); }
     return;
   }
+  // PUSH_DIAG (copy overload) — shared counter with move overload.
+  {
+    // Use extern linkage via the move overload's static counter.
+    const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
+    int total_s16 = frame.nb_samples * frame.channels;
+    int16_t p_min = 0, p_max = 0;
+    for (int i = 0; i < total_s16; ++i) {
+      if (s16[i] < p_min) p_min = s16[i];
+      if (s16[i] > p_max) p_max = s16[i];
+    }
+    static int push_copy_diag_count = 0;
+    if (push_copy_diag_count < 10) {
+      std::ostringstream oss;
+      oss << "[PUSH_DIAG_COPY] push#" << push_copy_diag_count
+          << " nb_samples=" << frame.nb_samples
+          << " s16_min=" << p_min << " s16_max=" << p_max;
+      Logger::Info(oss.str());
+      push_copy_diag_count++;
+    }
+  }
+
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
@@ -70,6 +91,33 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
       Logger::Warn(oss.str()); }
     return;
   }
+  // PUSH_DIAG: Verify data integrity before storing in buffer.
+  {
+    static int push_diag_count = 0;
+    if (push_diag_count < 30) {
+      const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
+      int total_s16 = frame.nb_samples * frame.channels;
+      int expected_bytes = total_s16 * static_cast<int>(sizeof(int16_t));
+      int16_t p_min = 0, p_max = 0;
+      bool all_zero = true;
+      for (int i = 0; i < total_s16; ++i) {
+        if (s16[i] < p_min) p_min = s16[i];
+        if (s16[i] > p_max) p_max = s16[i];
+        if (s16[i] != 0) all_zero = false;
+      }
+      std::ostringstream oss;
+      oss << "[PUSH_DIAG] push#" << push_diag_count
+          << " nb_samples=" << frame.nb_samples
+          << " data_bytes=" << frame.data.size()
+          << " expected_bytes=" << expected_bytes
+          << " s16_min=" << p_min << " s16_max=" << p_max
+          << " all_zero=" << all_zero
+          << " gen=" << generation_;
+      Logger::Info(oss.str());
+      push_diag_count++;
+    }
+  }
+
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
@@ -150,6 +198,36 @@ bool AudioLookaheadBuffer::TryPopSamples(int samples_needed,
 
   total_samples_in_buffer_ -= samples_needed;
   total_samples_popped_ += samples_needed;
+
+  // TRYPOP_OUTPUT_DIAG: Verify assembled output data integrity.
+  {
+    static int trypop_diag_count = 0;
+    if (trypop_diag_count < 30) {
+      const int16_t* s16 = reinterpret_cast<const int16_t*>(out.data.data());
+      int total_s16 = out.nb_samples * out.channels;
+      int16_t p_min = 0, p_max = 0;
+      bool all_zero = true;
+      for (int i = 0; i < total_s16; ++i) {
+        if (s16[i] < p_min) p_min = s16[i];
+        if (s16[i] > p_max) p_max = s16[i];
+        if (s16[i] != 0) all_zero = false;
+      }
+      std::ostringstream oss;
+      oss << "[TRYPOP_OUTPUT_DIAG] pop#" << trypop_diag_count
+          << " nb_samples=" << out.nb_samples
+          << " data_bytes=" << out.data.size()
+          << " data_ptr=" << static_cast<const void*>(out.data.data())
+          << " s16_min=" << p_min << " s16_max=" << p_max
+          << " all_zero=" << all_zero
+          << " first4=" << (total_s16 >= 4 ? s16[0] : 0) << "," << (total_s16 >= 4 ? s16[1] : 0)
+          << "," << (total_s16 >= 4 ? s16[2] : 0) << "," << (total_s16 >= 4 ? s16[3] : 0)
+          << " frames_remain=" << frames_.size()
+          << " has_partial=" << has_partial_;
+      Logger::Info(oss.str());
+      trypop_diag_count++;
+    }
+  }
+
   return true;
 }
 

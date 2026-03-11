@@ -266,9 +266,15 @@ function startHLS() {
     });
     hls.on(Hls.Events.ERROR, (event, data) => {
       if (data.fatal) {
-        statusEl.textContent = 'Stream error, retrying...';
-        statusEl.className = 'status error';
-        setTimeout(() => { hls.destroy(); startHLS(); }, 3000);
+        hls.destroy();
+        // Re-show splash and go back through waitAndStart so we
+        // wait for a fresh playlist after segmenter restart.
+        splash.classList.remove('hidden');
+        splashText.textContent = 'Reconnecting...';
+        splashText.className = 'splash-text';
+        statusEl.textContent = 'Stream interrupted, reconnecting...';
+        statusEl.className = 'status buffering';
+        setTimeout(() => waitAndStart(30), 2000);
       }
     });
     hls.on(Hls.Events.FRAG_BUFFERED, () => {

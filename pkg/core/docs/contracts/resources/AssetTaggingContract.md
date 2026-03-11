@@ -65,6 +65,11 @@ retrovue assets tag --add "tag1,tag2" --select <filters>
 - D-3: Updates occur in a single Unit of Work. Partial failures MUST roll back.
 - D-4: Soft-deleted assets (`is_deleted=true`) MUST reject tagging with exit code 1.
 - D-5: `retired` assets MAY be tagged; tagging does not alter lifecycle state.
+- D-6: Tags are stored with a `CATEGORY:value` namespace prefix (e.g., `TAG:hbo`,
+       `NETWORK:cbs`). Pool matching MUST be backward-compatible: a DSL tag query
+       for `"hbo"` MUST match DB tags `TAG:hbo`, `NETWORK:hbo`, or plain `hbo`.
+       Matching uses `expand_tag_match_set()` from `tag_normalization.py` to expand
+       asset tags to include both namespaced and stripped forms before comparison.
 
 ---
 

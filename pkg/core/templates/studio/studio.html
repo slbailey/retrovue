@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RetroVue Studio</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0c12;--bg2:#0d1018;--bg3:#13161f;--bg4:#181c28;
+  --border:#1e2436;--border2:#262d40;
+  --text:#c8d0e0;--text2:#8090b0;--text3:#4a5878;
+  --gold:#e6b91e;--blue:#4a82d8;--green:#3ab468;--red:#c84040;
+  --sidebar:220px;--rightpanel:300px;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* TOP BAR */
+#topbar{height:46px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:0;flex-shrink:0;z-index:100}
+#logo{padding:0 16px;font-size:15px;font-weight:700;color:var(--gold);letter-spacing:2px;white-space:nowrap}
+#logo span{color:var(--text3);font-weight:400;font-size:12px;letter-spacing:0;margin-left:4px}
+.nav-tab{padding:0 16px;height:46px;display:flex;align-items:center;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;font-size:12px;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+.nav-tab.active{color:var(--text);border-bottom-color:var(--gold)}
+.nav-tab:hover{color:var(--text2)}
+#search-wrap{margin-left:auto;padding:0 12px}
+#search{background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:6px 12px;border-radius:4px;width:220px;font-size:12px;outline:none}
+#search:focus{border-color:var(--blue)}
+#untagged-badge{margin:0 16px;background:#5a1a1a;color:#f08080;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap}
+
+/* MAIN LAYOUT */
+#main{display:flex;flex:1;overflow:hidden}
+
+/* LEFT PALETTE */
+#palette{width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+#palette-header{padding:10px 12px 6px;border-bottom:1px solid var(--border)}
+#palette-header h3{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase}
+#palette-header p{font-size:10px;color:var(--text3);margin-top:2px}
+#palette-body{flex:1;overflow-y:auto;padding:8px 0}
+.cat-section{margin-bottom:4px}
+.cat-header{display:flex;align-items:center;justify-content:space-between;padding:4px 12px;cursor:pointer}
+.cat-name{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase}
+.cat-add{background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;line-height:1;padding:0 2px;opacity:.6}
+.cat-add:hover{color:var(--text2);opacity:1}
+.cat-tags{padding:0 8px 4px}
+.tag-pill{display:flex;align-items:center;gap:4px;padding:4px 8px;border-radius:4px;margin-bottom:3px;cursor:grab;font-size:11px;font-weight:600;border:1px solid transparent;user-select:none;transition:opacity .15s}
+.tag-pill:hover{filter:brightness(1.2)}
+.tag-pill:active{cursor:grabbing;opacity:.7}
+.tag-pill .drag-handle{opacity:.5;font-size:10px}
+.tag-pill .del-tag{margin-left:auto;opacity:0;cursor:pointer;font-size:13px;line-height:1}
+.tag-pill:hover .del-tag{opacity:.6}
+.tag-pill .del-tag:hover{opacity:1;color:#f08080!important}
+.add-tag-input{display:none;margin:2px 8px 4px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:4px;font-size:11px;width:calc(100% - 16px);outline:none}
+.add-tag-input:focus{border-color:var(--blue)}
+#palette-footer{padding:8px 12px;border-top:1px solid var(--border)}
+#add-category-btn{width:100%;padding:6px;background:var(--bg3);border:1px dashed var(--border2);color:var(--text3);border-radius:4px;cursor:pointer;font-size:11px;text-align:center}
+#add-category-btn:hover{border-color:var(--blue);color:var(--text2)}
+#new-cat-input{display:none;width:100%;padding:6px 8px;background:var(--bg3);border:1px solid var(--blue);color:var(--text);border-radius:4px;font-size:11px;margin-top:4px;outline:none}
+
+/* CENTER LIST */
+#list-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#list-toolbar{height:36px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:12px;flex-shrink:0}
+#sel-count{font-size:11px;color:var(--text3)}
+#filter-untagged{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text3);user-select:none}
+#filter-untagged:hover{color:var(--text2)}
+#progress-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text3)}
+#progress-bar-outer{width:120px;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+#progress-bar-inner{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
+#list-container{flex:1;overflow:hidden;position:relative}
+#drop-overlay{display:none;position:absolute;inset:0;background:rgba(74,130,216,.08);border:2px solid var(--blue);z-index:50;pointer-events:none;border-radius:4px}
+#drop-overlay-text{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--blue);color:#fff;padding:10px 20px;border-radius:6px;font-weight:700;font-size:14px}
+
+/* TABLE */
+#asset-table{width:100%;height:100%;overflow-y:auto;overflow-x:hidden}
+table{width:100%;border-collapse:collapse}
+thead{position:sticky;top:0;z-index:10;background:var(--bg2)}
+th{padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--text2)}
+td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr.row{cursor:pointer}
+tr.row:hover td{background:var(--bg3)}
+tr.row.selected td{background:#111d30}
+tr.row.selected td:first-child{border-left:3px solid var(--blue)}
+tr.row.drop-target td{background:#0d1e38;outline:1px solid var(--blue)}
+.cb{width:16px;height:16px;border:1px solid var(--border2);background:var(--bg3);border-radius:3px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+tr.row.selected .cb{background:var(--blue);border-color:var(--blue)}
+.cb-check{display:none;color:#fff;font-size:10px}
+tr.row.selected .cb-check{display:block}
+.col-filename{color:var(--text);font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col-dir{color:var(--text3);font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col-dur{color:var(--text3);font-size:11px;white-space:nowrap}
+.col-tags{display:flex;flex-wrap:wrap;gap:3px;max-width:360px}
+.inline-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;cursor:default}
+.inline-tag .rm{opacity:0;cursor:pointer;font-size:11px}
+.inline-tag:hover .rm{opacity:.7}
+.inline-tag .rm:hover{opacity:1}
+.untagged-hint{color:#804040;font-size:10px;font-style:italic}
+
+/* PAGINATION */
+#pagination{height:38px;background:var(--bg2);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:8px;flex-shrink:0}
+.page-btn{padding:4px 12px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);border-radius:4px;cursor:pointer;font-size:11px}
+.page-btn:hover{border-color:var(--blue);color:var(--text)}
+.page-btn.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.page-btn:disabled{opacity:.3;cursor:default}
+#page-info{font-size:11px;color:var(--text3)}
+
+/* RIGHT PANEL */
+#right-panel{width:var(--rightpanel);background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+#rp-empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:12px;text-align:center;padding:20px}
+#rp-detail{display:none;flex:1;overflow-y:auto;padding:14px}
+#rp-filename{font-size:13px;font-weight:600;color:var(--text);word-break:break-all;line-height:1.4}
+#rp-dir{font-size:11px;color:var(--text3);margin-top:3px}
+#rp-meta{font-size:11px;color:var(--text3);margin-top:3px}
+#rp-preview{margin-top:12px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:10px;text-align:center;font-size:11px;color:var(--text3)}
+#rp-preview a{color:var(--blue);text-decoration:none}
+#rp-preview a:hover{text-decoration:underline}
+.rp-section-title{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin:14px 0 6px}
+#rp-tags{display:flex;flex-wrap:wrap;gap:4px}
+.rp-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.rp-tag .rm{cursor:pointer;opacity:.6;font-size:12px}
+.rp-tag .rm:hover{opacity:1;color:#f08080!important}
+#rp-no-tags{font-size:11px;color:var(--text3);font-style:italic}
+
+/* TOAST */
+#toast{position:fixed;bottom:20px;right:20px;background:var(--bg4);border:1px solid var(--border2);color:var(--text);padding:10px 16px;border-radius:6px;font-size:12px;z-index:999;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div id="logo">RETROVUE <span>Studio</span></div>
+  <div class="nav-tab active">Library</div>
+  <div class="nav-tab">Channels</div>
+  <div class="nav-tab">Schedule</div>
+  <div class="nav-tab">Traffic</div>
+  <div id="search-wrap">
+    <input id="search" placeholder="Search filename..." type="text">
+  </div>
+  <div id="untagged-badge">— untagged</div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- LEFT PALETTE -->
+  <div id="palette">
+    <div id="palette-header">
+      <h3>Tag Palette</h3>
+      <p>Drag tags onto selected rows</p>
+    </div>
+    <div id="palette-body"></div>
+    <div id="palette-footer">
+      <button id="add-category-btn">+ New Category</button>
+      <input id="new-cat-input" placeholder="Category name..." type="text">
+    </div>
+  </div>
+
+  <!-- CENTER LIST -->
+  <div id="list-wrap">
+    <div id="list-toolbar">
+      <span id="sel-count">No selection</span>
+      <label id="filter-untagged">
+        <input type="checkbox" id="untagged-only" style="accent-color:var(--blue)">
+        Untagged only
+      </label>
+      <div id="progress-wrap">
+        <span id="progress-text">Loading...</span>
+        <div id="progress-bar-outer"><div id="progress-bar-inner" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div id="list-container">
+      <div id="drop-overlay"><div id="drop-overlay-text">Drop to apply tag</div></div>
+      <div id="asset-table">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:28px"><input type="checkbox" id="select-all" style="accent-color:var(--blue)"></th>
+              <th>Filename</th>
+              <th>Directory</th>
+              <th style="width:60px">Duration</th>
+              <th>Tags</th>
+            </tr>
+          </thead>
+          <tbody id="asset-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="pagination"></div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div id="right-panel">
+    <div id="rp-empty">Select a single asset<br>to see details</div>
+    <div id="rp-detail">
+      <div id="rp-filename"></div>
+      <div id="rp-dir"></div>
+      <div id="rp-meta"></div>
+      <div id="rp-preview"></div>
+      <div class="rp-section-title">Tags</div>
+      <div id="rp-tags"></div>
+      <div id="rp-no-tags" style="display:none">No tags yet — drag from palette</div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── STATE ────────────────────────────────────────────────────────────────
+let assets = [], palette = {}, selected = new Set();
+let currentPage = 1, totalPages = 1, totalAssets = 0, untaggedCount = 0;
+let searchTerm = '', untaggedOnly = false;
+let dragTag = null;  // {category, tag, color_bg, color_fg}
+let lastClickedIdx = null;
+
+// ── API ──────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch('/studio' + path, opts);
+  return r.json();
+}
+
+// ── TOAST ────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type='info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.borderColor = type === 'error' ? '#c84040' : type === 'success' ? '#3ab468' : 'var(--border2)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ── LOAD DATA ────────────────────────────────────────────────────────────
+async function loadAssets() {
+  const params = new URLSearchParams({page: currentPage, per_page: 100});
+  if (searchTerm) params.set('search', searchTerm);
+  if (untaggedOnly) params.set('untagged_only', 'true');
+  const data = await api('GET', '/api/assets?' + params);
+  assets = data.assets;
+  totalPages = data.pages;
+  totalAssets = data.total;
+  untaggedCount = data.untagged_count;
+  renderTable();
+  renderPagination();
+  updateBadge();
+  updateProgress();
+}
+
+async function loadPalette() {
+  palette = await api('GET', '/api/palette');
+  renderPalette();
+}
+
+// ── RENDER PALETTE ───────────────────────────────────────────────────────
+function renderPalette() {
+  const body = document.getElementById('palette-body');
+  body.innerHTML = '';
+  for (const [cat, tags] of Object.entries(palette)) {
+    const sec = document.createElement('div');
+    sec.className = 'cat-section';
+    sec.dataset.cat = cat;
+
+    const hdr = document.createElement('div');
+    hdr.className = 'cat-header';
+    hdr.innerHTML = `<span class="cat-name">${cat}</span><button class="cat-add" title="Add tag">+</button>`;
+    sec.appendChild(hdr);
+
+    const tagsDiv = document.createElement('div');
+    tagsDiv.className = 'cat-tags';
+    tags.forEach(t => tagsDiv.appendChild(makePill(cat, t)));
+    sec.appendChild(tagsDiv);
+
+    // Inline add input
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.className = 'add-tag-input'; inp.placeholder = 'New tag name...';
+    sec.appendChild(inp);
+
+    hdr.querySelector('.cat-add').addEventListener('click', (e) => {
+      e.stopPropagation();
+      inp.style.display = inp.style.display === 'block' ? 'none' : 'block';
+      if (inp.style.display === 'block') inp.focus();
+    });
+    inp.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        const tag = inp.value.trim().toLowerCase();
+        if (!tag) return;
+        await api('POST', '/api/palette/tag', {category: cat, tag});
+        inp.value = ''; inp.style.display = 'none';
+        await loadPalette();
+        toast('Tag added', 'success');
+      } else if (e.key === 'Escape') {
+        inp.value = ''; inp.style.display = 'none';
+      }
+    });
+
+    body.appendChild(sec);
+  }
+}
+
+function makePill(cat, t) {
+  const pill = document.createElement('div');
+  pill.className = 'tag-pill';
+  pill.draggable = true;
+  pill.style.background = t.color_bg;
+  pill.style.color = t.color_fg;
+  pill.style.borderColor = t.color_fg + '40';
+  pill.innerHTML = `<span class="drag-handle">⠿</span><span>${t.tag}</span><span class="del-tag" title="Delete">×</span>`;
+
+  pill.addEventListener('dragstart', (e) => {
+    dragTag = {category: cat, tag: t.tag, color_bg: t.color_bg, color_fg: t.color_fg};
+    e.dataTransfer.effectAllowed = 'copy';
+  });
+  pill.addEventListener('dragend', () => { dragTag = null; });
+
+  pill.querySelector('.del-tag').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete tag "${t.tag}" from ${cat}?`)) return;
+    await api('DELETE', '/api/palette/tag', {category: cat, tag: t.tag});
+    await loadPalette();
+    toast('Tag deleted');
+  });
+  return pill;
+}
+
+// ── NEW CATEGORY ─────────────────────────────────────────────────────────
+document.getElementById('add-category-btn').addEventListener('click', () => {
+  const inp = document.getElementById('new-cat-input');
+  inp.style.display = inp.style.display === 'block' ? 'none' : 'block';
+  if (inp.style.display === 'block') inp.focus();
+});
+document.getElementById('new-cat-input').addEventListener('keydown', async (e) => {
+  const inp = e.target;
+  if (e.key === 'Enter') {
+    const cat = inp.value.trim().toUpperCase();
+    if (!cat) return;
+    // Add a placeholder tag so category shows up
+    await api('POST', '/api/palette/tag', {category: cat, tag: '...add tags'});
+    inp.value = ''; inp.style.display = 'none';
+    await loadPalette();
+    toast('Category added', 'success');
+  } else if (e.key === 'Escape') {
+    inp.value = ''; inp.style.display = 'none';
+  }
+});
+
+// ── RENDER TABLE ─────────────────────────────────────────────────────────
+function formatDuration(ms) {
+  if (!ms) return '—';
+  const s = Math.round(ms / 1000);
+  const m = Math.floor(s / 60), ss = s % 60;
+  return m + ':' + String(ss).padStart(2,'0');
+}
+
+function renderTable() {
+  const tbody = document.getElementById('asset-tbody');
+  tbody.innerHTML = '';
+  assets.forEach((asset, idx) => {
+    const tr = document.createElement('tr');
+    tr.className = 'row' + (selected.has(asset.id) ? ' selected' : '');
+    tr.dataset.id = asset.id;
+    tr.dataset.idx = idx;
+
+    // Tags HTML
+    const tagsHtml = asset.tags.length
+      ? asset.tags.map(t => {
+          const clr = getPaletteColor(t.category, t.tag);
+          return `<span class="inline-tag" style="background:${clr.bg};color:${clr.fg}" data-cat="${t.category}" data-tag="${t.tag}">
+            ${t.tag}<span class="rm" data-assetid="${asset.id}" data-cat="${t.category}" data-tag="${t.tag}">×</span>
+          </span>`;
+        }).join('')
+      : '<span class="untagged-hint">untagged</span>';
+
+    tr.innerHTML = `
+      <td><div class="cb"><span class="cb-check">✓</span></div></td>
+      <td class="col-filename" title="${asset.file_path}">${asset.filename || asset.title || '—'}</td>
+      <td class="col-dir" title="${asset.directory_full}">${asset.directory}</td>
+      <td class="col-dur">${formatDuration(asset.duration_ms)}</td>
+      <td class="col-tags">${tagsHtml}</td>
+    `;
+
+    tr.addEventListener('click', (e) => {
+      if (e.target.classList.contains('rm')) return;
+      handleRowClick(e, asset, idx);
+    });
+
+    // Drag-over highlight
+    tr.addEventListener('dragover', (e) => {
+      if (!dragTag) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      if (selected.has(asset.id)) {
+        document.querySelectorAll('tr.row.selected').forEach(r => r.classList.add('drop-target'));
+      } else {
+        tr.classList.add('drop-target');
+      }
+    });
+    tr.addEventListener('dragleave', () => {
+      tr.classList.remove('drop-target');
+      document.querySelectorAll('tr.row.selected').forEach(r => r.classList.remove('drop-target'));
+    });
+    tr.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      tr.classList.remove('drop-target');
+      document.querySelectorAll('tr.row.selected').forEach(r => r.classList.remove('drop-target'));
+      if (!dragTag) return;
+      const ids = selected.has(asset.id) ? [...selected] : [asset.id];
+      await applyTag(ids, dragTag.category, dragTag.tag);
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  // Wire remove tag buttons
+  tbody.querySelectorAll('.rm').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const aid = parseInt(btn.dataset.assetid);
+      const cat = btn.dataset.cat, tag = btn.dataset.tag;
+      await api('DELETE', '/api/assets/tags', {asset_ids: [aid], category: cat, tag});
+      const a = assets.find(x => x.id === aid);
+      if (a) a.tags = a.tags.filter(t => !(t.category===cat && t.tag===tag));
+      renderTable();
+      updateRightPanel();
+      updateProgress();
+      toast('Tag removed');
+    });
+  });
+
+  updateSelCount();
+}
+
+function getPaletteColor(cat, tag) {
+  const catTags = palette[cat] || [];
+  const t = catTags.find(x => x.tag === tag);
+  return t ? {bg: t.color_bg, fg: t.color_fg} : {bg:'#1a2840', fg:'#6496d2'};
+}
+
+// ── SELECTION ────────────────────────────────────────────────────────────
+function handleRowClick(e, asset, idx) {
+  if (e.shiftKey && lastClickedIdx !== null) {
+    const lo = Math.min(lastClickedIdx, idx), hi = Math.max(lastClickedIdx, idx);
+    for (let i = lo; i <= hi; i++) selected.add(assets[i].id);
+  } else if (e.ctrlKey || e.metaKey) {
+    if (selected.has(asset.id)) selected.delete(asset.id);
+    else selected.add(asset.id);
+  } else {
+    selected.clear();
+    selected.add(asset.id);
+  }
+  lastClickedIdx = idx;
+  renderTable();
+  updateRightPanel();
+}
+
+document.getElementById('select-all').addEventListener('change', (e) => {
+  if (e.target.checked) assets.forEach(a => selected.add(a.id));
+  else selected.clear();
+  renderTable();
+  updateRightPanel();
+});
+
+function updateSelCount() {
+  const n = selected.size;
+  document.getElementById('sel-count').textContent = n === 0 ? 'No selection' : `${n} selected`;
+}
+
+// ── APPLY TAG ────────────────────────────────────────────────────────────
+async function applyTag(ids, category, tag) {
+  await api('POST', '/api/assets/tags', {asset_ids: ids, category, tag});
+  // Update local state
+  ids.forEach(id => {
+    const a = assets.find(x => x.id === id);
+    if (a && !a.tags.find(t => t.category===category && t.tag===tag)) {
+      a.tags.push({category, tag});
+    }
+  });
+  renderTable();
+  updateRightPanel();
+  updateProgress();
+  toast(`Applied "${tag}" to ${ids.length} item${ids.length>1?'s':''}`, 'success');
+}
+
+// ── DROP ON LIST CONTAINER ───────────────────────────────────────────────
+const listContainer = document.getElementById('list-container');
+const dropOverlay = document.getElementById('drop-overlay');
+
+listContainer.addEventListener('dragover', (e) => {
+  if (!dragTag || selected.size === 0) return;
+  e.preventDefault();
+  dropOverlay.style.display = 'block';
+});
+listContainer.addEventListener('dragleave', (e) => {
+  if (!listContainer.contains(e.relatedTarget)) dropOverlay.style.display = 'none';
+});
+listContainer.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dropOverlay.style.display = 'none';
+  if (!dragTag || selected.size === 0) return;
+  await applyTag([...selected], dragTag.category, dragTag.tag);
+});
+
+// ── RIGHT PANEL ──────────────────────────────────────────────────────────
+function updateRightPanel() {
+  const empty = document.getElementById('rp-empty');
+  const detail = document.getElementById('rp-detail');
+  if (selected.size !== 1) {
+    empty.style.display = 'flex';
+    detail.style.display = 'none';
+    return;
+  }
+  const id = [...selected][0];
+  const a = assets.find(x => x.id === id);
+  if (!a) return;
+  empty.style.display = 'none';
+  detail.style.display = 'block';
+  document.getElementById('rp-filename').textContent = a.filename || a.title;
+  document.getElementById('rp-dir').textContent = a.directory_full;
+  document.getElementById('rp-meta').textContent = formatDuration(a.duration_ms) + '  •  ' + (a.kind || '');
+  document.getElementById('rp-preview').innerHTML = `<a href="${a.file_path}" target="_blank">Open file path</a>`;
+
+  const tagsEl = document.getElementById('rp-tags');
+  const noTags = document.getElementById('rp-no-tags');
+  tagsEl.innerHTML = '';
+  if (a.tags.length === 0) {
+    noTags.style.display = 'block';
+  } else {
+    noTags.style.display = 'none';
+    a.tags.forEach(t => {
+      const clr = getPaletteColor(t.category, t.tag);
+      const span = document.createElement('span');
+      span.className = 'rp-tag';
+      span.style.background = clr.bg;
+      span.style.color = clr.fg;
+      span.innerHTML = `${t.tag} <span class="rm">×</span>`;
+      span.querySelector('.rm').addEventListener('click', async () => {
+        await api('DELETE', '/api/assets/tags', {asset_ids: [id], category: t.category, tag: t.tag});
+        a.tags = a.tags.filter(x => !(x.category===t.category && x.tag===t.tag));
+        renderTable();
+        updateRightPanel();
+        updateProgress();
+        toast('Tag removed');
+      });
+      tagsEl.appendChild(span);
+    });
+  }
+}
+
+// ── PAGINATION ───────────────────────────────────────────────────────────
+function renderPagination() {
+  const el = document.getElementById('pagination');
+  el.innerHTML = '';
+  const prev = document.createElement('button');
+  prev.className = 'page-btn'; prev.textContent = '← Prev';
+  prev.disabled = currentPage <= 1;
+  prev.addEventListener('click', () => { currentPage--; selected.clear(); loadAssets(); });
+  el.appendChild(prev);
+
+  const info = document.createElement('span');
+  info.id = 'page-info';
+  info.textContent = `Page ${currentPage} of ${totalPages}  (${totalAssets} assets)`;
+  el.appendChild(info);
+
+  const next = document.createElement('button');
+  next.className = 'page-btn'; next.textContent = 'Next →';
+  next.disabled = currentPage >= totalPages;
+  next.addEventListener('click', () => { currentPage++; selected.clear(); loadAssets(); });
+  el.appendChild(next);
+}
+
+// ── BADGE + PROGRESS ─────────────────────────────────────────────────────
+function updateBadge() {
+  document.getElementById('untagged-badge').textContent = untaggedCount + ' untagged';
+}
+function updateProgress() {
+  const tagged = totalAssets - untaggedCount;
+  const pct = totalAssets > 0 ? Math.round(tagged / totalAssets * 100) : 0;
+  document.getElementById('progress-bar-inner').style.width = pct + '%';
+  document.getElementById('progress-text').textContent = `${tagged} / ${totalAssets} tagged (${pct}%)`;
+}
+
+// ── SEARCH + FILTER ───────────────────────────────────────────────────────
+let searchTimer;
+document.getElementById('search').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTerm = e.target.value.trim();
+    currentPage = 1; selected.clear();
+    loadAssets();
+  }, 300);
+});
+document.getElementById('untagged-only').addEventListener('change', (e) => {
+  untaggedOnly = e.target.checked;
+  currentPage = 1; selected.clear();
+  loadAssets();
+});
+
+// ── INIT ──────────────────────────────────────────────────────────────────
+loadPalette();
+loadAssets();
+</script>
+</body>
+</html>

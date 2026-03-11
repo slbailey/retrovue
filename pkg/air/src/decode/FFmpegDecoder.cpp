@@ -1160,6 +1160,42 @@ bool FFmpegDecoder::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& out
     return false;
   }
 
+  // SWR_OUTPUT_DIAG: Check swr_convert output for noise/clipping.
+  {
+    static int swr_diag_count = 0;
+    if (swr_diag_count < 20) {
+      const int16_t* s16 = reinterpret_cast<const int16_t*>(output_frame.data.data());
+      int16_t s_min = 0, s_max = 0;
+      int total = samples_converted * out_channels;
+      for (int i = 0; i < total; ++i) {
+        if (s16[i] < s_min) s_min = s16[i];
+        if (s16[i] > s_max) s_max = s16[i];
+      }
+      // Also check first few float values from input FLTP planes
+      float in_f_min = 0, in_f_max = 0;
+      if (av_frame->nb_samples > 0 && av_frame->data[0]) {
+        const float* plane0 = reinterpret_cast<const float*>(av_frame->data[0]);
+        for (int i = 0; i < std::min(av_frame->nb_samples, 256); ++i) {
+          if (plane0[i] < in_f_min) in_f_min = plane0[i];
+          if (plane0[i] > in_f_max) in_f_max = plane0[i];
+        }
+      }
+      std::cout << "[SWR_OUTPUT_DIAG] frame#" << swr_diag_count
+                << " in_fmt=" << av_frame->format
+                << " in_channels=" << av_frame->ch_layout.nb_channels
+                << " in_rate=" << av_frame->sample_rate
+                << " in_nb_samples=" << av_frame->nb_samples
+                << " in_plane0_fmin=" << in_f_min << " in_plane0_fmax=" << in_f_max
+                << " in_data=" << static_cast<void*>(av_frame->data[0])
+                << " in_ext_data=" << static_cast<void*>(av_frame->extended_data[0])
+                << " data==ext=" << (av_frame->data[0] == av_frame->extended_data[0])
+                << " out_s16_min=" << s_min << " out_s16_max=" << s_max
+                << " out_samples=" << samples_converted
+                << std::endl;
+      swr_diag_count++;
+    }
+  }
+
   // Update output frame metadata
   output_frame.sample_rate = 48000;
   output_frame.channels = 2;
