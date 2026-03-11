@@ -82,6 +82,7 @@ class HLSAccessFilter(logging.Filter):
     """
 
     _QUIET_PREFIXES = ("/hls/", "/api/epg", "/discover.json", "/lineup_status.json")
+    _QUIET_SUFFIXES = ("/status",)  # suppress /channel/*/status polling
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
@@ -89,12 +90,17 @@ class HLSAccessFilter(logging.Filter):
             return True
         path = args[2] if len(args) > 2 else ""
         status_code = args[4] if len(args) > 4 else 0
-        if isinstance(path, str) and any(path.startswith(p) for p in self._QUIET_PREFIXES):
-            try:
-                if int(status_code) < 400:
-                    return False
-            except (ValueError, TypeError):
-                pass
+        if isinstance(path, str):
+            is_quiet = (
+                any(path.startswith(p) for p in self._QUIET_PREFIXES)
+                or any(path.endswith(s) for s in self._QUIET_SUFFIXES)
+            )
+            if is_quiet:
+                try:
+                    if int(status_code) < 400:
+                        return False
+                except (ValueError, TypeError):
+                    pass
         return True
 
 
@@ -583,6 +589,16 @@ class ProgramDirector:
 
             sc = config.schedule_config or {}
 
+            # INV-EPG-VIEWER-INDEPENDENT-001: Wire Tier 1 horizon extension
+            # into the daemon so EPG stays fresh without viewers.
+            tier1_cb = None
+            try:
+                svc = self._get_schedule_service_for_channel(channel_id, config)
+                if hasattr(svc, "_maybe_extend_horizon"):
+                    tier1_cb = svc._maybe_extend_horizon
+            except Exception:
+                pass
+
             daemon = PlaylistBuilderDaemon(
                 channel_id=channel_id,
                 min_hours=sc.get("playlog_min_hours", 3),
@@ -598,6 +614,7 @@ class ProgramDirector:
                 master_clock=self._embedded_clock,
                 channel_tz=sc.get("channel_tz", "UTC"),
                 dsl_path=sc.get("dsl_path", ""),
+                tier1_extend_callback=tier1_cb,
             )
 
             # Readiness gate: synchronous initial evaluation
@@ -1526,6 +1543,9 @@ class ProgramDirector:
 
     def _register_endpoints(self) -> None:
         """Register Phase 0 HTTP endpoints."""
+        # Studio tagging UI
+        from retrovue.web.studio import router as studio_router
+        self.fastapi_app.include_router(studio_router)
         
         @self.fastapi_app.get("/channels", response_model=None)
         async def get_channels():
@@ -1900,7 +1920,6 @@ class ProgramDirector:
             """
             from zoneinfo import ZoneInfo
             from retrovue.runtime.dsl_schedule_service import DslScheduleService
-            from retrovue.runtime.catalog_resolver import CatalogAssetResolver
             from retrovue.infra.uow import session
 
             tz = ZoneInfo("America/New_York")
@@ -1935,48 +1954,59 @@ class ProgramDirector:
                 blocks = DslScheduleService.get_canonical_epg(
                     channel_id, window_start, window_end
                 )
-                if blocks:
-                    with session() as db:
-                        resolver = CatalogAssetResolver(db)
+                for block in blocks or []:
+                    start_dt = datetime.fromisoformat(block["start_at"])
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=tz)
+                    slot_sec = block["slot_duration_sec"]
+                    ep_sec = block.get("episode_duration_sec", slot_sec)
+                    end_dt = start_dt + timedelta(seconds=slot_sec)
 
-                    for block in blocks:
-                        start_dt = datetime.fromisoformat(block["start_at"])
-                        if start_dt.tzinfo is None:
-                            start_dt = start_dt.replace(tzinfo=tz)
-                        slot_sec = block["slot_duration_sec"]
-                        ep_sec = block.get("episode_duration_sec", slot_sec)
-                        end_dt = start_dt + timedelta(seconds=slot_sec)
+                    if start_dt <= now < end_dt:
+                        title = block.get("title", "Untitled")
+                        episode_title = ""
+                        season = None
+                        episode = None
+                        description = ""
 
-                        if start_dt <= now < end_dt:
-                            title = block.get("title", "Untitled")
-                            episode_title = ""
-                            season = None
-                            episode = None
-                            description = ""
-                            for cat_entry in resolver._catalog:
-                                if cat_entry.canonical_id == block["asset_id"]:
-                                    title = cat_entry.series_title or title
-                                    episode_title = getattr(cat_entry, "title", "") or ""
-                                    season = cat_entry.season
-                                    episode = cat_entry.episode
-                                    description = getattr(cat_entry, "description", "") or ""
-                                    break
+                        # Single-asset lookup instead of full catalog load
+                        from retrovue.domain.entities import AssetEditorial
+                        asset_id = block.get("asset_id")
+                        if asset_id:
+                            p = None
+                            with session() as db:
+                                ed = db.query(AssetEditorial).filter(
+                                    AssetEditorial.asset_uuid == asset_id
+                                ).first()
+                                if ed:
+                                    p = dict(ed.payload) if ed.payload else None
+                            if p:
+                                asset_title = p.get("title", "") or ""
+                                series = p.get("series_title", "") or ""
+                                if series:
+                                    title = series
+                                    episode_title = asset_title
+                                else:
+                                    title = asset_title or title
+                                season = p.get("season_number")
+                                episode = p.get("episode_number")
+                                description = p.get("description", "") or ""
 
-                            now_playing = {
-                                "title": title,
-                                "episode_title": episode_title,
-                                "season": season,
-                                "episode": episode,
-                                "description": description,
-                                "start_time": start_dt.astimezone(tz).isoformat(),
-                                "end_time": end_dt.astimezone(tz).isoformat(),
-                                "duration_minutes": round(ep_sec / 60, 1),
-                                "slot_minutes": round(slot_sec / 60, 1),
-                                "progress_pct": round(
-                                    (now - start_dt).total_seconds() / slot_sec * 100, 1
-                                ),
-                            }
-                            break
+                        now_playing = {
+                            "title": title,
+                            "episode_title": episode_title,
+                            "season": season,
+                            "episode": episode,
+                            "description": description,
+                            "start_time": start_dt.astimezone(tz).isoformat(),
+                            "end_time": end_dt.astimezone(tz).isoformat(),
+                            "duration_minutes": round(ep_sec / 60, 1),
+                            "slot_minutes": round(slot_sec / 60, 1),
+                            "progress_pct": round(
+                                (now - start_dt).total_seconds() / slot_sec * 100, 1
+                            ),
+                        }
+                        break
             except Exception as e:
                 self._logger.debug("Status EPG lookup error: %s", e)
 

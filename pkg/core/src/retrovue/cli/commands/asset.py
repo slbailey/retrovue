@@ -176,7 +176,8 @@ def update_asset(
                 # D-3: single Unit of Work — delete then insert
                 db.query(AssetTag).filter_by(asset_uuid=asset.uuid).delete()
                 for tag_val in new_tag_set:
-                    db.add(AssetTag(asset_uuid=asset.uuid, tag=tag_val, source="operator"))
+                    namespaced = tag_val if ":" in tag_val else f"TAG:{tag_val}"
+                    db.add(AssetTag(asset_uuid=asset.uuid, tag=namespaced, source="operator"))
                 db.commit()
 
             status = "changed" if changed else "no_change"

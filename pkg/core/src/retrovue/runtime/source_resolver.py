@@ -160,11 +160,13 @@ class SourceResolver:
             return False
 
         # tags filter: asset must have ALL required tags
+        # Backward-compatible: plain DSL tags match namespaced DB tags
         required_tags = match.get("tags")
         if required_tags:
-            meta_tags_lower = {t.lower() for t in meta.tags}
+            from retrovue.domain.tag_normalization import expand_tag_match_set
+            meta_tags_expanded = expand_tag_match_set(set(meta.tags))
             for tag in required_tags:
-                if tag.lower() not in meta_tags_lower:
+                if tag.lower() not in meta_tags_expanded:
                     return False
 
         # rating filter

@@ -75,6 +75,7 @@ class PlaylistBuilderDaemon:
         master_clock=None,
         channel_tz: str = "UTC",
         dsl_path: str | None = None,
+        tier1_extend_callback: Any = None,
     ):
         self._channel_id = channel_id
         self._min_hours = min_hours
@@ -85,6 +86,9 @@ class PlaylistBuilderDaemon:
         self._filler_duration_ms = filler_duration_ms
         self._clock = master_clock
         self._channel_tz = ZoneInfo(channel_tz)
+        # INV-EPG-VIEWER-INDEPENDENT-001: Callback to extend Tier 1 horizon
+        # when the daemon discovers missing days. Signature: (channel_id, now_utc_ms) -> None
+        self._tier1_extend = tier1_extend_callback
 
         # Traffic policy + break config resolved from channel DSL
         self._traffic_policy: Any = None
@@ -144,6 +148,17 @@ class PlaylistBuilderDaemon:
 
         now_ms = self._now_utc_ms()
         self._last_evaluation_utc_ms = now_ms
+
+        # INV-EPG-VIEWER-INDEPENDENT-001: Proactively extend Tier 1 horizon
+        # so EPG data stays fresh even when no viewers are connected.
+        if self._tier1_extend is not None:
+            try:
+                self._tier1_extend(self._channel_id, now_ms)
+            except Exception as e:
+                logger.debug(
+                    "PlaylistBuilder[%s]: Tier 1 extend callback failed: %s",
+                    self._channel_id, e,
+                )
 
         with db_session_factory() as db:
             # Pre-step: ensure Tier 2 covers the block containing now (backfill if hole)

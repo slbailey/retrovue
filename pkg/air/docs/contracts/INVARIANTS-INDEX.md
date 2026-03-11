@@ -181,11 +181,13 @@ Frame selection cadence must reflect the live source FPS at all times. See [Cade
 
 | ID | One-line | Owner | Type |
 |----|----------|-------|------|
-| **INV-CADENCE-SOURCE-SYNC-001** | Cadence parameters (increment, threshold, enabled) MUST correspond to current live source FPS at every output tick | `PipelineManager` | Semantic |
-| **INV-CADENCE-SOURCE-SYNC-002** | Every producer transition (session start, all fence rotation paths, padded-gap-exit) MUST reinitialize cadence from new live source FPS before next tick | `PipelineManager` | Semantic |
-| **INV-CADENCE-SOURCE-SYNC-003** | Every intra-block segment swap MUST refresh cadence from new segment's source FPS before next tick | `PipelineManager` | Semantic |
+| **INV-CADENCE-SOURCE-SYNC-001** | Resample parameters (in/out FPS, enabled) MUST correspond to current live source FPS at every output tick | `PipelineManager` | Semantic |
+| **INV-CADENCE-SOURCE-SYNC-002** | Every producer transition (session start, all fence rotation paths, padded-gap-exit) MUST reinitialize resampling from new live source FPS before next tick | `PipelineManager` | Semantic |
+| **INV-CADENCE-SOURCE-SYNC-003** | Every intra-block segment swap MUST refresh resampling from new segment's source FPS before next tick | `PipelineManager` | Semantic |
 | **INV-CADENCE-SOURCE-SYNC-004** | Stale cadence causes observable speed error (source_fps / output_fps relative speed); always a defect | `PipelineManager` | Semantic |
 | **INV-CADENCE-SINGLE-AUTHORITY** | Frame cadence decisions (advance vs repeat) must occur only at the clock domain where frames are emitted to the output stream (TickLoop / PipelineManager). Decoder and buffer layers must not apply cadence logic. Dual cadence causes multiplicative rate error (e.g. 24²/29.97 = 19.2fps = 0.8× speed). | `PipelineManager` | Semantic (Broadcast-Grade) |
+| **INV-RESAMPLE-DETERMINISM-001** | Frame selection uses stateless time-domain mapping: `source_frame(N) = floor(N × in_num × out_den / (out_num × in_den))`. Pure, monotonic, integer-only. Supersedes INV-CADENCE-POP-004. | `PipelineManager` | Semantic |
+| **INV-PACING-SINGLE-AUTHORITY** | Exactly one component gates packet emission to real-time: `OutputClock::WaitForFrame`. `EncoderPipeline::GateOutputTiming` MUST be disabled for the live-output path. Dual pacing with misaligned `steady_clock` anchors causes playback acceleration after ~1-2 seconds. Emission gate MUST open AFTER `clock->Start()` to prevent bootstrap burst delivery. | `PipelineManager` | Semantic (Broadcast-Grade) |
 
 ### Block Boundary Authorities (Canonical Model)
 

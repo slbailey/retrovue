@@ -162,13 +162,15 @@ class StubAssetResolver:
                     continue
 
             # Filter: tags (AND-combined, case-insensitive)
+            # Backward-compatible: plain DSL tags match namespaced DB tags
             tags_cfg = match.get("tags")
             if tags_cfg:
+                from retrovue.domain.tag_normalization import expand_tag_match_set
                 if isinstance(tags_cfg, str):
                     tags_cfg = [tags_cfg]
                 required = {t.lower() for t in tags_cfg}
-                asset_tags = {t.lower() for t in meta.tags}
-                if not required.issubset(asset_tags):
+                asset_tags_expanded = expand_tag_match_set(set(meta.tags))
+                if not required.issubset(asset_tags_expanded):
                     continue
 
             results.append(asset_id)

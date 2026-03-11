@@ -202,6 +202,10 @@ void SocketSink::OpenEmissionGate() {
 void SocketSink::WriterThreadLoop() {
   constexpr int kPollTimeoutMs = 100;  // Check for stop every 100ms
   auto last_queue_log_time = std::chrono::steady_clock::now();
+  bool first_send_logged = false;
+  uint64_t transport_diag_cumulative_bytes = 0;
+  // TRANSPORT_DIAG: Log first 60 sends then every 100th for slope analysis
+  uint64_t transport_diag_send_count = 0;
 
   while (!writer_stop_.load(std::memory_order_acquire)) {
     auto now = std::chrono::steady_clock::now();
@@ -336,8 +340,36 @@ void SocketSink::WriterThreadLoop() {
       ptr += n;
       remaining -= static_cast<size_t>(n);
 
+      // INV-PACING-SINGLE-AUTHORITY: First socket send diagnostic.
+      if (!first_send_logged) {
+        first_send_logged = true;
+        auto first_send_wall = std::chrono::steady_clock::now();
+        int64_t first_send_mono_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            first_send_wall.time_since_epoch()).count();
+        { std::ostringstream oss;
+          oss << "[SocketSink:" << name_ << "] PACING_DIAG: first_socket_send"
+              << " bytes=" << n
+              << " wall_mono_us=" << first_send_mono_us
+              << " queue_bytes=" << current_buffer_size_;
+          Logger::Info(oss.str()); }
+      }
+
       // INV-HONEST-LIVENESS-METRICS: Update ONLY when kernel accepts bytes
       bytes_delivered_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+      transport_diag_cumulative_bytes += static_cast<uint64_t>(n);
+      transport_diag_send_count++;
+      // TRANSPORT_DIAG: Log socket send wall time for slope analysis
+      if (transport_diag_send_count <= 60 || (transport_diag_send_count % 100 == 0)) {
+        auto send_wall = std::chrono::steady_clock::now();
+        int64_t send_wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            send_wall.time_since_epoch()).count();
+        { std::ostringstream oss;
+          oss << "[SocketSink:" << name_ << "] TRANSPORT_DIAG:"
+              << " socket_send_wall_us=" << send_wall_us
+              << " bytes=" << n
+              << " cumulative_bytes=" << transport_diag_cumulative_bytes;
+          Logger::Info(oss.str()); }
+      }
       {
         std::lock_guard<std::mutex> tlock(time_mutex_);
         last_accepted_time_ = std::chrono::steady_clock::now();

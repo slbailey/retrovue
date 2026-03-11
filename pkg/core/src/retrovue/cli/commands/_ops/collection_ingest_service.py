@@ -902,10 +902,12 @@ class CollectionIngestService:
                         ]
                     if tag_labels:
                         for tag_val in normalize_tag_set(tag_labels):
+                            # INV-ASSET-TAG-FORMAT-001: tags stored as CATEGORY:value
+                            namespaced = tag_val if ":" in tag_val else f"TAG:{tag_val}"
                             self.db.merge(
                                 AssetTag(
                                     asset_uuid=asset.uuid,
-                                    tag=tag_val,
+                                    tag=namespaced,
                                     source="ingest",
                                 )
                             )

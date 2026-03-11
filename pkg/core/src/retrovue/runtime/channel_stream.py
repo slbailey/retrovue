@@ -170,6 +170,14 @@ def _classify_upstream_spike(
 _logger = logging.getLogger(__name__)
 
 # =============================================================================
+# CORE_TRANSPORT_DIAG: Per-stage timing instrumentation for slope analysis.
+# Proves or falsifies whether Core delivery is bursty when AIR output is uniform.
+# =============================================================================
+_DIAG_ENABLED = False  # Set True to enable Core transport diagnostics
+_DIAG_STARTUP_EVENTS = 200  # Log first N events per stage, then every Nth
+_DIAG_STEADY_INTERVAL = 100  # Log every Nth event after startup
+
+# =============================================================================
 # AUDIT: INV-UDS-DRAIN timing instrumentation
 # =============================================================================
 _AUDIT_T0: int | None = None  # Thread started (monotonic_ns)
@@ -637,6 +645,23 @@ class ChannelStream:
         )
         chunk_size = 32768  # ~174 TS packets; reduces iterations from ~166/s to ~10-20/s
 
+        # CORE_TRANSPORT_DIAG: upstream read instrumentation
+        _diag_recv_count = 0
+        _diag_recv_cumulative_bytes = 0
+        _diag_recv_t0 = None  # set on first recv
+
+        # STARTUP_CAPTURE: Tee first 512KB of TS to disk for ffprobe analysis
+        _capture_path = Path("/tmp") / f"retrovue_startup_{self.channel_id}.ts"
+        _capture_fd: Any = None
+        _capture_remaining = 512 * 1024  # bytes to capture
+        try:
+            _capture_fd = open(_capture_path, "wb")
+            self._logger.debug(
+                "STARTUP_CAPTURE: writing first 512KB to %s", _capture_path
+            )
+        except OSError as e:
+            self._logger.debug("STARTUP_CAPTURE: failed to open %s: %s", _capture_path, e)
+
         # Only log spike when truly slow: > 3× poll timeout, or did read and > 50 ms
         spike_threshold_long_ms = 3 * (UPSTREAM_POLL_TIMEOUT_S * 1000)
         while not self._stop_event.is_set():
@@ -696,8 +721,43 @@ class ChannelStream:
                         self.channel_id,
                     )
                     continue  # next iteration enters _connect_with_backoff
+                # STARTUP_CAPTURE: tee to disk
+                if _capture_fd is not None and _capture_remaining > 0:
+                    to_write = chunk[:_capture_remaining]
+                    try:
+                        _capture_fd.write(to_write)
+                        _capture_remaining -= len(to_write)
+                        if _capture_remaining <= 0:
+                            _capture_fd.close()
+                            _capture_fd = None
+                            self._logger.debug(
+                                "STARTUP_CAPTURE: complete (%s)", _capture_path
+                            )
+                    except OSError:
+                        _capture_fd = None
                 self._ring_buffer.put(chunk)
                 t_after_put = time.monotonic_ns()
+                # CORE_TRANSPORT_DIAG: UDS recv timing
+                if _DIAG_ENABLED and bytes_read_this_iter > 0:
+                    _diag_recv_count += 1
+                    _diag_recv_cumulative_bytes += bytes_read_this_iter
+                    if _diag_recv_t0 is None:
+                        _diag_recv_t0 = t_after_recv
+                    if (_diag_recv_count <= _DIAG_STARTUP_EVENTS or
+                            _diag_recv_count % _DIAG_STEADY_INTERVAL == 0):
+                        wall_us = t_after_recv // 1000
+                        self._logger.info(
+                            "CORE_RECV_DIAG: recv_seq=%d wall_us=%d bytes=%d "
+                            "cumulative_bytes=%d select_ms=%.2f recv_ms=%.2f put_ms=%.2f "
+                            "ring_bytes=%d channel=%s",
+                            _diag_recv_count, wall_us, bytes_read_this_iter,
+                            _diag_recv_cumulative_bytes,
+                            (t_after_select - t_start) / 1e6,
+                            (t_after_recv - t_after_select) / 1e6,
+                            (t_after_put - t_after_recv) / 1e6,
+                            self._ring_buffer.current_bytes,
+                            self.channel_id,
+                        )
             except IOError as e:
                 self._logger.warning(
                     "[HTTP] UPSTREAM_DISCONNECTED reason=read_error error=%s "
@@ -765,10 +825,30 @@ class ChannelStream:
         Never closes upstream. Runs regardless of subscriber count: with 0 clients we
         still get() from the ring buffer (draining it) and discard; upstream never blocks.
         """
+        # CORE_TRANSPORT_DIAG: fanout instrumentation
+        _diag_fanout_count = 0
+        _diag_fanout_cumulative_bytes = 0
+
         while not self._stop_event.is_set():
             chunk = self._ring_buffer.get(timeout=UPSTREAM_POLL_TIMEOUT_S)
             if chunk is None:
                 continue
+            # CORE_TRANSPORT_DIAG: fanout dequeue timing
+            if _DIAG_ENABLED:
+                _diag_fanout_count += 1
+                _diag_fanout_cumulative_bytes += len(chunk)
+                if (_diag_fanout_count <= _DIAG_STARTUP_EVENTS or
+                        _diag_fanout_count % _DIAG_STEADY_INTERVAL == 0):
+                    wall_us = time.monotonic_ns() // 1000
+                    self._logger.info(
+                        "CORE_FANOUT_DIAG: fanout_seq=%d wall_us=%d bytes=%d "
+                        "cumulative_bytes=%d ring_bytes=%d subscribers=%d channel=%s",
+                        _diag_fanout_count, wall_us, len(chunk),
+                        _diag_fanout_cumulative_bytes,
+                        self._ring_buffer.current_bytes,
+                        len(self.subscribers),
+                        self.channel_id,
+                    )
             if self.hls_manager is not None:
                 try:
                     self.hls_manager.feed(self.channel_id, chunk)
@@ -1019,19 +1099,44 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
     max_consecutive_timeouts = 100  # 10 seconds at 0.1s timeout
     loop = asyncio.get_event_loop()
 
+    # CORE_TRANSPORT_DIAG: HTTP yield instrumentation
+    _diag_yield_count = 0
+    _diag_yield_cumulative_bytes = 0
+    _diag_timeout_total = 0
+
     while True:
         try:
+            t_drain_start = time.monotonic_ns()
             batch = await loop.run_in_executor(
                 None,
                 lambda: client_queue.drain_many(262144)
             )
+            t_drain_end = time.monotonic_ns()
             consecutive_timeouts = 0
             if not batch:  # EOF signal (b"") or closed (None)
                 break
+            # CORE_TRANSPORT_DIAG: HTTP yield timing
+            if _DIAG_ENABLED:
+                _diag_yield_count += 1
+                _diag_yield_cumulative_bytes += len(batch)
+                if (_diag_yield_count <= _DIAG_STARTUP_EVENTS or
+                        _diag_yield_count % _DIAG_STEADY_INTERVAL == 0):
+                    drain_ms = (t_drain_end - t_drain_start) / 1e6
+                    wall_us = t_drain_end // 1000
+                    _logger.info(
+                        "CORE_YIELD_DIAG: yield_seq=%d wall_us=%d bytes=%d "
+                        "cumulative_bytes=%d drain_ms=%.2f timeouts_so_far=%d "
+                        "queue_bytes=%d",
+                        _diag_yield_count, wall_us, len(batch),
+                        _diag_yield_cumulative_bytes, drain_ms,
+                        _diag_timeout_total,
+                        client_queue.current_bytes,
+                    )
             yield batch
             await asyncio.sleep(0)
         except Empty:
             consecutive_timeouts += 1
+            _diag_timeout_total += 1
             if consecutive_timeouts >= max_consecutive_timeouts:
                 _logger.debug("generate_ts_stream_async exiting due to timeout")
                 break

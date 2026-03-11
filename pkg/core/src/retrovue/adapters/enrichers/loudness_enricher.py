@@ -127,9 +127,14 @@ class LoudnessEnricher(BaseEnricher):
         # appear throughout. Extract only the summary section to avoid matching
         # early running-average values (often -70 LUFS at start of file).
         #
+        # Use find() (FIRST Summary), not rfind(). DTS 5.1 and other multi-
+        # channel sources can cause ffmpeg to emit a SECOND ebur128 filter
+        # instance with a bogus -70.0 LUFS measurement (empty/reset state).
+        # The first Summary is always the real measurement.
+        #
         # ffmpeg flushes the summary even when interrupted by SIGINT (rc=-2/255),
         # so attempt to parse before checking the return code.
-        summary_idx = result.stderr.rfind("Summary:")
+        summary_idx = result.stderr.find("Summary:")
         search_text = result.stderr[summary_idx:] if summary_idx >= 0 else result.stderr
         match = _INTEGRATED_RE.search(search_text)
 

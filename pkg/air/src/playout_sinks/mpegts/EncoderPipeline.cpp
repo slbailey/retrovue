@@ -1566,6 +1566,33 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   const uint8_t* src_data = audio_frame.data.data();
   int src_nb_samples = audio_frame.nb_samples;
 
+  // RAW_INPUT_DIAG: Check the AudioFrame data before any processing.
+  {
+    static int raw_diag_count = 0;
+    if (raw_diag_count < 20) {
+      const int16_t* raw = reinterpret_cast<const int16_t*>(src_data);
+      int total = src_nb_samples * encoder_channels;
+      int expected_bytes = total * static_cast<int>(sizeof(int16_t));
+      int16_t r_min = 0, r_max = 0;
+      for (int i = 0; i < total; ++i) {
+        if (raw[i] < r_min) r_min = raw[i];
+        if (raw[i] > r_max) r_max = raw[i];
+      }
+      std::cout << "[RAW_INPUT_DIAG] call#" << raw_diag_count
+                << " nb_samples=" << src_nb_samples
+                << " data_size=" << audio_frame.data.size()
+                << " expected_bytes=" << expected_bytes
+                << " s16_min=" << r_min << " s16_max=" << r_max
+                << " is_silence=" << is_silence_pad
+                << " resample_buf_samples=" << audio_resample_buffer_samples_
+                << " data_ptr=" << static_cast<const void*>(src_data)
+                << " first4=" << (total >= 4 ? raw[0] : -1) << "," << (total >= 4 ? raw[1] : -1)
+                << "," << (total >= 4 ? raw[2] : -1) << "," << (total >= 4 ? raw[3] : -1)
+                << std::endl;
+      raw_diag_count++;
+    }
+  }
+
   // Prepend any buffered samples from previous call, then append new samples
   // If sample rate changed, buffer was already cleared above
   std::vector<int16_t> combined_samples;
@@ -1593,6 +1620,24 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   const int16_t* samples_ptr = combined_samples.data();
   int samples_remaining = total_samples;
   int64_t current_pts90k = pts90k;
+
+  // COMBINED_DIAG: Check combined_samples after assembly.
+  {
+    static int combined_diag_count = 0;
+    if (combined_diag_count < 20) {
+      int16_t c_min = 0, c_max = 0;
+      for (size_t i = 0; i < combined_samples.size(); ++i) {
+        if (combined_samples[i] < c_min) c_min = combined_samples[i];
+        if (combined_samples[i] > c_max) c_max = combined_samples[i];
+      }
+      std::cout << "[COMBINED_DIAG] call#" << combined_diag_count
+                << " total_samples=" << total_samples
+                << " combined_size=" << combined_samples.size()
+                << " s16_min=" << c_min << " s16_max=" << c_max
+                << std::endl;
+      combined_diag_count++;
+    }
+  }
 
   // =========================================================================
   // INV-P9-STEADY-007: Producer CT Authoritative
@@ -1717,11 +1762,21 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
     const int samples_this_frame = frame_size;  // Always exactly frame_size
 
     if (dbg_audio_chunk_count < kDbgAudioChunkLogLimit) {
+      // AUDIO_LEVEL_DIAG: Log actual int16 sample peaks to find amplification source.
+      int16_t s16_min = 0, s16_max = 0;
+      for (int i = 0; i < samples_this_frame * encoder_channels; ++i) {
+        int16_t s = samples_ptr[i];
+        if (s < s16_min) s16_min = s;
+        if (s > s16_max) s16_max = s;
+      }
       std::cout << "[INV-AUDIO-SAMPLE-CLOCK-DBG] chunk#" << dbg_audio_chunk_count
                 << " type=" << (is_silence_pad ? "SILENCE" : "REAL")
                 << " pts90k=" << current_pts90k
                 << " audio_encode_samples=" << audio_encode_sample_counter_
-                << " nb_samples=" << samples_this_frame << std::endl;
+                << " nb_samples=" << samples_this_frame
+                << " s16_min=" << s16_min << " s16_max=" << s16_max
+                << " encoder_fmt=" << audio_codec_ctx_->sample_fmt
+                << std::endl;
       dbg_audio_chunk_count++;
     }
     
@@ -1767,6 +1822,25 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       std::cerr << "[EncoderPipeline] Audio format conversion not implemented for encoder format: "
                 << audio_codec_ctx_->sample_fmt << std::endl;
       return false;
+    }
+
+    // AUDIO_FLOAT_DIAG: After conversion, check actual float values in frame.
+    if (dbg_audio_chunk_count <= kDbgAudioChunkLogLimit + 1 &&
+        audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
+      float f_min = 0.0f, f_max = 0.0f;
+      for (int c = 0; c < encoder_channels; ++c) {
+        const float* plane = reinterpret_cast<const float*>(audio_frame_->data[c]);
+        for (int i = 0; i < samples_this_frame; ++i) {
+          if (plane[i] < f_min) f_min = plane[i];
+          if (plane[i] > f_max) f_max = plane[i];
+        }
+      }
+      std::cout << "[AUDIO_FLOAT_DIAG] chunk#" << (dbg_audio_chunk_count - 1)
+                << " f_min=" << f_min << " f_max=" << f_max
+                << " frame_data0=" << static_cast<void*>(audio_frame_->data[0])
+                << " frame_data1=" << static_cast<void*>(audio_frame_->data[1])
+                << " frame_linesize0=" << audio_frame_->linesize[0]
+                << std::endl;
     }
 
     // Send frame to encoder
@@ -2300,6 +2374,33 @@ void EncoderPipeline::FlushMuxInterleaver() {
 void EncoderPipeline::WriteMuxPacket(AVPacket* pkt) {
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   if (!pkt || !format_ctx_) return;
+
+  // MUX_PACKET_DIAG: Log first 10 packets to capture actual DTS/PTS entering muxer
+  static int mux_diag_count = 0;
+  if (mux_diag_count < 10) {
+    mux_diag_count++;
+    bool is_video = (video_stream_ && pkt->stream_index == video_stream_->index);
+    const char* type = is_video ? "video" : "audio";
+    AVRational stream_tb = is_video ? video_stream_->time_base :
+                           (audio_stream_ ? audio_stream_->time_base : AVRational{1, 90000});
+    int64_t dts_90k = av_rescale_q(pkt->dts, stream_tb, {1, 90000});
+    int64_t pts_90k = av_rescale_q(pkt->pts, stream_tb, {1, 90000});
+    auto wall = std::chrono::steady_clock::now();
+    int64_t wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        wall.time_since_epoch()).count();
+    { std::ostringstream oss;
+      oss << "[EncoderPipeline] MUX_PACKET_DIAG:"
+          << " seq=" << mux_diag_count
+          << " type=" << type
+          << " dts=" << pkt->dts
+          << " pts=" << pkt->pts
+          << " dts_90k=" << dts_90k
+          << " pts_90k=" << pts_90k
+          << " size=" << pkt->size
+          << " stream_tb=" << stream_tb.num << "/" << stream_tb.den
+          << " wall_us=" << wall_us;
+      std::cout << oss.str() << std::endl; }
+  }
 
   // Notify observer before writing
   if (packet_write_observer_) {

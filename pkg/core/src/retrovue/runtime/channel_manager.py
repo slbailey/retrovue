@@ -1625,23 +1625,21 @@ class TracedSocket:
     def close(self) -> None:
         # Cancel the GC finalizer — an explicit close is expected, not a leak.
         self._finalizer.detach()
-        self._logger.info(
-            "INV-UDS-CLOSE-TRACE: channel=%s fd=%d gen=%d\n%s",
+        self._logger.debug(
+            "INV-UDS-CLOSE-TRACE: channel=%s fd=%d gen=%d",
             self._channel_id,
             self._fd,
             self._generation,
-            "".join(traceback.format_stack()),
         )
         self._sock.close()
 
     def shutdown(self, how: int) -> None:
-        self._logger.info(
-            "INV-UDS-SHUTDOWN-TRACE: channel=%s fd=%d gen=%d how=%s\n%s",
+        self._logger.debug(
+            "INV-UDS-SHUTDOWN-TRACE: channel=%s fd=%d gen=%d how=%s",
             self._channel_id,
             self._fd,
             self._generation,
             how,
-            "".join(traceback.format_stack()),
         )
         self._sock.shutdown(how)
 

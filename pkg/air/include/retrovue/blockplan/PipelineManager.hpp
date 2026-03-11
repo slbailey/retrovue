@@ -204,6 +204,12 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Pure decision function — no side effects, no logging.
   static bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming);
 
+  // INV-RESAMPLE-DETERMINISM-001: Pure function mapping output tick to source frame index.
+  // Returns floor(tick * in_num * out_den / (out_num * in_den)) using 128-bit intermediates.
+  static int64_t SourceFrameForTick(int64_t tick,
+                                     int64_t in_num, int64_t in_den,
+                                     int64_t out_num, int64_t out_den);
+
  private:
   std::shared_ptr<ITimeSource> time_source_;
   std::shared_ptr<IOutputClock> output_clock_;
@@ -415,11 +421,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Deterministic PAD seam: block until pad_b_audio_buffer_ has >= kMinSegmentSwapAudioMs.
   void PrimePadBForSeamOrDie(const char* reason);
 
-  // Frame-selection cadence: set frame_selection_cadence_enabled_ and Bresenham params from live block input FPS.
+  // Frame-selection resampling: set resample params from live block input FPS.
   // Tick grid is fixed by session output FPS (house format); this only updates repeat-vs-advance policy.
   void InitFrameSelectionCadenceForLiveBlock();
 
-  // After segment swap: refresh frame-selection cadence from current LIVE source FPS (preserves duration).
+  // After segment swap: refresh frame-selection resampling from current LIVE source FPS (preserves duration).
   void RefreshFrameSelectionCadenceFromLiveSource(const char* reason);
 
   // Static helper: build synthetic single-segment FedBlock for segment prep.
@@ -454,11 +460,14 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool has_last_good_video_frame_ = false;
   // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Segment that produced last_good_video_frame_.
   int32_t last_good_origin_segment_ = -1;
-  // Frame-selection cadence (repeat-vs-advance) for upsampling (e.g., 24→30). TickLoop only.
-  bool frame_selection_cadence_enabled_ = false;
-  int64_t frame_selection_cadence_budget_num_ = 0;   // Bresenham accumulator
-  int64_t frame_selection_cadence_budget_den_ = 1;   // Threshold to advance
-  int64_t frame_selection_cadence_increment_ = 0;   // Amount to add per tick
+  // INV-RESAMPLE-DETERMINISM-001: Time-based frame selection (repeat-vs-advance).
+  // Replaces Bresenham accumulator with stateless SourceFrameForTick() mapping.
+  bool resample_enabled_ = false;
+  int64_t resample_tick_ = 0;           // Tick counter within resample epoch (reset on init/segment swap)
+  int64_t resample_in_num_ = 0;         // Source FPS numerator
+  int64_t resample_in_den_ = 1;         // Source FPS denominator
+  int64_t resample_out_num_ = 0;        // Output FPS numerator
+  int64_t resample_out_den_ = 1;        // Output FPS denominator
   RationalFps last_source_fps_{0, 1};      // Last live source FPS (for refresh-on-segment-swap).
   // INV-CADENCE-SOURCE-SYNC-002: Diagnostic counters for cadence decisions.
   int64_t cadence_diag_advance_ = 0;

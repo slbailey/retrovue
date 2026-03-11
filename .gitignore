@@ -190,3 +190,11 @@ CTestTestfile.cmake
 # Large backup files and test media
 backups/
 Teaser.mp4
+
+#========================================================================
+# Secrets / API credentials
+#========================================================================
+.secrets
+secrets.env
+youtube_credentials.json
+youtube_token.json
