@@ -1,0 +1,56 @@
+# RetroVue Program Director — systemd service unit
+#
+# Install:
+#   sudo cp /opt/retrovue/config/systemd/retrovue.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable retrovue
+#   sudo systemctl start retrovue
+#
+# Logs:
+#   journalctl -u retrovue -f          # follow live
+#   journalctl -u retrovue --since today
+#
+# Status:
+#   sudo systemctl status retrovue
+
+[Unit]
+Description=RetroVue Program Director
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=steve
+Group=steve
+WorkingDirectory=/opt/retrovue
+Environment=PATH=/opt/retrovue/pkg/core/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=VIRTUAL_ENV=/opt/retrovue/pkg/core/.venv
+
+ExecStart=/opt/retrovue/pkg/core/.venv/bin/retrovue start
+
+# Auto-restart on ANY non-clean exit (crash, OOM, signal kill)
+Restart=on-failure
+RestartSec=5
+
+# Also restart on clean exit (SIGTERM from systemd stop is NOT a failure,
+# but SIGHUP from terminal close IS caught and exits 0 — we want restart)
+# Use 'always' to guarantee the process comes back no matter what.
+Restart=always
+
+# Logging — stdout/stderr → journald (persistent, searchable, rotated)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=retrovue
+
+# Resource limits
+LimitNOFILE=65536
+
+# Crash rate limiting: 5 crashes in 60s → give up (prevents tight restart loops)
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# OOM protection: prefer killing other things before RetroVue
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
