@@ -492,6 +492,8 @@ add_executable(blockplan_contract_tests
   tests/contracts/test_inv_no_float_fps_timebase_001.cpp
   
   tests/blockplan/test_segment_aware_playback_proof.cpp
+  tests/contracts/BlockPlan/SegmentPrefillContractTests.cpp
+  tests/contracts/BlockPlan/SegmentSwapReadinessContractTests.cpp
   tests/contracts/BlockPlan/FFmpegCodecInitSerializationTests.cpp
 )
 

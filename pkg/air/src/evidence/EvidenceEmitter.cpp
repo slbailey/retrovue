@@ -125,7 +125,8 @@ void EvidenceEmitter::EmitSegmentStart(const SegmentStartPayload& p) {
     << ",\"join_in_progress\":" << (p.join_in_progress ? "true" : "false")
     << ",\"segment_uuid\":\"" << JsonEscape(p.segment_uuid) << "\""
     << ",\"asset_uuid\":\"" << JsonEscape(p.asset_uuid) << "\""
-    << ",\"segment_type\":\"" << JsonEscape(p.segment_type) << "\"" << "}";
+    << ",\"segment_type_name\":\"" << JsonEscape(p.segment_type_name) << "\""
+    << ",\"asset_uri\":\"" << JsonEscape(p.asset_uri) << "\"" << "}";
   EvidenceFromAir msg = MakeEnvelope("SEGMENT_START", o.str());
   auto status = spool_->Append(msg);
   if (status == AppendStatus::kSpoolFull) {

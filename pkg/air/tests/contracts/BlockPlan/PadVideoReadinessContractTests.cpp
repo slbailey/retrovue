@@ -34,7 +34,7 @@ TEST(PadVideoReadiness, PadEligibleWithZeroVideoFramesBecauseOnDemand) {
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad))
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0))
       << "PAD provides video on-demand; video depth gate must not apply";
 }
 
@@ -46,7 +46,7 @@ TEST(PadVideoReadiness, PadEligibleWithSufficientVideoAndAudio) {
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad));
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0));
 }
 
 // PAD with audio-only (video=0) IS eligible — PAD video is on-demand.
@@ -59,7 +59,7 @@ TEST(PadVideoReadiness, PadAudioOnlySufficientBecauseVideoOnDemand) {
 
   // PAD provides video synchronously via pad_producer_->VideoFrame().
   // Audio depth is the only gate.
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad))
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0))
       << "PAD video is on-demand; audio depth alone satisfies eligibility";
 }
 
@@ -71,7 +71,7 @@ TEST(PadVideoReadiness, PadWithInsufficientAudioNotEligible) {
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad))
+  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0))
       << "PAD still requires audio depth for continuity at seam";
 }
 
@@ -83,7 +83,7 @@ TEST(PadVideoReadiness, ContentStillRequiresVideoDepth) {
   content.is_pad = false;
   content.segment_type = SegmentType::kContent;
 
-  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(content))
+  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(content, 15))
       << "Content segments still require buffered video depth";
 }
 

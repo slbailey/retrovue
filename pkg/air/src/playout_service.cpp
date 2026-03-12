@@ -1018,7 +1018,8 @@ namespace retrovue
             ss.join_in_progress = join_in_progress;
             ss.segment_uuid = seg.segment_uuid;
             ss.asset_uuid = seg.asset_uuid;
-            ss.segment_type = blockplan::SegmentTypeName(seg.segment_type);
+            ss.segment_type_name = blockplan::SegmentTypeName(seg.segment_type);
+            ss.asset_uri = seg.asset_uri;
             em->EmitSegmentStart(ss);
           }
         };

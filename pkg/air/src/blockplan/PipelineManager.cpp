@@ -1395,14 +1395,25 @@ void PipelineManager::Run() {
         buffer::kHouseAudioSampleRate;
 
     // ==================================================================
-    // PRE-TAKE READINESS: Peek only — never consume.
-    // B is created in EnsureIncomingBReadyForSeam (called when take_segment).
+    // INV-SEAM-SEGMENT-PREFILL-001: Early B-side pipeline creation.
+    //
+    // When the SeamPreparer has a segment result ready, create the B-side
+    // pipeline (buffer + fill loop) immediately rather than deferring to
+    // the seam tick.  This gives the fill loop the full runway between
+    // prep completion and the seam to build video lookahead depth to
+    // target — so the swap evaluates a warm pipeline, not a cold start.
+    //
+    // EnsureIncomingBReadyForSeam is idempotent (returns immediately if
+    // segment_b already exists), so the seam-tick call becomes a no-op.
     // ==================================================================
-    const int32_t next_segment_index = current_segment_index_ + 1;
-    auto seg_peek = seam_preparer_->PeekSegmentResult();
-    if (seg_peek && seg_peek->parent_block_id == live_parent_block_.block_id &&
-        seg_peek->parent_segment_index == next_segment_index) {
-      // Next segment preroll ready; EnsureIncomingBReadyForSeam consumes at seam tick.
+    {
+      auto seg_peek = seam_preparer_->PeekSegmentResult();
+      if (seg_peek &&
+          seg_peek->parent_block_id == live_parent_block_.block_id &&
+          seg_peek->parent_segment_index > current_segment_index_) {
+        EnsureIncomingBReadyForSeam(seg_peek->parent_segment_index,
+                                    session_frame_index);
+      }
     }
 
     if (!preview_ && seam_preparer_->HasBlockResult()) {
@@ -1600,7 +1611,8 @@ void PipelineManager::Run() {
       // CONTENT_SEAM_OVERRIDE) handle their seam types with paired force-swap flags.
       const int32_t to_seg_vsrc = current_segment_index_ + 1;
       auto incoming_at_selection = GetIncomingSegmentState(to_seg_vsrc);
-      if (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection)) {
+      const int vsrc_required_video = segment_b_video_buffer_->TargetDepthFrames();
+      if (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection, vsrc_required_video)) {
         v_src = segment_b_video_buffer_.get();
       } else {
         v_src = video_buffer_.get();
@@ -1614,7 +1626,7 @@ void PipelineManager::Run() {
             << " segb_depth=" << segb_depth
             << " segb_audio_ms=" << (incoming_at_selection ? incoming_at_selection->incoming_audio_ms : -1)
             << " v_src=" << (v_src == segment_b_video_buffer_.get() ? "incoming" : "active")
-            << " eligible=" << (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection) ? "true" : "false");
+            << " eligible=" << (incoming_at_selection && IsIncomingSegmentEligibleForSwap(*incoming_at_selection, vsrc_required_video) ? "true" : "false");
         Logger::Info(oss.str()); }
     } else if (take_b) {
       // Block fence but B not ready: leave v_src null so cascade uses pad until next tick.
@@ -2786,6 +2798,10 @@ void PipelineManager::Run() {
       EnsureIncomingBReadyForSeam(to_seg, session_frame_index);
       std::optional<IncomingState> incoming = GetIncomingSegmentState(to_seg);
 
+      // INV-SEAM-SWAP-READINESS-001: threshold sourced from buffer, not a constant.
+      const int swap_required_video = segment_b_video_buffer_
+          ? segment_b_video_buffer_->TargetDepthFrames() : 0;
+
       // INV-CONTINUOUS-FRAME-AUTHORITY-001 enforcement: prevent frame-authority vacuum.
       // Force swap when active cannot provide video and successor has video,
       // even if normal eligibility gate (audio depth) is not met.
@@ -2794,7 +2810,7 @@ void PipelineManager::Run() {
           active_video_depth == 0 &&
           incoming.has_value() &&
           incoming->incoming_video_frames > 0 &&
-          !IsIncomingSegmentEligibleForSwap(*incoming);
+          !IsIncomingSegmentEligibleForSwap(*incoming, swap_required_video);
 
       // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: When a PAD frame was actually
       // selected this tick (pad_seam_this_tick AND decision==kPad), the swap
@@ -2865,7 +2881,7 @@ void PipelineManager::Run() {
             Logger::Info(oss.str()); }
         }
         // Keep current live; do not call PerformSegmentSwap.
-      } else if (!IsIncomingSegmentEligibleForSwap(*incoming) && !force_swap_for_frame_authority && !force_swap_for_pad_seam && !force_swap_for_content_seam) {
+      } else if (!IsIncomingSegmentEligibleForSwap(*incoming, swap_required_video) && !force_swap_for_frame_authority && !force_swap_for_pad_seam && !force_swap_for_content_seam) {
         // Incoming exists but not eligible, and no force-swap applicable.
         if (last_logged_defer_seam_frame_ != next_seam_frame_) {
           last_logged_defer_seam_frame_ = next_seam_frame_;
@@ -2891,6 +2907,7 @@ void PipelineManager::Run() {
                 << " reason=not_ready"
                 << " incoming_audio_ms=" << incoming->incoming_audio_ms
                 << " incoming_video_frames=" << incoming->incoming_video_frames
+                << " required_depth=" << swap_required_video
                 << " tick=" << session_frame_index;
             Logger::Info(oss.str()); }
         }
@@ -4785,7 +4802,9 @@ void PipelineManager::ArmSegmentPrep(int64_t session_frame_index) {
 }
 
 // =============================================================================
-// EnsureIncomingBReadyForSeam — create B (segment_b_*) before eligibility gate
+// EnsureIncomingBReadyForSeam — create B (segment_b_*) and start fill loop.
+// INV-SEAM-SEGMENT-PREFILL-001: Called every tick once prep result is available,
+// not just at the seam tick.  Idempotent: returns immediately if B exists.
 // =============================================================================
 
 void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index) {
@@ -4805,7 +4824,10 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
     return;
   }
 
-  // CONTENT: take result and create B + StartFilling (so swap never allocates A).
+  // CONTENT: take result and create B + StartFilling.
+  // INV-SEAM-SEGMENT-PREFILL-001: Called every tick when a prep result is
+  // available (not just at the seam tick), giving the fill loop the full
+  // runway to build lookahead depth before the swap gate evaluates.
   if (!seam_preparer_->HasSegmentResult()) {
     return;
   }
@@ -4846,10 +4868,20 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
       Logger::Error(oss.str());
     }
   }
+  // INV-SEAM-SEGMENT-PREFILL-001: Compute runway remaining until the seam tick.
+  int64_t runway_ticks = 0;
+  if (to_seg > 0 &&
+      (to_seg - 1) < static_cast<int32_t>(planned_segment_seam_frames_.size())) {
+    int64_t seam_tick = planned_segment_seam_frames_[to_seg - 1];
+    if (seam_tick > session_frame_index) {
+      runway_ticks = seam_tick - session_frame_index;
+    }
+  }
   { std::ostringstream oss;
-    oss << "[PipelineManager] EnsureIncomingBReadyForSeam B_ready"
+    oss << "[PipelineManager] SEGMENT_PREFILL_STARTED"
+        << " segment=" << to_seg
         << " tick=" << session_frame_index
-        << " to_segment=" << to_seg
+        << " runway_ticks_remaining=" << runway_ticks
         << " segment_b_audio_depth_ms=" << segment_b_audio_buffer_->DepthMs()
         << " segment_b_video_depth_frames=" << segment_b_video_buffer_->DepthFrames();
     Logger::Info(oss.str()); }
@@ -4942,7 +4974,8 @@ void PipelineManager::PrimePadBForSeamOrDie(const char* reason) {
   }
 }
 
-bool PipelineManager::IsIncomingSegmentEligibleForSwap(const IncomingState& incoming) {
+bool PipelineManager::IsIncomingSegmentEligibleForSwap(
+    const IncomingState& incoming, int required_video_frames) {
   // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: PAD segments provide video
   // on-demand via pad_producer_->VideoFrame().  They have no buffer to fill,
   // so the video-depth gate does not apply.  Audio depth still required for
@@ -4950,8 +4983,11 @@ bool PipelineManager::IsIncomingSegmentEligibleForSwap(const IncomingState& inco
   if (incoming.is_pad) {
     return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs;
   }
+  // INV-SEAM-SWAP-READINESS-001: require incoming buffer to reach its
+  // configured target depth (sourced from segment_b_video_buffer_->
+  // TargetDepthFrames() at call site), not the old non-emptiness constant.
   return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs &&
-         incoming.incoming_video_frames >= kMinSegmentSwapVideoFrames;
+         incoming.incoming_video_frames >= required_video_frames;
 }
 
 // =============================================================================

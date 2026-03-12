@@ -232,6 +232,7 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | [invariants/core/scheduling/INV-TIER2-COMPILATION-CONSISTENCY-001.md](invariants/core/scheduling/INV-TIER2-COMPILATION-CONSISTENCY-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
 | INV-RESCHEDULE-FUTURE-GUARD-001 | [invariants/core/scheduling/INV-RESCHEDULE-FUTURE-GUARD-001.md](invariants/core/scheduling/INV-RESCHEDULE-FUTURE-GUARD-001.md) | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
 | INV-RESCHEDULE-CASCADE-TIER2-001 | [invariants/core/scheduling/INV-RESCHEDULE-CASCADE-TIER2-001.md](invariants/core/scheduling/INV-RESCHEDULE-CASCADE-TIER2-001.md) | LAW-DERIVATION, LAW-IMMUTABILITY |
+| INV-CROSS-DAY-CARRY-IN-001 | [invariants/core/scheduling/INV-CROSS-DAY-CARRY-IN-001.md](invariants/core/scheduling/INV-CROSS-DAY-CARRY-IN-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY, LAW-LIVENESS |
 
 ### EPG
 
@@ -362,6 +363,8 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-PAD-VIDEO-READINESS-001 | [invariants/air/INV-PAD-VIDEO-READINESS-001.md](invariants/air/INV-PAD-VIDEO-READINESS-001.md) | Enforcement evidence (derived) — parents: INV-CONTINUOUS-FRAME-AUTHORITY-001, INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 |
 | INV-LAST-SEGMENT-BLOCK-BOUNDARY-001 | [invariants/air/INV-LAST-SEGMENT-BLOCK-BOUNDARY-001.md](invariants/air/INV-LAST-SEGMENT-BLOCK-BOUNDARY-001.md) | Primary — ADR-013 seam classification upstream |
 | INV-CADENCE-SEAM-ADVANCE-001 | [invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md](invariants/air/INV-CADENCE-SEAM-ADVANCE-001.md) | Derived — parent: INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 |
+| INV-SEAM-SEGMENT-PREFILL-001 | [invariants/air/INV-SEAM-SEGMENT-PREFILL-001.md](invariants/air/INV-SEAM-SEGMENT-PREFILL-001.md) | Primary — derives from INV-SEAM-006, INV-SEAM-SEG-003 |
+| INV-SEAM-SWAP-READINESS-001 | [invariants/air/INV-SEAM-SWAP-READINESS-001.md](invariants/air/INV-SEAM-SWAP-READINESS-001.md) | Primary — derives from INV-SEAM-002, INV-VIDEO-LOOKAHEAD-001 |
 | INV-TIME-MODE-EQUIVALENCE-001 | [invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md](invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md) | Primary |
 | INV-VFR-DROP-GUARD-001 | [invariants/air/INV-VFR-DROP-GUARD-001.md](invariants/air/INV-VFR-DROP-GUARD-001.md) | Primary — derives from INV-FPS-RESAMPLE, LAW-LIVENESS |
 | INV-CADENCE-SOURCE-SYNC-001 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — cadence must reflect live source FPS at all output ticks |

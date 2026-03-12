@@ -35,7 +35,8 @@ struct SegmentStartPayload {
   // INV-AIR-SEGMENT-ID-001,002,005: Identity fields
   std::string segment_uuid;
   std::string asset_uuid;
-  std::string segment_type;
+  std::string segment_type_name;    // "content", "filler", "pad", "presentation", etc.
+  std::string asset_uri;            // Asset file path (empty for PAD)
 };
 
 struct SegmentEndPayload {

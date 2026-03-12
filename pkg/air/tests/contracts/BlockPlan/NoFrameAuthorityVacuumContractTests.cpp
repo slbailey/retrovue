@@ -35,7 +35,7 @@ TEST(SwapCommitVideoPreCondition, PadEligibleWithZeroVideoFramesBecauseOnDemand)
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad))
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0))
       << "PAD provides video on-demand; no frame authority vacuum possible";
 }
 
@@ -47,16 +47,17 @@ TEST(SwapCommitVideoPreCondition, PadWithSufficientVideoFramesEligible) {
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad));
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0));
 }
 
 // Content with sufficient audio AND video is eligible; PAD with same depths
 // is also eligible.  Both can provide video — content via buffer, PAD via
 // on-demand producer.
 TEST(SwapCommitVideoPreCondition, ContentAndPadBothEligibleWhenDepthsSufficient) {
+  // INV-SEAM-SWAP-READINESS-001: content requires target depth (15 frames).
   IncomingState content;
   content.incoming_audio_ms = 500;
-  content.incoming_video_frames = 2;
+  content.incoming_video_frames = 15;
   content.is_pad = false;
   content.segment_type = SegmentType::kContent;
 
@@ -66,8 +67,8 @@ TEST(SwapCommitVideoPreCondition, ContentAndPadBothEligibleWhenDepthsSufficient)
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(content));
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad));
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(content, 15));
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0));
 }
 
 // Content with zero video frames is NOT eligible (baseline — content has buffers).
@@ -78,7 +79,7 @@ TEST(SwapCommitVideoPreCondition, ContentWithZeroVideoFramesNotEligible) {
   content.is_pad = false;
   content.segment_type = SegmentType::kContent;
 
-  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(content))
+  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(content, 15))
       << "Content segments must prove video capability via buffer depth";
 }
 
@@ -90,7 +91,7 @@ TEST(SwapCommitVideoPreCondition, PadWithVideoButInsufficientAudioNotEligible) {
   pad.is_pad = true;
   pad.segment_type = SegmentType::kPad;
 
-  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad))
+  EXPECT_FALSE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad, 0))
       << "Audio depth is still required for PAD for continuity at seam";
 }
 

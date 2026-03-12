@@ -225,7 +225,7 @@ TEST_F(AtomicAuthorityTransferTest, PadSeamWithStaleBBuffersMustNotDeferSwap) {
 
   // PAD segments provide video on-demand (pad_producer_->VideoFrame()).
   // The video-depth gate must not apply.
-  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad_state))
+  EXPECT_TRUE(PipelineManager::IsIncomingSegmentEligibleForSwap(pad_state, 0))
       << "PAD segment swap deferred due to video depth gate — "
          "INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001 will fire";
 }
@@ -245,7 +245,7 @@ TEST_F(AtomicAuthorityTransferTest, PadSeamDeferredSwapCausesStaleFrameBleed) {
   pad_state.segment_type = SegmentType::kPad;
 
   const bool eligible =
-      PipelineManager::IsIncomingSegmentEligibleForSwap(pad_state);
+      PipelineManager::IsIncomingSegmentEligibleForSwap(pad_state, 0);
 
   if (!eligible) {
     // Gate deferred the swap → active stays at 1.
