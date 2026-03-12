@@ -1119,13 +1119,16 @@ class ChannelManager:
             return
         self._check_teardown_completion()
 
-        if self.active_producer is None:
+        # Snapshot to avoid TOCTOU race — another thread may clear active_producer
+        # between the None check and the method calls.
+        producer = self.active_producer
+        if producer is None:
             self.runtime_state.producer_status = "stopped"
             self.runtime_state.last_health = "stopped"
             return
 
-        health_status = self.active_producer.health()
-        producer_state: ProducerState = self.active_producer.get_state()
+        health_status = producer.health()
+        producer_state: ProducerState = producer.get_state()
 
         self.runtime_state.last_health = health_status
         self.runtime_state.producer_status = producer_state.status.value

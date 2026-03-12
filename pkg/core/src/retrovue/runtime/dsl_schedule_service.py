@@ -601,10 +601,9 @@ class DslScheduleService:
     def _resolve_cross_day_overlaps(blocks: list[ScheduledBlock]) -> list[ScheduledBlock]:
         """INV-CROSS-DAY-CARRY-IN-001: Defense-in-depth guardrail.
 
-        After all days are compiled with effective_day_open_ms filtering,
-        this method should be a no-op.  If it finds overlaps, the compile-
-        time filtering missed something — log a warning so the root cause
-        can be investigated.
+        After carry-in push-forward at the program-block level, this method
+        should be a no-op.  If it finds overlaps, the push-forward missed
+        something — log a warning so the root cause can be investigated.
 
         Precondition: *blocks* is sorted by start_utc_ms.
         """
@@ -615,12 +614,11 @@ class DslScheduleService:
         for blk in blocks[1:]:
             prev = resolved[-1]
             if blk.start_utc_ms < prev.end_utc_ms:
-                # Should not happen if compile-time filtering is correct
                 logger.warning(
                     "INV-CROSS-DAY-CARRY-IN-001 GUARDRAIL: Cross-day overlap "
-                    "detected at merge time — compile-time filtering should "
+                    "detected at merge time — carry-in push-forward should "
                     "have prevented this. Dropping block %s [%d, %d) "
-                    "subsumed by %s [%d, %d)",
+                    "overlapping %s [%d, %d)",
                     blk.block_id, blk.start_utc_ms, blk.end_utc_ms,
                     prev.block_id, prev.start_utc_ms, prev.end_utc_ms,
                 )
@@ -1243,32 +1241,22 @@ class DslScheduleService:
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
 
+        # INV-CROSS-DAY-CARRY-IN-001: Broadcast days are accounting
+        # constructs.  The schedule is a linked list — each block starts
+        # where the previous one ended.  When a carry-in movie occupies
+        # time past the broadcast day boundary, the first block of the
+        # new day starts at the carry-in end, not the grid boundary.
+        #
+        # Apply carry-in adjustment to program_blocks BEFORE expansion
+        # so that ScheduledBlocks are born with correct start times.
+        if effective_day_open_ms > 0:
+            self._apply_carry_in_push_forward(
+                schedule, effective_day_open_ms, broadcast_day,
+            )
+
         # Expand each program block into segmented blocks
         # (content segments + empty filler placeholders)
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
-
-        # INV-CROSS-DAY-CARRY-IN-001: Remove blocks that start before this
-        # day's effective open time.  These blocks will never air — the
-        # carry-in movie owns that time.  Filter BEFORE persisting so
-        # ScheduleItems/EPG never show phantom blocks.
-        if effective_day_open_ms > 0:
-            before_count = len(blocks)
-            blocks = [b for b in blocks if b.start_utc_ms >= effective_day_open_ms]
-            dropped = before_count - len(blocks)
-            if dropped:
-                logger.info(
-                    "INV-CROSS-DAY-CARRY-IN-001: Removed %d phantom blocks "
-                    "from %s — effective_day_open_ms=%d (carry-in from "
-                    "prior day owns this time)",
-                    dropped, broadcast_day, effective_day_open_ms,
-                )
-                # Also filter program_blocks so ScheduleItems stay consistent
-                schedule["program_blocks"] = [
-                    pb for pb in schedule["program_blocks"]
-                    if int(
-                        datetime.fromisoformat(pb["start_at"]).timestamp() * 1000
-                    ) >= effective_day_open_ms
-                ]
 
         # INV-SCHEDULE-HORIZON-001: Persist segmented blocks alongside
         # program metadata so Tier 2 (Playlog Horizon Daemon) can consume
@@ -1348,6 +1336,78 @@ class DslScheduleService:
             )
 
         return blocks
+
+    @staticmethod
+    def _apply_carry_in_push_forward(
+        schedule: dict,
+        effective_day_open_ms: int,
+        broadcast_day: str,
+    ) -> None:
+        """INV-CROSS-DAY-CARRY-IN-001: Push program blocks forward past the carry-in.
+
+        Broadcast days are accounting constructs.  The schedule is a
+        continuous linked list — each block starts where the previous one
+        ended.  When a carry-in movie extends past the day boundary, blocks
+        that fall entirely within the carry-in window are dropped, and the
+        first surviving block's start_at is pushed forward to the carry-in
+        end.  Subsequent blocks cascade forward to remain contiguous.
+
+        Mutates ``schedule["program_blocks"]`` in-place.
+        """
+        program_blocks = schedule.get("program_blocks", [])
+        if not program_blocks:
+            return
+
+        effective_open_dt = datetime.fromtimestamp(
+            effective_day_open_ms / 1000, tz=timezone.utc,
+        )
+
+        surviving: list[dict] = []
+        pushed = False
+        for pb in program_blocks:
+            pb_start = datetime.fromisoformat(pb["start_at"])
+            pb_end_ms = int(pb_start.timestamp() * 1000) + int(pb["slot_duration_sec"] * 1000)
+
+            if pb_end_ms <= effective_day_open_ms:
+                # Fully subsumed — this block never airs
+                continue
+
+            pb_start_ms = int(pb_start.timestamp() * 1000)
+            if pb_start_ms < effective_day_open_ms:
+                # This block starts before the carry-in ends.
+                # Push it forward so it starts at the carry-in end.
+                # Subsequent blocks cascade via the same push.
+                push_ms = effective_day_open_ms - pb_start_ms
+                pb["start_at"] = effective_open_dt.isoformat()
+                pushed = True
+                logger.info(
+                    "INV-CROSS-DAY-CARRY-IN-001: Pushed block '%s' start "
+                    "%s → %s (+%dms) for broadcast_day=%s",
+                    pb.get("title", "?"),
+                    pb_start.isoformat(), effective_open_dt.isoformat(),
+                    push_ms, broadcast_day,
+                )
+                surviving.append(pb)
+
+                # Cascade: push all subsequent blocks forward by the same amount
+                cursor = effective_open_dt + timedelta(seconds=pb["slot_duration_sec"])
+                continue
+
+            if pushed:
+                # Cascade: push this block forward to maintain contiguity
+                pb["start_at"] = cursor.isoformat()  # type: ignore[possibly-undefined]
+                cursor = cursor + timedelta(seconds=pb["slot_duration_sec"])  # type: ignore[possibly-undefined]
+            surviving.append(pb)
+
+        if len(surviving) < len(program_blocks):
+            logger.info(
+                "INV-CROSS-DAY-CARRY-IN-001: Dropped %d subsumed blocks "
+                "from %s (carry-in owns time before %s)",
+                len(program_blocks) - len(surviving),
+                broadcast_day, effective_open_dt.isoformat(),
+            )
+
+        schedule["program_blocks"] = surviving
 
     def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
         """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.

@@ -243,6 +243,7 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-BLEED-NO-GAP-001 | `TestInvBleedNoGap001` | 11 tests (contiguity, compaction, grid alignment, bleed resolution, day boundary, cascade) | PASS |
 | INV-MARATHON-CROSSMIDNIGHT-001 | `TestInvMarathonCrossmidnight001` | 4 tests (produces blocks, start after 22:00, end resolves next day, fills window) | PASS |
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | `TestInvTier2CompilationConsistency001` | `test_get_block_at_returns_current_compilation_not_stale_txlog`, `test_consecutive_blocks_are_contiguous` | PASS |
+| INV-CROSS-DAY-CARRY-IN-001 | `TestEffectiveDayOpenMs`, `TestPushForward`, `TestCarryInPropagation`, `TestMergeTimeGuardrail` | 20 tests (effective_day_open_ms computation, push-forward contiguity, cascade, subsumed block removal, propagation across empty days, merge-time guardrail defense-in-depth) | PASS |
 
 #### Tier 3 — Runtime and Integration
 

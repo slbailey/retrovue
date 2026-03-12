@@ -160,7 +160,7 @@ schedule:
 
   sunday:
     - start: "14:00"
-    - slots: 5
+      slots: 5
       program: scifi_movies
       progression: random
       bleed: true
