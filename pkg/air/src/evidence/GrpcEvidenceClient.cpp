@@ -163,6 +163,10 @@ proto::EvidenceFromAir GrpcEvidenceClient::ToProto(const EvidenceFromAir& m) {
     if (ExtractInt64(j, "asset_start_frame", &i64_val)) ss->set_asset_start_frame(i64_val);
     if (ExtractInt64(j, "scheduled_duration_ms", &i64_val)) ss->set_scheduled_duration_ms(i64_val);
     if (ExtractBool(j, "join_in_progress", &b_val)) ss->set_join_in_progress(b_val);
+    if (ExtractString(j, "segment_uuid", &s_val)) ss->set_segment_uuid(s_val);
+    if (ExtractString(j, "asset_uuid", &s_val)) ss->set_asset_uuid(s_val);
+    if (ExtractString(j, "segment_type_name", &s_val)) ss->set_segment_type_name(s_val);
+    if (ExtractString(j, "asset_uri", &s_val)) ss->set_asset_uri(s_val);
 
   } else if (m.payload_type == "SEGMENT_END") {
     auto* se = p.mutable_segment_end();
@@ -177,6 +181,9 @@ proto::EvidenceFromAir GrpcEvidenceClient::ToProto(const EvidenceFromAir& m) {
     if (ExtractString(j, "status", &s_val)) se->set_status(s_val);
     if (ExtractString(j, "reason", &s_val)) se->set_reason(s_val);
     if (ExtractUint64(j, "fallback_frames_used", &u64_val)) se->set_fallback_frames_used(u64_val);
+    if (ExtractString(j, "segment_uuid", &s_val)) se->set_segment_uuid(s_val);
+    if (ExtractString(j, "segment_type_name", &s_val)) se->set_segment_type_name(s_val);
+    if (ExtractString(j, "asset_uuid", &s_val)) se->set_asset_uuid(s_val);
 
   } else if (m.payload_type == "BLOCK_FENCE") {
     auto* bf = p.mutable_block_fence();

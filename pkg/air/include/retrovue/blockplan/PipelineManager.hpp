@@ -202,7 +202,10 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Content: requires minimum audio AND video depth.
   // PAD: requires minimum audio depth only (video is on-demand).
   // Pure decision function — no side effects, no logging.
-  static bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming);
+  // INV-SEAM-SWAP-READINESS-001: required_video_frames sourced from
+  // segment_b_video_buffer_->TargetDepthFrames() at call site.
+  static bool IsIncomingSegmentEligibleForSwap(const IncomingState& incoming,
+                                               int required_video_frames);
 
   // INV-RESAMPLE-DETERMINISM-001: Pure function mapping output tick to source frame index.
   // Returns floor(tick * in_num * out_den / (out_num * in_den)) using 128-bit intermediates.
@@ -407,7 +410,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Corrects to a safe value and logs when violated (rate-limited once per block).
   void EnforceNextSeamInvariant(int64_t session_frame_index, const char* reason);
   void ArmSegmentPrep(int64_t session_frame_index);
-  // Ensures B (segment_b_*) is created and StartFilling for to_seg before eligibility gate.
+  // INV-SEAM-SEGMENT-PREFILL-001: Create B (segment_b_*) and start fill loop
+  // for to_seg.  Called every tick once prep result is available — idempotent.
   void EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t session_frame_index);
   // Segment POST-TAKE: swap B into A (content) or PAD transition; dispatches to PerformContentSwap_BtoA or PerformPadTransition.
   void PerformSegmentSwap(int64_t session_frame_index);
