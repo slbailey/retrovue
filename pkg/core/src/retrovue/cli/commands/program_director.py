@@ -8,6 +8,7 @@ is no separate daemon. Single HTTP server, single port.
 """
 
 import logging
+import os
 import typer
 from pathlib import Path
 from retrovue.runtime.program_director import ProgramDirector
@@ -154,12 +155,36 @@ def start(
 
     program_director.start()
 
+    import signal
+    import sys
+    import time
+
+    logger = logging.getLogger("retrovue.director")
+
+    def _handle_signal(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logger.info("Received %s — initiating graceful shutdown", sig_name)
+        program_director.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGHUP, _handle_signal)
+
+    logger.info("ProgramDirector started on port %d (pid=%d)", http_port, os.getpid())
+
     try:
-        import time
-        print(f"ProgramDirector started on port {http_port}")
-        print("Press Ctrl+C to stop...")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        logger.info("Received SIGINT — initiating graceful shutdown")
         program_director.stop()
+    except Exception:
+        logger.critical(
+            "ProgramDirector crashed unexpectedly (pid=%d)", os.getpid(),
+            exc_info=True,
+        )
+        try:
+            program_director.stop()
+        except Exception:
+            pass
+        sys.exit(1)
