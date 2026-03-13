@@ -20,16 +20,31 @@ from .base import BaseEnricher, EnricherConfig, EnricherError
 # ATSC A/85 target (CALM Act, US broadcast standard)
 TARGET_LUFS: float = -24.0
 
+# INV-WIDE-LRA-SUPPLEMENT-001 policy defaults (Section 5 of design doc).
+# Initial defaults for conservative rollout — subject to empirical tuning.
+LRA_THRESHOLD: float = 15.0    # LU; content above this qualifies for supplement
+SUPPLEMENT_SCALE: float = 0.5  # dB of supplement per LU above threshold
+MAX_SUPPLEMENT_DB: float = 6.0  # hard cap on supplement
+
 # Regex to parse integrated loudness from ffmpeg ebur128 stderr
 _INTEGRATED_RE = re.compile(r"I:\s+([-\d.]+)\s+LUFS")
+# Regex to parse LRA from ffmpeg ebur128 stderr (INV-LOUDNESS-LRA-PERSISTENCE-001)
+_LRA_RE = re.compile(r"LRA:\s+([\d.]+)\s+LU")
 
 
-def compute_gain_db(integrated_lufs: float) -> float:
+def compute_gain_db(integrated_lufs: float, *, lra_lu: float | None = None) -> float:
     """Compute loudness normalization gain.
 
     Rule 7: gain_db = target_lufs - integrated_lufs
+    INV-WIDE-LRA-SUPPLEMENT-001: wide-LRA content gets a bounded supplement.
     """
-    return TARGET_LUFS - integrated_lufs
+    base_gain = TARGET_LUFS - integrated_lufs
+
+    if lra_lu is None or lra_lu <= LRA_THRESHOLD:
+        return base_gain
+
+    supplement = min((lra_lu - LRA_THRESHOLD) * SUPPLEMENT_SCALE, MAX_SUPPLEMENT_DB)
+    return base_gain + supplement
 
 
 def get_gain_db_from_probed(probed: dict[str, Any] | None) -> float:
@@ -43,13 +58,20 @@ def get_gain_db_from_probed(probed: dict[str, Any] | None) -> float:
 
 
 def needs_loudness_measurement(probed: dict[str, Any] | None) -> bool:
-    """Check whether an asset needs loudness measurement."""
+    """Check whether an asset needs loudness measurement.
+
+    INV-LOUDNESS-LRA-PERSISTENCE-001 Rule 2: assets with loudness data but
+    missing loudness_range_lu are eligible for re-enrichment.
+    """
     if not probed:
         return True
     loudness = probed.get("loudness")
     if not loudness or not isinstance(loudness, dict):
         return True
-    return "gain_db" not in loudness
+    if "gain_db" not in loudness:
+        return True
+    # Re-enrich if LRA was not captured in a prior measurement
+    return "loudness_range_lu" not in loudness
 
 
 class LoudnessEnricher(BaseEnricher):
@@ -148,13 +170,21 @@ class LoudnessEnricher(BaseEnricher):
             )
 
         integrated_lufs = float(match.group(1))
-        gain_db = compute_gain_db(integrated_lufs)
 
-        return {
+        # INV-LOUDNESS-LRA-PERSISTENCE-001: parse LRA from same Summary block
+        lra_match = _LRA_RE.search(search_text)
+        lra_lu = float(lra_match.group(1)) if lra_match else None
+
+        gain_db = compute_gain_db(integrated_lufs, lra_lu=lra_lu)
+
+        result: dict[str, Any] = {
             "integrated_lufs": integrated_lufs,
             "gain_db": gain_db,
             "target_lufs": TARGET_LUFS,
         }
+        if lra_lu is not None:
+            result["loudness_range_lu"] = lra_lu
+        return result
 
     @classmethod
     def get_config_schema(cls) -> EnricherConfig:

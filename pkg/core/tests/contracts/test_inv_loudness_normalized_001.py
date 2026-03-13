@@ -104,9 +104,9 @@ class TestUnmeasuredAssetEnqueuesMeasurement:
 
     # Tier: 1 | Structural invariant
     def test_no_enqueue_for_measured(self) -> None:
-        """When probed has loudness.gain_db, no measurement needed."""
+        """When probed has loudness.gain_db and loudness_range_lu, no measurement needed."""
         from retrovue.adapters.enrichers.loudness_enricher import needs_loudness_measurement
-        probed = {"loudness": {"integrated_lufs": -20.3, "gain_db": -3.7, "target_lufs": -24.0}}
+        probed = {"loudness": {"integrated_lufs": -20.3, "gain_db": -3.7, "target_lufs": -24.0, "loudness_range_lu": 8.2}}
         assert needs_loudness_measurement(probed) is False
 
 

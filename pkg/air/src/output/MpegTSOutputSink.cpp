@@ -1150,7 +1150,8 @@ void MpegTSOutputSink::MuxLoop() {
         late_frame_count = 0;
       }
 
-      const int64_t pts90k = (frame.metadata.pts * 90000) / 1'000'000;
+      const int64_t video_pts_us = frame.metadata.pts;
+      const int64_t pts90k = (video_pts_us * 90000) / 1'000'000;
       const bool is_real_frame = (frame.metadata.asset_uri.find("pad://") == std::string::npos &&
                                   frame.metadata.asset_uri.find("starvation://") == std::string::npos &&
                                   frame.metadata.asset_uri.find("internal://black") == std::string::npos);
@@ -1183,7 +1184,7 @@ void MpegTSOutputSink::MuxLoop() {
       }
 
       std::cout << "[MpegTSOutputSink] Encoder received frame: real=" << (is_real_frame ? "yes" : "no")
-                << " pts=" << frame.metadata.pts
+                << " pts=" << video_pts_us
                 << " asset=" << frame.metadata.asset_uri << std::endl;
       encoder_->encodeFrame(frame, pts90k);
 

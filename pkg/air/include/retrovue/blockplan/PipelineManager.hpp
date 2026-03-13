@@ -28,6 +28,7 @@
 
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
@@ -356,6 +357,15 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Audio frames from decode are pushed here; the tick loop pops
   // exact per-tick sample counts.  Underflow = hard fault.
   std::unique_ptr<AudioLookaheadBuffer> audio_buffer_;
+
+  // --- Broadcast DRC: dynamic range compression (INV-BROADCAST-DRC-001) ---
+  // Pure signal processor; owned per-session, reset on segment/block boundaries.
+  std::unique_ptr<BroadcastAudioProcessor> broadcast_audio_processor_;
+  // Diagnostic accumulators — PipelineManager owns telemetry, not the processor.
+  float drc_segment_peak_reduction_db_ = 0.0f;
+  float drc_segment_sum_reduction_db_ = 0.0f;
+  int drc_segment_ticks_compressed_ = 0;
+  int drc_segment_ticks_total_ = 0;
 
   // --- Preroll B buffers: filled by preview producer BEFORE fence ---
   // The preview producer's fill thread writes decoded frames here while
