@@ -101,17 +101,20 @@ def _hydrate_compiled_segments(
         dur_ms = int(cs["duration_ms"])
         seg_asset_id = cs.get("asset_id", "")
 
-        # Resolve asset_id → file URI via catalog
+        # Resolve asset_id → file URI and loudness gain via catalog
         asset_uri = ""
+        gain_db = 0.0
         if seg_asset_id and resolver is not None:
             meta = resolver.lookup(seg_asset_id)
             asset_uri = meta.file_uri or ""
-
+            # INV-LOUDNESS-NORMALIZED-001: propagate per-asset loudness gain
+            gain_db = meta.loudness_gain_db
         segments.append(ScheduledSegment(
             segment_type=cs["segment_type"],
             asset_uri=asset_uri,
             asset_start_offset_ms=0,
             segment_duration_ms=dur_ms,
+            gain_db=gain_db,
         ))
         content_total_ms += dur_ms
 

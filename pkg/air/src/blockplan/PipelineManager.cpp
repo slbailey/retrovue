@@ -23,6 +23,7 @@
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
 #include "retrovue/blockplan/LoudnessGain.hpp"
 #include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
@@ -932,6 +933,9 @@ void PipelineManager::Run() {
   audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
       audio_target, buffer::kHouseAudioSampleRate,
       buffer::kHouseAudioChannels, audio_low);
+
+  // INV-BROADCAST-DRC-001: Construct broadcast DRC processor for session lifetime.
+  broadcast_audio_processor_ = std::make_unique<BroadcastAudioProcessor>();
 
   // Track audio ticks and buffer-emitted samples separately from pad samples.
   // Used for exact per-tick sample computation (drift-free rational arithmetic).
@@ -2232,24 +2236,6 @@ void PipelineManager::Run() {
         break;
     }
 #endif
-    {
-      auto wall_now = std::chrono::system_clock::now();
-      int64_t wall_clock_now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          wall_now.time_since_epoch()).count();
-      int64_t expected_emit_time_ms = session_epoch_utc_ms_ +
-          (session_frame_index * 1000 * ctx_->fps.den) / ctx_->fps.num;
-      int64_t delta_ms = wall_clock_now_ms - expected_emit_time_ms;
-      const int repeat_flag = (decision == TakeDecision::kRepeat) ? 1 : 0;
-      std::ostringstream oss;
-      oss << "[PipelineManager] EMIT_FRAME"
-          << " source_frame_index=" << session_frame_index
-          << " repeat=" << repeat_flag
-          << " ptr=" << std::hex << reinterpret_cast<uintptr_t>(chosen_video) << std::dec
-          << " wall_clock_now=" << wall_clock_now_ms
-          << " expected_emit_time=" << expected_emit_time_ms
-          << " delta_ms=" << delta_ms;
-      Logger::Info(oss.str());
-    }
     session_encoder->encodeFrame(*chosen_video, video_pts_90k);
 
     // INV-PACING-SINGLE-AUTHORITY: First video frame diagnostic.
@@ -3300,6 +3286,19 @@ void PipelineManager::Run() {
           if (seg_gain_db != 0.0f) {
             float linear_gain = blockplan::GainDbToLinear(seg_gain_db);
             blockplan::ApplyGainS16(audio_out, linear_gain);
+          }
+        }
+        // INV-BROADCAST-DRC-001: Apply broadcast dynamic range compression.
+        // Positioned after loudness normalization, before encoding.
+        // Per-sample envelope follower with linked stereo peak detection.
+        {
+          float drc_reduction = broadcast_audio_processor_->Process(audio_out);
+          drc_segment_ticks_total_++;
+          if (drc_reduction > 0.0f) {
+            drc_segment_ticks_compressed_++;
+            drc_segment_sum_reduction_db_ += drc_reduction;
+            if (drc_reduction > drc_segment_peak_reduction_db_)
+              drc_segment_peak_reduction_db_ = drc_reduction;
           }
         }
         // PRE_ENCODE_DIAG: Verify audio_out data right before encodeAudioFrame.
@@ -4560,6 +4559,14 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
 void PipelineManager::ComputeSegmentSeamFrames() {
   planned_segment_seam_frames_.clear();
   current_segment_index_ = 0;
+  // INV-BROADCAST-DRC-003: Reset DRC envelope on block activation.
+  if (broadcast_audio_processor_) {
+    broadcast_audio_processor_->Reset();
+    drc_segment_peak_reduction_db_ = 0.0f;
+    drc_segment_sum_reduction_db_ = 0.0f;
+    drc_segment_ticks_compressed_ = 0;
+    drc_segment_ticks_total_ = 0;
+  }
   const int64_t fps_num = ctx_->fps.num;
   const int64_t fps_den = ctx_->fps.den;
   int64_t denom = fps_den * 1000;
@@ -5101,6 +5108,25 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   //
   // 0ms duration trap: segment_duration_ms == 0 => do NOT allow tick+0 seams.
   // Policy: next_seam = min(block_fence_frame_, tick + MIN_DWELL_FRAMES), min 1 frame.
+  // INV-BROADCAST-DRC-003: Log DRC summary for completed segment, then reset.
+  {
+    float avg_reduction = (drc_segment_ticks_compressed_ > 0)
+        ? (drc_segment_sum_reduction_db_ / static_cast<float>(drc_segment_ticks_compressed_))
+        : 0.0f;
+    std::ostringstream oss;
+    oss << "[PipelineManager] BROADCAST_DRC_SEGMENT_SUMMARY"
+        << " segment_index=" << current_segment_index_
+        << " peak_gain_reduction_db=" << drc_segment_peak_reduction_db_
+        << " avg_gain_reduction_db=" << avg_reduction
+        << " ticks_compressed=" << drc_segment_ticks_compressed_
+        << " ticks_total=" << drc_segment_ticks_total_;
+    Logger::Info(oss.str());
+    broadcast_audio_processor_->Reset();
+    drc_segment_peak_reduction_db_ = 0.0f;
+    drc_segment_sum_reduction_db_ = 0.0f;
+    drc_segment_ticks_compressed_ = 0;
+    drc_segment_ticks_total_ = 0;
+  }
   current_segment_index_++;
   {
     const int64_t min_dwell_frames = ctx_->fps.IsValid()

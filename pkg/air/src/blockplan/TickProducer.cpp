@@ -552,6 +552,17 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     primed_frame_.reset();
     block_ct_ms_ = frame.block_ct_ms;  // PTS-derived from PrimeFirstFrame; do not use CtMs(frame_index_)
     frame_index_++;
+
+    // INV-FPS-TICK-PTS: normalize primed frame onto house CT grid.
+    if (output_fps_.num > 0) {
+      const int64_t this_tick_index = frame_index_ - 1;
+      const int64_t tick_pts_us = CtUs(this_tick_index);
+      const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
+      frame.video.metadata.pts = tick_pts_us;
+      frame.video.metadata.dts = tick_pts_us;
+      frame.video.metadata.SetDurationFromUs(output_frame_duration_us);
+    }
+
     diag_emit_count_++;
     if (diag_emit_count_ <= 12) {
       std::ostringstream oss;
@@ -570,6 +581,17 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     buffered_frames_.pop_front();
     block_ct_ms_ = frame.block_ct_ms;
     frame_index_++;
+
+    // INV-FPS-TICK-PTS: normalize primed/buffered frames onto house CT grid.
+    if (output_fps_.num > 0) {
+      const int64_t this_tick_index = frame_index_ - 1;
+      const int64_t tick_pts_us = CtUs(this_tick_index);
+      const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
+      frame.video.metadata.pts = tick_pts_us;
+      frame.video.metadata.dts = tick_pts_us;
+      frame.video.metadata.SetDurationFromUs(output_frame_duration_us);
+    }
+
     diag_emit_count_++;
     if (diag_emit_count_ <= 12) {
       std::ostringstream oss;
@@ -632,6 +654,18 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   // OFF / CADENCE: one decode per output tick.
   auto fd = DecodeNextFrameRaw();
   if (fd) {
+    // INV-FPS-TICK-PTS: normalize all emitted frames (OFF and CADENCE)
+    // onto the house CT grid so mux sees a single authoritative timebase.
+    if (output_fps_.num > 0) {
+      const int64_t this_tick_index = frame_index_ - 1;
+      const int64_t tick_pts_us = CtUs(this_tick_index);
+      const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
+
+      fd->video.metadata.pts = tick_pts_us;
+      fd->video.metadata.dts = tick_pts_us;
+      fd->video.metadata.SetDurationFromUs(output_frame_duration_us);
+    }
+
     diag_emit_count_++;
     if (diag_emit_count_ <= 12) {
       const char* path_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :

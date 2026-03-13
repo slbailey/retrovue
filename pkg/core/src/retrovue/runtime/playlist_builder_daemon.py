@@ -705,6 +705,10 @@ class PlaylistBuilderDaemon:
             else:
                 d["title"] = "BLACK" if seg.segment_type == "pad" else seg.segment_type.upper()
 
+            # INV-LOUDNESS-NORMALIZED-001: persist gain_db when non-zero
+            if seg.gain_db != 0.0:
+                d["gain_db"] = seg.gain_db
+
             # Preserve transition fields if present
             if seg.transition_in != "TRANSITION_NONE":
                 d["transition_in"] = seg.transition_in

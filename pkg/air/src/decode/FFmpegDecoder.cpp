@@ -44,6 +44,7 @@ extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/mem.h>  // av_freep (for av_image_alloc buffer)
 #include <libavutil/log.h>  // For av_log_set_level
+#include <libavutil/opt.h>  // For av_opt_set_double (INV-DOWNMIX-CENTER-BOOST-001)
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 }
@@ -837,6 +838,17 @@ bool FFmpegDecoder::InitializeResampler() {
   // Clean up channel layouts (swr_alloc_set_opts2 copies them)
   av_channel_layout_uninit(&src_ch_layout);
   av_channel_layout_uninit(&dst_ch_layout);
+
+  // INV-DOWNMIX-CENTER-BOOST-001: Boost center channel for dialogue
+  // intelligibility during surround→stereo downmix. Default ITU coefficient
+  // is 0.707 (-3 dB); retro TV aesthetic requires 1.0 (0 dB) so dialogue
+  // is +3 dB louder relative to the L/R surround field.
+  // Only affects surround sources; stereo/mono pass through unchanged.
+  if (src_nb_channels > 2) {
+    av_opt_set_double(swr_ctx_, "center_mix_level", 1.0, 0);
+    std::cout << "[FFmpegDecoder] INV-DOWNMIX-CENTER-BOOST-001: center_mix_level=1.0 (src_channels="
+              << src_nb_channels << ")" << std::endl;
+  }
 
   // Initialize resampler
   if (swr_init(swr_ctx_) < 0) {
