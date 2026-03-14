@@ -1952,6 +1952,62 @@ void PipelineManager::Run() {
         if (store_frame.has_value()) {
           // FIVS hit: emit this frame.
           vbf = std::move(*store_frame);
+
+          // INV-FIVS-PTS-CONSISTENCY: PTS slope consistency check.
+          // Establishes the average PTS delta from the first kSlopeWindow
+          // decoded frames, then verifies subsequent deltas stay within
+          // ±50% of that slope. Detects broken timestamps, mux corruption,
+          // and decoder jumps without flagging valid telecine or VFR content.
+          // Resets on segment boundary so each segment establishes its own slope.
+          // Never alters frame selection or emission.
+          if (vbf.was_decoded) {
+            constexpr int kSlopeWindow = 24;  // ~1 second at 24fps
+
+            // Segment boundary reset: new segment means new media source,
+            // so the established slope is no longer valid.
+            if (vbf.segment_origin_id >= 0 &&
+                vbf.segment_origin_id != pts_drift_last_segment_origin_) {
+              pts_drift_prev_pts_us_ = -1;
+              pts_drift_established_delta_us_ = -1;
+              pts_drift_slope_sum_us_ = 0;
+              pts_drift_slope_count_ = 0;
+              pts_drift_last_segment_origin_ = vbf.segment_origin_id;
+            }
+            const int64_t actual_pts_us = vbf.video.metadata.pts;
+            if (pts_drift_prev_pts_us_ >= 0) {
+              const int64_t delta = actual_pts_us - pts_drift_prev_pts_us_;
+              if (pts_drift_slope_count_ < kSlopeWindow) {
+                // Accumulation phase: gather deltas to establish slope.
+                pts_drift_slope_sum_us_ += delta;
+                pts_drift_slope_count_++;
+                if (pts_drift_slope_count_ == kSlopeWindow) {
+                  pts_drift_established_delta_us_ =
+                      pts_drift_slope_sum_us_ / kSlopeWindow;
+                }
+              } else {
+                // Checking phase: verify delta against established slope.
+                const int64_t tolerance = pts_drift_established_delta_us_ / 2;
+                const int64_t deviation = delta - pts_drift_established_delta_us_;
+                if (std::abs(deviation) > tolerance) {
+                  if (pts_drift_last_log_tick_ < 0 ||
+                      session_frame_index - pts_drift_last_log_tick_ >= 30) {
+                    pts_drift_last_log_tick_ = session_frame_index;
+                    std::ostringstream oss;
+                    oss << "[PipelineManager] PTS_DRIFT_DETECTED"
+                        << " actual_delta_us=" << delta
+                        << " established_delta_us=" << pts_drift_established_delta_us_
+                        << " deviation_us=" << deviation
+                        << " prev_pts_us=" << pts_drift_prev_pts_us_
+                        << " actual_pts_us=" << actual_pts_us
+                        << " asset_uri=" << vbf.asset_uri;
+                    Logger::Info(oss.str());
+                  }
+                }
+              }
+            }
+            pts_drift_prev_pts_us_ = actual_pts_us;
+          }
+
           // Evict old frames — wakes fill thread via space_cv_.
           const int64_t back_margin = 2;
           if (selected_src_this_tick > back_margin)

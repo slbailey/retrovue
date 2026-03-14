@@ -500,6 +500,16 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Bounded escalation: after HOLD_MAX_MS in degraded, switch to standby (slot 'S').
   int64_t degraded_entered_frame_index_ = -1;
   bool degraded_escalated_to_standby_ = false;
+  // INV-FIVS-PTS-CONSISTENCY: PTS slope consistency diagnostic.
+  // Establishes average PTS delta from first kSlopeWindow decoded frames,
+  // then checks subsequent deltas stay within ±50% of that slope.
+  // Resets on segment boundary (segment_origin_id change).
+  int64_t pts_drift_last_log_tick_ = -1;
+  int64_t pts_drift_prev_pts_us_ = -1;
+  int64_t pts_drift_established_delta_us_ = -1;
+  int64_t pts_drift_slope_sum_us_ = 0;
+  int pts_drift_slope_count_ = 0;
+  int32_t pts_drift_last_segment_origin_ = -1;
 };
 
 }  // namespace retrovue::blockplan
