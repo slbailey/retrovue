@@ -31,10 +31,18 @@ static std::atomic<int> g_active_fill_threads{0};
 // Steady-state: audio-below-low may override parking only within this many frames above target.
 static constexpr int kBurstMarginFrames = 5;
 
+// INV-FIVS-HORIZON: Sentinel for "consumer hasn't started" (pre-first-tick).
+// Distinct from negative lookahead (decoder behind consumer).
+// Callers must check for this sentinel explicitly, NOT treat all la < 0 as unknown.
+static constexpr int kLookaheadConsumerUnknown = INT_MIN;
+
 VideoLookaheadBuffer::VideoLookaheadBuffer(int target_depth_frames,
-                                           int low_water_frames)
+                                           int low_water_frames,
+                                           int lookahead_target)
     : target_depth_frames_(target_depth_frames),
       low_water_frames_(low_water_frames),
+      lookahead_target_(lookahead_target > 0 ? lookahead_target : target_depth_frames),
+      frame_store_(static_cast<size_t>(ComputeHardCap(target_depth_frames))),
       hard_cap_frames_(ComputeHardCap(target_depth_frames)) {}
 
 VideoLookaheadBuffer::~VideoLookaheadBuffer() {
@@ -67,6 +75,7 @@ void VideoLookaheadBuffer::StartFilling(
   StopFilling(false);
 
   fill_stop_.store(false, std::memory_order_release);
+  consumer_selected_src_.store(-1, std::memory_order_relaxed);  // INV-FIVS-LOOKAHEAD-001: reset for new fill session
   steady_filling_.store(true, std::memory_order_relaxed);  // INV-BUFFER-HYSTERESIS-001: start filling
   if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
     first_push_to_live_logged_ = false;  // STARTUP_TRACE: log first push of this fill session
@@ -166,6 +175,10 @@ void VideoLookaheadBuffer::StartFilling(
         frames_.pop_front();
         drops_total_++;
       }
+      // FIVS: mirror insert into indexed store for O(1) lookup.
+      if (vf.source_frame_index >= 0) {
+        frame_store_.Insert(vf, vf.source_frame_index);
+      }
       frames_.push_back(std::move(vf));
       total_pushed_++;
       primed_ = true;
@@ -226,10 +239,12 @@ void VideoLookaheadBuffer::StopFilling(bool flush) {
   if (flush) {
     std::lock_guard<std::mutex> lock(mutex_);
     frames_.clear();
+    frame_store_.Clear();
     primed_ = false;
     // total_pushed_ / total_popped_ are cumulative — not reset on flush.
   }
 
+  consumer_selected_src_.store(-1, std::memory_order_relaxed);  // INV-FIVS-LOOKAHEAD-001
   producer_ = nullptr;
   audio_buffer_ = nullptr;
   stop_signal_ = nullptr;
@@ -248,11 +263,13 @@ VideoLookaheadBuffer::StopFillingAsync(bool flush) {
     result.thread = std::move(fill_thread_);
     fill_running_ = false;
   }
+  consumer_selected_src_.store(-1, std::memory_order_relaxed);  // INV-FIVS-LOOKAHEAD-001
   // Bump generation without lock so tick thread never blocks on fill thread's mutex_ (INV-SEAM-001).
   fill_generation_.fetch_add(1, std::memory_order_release);
   if (flush) {
     std::lock_guard<std::mutex> lock(mutex_);
     frames_.clear();
+    frame_store_.Clear();
     primed_ = false;
   }
   const bool thread_detached = result.thread.joinable();
@@ -360,10 +377,6 @@ void VideoLookaheadBuffer::FillLoop() {
   // flow again.
   bool content_gap = false;
 
-  // INV-P10-PIPELINE-FLOW-CONTROL: skip_wait allowed only during bootstrap.
-  // Once we leave bootstrap, skip_wait is forced false for the life of this fill loop.
-  bool skip_wait_latch = true;
-
   { std::ostringstream oss;
     oss << "[FillLoop:" << buffer_label_ << "] ENTER"
         << " input_fps=" << input_fps_.num << "/" << input_fps_.den
@@ -417,55 +430,81 @@ void VideoLookaheadBuffer::FillLoop() {
     // depth >= target (up to burst_cap), so decode can resume without
     // draining to <= target.
     {
-      // INV-P10-PIPELINE-FLOW-CONTROL audit: gate decision instrumentation.
-      int gate_check_depth;
+      // INV-FIVS-LOOKAHEAD-001: Fill thread parking driven by timeline lookahead.
+      // lookahead = LatestIndex - consumer_selected_src.
+      // When lookahead < lookahead_target_, decode more.
+      // When lookahead >= lookahead_target_, park.
+      // Fallback to Size < target when consumer hasn't started (selected_src == -1).
+      int gate_lookahead;
+      int gate_store_size;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        gate_check_depth = static_cast<int>(frames_.size());
+        gate_lookahead = ComputeLookaheadLocked();
+        gate_store_size = static_cast<int>(frame_store_.Size());
       }
       bool is_bootstrap = fill_phase_.load(std::memory_order_relaxed) ==
           static_cast<int>(FillPhase::kBootstrap);
       bool filling_now = steady_filling_.load(std::memory_order_relaxed);
       bool skip_wait = false;
 
-      // INV-P10: In steady phase, never allow skip_wait. Latch is cleared when bootstrap ends.
-      if (!is_bootstrap) {
-        skip_wait_latch = false;
+      // Should the fill thread park?
+      // Memory safety caps always use store Size (not lookahead).
+      // Scheduling decisions use lookahead when consumer position is known.
+      auto should_park_for_lookahead = [&]() -> bool {
+        // Memory safety: always park at hard cap regardless of lookahead.
+        if (gate_store_size >= hard_cap_frames_) return true;
+        if (gate_lookahead == kLookaheadConsumerUnknown) {
+          // INV-FIVS-LOOKAHEAD-STATE-001 R1: Pre-first-tick fallback.
+          return gate_store_size >= target_depth_frames_;
+        }
+        // INV-FIVS-LOOKAHEAD-STATE-001 R3/R4: negative lookahead means
+        // decoder behind — must NOT park. la < target is always true.
+        return gate_lookahead >= lookahead_target_;
+      };
+
+      // AUDIO STALL PROBE: Log fill-thread gate decision every 50 iterations for LIVE buffer.
+      if (buffer_label_ == "LIVE_VIDEO_BUFFER" && total_pushed_ % 50 == 0 && total_pushed_ > 0) {
+        const int probe_audio_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
+        const int probe_audio_low = audio_buffer ? audio_buffer->LowWaterMs() : -1;
+        std::ostringstream oss;
+        oss << "[FillLoop:LIVE_VIDEO_BUFFER] GATE_PROBE"
+            << " iter=" << total_pushed_
+            << " filling_now=" << filling_now
+            << " is_bootstrap=" << is_bootstrap
+            << " lookahead=" << gate_lookahead
+            << " la_target=" << lookahead_target_
+            << " store=" << gate_store_size
+            << " audio_ms=" << probe_audio_ms
+            << " audio_low=" << probe_audio_low
+            << " skip_wait=" << skip_wait;
+        Logger::Info(oss.str());
       }
 
       if (!is_bootstrap && filling_now) {
-        // FILLING path (steady only): park when depth >= target (strict slot-based).
-        int depth;
-        {
-          std::lock_guard<std::mutex> lock(mutex_);
-          depth = static_cast<int>(frames_.size());
-        }
-        if (depth >= target_depth_frames_) {
-          // At or above target: transition to PARKED. No audio-override in steady.
+        // FILLING path (steady only): park when lookahead >= target.
+        if (should_park_for_lookahead()) {
           steady_filling_.store(false, std::memory_order_relaxed);
-          const int audio_depth_ms = audio_buffer ? audio_buffer->DepthMs() : 0;
           { std::ostringstream oss;
             oss << "[FillLoop:" << buffer_label_ << "] PARK"
-                << " video_depth_frames=" << depth
-                << " audio_depth_ms=" << audio_depth_ms;
+                << " lookahead=" << gate_lookahead
+                << " lookahead_target=" << lookahead_target_
+                << " store_size=" << gate_store_size
+                << " audio_depth_ms=" << (audio_buffer ? audio_buffer->DepthMs() : -1);
             Logger::Debug(oss.str()); }
           // Fall through to the condvar path below so we park properly.
         } else {
-          // Below target — may skip condvar only if still in bootstrap (skip_wait_latch).
+          // INV-FIVS-LOOKAHEAD-001: Lookahead below target — burst decode
+          // without parking. The fill thread must decode continuously until
+          // the lookahead window is filled, not one frame per wake cycle.
           skip_wait = true;
         }
       } else if (is_bootstrap) {
-        // Bootstrap: may skip wait when below target (handled by predicate) or when filling.
-        int depth;
-        { std::lock_guard<std::mutex> lock(mutex_); depth = static_cast<int>(frames_.size()); }
-        if (depth < target_depth_frames_ && filling_now) {
-          skip_wait = true;
+        // Bootstrap: skip wait when lookahead below target or store below target.
+        if (gate_lookahead == kLookaheadConsumerUnknown
+                ? gate_store_size < target_depth_frames_
+                : gate_lookahead < lookahead_target_) {
+          if (filling_now) skip_wait = true;
         }
-      }
-
-      // INV-P10: skip_wait is bootstrap-only. In steady, force false.
-      if (!skip_wait_latch) {
-        skip_wait = false;
       }
 
 #if defined(RETROVUE_VERBOSE_FILL)
@@ -473,8 +512,9 @@ void VideoLookaheadBuffer::FillLoop() {
         std::ostringstream oss;
         oss << "FILL_GATE_CHECK this=" << static_cast<const void*>(this)
             << " label=" << buffer_label_
-            << " depth=" << gate_check_depth
-            << " target=" << target_depth_frames_
+            << " lookahead=" << gate_lookahead
+            << " lookahead_target=" << lookahead_target_
+            << " store_size=" << gate_store_size
             << " hard_cap=" << hard_cap_frames_
             << " steady_filling=" << (steady_filling_.load(std::memory_order_relaxed) ? "true" : "false")
             << " fill_stop=" << (fill_stop_.load(std::memory_order_acquire) ? "true" : "false")
@@ -485,20 +525,17 @@ void VideoLookaheadBuffer::FillLoop() {
 
       if (!skip_wait) {
         // PARKED path (or bootstrap): block on condvar.
-        int park_depth;
-        { std::lock_guard<std::mutex> lock(mutex_); park_depth = static_cast<int>(frames_.size()); }
 #if defined(RETROVUE_VERBOSE_FILL)
         {
           std::ostringstream oss;
           oss << "FILL_GATE_PARK this=" << static_cast<const void*>(this)
               << " label=" << buffer_label_
-              << " depth=" << park_depth
-              << " target=" << target_depth_frames_;
+              << " lookahead=" << gate_lookahead
+              << " lookahead_target=" << lookahead_target_
+              << " store_size=" << gate_store_size;
           Logger::Debug(oss.str());
         }
 #endif
-        // Steady state: wait() only — wake on notify_one() (consumer pop) or stop. No timeout, no spin.
-        // Bootstrap: wait_for() with short timeout to re-check audio-gated predicate.
         constexpr auto kParkWaitTimeout = std::chrono::milliseconds(20);
         std::string wake_reason;
         {
@@ -514,10 +551,16 @@ void VideoLookaheadBuffer::FillLoop() {
                 wake_reason = "stop";
                 return true;
               }
-              int depth = static_cast<int>(frames_.size());
-              if (depth >= hard_cap_frames_) return false;
-              if (depth >= bootstrap_cap_frames_) return false;
-              if (depth < bootstrap_target_frames_) {
+              // Memory safety caps: always use store size.
+              const int store_sz = static_cast<int>(frame_store_.Size());
+              if (store_sz >= hard_cap_frames_) return false;
+              if (store_sz >= bootstrap_cap_frames_) return false;
+              // INV-FIVS-LOOKAHEAD-001: scheduling uses lookahead.
+              const int la = ComputeLookaheadLocked();
+              const bool need_more = (la == kLookaheadConsumerUnknown)
+                  ? store_sz < bootstrap_target_frames_
+                  : la < lookahead_target_;
+              if (need_more) {
                 wake_reason = "bootstrap";
                 return true;
               }
@@ -528,7 +571,7 @@ void VideoLookaheadBuffer::FillLoop() {
               return false;
             });
           } else {
-            // Steady: predicate is fill_stop || frames_.size() < target || audio below low-water.
+            // Steady: predicate uses lookahead for scheduling, Size for memory cap.
             space_cv_.wait_for(lock, std::chrono::milliseconds(100), [this, stop_signal, audio_buffer, &wake_reason] {
               bool stopping = fill_stop_.load(std::memory_order_acquire) ||
                   (stop_signal && stop_signal->load(std::memory_order_acquire));
@@ -536,23 +579,35 @@ void VideoLookaheadBuffer::FillLoop() {
                 wake_reason = "stop";
                 return true;
               }
-              const int depth = static_cast<int>(frames_.size());
-              if (depth < target_depth_frames_) {
+              // INV-FIVS-LOOKAHEAD-STATE-001: wake when lookahead drops below target.
+              // Negative lookahead (decoder behind) MUST wake — not size fallback.
+              const int la = ComputeLookaheadLocked();
+              const bool need_more = (la == kLookaheadConsumerUnknown)
+                  ? static_cast<int>(frame_store_.Size()) < target_depth_frames_
+                  : la < lookahead_target_;
+              if (need_more) {
                 steady_filling_.store(true, std::memory_order_relaxed);
                 { std::ostringstream oss;
                   oss << "[FillLoop:" << buffer_label_ << "] UNPARK"
-                      << " video_depth_frames=" << depth
+                      << " lookahead=" << la
+                      << " lookahead_target=" << lookahead_target_
+                      << " store_size=" << frame_store_.Size()
                       << " audio_depth_ms=" << (audio_buffer ? audio_buffer->DepthMs() : -1);
                   Logger::Debug(oss.str()); }
-                wake_reason = "space";
+                wake_reason = "lookahead";
                 return true;
               }
-              // INV-AUDIO-LIVENESS-001: When video is full but audio is below
+              // INV-AUDIO-LIVENESS-001: When video is ahead but audio is below
               // low-water, wake to decode for audio (video frame will be dropped).
-              if (audio_buffer && depth < hard_cap_frames_) {
+              // Set steady_filling_ so the fill thread enters burst mode and
+              // keeps decoding until audio is above low water (not one frame per
+              // condvar timeout).
+              const int store_sz = static_cast<int>(frame_store_.Size());
+              if (audio_buffer && store_sz < hard_cap_frames_) {
                 const int audio_ms = audio_buffer->DepthMs();
                 const int low_ms = audio_buffer->LowWaterMs();
                 if (audio_ms < low_ms) {
+                  steady_filling_.store(true, std::memory_order_relaxed);
                   wake_reason = "audio_liveness";
                   return true;
                 }
@@ -561,10 +616,13 @@ void VideoLookaheadBuffer::FillLoop() {
             });
           }
         }
-        int depth;
+        // Post-wake diagnostics.
+        int post_lookahead;
+        int post_store_size;
         {
           std::lock_guard<std::mutex> lock(mutex_);
-          depth = static_cast<int>(frames_.size());
+          post_lookahead = ComputeLookaheadLocked();
+          post_store_size = static_cast<int>(frame_store_.Size());
         }
 #if defined(RETROVUE_VERBOSE_FILL)
         if (!wake_reason.empty()) {
@@ -572,9 +630,9 @@ void VideoLookaheadBuffer::FillLoop() {
           std::ostringstream oss;
           oss << "FILL_GATE_WAKE this=" << static_cast<const void*>(this)
               << " label=" << buffer_label_
-              << " depth=" << depth
-              << " target=" << target_depth_frames_
-              << " hard_cap=" << hard_cap_frames_
+              << " lookahead=" << post_lookahead
+              << " lookahead_target=" << lookahead_target_
+              << " store_size=" << post_store_size
               << " audio_ms=" << audio_ms
               << " steady=" << (steady_filling_.load(std::memory_order_relaxed) ? "true" : "false")
               << " skip_wait=false fill_stop=" << (fill_stop_.load(std::memory_order_acquire) ? "true" : "false")
@@ -582,16 +640,36 @@ void VideoLookaheadBuffer::FillLoop() {
           Logger::Debug(oss.str());
         }
 #endif
-        // INV-AUDIO-LIVENESS-001: If we woke from wait and video is still full with audio low,
-        // this cycle we decode for audio only and drop the video frame.
+        // INV-AUDIO-LIVENESS-001: If we woke from wait and video lookahead is still
+        // sufficient with audio low, decode for audio only (drop video frame).
         if (!skip_wait && audio_buffer) {
-          int d;
-          { std::lock_guard<std::mutex> lock(mutex_); d = static_cast<int>(frames_.size()); }
+          const bool video_ahead = (post_lookahead == kLookaheadConsumerUnknown)
+              ? post_store_size >= target_depth_frames_
+              : post_lookahead >= lookahead_target_;
           const int a_ms = audio_buffer->DepthMs();
           const int low_ms = audio_buffer->LowWaterMs();
-          if (d >= target_depth_frames_ && a_ms < low_ms)
+          if (video_ahead && a_ms < low_ms)
             drop_video_this_cycle = true;
         }
+
+        // AUDIO STALL PROBE: Log post-wake state for LIVE buffer (rate-limited).
+        if (buffer_label_ == "LIVE_VIDEO_BUFFER" && !skip_wait) {
+          static int64_t probe_count = 0;
+          if (++probe_count <= 200 || probe_count % 100 == 0) {
+            const int a_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
+            std::ostringstream oss;
+            oss << "[FillLoop:LIVE_VIDEO_BUFFER] WAKE_PROBE"
+                << " wake_reason=" << wake_reason
+                << " skip_wait=" << skip_wait
+                << " drop_video=" << drop_video_this_cycle
+                << " post_la=" << post_lookahead
+                << " post_store=" << post_store_size
+                << " audio_ms=" << a_ms
+                << " filling_now=" << steady_filling_.load(std::memory_order_relaxed);
+            Logger::Info(oss.str());
+          }
+        }
+
         if (fill_stop_.load(std::memory_order_acquire) ||
             (stop_signal && stop_signal->load(std::memory_order_acquire))) {
           exit_reason = fill_stop_.load(std::memory_order_acquire)
@@ -602,12 +680,14 @@ void VideoLookaheadBuffer::FillLoop() {
 #ifdef RETROVUE_DEBUG_BOOTSTRAP
         if (fill_phase_.load(std::memory_order_relaxed) ==
             static_cast<int>(FillPhase::kBootstrap)) {
-          int d = static_cast<int>(frames_.size());
+          int la = ComputeLookaheadLocked();
+          int sz = static_cast<int>(frame_store_.Size());
           int a_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
           { std::ostringstream oss;
             oss << "[FillLoop:" << buffer_label_ << "] BOOTSTRAP_WAKE"
                 << " bootstrap_epoch_ms=" << bootstrap_epoch_ms_
-                << " video_depth=" << d
+                << " lookahead=" << la
+                << " store_size=" << sz
                 << " bootstrap_target=" << bootstrap_target_frames_
                 << " cap=" << bootstrap_cap_frames_
                 << " audio_depth_ms=" << a_ms
@@ -616,31 +696,21 @@ void VideoLookaheadBuffer::FillLoop() {
         }
 #endif
       } else {
-        // Proceeding without waiting (skip_wait). INV-P10: This must only happen in bootstrap.
-        if (!skip_wait_latch) {
-          std::ostringstream oss;
-          oss << "FILL_THREAD_LIFECYCLE_VIOLATION reason=skip_wait_in_steady"
-              << " this=" << static_cast<const void*>(this)
-              << " label=" << buffer_label_
-              << " depth=" << gate_check_depth
-              << " target=" << target_depth_frames_;
-          Logger::Error(oss.str());
-        } else {
+        // INV-FIVS-LOOKAHEAD-001: Burst decode — skip_wait because lookahead < target.
+        // The fill thread decodes continuously until the lookahead window is filled.
 #if defined(RETROVUE_VERBOSE_FILL)
+        {
           const int audio_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
           std::ostringstream oss;
-          oss << "FILL_GATE_WAKE this=" << static_cast<const void*>(this)
+          oss << "FILL_BURST_DECODE this=" << static_cast<const void*>(this)
               << " label=" << buffer_label_
-              << " depth=" << gate_check_depth
-              << " target=" << target_depth_frames_
-              << " hard_cap=" << hard_cap_frames_
-              << " audio_ms=" << audio_ms
-              << " steady=" << (steady_filling_.load(std::memory_order_relaxed) ? "true" : "false")
-              << " skip_wait=true fill_stop=" << (fill_stop_.load(std::memory_order_acquire) ? "true" : "false")
-              << " reason=skip_wait";
+              << " lookahead=" << gate_lookahead
+              << " lookahead_target=" << lookahead_target_
+              << " store_size=" << gate_store_size
+              << " audio_ms=" << audio_ms;
           Logger::Debug(oss.str());
-#endif
         }
+#endif
       }
       // MEM_WATCHDOG: rate-limited — disabled to reduce log volume.
       (void)last_fill_log_;
@@ -678,13 +748,17 @@ void VideoLookaheadBuffer::FillLoop() {
     // (pointer rotation).  No decoder lifecycle work happens on this thread.
     if (should_decode) {
 #if defined(RETROVUE_VERBOSE_FILL)
-      int allow_depth;
-      { std::lock_guard<std::mutex> lock(mutex_); allow_depth = static_cast<int>(frames_.size()); }
+      int allow_lookahead;
+      int allow_store_size;
+      { std::lock_guard<std::mutex> lock(mutex_);
+        allow_lookahead = ComputeLookaheadLocked();
+        allow_store_size = static_cast<int>(frame_store_.Size()); }
       {
         std::ostringstream oss;
         oss << "FILL_GATE_ALLOW this=" << static_cast<const void*>(this)
             << " label=" << buffer_label_
-            << " depth=" << allow_depth;
+            << " lookahead=" << allow_lookahead
+            << " store_size=" << allow_store_size;
         Logger::Debug(oss.str());
       }
 #endif
@@ -693,7 +767,7 @@ void VideoLookaheadBuffer::FillLoop() {
       auto decode_end = std::chrono::steady_clock::now();
       if (fd) {
         content_gap = false;
-        // Record decode latency (separate lock scope from frame push).
+        // Record decode latency + FIVS stall diagnostics.
         {
           auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
               decode_end - decode_start).count();
@@ -701,7 +775,26 @@ void VideoLookaheadBuffer::FillLoop() {
           decode_latency_us_[latency_ring_pos_] = latency_us;
           latency_ring_pos_ = (latency_ring_pos_ + 1) % kLatencyRingSize;
           if (latency_ring_count_ < kLatencyRingSize) latency_ring_count_++;
+          diag_last_trygetframe_time_ = decode_end;
         }
+
+        // FIVS STALL PROBE: Log every TryGetFrame return when consumer is ahead of decoder.
+        {
+          const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
+          if (sel >= 0 && fd->source_frame_index >= 0 && sel > fd->source_frame_index) {
+            auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                decode_end - decode_start).count();
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] STALL_DECODE"
+                << " returned_src_idx=" << fd->source_frame_index
+                << " consumer_sel=" << sel
+                << " gap=" << (fd->source_frame_index - sel)
+                << " decode_us=" << latency_us
+                << " will_insert=" << (fd->source_frame_index >= 0 ? "Y" : "N");
+            Logger::Info(oss.str());
+          }
+        }
+
         // Cache for cadence repeats and hold-last.
         last_decoded = fd->video;  // copy to cache
         last_decoded_source_frame_index = fd->source_frame_index;
@@ -721,8 +814,46 @@ void VideoLookaheadBuffer::FillLoop() {
 
         // Push decoded audio to AudioLookaheadBuffer (generation-gated).
         if (audio_buffer) {
+          int64_t audio_samples_this_decode = 0;
+          int audio_frames_this_decode = 0;
           for (auto& af : fd->audio) {
+            audio_samples_this_decode += af.nb_samples;
+            audio_frames_this_decode++;
+            // AV_DETAIL_PROBE: Per-audio-frame detail (first 60 decodes).
+            {
+              static int64_t detail_count = 0;
+              if (++detail_count <= 60) {
+                std::ostringstream oss;
+                oss << "[FillLoop:" << buffer_label_ << "] AV_AUDIO_DETAIL"
+                    << " src_idx=" << fd->source_frame_index
+                    << " af_idx=" << audio_frames_this_decode
+                    << " nb_samples=" << af.nb_samples
+                    << " sample_rate=" << af.sample_rate
+                    << " channels=" << af.channels
+                    << " data_bytes=" << af.data.size();
+                Logger::Info(oss.str());
+              }
+            }
             audio_buffer->Push(std::move(af), my_audio_gen);
+          }
+          // AV_SYNC_PROBE: Log audio production rate vs video position.
+          {
+            static int64_t av_probe_count = 0;
+            if (++av_probe_count <= 30 || av_probe_count % 200 == 0) {
+              const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
+              std::ostringstream oss;
+              oss << "[FillLoop:" << buffer_label_ << "] AV_SYNC_PROBE"
+                  << " src_idx=" << fd->source_frame_index
+                  << " consumer_sel=" << sel
+                  << " gap=" << (fd->source_frame_index - sel)
+                  << " audio_frames=" << audio_frames_this_decode
+                  << " audio_samples=" << audio_samples_this_decode
+                  << " audio_depth_ms=" << audio_buffer->DepthMs()
+                  << " drop_video=" << drop_video_this_cycle
+                  << " total_pushed=" << audio_buffer->TotalSamplesPushed()
+                  << " total_popped=" << audio_buffer->TotalSamplesPopped();
+              Logger::Info(oss.str());
+            }
           }
         }
       } else if (have_last_decoded) {
@@ -765,10 +896,22 @@ void VideoLookaheadBuffer::FillLoop() {
     }
 
     // INV-AUDIO-LIVENESS-001: When video was full but we decoded for audio only,
-    // push audio (already done above) but do not enqueue video — drop frame to avoid unbounded growth.
+    // push audio (already done above) but do not enqueue video into deque — drop deque frame
+    // to avoid unbounded growth.
+    // INV-FIVS-LOOKAHEAD-STATE-001: FIVS insert must ALWAYS happen regardless of
+    // drop_video_this_cycle. The indexed store needs every source_frame_index for
+    // O(1) lookup. Dropping from FIVS creates permanent gaps that cause FIVS_MISS.
     if (drop_video_this_cycle) {
       decode_continued_for_audio_while_video_full_.fetch_add(1, std::memory_order_relaxed);
-      // Skip frame push; primed_ and buffer depth unchanged.
+      // Still insert into FIVS — the indexed store must have every frame.
+      if (vf.source_frame_index >= 0) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        frame_store_.Insert(vf, vf.source_frame_index);
+        diag_insert_ring_[diag_insert_ring_pos_] = vf.source_frame_index;
+        diag_insert_ring_pos_ = (diag_insert_ring_pos_ + 1) % kDiagInsertRingSize;
+        diag_insert_ring_count_++;
+      }
+      // Skip deque push; primed_ and deque depth unchanged.
     } else {
       // STARTUP_TRACE: First push from FillLoop (when no primed frame was pushed in StartFilling).
       if (buffer_label_ == "LIVE_VIDEO_BUFFER" && !first_push_to_live_logged_) {
@@ -793,8 +936,30 @@ void VideoLookaheadBuffer::FillLoop() {
         frames_.pop_front();
         drops_total_++;
       }
+      // FIVS: mirror insert into indexed store for O(1) lookup.
+      if (vf.source_frame_index >= 0) {
+        frame_store_.Insert(vf, vf.source_frame_index);
+        // FIVS stall diag: record inserted index into ring.
+        diag_insert_ring_[diag_insert_ring_pos_] = vf.source_frame_index;
+        diag_insert_ring_pos_ = (diag_insert_ring_pos_ + 1) % kDiagInsertRingSize;
+        diag_insert_ring_count_++;
+      }
       frames_.push_back(std::move(vf));
       total_pushed_++;
+      // INV-FIVS-LOOKAHEAD-001: Diagnostic every 100 frames.
+      if (total_pushed_ % 100 == 0) {
+        const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
+        const int64_t latest = frame_store_.LatestIndex();
+        const int la = (sel >= 0 && latest >= 0) ? static_cast<int>(latest - sel) : -1;
+        std::ostringstream oss;
+        oss << "[FillLoop:" << buffer_label_ << "] FIVS_LOOKAHEAD_STATUS"
+            << " latest_index=" << latest
+            << " consumer_selected_src=" << sel
+            << " lookahead=" << la
+            << " store_size=" << frame_store_.Size()
+            << " total_pushed=" << total_pushed_;
+        Logger::Info(oss.str());
+      }
 #if defined(RETROVUE_VERBOSE_FILL)
       {
         const int depth_after_push = static_cast<int>(frames_.size());
@@ -878,12 +1043,89 @@ void VideoLookaheadBuffer::DiscardFront() {
 }
 
 // =============================================================================
+// FIVS: Indexed Access (Frame-Indexed Video Store)
+// =============================================================================
+
+std::optional<VideoBufferFrame> VideoLookaheadBuffer::GetByIndex(int64_t source_frame_index) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const VideoBufferFrame* ptr = frame_store_.Get(source_frame_index);
+  if (ptr) return *ptr;  // Copy under lock — safe from concurrent fill-thread mutations.
+  return std::nullopt;
+}
+
+void VideoLookaheadBuffer::EvictBelow(int64_t min_index) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const size_t before = frame_store_.Size();
+    frame_store_.EvictBelow(min_index);
+    if (frame_store_.Size() < before) {
+      // FIVS eviction created space — wake fill thread.
+      space_cv_.notify_one();
+    }
+  }
+}
+
+size_t VideoLookaheadBuffer::IndexedStoreSize() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return frame_store_.Size();
+}
+
+void VideoLookaheadBuffer::UpdateConsumerPosition(int64_t selected_src) {
+  consumer_selected_src_.store(selected_src, std::memory_order_relaxed);
+  {
+    // FIVS-EVICTION-SAFETY: Update the consumer floor so auto-eviction
+    // never removes frames the consumer still needs.
+    std::lock_guard<std::mutex> lock(mutex_);
+    frame_store_.SetConsumerFloor(selected_src);
+  }
+  // INV-FIVS-LOOKAHEAD-001: Wake the fill thread so it tracks consumer
+  // advancement. Without this, GetByIndex-based consumption (unlike
+  // TryPopFrame) never notifies space_cv_, leaving the fill thread parked
+  // on the 100ms condvar timeout — too slow to sustain audio.
+  space_cv_.notify_one();
+}
+
+int VideoLookaheadBuffer::ComputeLookaheadLocked() const {
+  const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
+  if (sel < 0) return kLookaheadConsumerUnknown;  // Consumer hasn't started yet
+  const int64_t latest = frame_store_.LatestIndex();
+  if (latest < 0) return 0;  // Store empty, consumer started → lookahead = 0
+  return static_cast<int>(latest - sel);
+}
+
+// =============================================================================
+// FIVS Stall Diagnostics
+// =============================================================================
+
+VideoLookaheadBuffer::FivsDiag VideoLookaheadBuffer::SnapshotFivsDiag() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  FivsDiag d;
+  d.store_min_index = frame_store_.OldestIndex();
+  d.store_max_index = frame_store_.LatestIndex();
+  d.store_size = frame_store_.Size();
+  auto now = std::chrono::steady_clock::now();
+  if (diag_last_trygetframe_time_.time_since_epoch().count() > 0) {
+    d.last_trygetframe_age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - diag_last_trygetframe_time_).count();
+  }
+  d.last_inserted_count = std::min(diag_insert_ring_count_, kDiagInsertRingSize);
+  // Copy ring in insertion order (oldest first).
+  for (int i = 0; i < d.last_inserted_count; i++) {
+    int idx = (diag_insert_ring_pos_ - d.last_inserted_count + i + kDiagInsertRingSize)
+              % kDiagInsertRingSize;
+    d.last_inserted[i] = diag_insert_ring_[idx];
+  }
+  return d;
+}
+
+// =============================================================================
 // Observability
 // =============================================================================
 
 int VideoLookaheadBuffer::DepthFrames() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  const int depth = static_cast<int>(frames_.size());
+  // Phase 3: FIVS store is authoritative for video depth.
+  const int depth = static_cast<int>(frame_store_.Size());
   if (depth > hard_cap_frames_) {
     std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] INV-VIDEO-BOUNDED VIOLATION"
@@ -928,10 +1170,12 @@ bool VideoLookaheadBuffer::IsPrimed() const {
 void VideoLookaheadBuffer::Reset() {
   StopFilling(false);
   steady_filling_.store(true, std::memory_order_relaxed);  // INV-BUFFER-HYSTERESIS-001
+  consumer_selected_src_.store(-1, std::memory_order_relaxed);  // INV-FIVS-LOOKAHEAD-001
   decode_continued_for_audio_while_video_full_.store(0, std::memory_order_relaxed);
   decode_parked_video_full_audio_low_.store(0, std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(mutex_);
   frames_.clear();
+  frame_store_.Clear();
   total_pushed_ = 0;
   total_popped_ = 0;
   drops_total_ = 0;
@@ -947,7 +1191,8 @@ void VideoLookaheadBuffer::Reset() {
 
 bool VideoLookaheadBuffer::IsBelowLowWater() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return primed_ && static_cast<int>(frames_.size()) < low_water_frames_;
+  // Phase 3: FIVS store is authoritative for video depth.
+  return primed_ && static_cast<int>(frame_store_.Size()) < low_water_frames_;
 }
 
 void VideoLookaheadBuffer::SetAudioBoost(bool enable) {
@@ -972,7 +1217,7 @@ void VideoLookaheadBuffer::EnterBootstrap(int bootstrap_target_frames,
   bootstrap_cap_frames_ = std::min(bootstrap_cap_frames, hard_cap_frames_);
   bootstrap_min_audio_ms_ = min_audio_ms;
   bootstrap_epoch_ms_ = bootstrap_epoch_ms;
-  int vd = static_cast<int>(frames_.size());
+  int vd = static_cast<int>(frame_store_.Size());
   int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] EnterBootstrap"
@@ -980,7 +1225,7 @@ void VideoLookaheadBuffer::EnterBootstrap(int bootstrap_target_frames,
         << " target=" << bootstrap_target_frames
         << " cap=" << bootstrap_cap_frames
         << " min_audio_ms=" << min_audio_ms
-        << " video_depth=" << vd
+        << " store_size=" << vd
         << " audio_depth_ms=" << a_ms;
     Logger::Info(oss.str()); }
   fill_phase_.store(static_cast<int>(FillPhase::kBootstrap),
@@ -990,12 +1235,12 @@ void VideoLookaheadBuffer::EnterBootstrap(int bootstrap_target_frames,
 }
 
 void VideoLookaheadBuffer::EndBootstrap() {
-  int vd = static_cast<int>(frames_.size());
+  int vd = static_cast<int>(frame_store_.Size());
   int a_ms = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
   { std::ostringstream oss;
     oss << "[VideoBuffer:" << buffer_label_ << "] EndBootstrap"
         << " bootstrap_epoch_ms=" << bootstrap_epoch_ms_
-        << " video_depth=" << vd
+        << " store_size=" << vd
         << " audio_depth_ms=" << a_ms;
     Logger::Info(oss.str()); }
   fill_phase_.store(static_cast<int>(FillPhase::kSteady),

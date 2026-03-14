@@ -257,6 +257,7 @@ Zero-decode-latency priming at block boundaries. See [../../docs/contracts/INVAR
 | **INV-BLOCK-PRIME-006** | Priming is event-driven — executes after AssignBlock, no polling or timers | `ProducerPreloader` | Coordination |
 | **INV-BLOCK-PRIME-007** | Primed frame metadata integrity — PTS, audio, asset_uri match normal decode | `TickProducer` | Coordination |
 | **INV-AUDIO-PRIME-002** | Primed frame must carry ≥1 audio packet when asset has audio; ready for seam not declared until audio depth threshold satisfied. Contract: [INV-AUDIO-PRIME-002.md](../../docs/contracts/INVARIANTS.md#inv-audio-prime-002-prime-frame-must-carry-audio). | `TickProducer` / `VideoLookaheadBuffer` | Coordination |
+| **INV-AUDIO-DRAIN-001** | Every decode cycle must drain ALL pending audio frames from the decoder; no artificial cap. Safety fuse (64) logs violation if hit. Contract: [INV-AUDIO-DRAIN-001.md](playout/INV-AUDIO-DRAIN-001.md). Test: `test_full_drain_no_residual`, `test_variable_audio_per_decode` | `TickProducer` | Semantic |
 
 ### Deterministic Underflow and Tick Observability (INV-DETERMINISTIC-UNDERFLOW-AND-TICK-OBSERVABILITY)
 
@@ -372,6 +373,45 @@ Logging requirements, stall diagnostics, drop policies, safety rails, test-only 
 | INV-P8-AUDIO-PRIME-STALL | Diagnostic: log if video dropped too long waiting for audio prime | Diagnostic |
 | INV-P8-SWITCH-TIMING | Core: switch at boundary; log if pending after boundary; violation log if complete after boundary | Diagnostic |
 | INV-P10-FRAME-DROP-POLICY | Frame drops forbidden except under explicit conditions; must log INV-P10-FRAME-DROP | Diagnostic |
+
+---
+
+## Frame-Indexed Video Store (FIVS) Invariants
+
+Source: [frame_indexed_video_store.md](playout/frame_indexed_video_store.md)
+
+| ID | One-line | Owner | Type | Violation | Diagnostic | Test |
+|----|----------|-------|------|-----------|------------|------|
+| **FIVS-ALIGN** | actual_src_emitted ≤ selected_src; store never returns frame with index > requested | `PipelineManager` | Semantic | Emitted frame index exceeds scheduler's selected_src | `FRAME_STORE_ALIGN_VIOLATION` | `test_no_future_frame_emission` |
+| **FIVS-STORAGE-BY-INDEX** | Frames stored/retrieved by source_frame_index; one frame per index | `FrameIndexedVideoStore` | Semantic | Retrieval by non-index key or multiple frames per index | `FRAME_STORE_INSERT` | `test_retrieve_exact_frame`, `test_out_of_order_insert_retrieve` |
+| **FIVS-RETRIEVAL-NON-DESTRUCTIVE** | Retrieving one index does not remove other frames (except eviction) | `FrameIndexedVideoStore` | Semantic | Get(N) causes loss of frame M≠N without eviction | `FRAME_STORE_HIT` | `test_retrieval_does_not_remove_others` |
+| **FIVS-DUPLICATE-POLICY** | Duplicate index insertion replaces existing frame (deterministic) | `FrameIndexedVideoStore` | Semantic | Non-deterministic duplicate handling | `FRAME_STORE_DUPLICATE` | `test_duplicate_index_policy` |
+| **FIVS-EVICTION-SAFETY** | Eviction never removes a frame with index ≥ minimum requestable | `FrameIndexedVideoStore` | Semantic | Evicted frame still requestable by scheduler | `FRAME_STORE_EVICT` | `test_eviction_never_removes_requestable` |
+| **FIVS-MONOTONIC-VISIBILITY** | Once inserted, a frame is retrievable until explicitly evicted | `FrameIndexedVideoStore` | Semantic | Frame disappears without eviction | `FRAME_STORE_MISS` | `test_retrieve_after_eviction_boundary` |
+
+### FIVS Lookahead Refill
+
+| ID | One-line | Owner | Type | Violation | Diagnostic | Test |
+|----|----------|-------|------|-----------|------------|------|
+| **INV-FIVS-LOOKAHEAD-001** | Fill thread parks when `LatestIndex - consumer_selected_src >= lookahead_target`; refill is timeline-driven, not size-driven | `VideoLookaheadBuffer` | Scheduling | Fill thread parks/wakes based on store size instead of timeline lookahead | `FILL_GATE_CHECK`, `PARK`, `UNPARK` | `FIVSLookaheadContract.*` (10 tests) |
+
+Source: INV-FIVS-LOOKAHEAD-001 in `VideoLookaheadBuffer.hpp` / `VideoLookaheadBuffer.cpp`
+
+### FIVS Decode Horizon
+
+| ID | One-line | Owner | Type | Violation | Diagnostic | Test |
+|----|----------|-------|------|-----------|------------|------|
+| **INV-FIVS-HORIZON** | `highest_decoded_frame >= consumer_requested_frame + lookahead_target` — decoder must stay ahead of consumer by at least lookahead_target frames | `VideoLookaheadBuffer` | Semantic | Frame repetition, freeze/jump playback, negative frame_gap | `FIVS_LOOKAHEAD_STATUS`, `FIVS_HORIZON_VIOLATION` | `FIVSHorizonContract.*` (4 tests) |
+
+Source: [fivs_decode_horizon.md](playout/fivs_decode_horizon.md)
+
+### FIVS Lookahead State Distinction
+
+| ID | One-line | Owner | Type | Violation | Diagnostic | Test |
+|----|----------|-------|------|-----------|------------|------|
+| **INV-FIVS-LOOKAHEAD-STATE-001** | Fill loop must distinguish `consumer_not_started` from `decoder_behind`; negative lookahead must trigger immediate decode, not size-based fallback | `VideoLookaheadBuffer` | Semantic | Negative lookahead treated as unknown → size fallback → fill thread parks while decoder behind → horizon collapse | `PARK`, `UNPARK`, `FIVS_LOOKAHEAD_STATUS` | `FIVSLookaheadStateContract.*` (4 tests) |
+
+Source: [fivs_lookahead_state.md](playout/fivs_lookahead_state.md)
 
 ---
 
