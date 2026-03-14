@@ -1575,6 +1575,7 @@ void PipelineManager::Run() {
     TakeDecision decision = TakeDecision::kPad;
     const buffer::Frame* chosen_video = nullptr;  // set during selection; one encodeFrame(*chosen_video) after cascade
     char take_source_char = 'P';  // set from decision after frame-selection cascade
+    const char* pad_cause_tag = nullptr;  // PAD_CAUSE diagnostic: block_transition | segment_transition | live_buffer_empty | startup_bootstrap | ahead_no_hold | unknown_fallback
     bool decision_finalized_pre_encode = false;  // debug: set true only immediately before the single encodeFrame
     VideoBufferFrame vbf;
     int audio_frames_this_tick = 0;
@@ -1874,6 +1875,7 @@ void PipelineManager::Run() {
     if (pad_seam_this_tick) {
       chosen_video = &pad_producer_->VideoFrame();
       decision = TakeDecision::kPad;
+      pad_cause_tag = "segment_transition";
       { std::ostringstream oss;
         oss << "[PipelineManager] PAD_SEAM_OVERRIDE"
             << " tick=" << session_frame_index
@@ -1937,15 +1939,46 @@ void PipelineManager::Run() {
       } else {
         chosen_video = &pad_producer_->VideoFrame();
         decision = TakeDecision::kPad;
+        pad_cause_tag = "startup_bootstrap";
       }
     } else if (should_advance_video && v_src) {
       // Consumption-time alignment: discard frames until front.source_frame_index >= selected_src (tick loop only).
+      // Contract frame_selection_alignment.md: never emit a frame ahead of scheduler (actual_src_emitted <= selected_src).
+      bool emit_pad_not_pop = false;
       if (resample_enabled_ && selected_src_this_tick >= 0 && v_src == video_buffer_.get()) {
         VideoBufferFrame peek;
         while (v_src->TryPeekFront(peek) && peek.source_frame_index < selected_src_this_tick)
           v_src->DiscardFront();
+        if (v_src->TryPeekFront(peek) && peek.source_frame_index > selected_src_this_tick)
+          emit_pad_not_pop = true;  // Decoder ahead: emit PAD, do not pop future frame.
       }
-      if (v_src->TryPopFrame(vbf)) {
+      if (emit_pad_not_pop) {
+        // Contract: never emit future frame. Hold last valid frame instead of PAD to avoid black flashes.
+        if (has_last_good_video_frame_) {
+          chosen_video = &last_good_video_frame_;
+          decision = TakeDecision::kRepeat;
+          // last_good_source_frame_index_ unchanged; still <= selected_src_this_tick (we didn't pop).
+        } else {
+          chosen_video = &pad_producer_->VideoFrame();
+          decision = TakeDecision::kPad;
+          pad_cause_tag = "ahead_no_hold";
+        }
+        // Diagnostic: rate-limited (every 60 ticks).
+        if (frame_alignment_ahead_pad_last_log_tick_ < 0 ||
+            session_frame_index - frame_alignment_ahead_pad_last_log_tick_ >= 60) {
+          VideoBufferFrame peek_ahead;
+          if (v_src->TryPeekFront(peek_ahead)) {
+            std::ostringstream oss;
+            oss << "[PipelineManager] FRAME_ALIGNMENT_AHEAD_PAD"
+                << " tick=" << session_frame_index
+                << " selected_src=" << selected_src_this_tick
+                << " front_index=" << peek_ahead.source_frame_index
+                << " (hold last frame; queue realigns when scheduler catches up)";
+            Logger::Info(oss.str());
+          }
+          frame_alignment_ahead_pad_last_log_tick_ = session_frame_index;
+        }
+      } else if (v_src->TryPopFrame(vbf)) {
         // STARTUP_TRACE: First pop from LIVE_VIDEO_BUFFER (prove first live frame source_frame_index == first selected_src).
         if (v_src == video_buffer_.get() && !first_live_pop_logged_) {
           std::ostringstream oss;
@@ -1980,6 +2013,7 @@ void PipelineManager::Run() {
       }
     } else if (take_b) {
       chosen_video = &pad_producer_->VideoFrame();  // default for all take_b pad paths
+      pad_cause_tag = "block_transition";  // block fence; B not ready (preview/segment-b handoff miss)
       // B not primed or empty at fence — PADDED_GAP.
       const char* pad_cause = "no_preview_buffers";
       if (v_src) {
@@ -2081,6 +2115,7 @@ void PipelineManager::Run() {
       if (active_is_pad_here && incoming_has_fade) {
         chosen_video = &pad_producer_->VideoFrame();
         decision = TakeDecision::kPad;
+        pad_cause_tag = "segment_transition";
       } else {
         chosen_video = &last_good_video_frame_;
         decision = TakeDecision::kHold;  // Hold at segment seam
@@ -2106,9 +2141,11 @@ void PipelineManager::Run() {
       // empty; use pad instead of stopping.
       chosen_video = &pad_producer_->VideoFrame();
       decision = TakeDecision::kPad;
+      pad_cause_tag = "startup_bootstrap";
     } else {
       // A not primed (no block loaded yet or buffer warming up) — pad.
       chosen_video = &pad_producer_->VideoFrame();
+      pad_cause_tag = (session_frame_index <= 1) ? "startup_bootstrap" : "live_buffer_empty";
     }
 
     // Derive take_source_char from decision once per tick.
@@ -2119,6 +2156,14 @@ void PipelineManager::Run() {
       case TakeDecision::kHold:     take_source_char = 'H'; break;
       case TakeDecision::kStandby:  take_source_char = 'S'; break;
       case TakeDecision::kPad:      take_source_char = 'P'; break;
+    }
+
+    // PAD_CAUSE: one log per pad/standby tick so evidence script can attribute "other" to named causes.
+    if (decision == TakeDecision::kPad || decision == TakeDecision::kStandby) {
+      const char* cause = pad_cause_tag ? pad_cause_tag : "unknown_fallback";
+      std::ostringstream oss;
+      oss << "[PipelineManager] PAD_CAUSE tick=" << session_frame_index << " cause=" << cause;
+      Logger::Info(oss.str());
     }
 
     // INV-HANDOFF-DIAG: frame_gap = actual_src_emitted - selected_src (confirms gap grows = FIFO ahead of scheduler).
@@ -2144,6 +2189,18 @@ void PipelineManager::Run() {
               << " (FIFO head != scheduler)";
           Logger::Info(oss.str()); }
       }
+    }
+
+    // Contract frame_selection_alignment.md: actual_src_emitted <= selected_src. Violation = decoder outran clock.
+    if (selected_src_this_tick >= 0 && last_good_source_frame_index_ >= 0 &&
+        (decision == TakeDecision::kContentA || decision == TakeDecision::kContentB ||
+         decision == TakeDecision::kRepeat) &&
+        last_good_source_frame_index_ > selected_src_this_tick) {
+      std::ostringstream oss;
+      oss << "[PipelineManager] FRAME_ALIGNMENT_VIOLATION"
+          << " selected_src=" << selected_src_this_tick
+          << " actual_src_emitted=" << last_good_source_frame_index_;
+      Logger::Error(oss.str());
     }
 
     // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
