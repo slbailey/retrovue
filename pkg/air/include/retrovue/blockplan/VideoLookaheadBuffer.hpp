@@ -37,6 +37,7 @@ struct VideoBufferFrame {
   int64_t block_ct_ms = -1;  // CT at decode time; -1 for repeats
   bool was_decoded = false;   // true = real decode, false = cadence repeat or hold-last
   int32_t segment_origin_id = -1;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: segment that produced this frame
+  int64_t source_frame_index = -1;  // INV-HANDOFF-DIAG: 0-based source frame index (for frame_gap logging)
 };
 
 // VideoLookaheadBuffer accumulates decoded video frames from a background
@@ -108,6 +109,11 @@ class VideoLookaheadBuffer {
   // Pop one video frame for the tick loop. Non-blocking.
   // Returns false on underflow (hard fault).
   bool TryPopFrame(VideoBufferFrame& out);
+
+  // Peek front without popping. Returns false if empty. For consumption-time alignment only.
+  bool TryPeekFront(VideoBufferFrame& out) const;
+  // Discard front frame (pop without returning). No-op if empty. Wakes fill thread.
+  void DiscardFront();
 
   // --- Observability ---
 
@@ -232,6 +238,8 @@ class VideoLookaheadBuffer {
 
   // INV-AUDIO-PREROLL-ISOLATION-001: Buffer context label for diagnostics.
   std::string buffer_label_{"UNKNOWN"};
+  // STARTUP_TRACE: Log first push to LIVE_VIDEO_BUFFER only once per fill session.
+  bool first_push_to_live_logged_ = false;
 
   // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Segment origin for frame stamping.
   int32_t segment_origin_id_ = -1;

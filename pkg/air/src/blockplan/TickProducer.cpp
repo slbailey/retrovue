@@ -331,6 +331,16 @@ void TickProducer::AssignBlock(const FedBlock& block) {
                 << std::endl;
     }
   }
+
+  // STARTUP_TRACE: Prove first live frame source_frame_index origin.
+  {
+    std::ostringstream oss;
+    oss << "[TickProducer] STARTUP_TRACE AssignBlock"
+        << " producer=" << static_cast<const void*>(this)
+        << " block_id=" << block.block_id
+        << " frame_index_=" << frame_index_;
+    retrovue::util::Logger::Info(oss.str());
+  }
 }
 
 void TickProducer::SetLogicalSegmentIndex(int32_t index) {
@@ -463,6 +473,8 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
   primed_frame_.reset();
 
   // Decode additional frames until audio depth meets threshold.
+  // INV-HANDOFF: Use DecodeNextFrameRaw(false) — priming is pre-output preparation,
+  // not session emission; must not advance frame_index_.
   constexpr int kMaxNullRun = 10;
   constexpr int kMaxTotalDecodes = 60;
   constexpr int kMaxPrimeWallclockMs = 2000;
@@ -486,7 +498,7 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
 
     total_decodes++;
 
-    auto fd = DecodeNextFrameRaw();
+    auto fd = DecodeNextFrameRaw(false);
     if (!fd) {
       null_run++;
       if (null_run >= kMaxNullRun) break;
@@ -533,6 +545,17 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
             << " has_audio_stream=" << (decoder_ && decoder_->HasAudioStream())
             << std::endl;
 
+  // STARTUP_TRACE: Producer state after prime (before any fill consumes primed frame).
+  {
+    std::ostringstream oss;
+    oss << "[TickProducer] STARTUP_TRACE PrimeFirstTick"
+        << " producer=" << static_cast<const void*>(this)
+        << " frame_index_=" << frame_index_
+        << " has_primed=" << primed_frame_.has_value()
+        << " buffered_count=" << buffered_frames_.size();
+    retrovue::util::Logger::Info(oss.str());
+  }
+
   return {met, depth_ms};
 }
 
@@ -554,9 +577,11 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     frame_index_++;
 
     // INV-FPS-TICK-PTS: normalize primed frame onto house CT grid.
+    const int64_t this_tick_index_primed = frame_index_ - 1;
+    frame.source_frame_index = this_tick_index_primed;
     const int64_t source_pts_us_primed = frame.video.metadata.pts;
     if (output_fps_.num > 0) {
-      const int64_t this_tick_index = frame_index_ - 1;
+      const int64_t this_tick_index = this_tick_index_primed;
       const int64_t tick_pts_us = CtUs(this_tick_index);
       const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
       frame.video.metadata.pts = tick_pts_us;
@@ -581,6 +606,15 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
           << " path=PRIMED";
       retrovue::util::Logger::Info(oss.str());
     }
+    // STARTUP_TRACE: First frame returned from producer (primed path).
+    if (diag_emit_count_ <= 3) {
+      std::ostringstream oss;
+      oss << "[TickProducer] STARTUP_TRACE TryGetFrame_primed_return"
+          << " producer=" << static_cast<const void*>(this)
+          << " source_frame_index=" << frame.source_frame_index
+          << " frame_index_after=" << frame_index_;
+      retrovue::util::Logger::Info(oss.str());
+    }
     return frame;
   }
 
@@ -593,9 +627,11 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     frame_index_++;
 
     // INV-FPS-TICK-PTS: normalize primed/buffered frames onto house CT grid.
+    const int64_t this_tick_index_buf = frame_index_ - 1;
+    frame.source_frame_index = this_tick_index_buf;
     const int64_t source_pts_us_buf = frame.video.metadata.pts;
     if (output_fps_.num > 0) {
-      const int64_t this_tick_index = frame_index_ - 1;
+      const int64_t this_tick_index = this_tick_index_buf;
       const int64_t tick_pts_us = CtUs(this_tick_index);
       const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
       frame.video.metadata.pts = tick_pts_us;
@@ -647,6 +683,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     }
     // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
     const int64_t this_tick_index = frame_index_ - 1;
+    first->source_frame_index = this_tick_index;
     const int64_t tick_pts_us = CtUs(this_tick_index);
     const int64_t source_pts_us_drop = first->video.metadata.pts;
     first->video.metadata.pts = tick_pts_us;
@@ -686,9 +723,11 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (fd) {
     // INV-FPS-TICK-PTS: normalize all emitted frames (OFF and CADENCE)
     // onto the house CT grid so mux sees a single authoritative timebase.
+    const int64_t this_tick_index_decode = frame_index_ - 1;
+    fd->source_frame_index = this_tick_index_decode;
     const int64_t source_pts_us_decode = fd->video.metadata.pts;
     if (output_fps_.num > 0) {
-      const int64_t this_tick_index = frame_index_ - 1;
+      const int64_t this_tick_index = this_tick_index_decode;
       const int64_t tick_pts_us = CtUs(this_tick_index);
       const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
 

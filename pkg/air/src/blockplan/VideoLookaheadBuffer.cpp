@@ -68,6 +68,9 @@ void VideoLookaheadBuffer::StartFilling(
 
   fill_stop_.store(false, std::memory_order_release);
   steady_filling_.store(true, std::memory_order_relaxed);  // INV-BUFFER-HYSTERESIS-001: start filling
+  if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+    first_push_to_live_logged_ = false;  // STARTUP_TRACE: log first push of this fill session
+  }
   producer_ = producer;
   audio_buffer_ = audio_buffer;
   stop_signal_ = stop_signal;
@@ -108,6 +111,7 @@ void VideoLookaheadBuffer::StartFilling(
       vf.block_ct_ms = fd->block_ct_ms;
       vf.was_decoded = true;
       vf.segment_origin_id = segment_origin_id_;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
+      vf.source_frame_index = fd->source_frame_index;
 
       // Push decoded audio to AudioLookaheadBuffer.
       if (audio_buffer_) {
@@ -143,6 +147,19 @@ void VideoLookaheadBuffer::StartFilling(
              << " segment_origin_id=" << vf.segment_origin_id
              << " source=PrimeFirstFrame";
         Logger::Info(oss2.str()); }
+
+      // STARTUP_TRACE: First frame pushed into this buffer (proves first live frame source_frame_index).
+      if (buffer_label_ == "LIVE_VIDEO_BUFFER" && !first_push_to_live_logged_) {
+        const int64_t producer_frame_index = producer_ ? producer_->GetFrameIndex() : -1;
+        std::ostringstream oss;
+        oss << "[VideoBuffer:LIVE_VIDEO_BUFFER] STARTUP_TRACE first_push_LIVE_VIDEO_BUFFER"
+            << " source_frame_index=" << vf.source_frame_index
+            << " producer=" << static_cast<const void*>(producer_)
+            << " producer_GetFrameIndex=" << producer_frame_index
+            << " path=StartFilling_primed";
+        Logger::Info(oss.str());
+        first_push_to_live_logged_ = true;
+      }
 
       std::lock_guard<std::mutex> lock(mutex_);
       while (static_cast<int>(frames_.size()) >= hard_cap_frames_) {
@@ -324,6 +341,7 @@ void VideoLookaheadBuffer::FillLoop() {
 
   // Seed last_decoded from the primed frame (if consumed in StartFilling).
   buffer::Frame last_decoded;
+  int64_t last_decoded_source_frame_index = -1;
   bool have_last_decoded = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -686,12 +704,14 @@ void VideoLookaheadBuffer::FillLoop() {
         }
         // Cache for cadence repeats and hold-last.
         last_decoded = fd->video;  // copy to cache
+        last_decoded_source_frame_index = fd->source_frame_index;
         have_last_decoded = true;
 
         vf.video = std::move(fd->video);  // move to buffer frame
         vf.asset_uri = std::move(fd->asset_uri);
         vf.block_ct_ms = fd->block_ct_ms;
         vf.was_decoded = true;
+        vf.source_frame_index = fd->source_frame_index;
 
         // Bail out before pushing if stop was requested or generation changed.
         if (fill_stop_.load(std::memory_order_acquire)) {
@@ -711,6 +731,7 @@ void VideoLookaheadBuffer::FillLoop() {
         content_gap = true;
         vf.video = last_decoded;
         vf.was_decoded = false;
+        vf.source_frame_index = last_decoded_source_frame_index;
         // INV-HOLD-LAST-AUDIO: Push silence so audio buffer doesn't underflow.
         if (audio_buffer && silence_samples_per_frame > 0) {
           audio_buffer->Push(silence_template, my_audio_gen);
@@ -725,6 +746,7 @@ void VideoLookaheadBuffer::FillLoop() {
       // Cadence repeat (or content-gap hold-last).
       vf.video = last_decoded;
       vf.was_decoded = false;
+      vf.source_frame_index = last_decoded_source_frame_index;
       // Push silence on cadence-skip cycles when in a content gap
       // to prevent audio underflow on the block tail.
       if (content_gap && audio_buffer && silence_samples_per_frame > 0) {
@@ -748,6 +770,18 @@ void VideoLookaheadBuffer::FillLoop() {
       decode_continued_for_audio_while_video_full_.fetch_add(1, std::memory_order_relaxed);
       // Skip frame push; primed_ and buffer depth unchanged.
     } else {
+      // STARTUP_TRACE: First push from FillLoop (when no primed frame was pushed in StartFilling).
+      if (buffer_label_ == "LIVE_VIDEO_BUFFER" && !first_push_to_live_logged_) {
+        const int64_t producer_frame_index = producer_ ? producer_->GetFrameIndex() : -1;
+        std::ostringstream oss;
+        oss << "[VideoBuffer:LIVE_VIDEO_BUFFER] STARTUP_TRACE first_push_LIVE_VIDEO_BUFFER"
+            << " source_frame_index=" << vf.source_frame_index
+            << " producer=" << static_cast<const void*>(producer_)
+            << " producer_GetFrameIndex=" << producer_frame_index
+            << " path=FillLoop_decode";
+        Logger::Info(oss.str());
+        first_push_to_live_logged_ = true;
+      }
       // Push to buffer — generation gate prevents stale-frame bleed.
       // INV-VIDEO-BOUNDED: Enforce hard cap so container never grows unbounded (e.g. consumer stall).
       std::lock_guard<std::mutex> lock(mutex_);
@@ -826,6 +860,21 @@ bool VideoLookaheadBuffer::TryPopFrame(VideoBufferFrame& out) {
   // Signal fill thread that space is available.
   space_cv_.notify_one();
   return true;
+}
+
+bool VideoLookaheadBuffer::TryPeekFront(VideoBufferFrame& out) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (frames_.empty()) return false;
+  out = frames_.front();
+  return true;
+}
+
+void VideoLookaheadBuffer::DiscardFront() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (frames_.empty()) return;
+  frames_.pop_front();
+  total_popped_++;
+  space_cv_.notify_one();
 }
 
 // =============================================================================

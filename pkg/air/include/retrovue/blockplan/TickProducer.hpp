@@ -72,6 +72,8 @@ struct FrameData {
   // INV-AIR-MEDIA-TIME: PTS-derived media content time (ms), normalized to segment start.
   // Must NOT be computed from output FPS or frame index. On repeat/hold/pad, do not advance.
   int64_t block_ct_ms = 0;  // media_ct_ms: decoder PTS → ms; -1 or last value for pad/repeat
+  // INV-HANDOFF-DIAG: 0-based source frame index of this emitted frame (for frame_gap logging only).
+  int64_t source_frame_index = -1;
 };
 
 class TickProducer : public producers::IProducer,
@@ -98,6 +100,7 @@ class TickProducer : public producers::IProducer,
   bool HasPrimedFrame() const override;
   bool HasAudioStream() const override;
   const std::vector<SegmentBoundary>& GetBoundaries() const override;
+  int64_t GetFrameIndex() const override { return frame_index_; }
 
   void SetInterruptFlags(const ITickProducer::InterruptFlags&) override;
 
