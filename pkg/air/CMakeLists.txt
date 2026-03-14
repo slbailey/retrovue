@@ -492,6 +492,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/test_inv_no_float_fps_timebase_001.cpp
   tests/contracts/test_prime_first_tick_does_not_advance_frame_index.cpp
   tests/contracts/test_first_live_frame_matches_scheduler.cpp
+  tests/contracts/test_frame_alignment_invariant.cpp
 
   tests/blockplan/test_segment_aware_playback_proof.cpp
   tests/contracts/BlockPlan/SegmentPrefillContractTests.cpp

@@ -490,6 +490,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   int64_t cadence_diag_repeat_ = 0;
   int64_t cadence_diag_bypass_ = 0;   // Ticks where cadence was not evaluated (take_b, v_src null, etc.)
   int64_t cadence_diag_last_log_tick_ = 0;
+  // Frame alignment (contract frame_selection_alignment.md): rate-limited log when we emit PAD because queue ahead.
+  int64_t frame_alignment_ahead_pad_last_log_tick_ = -1;
   // Fingerprint context for held frame (no-unintentional-black: H must match last A content).
   uint32_t last_good_y_crc32_ = 0;
   std::string last_good_asset_uri_;
