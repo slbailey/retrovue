@@ -1365,6 +1365,10 @@ void PipelineManager::Run() {
   bool pacing_diag_first_video_logged = false;
   bool pacing_diag_first_audio_logged = false;
 
+  // INV-FPS-PACING-DIAG: delta_wall_us / delta_pts_us for first ~120 ticks (runbook validation).
+  int64_t pacing_diag_prev_wall_us = -1;
+  int64_t pacing_diag_prev_pts_us = -1;
+
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
     // Hook A: set thread-local tick/block so write callback can log on first EPIPE
@@ -1397,6 +1401,25 @@ void PipelineManager::Run() {
     int64_t audio_pts_90k =
         ((audio_samples_emitted - pts_origin_audio_samples) * 90000) /
         buffer::kHouseAudioSampleRate;
+
+    // INV-FPS-PACING-DIAG: First ~120 ticks — wall vs PTS deltas (29.97: expect ~33366 us).
+    if (session_frame_index < 120) {
+      const int64_t video_pts_us = (video_pts_90k * 1'000'000) / 90000;
+      const int64_t delta_wall_us = (pacing_diag_prev_wall_us >= 0)
+          ? (wait_return_us - pacing_diag_prev_wall_us) : 0;
+      const int64_t delta_pts_us = (pacing_diag_prev_pts_us >= 0)
+          ? (video_pts_us - pacing_diag_prev_pts_us) : 0;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-FPS-PACING-DIAG"
+            << " tick_index=" << session_frame_index
+            << " wall_clock_us=" << wait_return_us
+            << " video_pts_us=" << video_pts_us
+            << " delta_wall_us=" << delta_wall_us
+            << " delta_pts_us=" << delta_pts_us;
+        Logger::Info(oss.str()); }
+      pacing_diag_prev_wall_us = wait_return_us;
+      pacing_diag_prev_pts_us = video_pts_us;
+    }
 
     // ==================================================================
     // INV-SEAM-SEGMENT-PREFILL-001: Early B-side pipeline creation.
@@ -2236,6 +2259,19 @@ void PipelineManager::Run() {
         break;
     }
 #endif
+    // INV-FPS-TICK-PTS: Emitted PTS must come from session tick clock, not decoder.
+    // Overwrite frame metadata so every path (primed, buffered, decode, repeat, PAD) carries
+    // session PTS/duration; encoder receives video_pts_90k and uses it for mux.
+    {
+      buffer::Frame* mutable_video = const_cast<buffer::Frame*>(chosen_video);
+      const int64_t emitted_pts_us = (video_pts_90k * 1'000'000) / 90000;
+      const int64_t output_frame_duration_us = (ctx_->fps.den > 0 && ctx_->fps.num > 0)
+          ? (1'000'000 * ctx_->fps.den) / ctx_->fps.num
+          : 33366;
+      mutable_video->metadata.pts = emitted_pts_us;
+      mutable_video->metadata.dts = emitted_pts_us;
+      mutable_video->metadata.SetDurationFromUs(output_frame_duration_us);
+    }
     session_encoder->encodeFrame(*chosen_video, video_pts_90k);
 
     // INV-PACING-SINGLE-AUTHORITY: First video frame diagnostic.

@@ -554,6 +554,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     frame_index_++;
 
     // INV-FPS-TICK-PTS: normalize primed frame onto house CT grid.
+    const int64_t source_pts_us_primed = frame.video.metadata.pts;
     if (output_fps_.num > 0) {
       const int64_t this_tick_index = frame_index_ - 1;
       const int64_t tick_pts_us = CtUs(this_tick_index);
@@ -561,6 +562,15 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       frame.video.metadata.pts = tick_pts_us;
       frame.video.metadata.dts = tick_pts_us;
       frame.video.metadata.SetDurationFromUs(output_frame_duration_us);
+      if (diag_emit_count_ < 60) {
+        std::ostringstream oss;
+        oss << "[TickProducer] INV-FPS-TICK-PTS-DIAG"
+            << " tick_index=" << this_tick_index
+            << " source_pts_us=" << source_pts_us_primed
+            << " emitted_pts_us=" << tick_pts_us
+            << " resample_mode=PRIMED";
+        retrovue::util::Logger::Info(oss.str());
+      }
     }
 
     diag_emit_count_++;
@@ -583,6 +593,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     frame_index_++;
 
     // INV-FPS-TICK-PTS: normalize primed/buffered frames onto house CT grid.
+    const int64_t source_pts_us_buf = frame.video.metadata.pts;
     if (output_fps_.num > 0) {
       const int64_t this_tick_index = frame_index_ - 1;
       const int64_t tick_pts_us = CtUs(this_tick_index);
@@ -590,6 +601,15 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       frame.video.metadata.pts = tick_pts_us;
       frame.video.metadata.dts = tick_pts_us;
       frame.video.metadata.SetDurationFromUs(output_frame_duration_us);
+      if (diag_emit_count_ < 60) {
+        std::ostringstream oss;
+        oss << "[TickProducer] INV-FPS-TICK-PTS-DIAG"
+            << " tick_index=" << this_tick_index
+            << " source_pts_us=" << source_pts_us_buf
+            << " emitted_pts_us=" << tick_pts_us
+            << " resample_mode=BUFFERED";
+        retrovue::util::Logger::Info(oss.str());
+      }
     }
 
     diag_emit_count_++;
@@ -628,8 +648,18 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
     const int64_t this_tick_index = frame_index_ - 1;
     const int64_t tick_pts_us = CtUs(this_tick_index);
+    const int64_t source_pts_us_drop = first->video.metadata.pts;
     first->video.metadata.pts = tick_pts_us;
     first->video.metadata.dts = tick_pts_us;
+    if (diag_emit_count_ < 60) {
+      std::ostringstream oss;
+      oss << "[TickProducer] INV-FPS-TICK-PTS-DIAG"
+          << " tick_index=" << this_tick_index
+          << " source_pts_us=" << source_pts_us_drop
+          << " emitted_pts_us=" << tick_pts_us
+          << " resample_mode=DROP";
+      retrovue::util::Logger::Info(oss.str());
+    }
 
     diag_emit_count_++;
     if (diag_emit_count_ <= 12) {
@@ -656,6 +686,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   if (fd) {
     // INV-FPS-TICK-PTS: normalize all emitted frames (OFF and CADENCE)
     // onto the house CT grid so mux sees a single authoritative timebase.
+    const int64_t source_pts_us_decode = fd->video.metadata.pts;
     if (output_fps_.num > 0) {
       const int64_t this_tick_index = frame_index_ - 1;
       const int64_t tick_pts_us = CtUs(this_tick_index);
@@ -664,6 +695,17 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
       fd->video.metadata.pts = tick_pts_us;
       fd->video.metadata.dts = tick_pts_us;
       fd->video.metadata.SetDurationFromUs(output_frame_duration_us);
+      if (diag_emit_count_ < 60) {
+        const char* mode_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :
+            (resample_mode_ == ResampleMode::DROP) ? "DROP" : "CADENCE";
+        std::ostringstream oss;
+        oss << "[TickProducer] INV-FPS-TICK-PTS-DIAG"
+            << " tick_index=" << this_tick_index
+            << " source_pts_us=" << source_pts_us_decode
+            << " emitted_pts_us=" << tick_pts_us
+            << " resample_mode=" << mode_str;
+        retrovue::util::Logger::Info(oss.str());
+      }
     }
 
     diag_emit_count_++;
