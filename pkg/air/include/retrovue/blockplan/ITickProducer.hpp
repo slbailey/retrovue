@@ -71,6 +71,10 @@ class ITickProducer {
   // Empty if no block assigned or validation failed.
   virtual const std::vector<SegmentBoundary>& GetBoundaries() const = 0;
 
+  // Diagnostic only (STARTUP_TRACE): 0-based count of frames emitted by this producer.
+  // Returns -1 for non-TickProducer implementations.
+  virtual int64_t GetFrameIndex() const { return -1; }
+
   // Optional: Set interrupt flags for FFmpeg I/O. When either is true,
   // av_read_frame and other blocking calls abort promptly.
   // fill_stop: buffer's fill-stop signal (StopFilling/StopFillingAsync).

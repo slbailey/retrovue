@@ -1092,6 +1092,17 @@ void PipelineManager::Run() {
     if (remaining_block_frames_ < 0) remaining_block_frames_ = 0;
     block_acc.Reset(live_tp()->GetBlock().block_id);
     emit_block_start("queue");
+    // STARTUP_TRACE: Before live buffer fill starts — producer state.
+    {
+      auto* tp = live_tp();
+      std::ostringstream oss;
+      oss << "[PipelineManager] STARTUP_TRACE StartFilling_live_buffer"
+          << " producer=" << static_cast<const void*>(tp)
+          << " producer_GetFrameIndex=" << tp->GetFrameIndex()
+          << " block_id=" << tp->GetBlock().block_id
+          << " path=session_first_block";
+      Logger::Info(oss.str());
+    }
     // INV-VIDEO-LOOKAHEAD-001: Start fill thread (cadence resolved inside).
     video_buffer_->StartFilling(
         live_tp(), audio_buffer_.get(),
@@ -1814,9 +1825,11 @@ void PipelineManager::Run() {
     bool should_advance_video = true;
     bool is_cadence_repeat = false;
 
+    int64_t selected_src_this_tick = -1;  // INV-HANDOFF-DIAG: SourceFrameForTick result for this tick
     if (resample_enabled_ && !take_b && v_src) {
       int64_t curr_src = SourceFrameForTick(resample_tick_,
           resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_);
+      selected_src_this_tick = curr_src;
       int64_t prev_src = (resample_tick_ > 0)
           ? SourceFrameForTick(resample_tick_ - 1,
                 resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_)
@@ -1883,6 +1896,7 @@ void PipelineManager::Run() {
       chosen_video = &vbf.video;
       decision = TakeDecision::kContentA;
       last_good_video_frame_ = vbf.video;
+      last_good_source_frame_index_ = vbf.source_frame_index;
       has_last_good_video_frame_ = true;
       last_good_asset_uri_ = vbf.asset_uri;
       last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
@@ -1924,25 +1938,45 @@ void PipelineManager::Run() {
         chosen_video = &pad_producer_->VideoFrame();
         decision = TakeDecision::kPad;
       }
-    } else if (should_advance_video && v_src && v_src->TryPopFrame(vbf)) {
-      chosen_video = &vbf.video;
-      decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
-      last_good_video_frame_ = vbf.video;
-      has_last_good_video_frame_ = true;
-      last_good_asset_uri_ = vbf.asset_uri;
-      last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
-          ? live_tp()->GetBlock().block_id : std::string();
-      last_good_offset_ms_ = vbf.block_ct_ms;
-      if (!vbf.video.data.empty()) {
-        size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
-        last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
-                                        std::min(y_size, vbf.video.data.size()));
-      } else {
-        last_good_y_crc32_ = 0;
+    } else if (should_advance_video && v_src) {
+      // Consumption-time alignment: discard frames until front.source_frame_index >= selected_src (tick loop only).
+      if (resample_enabled_ && selected_src_this_tick >= 0 && v_src == video_buffer_.get()) {
+        VideoBufferFrame peek;
+        while (v_src->TryPeekFront(peek) && peek.source_frame_index < selected_src_this_tick)
+          v_src->DiscardFront();
       }
-      if (take_b) {
-        committed_b_frame_this_tick = true;
-        degraded_take_active_ = false;
+      if (v_src->TryPopFrame(vbf)) {
+        // STARTUP_TRACE: First pop from LIVE_VIDEO_BUFFER (prove first live frame source_frame_index == first selected_src).
+        if (v_src == video_buffer_.get() && !first_live_pop_logged_) {
+          std::ostringstream oss;
+          oss << "[PipelineManager] STARTUP_TRACE first_pop_LIVE_VIDEO_BUFFER"
+              << " session_frame_index=" << session_frame_index
+              << " popped_source_frame_index=" << vbf.source_frame_index
+              << " selected_src_this_tick=" << selected_src_this_tick
+              << " invariant_ok=" << (vbf.source_frame_index == selected_src_this_tick ? "Y" : "N");
+          Logger::Info(oss.str());
+          first_live_pop_logged_ = true;
+        }
+        chosen_video = &vbf.video;
+        decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
+        last_good_video_frame_ = vbf.video;
+        last_good_source_frame_index_ = vbf.source_frame_index;
+        has_last_good_video_frame_ = true;
+        last_good_asset_uri_ = vbf.asset_uri;
+        last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+            ? live_tp()->GetBlock().block_id : std::string();
+        last_good_offset_ms_ = vbf.block_ct_ms;
+        if (!vbf.video.data.empty()) {
+          size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+          last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                            std::min(y_size, vbf.video.data.size()));
+        } else {
+          last_good_y_crc32_ = 0;
+        }
+        if (take_b) {
+          committed_b_frame_this_tick = true;
+          degraded_take_active_ = false;
+        }
       }
     } else if (take_b) {
       chosen_video = &pad_producer_->VideoFrame();  // default for all take_b pad paths
@@ -2085,6 +2119,31 @@ void PipelineManager::Run() {
       case TakeDecision::kHold:     take_source_char = 'H'; break;
       case TakeDecision::kStandby:  take_source_char = 'S'; break;
       case TakeDecision::kPad:      take_source_char = 'P'; break;
+    }
+
+    // INV-HANDOFF-DIAG: frame_gap = actual_src_emitted - selected_src (confirms gap grows = FIFO ahead of scheduler).
+    if (session_frame_index < 300 && resample_enabled_ && selected_src_this_tick >= 0 &&
+        last_good_source_frame_index_ >= 0 &&
+        (decision == TakeDecision::kContentA || decision == TakeDecision::kContentB ||
+         decision == TakeDecision::kRepeat)) {
+      const int64_t frame_gap = last_good_source_frame_index_ - selected_src_this_tick;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-HANDOFF-DIAG"
+            << " tick=" << session_frame_index
+            << " selected_src=" << selected_src_this_tick
+            << " actual_src_emitted=" << last_good_source_frame_index_
+            << " frame_gap=" << frame_gap;
+        Logger::Info(oss.str()); }
+      // Prove FIFO head is wrong: emitted frame index != scheduler selection (no functional change).
+      if (last_good_source_frame_index_ != selected_src_this_tick) {
+        { std::ostringstream oss;
+          oss << "[PipelineManager] DRIFT_DETECTED"
+              << " tick=" << session_frame_index
+              << " selected_src=" << selected_src_this_tick
+              << " frame_source_index=" << last_good_source_frame_index_
+              << " (FIFO head != scheduler)";
+          Logger::Info(oss.str()); }
+      }
     }
 
     // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
@@ -2450,6 +2509,13 @@ void PipelineManager::Run() {
         // VLB has only primed frames and underflows at the next tick.
         if (preview_fill_stopped_after_prime_ && !video_buffer_->IsFilling()) {
           auto* tp = AsTickProducer(live_.get());
+          { std::ostringstream oss;
+            oss << "[PipelineManager] STARTUP_TRACE StartFilling_live_buffer"
+                << " producer=" << static_cast<const void*>(tp)
+                << " producer_GetFrameIndex=" << tp->GetFrameIndex()
+                << " block_id=" << tp->GetBlock().block_id
+                << " path=swap_restart_fill";
+            Logger::Info(oss.str()); }
           video_buffer_->StartFilling(
               tp, audio_buffer_.get(),
               tp->GetInputRationalFps(), ctx_->fps,
@@ -2532,6 +2598,14 @@ void PipelineManager::Run() {
           audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
               fa_target, buffer::kHouseAudioSampleRate,
               buffer::kHouseAudioChannels, fa_low);
+          { auto* tp = AsTickProducer(live_.get());
+            std::ostringstream oss;
+            oss << "[PipelineManager] STARTUP_TRACE StartFilling_live_buffer"
+                << " producer=" << static_cast<const void*>(tp)
+                << " producer_GetFrameIndex=" << tp->GetFrameIndex()
+                << " block_id=" << tp->GetBlock().block_id
+                << " path=fallback_sync_fill";
+            Logger::Info(oss.str()); }
           video_buffer_->StartFilling(
               AsTickProducer(live_.get()), audio_buffer_.get(),
               AsTickProducer(live_.get())->GetInputRationalFps(), ctx_->fps,
@@ -3869,6 +3943,15 @@ void PipelineManager::Run() {
         }
         preview_video_buffer_.reset();
         preview_audio_buffer_.reset();
+        // STARTUP_TRACE: Before live fill (PADDED_GAP exit path).
+        { auto* tp = live_tp();
+          std::ostringstream oss;
+          oss << "[PipelineManager] STARTUP_TRACE StartFilling_live_buffer"
+              << " producer=" << static_cast<const void*>(tp)
+              << " producer_GetFrameIndex=" << tp->GetFrameIndex()
+              << " block_id=" << tp->GetBlock().block_id
+              << " path=padded_gap_exit_fill";
+          Logger::Info(oss.str()); }
         // INV-VIDEO-LOOKAHEAD-001: Start fill thread with loaded producer.
         video_buffer_->StartFilling(
             live_tp(), audio_buffer_.get(),

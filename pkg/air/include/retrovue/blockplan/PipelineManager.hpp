@@ -472,6 +472,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   bool degraded_take_active_ = false;
   buffer::Frame last_good_video_frame_;
   bool has_last_good_video_frame_ = false;
+  int64_t last_good_source_frame_index_ = -1;  // INV-HANDOFF-DIAG: source frame index of last emitted content/repeat
+  bool first_live_pop_logged_ = false;  // STARTUP_TRACE: log first pop from LIVE_VIDEO_BUFFER once per session
   // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Segment that produced last_good_video_frame_.
   int32_t last_good_origin_segment_ = -1;
   // INV-RESAMPLE-DETERMINISM-001: Time-based frame selection (repeat-vs-advance).
