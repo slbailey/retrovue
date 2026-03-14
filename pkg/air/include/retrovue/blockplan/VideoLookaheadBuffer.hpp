@@ -18,27 +18,19 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/FrameIndexedVideoStore.hpp"
+#include "retrovue/blockplan/VideoBufferFrame.hpp"
 #include "retrovue/buffer/FrameRingBuffer.h"
 
 namespace retrovue::blockplan {
 
 class AudioLookaheadBuffer;
 class ITickProducer;
-
-// VideoBufferFrame carries a decoded (or repeated) video frame plus
-// metadata needed by the tick loop for fingerprinting and accumulation.
-struct VideoBufferFrame {
-  buffer::Frame video;
-  std::string asset_uri;
-  int64_t block_ct_ms = -1;  // CT at decode time; -1 for repeats
-  bool was_decoded = false;   // true = real decode, false = cadence repeat or hold-last
-  int32_t segment_origin_id = -1;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: segment that produced this frame
-  int64_t source_frame_index = -1;  // INV-HANDOFF-DIAG: 0-based source frame index (for frame_gap logging)
-};
 
 // VideoLookaheadBuffer accumulates decoded video frames from a background
 // fill thread and dispenses them one per tick to the main loop.
@@ -63,7 +55,8 @@ struct VideoBufferFrame {
 class VideoLookaheadBuffer {
  public:
   explicit VideoLookaheadBuffer(int target_depth_frames = 15,
-                                int low_water_frames = 5);
+                                int low_water_frames = 5,
+                                int lookahead_target = -1);
   ~VideoLookaheadBuffer();
 
   VideoLookaheadBuffer(const VideoLookaheadBuffer&) = delete;
@@ -114,6 +107,27 @@ class VideoLookaheadBuffer {
   bool TryPeekFront(VideoBufferFrame& out) const;
   // Discard front frame (pop without returning). No-op if empty. Wakes fill thread.
   void DiscardFront();
+
+  // --- FIVS: Indexed Access (Frame-Indexed Video Store) ---
+
+  // Retrieve frame by source_frame_index. Returns nullopt if not present.
+  // Thread-safe (acquires mutex_, copies frame under lock). FIVS-ALIGN: never returns frame with index > requested.
+  std::optional<VideoBufferFrame> GetByIndex(int64_t source_frame_index);
+
+  // Evict all frames with index < min_index from the indexed store.
+  // Thread-safe (acquires mutex_). FIVS-EVICTION-SAFETY.
+  void EvictBelow(int64_t min_index);
+
+  // Current indexed store depth (number of frames in FIVS).
+  size_t IndexedStoreSize() const;
+
+  // INV-FIVS-LOOKAHEAD-001: Update the consumer's current timeline position.
+  // Called by tick loop after computing selected_src_this_tick.
+  // The fill thread uses this to compute lookahead = LatestIndex - selected_src.
+  void UpdateConsumerPosition(int64_t selected_src);
+
+  // Current lookahead target (frames ahead of consumer). For diagnostics.
+  int LookaheadTarget() const { return lookahead_target_; }
 
   // --- Observability ---
 
@@ -226,8 +240,14 @@ class VideoLookaheadBuffer {
  private:
   void FillLoop();
 
+  // INV-FIVS-LOOKAHEAD-001: Compute lookahead (frames ahead of consumer).
+  // Returns -1 when consumer position is unknown (pre-first-tick).
+  // Must be called with mutex_ held (reads frame_store_).
+  int ComputeLookaheadLocked() const;
+
   int target_depth_frames_;
   int low_water_frames_;
+  int lookahead_target_;  // INV-FIVS-LOOKAHEAD-001: frames ahead of consumer before parking
   std::atomic<bool> audio_boost_{false};
 
   // INV-BUFFER-HYSTERESIS-001: Dual-threshold steady-state fill control.
@@ -261,12 +281,19 @@ class VideoLookaheadBuffer {
 
   mutable std::mutex mutex_;
   std::deque<VideoBufferFrame> frames_;
+  // FIVS: indexed store for O(1) frame lookup by source_frame_index.
+  // Protected by mutex_. Used alongside deque for dual-path access.
+  FrameIndexedVideoStore frame_store_;
   std::condition_variable space_cv_;  // fill thread waits when buffer full
 
   std::thread fill_thread_;
   std::atomic<bool> fill_stop_{false};
   bool fill_running_ = false;
   std::atomic<uint64_t> fill_generation_{0};  // Monotonic; bumped at StopFillingAsync/StartFilling (atomic so tick path can bump without taking mutex_)
+
+  // INV-FIVS-LOOKAHEAD-001: Consumer timeline position (set by tick loop, read by fill thread).
+  // -1 means consumer hasn't computed its first selected_src yet.
+  std::atomic<int64_t> consumer_selected_src_{-1};
 
   // Fill thread parameters (set by StartFilling, read by FillLoop).
   ITickProducer* producer_ = nullptr;
@@ -307,6 +334,26 @@ class VideoLookaheadBuffer {
   // INV-AUDIO-LIVENESS-001 diagnostics (not invariants): audio-first decode under backpressure.
   std::atomic<int64_t> decode_continued_for_audio_while_video_full_{0};
   std::atomic<int64_t> decode_parked_video_full_audio_low_{0};
+
+  // --- FIVS stall diagnostics (INV-FIVS-LOOKAHEAD-STATE-001) ---
+ public:
+  struct FivsDiag {
+    int64_t store_min_index = -1;
+    int64_t store_max_index = -1;
+    size_t store_size = 0;
+    int64_t last_trygetframe_age_ms = -1;  // ms since last TryGetFrame returned
+    std::array<int64_t, 8> last_inserted;  // ring of last N inserted source_frame_index
+    int last_inserted_count = 0;           // how many valid entries
+  };
+  FivsDiag SnapshotFivsDiag() const;
+ private:
+  // Ring buffer of last 8 inserted source_frame_index values (under mutex_).
+  static constexpr int kDiagInsertRingSize = 8;
+  std::array<int64_t, kDiagInsertRingSize> diag_insert_ring_{};
+  int diag_insert_ring_pos_ = 0;
+  int diag_insert_ring_count_ = 0;
+  // Timestamp of last TryGetFrame return (under mutex_).
+  std::chrono::steady_clock::time_point diag_last_trygetframe_time_{};
 };
 
 }  // namespace retrovue::blockplan

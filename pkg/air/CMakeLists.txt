@@ -214,6 +214,8 @@ set(AIR_CORE_SOURCES
   src/blockplan/AudioLookaheadBuffer.cpp
   # VideoLookaheadBuffer: non-blocking video buffering (INV-VIDEO-LOOKAHEAD-001)
   src/blockplan/VideoLookaheadBuffer.cpp
+  # FrameIndexedVideoStore: indexed video frame store (FIVS contract)
+  src/blockplan/FrameIndexedVideoStore.cpp
   # Evidence spool + emitter (AirExecutionEvidenceSpoolContract_v0.1)
   src/evidence/EvidenceSpool.cpp
   src/evidence/EvidenceEmitter.cpp
@@ -498,6 +500,11 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SegmentPrefillContractTests.cpp
   tests/contracts/BlockPlan/SegmentSwapReadinessContractTests.cpp
   tests/contracts/BlockPlan/FFmpegCodecInitSerializationTests.cpp
+  tests/contracts/BlockPlan/FrameIndexedVideoStoreContractTests.cpp
+  tests/contracts/BlockPlan/FIVSLookaheadRefillContractTests.cpp
+  tests/contracts/BlockPlan/FIVSHorizonContractTests.cpp
+  tests/contracts/BlockPlan/FIVSLookaheadStateContractTests.cpp
+  tests/contracts/BlockPlan/AudioDrainContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests

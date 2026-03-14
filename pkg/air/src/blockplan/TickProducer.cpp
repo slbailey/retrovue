@@ -19,7 +19,11 @@
 
 namespace retrovue::blockplan {
 
-static constexpr int kMaxAudioFramesPerVideoFrame = 2;
+// INV-AUDIO-DRAIN-001: Safety fuse for audio drain loop.
+// The decoder must be fully drained each cycle. This fuse only exists to
+// prevent infinite loops on pathological streams — it must never fire under
+// normal operation. If it fires, log a violation.
+static constexpr int kAudioDrainSafetyFuse = 64;
 
 TickProducer::TickProducer(int width, int height, RationalFps output_fps)
     : width_(width),
@@ -373,13 +377,20 @@ void TickProducer::PrimeFirstFrame() {
     return;
   }
 
+  // INV-AUDIO-DRAIN-001: Drain ALL pending audio from the decoder.
+  // The decoder buffers audio as a side-effect of video demuxing. Leaving
+  // frames undrained causes progressive A/V desync.
   std::vector<buffer::AudioFrame> audio_frames;
   buffer::AudioFrame audio_frame;
   int audio_count = 0;
-  while (audio_count < kMaxAudioFramesPerVideoFrame &&
-         decoder_->GetPendingAudioFrame(audio_frame)) {
+  while (decoder_->GetPendingAudioFrame(audio_frame)) {
     audio_frames.push_back(std::move(audio_frame));
     audio_count++;
+    if (audio_count >= kAudioDrainSafetyFuse) {
+      std::cout << "[TickProducer] AUDIO_DRAIN_VIOLATION: safety fuse hit at "
+                << kAudioDrainSafetyFuse << " frames" << std::endl;
+      break;
+    }
   }
 
   // PTS-anchored CT — same logic as TryGetFrame (INV-BLOCK-PRIME-007)
@@ -907,13 +918,18 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
     return std::nullopt;
   }
 
+  // INV-AUDIO-DRAIN-001: Drain ALL pending audio from the decoder.
   std::vector<buffer::AudioFrame> audio_frames;
   buffer::AudioFrame audio_frame;
   int audio_count = 0;
-  while (audio_count < kMaxAudioFramesPerVideoFrame &&
-         decoder_->GetPendingAudioFrame(audio_frame)) {
+  while (decoder_->GetPendingAudioFrame(audio_frame)) {
     audio_frames.push_back(std::move(audio_frame));
     audio_count++;
+    if (audio_count >= kAudioDrainSafetyFuse) {
+      std::cout << "[TickProducer] AUDIO_DRAIN_VIOLATION: safety fuse hit at "
+                << kAudioDrainSafetyFuse << " frames" << std::endl;
+      break;
+    }
   }
 
   int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;

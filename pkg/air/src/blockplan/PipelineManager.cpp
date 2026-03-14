@@ -1831,6 +1831,8 @@ void PipelineManager::Run() {
       int64_t curr_src = SourceFrameForTick(resample_tick_,
           resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_);
       selected_src_this_tick = curr_src;
+      // INV-FIVS-LOOKAHEAD-001: Communicate consumer position to fill thread.
+      video_buffer_->UpdateConsumerPosition(selected_src_this_tick);
       int64_t prev_src = (resample_tick_ > 0)
           ? SourceFrameForTick(resample_tick_ - 1,
                 resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_)
@@ -1942,51 +1944,88 @@ void PipelineManager::Run() {
         pad_cause_tag = "startup_bootstrap";
       }
     } else if (should_advance_video && v_src) {
-      // Consumption-time alignment: discard frames until front.source_frame_index >= selected_src (tick loop only).
-      // Contract frame_selection_alignment.md: never emit a frame ahead of scheduler (actual_src_emitted <= selected_src).
-      bool emit_pad_not_pop = false;
+      // FIVS: Pure indexed lookup for live video buffer with resample.
+      // No deque-based alignment. FIVS is the sole source of truth for video retrieval.
+      // Contract: frame_indexed_video_store.md
       if (resample_enabled_ && selected_src_this_tick >= 0 && v_src == video_buffer_.get()) {
-        VideoBufferFrame peek;
-        while (v_src->TryPeekFront(peek) && peek.source_frame_index < selected_src_this_tick)
-          v_src->DiscardFront();
-        if (v_src->TryPeekFront(peek) && peek.source_frame_index > selected_src_this_tick)
-          emit_pad_not_pop = true;  // Decoder ahead: emit PAD, do not pop future frame.
-      }
-      if (emit_pad_not_pop) {
-        // Contract: never emit future frame. Hold last valid frame instead of PAD to avoid black flashes.
-        if (has_last_good_video_frame_) {
-          chosen_video = &last_good_video_frame_;
-          decision = TakeDecision::kRepeat;
-          // last_good_source_frame_index_ unchanged; still <= selected_src_this_tick (we didn't pop).
-        } else {
-          chosen_video = &pad_producer_->VideoFrame();
-          decision = TakeDecision::kPad;
-          pad_cause_tag = "ahead_no_hold";
-        }
-        // Diagnostic: rate-limited (every 60 ticks).
-        if (frame_alignment_ahead_pad_last_log_tick_ < 0 ||
-            session_frame_index - frame_alignment_ahead_pad_last_log_tick_ >= 60) {
-          VideoBufferFrame peek_ahead;
-          if (v_src->TryPeekFront(peek_ahead)) {
+        auto store_frame = video_buffer_->GetByIndex(selected_src_this_tick);
+        if (store_frame.has_value()) {
+          // FIVS hit: emit this frame.
+          vbf = std::move(*store_frame);
+          // Evict old frames — wakes fill thread via space_cv_.
+          const int64_t back_margin = 2;
+          if (selected_src_this_tick > back_margin)
+            video_buffer_->EvictBelow(selected_src_this_tick - back_margin);
+          if (!first_live_pop_logged_) {
             std::ostringstream oss;
-            oss << "[PipelineManager] FRAME_ALIGNMENT_AHEAD_PAD"
+            oss << "[PipelineManager] STARTUP_TRACE first_FIVS_hit"
+                << " session_frame_index=" << session_frame_index
+                << " source_frame_index=" << vbf.source_frame_index
+                << " selected_src_this_tick=" << selected_src_this_tick;
+            Logger::Info(oss.str());
+            first_live_pop_logged_ = true;
+          }
+          chosen_video = &vbf.video;
+          decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
+          last_good_video_frame_ = vbf.video;
+          last_good_source_frame_index_ = vbf.source_frame_index;
+          has_last_good_video_frame_ = true;
+          last_good_asset_uri_ = vbf.asset_uri;
+          last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+              ? live_tp()->GetBlock().block_id : std::string();
+          last_good_offset_ms_ = vbf.block_ct_ms;
+          if (!vbf.video.data.empty()) {
+            size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+            last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                              std::min(y_size, vbf.video.data.size()));
+          } else {
+            last_good_y_crc32_ = 0;
+          }
+          if (take_b) {
+            committed_b_frame_this_tick = true;
+            degraded_take_active_ = false;
+          }
+        } else {
+          // FIVS miss: hold last good frame or PAD.
+          if (has_last_good_video_frame_) {
+            chosen_video = &last_good_video_frame_;
+            decision = TakeDecision::kRepeat;
+          } else {
+            chosen_video = &pad_producer_->VideoFrame();
+            decision = TakeDecision::kPad;
+            pad_cause_tag = "fivs_miss_no_hold";
+          }
+          // Rate-limited diagnostic (every 30 ticks).
+          if (frame_alignment_ahead_pad_last_log_tick_ < 0 ||
+              session_frame_index - frame_alignment_ahead_pad_last_log_tick_ >= 30) {
+            auto diag = video_buffer_->SnapshotFivsDiag();
+            std::ostringstream oss;
+            oss << "[PipelineManager] FIVS_MISS"
                 << " tick=" << session_frame_index
                 << " selected_src=" << selected_src_this_tick
-                << " front_index=" << peek_ahead.source_frame_index
-                << " (hold last frame; queue realigns when scheduler catches up)";
+                << " store_size=" << diag.store_size
+                << " store_min=" << diag.store_min_index
+                << " store_max=" << diag.store_max_index
+                << " tryget_age_ms=" << diag.last_trygetframe_age_ms
+                << " has_last_good=" << (has_last_good_video_frame_ ? "Y" : "N")
+                << " last_inserted=[";
+            for (int i = 0; i < diag.last_inserted_count; i++) {
+              if (i > 0) oss << ",";
+              oss << diag.last_inserted[i];
+            }
+            oss << "]";
             Logger::Info(oss.str());
+            frame_alignment_ahead_pad_last_log_tick_ = session_frame_index;
           }
-          frame_alignment_ahead_pad_last_log_tick_ = session_frame_index;
         }
       } else if (v_src->TryPopFrame(vbf)) {
-        // STARTUP_TRACE: First pop from LIVE_VIDEO_BUFFER (prove first live frame source_frame_index == first selected_src).
+        // Legacy deque path: non-resample or non-live-buffer (segment-B, preview, PAD).
         if (v_src == video_buffer_.get() && !first_live_pop_logged_) {
           std::ostringstream oss;
           oss << "[PipelineManager] STARTUP_TRACE first_pop_LIVE_VIDEO_BUFFER"
               << " session_frame_index=" << session_frame_index
               << " popped_source_frame_index=" << vbf.source_frame_index
-              << " selected_src_this_tick=" << selected_src_this_tick
-              << " invariant_ok=" << (vbf.source_frame_index == selected_src_this_tick ? "Y" : "N");
+              << " selected_src_this_tick=" << selected_src_this_tick;
           Logger::Info(oss.str());
           first_live_pop_logged_ = true;
         }
