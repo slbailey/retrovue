@@ -3,11 +3,15 @@ Contract tests for Plex HDHomeRun channel lineup.
 
 Verifies:
   INV-PLEX-LINEUP-001 — /lineup.json channel accuracy
+  Plex Compatibility Interface — lineup invariants (GuideNumber, order, URLs, determinism)
 """
 
 import pytest
+from fastapi import FastAPI
+from starlette.testclient import TestClient
 
 from retrovue.integrations.plex.adapter import PlexAdapter
+from retrovue.integrations.plex.router import create_plex_router
 
 
 # ---------------------------------------------------------------------------
@@ -15,11 +19,15 @@ from retrovue.integrations.plex.adapter import PlexAdapter
 # ---------------------------------------------------------------------------
 
 def _make_channels(*names: str) -> list[dict]:
-    """Build minimal channel dicts matching ProgramDirector._load_channels_list format."""
+    """Build minimal channel dicts matching ProgramDirector._load_channels_list format.
+
+    Includes number (Plex GuideNumber); uses 100+index so lineup ordering is deterministic.
+    """
     return [
         {
             "channel_id": name.lower().replace(" ", "-"),
-            "channel_id_int": i + 1,
+            "number": 100 + (i + 1),
+            "channel_id_int": 100 + (i + 1),
             "name": name,
             "schedule_config": {"channel_type": "network"},
         }
@@ -159,4 +167,70 @@ class TestPlexLineup:
         assert lineup_names == registry_names, (
             f"INV-PLEX-LINEUP-001 violated: lineup names {lineup_names} "
             f"do not match registry names {registry_names}"
+        )
+
+    def test_guide_numbers_are_numeric_strings(self):
+        """GuideNumber MUST be a numeric string (Plex Compatibility Interface)."""
+        channels = _make_channels("HBO", "CNN")
+        adapter = _make_adapter(channels)
+        lineup = adapter.lineup()
+        for entry in lineup:
+            gn = entry["GuideNumber"]
+            assert isinstance(gn, str), (
+                f"Plex lineup invariant violated: GuideNumber must be string, got {type(gn).__name__}"
+            )
+            assert gn.isdigit(), (
+                f"Plex lineup invariant violated: GuideNumber must be numeric string, got {gn!r}"
+            )
+
+    def test_guide_numbers_sorted_ascending(self):
+        """Channel ordering invariant: lineup MUST be in ascending GuideNumber order."""
+        channels = _make_channels("HBO", "CNN", "ESPN")
+        adapter = _make_adapter(channels)
+        lineup = adapter.lineup()
+        numbers = [entry["GuideNumber"] for entry in lineup]
+        sorted_numbers = sorted(numbers, key=lambda x: (int(x) if x.isdigit() else 0))
+        assert numbers == sorted_numbers, (
+            f"Plex channel ordering invariant violated: GuideNumbers must be ascending, "
+            f"got {numbers}, expected {sorted_numbers}"
+        )
+
+    def test_lineup_urls_are_absolute(self):
+        """URLs MUST be absolute (Plex Compatibility Interface)."""
+        channels = _make_channels("HBO")
+        adapter = _make_adapter(channels, base_url="http://192.168.1.50:8000")
+        lineup = adapter.lineup()
+        for entry in lineup:
+            url = entry["URL"]
+            assert url.startswith("http://") or url.startswith("https://"), (
+                f"Plex lineup invariant violated: URL must be absolute, got {url!r}"
+            )
+
+    def test_lineup_deterministic_across_calls(self):
+        """Lineup determinism invariant: same set and order across repeated requests."""
+        channels = _make_channels("HBO", "CNN")
+        adapter = _make_adapter(channels)
+        lineup1 = adapter.lineup()
+        lineup2 = adapter.lineup()
+        assert len(lineup1) == len(lineup2)
+        for a, b in zip(lineup1, lineup2):
+            assert a["GuideNumber"] == b["GuideNumber"], (
+                "Plex lineup determinism invariant violated: GuideNumber changed between calls"
+            )
+            assert a["URL"] == b["URL"], (
+                "Plex lineup determinism invariant violated: URL changed between calls"
+            )
+
+    def test_lineup_endpoint_returns_200_and_json_array(self):
+        """Lineup endpoint MUST return HTTP 200 and a JSON array (public interface)."""
+        app = FastAPI()
+        app.include_router(create_plex_router(_make_adapter(_make_channels("HBO"))))
+        client = TestClient(app)
+        response = client.get("/lineup.json")
+        assert response.status_code == 200, (
+            f"Plex lineup invariant violated: expected HTTP 200, got {response.status_code}"
+        )
+        data = response.json()
+        assert isinstance(data, list), (
+            f"Plex lineup invariant violated: response must be JSON array, got {type(data).__name__}"
         )

@@ -33,6 +33,7 @@ def test_channel_config_rejects_schedule_source_mock():
     """ChannelConfig validation rejects schedule_source != 'dsl' (e.g. 'mock')."""
     config = ChannelConfig(
         channel_id="test",
+        number=1,
         channel_id_int=1,
         name="Test",
         program_format=DEFAULT_PROGRAM_FORMAT,
@@ -47,6 +48,7 @@ def test_channel_config_accepts_schedule_source_dsl():
     """ChannelConfig validation accepts schedule_source 'dsl'."""
     config = ChannelConfig(
         channel_id="test",
+        number=1,
         channel_id_int=1,
         name="Test",
         program_format=DEFAULT_PROGRAM_FORMAT,

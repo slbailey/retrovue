@@ -383,6 +383,24 @@ class PlexClient:
                 "genres": [],
             }
 
+            # Artwork: Plex returns relative paths (e.g. /library/metadata/12345/thumb/...)
+            # For movies, "thumb" IS the poster.
+            # For TV episodes, "thumb" is a video still/screenshot.
+            #   - "grandparentThumb" = series poster
+            #   - "parentThumb"      = season poster
+            thumb_path = video.get("thumb")
+            art_path = video.get("art")
+            parent_thumb_path = video.get("parentThumb")
+            grandparent_thumb_path = video.get("grandparentThumb")
+            if thumb_path:
+                metadata["thumbUrl"] = f"{self.base_url}{thumb_path}?X-Plex-Token={self.token}"
+            if art_path:
+                metadata["artUrl"] = f"{self.base_url}{art_path}?X-Plex-Token={self.token}"
+            if parent_thumb_path:
+                metadata["parentThumbUrl"] = f"{self.base_url}{parent_thumb_path}?X-Plex-Token={self.token}"
+            if grandparent_thumb_path:
+                metadata["grandparentThumbUrl"] = f"{self.base_url}{grandparent_thumb_path}?X-Plex-Token={self.token}"
+
             # Provide simplified keys in addition to raw attribute names
             if metadata.get("contentRating"):
                 metadata["content_rating"] = metadata["contentRating"]
@@ -1319,6 +1337,20 @@ class PlexImporter(BaseImporter):
                     editorial["episode_number"] = int(str(_eidx))
             except Exception:
                 pass
+            # INV-PLEX-ARTWORK-001: persist poster URL at ingest time.
+            # For movies: thumb IS the poster.
+            # For TV episodes: thumb is a screenshot — use series/season poster instead.
+            item_type = item.get("type", "")
+            if item_type == "episode":
+                poster = (
+                    meta.get("grandparentThumbUrl")  # series poster
+                    or meta.get("parentThumbUrl")     # season poster
+                    or meta.get("thumbUrl")           # fallback to episode still
+                )
+            else:
+                poster = meta.get("thumbUrl")  # movie poster
+            if poster:
+                editorial["thumb_url"] = poster
             # Library name for operator visibility (can be ignored downstream if redundant)
             if library.get("title"):
                 editorial["library_name"] = library.get("title")

@@ -13,7 +13,7 @@ schedules that drive 24/7 playout.
 
 ```yaml
 channel: cheers-24-7
-channel_number: 2
+number: 101
 name: "Cheers 24/7"
 channel_type: network
 timezone: America/New_York
@@ -49,7 +49,8 @@ schedule:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `channel` | string | Unique channel identifier (slug). Used as the channel ID everywhere in the system. Must be lowercase with hyphens. |
+| `channel` | string | Unique channel identifier (slug). Used as the canonical channel ID everywhere in the system. Must be lowercase with hyphens. |
+| `number` | int | **Required.** Positive integer, unique across all channels. Used as Plex GuideNumber and XMLTV `<channel id>`. See [Channel Numbering](channels/channel_numbering.md). Legacy: `channel_number` is accepted if `number` is missing. |
 | `timezone` | string | IANA timezone (e.g. `America/New_York`). All schedule times are interpreted in this zone. |
 | `schedule` | dict | The programming schedule. See [Schedule](#schedule). |
 
@@ -57,7 +58,7 @@ schedule:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `channel_number` | int | — | Numeric channel number for EPG display. |
+| `channel_number` | int | — | **Legacy.** Use `number` instead. Accepted for backward compatibility when `number` is absent. |
 | `name` | string | — | Human-readable display name. |
 | `channel_type` | string | `network` | Determines break placement strategy. See [Channel Types](#channel-types). |
 | `template` | string | `network_television` | Grid template. `network_television` = 30-min grid, `premium_movie` = 15-min grid. |

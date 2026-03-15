@@ -95,14 +95,22 @@ class PlexAdapter:
         )
 
     def lineup(self) -> list[dict[str, str]]:
-        """INV-PLEX-LINEUP-001: One entry per registered channel."""
+        """INV-PLEX-LINEUP-001: One entry per registered channel; GuideNumber from config number.
+
+        Channels are always sorted by number so lineup order is deterministic (ascending GuideNumber).
+        """
+        channels_sorted = sorted(
+            self._channels,
+            key=lambda c: c.get("number", c.get("channel_id_int", 0)),
+        )
         return [
             make_lineup_entry(
                 channel_id=ch["channel_id"],
                 channel_name=ch["name"],
                 base_url=self._base_url,
+                guide_number=ch.get("number", ch.get("channel_id_int")),
             )
-            for ch in self._channels
+            for ch in channels_sorted
         ]
 
     def lineup_status(self) -> dict[str, Any]:

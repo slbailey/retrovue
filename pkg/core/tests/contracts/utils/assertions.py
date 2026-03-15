@@ -35,4 +35,3 @@ def assert_contains_fields(obj: Mapping[str, Any], expected: Mapping[str, Any]) 
         assert actual_value == expected_value, (
             f"Field '{key}' expected {expected_value!r} but found {actual_value!r}"
         )
-
