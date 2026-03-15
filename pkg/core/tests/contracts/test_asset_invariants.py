@@ -97,9 +97,59 @@ def _is_schedulable(asset: SimpleNamespace) -> bool:
     )
 
 
+def _check_asset_media_identity(schedule_slot: SimpleNamespace) -> None:
+    """Validate INV-ASSET-MEDIA-IDENTITY: schedule slots reference Assets, not Media.
+
+    Asset schedules; media plays. The schedulable unit MUST be an Asset.
+    """
+    if getattr(schedule_slot, "media_id_as_schedule_unit", None) is True:
+        raise ValueError(
+            "INV-ASSET-MEDIA-IDENTITY-VIOLATED: "
+            "schedule slot must not use Media as the scheduling unit"
+        )
+    if not (getattr(schedule_slot, "asset_id", None) or getattr(schedule_slot, "asset_uuid", None)):
+        raise ValueError(
+            "INV-ASSET-MEDIA-IDENTITY-VIOLATED: "
+            "schedule slot must reference an Asset (asset_id or asset_uuid)"
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 1: Asset Entity Integrity
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestInvAssetMediaIdentity:
+    """INV-ASSET-MEDIA-IDENTITY enforcement tests.
+
+    Fundamental rule: asset schedules, media plays. Scheduler schedules Assets only;
+    playout resolves Asset to Media at runtime.
+    """
+
+    def test_schedule_slot_with_asset_id_valid(self) -> None:
+        """INV-ASSET-MEDIA-IDENTITY — schedule slot references Asset."""
+        slot = SimpleNamespace(asset_id="00000000-0000-0000-0000-000000000001")
+        _check_asset_media_identity(slot)  # must not raise
+
+    def test_schedule_slot_with_asset_uuid_valid(self) -> None:
+        """INV-ASSET-MEDIA-IDENTITY — schedule slot references Asset via asset_uuid."""
+        slot = SimpleNamespace(asset_uuid="00000000-0000-0000-0000-000000000001")
+        _check_asset_media_identity(slot)  # must not raise
+
+    def test_schedule_slot_media_as_unit_violation(self) -> None:
+        """INV-ASSET-MEDIA-IDENTITY — Media must not be the scheduling unit."""
+        slot = SimpleNamespace(
+            asset_id="00000000-0000-0000-0000-000000000001",
+            media_id_as_schedule_unit=True,
+        )
+        with pytest.raises(ValueError, match="INV-ASSET-MEDIA-IDENTITY-VIOLATED"):
+            _check_asset_media_identity(slot)
+
+    def test_schedule_slot_without_asset_reference_violation(self) -> None:
+        """INV-ASSET-MEDIA-IDENTITY — schedule slot must reference an Asset."""
+        slot = SimpleNamespace(media_id="some-media-id")  # no asset_id / asset_uuid
+        with pytest.raises(ValueError, match="INV-ASSET-MEDIA-IDENTITY-VIOLATED"):
+            _check_asset_media_identity(slot)
 
 
 class TestInvAssetApprovedImpliesReady001:
