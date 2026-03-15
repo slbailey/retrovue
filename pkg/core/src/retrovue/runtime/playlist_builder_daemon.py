@@ -809,6 +809,9 @@ class PlaylistBuilderDaemon:
     # ------------------------------------------------------------------
 
     def _run_loop(self) -> None:
+        # ContainerDiscoveryContract / CatalogReconciliationContract: container refresh
+        # (discovery + reconciliation for configured collections) MUST run before
+        # horizon expansion. Wire container_refresh here when invoked by scheduler.
         while not self._stop_event.is_set():
             try:
                 self.evaluate_once()

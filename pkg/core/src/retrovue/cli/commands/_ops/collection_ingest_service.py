@@ -30,9 +30,16 @@ from retrovue.infra.metadata.persistence import persist_asset_metadata
 
 from ....adapters.registry import ENRICHERS
 from ....catalog.discovery import discover_locators
+from ....catalog.processor_jobs import enqueue_processor_jobs
+from ....catalog.reconciliation import (
+    ReconciliationOutcome,
+    determine_reconciliation_outcomes,
+    load_catalog_state_for_collection,
+)
 from ....domain.entities import Asset, Collection
 from ....infra.canonical import canonical_hash, canonical_key_for
 from ....infra.exceptions import IngestError
+from ....infra.settings import settings
 from ....usecases.metadata_handler import handle_ingest
 from ....usecases.asset_path_resolver import AssetPathResolver
 
@@ -438,8 +445,7 @@ class CollectionIngestService:
         except Exception:
             pipeline_checksum = None
 
-        # Discovery is the single source of "what was discovered" (ContainerDiscoveryContract).
-        # discover_locators returns (DiscoveredLocator, raw_item) pairs; no catalog writes.
+        # (1) Discover — single source of "what was discovered" (ContainerDiscoveryContract).
         try:
             discovery_result = discover_locators(
                 collection,
@@ -451,8 +457,26 @@ class CollectionIngestService:
         except Exception as e:
             raise RuntimeError(f"Importer discovery failed: {e}") from e
 
+        stats.assets_discovered = len(discovery_result or [])
+        discovered_locators = [d for d, _ in discovery_result or []]
+        item_by_hash = {
+            canonical_hash(d.locator): item for d, item in (discovery_result or [])
+        }
+
         # Get provider name from importer
         provider = getattr(importer, "name", None) if importer else None
+
+        # (2) Detect sidecars — leave for apply step (no-op here).
+        # (3) Compare — load current catalog state for this collection.
+        catalog_state = load_catalog_state_for_collection(self.db, collection.uuid)
+        # (4) Determine outcome — create | update | no_action | mark_unavailable.
+        outcomes = determine_reconciliation_outcomes(
+            discovered_locators,
+            catalog_state,
+            enable_fingerprint_updates=settings.enable_fingerprint_updates,
+            full_collection_scope=(scope == "collection"),
+        )
+        processor_ids_for_enqueue = [eid for eid, _, _ in pipeline]
 
         # Preload path mappings for this collection to resolve local paths before enrichment
         path_mappings: list[tuple[str, str]] = []
@@ -563,11 +587,41 @@ class CollectionIngestService:
                 return 1.0
             return score
 
-        # Track all canonical_key_hashes seen during discovery for reconciliation
-        seen_hashes: set[str] = set()
+        # (5) Apply — for each outcome: create (full path), update (fingerprint + enqueue), no_action, mark_unavailable.
+        for loc, outcome, existing_asset in outcomes:
+            if outcome == ReconciliationOutcome.mark_unavailable and existing_asset is not None:
+                if not dry_run:
+                    existing_asset.is_deleted = True
+                    existing_asset.deleted_at = datetime.now(UTC)
+                stats.assets_removed += 1
+                logger.info(
+                    "asset_marked_unavailable",
+                    asset_uuid=str(existing_asset.uuid),
+                    uri=existing_asset.uri,
+                    collection=collection.name,
+                )
+                continue
+            if outcome == ReconciliationOutcome.no_action and existing_asset is not None:
+                stats.assets_skipped += 1
+                continue
+            if outcome == ReconciliationOutcome.update and existing_asset is not None and loc is not None:
+                if settings.enable_fingerprint_updates and loc.fingerprint:
+                    existing_asset.file_size = loc.fingerprint.size
+                    existing_asset.file_mtime = loc.fingerprint.mtime
+                enqueue_processor_jobs(
+                    [existing_asset.uuid],
+                    processor_ids_for_enqueue,
+                    db=self.db,
+                )
+                stats.assets_updated += 1
+                continue
+            if outcome != ReconciliationOutcome.create or loc is None:
+                continue
 
-        for _discovered_locator, item in discovery_result or []:
-            stats.assets_discovered += 1
+            # Create path: run full path resolution, pipeline, handle_ingest, persist.
+            item = item_by_hash.get(canonical_hash(loc.locator))
+            if item is None:
+                continue
             # Capture source_uri before any local resolution
             try:
                 source_uri_val = _get_uri(item)
@@ -780,17 +834,15 @@ class CollectionIngestService:
             try:
                 canonical_key = canonical_key_for(item, collection=collection, provider=provider)
                 canonical_key_hash = canonical_hash(canonical_key)
-                seen_hashes.add(canonical_key_hash)
             except IngestError as e:
                 stats.errors.append(str(e))
                 continue
 
-            # Dry-run still executes all reads; it only avoids persisting writes
+            # Duplicate check: same canonical_key_hash may appear from multiple items; only create once.
             existing = repo.get_by_collection_and_canonical_hash(
                 collection.uuid, canonical_key_hash
             )
             if existing is not None:
-                # Existing asset found — do not mutate during collection ingest.
                 stats.assets_skipped += 1
                 continue
 
@@ -830,12 +882,17 @@ class CollectionIngestService:
             else:
                 stats.assets_needs_review += 1
 
+            source_id = getattr(collection, "source_id", None)
+            if source_id is None:
+                raise ValueError("collection must have source_id for asset creation")
+            file_size = loc.fingerprint.size if loc and loc.fingerprint else size_val
+            file_mtime = loc.fingerprint.mtime if loc and loc.fingerprint else None
             asset = Asset(
                 uuid=uuid.uuid4(),
                 collection_uuid=collection.uuid,
+                source_id=source_id,
                 canonical_key=canonical_key,
                 canonical_key_hash=canonical_key_hash,
-                # Persist source_uri in DB; canonical_uri is derived only for enrichment/runtime
                 uri=source_uri_val or canonical_uri_val,
                 canonical_uri=canonical_uri_val,
                 size=size_val,
@@ -843,6 +900,8 @@ class CollectionIngestService:
                 approved_for_broadcast=initial_approved,
                 operator_verified=False,
                 discovered_at=datetime.now(UTC),
+                file_size=file_size,
+                file_mtime=file_mtime,
             )
             # Populate optional incoming fields when creating a new asset
             incoming_enricher = _get_enricher_checksum(item)
@@ -930,6 +989,12 @@ class CollectionIngestService:
                 except Exception:
                     # Allow upstream to surface; we keep stats consistent with actual persistence
                     raise
+                # (6) Enqueue — after create, stub enqueue for Phase 3.
+                enqueue_processor_jobs(
+                    [asset.uuid],
+                    processor_ids_for_enqueue,
+                    db=self.db,
+                )
             stats.assets_ingested += 1
             if created_assets is not None:
                 asset_record = {
@@ -956,37 +1021,6 @@ class CollectionIngestService:
                 except Exception:
                     pass
                 created_assets.append(asset_record)
-
-        # ── Reconciliation: soft-delete assets no longer on disk ──────────
-        # Only for full collection ingest (no title/season/episode scope),
-        # and only when discovery returned at least one item (guard against
-        # importer failures that return an empty list, which would wipe all
-        # assets).
-        if scope == "collection" and seen_hashes and stats.assets_discovered > 0:
-            try:
-                stale_q = (
-                    self.db.query(Asset)
-                    .filter(
-                        Asset.collection_uuid == collection.uuid,
-                        Asset.is_deleted.is_(False),
-                        ~Asset.canonical_key_hash.in_(seen_hashes),
-                    )
-                )
-                stale_assets = stale_q.all()
-
-                for stale_asset in stale_assets:
-                    if not dry_run:
-                        stale_asset.is_deleted = True
-                        stale_asset.deleted_at = datetime.now(UTC)
-                    stats.assets_removed += 1
-                    logger.info(
-                        "ingest_reconcile_removed",
-                        asset_uuid=str(stale_asset.uuid),
-                        uri=stale_asset.uri,
-                        collection=collection.name,
-                    )
-            except Exception as exc:
-                stats.errors.append(f"reconciliation failed: {exc}")
 
         result = CollectionIngestResult(
             collection_id=str(collection.uuid),

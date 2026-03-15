@@ -40,9 +40,10 @@ def _fake_collection(*, uuid="c-1", name="commercials", source_id="s-1"):
     )
 
 
-def _fake_discovered_item(*, path_uri="/media/a.mp4", size=1000):
+def _fake_discovered_item(*, path_uri="/media/a.mp4", size=1000, provider_key=None):
     return SimpleNamespace(
         path_uri=path_uri,
+        provider_key=provider_key,
         size=size,
         raw_labels=[],
         editorial=None,
@@ -104,6 +105,9 @@ class TestFullIngestReconciliation:
             return_value={"resolved_fields": {}},
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            return_value={"hash_gone": stale_asset},
         ):
             # Make scalar return None (no existing asset for the discovered item)
             db.scalar.return_value = None
@@ -199,6 +203,11 @@ class TestDryRunReconciliation:
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
             return_value={"resolved_fields": {}},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            return_value={"hash_gone": stale_asset},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
         ):
             db.scalar.return_value = None
 

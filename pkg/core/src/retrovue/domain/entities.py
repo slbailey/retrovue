@@ -193,6 +193,9 @@ class Asset(Base):
     collection_uuid: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("collections.uuid", ondelete="RESTRICT"), nullable=False
     )
+    source_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
+    )
     canonical_key: Mapped[str] = mapped_column(Text, nullable=False)
     canonical_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     uri: Mapped[str] = mapped_column(Text, nullable=False)
@@ -227,6 +230,9 @@ class Asset(Base):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_enricher_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Fingerprint for reconciliation (compare with discovered size/mtime)
+    file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    file_mtime: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -274,6 +280,9 @@ class Asset(Base):
             "collection_uuid", "canonical_key_hash", name="ix_assets_collection_canonical_unique"
         ),
         UniqueConstraint("collection_uuid", "uri", name="ix_assets_collection_uri_unique"),
+        UniqueConstraint(
+            "source_id", "collection_uuid", "uri", name="uq_assets_source_container_locator"
+        ),
         # Checks
         CheckConstraint(
             "(NOT approved_for_broadcast) OR (state = 'ready')", name="chk_approved_implies_ready"
