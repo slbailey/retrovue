@@ -28,6 +28,7 @@
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/ProducerPreloader.hpp"
 #include "FastTestConfig.hpp"
+#include "TestDecoder.hpp"
 #include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
@@ -138,7 +139,8 @@ class SeamProofContractTest : public ::testing::Test {
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
         test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-        PipelineManagerOptions{0});
+        PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   }
 
   bool WaitForBlocksCompletedBounded(int count, int64_t max_steps = 50000) {

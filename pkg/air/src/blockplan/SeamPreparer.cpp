@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/DefaultProducerFactory.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "retrovue/util/Logger.hpp"
@@ -20,7 +21,10 @@ namespace retrovue::blockplan {
 
 using retrovue::util::Logger;
 
-SeamPreparer::SeamPreparer() {
+SeamPreparer::SeamPreparer(std::shared_ptr<IProducerFactory> factory)
+    : producer_factory_(factory
+          ? std::move(factory)
+          : std::make_shared<DefaultProducerFactory>()) {
   worker_thread_ = std::thread(&SeamPreparer::WorkerLoop, this);
 }
 
@@ -231,10 +235,14 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   }
 
   int64_t fps_num = 30, fps_den = 1;
-  auto source = std::make_unique<TickProducer>(req.width, req.height, req.fps);
-  source->SetAspectPolicy(req.aspect_policy);
-  source->AssignBlock(req.block);
-  source->SetLogicalSegmentIndex(req.segment_index);
+  auto source_base = producer_factory_->Create(req.width, req.height, req.fps);
+  if (auto* tp = dynamic_cast<TickProducer*>(source_base.get())) {
+    tp->SetAspectPolicy(req.aspect_policy);
+    tp->SetLogicalSegmentIndex(req.segment_index);
+  }
+  auto* source_tp = dynamic_cast<ITickProducer*>(source_base.get());
+  assert(source_tp && "Factory must produce ITickProducer");
+  source_tp->AssignBlock(req.block);
 
   // Checkpoint 3
   if (cancel_requested_.load(std::memory_order_acquire)) return;
@@ -247,7 +255,14 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   const bool is_pad = (seg_type == SegmentType::kPad);
 
   // First decode + audio prime loop (INV-AUDIO-PRIME-001)
-  auto prime_result = source->PrimeFirstTick(req.min_audio_prime_ms);
+  TickProducer::PrimeResult prime_result;
+  if (auto* real_tp = dynamic_cast<TickProducer*>(source_base.get())) {
+    prime_result = real_tp->PrimeFirstTick(req.min_audio_prime_ms);
+  } else {
+    // TestDecoder or other non-TickProducer: priming done in AssignBlock.
+    prime_result.met_threshold = source_tp->HasPrimedFrame() || source_tp->HasDecoder();
+    prime_result.actual_depth_ms = prime_result.met_threshold ? req.min_audio_prime_ms : 0;
+  }
 
   // Checkpoint 4
   if (cancel_requested_.load(std::memory_order_acquire)) return;
@@ -255,7 +270,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   if (req.type == SeamRequestType::kBlock && !is_pad) {
     std::ostringstream oss;
     oss << "[SeamPreparer] PREROLL_WORKER_PRIME block_id=" << req.block.block_id
-        << " first_decode_ok=" << (source->HasDecoder() ? "Y" : "N")
+        << " first_decode_ok=" << (source_tp->HasDecoder() ? "Y" : "N")
         << " audio_depth_ms=" << prime_result.actual_depth_ms
         << " met_threshold=" << (prime_result.met_threshold ? "Y" : "N");
     Logger::Info(oss.str());
@@ -293,11 +308,11 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
         << " block=" << req.block.block_id
         << " segment_index=" << req.segment_index
         << " segment_type=" << SegmentTypeName(seg_type)
-        << " decoder_used=" << (source->HasDecoder() ? "true" : "false")
+        << " decoder_used=" << (source_tp->HasDecoder() ? "true" : "false")
         << " audio_depth_ms=" << prime_result.actual_depth_ms;
     Logger::Info(oss.str());
     // Surface preroll failure: content block but decoder open/seek failed.
-    if (req.type == SeamRequestType::kBlock && !source->HasDecoder()) {
+    if (req.type == SeamRequestType::kBlock && !source_tp->HasDecoder()) {
       std::ostringstream fail_oss;
       fail_oss << "[SeamPreparer] PREROLL_DECODER_FAILED"
                << " block_id=" << req.block.block_id
@@ -307,7 +322,7 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   }
 
   auto result = std::make_unique<SeamResult>();
-  result->producer = std::move(source);
+  result->producer = std::move(source_base);
   result->audio_prime_depth_ms = prime_result.actual_depth_ms;
   result->video_primed_frames = 1;  // PrimeFirstTick guarantees at least one frame
   result->type = req.type;

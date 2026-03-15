@@ -14,6 +14,7 @@
 #include "retrovue/blockplan/PipelineManager.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
 #include "FastTestConfig.hpp"
+#include "TestDecoder.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -59,7 +60,8 @@ TEST_F(ExecutionEngineGuardrailTest, ContinuousOutputSelectsContinuousEngine) {
   auto engine = std::make_unique<PipelineManager>(
       ctx_.get(), std::move(callbacks), nullptr,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den),
-      PipelineManagerOptions{0});
+      PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   EXPECT_NE(engine, nullptr);
 
   // Verify it satisfies the IPlayoutExecutionEngine interface

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/blockplan/IProducerFactory.hpp"
 #include "retrovue/producers/IProducer.h"
 #include "retrovue/runtime/AspectPolicy.h"
 
@@ -82,7 +83,7 @@ class SeamPreparer {
  public:
   using DelayHookFn = std::function<void(const std::atomic<bool>&)>;
 
-  SeamPreparer();
+  explicit SeamPreparer(std::shared_ptr<IProducerFactory> factory = nullptr);
   ~SeamPreparer();
 
   SeamPreparer(const SeamPreparer&) = delete;
@@ -142,6 +143,7 @@ class SeamPreparer {
   bool worker_active_ = false;  // Guarded by mutex_
 
   DelayHookFn delay_hook_;  // Test-only
+  std::shared_ptr<IProducerFactory> producer_factory_;
 };
 
 }  // namespace retrovue::blockplan

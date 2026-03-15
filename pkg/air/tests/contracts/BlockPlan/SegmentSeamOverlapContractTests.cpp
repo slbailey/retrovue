@@ -152,6 +152,7 @@
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
 #include "FastTestConfig.hpp"
+#include "TestDecoder.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -344,7 +345,8 @@ class SegmentSeamOverlapContractTest : public ::testing::Test {
     };
     return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks),
         nullptr, test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den),
-        PipelineManagerOptions{0});
+        PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   }
 
   bool WaitForSessionEnded(int timeout_ms = 5000) {
