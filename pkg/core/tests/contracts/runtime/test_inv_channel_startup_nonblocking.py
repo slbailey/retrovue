@@ -24,6 +24,7 @@ def _make_channel_config(channel_id: str = "test-ch") -> "ChannelConfig":
 
     return ChannelConfig(
         channel_id=channel_id,
+        number=1,
         channel_id_int=1,
         name="Test Channel",
         program_format={"width": 1920, "height": 1080, "fps": 30},

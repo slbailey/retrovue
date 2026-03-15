@@ -31,6 +31,15 @@ Covers: Plex adapter → ProgramDirector → ChannelManager → AIR lifecycle
 | INV-PLEX-XMLTV-001 | Programme elements have required attributes | `test_plex_epg.py::TestPlexEPG::test_epg_xml_programme_has_start_stop_channel` | TODO |
 | INV-PLEX-XMLTV-001 | Display name matches channel registry name | `test_plex_epg.py::TestPlexEPG::test_epg_xml_display_name_matches_channel_name` | TODO |
 
+## Artwork
+
+| Invariant | Test Scenario | Test File | Status |
+|-----------|---------------|-----------|--------|
+| INV-PLEX-ARTWORK-001 | Plex importer persists thumb_url in editorial payload | `test_plex_artwork.py::TestPlexArtworkIngest::test_thumb_url_persisted_in_editorial` | ✅ |
+| INV-PLEX-ARTWORK-001 | Artwork resolver reads from editorial payload, no live API call | `test_plex_artwork.py::TestPlexArtworkResolve::test_resolve_from_editorial_no_api_call` | ✅ |
+| INV-PLEX-ARTWORK-001 | Missing thumb_url returns placeholder, no fallback to live API | `test_plex_artwork.py::TestPlexArtworkResolve::test_missing_thumb_url_returns_none` | ✅ |
+| INV-PLEX-ARTWORK-001 | XMLTV icon element uses persisted artwork URL | `test_plex_artwork.py::TestPlexArtworkXmltv::test_xmltv_icon_uses_persisted_thumb_url` | ✅ |
+
 ## Stream Lifecycle
 
 | Invariant | Test Scenario | Test File | Status |

@@ -115,12 +115,14 @@ class ChannelConfig:
 
     Combines:
     - Human-readable ID (channel_id) for URLs and logs
-    - Integer ID (channel_id_int) for AIR gRPC
+    - number: externally visible channel number (Plex GuideNumber, XMLTV channel id)
+    - channel_id_int: AIR gRPC ID (may match number)
     - Display name
     - Technical program format
     - Schedule source configuration
     """
-    channel_id: str           # Human ID ("mock", "retro1")
+    channel_id: str           # Human ID ("cheers-24-7", "hbo")
+    number: int               # External channel number (Plex GuideNumber; must be unique, positive)
     channel_id_int: int       # AIR gRPC ID (1, 2, 3...)
     name: str
     program_format: ProgramFormat
@@ -147,6 +149,7 @@ class ChannelConfig:
             )
         config = cls(
             channel_id=data["channel_id"],
+            number=data.get("number", data["channel_id_int"]),
             channel_id_int=data["channel_id_int"],
             name=data["name"],
             program_format=ProgramFormat.from_dict(program_format_data) if program_format_data else DEFAULT_PROGRAM_FORMAT,
@@ -229,6 +232,7 @@ class InlineChannelConfigProvider:
 # Default channel config for tests/fallback
 MOCK_CHANNEL_CONFIG = ChannelConfig(
     channel_id="mock",
+    number=1,
     channel_id_int=1,
     name="Mock Channel",
     program_format=DEFAULT_PROGRAM_FORMAT,

@@ -18,11 +18,15 @@ from retrovue.web.iptv import generate_xmltv
 # ---------------------------------------------------------------------------
 
 def _make_channels(*names: str) -> list[dict]:
-    """Build minimal channel dicts matching ProgramDirector._load_channels_list format."""
+    """Build minimal channel dicts matching ProgramDirector._load_channels_list format.
+
+    Includes number for Plex/XMLTV channel id (GuideNumber).
+    """
     return [
         {
             "channel_id": name.lower().replace(" ", "-"),
-            "channel_id_int": i + 1,
+            "number": 100 + (i + 1),
+            "channel_id_int": 100 + (i + 1),
             "name": name,
             "schedule_config": {"channel_type": "network"},
         }
@@ -103,28 +107,24 @@ class TestPlexEPG:
     def test_epg_xml_channel_ids_match_lineup_guide_numbers(self):
         """Channel IDs in XMLTV MUST match GuideNumber from /lineup.json.
 
-        Both are derived from channel_id — the mapping MUST be consistent.
+        Both use the configured channel number (Plex-facing external ID).
         """
         channels = _make_channels("HBO", "CNN")
         adapter = _make_adapter(channels)
 
         lineup = adapter.lineup()
-        lineup_ids = {entry["GuideNumber"] for entry in lineup}
+        lineup_guide_numbers = {entry["GuideNumber"] for entry in lineup}
 
         root = xml_parse(adapter.epg_xml())
-        xmltv_ids = {el.get("id") for el in root.findall("channel")}
+        xmltv_channel_ids = {el.get("id") for el in root.findall("channel")}
 
-        # XMLTV channel IDs must be a superset of (or equal to) lineup GuideNumbers
-        # to ensure Plex can correlate guide data with lineup entries.
-        # The adapter may use channel_id for both, which satisfies this.
-        assert xmltv_ids, "INV-PLEX-XMLTV-001 violated: no channel IDs in XMLTV"
-        assert lineup_ids, "INV-PLEX-LINEUP-001 violated: no GuideNumbers in lineup"
+        assert xmltv_channel_ids, "INV-PLEX-XMLTV-001 violated: no channel IDs in XMLTV"
+        assert lineup_guide_numbers, "INV-PLEX-LINEUP-001 violated: no GuideNumbers in lineup"
 
-        # Both must reference the same underlying channel identifiers
-        registry_ids = {ch["channel_id"] for ch in channels}
-        assert xmltv_ids == registry_ids, (
-            f"INV-PLEX-XMLTV-001 violated: XMLTV channel IDs {xmltv_ids} "
-            f"do not match registry IDs {registry_ids}"
+        # XMLTV <channel id> and lineup GuideNumber must both be the channel number
+        assert xmltv_channel_ids == lineup_guide_numbers, (
+            f"INV-PLEX-XMLTV-001 violated: XMLTV channel IDs {xmltv_channel_ids} "
+            f"do not match lineup GuideNumbers {lineup_guide_numbers}"
         )
 
     def test_epg_xml_contains_programme_elements(self):

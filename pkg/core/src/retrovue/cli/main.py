@@ -193,6 +193,7 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
     # Build channel config using from_dict for proper deserialization
     config_data = {
         "channel_id": channel_data["channel_id"],
+        "number": channel_data.get("number", channel_data.get("channel_id_int", 1)),
         "channel_id_int": channel_data.get("channel_id_int", 1),
         "name": channel_data.get("name", channel_id),
         "program_format": channel_data.get("program_format", {

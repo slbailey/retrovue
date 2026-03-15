@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from retrovue.infra.exceptions import ConfigurationError
 from ..config import ChannelConfig, ProgramFormat
 
 _logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class YamlChannelConfigProvider:
 
     def _load(self) -> None:
         self._configs.clear()
+        self._seen_numbers: set[int] = set()
 
         if not self._config_dir.is_dir():
             _logger.warning("Channel config directory not found: %s", self._config_dir)
@@ -108,10 +110,22 @@ class YamlChannelConfigProvider:
                 continue
             try:
                 self._load_channel_file(yaml_file)
+            except ConfigurationError:
+                raise
             except Exception as e:
                 _logger.warning(
                     "Skipping invalid channel config %s: %s", yaml_file.name, e
                 )
+
+        # Channel number domain invariant: enforce at load time so broken guide never starts
+        numbers = [c.number for c in self._configs.values()]
+        if len(numbers) != len(set(numbers)):
+            raise ConfigurationError("Channel numbers must be unique")
+        for n in numbers:
+            if not isinstance(n, int):
+                raise ConfigurationError(f"Channel number must be integer: {n}")
+            if n <= 0:
+                raise ConfigurationError(f"Channel number must be positive: {n}")
 
         _logger.info(
             "Loaded %d channel configs from %s",
@@ -127,9 +141,31 @@ class YamlChannelConfigProvider:
         if not channel_id:
             raise ValueError(f"Missing 'channel' field in {yaml_file.name}")
 
-        channel_number = data.get("channel_number")
-        if channel_number is None:
-            raise ValueError(f"Missing 'channel_number' field in {yaml_file.name}")
+        # number (preferred) or channel_number (backward compat)
+        raw_number = data.get("number", data.get("channel_number"))
+        if raw_number is None:
+            raise ConfigurationError(
+                f"Missing 'number' (or 'channel_number') field in {yaml_file.name}. "
+                "Channel number is required for Plex GuideNumber and must be a positive integer."
+            )
+        if not isinstance(raw_number, int):
+            raise ConfigurationError(
+                f"Channel number must be an integer in {yaml_file.name}, got {type(raw_number).__name__}"
+            )
+        if raw_number < 1:
+            raise ConfigurationError(
+                f"Channel number must be positive in {yaml_file.name}, got {raw_number}"
+            )
+        channel_number = raw_number
+
+        if channel_id in self._configs:
+            raise ConfigurationError(
+                f"Duplicate channel id detected: {channel_id!r} (in {yaml_file.name})"
+            )
+        if hasattr(self, "_seen_numbers") and channel_number in self._seen_numbers:
+            raise ConfigurationError(
+                f"Duplicate channel number detected: {channel_number}"
+            )
 
         name = data.get("name", _titleize(channel_id))
 
@@ -171,13 +207,15 @@ class YamlChannelConfigProvider:
 
         config = ChannelConfig(
             channel_id=channel_id,
-            channel_id_int=int(channel_number),
+            number=channel_number,
+            channel_id_int=channel_number,
             name=name,
             program_format=program_format,
             schedule_source="dsl",
             schedule_config=schedule_config,
         )
 
+        self._seen_numbers.add(channel_number)
         self._configs[channel_id] = config
         _logger.debug(
             "Loaded channel config: %s (int_id=%d) from %s",
@@ -200,12 +238,13 @@ class YamlChannelConfigProvider:
         return list(self._configs.keys())
 
     def to_channels_list(self) -> list[dict[str, Any]]:
-        """Return channel configs as list of dicts."""
+        """Return channel configs as list of dicts (includes number for Plex/XMLTV)."""
         self._ensure_loaded()
         result = []
         for config in self._configs.values():
             result.append({
                 "channel_id": config.channel_id,
+                "number": config.number,
                 "channel_id_int": config.channel_id_int,
                 "name": config.name,
                 "program_format": {

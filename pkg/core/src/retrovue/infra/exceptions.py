@@ -18,6 +18,12 @@ class ValidationError(RetroVueError):
     pass
 
 
+class ConfigurationError(RetroVueError):
+    """Raised when channel or system configuration is invalid (e.g. duplicate channel number)."""
+
+    pass
+
+
 class ConstraintError(RetroVueError):
     """Raised when database constraint violation occurs."""
 

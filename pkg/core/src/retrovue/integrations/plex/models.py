@@ -53,14 +53,16 @@ def make_lineup_entry(
     channel_id: str,
     channel_name: str,
     base_url: str,
+    guide_number: int | None = None,
 ) -> dict[str, str]:
     """Build a single HDHomeRun lineup entry.
 
-    INV-PLEX-LINEUP-001: GuideNumber from channel_id, GuideName from
-    display name, URL from /channel/{id}.ts endpoint.
+    INV-PLEX-LINEUP-001: GuideNumber from channel config number (Plex-facing),
+    GuideName from display name, URL from /channel/{id}.ts (canonical id).
     """
+    num = guide_number if guide_number is not None else channel_id
     return {
-        "GuideNumber": channel_id,
+        "GuideNumber": str(num) if isinstance(num, int) else str(num),
         "GuideName": channel_name,
         "URL": f"{base_url.rstrip('/')}/channel/{channel_id}.ts",
     }

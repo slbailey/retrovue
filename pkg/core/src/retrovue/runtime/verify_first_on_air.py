@@ -91,6 +91,7 @@ def run_server():
 
     channel_config = ChannelConfig(
         channel_id=CHANNEL_ID,
+        number=1,
         channel_id_int=1,
         name="Test Channel",
         program_format=program_format,

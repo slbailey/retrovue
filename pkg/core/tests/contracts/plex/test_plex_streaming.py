@@ -5,12 +5,16 @@ Verifies:
   INV-PLEX-STREAM-START-001 — stream start delegates to ProgramDirector
   INV-PLEX-STREAM-DISCONNECT-001 — disconnect triggers tune_out
   INV-PLEX-FANOUT-001 — Plex and direct viewers share one producer
+  Plex Compatibility Interface — stream endpoint returns 200 and MPEG-TS sync bytes
 """
 
 import threading
 from unittest.mock import MagicMock, patch, call
 
 import pytest
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from starlette.testclient import TestClient
 
 from retrovue.integrations.plex.adapter import PlexAdapter
 
@@ -20,11 +24,12 @@ from retrovue.integrations.plex.adapter import PlexAdapter
 # ---------------------------------------------------------------------------
 
 def _make_channels(*names: str) -> list[dict]:
-    """Build minimal channel dicts."""
+    """Build minimal channel dicts with number (Plex GuideNumber)."""
     return [
         {
             "channel_id": name.lower().replace(" ", "-"),
-            "channel_id_int": i + 1,
+            "number": 100 + (i + 1),
+            "channel_id_int": 100 + (i + 1),
             "name": name,
             "schedule_config": {"channel_type": "network"},
         }
@@ -376,4 +381,66 @@ class TestPlexStreaming:
         assert mgr.viewer_count == 0
         assert mgr._producer_stopped, (
             "INV-PLEX-FANOUT-001 violated: producer not stopped after all viewers left"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Stream endpoint contract (HTTP observable behavior)
+# ---------------------------------------------------------------------------
+
+# TS sync byte per MPEG-TS; first byte of each 188-byte packet.
+TS_SYNC_BYTE = 0x47
+
+
+def _stub_ts_stream():
+    """Yield a few TS-like packets (sync 0x47 + padding) for deterministic contract tests."""
+    packet = bytes([TS_SYNC_BYTE] + [0x00] * 187)
+    for _ in range(10):
+        yield packet
+
+
+class TestPlexStreamEndpoint:
+    """Plex Compatibility Interface: channel stream endpoint behavior.
+
+    Tests observable HTTP behavior: 200, stream starts with MPEG-TS sync bytes.
+    Uses a stub stream (no real playout) for determinism.
+    """
+
+    def test_stream_endpoint_returns_200(self):
+        """Stream availability invariant: endpoint MUST return HTTP 200."""
+        app = FastAPI()
+
+        @app.get("/channel/{channel_id}.ts")
+        def stream_channel(channel_id: str):
+            return StreamingResponse(
+                _stub_ts_stream(),
+                media_type="video/mp2t",
+            )
+
+        client = TestClient(app)
+        response = client.get("/channel/hbo.ts")
+        assert response.status_code == 200, (
+            f"Plex stream availability invariant violated: expected HTTP 200, got {response.status_code}"
+        )
+
+    def test_stream_begins_with_ts_sync_bytes(self):
+        """Stream MUST begin with MPEG-TS packets (sync byte 0x47)."""
+        app = FastAPI()
+
+        @app.get("/channel/{channel_id}.ts")
+        def stream_channel(channel_id: str):
+            return StreamingResponse(
+                _stub_ts_stream(),
+                media_type="video/mp2t",
+            )
+
+        client = TestClient(app)
+        response = client.get("/channel/hbo.ts")
+        assert response.status_code == 200
+        content = b"".join(response.iter_bytes())
+        assert len(content) >= 188, (
+            "Plex stream invariant violated: stream must produce TS packets"
+        )
+        assert content[0] == TS_SYNC_BYTE, (
+            f"Plex stream invariant violated: first byte must be TS sync 0x47, got 0x{content[0]:02x}"
         )

@@ -17,6 +17,9 @@ This directory is the **only canonical source of runtime guarantees** for playou
   - Shared: `docs/contracts/invariants/shared/`
 - Component contracts (interface and behavior specifications):
   - `docs/contracts/core/` — Core subsystem contracts (execution interface, horizon management, runway, transmission log, etc.)
+  - `docs/contracts/plex/PLEX_COMPATIBILITY_INTERFACE.md` — Plex / HDHomeRun integration (tuner discovery, lineup, guide, artwork)
+  - `docs/contracts/xmltv/XMLTV_EXPORT_CONTRACT.md` — XMLTV export (EPG → XMLTV, schedule correctness, lineup consistency)
+  - `docs/contracts/epg/EPG_GENERATION_CONTRACT.md` — EPG generation (Schedule → EPG timeline, continuity, determinism)
 - Domain authority documents (glossary, pipeline model, authority vocabulary):
   - `docs/domains/` — Domain-level reference documents (HorizonManager, ScheduleManager, PlaylistEventExecution, etc.)
 ## Test labels: contract (CI) vs soak (nightly)

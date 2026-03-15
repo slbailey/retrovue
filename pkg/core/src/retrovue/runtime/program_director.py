@@ -356,6 +356,7 @@ class ProgramDirector:
                 if cfg:
                     result.append({
                         'channel_id': cfg.channel_id,
+                        'number': cfg.number,
                         'channel_id_int': cfg.channel_id_int,
                         'name': cfg.name,
                         'schedule_config': cfg.schedule_config,
@@ -461,6 +462,7 @@ class ProgramDirector:
             from retrovue.runtime.channel_manager import MockAlternatingScheduleService
             test1_config = ChannelConfig(
                 channel_id=MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID,
+                number=1,
                 channel_id_int=1,
                 name="Test A/B",
                 program_format=DEFAULT_PROGRAM_FORMAT,
@@ -1900,6 +1902,7 @@ class ProgramDirector:
                                 start_dt, end_dt, slot_sec, ep_sec,
                                 is_movie=season_number is None,
                             ),
+                            "asset_id": str(asset_id) if asset_id else None,
                         })
                 except Exception as e:
                     self._logger.error("EPG error for %s: %s", ch["channel_id"], e, exc_info=True)
@@ -2275,20 +2278,11 @@ class ProgramDirector:
             html_path = Path("/opt/retrovue/pkg/core/templates") / "epg" / "guide.html"
             return HTMLResponse(content=html_path.read_text())
 
-        # --- IPTV Discovery Endpoints ---
-
-        @self.fastapi_app.get("/iptv/channels.m3u")
-        def get_m3u_playlist(request: Request) -> Response:
-            """Multi-channel M3U playlist for IPTV clients (Plex, Jellyfin, VLC)."""
-            from retrovue.web.iptv import generate_m3u
-
-            channels = self._load_channels_list()
-            base_url = str(request.base_url).rstrip("/")
-            m3u = generate_m3u(channels, base_url=base_url)
-            return Response(content=m3u, media_type="audio/x-mpegurl")
+        # --- IPTV Guide (no M3U playlist: Plex uses HDHomeRun discover/lineup only) ---
 
         @self.fastapi_app.get("/iptv/guide.xml")
         def get_xmltv_guide(
+            request: Request,
             date: Optional[str] = None,
         ) -> Response:
             """XMLTV electronic program guide for IPTV clients.
@@ -2296,19 +2290,102 @@ class ProgramDirector:
             Plain def (not async) to avoid blocking the event loop during
             schedule compilation (INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001).
             Reuses the same EPG compilation path as /api/epg.
+            Contract: observable freshness (ETag/Last-Modified) when guide changes.
             """
+            import hashlib
+            from datetime import date as _date_type
+            from email.utils import formatdate
             from retrovue.web.iptv import generate_xmltv
 
-            # Build EPG entries using the same logic as get_epg_all
-            epg_result = get_epg_all(date=date)
             channels = self._load_channels_list()
-            entries = [e for e in epg_result.get("entries", []) if "error" not in e]
+            # EPG/XMLTV horizon invariant: at least 48h future; fetch multiple broadcast days
+            first = get_epg_all(date=date)
+            entries = [e for e in first.get("entries", []) if "error" not in e]
+            bd_str = first.get("broadcast_day")
+            if bd_str:
+                bd = _date_type.fromisoformat(bd_str)
+                for delta_days in (1, 2):
+                    next_result = get_epg_all(date=(bd + timedelta(days=delta_days)).strftime("%Y-%m-%d"))
+                    entries.extend(
+                        e for e in next_result.get("entries", []) if "error" not in e
+                    )
 
-            xml_str = generate_xmltv(channels, entries)
+            base_url = str(request.base_url).rstrip("/")
+            xml_str = generate_xmltv(channels, entries, base_url=base_url)
+            full_content = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str
+
+            # XMLTV refresh invariant: cache validators so Plex detects freshness
+            etag = hashlib.sha256(full_content.encode()).hexdigest()
+            last_modified = formatdate(usegmt=True)
+
             return Response(
-                content='<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str,
+                content=full_content,
                 media_type="application/xml",
+                headers={
+                    "ETag": f'"{etag}"',
+                    "Last-Modified": last_modified,
+                },
             )
+
+        # --- Artwork for Plex guide (posters / channel logos) ---
+        # Minimal valid 1x1 JPEG placeholder when no artwork is configured
+        _PLACEHOLDER_JPEG_B64 = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
+        _PLACEHOLDER_JPEG = __import__("base64").b64decode(_PLACEHOLDER_JPEG_B64)
+
+        @self.fastapi_app.get("/art/program/{program_id}.jpg")
+        def art_program(program_id: str) -> Response:
+            """Programme poster for XMLTV/Plex. Proxies image from upstream source.
+
+            INV-PLEX-ARTWORK-001: Serves artwork by proxying the persisted
+            thumb_url through RetroVue rather than redirecting to the upstream
+            server.  Plex guide clients do not reliably follow redirects back
+            to their own server.
+            """
+            import requests as _requests
+            from retrovue.infra.uow import session
+            from retrovue.web.artwork import resolve_programme_poster_url
+
+            try:
+                asset_uuid = uuid.UUID(program_id)
+            except ValueError:
+                return Response(content=_PLACEHOLDER_JPEG, media_type="image/jpeg")
+
+            with session() as db:
+                url = resolve_programme_poster_url(asset_uuid, db)
+            if not url:
+                return Response(content=_PLACEHOLDER_JPEG, media_type="image/jpeg")
+
+            # Proxy the image from upstream instead of redirecting.
+            try:
+                upstream = _requests.get(url, timeout=10, verify=False)
+                upstream.raise_for_status()
+                return Response(
+                    content=upstream.content,
+                    media_type=upstream.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+            except Exception:
+                return Response(content=_PLACEHOLDER_JPEG, media_type="image/jpeg")
+
+        @self.fastapi_app.get("/art/channel/{channel_id}.jpg")
+        def art_channel(channel_id: str) -> Response:
+            """Channel logo for XMLTV/Plex. Placeholder until channel artwork is configured."""
+            return Response(
+                content=_PLACEHOLDER_JPEG,
+                media_type="image/jpeg",
+            )
+
+        # --- Block IPTV playlist paths (Plex discovery surface invariant) ---
+        # Return 404 for common M3U paths so Plex does not register a second
+        # device or phantom tuner. Tuner discovery is HDHomeRun only.
+
+        @self.fastapi_app.get("/channels.m3u8")
+        def _block_channels_m3u8() -> Response:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+        @self.fastapi_app.get("/channels.m3u")
+        def _block_channels_m3u() -> Response:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
 
         # --- Plex HDHomeRun Virtual Tuner Endpoints ---
         # INV-PLEX-DISCOVERY-001, INV-PLEX-LINEUP-001,
@@ -2330,18 +2407,22 @@ class ProgramDirector:
 
         @self.fastapi_app.get("/lineup.json")
         def plex_lineup(request: Request):
-            """HDHomeRun channel lineup — INV-PLEX-LINEUP-001."""
+            """HDHomeRun channel lineup — INV-PLEX-LINEUP-001 (ascending GuideNumber order)."""
             from retrovue.integrations.plex.models import make_lineup_entry
 
             channels = self._load_channels_list()
             base_url = str(request.base_url).rstrip("/")
+            # Channel ordering invariant: ascending GuideNumber
+            sort_key = lambda ch: ch.get("number", ch.get("channel_id_int", 0))
+            sorted_channels = sorted(channels, key=sort_key)
             return [
                 make_lineup_entry(
                     channel_id=ch["channel_id"],
                     channel_name=ch["name"],
                     base_url=base_url,
+                    guide_number=ch.get("number", ch.get("channel_id_int")),
                 )
-                for ch in channels
+                for ch in sorted_channels
             ]
 
         @self.fastapi_app.get("/lineup_status.json")

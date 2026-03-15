@@ -7,9 +7,13 @@ and return formatted strings. No I/O, no database access.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 from xml.etree.ElementTree import Element, SubElement, tostring
+
+# Station timezone for XMLTV: Plex expects local time + offset (contract: no UTC-only).
+_DEFAULT_STATION_TZ = ZoneInfo("America/New_York")
 
 
 # ---------------------------------------------------------------------------
@@ -54,49 +58,84 @@ def generate_m3u(channels: list[dict[str, Any]], *, base_url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _xmltv_timestamp(iso_str: str) -> str:
-    """Convert ISO 8601 datetime string to XMLTV timestamp format.
+def _xmltv_timestamp(iso_str: str, station_tz: ZoneInfo = _DEFAULT_STATION_TZ) -> str:
+    """Convert ISO 8601 datetime to XMLTV format in station local time.
 
-    Input:  2026-03-06T06:00:00
-    Output: 20260306060000 +0000
-
-    Naive datetimes are assumed UTC.
+    Plex requires local station time with offset (not UTC-only). Converts
+    the given time to the station timezone so "now" matches programme windows.
     """
     dt = datetime.fromisoformat(iso_str)
-    if dt.tzinfo is not None:
-        offset = dt.strftime("%z")
-        # Ensure +HHMM format (strftime gives +HHMM already)
-    else:
-        offset = "+0000"
-    return dt.strftime("%Y%m%d%H%M%S") + " " + offset
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local_dt = dt.astimezone(station_tz)
+    offset = local_dt.strftime("%z")  # e.g. -0400 or +0000
+    return local_dt.strftime("%Y%m%d%H%M%S") + " " + offset
+
+
+def _channel_number(ch: dict[str, Any]) -> int:
+    """External channel number for XMLTV (Plex GuideNumber). Prefer number over channel_id_int."""
+    return ch.get("number", ch.get("channel_id_int", 0))
 
 
 def generate_xmltv(
     channels: list[dict[str, Any]],
     epg_entries: list[dict[str, Any]],
+    base_url: str | None = None,
 ) -> str:
-    """Generate XMLTV guide XML from channel configs and EPG entries."""
+    """Generate XMLTV guide XML from channel configs and EPG entries.
+
+    Invariant: XMLTV <channel id> and <programme channel> use the same channel number
+    as Plex GuideNumber, so lineup and guide mapping is consistent. Example:
+
+      <channel id="101">
+        <display-name>Cheers 24/7</display-name>
+        <icon src="http://server/art/channel/cheers-24-7.jpg"/>
+      </channel>
+      <programme start="20260314180000 -0400" stop="20260314183000 -0400" channel="101">
+        <icon src="http://server/art/program/{asset_id}.jpg"/>
+    """
     tv = Element("tv", attrib={
         "generator-info-name": "RetroVue",
         "generator-info-url": "",
     })
 
-    # <channel> elements
-    for ch in sorted(channels, key=lambda c: c.get("channel_id_int", 0)):
-        chan_el = SubElement(tv, "channel", id=ch["channel_id"])
+    base = (base_url or "").rstrip("/")
+
+    # channel_id -> number for programme channel attribute
+    channel_id_to_number: dict[str, str] = {
+        ch["channel_id"]: str(_channel_number(ch)) for ch in channels
+    }
+
+    # <channel> elements: id is the external channel number (Plex GuideNumber)
+    for ch in sorted(channels, key=_channel_number):
+        num_str = str(_channel_number(ch))
+        chan_el = SubElement(tv, "channel", attrib={"id": num_str})
         dn = SubElement(chan_el, "display-name")
         dn.text = ch["name"]
+        if base:
+            SubElement(chan_el, "icon", attrib={"src": f"{base}/art/channel/{ch['channel_id']}.jpg"})
 
-    # <programme> elements
-    for entry in epg_entries:
+    # XMLTV chronological ordering: programmes by channel then start time
+    sorted_entries = sorted(
+        epg_entries,
+        key=lambda e: (e["channel_id"], e["start_time"]),
+    )
+
+    # <programme> elements: channel is the external number (matches <channel id>)
+    for entry in sorted_entries:
+        ch_id = entry["channel_id"]
+        prog_channel = channel_id_to_number.get(ch_id, ch_id)
         prog = SubElement(tv, "programme", attrib={
             "start": _xmltv_timestamp(entry["start_time"]),
             "stop": _xmltv_timestamp(entry["end_time"]),
-            "channel": entry["channel_id"],
+            "channel": prog_channel,
         })
 
         title_el = SubElement(prog, "title")
         title_el.text = entry.get("title", "")
+
+        if base and entry.get("asset_id"):
+            SubElement(prog, "icon", attrib={"src": f"{base}/art/program/{entry['asset_id']}.jpg"})
 
         episode_title = entry.get("episode_title", "")
         if episode_title:

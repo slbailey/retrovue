@@ -1,0 +1,1 @@
+"""EPG Generation Contract tests."""
