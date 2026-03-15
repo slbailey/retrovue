@@ -1,5 +1,5 @@
 channel: hbo
-channel_number: 3
+number: 201
 name: "Home Box Office"
 channel_type: premium
 timezone: America/New_York
@@ -161,7 +161,7 @@ schedule:
   sunday:
     - start: "14:00"
       slots: 5
-      program: scifi_movies
+      program: hbo_scifi_movies
       progression: random
       bleed: true
 
