@@ -32,6 +32,7 @@
 #include "retrovue/blockplan/RationalFps.hpp"
 #include "deterministic_tick_driver.hpp"
 #include "FastTestConfig.hpp"
+#include "TestDecoder.hpp"
 
 namespace retrovue::blockplan::testing {
 namespace {
@@ -191,7 +192,8 @@ class PipelineManagerSegmentSwapPadFenceTest : public ::testing::Test {
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
         test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-        PipelineManagerOptions{0});
+        PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   }
 
   int64_t NowMs() { return test_ts_->NowUtcMs(); }

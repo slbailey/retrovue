@@ -30,6 +30,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/blockplan/IProducerFactory.hpp"
 #include "retrovue/blockplan/ITickProducer.hpp"
 #include "retrovue/blockplan/PipelineMetrics.hpp"
 #include "retrovue/blockplan/IPlayoutExecutionEngine.hpp"
@@ -143,7 +144,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
                   Callbacks callbacks,
                   std::shared_ptr<ITimeSource> time_source = nullptr,
                   std::shared_ptr<IOutputClock> output_clock = nullptr,
-                  PipelineManagerOptions options = {});
+                  PipelineManagerOptions options = {},
+                  std::shared_ptr<IProducerFactory> producer_factory = nullptr);
   ~PipelineManager() override;
 
   // IPlayoutExecutionEngine
@@ -218,6 +220,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   std::shared_ptr<ITimeSource> time_source_;
   std::shared_ptr<IOutputClock> output_clock_;
   PipelineManagerOptions options_;
+  std::shared_ptr<IProducerFactory> producer_factory_;
 
   void Run();
 
@@ -234,6 +237,11 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // a fully READY IProducer was obtained.  Non-blocking.
   // headroom_ms: fence headroom in ms; if >= 2000 and result discarded (decoder failed), retry once.
   std::unique_ptr<producers::IProducer> TryTakePreviewProducer(int64_t headroom_ms = -1);
+
+  // Create a new producer via the injected factory (or default TickProducer).
+  std::unique_ptr<producers::IProducer> CreateProducer() {
+    return producer_factory_->Create(ctx_->width, ctx_->height, ctx_->fps);
+  }
 
   // --- ITickProducer access helpers ---
   // All tick-method calls on IProducer pointers go through these.
@@ -457,7 +465,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Persistent pad B chain: created once at session init, always-ready for PAD seams.
   // At PAD seam we swap A with pad_b_* only (no A allocation). After handoff we
   // recreate pad_b_* so the chain is ready for the next PAD.
-  std::unique_ptr<TickProducer> pad_b_producer_;
+  std::unique_ptr<producers::IProducer> pad_b_producer_;
   std::unique_ptr<VideoLookaheadBuffer> pad_b_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> pad_b_audio_buffer_;
 

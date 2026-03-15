@@ -26,6 +26,7 @@
 #include "retrovue/blockplan/ProducerPreloader.hpp"
 #include "retrovue/blockplan/SeamProofTypes.hpp"
 #include "FastTestConfig.hpp"
+#include "TestDecoder.hpp"
 #include "deterministic_tick_driver.hpp"
 
 namespace retrovue::blockplan::testing {
@@ -94,7 +95,8 @@ class ContinuousOutputContractTest : public ::testing::Test {
     return std::make_unique<PipelineManager>(
         ctx_.get(), std::move(callbacks), test_ts_,
         test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-        PipelineManagerOptions{0});
+        PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   }
 
   // Wait for session_ended callback (bounded iterations, no wall clock).
@@ -144,7 +146,8 @@ class ContinuousOutputContractTest : public ::testing::Test {
     };
     return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
         test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-        PipelineManagerOptions{0});
+        PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   }
 
   std::vector<FrameFingerprint> SnapshotFingerprints() {
@@ -514,10 +517,10 @@ TEST_F(ContinuousOutputContractTest, SourceSwapCountIncrements) {
   // Two blocks (~ceil(kShortBlockMs/33) frames each at 30fps).
   // Wall-anchored timestamps so fence fires at the correct future time.
   auto now_ms = NowMs();
-  FedBlock block1 = MakeSyntheticBlock("swap-001a", kShortBlockMs);
+  FedBlock block1 = MakeSyntheticBlock("swap-001a", kShortBlockMs, "test://swap-a.mp4");
   block1.start_utc_ms = now_ms;
   block1.end_utc_ms = now_ms + kShortBlockMs;
-  FedBlock block2 = MakeSyntheticBlock("swap-001b", kShortBlockMs);
+  FedBlock block2 = MakeSyntheticBlock("swap-001b", kShortBlockMs, "test://swap-b.mp4");
   block2.start_utc_ms = now_ms + kShortBlockMs;
   block2.end_utc_ms = now_ms + 2 * kShortBlockMs;
   {
@@ -860,7 +863,8 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
 
   engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-      PipelineManagerOptions{0});
+      PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   engine_->Start();
 
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kTargetFrames);
@@ -1106,7 +1110,8 @@ TEST_F(ContinuousOutputContractTest, PadProof_SinglePadSeam) {
 
   engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-      PipelineManagerOptions{0});
+      PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   engine_->Start();
 
   int64_t fence_seam = ((5000 + 300 + 500) * 30 + 999) / 1000;
@@ -1402,7 +1407,8 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadSeam) {
 
   engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-      PipelineManagerOptions{0});
+      PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   engine_->Start();
 
   int64_t fence_seam5 = ((5000 + 200 + 300 + 500) * 30 + 999) / 1000;
@@ -1631,7 +1637,8 @@ TEST_F(ContinuousOutputContractTest, PadProof_BudgetShortfall_ExactCount) {
 
   engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
-      PipelineManagerOptions{0});
+      PipelineManagerOptions{0},
+        std::make_shared<test_infra::TestProducerFactory>());
   engine_->Start();
 
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kN);

@@ -24,6 +24,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
+#include "retrovue/blockplan/DefaultProducerFactory.hpp"
 #include "retrovue/blockplan/LoudnessGain.hpp"
 #include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
 #include "retrovue/blockplan/TickProducer.hpp"
@@ -102,19 +103,22 @@ PipelineManager::PipelineManager(
     Callbacks callbacks,
     std::shared_ptr<ITimeSource> time_source,
     std::shared_ptr<IOutputClock> output_clock,
-    PipelineManagerOptions options)
+    PipelineManagerOptions options,
+    std::shared_ptr<IProducerFactory> producer_factory)
     : ctx_(ctx),
       callbacks_(std::move(callbacks)),
       time_source_(time_source ? std::move(time_source)
                                : std::make_shared<SystemTimeSource>()),
       output_clock_(std::move(output_clock)),
       options_(options),
-      live_(std::make_unique<TickProducer>(ctx->width, ctx->height,
-                                     ctx->fps)),
-      seam_preparer_(std::make_unique<SeamPreparer>()) {
+      producer_factory_(producer_factory
+          ? std::move(producer_factory)
+          : std::make_shared<DefaultProducerFactory>()),
+      live_(CreateProducer()),
+      seam_preparer_(std::make_unique<SeamPreparer>(producer_factory_)) {
   metrics_.channel_id = ctx->channel_id;
   // INV-ASPECT-PRESERVE-001: Propagate aspect policy to live producer
-  static_cast<TickProducer*>(live_.get())->SetAspectPolicy(ctx->aspect_policy);
+  if (auto* tp = dynamic_cast<TickProducer*>(live_.get())) tp->SetAspectPolicy(ctx->aspect_policy);
 }
 
 PipelineManager::~PipelineManager() {
@@ -960,8 +964,8 @@ void PipelineManager::Run() {
   video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
 
   // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
-  pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
-  static_cast<TickProducer*>(pad_b_producer_.get())->SetAspectPolicy(ctx_->aspect_policy);
+  pad_b_producer_ = CreateProducer();
+  if (auto* tp = dynamic_cast<TickProducer*>(pad_b_producer_.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
   pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
   int pad_a_target = bcfg.audio_target_depth_ms;
@@ -2728,7 +2732,7 @@ void PipelineManager::Run() {
               Logger::Info(oss.str()); }
             auto fresh = std::make_unique<TickProducer>(
                 ctx_->width, ctx_->height, ctx_->fps);
-            static_cast<TickProducer*>(fresh.get())->SetAspectPolicy(ctx_->aspect_policy);
+            if (auto* tp = dynamic_cast<TickProducer*>(fresh.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
             AsTickProducer(fresh.get())->AssignBlock(fallback_block);
             live_ = std::move(fresh);
             swapped = true;
@@ -2780,7 +2784,7 @@ void PipelineManager::Run() {
 
       if (!swapped) {
         // No B available — PADDED_GAP.
-        live_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
+        live_ = CreateProducer();
         static_cast<TickProducer*>(live_.get())->SetAspectPolicy(ctx_->aspect_policy);
         // Fresh buffers — use same video target/low as session start.
         const auto& gbcfg = ctx_->buffer_config;
@@ -5338,8 +5342,8 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     swap_branch = "SWAP_B_TO_A";
   } else {
     // INV-SEAM-SEG-007: MISS — create B (only), then move B into A slots.
-    segment_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
-    static_cast<TickProducer*>(segment_b_producer_.get())->SetAspectPolicy(ctx_->aspect_policy);
+    segment_b_producer_ = CreateProducer();
+    if (auto* tp = dynamic_cast<TickProducer*>(segment_b_producer_.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
     segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
     segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
@@ -5476,8 +5480,8 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     int pad_a_low = pad_bcfg.audio_low_water_ms > 0
         ? pad_bcfg.audio_low_water_ms
         : std::max(1, pad_a_target / 3);
-    pad_b_producer_ = std::make_unique<TickProducer>(ctx_->width, ctx_->height, ctx_->fps);
-    static_cast<TickProducer*>(pad_b_producer_.get())->SetAspectPolicy(ctx_->aspect_policy);
+    pad_b_producer_ = CreateProducer();
+    if (auto* tp = dynamic_cast<TickProducer*>(pad_b_producer_.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
     pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
     pad_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
