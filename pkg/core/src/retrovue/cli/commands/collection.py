@@ -432,9 +432,9 @@ def list_collections(
                 if source_obj:
                     table = Table(title=f"Collections for source '{source_obj.name}'")
                 else:
-                    table = Table(title="All Collections")
-                table.add_column("ID", style="cyan", width=8)
+                    table = Table(title="All Collections (use Name for: retrovue collection ingest <name>)")
                 table.add_column("Name", style="green")
+                table.add_column("ID", style="cyan", width=8)
                 table.add_column("Sync", style="yellow")
                 table.add_column("Ingestable", style="red")
                 table.add_column("Path Mappings", style="white", width=50)
@@ -455,8 +455,8 @@ def list_collections(
                         mapping_text = "No mappings"
 
                     table.add_row(
-                        collection["collection_id"][:8] + "...",  # Truncate UUID for display
                         collection["display_name"],
+                        collection["collection_id"][:8] + "...",  # Truncate UUID for display
                         sync_status,
                         ingestable_status,
                         mapping_text,
@@ -526,10 +526,10 @@ def list_all_collections(
 
                 console = Console()
 
-                # Create main table
-                table = Table(title="All Collections Across All Sources")
-                table.add_column("UUID", style="cyan", width=36)
+                # Create main table (Name first for use with: retrovue collection ingest <name>)
+                table = Table(title="All Collections (use Name for: retrovue collection ingest <name>)")
                 table.add_column("Name", style="green")
+                table.add_column("UUID", style="cyan", width=36)
                 table.add_column("Source", style="blue")
                 table.add_column("Sync", style="yellow")
                 table.add_column("Ingestible", style="red")
@@ -539,8 +539,8 @@ def list_all_collections(
                     ingestable_status = "Yes" if collection["ingestable"] else "No"
 
                     table.add_row(
-                        collection["collection_id"],  # Show full UUID
                         collection["name"],
+                        collection["collection_id"],
                         f"{collection['source_name']} ({collection['source_type']})",
                         sync_status,
                         ingestable_status,
@@ -1533,6 +1533,8 @@ def collection_ingest(
                         else:
                             typer.echo(f"Assets skipped: {result.stats.assets_skipped}")
                         typer.echo(f"Assets updated: {result.stats.assets_updated}")
+                        if result.stats.assets_removed:
+                            typer.echo(f"Assets removed: {result.stats.assets_removed} (no longer in source)")
                         if result.stats.assets_auto_ready:
                             typer.echo(f"Assets auto-ready: {result.stats.assets_auto_ready}")
                         if result.stats.assets_needs_enrichment:
@@ -1549,6 +1551,20 @@ def collection_ingest(
                                 typer.echo(f"  ... and {len(result.stats.errors) - 5} more")
                         if result.last_ingest_time:
                             typer.echo(f"Last ingest: {result.last_ingest_time}")
+                        # Explain what the worker will do; processors come from collection config, not the worker
+                        procs = getattr(result, "enqueued_processors", None) or []
+                        if procs:
+                            _processor_descriptions = {
+                                "interstitial-type": "sets editorial interstitial_type from collection name",
+                                "ffprobe": "duration, codecs, container from media file",
+                                "loudness": "loudness metrics (e.g. LUFS)",
+                            }
+                            typer.echo("")
+                            typer.echo("Enrichers attached to this collection (the worker will run these on each asset):")
+                            for pid in procs:
+                                desc = _processor_descriptions.get(pid, "")
+                                typer.echo(f"  - {pid}" + (f" ({desc})" if desc else ""))
+                            typer.echo("Run: retrovue worker run")
 
                 # If dry-run requested, optionally rollback (service itself skipped writes)
                 if dry_run:

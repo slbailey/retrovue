@@ -1,8 +1,12 @@
 """
-Processor job queue: enqueue, claim, complete, retry.
+Processor job queue: enqueue, claim, complete, retry, purge.
 
 Contract: ProcessorJobQueueContract. One job per (target_type, target_id).
-When ENABLE_PROCESSOR_QUEUE is true, reconciliation calls real enqueue.
+Reconciliation and re-enrich always enqueue; workers run the processor runtime (State 3).
+
+Retention: Completed/failed jobs are purged when older than PROCESSOR_JOB_RETENTION_DAYS (default 30).
+Purge runs once at the start of each `retrovue worker run`, or on demand via `retrovue worker purge`.
+Set PROCESSOR_JOB_RETENTION_DAYS=0 to disable. processor_runs are cascade-deleted with their job.
 """
 
 from __future__ import annotations
@@ -116,6 +120,42 @@ def retry_job(db: Session, job_id: uuid.UUID) -> None:
     job.error_message = None
 
 
+def purge_old_processor_jobs(
+    db: Session,
+    retention_days: int,
+) -> int:
+    """
+    Delete completed/failed processor jobs whose completed_at is older than retention_days.
+
+    processor_runs are cascade-deleted with their job. Does not touch pending/running jobs
+    or processor_outputs (those are current metadata, not history).
+    Returns the number of jobs deleted.
+    """
+    if retention_days <= 0:
+        return 0
+    from datetime import timedelta
+
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    # Delete in a subquery to avoid loading rows; CASCADE removes processor_runs
+    deleted = (
+        db.query(ProcessorJob)
+        .filter(
+            ProcessorJob.status.in_([STATUS_COMPLETED, STATUS_FAILED]),
+            ProcessorJob.completed_at.isnot(None),
+            ProcessorJob.completed_at < cutoff,
+        )
+        .delete(synchronize_session="fetch")
+    )
+    if deleted:
+        logger.info(
+            "processor_jobs_purged",
+            deleted=deleted,
+            retention_days=retention_days,
+            cutoff=cutoff.isoformat(),
+        )
+    return deleted
+
+
 def enqueue_processor_jobs(
     asset_ids: list[uuid.UUID],
     processor_ids: list[str],
@@ -142,8 +182,10 @@ def enqueue_processor_jobs(
     for asset_id in asset_ids:
         for target_type in target_types:
             enqueue(db, target_type, asset_id, priority=PRIORITY_NORMAL)
-    logger.debug(
-        "enqueue_processor_jobs",
-        asset_count=len(asset_ids),
-        target_types=list(target_types),
-    )
+    # Log only for batches to avoid flooding when ingest enqueues one asset at a time
+    if len(asset_ids) > 1:
+        logger.debug(
+            "enqueue_processor_jobs",
+            asset_count=len(asset_ids),
+            target_types=list(target_types),
+        )

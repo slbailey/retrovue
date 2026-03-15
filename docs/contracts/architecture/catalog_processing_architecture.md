@@ -4,42 +4,31 @@
 
 RetroVue maintains a catalog of Assets and Media discovered from external Sources. External systems (Plex, Jellyfin, filesystem) are scanned through Containers. The system reconciles discovered media with the catalog and runs processors to enrich metadata.
 
-The architecture separates:
+The pipeline has five stages:
 
-- discovery
-- reconciliation
-- job orchestration
-- processor execution
-- metadata storage
+1. **Container discovery** — Enumerate locators from the source.
+2. **Catalog reconciliation** — Compare with catalog; create/update/mark unavailable; enqueue jobs.
+3. **Job queue** — One job per target; workers drain the queue.
+4. **Processor runtime** — Workers run processors sequentially per job; single transaction persist.
+5. **Metadata persistence** — Structured tables and processor_outputs; ownership enforced.
 
 ---
 
 ## Processing Pipeline Diagram
 
 ```
-External Source
-     │
-     ▼
-ContainerDiscoveryContract
-     │
-     ▼
-CatalogReconciliationContract
-     │
-     ▼
-AssetMediaIdentityContract
-     │
-     ▼
-ProcessorCapabilityContract
-     │
-     ▼
-ProcessorJobQueueContract
-     │
-     ▼
-ProcessorExecutionContract
-     │
-     ▼
-ProcessorMetadataContract
+Container discovery
+       ↓
+Catalog reconciliation
+       ↓
+Job queue
+       ↓
+Processor runtime
+       ↓
+Metadata persistence
 ```
+
+(Contracts: ContainerDiscoveryContract → CatalogReconciliationContract → ProcessorJobQueueContract → ProcessorExecutionContract → ProcessorMetadataContract. AssetMediaIdentityContract and ProcessorCapabilityContract define identity and capability rules used across the flow.)
 
 Each stage transforms or enriches information while preserving system invariants. The ProcessorCapabilityContract determines which processors apply to discovered or updated media; processors are selected dynamically, not hard-coded, before jobs are enqueued.
 

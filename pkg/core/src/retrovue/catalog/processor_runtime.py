@@ -219,6 +219,10 @@ def execute_job(db: Session, job: Any) -> None:
     asset = db.get(Asset, job.target_id)
     if asset is None:
         raise ValueError(f"Asset not found for target_id={job.target_id}")
+    if getattr(asset, "is_deleted", False):
+        raise ValueError(
+            f"Asset {job.target_id} has been marked unavailable (removed from source); skipping job"
+        )
 
     path_uri = (asset.canonical_uri or asset.uri or "").strip()
     if not path_uri:
@@ -259,6 +263,15 @@ def execute_job(db: Session, job: Any) -> None:
     run_records: list[dict[str, Any]] = []
     flexible_outputs: list[tuple[str, dict[str, Any]]] = []
 
+    logger.info(
+        "job_started",
+        job_id=str(job.id),
+        target_id=str(job.target_id),
+        uri=path_uri,
+        collection=collection_name or None,
+        processors=[p for p in processor_ids],
+    )
+
     for processor_id in processor_ids:
         enricher = _enricher_instance(processor_id, collection_name)
         if enricher is None:
@@ -288,10 +301,11 @@ def execute_job(db: Session, job: Any) -> None:
         )
         logger.info(
             "processor_started",
-            processor_id=processor_id,
-            target_type=job.target_type,
-            target_id=str(job.target_id),
             job_id=str(job.id),
+            processor_id=processor_id,
+            target_id=str(job.target_id),
+            uri=path_uri,
+            collection=collection_name or None,
         )
         try:
             item = _context_to_item(ctx, path_uri, collection_name)
@@ -316,8 +330,12 @@ def execute_job(db: Session, job: Any) -> None:
             duration_ms = (completed_at - started_at).total_seconds() * 1000
             logger.info(
                 "processor_completed",
+                job_id=str(job.id),
                 processor_id=processor_id,
+                target_id=str(job.target_id),
+                uri=path_uri,
                 duration_ms=round(duration_ms),
+                applied=dict(result.metadata) if result.metadata else None,
             )
         except Exception as e:
             completed_at = datetime.now(UTC)

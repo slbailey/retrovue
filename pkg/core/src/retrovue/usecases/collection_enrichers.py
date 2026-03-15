@@ -258,8 +258,8 @@ def apply_enrichers_to_collection(
         coll_name = getattr(collection, "name", "") or ""
         if coll_name in COLLECTION_TYPE_MAP:
             it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
-            pipeline.insert(0, (-1, "__interstitial_type__", it_enricher))
-            signature.insert(0, {"enricher_id": "__interstitial_type__", "priority": -1})
+            pipeline.insert(0, (-1, "interstitial-type", it_enricher))
+            signature.insert(0, {"enricher_id": "interstitial-type", "priority": -1})
     except Exception:
         pass
 

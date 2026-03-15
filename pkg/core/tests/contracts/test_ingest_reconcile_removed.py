@@ -12,6 +12,7 @@ Rules covered:
 - R-4: Empty discovery (importer returns []) does NOT delete anything (safety guard)
 - R-5: Already-deleted assets are not double-deleted
 - R-6: assets_removed count is accurate in stats
+- R-7: Re-added asset (same canonical_key_hash as soft-deleted row) is restored and enqueued
 """
 
 from __future__ import annotations
@@ -108,6 +109,8 @@ class TestFullIngestReconciliation:
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
             return_value={"hash_gone": stale_asset},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
         ):
             # Make scalar return None (no existing asset for the discovered item)
             db.scalar.return_value = None
@@ -156,6 +159,8 @@ class TestScopedIngestNoDelete:
             return_value={"resolved_fields": {}},
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
         ):
             db.scalar.return_value = None
 
@@ -254,6 +259,75 @@ class TestEmptyDiscoverySafety:
         # No items discovered → no reconciliation should occur
         assert result.stats.assets_removed == 0
         assert result.stats.assets_discovered == 0
+
+
+# ---------------------------------------------------------------------------
+# R-6: Stats accuracy
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# R-7: Re-add restores soft-deleted asset
+# ---------------------------------------------------------------------------
+
+
+class TestReAddRestoresAsset:
+    """R-7: When a discovered item matches a soft-deleted asset by canonical_key_hash, restore and enqueue."""
+
+    def test_restored_asset_counted_as_ingested(self):
+        from retrovue.cli.commands._ops.collection_ingest_service import (
+            CollectionIngestService,
+        )
+
+        db = MagicMock()
+        collection = _fake_collection()
+
+        # One discovered item; catalog state empty so outcome is "create"
+        loc = SimpleNamespace(locator="/media/a.mp4", fingerprint=None)
+        item = _fake_discovered_item(path_uri="/media/a.mp4")
+        soft_deleted_asset = _fake_asset(
+            uuid="a-old",
+            canonical_key_hash="hash_a",
+            uri="/media/a.mp4",
+            is_deleted=True,
+        )
+        soft_deleted_asset.deleted_at = datetime.now(UTC)
+
+        importer = MagicMock()
+        importer.validate_ingestible.return_value = True
+        importer.name = "test"
+
+        with patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.discover_locators",
+            return_value=[(loc, item)],
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            return_value="key_a",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            return_value="hash_a",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            return_value={"resolved_fields": {}},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            return_value={},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+        ):
+            # Repo finds the soft-deleted row when checking duplicate by canonical_key_hash
+            db.scalar.return_value = soft_deleted_asset
+
+            svc = CollectionIngestService(db)
+            result = svc.ingest_collection(
+                collection=collection,
+                importer=importer,
+            )
+
+        assert result.stats.assets_ingested == 1
+        assert soft_deleted_asset.is_deleted is False
+        assert soft_deleted_asset.deleted_at is None
 
 
 # ---------------------------------------------------------------------------

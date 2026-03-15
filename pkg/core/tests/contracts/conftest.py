@@ -11,6 +11,13 @@ Labels: All tests in tests/contracts/ are marked "contract" (run in CI).
 Long-running tests should be marked "soak" (nightly only); add a fast
 deterministic counterpart that validates the same invariant(s) via simulated time.
 CI runs: pytest tests/contracts -m "contract and not soak"
+
+Database: Some contract tests (e.g. test_processor_metadata_contract,
+test_processor_execution_contract) use the real session() from infra.uow and
+commit. That creates "Test Collection" and "Test Source" rows in whatever
+database DATABASE_URL points to. To avoid polluting your main DB, run contract
+tests against a test database, e.g.:
+  DATABASE_URL=postgresql+psycopg://user:pass@host/test_db pytest tests/contracts/
 """
 
 from __future__ import annotations

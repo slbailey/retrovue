@@ -103,6 +103,8 @@ class CollectionIngestResult:
     created_assets: list[dict[str, str]] | None = None
     updated_assets: list[dict[str, str]] | None = None
     thresholds: dict[str, float] | None = None
+    # Processors that were enqueued (worker will run these on each asset)
+    enqueued_processors: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result to dictionary matching contract JSON output format."""
@@ -139,6 +141,8 @@ class CollectionIngestResult:
             result["season"] = self.season
         if self.episode is not None:
             result["episode"] = self.episode
+        if self.enqueued_processors is not None:
+            result["enqueued_processors"] = self.enqueued_processors
         # Only include verbose lists when populated
         if self.created_assets is not None:
             result["created_assets"] = self.created_assets
@@ -422,9 +426,9 @@ class CollectionIngestService:
             if coll_name in COLLECTION_TYPE_MAP:
                 it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
                 # Prepend at priority -1 so it runs before any other enrichers
-                pipeline.insert(0, ("__interstitial_type__", -1, it_enricher))
+                pipeline.insert(0, ("interstitial-type", -1, it_enricher))
                 pipeline_signature.insert(0, {
-                    "enricher_id": "__interstitial_type__",
+                    "enricher_id": "interstitial-type",
                     "priority": -1,
                 })
         except Exception as _ite_exc:
@@ -617,7 +621,7 @@ class CollectionIngestService:
             if outcome != ReconciliationOutcome.create or loc is None:
                 continue
 
-            # Create path: run full path resolution, pipeline, handle_ingest, persist.
+            # Create path: path resolution, handle_ingest, persist, enqueue.
             item = item_by_hash.get(canonical_hash(loc.locator))
             if item is None:
                 continue
@@ -648,7 +652,7 @@ class CollectionIngestService:
                         pass
             except Exception:
                 pass
-            # Snapshot importer editorial BEFORE pipeline runs
+            # Snapshot importer editorial (importer output only; workers enrich later)
             try:
                 try:
                     importer_editorial = (
@@ -672,7 +676,7 @@ class CollectionIngestService:
                 except Exception:
                     asset_type_val = None
 
-                # Enriched editorial after pipeline
+                # Editorial from importer (workers add processor metadata later)
                 try:
                     enriched_editorial = (
                         item.get("editorial") if isinstance(item, dict) else getattr(item, "editorial", None)
@@ -718,7 +722,7 @@ class CollectionIngestService:
                     except Exception:
                         pass
 
-                # Probe and sidecars after pipeline (enrichers may add them)
+                # Probe and sidecars from importer (workers add processor output later)
                 try:
                     probed_val = item.get("probed") if isinstance(item, dict) else getattr(item, "probed", None)
                 except Exception:
@@ -818,11 +822,34 @@ class CollectionIngestService:
                 continue
 
             # Duplicate check: same canonical_key_hash may appear from multiple items; only create once.
+            # If the existing row is soft-deleted (removed from source then re-added), restore it and enqueue.
             existing = repo.get_by_collection_and_canonical_hash(
                 collection.uuid, canonical_key_hash
             )
             if existing is not None:
-                stats.assets_skipped += 1
+                if getattr(existing, "is_deleted", False):
+                    if not dry_run:
+                        existing.is_deleted = False
+                        existing.deleted_at = None
+                        if loc and getattr(loc, "fingerprint", None):
+                            if loc.fingerprint.size is not None:
+                                existing.file_size = loc.fingerprint.size
+                            if loc.fingerprint.mtime is not None:
+                                existing.file_mtime = loc.fingerprint.mtime
+                        enqueue_processor_jobs(
+                            [existing.uuid],
+                            processor_ids_for_enqueue,
+                            db=self.db,
+                        )
+                    stats.assets_ingested += 1
+                    logger.info(
+                        "asset_restored",
+                        asset_uuid=str(existing.uuid),
+                        uri=getattr(existing, "uri", None),
+                        collection=collection.name,
+                    )
+                else:
+                    stats.assets_skipped += 1
                 continue
 
             if max_new is not None and stats.assets_ingested >= max_new:
@@ -1012,6 +1039,7 @@ class CollectionIngestService:
             created_assets=created_assets,
             updated_assets=updated_assets,
             thresholds={"auto_ready": auto_ready_threshold, "review": review_threshold},
+            enqueued_processors=processor_ids_for_enqueue if (stats.assets_ingested or stats.assets_updated) else None,
         )
 
         return result

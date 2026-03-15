@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     allowed_origins: str = Field(default="*", alias="ALLOWED_ORIGINS")  # Comma-separated origins
     env: str = Field(default="dev", alias="ENV")  # dev|prod|test
 
+    # Processor job history: completed/failed jobs older than this many days are purged
+    processor_job_retention_days: int = Field(
+        default=30,
+        alias="PROCESSOR_JOB_RETENTION_DAYS",
+        description="Purge completed/failed processor jobs older than this (0 = disable purge)",
+    )
+
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file=".env", 
         case_sensitive=False,
