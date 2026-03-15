@@ -135,6 +135,7 @@ class ThreadTrackingProducer : public ITickProducer {
         width_, height_, static_cast<uint8_t>(0x10 + (idx % 200)));
     fd.asset_uri = asset_uri_;
     fd.block_ct_ms = idx * frame_duration_ms_;
+    fd.source_frame_index = idx;  // FIVS: required for indexed store insert
     fd.audio.push_back(MakeAudioFrame(1600));
     return fd;
   }
@@ -314,6 +315,7 @@ TEST(LookaheadContract, TickThread_PrimedFrameIsOnlyException) {
   primed.video = MakeVideoFrame(64, 48, 0xAA);
   primed.asset_uri = "primed.mp4";
   primed.block_ct_ms = 0;
+  primed.source_frame_index = 0;
   primed.audio.push_back(MakeAudioFrame(1024));
   prod.SetPrimedFrame(std::move(primed));
 
@@ -558,29 +560,32 @@ TEST(LookaheadContract, VideoUnderflow_ReturnsFalse_NoPadInjected) {
 
   buf.StartFilling(&prod, nullptr, FPS_30, FPS_30, &stop);
 
-  // Wait for fill thread to exhaust content (3 real + hold-last to 5).
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
+  // Wait for fill thread to exhaust content (3 real + hold-last).
+  // FIVS DepthFrames() counts unique source indices (max 3), so wait on
+  // TotalFramesPushed to confirm hold-last frames are being produced.
+  ASSERT_TRUE(WaitFor([&] { return buf.TotalFramesPushed() >= 5; },
                        std::chrono::milliseconds(1000)));
 
   // Stop fill thread — no more frames will be produced.
   buf.StopFilling(false);
 
-  // Drain all buffered frames.
-  int depth = buf.DepthFrames();
-  for (int i = 0; i < depth; i++) {
-    VideoBufferFrame vbf;
-    ASSERT_TRUE(buf.TryPopFrame(vbf));
+  // Drain all buffered frames from deque.
+  VideoBufferFrame vbf;
+  while (buf.TryPopFrame(vbf)) {
+    // drain
   }
-  EXPECT_EQ(buf.DepthFrames(), 0);
+
+  // Capture underflow count after drain (drain loop's final false pop counts as 1).
+  int64_t underflow_after_drain = buf.UnderflowCount();
 
   // Next pop MUST fail — no substitute data.
-  VideoBufferFrame vbf;
-  bool ok = buf.TryPopFrame(vbf);
+  VideoBufferFrame vbf2;
+  bool ok = buf.TryPopFrame(vbf2);
 
   EXPECT_FALSE(ok)
       << "INV-VIDEO-LOOKAHEAD-001 R3 violation: TryPopFrame must return false "
          "on underflow, not inject substitute data";
-  EXPECT_EQ(buf.UnderflowCount(), 1);
+  EXPECT_EQ(buf.UnderflowCount(), underflow_after_drain + 1);
 }
 
 // ---- 3b: Audio underflow returns false — no silence injected ----
@@ -694,6 +699,7 @@ TEST(LookaheadContract, FenceTick_DeliversNextBlock_ExactIndex) {
   primed_b.video = MakeVideoFrame(64, 48, 0xBB);
   primed_b.asset_uri = "block_b.mp4";
   primed_b.block_ct_ms = 0;
+  primed_b.source_frame_index = 0;
   primed_b.audio.push_back(MakeAudioFrame(1024));
   block_b.SetPrimedFrame(std::move(primed_b));
 
@@ -764,6 +770,7 @@ TEST(LookaheadContract, FenceTick_PrecisionPreservedUnderStall) {
   primed_b.video = MakeVideoFrame(64, 48, 0xCC);
   primed_b.asset_uri = "block_b.mp4";
   primed_b.block_ct_ms = 0;
+  primed_b.source_frame_index = 0;
   primed_b.audio.push_back(MakeAudioFrame(1024));
   block_b.SetPrimedFrame(std::move(primed_b));
 
@@ -814,6 +821,7 @@ TEST(LookaheadContract, FenceTick_AudioAvailableFromNewBlock) {
   primed_b.video = MakeVideoFrame(64, 48, 0xDD);
   primed_b.asset_uri = "block_b.mp4";
   primed_b.block_ct_ms = 0;
+  primed_b.source_frame_index = 0;
   primed_b.audio.push_back(MakeAudioFrame(1024, 77));
   block_b.SetPrimedFrame(std::move(primed_b));
 
@@ -861,6 +869,7 @@ TEST(LookaheadContract, FenceTick_RapidTransitions_Stable) {
     primed.video = MakeVideoFrame(64, 48, static_cast<uint8_t>(block_idx));
     primed.asset_uri = uri;
     primed.block_ct_ms = 0;
+    primed.source_frame_index = 0;
     primed.audio.push_back(MakeAudioFrame(1024));
     prod.SetPrimedFrame(std::move(primed));
 

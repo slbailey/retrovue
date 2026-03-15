@@ -362,10 +362,14 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Pure signal processor; owned per-session, reset on segment/block boundaries.
   std::unique_ptr<BroadcastAudioProcessor> broadcast_audio_processor_;
   // Diagnostic accumulators — PipelineManager owns telemetry, not the processor.
-  float drc_segment_peak_reduction_db_ = 0.0f;
-  float drc_segment_sum_reduction_db_ = 0.0f;
+  // Centidecibels (dB × 100) — integer-only in hot path (INV-FPS-RATIONAL-001).
+  int32_t drc_segment_peak_reduction_cdb_ = 0;
+  int64_t drc_segment_sum_reduction_cdb_ = 0;
   int drc_segment_ticks_compressed_ = 0;
   int drc_segment_ticks_total_ = 0;
+  // Precomputed per-segment loudness gain in Q16 fixed point (65536 = unity).
+  // Set at segment activation from gain_db; avoids float in per-tick loop.
+  int32_t current_segment_gain_q16_ = 65536;
 
   // --- Preroll B buffers: filled by preview producer BEFORE fence ---
   // The preview producer's fill thread writes decoded frames here while

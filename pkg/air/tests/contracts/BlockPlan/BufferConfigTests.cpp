@@ -94,6 +94,7 @@ class MockTickProducer : public ITickProducer {
                                static_cast<uint8_t>(0x10 + (frame_index % 200)));
     fd.asset_uri = "test_asset.mp4";
     fd.block_ct_ms = frame_index * frame_duration_ms_;
+    fd.source_frame_index = frame_index;  // FIVS: required for indexed store insert
     fd.audio.push_back(MakeAudioFrame(1024));
 
     return fd;

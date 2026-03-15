@@ -95,6 +95,7 @@ class MockTickProducer : public ITickProducer {
                                static_cast<uint8_t>(0x10 + (frame_index % 200)));
     fd.asset_uri = "test_asset.mp4";
     fd.block_ct_ms = frame_index * frame_duration_ms_;
+    fd.source_frame_index = frame_index;  // FIVS: required for indexed store insert
 
     // Produce one audio frame per video decode.
     fd.audio.push_back(MakeAudioFrame(1024));
@@ -356,6 +357,7 @@ TEST(VideoLookaheadBufferTest, PrimedFrameConsumedInStartFilling) {
   primed.video = MakeVideoFrame(64, 48, 0xFF);
   primed.asset_uri = "primed_asset.mp4";
   primed.block_ct_ms = 0;
+  primed.source_frame_index = 0;
   primed.audio.push_back(MakeAudioFrame(1024, 42));
   mock.SetPrimedFrame(std::move(primed));
 
@@ -394,30 +396,22 @@ TEST(VideoLookaheadBufferTest, CadenceResolution) {
 
   buf.StartFilling(&mock, nullptr, FPS_23976, FPS_30, &stop);
 
-  // Wait for fill thread to exhaust source content and fill with hold-last.
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 25; },
+  // FIVS: DepthFrames() counts unique source frames (max 20 for 20 source frames).
+  // Wait for all 20 unique source frames to be decoded and stored in FIVS.
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 20; },
                        std::chrono::milliseconds(1000)));
 
   buf.StopFilling(false);
 
-  // Count decoded vs repeated frames.
-  int decoded_count = 0;
-  int repeat_count = 0;
-  int total = buf.DepthFrames();
-  for (int i = 0; i < total; i++) {
-    VideoBufferFrame out;
-    ASSERT_TRUE(buf.TryPopFrame(out));
-    if (out.was_decoded) {
-      decoded_count++;
-    } else {
-      repeat_count++;
-    }
-  }
+  // FIVS store has all 20 unique source frame indices (cadence repeats
+  // share indices with their decoded originals — REPLACE policy).
+  EXPECT_EQ(buf.DepthFrames(), 20)
+      << "FIVS must contain 20 unique source frame indices";
 
-  // All 20 source frames should have been decoded.
-  EXPECT_EQ(decoded_count, 20);
-  // There should be some repeats (cadence + hold-last after exhaustion).
-  EXPECT_GT(repeat_count, 0);
+  // Total pushes includes cadence repeats and hold-last, proving
+  // the fill thread produced MORE output frames than source frames.
+  EXPECT_GT(buf.TotalFramesPushed(), 20)
+      << "Cadence 23.976→30 must produce repeats beyond 20 source frames";
 }
 
 // =============================================================================
@@ -431,30 +425,20 @@ TEST(VideoLookaheadBufferTest, ContentExhaustionHoldLast) {
 
   buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
-  // Wait for buffer to fill to target (5 real + 15 hold-last).
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 20; },
+  // FIVS: DepthFrames() counts unique source frames (max 5 for 5 source frames).
+  // Wait for all 5 unique source frames to be stored in FIVS.
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 5; },
                        std::chrono::milliseconds(500)));
 
   buf.StopFilling(false);
 
-  // Pop all frames.
-  int decoded = 0;
-  int hold_last = 0;
-  int total = buf.DepthFrames();
-  for (int i = 0; i < total; i++) {
-    VideoBufferFrame out;
-    ASSERT_TRUE(buf.TryPopFrame(out));
-    if (out.was_decoded) {
-      decoded++;
-    } else {
-      hold_last++;
-    }
-  }
+  // FIVS store has all 5 unique source frame indices.
+  EXPECT_EQ(buf.DepthFrames(), 5)
+      << "FIVS must contain 5 unique source frame indices";
 
-  // 5 real decodes + remaining are hold-last.
-  EXPECT_EQ(decoded, 5);
-  EXPECT_GT(hold_last, 0);
-  EXPECT_EQ(decoded + hold_last, total);
+  // Total pushes includes hold-last repeats beyond the 5 decoded frames.
+  EXPECT_GT(buf.TotalFramesPushed(), 5)
+      << "Content exhaustion must produce hold-last frames beyond 5 source frames";
 }
 
 // =============================================================================

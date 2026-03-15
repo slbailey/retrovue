@@ -1022,6 +1022,13 @@ bool VideoLookaheadBuffer::TryPopFrame(VideoBufferFrame& out) {
   frames_.pop_front();
   total_popped_++;
 
+  // FIVS consistency: evict popped frame from indexed store so DepthFrames()
+  // (which uses frame_store_.Size()) stays consistent with the deque.
+  // EvictBelow(index + 1) removes the frame we just consumed.
+  if (out.source_frame_index >= 0) {
+    frame_store_.EvictBelow(out.source_frame_index + 1);
+  }
+
   // Signal fill thread that space is available.
   space_cv_.notify_one();
   return true;

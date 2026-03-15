@@ -167,3 +167,79 @@ TEST(LoudnessGainContract, FrameTiming_Unchanged) {
   EXPECT_EQ(frame.channels, original_channels)
       << "channels must not change after gain application";
 }
+
+// =============================================================================
+// Q16 fixed-point gain: INV-LOUDNESS-NORMALIZED-001 + INV-FPS-RATIONAL-001
+// =============================================================================
+
+TEST(LoudnessGainContract, Q16_UnityIsIdentity) {
+  auto frame = MakeFrame(12345, 512);
+  std::vector<uint8_t> original(frame.data.begin(), frame.data.end());
+
+  // Unity in Q16 = 65536
+  int32_t unity_q16 = blockplan::GainDbToQ16(0.0f);
+  EXPECT_EQ(unity_q16, 65536);
+
+  blockplan::ApplyGainS16Q16(frame, unity_q16);
+
+  // Bitwise identical — no rounding error at unity
+  EXPECT_EQ(std::memcmp(frame.data.data(), original.data(), original.size()), 0)
+      << "Q16 unity (65536) must produce bitwise identical output";
+}
+
+TEST(LoudnessGainContract, Q16_Minus6dB_HalvesAmplitude) {
+  auto frame = MakeFrame(10000, 1024);
+  int32_t gain_q16 = blockplan::GainDbToQ16(-6.0f);
+
+  // -6 dB ≈ 0.501 → Q16 ≈ 32845
+  EXPECT_NEAR(gain_q16, 32845, 100);
+
+  blockplan::ApplyGainS16Q16(frame, gain_q16);
+
+  auto* samples = reinterpret_cast<const int16_t*>(frame.data.data());
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_NEAR(samples[i], 5012, 15)
+        << "Q16 -6dB: sample " << i << " should be ~50% of 10000";
+  }
+}
+
+TEST(LoudnessGainContract, Q16_ClampsToInt16Range) {
+  auto frame_pos = MakeFrame(30000, 64);
+  int32_t gain_q16 = blockplan::GainDbToQ16(6.0f);  // ~2x
+
+  blockplan::ApplyGainS16Q16(frame_pos, gain_q16);
+
+  auto* samples = reinterpret_cast<const int16_t*>(frame_pos.data.data());
+  for (int i = 0; i < 64 * 2; ++i) {
+    EXPECT_EQ(samples[i], 32767)
+        << "Q16 positive overflow must clamp to +32767";
+  }
+
+  auto frame_neg = MakeFrame(-30000, 64);
+  blockplan::ApplyGainS16Q16(frame_neg, gain_q16);
+
+  auto* samples_neg = reinterpret_cast<const int16_t*>(frame_neg.data.data());
+  for (int i = 0; i < 64 * 2; ++i) {
+    EXPECT_EQ(samples_neg[i], -32768)
+        << "Q16 negative overflow must clamp to -32768";
+  }
+}
+
+TEST(LoudnessGainContract, Q16_MatchesFloatWithinOneLSB) {
+  // Q16 and float paths must agree within ±1 sample (Q16 truncation vs float rounding)
+  auto frame_float = MakeFrame(8000, 1024);
+  auto frame_q16 = MakeFrame(8000, 1024);
+
+  float linear = blockplan::GainDbToLinear(-3.5f);
+  int32_t q16 = blockplan::GainDbToQ16(-3.5f);
+
+  blockplan::ApplyGainS16(frame_float, linear);
+  blockplan::ApplyGainS16Q16(frame_q16, q16);
+
+  auto* sf = reinterpret_cast<const int16_t*>(frame_float.data.data());
+  auto* sq = reinterpret_cast<const int16_t*>(frame_q16.data.data());
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_NEAR(sf[i], sq[i], 1)
+        << "Q16 and float paths must agree within ±1 LSB at sample " << i;
+  }
+}
