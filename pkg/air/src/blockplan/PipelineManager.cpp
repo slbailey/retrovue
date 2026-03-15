@@ -1380,9 +1380,11 @@ void PipelineManager::Run() {
   bool pacing_diag_first_video_logged = false;
   bool pacing_diag_first_audio_logged = false;
 
+#ifdef RETROVUE_VERBOSE_LOGS
   // INV-FPS-PACING-DIAG: delta_wall_us / delta_pts_us for first ~120 ticks (runbook validation).
   int64_t pacing_diag_prev_wall_us = -1;
   int64_t pacing_diag_prev_pts_us = -1;
+#endif
 
   while (!ctx_->stop_requested.load(std::memory_order_acquire) &&
          !output_detached.load(std::memory_order_acquire)) {
@@ -1417,6 +1419,7 @@ void PipelineManager::Run() {
         ((audio_samples_emitted - pts_origin_audio_samples) * 90000) /
         buffer::kHouseAudioSampleRate;
 
+#ifdef RETROVUE_VERBOSE_LOGS
     // INV-FPS-PACING-DIAG: First ~120 ticks — wall vs PTS deltas (29.97: expect ~33366 us).
     if (session_frame_index < 120) {
       const int64_t video_pts_us = (video_pts_90k * 1'000'000) / 90000;
@@ -1435,6 +1438,7 @@ void PipelineManager::Run() {
       pacing_diag_prev_wall_us = wait_return_us;
       pacing_diag_prev_pts_us = video_pts_us;
     }
+#endif
 
     // ==================================================================
     // INV-SEAM-SEGMENT-PREFILL-001: Early B-side pipeline creation.
@@ -1779,6 +1783,7 @@ void PipelineManager::Run() {
         }
         if (preview_video_buffer_) next_fed = b_primed;
       }
+#ifdef RETROVUE_VERBOSE_LOGS
       { std::ostringstream oss;
         oss << "[PipelineManager] FENCE_TRANSITION"
             << " tick=" << session_frame_index
@@ -1790,6 +1795,7 @@ void PipelineManager::Run() {
             << " decoder_state=" << (decoder_state ? "has_decoder" : "no_decoder")
             << " first_seg_asset_uri=" << (first_seg_asset_uri.empty() ? "empty" : first_seg_asset_uri);
         Logger::Info(oss.str()); }
+#endif
 
       // Preview ownership: preroll_owner_block_id must match next_block_id.
       if (preview_ && !expected_preroll_block_id_.empty() && next_block_id != expected_preroll_block_id_) {
@@ -2269,6 +2275,7 @@ void PipelineManager::Run() {
       case TakeDecision::kPad:      take_source_char = 'P'; break;
     }
 
+#ifdef RETROVUE_VERBOSE_LOGS
     // PAD_CAUSE: rate-limited to once per ~10s (300 ticks) to reduce log volume.
     if (decision == TakeDecision::kPad || decision == TakeDecision::kStandby) {
       if (session_frame_index - last_pad_cause_log_tick_ >= 300) {
@@ -2279,7 +2286,9 @@ void PipelineManager::Run() {
         Logger::Info(oss.str());
       }
     }
+#endif
 
+#ifdef RETROVUE_VERBOSE_LOGS
     // INV-HANDOFF-DIAG: frame_gap = actual_src_emitted - selected_src (confirms gap grows = FIFO ahead of scheduler).
     if (session_frame_index < 300 && resample_enabled_ && selected_src_this_tick >= 0 &&
         last_good_source_frame_index_ >= 0 &&
@@ -2293,7 +2302,6 @@ void PipelineManager::Run() {
             << " actual_src_emitted=" << last_good_source_frame_index_
             << " frame_gap=" << frame_gap;
         Logger::Info(oss.str()); }
-      // Prove FIFO head is wrong: emitted frame index != scheduler selection (no functional change).
       if (last_good_source_frame_index_ != selected_src_this_tick) {
         { std::ostringstream oss;
           oss << "[PipelineManager] DRIFT_DETECTED"
@@ -2304,6 +2312,7 @@ void PipelineManager::Run() {
           Logger::Info(oss.str()); }
       }
     }
+#endif
 
     // Contract frame_selection_alignment.md: actual_src_emitted <= selected_src. Violation = decoder outran clock.
     if (selected_src_this_tick >= 0 && last_good_source_frame_index_ >= 0 &&
@@ -2317,10 +2326,9 @@ void PipelineManager::Run() {
       Logger::Error(oss.str());
     }
 
-    // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
-    // Log after take_source_char is set so decision= is correct. A=content live, B=content preview,
-    // R=repeat (cadence), H=hold, S=standby, P=pad (not "presentation").
-    if (session_frame_index - cadence_diag_last_log_tick_ >= 1500) {  // ~50s at 30fps (was 300)
+#ifdef RETROVUE_VERBOSE_LOGS
+    // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic.
+    if (session_frame_index - cadence_diag_last_log_tick_ >= 1500) {
       auto now_wall = std::chrono::system_clock::now();
       auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           now_wall.time_since_epoch()).count();
@@ -2343,6 +2351,7 @@ void PipelineManager::Run() {
         Logger::Info(oss.str()); }
       cadence_diag_last_log_tick_ = session_frame_index;
     }
+#endif
 
     // ==================================================================
     // SEAM_TICK_EMISSION_AUDIT — INV-TRANSITION-005 disambiguation.
@@ -2933,19 +2942,24 @@ void PipelineManager::Run() {
 
       // Step 7: Emit finalization logs.
       if (outgoing_summary) {
+#ifdef RETROVUE_VERBOSE_LOGS
         Logger::Info(FormatPlaybackSummary(*outgoing_summary));
+#endif
         if (callbacks_.on_block_summary) {
           callbacks_.on_block_summary(*outgoing_summary);
         }
       }
       if (outgoing_proof) {
+#ifdef RETROVUE_VERBOSE_LOGS
         Logger::Info(FormatPlaybackProof(*outgoing_proof));
+#endif
         if (callbacks_.on_playback_proof) {
           callbacks_.on_playback_proof(*outgoing_proof);
         }
       }
 
       if (outgoing_summary) {
+#ifdef RETROVUE_VERBOSE_LOGS
         int64_t base_offset = !outgoing_block.segments.empty()
             ? outgoing_block.segments[0].asset_start_offset_ms : 0;
         std::ostringstream oss;
@@ -2963,8 +2977,10 @@ void PipelineManager::Run() {
               << (base_offset + outgoing_summary->last_block_ct_ms);
         }
         Logger::Info(oss.str());
+#endif
       }
 
+#ifdef RETROVUE_VERBOSE_LOGS
       {
         int64_t now_utc_ms = time_source_->NowUtcMs();
         int64_t delta_ms = now_utc_ms - outgoing_block.end_utc_ms;
@@ -2980,16 +2996,15 @@ void PipelineManager::Run() {
             << " remaining_budget=" << remaining_block_frames_;
         Logger::Info(oss.str());
       }
+#endif
 
+#ifdef RETROVUE_VERBOSE_LOGS
       // Task 4: Structured fence proof summary — single source of seam evidence.
       {
         int64_t fence_tick_val = compute_fence_frame(outgoing_block);
         int64_t emitted = outgoing_summary ? outgoing_summary->frames_emitted : 0;
         int64_t pad = outgoing_summary ? outgoing_summary->pad_frames : 0;
-        // truncated_by_fence: content was still available but fence ended the block.
-        // Signal: zero pad frames AND emitted < fence tick (content cut short).
         bool truncated = (pad == 0 && emitted < fence_tick_val);
-        // early_exhaustion: content ran out before fence — had to pad.
         bool exhausted = (pad > 0);
         std::ostringstream oss;
         oss << "[FENCE_PROOF]"
@@ -3005,6 +3020,7 @@ void PipelineManager::Run() {
             << " primed_success=" << (swapped ? "Y" : "N");
         Logger::Info(oss.str());
       }
+#endif
 
       prev_completed_block_id = outgoing_block.block_id;
       fence_session_frame = session_frame_index;
@@ -3017,7 +3033,9 @@ void PipelineManager::Run() {
         seam.fence_frame = fence_session_frame;
         seam.pad_frames_at_fence = 0;
         seam.seamless = true;
+#ifdef RETROVUE_VERBOSE_LOGS
         Logger::Info(FormatSeamTransition(seam));
+#endif
         if (callbacks_.on_seam_transition) {
           callbacks_.on_seam_transition(seam);
         }
@@ -3234,6 +3252,7 @@ void PipelineManager::Run() {
         // Perform swap (INV-SEAM-001: swap is pointer/atomic only; no blocking).
         last_logged_defer_seam_frame_ = -1;  // Reset so next seam can log if deferred.
         { auto t0_seam = std::chrono::steady_clock::now();
+#ifdef RETROVUE_VERBOSE_LOGS
         // SEGMENT_TAKE_COMMIT: log decision state BEFORE swap (a_src still valid).
         { std::ostringstream oss;
           const char* to_type_str =
@@ -3252,7 +3271,6 @@ void PipelineManager::Run() {
               << " asset=" << (IsPadDecision(decision) ? "pad" : (vbf.asset_uri.empty() ? "none" : vbf.asset_uri))
               << " seg_b_ready=" << (segment_b_video_buffer_ != nullptr);
           Logger::Info(oss.str()); }
-        // Temporary PAD seam instrumentation: depth at commit (pad fill thread id not exposed).
         if (to_seg < static_cast<int32_t>(live_parent_block_.segments.size()) &&
             live_parent_block_.segments[to_seg].segment_type == SegmentType::kPad) {
           { std::ostringstream oss;
@@ -3267,6 +3285,7 @@ void PipelineManager::Run() {
                 << " current_thread_id=" << std::this_thread::get_id();
             Logger::Info(oss.str()); }
         }
+#endif
         if (to_seg < static_cast<int32_t>(live_parent_block_.segments.size()) &&
             live_parent_block_.segments[to_seg].segment_type == SegmentType::kPad) {
           seam_tick_pad_this_tick = true;
@@ -3720,15 +3739,14 @@ void PipelineManager::Run() {
         Logger::Info(oss.str()); }
     }
 
+#ifdef RETROVUE_VERBOSE_LOGS
     // TICK_TIMING_DIAG: Measure encode/mux duration and late-start per tick.
-    // Proves or falsifies burst-delivery hypothesis.
     {
       auto encode_done = std::chrono::steady_clock::now();
       int64_t encode_done_us = std::chrono::duration_cast<std::chrono::microseconds>(
           encode_done.time_since_epoch()).count();
       int64_t encode_dur_us = encode_done_us - wait_return_us;
       int64_t late_by_us = wait_return_us - deadline_us;
-      // Log only when late > 5ms or first 5 ticks (reduces per-tick noise)
       if (session_frame_index < 5 || late_by_us > 5000) {
         std::ostringstream oss;
         oss << "[PipelineManager] TICK_TIMING_DIAG:"
@@ -3742,6 +3760,7 @@ void PipelineManager::Run() {
         Logger::Info(oss.str());
       }
     }
+#endif
 
     // OUT-SEG-005b: Update max consecutive fallback ticks metric.
     if (current_consecutive_fallback_ticks > 0) {
@@ -3772,11 +3791,8 @@ void PipelineManager::Run() {
         break;
     }
 
-    // ==================================================================
+#ifdef RETROVUE_VERBOSE_LOGS
     // SEAM_PROOF_TICK: Per-frame source attribution on fence tick ±4.
-    // Answers: is the video frame from the incoming block?  Is audio
-    // from the incoming block?  Is there a PTS discontinuity at the seam?
-    // ==================================================================
     if (seam_proof_fence_tick >= 0 &&
         session_frame_index >= seam_proof_fence_tick &&
         session_frame_index < seam_proof_fence_tick + 5) {
@@ -3786,18 +3802,17 @@ void PipelineManager::Run() {
         video_source_block = live_tp()->GetBlock().block_id;
       }
 
-      // Classify audio source for this tick.
       const char* audio_source = "none";
       switch (decision) {
         case TakeDecision::kPad:
         case TakeDecision::kStandby:
-          audio_source = "pad_frame";  // Full pad frame (video + audio)
+          audio_source = "pad_frame";
           break;
         default:
           if (audio_frames_this_tick > 0 && audio_buffer_->IsPrimed()) {
-            audio_source = "buffer";     // Popped from AudioLookaheadBuffer
+            audio_source = "buffer";
           } else if (audio_frames_this_tick > 0) {
-            audio_source = "fence_pad";  // Fence silence (buffer not yet primed)
+            audio_source = "fence_pad";
           }
           break;
       }
@@ -3821,6 +3836,7 @@ void PipelineManager::Run() {
             << " video_buf_depth=" << video_buffer_->DepthFrames();
         Logger::Debug(oss.str()); }
     }
+#endif
 
     // SEAM_PROOF_FIRST_FRAME: Log when first non-pad frame from the incoming
     // block reaches the encoder.  activation_delay_ticks=0 means the incoming
@@ -4077,7 +4093,9 @@ void PipelineManager::Run() {
           seam.fence_frame = fence_session_frame;
           seam.pad_frames_at_fence = fence_pad_counter;
           seam.seamless = (fence_pad_counter == 0);
+#ifdef RETROVUE_VERBOSE_LOGS
           Logger::Info(FormatSeamTransition(seam));
+#endif
           if (callbacks_.on_seam_transition) {
             callbacks_.on_seam_transition(seam);
           }
@@ -4235,13 +4253,13 @@ void PipelineManager::Run() {
           fence_audio_pad_warning_this_tick, pad_frame_emitted_this_tick);
     }
 
-    // FRAME_RATE_AUDIT + CLOCK_DRIFT_AUDIT: every ~10s (300 ticks) to reduce log volume.
+#ifdef RETROVUE_VERBOSE_LOGS
+    // FRAME_RATE_AUDIT + CLOCK_DRIFT_AUDIT: every ~10s (300 ticks).
     if (session_frame_index > 0 && (session_frame_index % 300 == 0)) {
       auto audit_now = std::chrono::steady_clock::now();
       auto wall_now = std::chrono::system_clock::now();
       auto wall_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           wall_now.time_since_epoch()).count();
-      // FRAME_RATE_AUDIT: track actual emission rate (integer: fps_x1000 = frames*1e9/elapsed_us).
       {
         static thread_local int64_t audit_prev_tick = 0;
         static thread_local std::chrono::steady_clock::time_point audit_prev_time{};
@@ -4249,10 +4267,8 @@ void PipelineManager::Run() {
           int64_t tick_delta = session_frame_index - audit_prev_tick;
           int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
               audit_now - audit_prev_time).count();
-          // actual_fps_x1000 = tick_delta * 1000000 / elapsed_us (millifps, integer)
           int64_t actual_fps_x1000 = (elapsed_us > 0)
               ? (tick_delta * 1000000LL / elapsed_us) : 0;
-          // expected_fps_x1000 = fps.num * 1000 / fps.den
           int64_t expected_fps_x1000 = (ctx_->fps.den > 0)
               ? (ctx_->fps.num * 1000LL / ctx_->fps.den) : 0;
           std::ostringstream oss;
@@ -4268,10 +4284,8 @@ void PipelineManager::Run() {
         audit_prev_tick = session_frame_index;
         audit_prev_time = audit_now;
       }
-      // CLOCK_DRIFT_AUDIT: video vs audio PTS alignment (integer: delta in 90kHz units + ms).
       {
         int64_t av_delta_90k = video_pts_90k - audio_pts_90k;
-        // av_delta_ms_x100 = av_delta_90k * 100000 / 90000 (centims, avoids float)
         int64_t av_delta_ms_x100 = av_delta_90k * 100000LL / 90000LL;
         std::ostringstream oss;
         oss << "[PipelineManager] CLOCK_DRIFT_AUDIT"
@@ -4284,6 +4298,7 @@ void PipelineManager::Run() {
         Logger::Info(oss.str());
       }
     }
+#endif
 
     session_frame_index++;
   }

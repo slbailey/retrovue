@@ -463,8 +463,9 @@ void VideoLookaheadBuffer::FillLoop() {
         return gate_lookahead >= lookahead_target_;
       };
 
-      // AUDIO STALL PROBE: Debug only (set RETROVUE_DEBUG to see); was every 50 iters.
-      if (getenv("RETROVUE_DEBUG") && buffer_label_ == "LIVE_VIDEO_BUFFER" &&
+#if defined(RETROVUE_VERBOSE_LOGS)
+      // AUDIO STALL PROBE: only in Debug builds.
+      if (buffer_label_ == "LIVE_VIDEO_BUFFER" &&
           total_pushed_ % 500 == 0 && total_pushed_ > 0) {
         const int probe_audio_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
         const int probe_audio_low = audio_buffer ? audio_buffer->LowWaterMs() : -1;
@@ -477,6 +478,7 @@ void VideoLookaheadBuffer::FillLoop() {
             << " audio_ms=" << probe_audio_ms;
         Logger::Debug(oss.str());
       }
+#endif
 
       if (!is_bootstrap && filling_now) {
         // FILLING path (steady only): park when lookahead >= target.
@@ -650,8 +652,9 @@ void VideoLookaheadBuffer::FillLoop() {
             drop_video_this_cycle = true;
         }
 
-        // AUDIO STALL PROBE: Debug only (set RETROVUE_DEBUG to see).
-        if (getenv("RETROVUE_DEBUG") && buffer_label_ == "LIVE_VIDEO_BUFFER" && !skip_wait) {
+#if defined(RETROVUE_VERBOSE_LOGS)
+        // AUDIO STALL PROBE: only in Debug builds.
+        if (buffer_label_ == "LIVE_VIDEO_BUFFER" && !skip_wait) {
           static int64_t probe_count = 0;
           if (++probe_count <= 10 || probe_count % 500 == 0) {
             const int a_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
@@ -664,6 +667,7 @@ void VideoLookaheadBuffer::FillLoop() {
             Logger::Debug(oss.str());
           }
         }
+#endif
 
         if (fill_stop_.load(std::memory_order_acquire) ||
             (stop_signal && stop_signal->load(std::memory_order_acquire))) {

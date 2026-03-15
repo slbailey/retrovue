@@ -274,6 +274,10 @@ target_compile_definitions(retrovue_air_core
 if(RETROVUE_DEBUG_PAD_EMIT)
   target_compile_definitions(retrovue_air_core PRIVATE RETROVUE_DEBUG_PAD_EMIT)
 endif()
+# Verbose diagnostic logging only in Debug builds (off in RelWithDebInfo/Release).
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  target_compile_definitions(retrovue_air_core PRIVATE RETROVUE_VERBOSE_LOGS)
+endif()
 target_include_directories(retrovue_air_core PUBLIC "${FFMPEG_INCLUDE_DIR}")
 target_include_directories(retrovue_air_core
   PUBLIC

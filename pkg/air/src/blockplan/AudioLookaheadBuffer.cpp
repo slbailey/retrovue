@@ -52,8 +52,9 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
       Logger::Warn(oss.str()); }
     return;
   }
-  // PUSH_DIAG (copy): disabled by default; set RETROVUE_DEBUG to enable first 5.
-  if (getenv("RETROVUE_DEBUG")) {
+#if defined(RETROVUE_VERBOSE_LOGS)
+  // PUSH_DIAG (copy): only in Debug builds.
+  {
     static int push_copy_diag_count = 0;
     if (push_copy_diag_count < 5) {
       const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
@@ -70,6 +71,7 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
       push_copy_diag_count++;
     }
   }
+#endif
 
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
@@ -90,8 +92,9 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
       Logger::Warn(oss.str()); }
     return;
   }
-  // PUSH_DIAG: Only when RETROVUE_DEBUG is set (noise reduction).
-  if (getenv("RETROVUE_DEBUG")) {
+#if defined(RETROVUE_VERBOSE_LOGS)
+  // PUSH_DIAG: only in Debug builds.
+  {
     static int push_diag_count = 0;
     if (push_diag_count < 5) {
       const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
@@ -108,6 +111,7 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
       push_diag_count++;
     }
   }
+#endif
 
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;

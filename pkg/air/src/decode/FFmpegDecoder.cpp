@@ -1173,8 +1173,9 @@ bool FFmpegDecoder::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& out
     return false;
   }
 
-  // SWR_OUTPUT_DIAG: Only when RETROVUE_DEBUG is set (noise reduction).
-  if (getenv("RETROVUE_DEBUG")) {
+#if defined(RETROVUE_VERBOSE_LOGS)
+  // SWR_OUTPUT_DIAG: Only in Debug builds.
+  {
     static int swr_diag_count = 0;
     if (swr_diag_count < 5) {
       const int16_t* s16 = reinterpret_cast<const int16_t*>(output_frame.data.data());
@@ -1199,6 +1200,7 @@ bool FFmpegDecoder::ConvertAudioFrame(AVFrame* av_frame, buffer::AudioFrame& out
       swr_diag_count++;
     }
   }
+#endif
 
   // Update output frame metadata
   output_frame.sample_rate = 48000;

@@ -1824,8 +1824,9 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       return false;
     }
 
-    // AUDIO_FLOAT_DIAG: Only when RETROVUE_DEBUG is set (otherwise log volume is excessive).
-    if (getenv("RETROVUE_DEBUG") && audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
+    // AUDIO_FLOAT_DIAG: Only in Debug builds (RETROVUE_VERBOSE_LOGS).
+#if defined(RETROVUE_VERBOSE_LOGS)
+    if (audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
       static int64_t float_diag_count = 0;
       if (float_diag_count < kDbgAudioChunkLogLimit) {
         float f_min = 0.0f, f_max = 0.0f;
@@ -1845,6 +1846,7 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
         float_diag_count++;
       }
     }
+#endif
 
     // Send frame to encoder
     ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
