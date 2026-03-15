@@ -252,6 +252,7 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
+| INV-ASSET-MEDIA-IDENTITY | [invariants/core/asset/INV-ASSET-MEDIA-IDENTITY.md](invariants/core/asset/INV-ASSET-MEDIA-IDENTITY.md) | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY |
 | INV-ASSET-APPROVED-IMPLIES-READY-001 | [invariants/core/asset/INV-ASSET-APPROVED-IMPLIES-READY-001.md](invariants/core/asset/INV-ASSET-APPROVED-IMPLIES-READY-001.md) | LAW-ELIGIBILITY |
 | INV-ASSET-SOFTDELETE-SYNC-001 | [invariants/core/asset/INV-ASSET-SOFTDELETE-SYNC-001.md](invariants/core/asset/INV-ASSET-SOFTDELETE-SYNC-001.md) | — |
 | INV-ASSET-CANONICAL-KEY-FORMAT-001 | [invariants/core/asset/INV-ASSET-CANONICAL-KEY-FORMAT-001.md](invariants/core/asset/INV-ASSET-CANONICAL-KEY-FORMAT-001.md) | — |
