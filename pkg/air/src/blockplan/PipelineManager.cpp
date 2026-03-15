@@ -3554,25 +3554,24 @@ void PipelineManager::Run() {
           { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " TryPopSamples_success"; Logger::Debug(oss.str()); }
         }
         // INV-LOUDNESS-NORMALIZED-001: Apply per-segment loudness gain.
-        // Rule 1: constant linear scalar. Rule 3: int16 clamping. Rule 4: skip if 0.0.
-        if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
-          float seg_gain_db = live_parent_block_.segments[current_segment_index_].gain_db;
-          if (seg_gain_db != 0.0f) {
-            float linear_gain = blockplan::GainDbToLinear(seg_gain_db);
-            blockplan::ApplyGainS16(audio_out, linear_gain);
-          }
+        // Rule 1: constant Q16 scalar (precomputed at segment activation).
+        // Rule 3: int16 clamping. Rule 4: skip if unity (65536).
+        // INV-FPS-RATIONAL-001: No floats in hot path — Q16 fixed-point only.
+        if (current_segment_gain_q16_ != 65536) {
+          blockplan::ApplyGainS16Q16(audio_out, current_segment_gain_q16_);
         }
         // INV-BROADCAST-DRC-001: Apply broadcast dynamic range compression.
         // Positioned after loudness normalization, before encoding.
         // Per-sample envelope follower with linked stereo peak detection.
+        // Returns centidecibels (dB × 100, integer) — no floats in hot path.
         {
-          float drc_reduction = broadcast_audio_processor_->Process(audio_out);
+          int32_t drc_reduction_cdb = broadcast_audio_processor_->Process(audio_out);
           drc_segment_ticks_total_++;
-          if (drc_reduction > 0.0f) {
+          if (drc_reduction_cdb > 0) {
             drc_segment_ticks_compressed_++;
-            drc_segment_sum_reduction_db_ += drc_reduction;
-            if (drc_reduction > drc_segment_peak_reduction_db_)
-              drc_segment_peak_reduction_db_ = drc_reduction;
+            drc_segment_sum_reduction_cdb_ += drc_reduction_cdb;
+            if (drc_reduction_cdb > drc_segment_peak_reduction_cdb_)
+              drc_segment_peak_reduction_cdb_ = drc_reduction_cdb;
           }
         }
         // PRE_ENCODE_DIAG: Verify audio_out data right before encodeAudioFrame.
@@ -3586,16 +3585,12 @@ void PipelineManager::Run() {
               if (pe[i] < pe_min) pe_min = pe[i];
               if (pe[i] > pe_max) pe_max = pe[i];
             }
-            float diag_gain_db = 0.0f;
-            if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
-              diag_gain_db = live_parent_block_.segments[current_segment_index_].gain_db;
-            }
             std::cout << "[PRE_ENCODE_DIAG] call#" << pre_enc_diag_count
                       << " nb_samples=" << audio_out.nb_samples
                       << " data_ptr=" << static_cast<const void*>(audio_out.data.data())
                       << " data_bytes=" << audio_out.data.size()
                       << " s16_min=" << pe_min << " s16_max=" << pe_max
-                      << " gain_db=" << diag_gain_db
+                      << " gain_q16=" << current_segment_gain_q16_
                       << " seg_idx=" << current_segment_index_
                       << " is_pad=" << IsPadDecision(decision)
                       << std::endl;
@@ -4842,11 +4837,19 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
 void PipelineManager::ComputeSegmentSeamFrames() {
   planned_segment_seam_frames_.clear();
   current_segment_index_ = 0;
+  // INV-LOUDNESS-NORMALIZED-001 + INV-FPS-RATIONAL-001: Precompute Q16 gain
+  // for first segment at block activation. Updated on each segment advance.
+  if (!live_parent_block_.segments.empty()) {
+    current_segment_gain_q16_ = blockplan::GainDbToQ16(
+        live_parent_block_.segments[0].gain_db);
+  } else {
+    current_segment_gain_q16_ = 65536;  // unity
+  }
   // INV-BROADCAST-DRC-003: Reset DRC envelope on block activation.
   if (broadcast_audio_processor_) {
     broadcast_audio_processor_->Reset();
-    drc_segment_peak_reduction_db_ = 0.0f;
-    drc_segment_sum_reduction_db_ = 0.0f;
+    drc_segment_peak_reduction_cdb_ = 0;
+    drc_segment_sum_reduction_cdb_ = 0;
     drc_segment_ticks_compressed_ = 0;
     drc_segment_ticks_total_ = 0;
   }
@@ -5393,24 +5396,31 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   // Policy: next_seam = min(block_fence_frame_, tick + MIN_DWELL_FRAMES), min 1 frame.
   // INV-BROADCAST-DRC-003: Log DRC summary for completed segment, then reset.
   {
-    float avg_reduction = (drc_segment_ticks_compressed_ > 0)
-        ? (drc_segment_sum_reduction_db_ / static_cast<float>(drc_segment_ticks_compressed_))
-        : 0.0f;
+    int32_t avg_reduction_cdb = (drc_segment_ticks_compressed_ > 0)
+        ? static_cast<int32_t>(drc_segment_sum_reduction_cdb_ / drc_segment_ticks_compressed_)
+        : 0;
     std::ostringstream oss;
     oss << "[PipelineManager] BROADCAST_DRC_SEGMENT_SUMMARY"
         << " segment_index=" << current_segment_index_
-        << " peak_gain_reduction_db=" << drc_segment_peak_reduction_db_
-        << " avg_gain_reduction_db=" << avg_reduction
+        << " peak_gain_reduction_cdb=" << drc_segment_peak_reduction_cdb_
+        << " avg_gain_reduction_cdb=" << avg_reduction_cdb
         << " ticks_compressed=" << drc_segment_ticks_compressed_
         << " ticks_total=" << drc_segment_ticks_total_;
     Logger::Info(oss.str());
     broadcast_audio_processor_->Reset();
-    drc_segment_peak_reduction_db_ = 0.0f;
-    drc_segment_sum_reduction_db_ = 0.0f;
+    drc_segment_peak_reduction_cdb_ = 0;
+    drc_segment_sum_reduction_cdb_ = 0;
     drc_segment_ticks_compressed_ = 0;
     drc_segment_ticks_total_ = 0;
   }
   current_segment_index_++;
+  // INV-LOUDNESS-NORMALIZED-001 + INV-FPS-RATIONAL-001: Precompute Q16 gain for new segment.
+  if (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size())) {
+    current_segment_gain_q16_ = blockplan::GainDbToQ16(
+        live_parent_block_.segments[current_segment_index_].gain_db);
+  } else {
+    current_segment_gain_q16_ = 65536;
+  }
   {
     const int64_t min_dwell_frames = ctx_->fps.IsValid()
         ? std::max(static_cast<int64_t>(1), ctx_->fps.FramesFromDurationCeilMs(1000))

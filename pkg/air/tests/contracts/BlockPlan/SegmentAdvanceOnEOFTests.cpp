@@ -111,6 +111,7 @@ class SegmentAdvanceMockProducer : public ITickProducer {
       fd.video = MakeVideoFrame(width_, height_, 0x20);
       fd.asset_uri = "episode.mp4";
       fd.block_ct_ms = (episode_emitted_ - 1) * frame_duration_ms_;
+      fd.source_frame_index = global_frame_index_++;
       fd.audio.push_back(MakeAudioFrame(1024));
       return fd;
     }
@@ -131,6 +132,7 @@ class SegmentAdvanceMockProducer : public ITickProducer {
       fd.video = MakeVideoFrame(width_, height_, 0x40);
       fd.asset_uri = "filler.mp4";
       fd.block_ct_ms = filler_ct;
+      fd.source_frame_index = global_frame_index_++;
       fd.audio.push_back(MakeAudioFrame(1024));
       return fd;
     }
@@ -179,6 +181,7 @@ class SegmentAdvanceMockProducer : public ITickProducer {
   int gap_emitted_ = 0;
   int filler_emitted_ = 0;
   int call_count_ = 0;
+  int64_t global_frame_index_ = 0;
 
   FedBlock block_;
   bool has_primed_ = false;
@@ -217,6 +220,7 @@ TEST(SegmentAdvanceOnEOF, EpisodeEOFAdvancesToFiller) {
     primed.video = MakeVideoFrame(kWidth, kHeight, 0x20);
     primed.asset_uri = "episode.mp4";
     primed.block_ct_ms = 0;
+    primed.source_frame_index = 0;
     primed.audio.push_back(MakeAudioFrame(1024));
     producer_ptr->SetPrimedFrame(std::move(primed));
   }
@@ -321,6 +325,7 @@ TEST(SegmentAdvanceOnEOF, ContentGapDoesNotPermanentlyStopFillLoop) {
     primed.video = MakeVideoFrame(kWidth, kHeight, 0x20);
     primed.asset_uri = "episode.mp4";
     primed.block_ct_ms = 0;
+    primed.source_frame_index = 0;
     primed.audio.push_back(MakeAudioFrame(1024));
     producer_ptr->SetPrimedFrame(std::move(primed));
   }
@@ -372,6 +377,7 @@ TEST(SegmentAdvanceOnEOF, HoldLastFramesBridgeGap) {
     primed.video = MakeVideoFrame(kWidth, kHeight, 0x20);
     primed.asset_uri = "episode.mp4";
     primed.block_ct_ms = 0;
+    primed.source_frame_index = 0;
     primed.audio.push_back(MakeAudioFrame(1024));
     producer_ptr->SetPrimedFrame(std::move(primed));
   }

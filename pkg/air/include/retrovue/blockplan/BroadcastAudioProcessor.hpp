@@ -52,16 +52,17 @@ class BroadcastAudioProcessor {
     makeup_linear_ = std::pow(10.0f, kMakeupGainDb / 20.0f);
   }
 
-  // Process an AudioFrame in-place. Returns peak gain reduction (dB) applied.
+  // Process an AudioFrame in-place. Returns peak gain reduction in centidecibels
+  // (dB × 100, integer). E.g. 3.5 dB reduction → 350. Zero means no compression.
   // INV-BROADCAST-DRC-002: Only frame.data (sample amplitudes) is modified.
   // Sample count, channel count, sample_rate, pts_us are never touched.
-  float Process(buffer::AudioFrame& frame) {
+  int32_t Process(buffer::AudioFrame& frame) {
     const size_t total_samples =
         static_cast<size_t>(frame.nb_samples) * static_cast<size_t>(frame.channels);
     const size_t byte_count = total_samples * sizeof(int16_t);
 
     if (frame.data.size() < byte_count || frame.channels != kChannels) {
-      return 0.0f;
+      return 0;
     }
 
     auto* samples = reinterpret_cast<int16_t*>(frame.data.data());
@@ -119,7 +120,7 @@ class BroadcastAudioProcessor {
       samples[idx + 1] = static_cast<int16_t>(scaled_r);
     }
 
-    return peak_reduction_db;
+    return static_cast<int32_t>(peak_reduction_db * 100.0f);
   }
 
   // INV-BROADCAST-DRC-003: Reset envelope to unity (silence).
