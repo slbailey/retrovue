@@ -2269,12 +2269,15 @@ void PipelineManager::Run() {
       case TakeDecision::kPad:      take_source_char = 'P'; break;
     }
 
-    // PAD_CAUSE: one log per pad/standby tick so evidence script can attribute "other" to named causes.
+    // PAD_CAUSE: rate-limited to once per ~10s (300 ticks) to reduce log volume.
     if (decision == TakeDecision::kPad || decision == TakeDecision::kStandby) {
-      const char* cause = pad_cause_tag ? pad_cause_tag : "unknown_fallback";
-      std::ostringstream oss;
-      oss << "[PipelineManager] PAD_CAUSE tick=" << session_frame_index << " cause=" << cause;
-      Logger::Info(oss.str());
+      if (session_frame_index - last_pad_cause_log_tick_ >= 300) {
+        last_pad_cause_log_tick_ = session_frame_index;
+        const char* cause = pad_cause_tag ? pad_cause_tag : "unknown_fallback";
+        std::ostringstream oss;
+        oss << "[PipelineManager] PAD_CAUSE tick=" << session_frame_index << " cause=" << cause;
+        Logger::Info(oss.str());
+      }
     }
 
     // INV-HANDOFF-DIAG: frame_gap = actual_src_emitted - selected_src (confirms gap grows = FIFO ahead of scheduler).
@@ -2317,7 +2320,7 @@ void PipelineManager::Run() {
     // INV-CADENCE-SOURCE-SYNC-002: Rate-limited cadence diagnostic (every 300 ticks ≈ 10s at 30fps).
     // Log after take_source_char is set so decision= is correct. A=content live, B=content preview,
     // R=repeat (cadence), H=hold, S=standby, P=pad (not "presentation").
-    if (session_frame_index - cadence_diag_last_log_tick_ >= 300) {
+    if (session_frame_index - cadence_diag_last_log_tick_ >= 1500) {  // ~50s at 30fps (was 300)
       auto now_wall = std::chrono::system_clock::now();
       auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           now_wall.time_since_epoch()).count();
@@ -3725,8 +3728,8 @@ void PipelineManager::Run() {
           encode_done.time_since_epoch()).count();
       int64_t encode_dur_us = encode_done_us - wait_return_us;
       int64_t late_by_us = wait_return_us - deadline_us;
-      // Log first 90 ticks (~3s at 29.97fps) then every 300th tick
-      if (session_frame_index < 90 || (session_frame_index % 300 == 0) || late_by_us > 5000) {
+      // Log only when late > 5ms or first 5 ticks (reduces per-tick noise)
+      if (session_frame_index < 5 || late_by_us > 5000) {
         std::ostringstream oss;
         oss << "[PipelineManager] TICK_TIMING_DIAG:"
             << " tick=" << session_frame_index
@@ -4232,9 +4235,8 @@ void PipelineManager::Run() {
           fence_audio_pad_warning_this_tick, pad_frame_emitted_this_tick);
     }
 
-    // FRAME_RATE_AUDIT + CLOCK_DRIFT_AUDIT: every ~1 second for 1.25x speed diagnosis.
-    // All integer arithmetic — no float/double (INV-FPS-RATIONAL-001).
-    if (session_frame_index > 0 && (session_frame_index % 30 == 0)) {
+    // FRAME_RATE_AUDIT + CLOCK_DRIFT_AUDIT: every ~10s (300 ticks) to reduce log volume.
+    if (session_frame_index > 0 && (session_frame_index % 300 == 0)) {
       auto audit_now = std::chrono::steady_clock::now();
       auto wall_now = std::chrono::system_clock::now();
       auto wall_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

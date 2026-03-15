@@ -1824,23 +1824,26 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       return false;
     }
 
-    // AUDIO_FLOAT_DIAG: After conversion, check actual float values in frame.
-    if (dbg_audio_chunk_count <= kDbgAudioChunkLogLimit + 1 &&
-        audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
-      float f_min = 0.0f, f_max = 0.0f;
-      for (int c = 0; c < encoder_channels; ++c) {
-        const float* plane = reinterpret_cast<const float*>(audio_frame_->data[c]);
-        for (int i = 0; i < samples_this_frame; ++i) {
-          if (plane[i] < f_min) f_min = plane[i];
-          if (plane[i] > f_max) f_max = plane[i];
+    // AUDIO_FLOAT_DIAG: Only when RETROVUE_DEBUG is set (otherwise log volume is excessive).
+    if (getenv("RETROVUE_DEBUG") && audio_codec_ctx_->sample_fmt == AV_SAMPLE_FMT_FLTP) {
+      static int64_t float_diag_count = 0;
+      if (float_diag_count < kDbgAudioChunkLogLimit) {
+        float f_min = 0.0f, f_max = 0.0f;
+        for (int c = 0; c < encoder_channels; ++c) {
+          const float* plane = reinterpret_cast<const float*>(audio_frame_->data[c]);
+          for (int i = 0; i < samples_this_frame; ++i) {
+            if (plane[i] < f_min) f_min = plane[i];
+            if (plane[i] > f_max) f_max = plane[i];
+          }
         }
+        std::cout << "[AUDIO_FLOAT_DIAG] chunk#" << float_diag_count
+                  << " f_min=" << f_min << " f_max=" << f_max
+                  << " frame_data0=" << static_cast<void*>(audio_frame_->data[0])
+                  << " frame_data1=" << static_cast<void*>(audio_frame_->data[1])
+                  << " frame_linesize0=" << audio_frame_->linesize[0]
+                  << std::endl;
+        float_diag_count++;
       }
-      std::cout << "[AUDIO_FLOAT_DIAG] chunk#" << (dbg_audio_chunk_count - 1)
-                << " f_min=" << f_min << " f_max=" << f_max
-                << " frame_data0=" << static_cast<void*>(audio_frame_->data[0])
-                << " frame_data1=" << static_cast<void*>(audio_frame_->data[1])
-                << " frame_linesize0=" << audio_frame_->linesize[0]
-                << std::endl;
     }
 
     // Send frame to encoder

@@ -502,6 +502,8 @@ class PipelineManager : public IPlayoutExecutionEngine {
   int64_t cadence_diag_repeat_ = 0;
   int64_t cadence_diag_bypass_ = 0;   // Ticks where cadence was not evaluated (take_b, v_src null, etc.)
   int64_t cadence_diag_last_log_tick_ = 0;
+  // PAD_CAUSE: rate-limit to once per ~10s to reduce log volume when on pad/standby.
+  int64_t last_pad_cause_log_tick_ = -1;
   // Frame alignment (contract frame_selection_alignment.md): rate-limited log when we emit PAD because queue ahead.
   int64_t frame_alignment_ahead_pad_last_log_tick_ = -1;
   // Fingerprint context for held frame (no-unintentional-black: H must match last A content).

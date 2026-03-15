@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -51,22 +52,20 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
       Logger::Warn(oss.str()); }
     return;
   }
-  // PUSH_DIAG (copy overload) — shared counter with move overload.
-  {
-    // Use extern linkage via the move overload's static counter.
-    const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
-    int total_s16 = frame.nb_samples * frame.channels;
-    int16_t p_min = 0, p_max = 0;
-    for (int i = 0; i < total_s16; ++i) {
-      if (s16[i] < p_min) p_min = s16[i];
-      if (s16[i] > p_max) p_max = s16[i];
-    }
+  // PUSH_DIAG (copy): disabled by default; set RETROVUE_DEBUG to enable first 5.
+  if (getenv("RETROVUE_DEBUG")) {
     static int push_copy_diag_count = 0;
-    if (push_copy_diag_count < 10) {
+    if (push_copy_diag_count < 5) {
+      const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
+      int total_s16 = frame.nb_samples * frame.channels;
+      int16_t p_min = 0, p_max = 0;
+      for (int i = 0; i < total_s16; ++i) {
+        if (s16[i] < p_min) p_min = s16[i];
+        if (s16[i] > p_max) p_max = s16[i];
+      }
       std::ostringstream oss;
       oss << "[PUSH_DIAG_COPY] push#" << push_copy_diag_count
-          << " nb_samples=" << frame.nb_samples
-          << " s16_min=" << p_min << " s16_max=" << p_max;
+          << " nb_samples=" << frame.nb_samples << " s16_min=" << p_min << " s16_max=" << p_max;
       Logger::Info(oss.str());
       push_copy_diag_count++;
     }
@@ -91,28 +90,20 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
       Logger::Warn(oss.str()); }
     return;
   }
-  // PUSH_DIAG: Verify data integrity before storing in buffer.
-  {
+  // PUSH_DIAG: Only when RETROVUE_DEBUG is set (noise reduction).
+  if (getenv("RETROVUE_DEBUG")) {
     static int push_diag_count = 0;
-    if (push_diag_count < 30) {
+    if (push_diag_count < 5) {
       const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
       int total_s16 = frame.nb_samples * frame.channels;
-      int expected_bytes = total_s16 * static_cast<int>(sizeof(int16_t));
       int16_t p_min = 0, p_max = 0;
-      bool all_zero = true;
       for (int i = 0; i < total_s16; ++i) {
         if (s16[i] < p_min) p_min = s16[i];
         if (s16[i] > p_max) p_max = s16[i];
-        if (s16[i] != 0) all_zero = false;
       }
       std::ostringstream oss;
       oss << "[PUSH_DIAG] push#" << push_diag_count
-          << " nb_samples=" << frame.nb_samples
-          << " data_bytes=" << frame.data.size()
-          << " expected_bytes=" << expected_bytes
-          << " s16_min=" << p_min << " s16_max=" << p_max
-          << " all_zero=" << all_zero
-          << " gen=" << generation_;
+          << " nb_samples=" << frame.nb_samples << " s16_min=" << p_min << " s16_max=" << p_max;
       Logger::Info(oss.str());
       push_diag_count++;
     }

@@ -8,8 +8,9 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <numeric>
 #include <sstream>
@@ -462,22 +463,19 @@ void VideoLookaheadBuffer::FillLoop() {
         return gate_lookahead >= lookahead_target_;
       };
 
-      // AUDIO STALL PROBE: Log fill-thread gate decision every 50 iterations for LIVE buffer.
-      if (buffer_label_ == "LIVE_VIDEO_BUFFER" && total_pushed_ % 50 == 0 && total_pushed_ > 0) {
+      // AUDIO STALL PROBE: Debug only (set RETROVUE_DEBUG to see); was every 50 iters.
+      if (getenv("RETROVUE_DEBUG") && buffer_label_ == "LIVE_VIDEO_BUFFER" &&
+          total_pushed_ % 500 == 0 && total_pushed_ > 0) {
         const int probe_audio_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
         const int probe_audio_low = audio_buffer ? audio_buffer->LowWaterMs() : -1;
         std::ostringstream oss;
         oss << "[FillLoop:LIVE_VIDEO_BUFFER] GATE_PROBE"
             << " iter=" << total_pushed_
             << " filling_now=" << filling_now
-            << " is_bootstrap=" << is_bootstrap
             << " lookahead=" << gate_lookahead
-            << " la_target=" << lookahead_target_
             << " store=" << gate_store_size
-            << " audio_ms=" << probe_audio_ms
-            << " audio_low=" << probe_audio_low
-            << " skip_wait=" << skip_wait;
-        Logger::Info(oss.str());
+            << " audio_ms=" << probe_audio_ms;
+        Logger::Debug(oss.str());
       }
 
       if (!is_bootstrap && filling_now) {
@@ -652,21 +650,18 @@ void VideoLookaheadBuffer::FillLoop() {
             drop_video_this_cycle = true;
         }
 
-        // AUDIO STALL PROBE: Log post-wake state for LIVE buffer (rate-limited).
-        if (buffer_label_ == "LIVE_VIDEO_BUFFER" && !skip_wait) {
+        // AUDIO STALL PROBE: Debug only (set RETROVUE_DEBUG to see).
+        if (getenv("RETROVUE_DEBUG") && buffer_label_ == "LIVE_VIDEO_BUFFER" && !skip_wait) {
           static int64_t probe_count = 0;
-          if (++probe_count <= 200 || probe_count % 100 == 0) {
+          if (++probe_count <= 10 || probe_count % 500 == 0) {
             const int a_ms = audio_buffer ? audio_buffer->DepthMs() : -1;
             std::ostringstream oss;
             oss << "[FillLoop:LIVE_VIDEO_BUFFER] WAKE_PROBE"
                 << " wake_reason=" << wake_reason
-                << " skip_wait=" << skip_wait
-                << " drop_video=" << drop_video_this_cycle
                 << " post_la=" << post_lookahead
                 << " post_store=" << post_store_size
-                << " audio_ms=" << a_ms
-                << " filling_now=" << steady_filling_.load(std::memory_order_relaxed);
-            Logger::Info(oss.str());
+                << " audio_ms=" << a_ms;
+            Logger::Debug(oss.str());
           }
         }
 
@@ -1134,13 +1129,18 @@ int VideoLookaheadBuffer::DepthFrames() const {
   // Phase 3: FIVS store is authoritative for video depth.
   const int depth = static_cast<int>(frame_store_.Size());
   if (depth > hard_cap_frames_) {
-    std::ostringstream oss;
-    oss << "[VideoBuffer:" << buffer_label_ << "] INV-VIDEO-BOUNDED VIOLATION"
-        << " depth=" << depth << " hard_cap=" << hard_cap_frames_
-        << " target=" << target_depth_frames_
-        << " pushes=" << total_pushed_ << " pops=" << total_popped_
-        << " drops=" << drops_total_;
-    Logger::Error(oss.str());
+    if (!violation_logged_this_session_) {
+      violation_logged_this_session_ = true;
+      std::ostringstream oss;
+      oss << "[VideoBuffer:" << buffer_label_ << "] INV-VIDEO-BOUNDED VIOLATION"
+          << " depth=" << depth << " hard_cap=" << hard_cap_frames_
+          << " target=" << target_depth_frames_
+          << " pushes=" << total_pushed_ << " pops=" << total_popped_
+          << " drops=" << drops_total_;
+      Logger::Error(oss.str());
+    }
+  } else {
+    violation_logged_this_session_ = false;  // Reset so next exceed logs once
   }
   return depth;
 }

@@ -330,6 +330,8 @@ class VideoLookaheadBuffer {
   mutable std::chrono::steady_clock::time_point last_fill_log_{};
   mutable int last_watchdog_depth_{-1};
   mutable std::string last_watchdog_state_{};
+  // INV-VIDEO-BOUNDED: log only on first exceed per session (reset when depth goes back under cap).
+  mutable bool violation_logged_this_session_{false};
 
   // INV-AUDIO-LIVENESS-001 diagnostics (not invariants): audio-first decode under backpressure.
   std::atomic<int64_t> decode_continued_for_audio_while_video_full_{0};

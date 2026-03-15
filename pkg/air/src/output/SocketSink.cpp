@@ -204,7 +204,7 @@ void SocketSink::WriterThreadLoop() {
   auto last_queue_log_time = std::chrono::steady_clock::now();
   bool first_send_logged = false;
   uint64_t transport_diag_cumulative_bytes = 0;
-  // TRANSPORT_DIAG: Log first 60 sends then every 100th for slope analysis
+  // TRANSPORT_DIAG: Log first 5 sends only (reduced from 60 + every 100th)
   uint64_t transport_diag_send_count = 0;
 
   while (!writer_stop_.load(std::memory_order_acquire)) {
@@ -358,8 +358,8 @@ void SocketSink::WriterThreadLoop() {
       bytes_delivered_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
       transport_diag_cumulative_bytes += static_cast<uint64_t>(n);
       transport_diag_send_count++;
-      // TRANSPORT_DIAG: Log socket send wall time for slope analysis
-      if (transport_diag_send_count <= 60 || (transport_diag_send_count % 100 == 0)) {
+      // TRANSPORT_DIAG: Log only first 5 sends (reduces log volume)
+      if (transport_diag_send_count <= 5) {
         auto send_wall = std::chrono::steady_clock::now();
         int64_t send_wall_us = std::chrono::duration_cast<std::chrono::microseconds>(
             send_wall.time_since_epoch()).count();
