@@ -343,6 +343,36 @@ class ProcessorJob(Base):
     )
 
 
+class ProcessorRun(Base):
+    """Execution history: one row per processor run within a job.
+
+    Contract: ProcessorExecutionContract. Immutable; supports staleness and audit.
+    """
+
+    __tablename__ = "processor_runs"
+
+    run_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    job_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("processor_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    processor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[uuid_module.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    processor_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_processor_runs_job_id", "job_id"),
+        Index("ix_processor_runs_processor_target", "processor_id", "target_type", "target_id"),
+    )
+
+
 class AssetEditorial(Base):
     __tablename__ = "asset_editorial"
 
