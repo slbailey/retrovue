@@ -22,6 +22,7 @@ from ..domain.entities import (
     AssetEditorial,
     AssetProbed,
     Collection,
+    ProcessorOutput,
     ProcessorRun,
 )
 from ..infra.metadata.persistence import persist_asset_metadata
@@ -42,6 +43,22 @@ __all__ = [
 RUN_STATUS_COMPLETED = "completed"
 RUN_STATUS_FAILED = "failed"
 DEFAULT_PROCESSOR_VERSION = "0.1.0"
+
+# ProcessorMetadataContract: field ownership (processors MUST NOT overwrite operator-owned fields).
+FIELD_OWNERSHIP: dict[str, str] = {
+    "approved_for_broadcast": "operator",
+    "operator_verified": "operator",
+    "duration_ms": "processor",
+    "video_codec": "processor",
+    "audio_codec": "processor",
+    "container": "processor",
+    "bitrate": "processor",
+    "resolution": "processor",
+    "loudness_lufs": "processor",
+    "gain_db": "processor",
+    "loudness_range_lu": "processor",
+    "interstitial_type": "processor",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +257,7 @@ def execute_job(db: Session, job: Any) -> None:
 
     processor_ids = get_processors_for_target(job.target_type)
     run_records: list[dict[str, Any]] = []
+    flexible_outputs: list[tuple[str, dict[str, Any]]] = []
 
     for processor_id in processor_ids:
         enricher = _enricher_instance(processor_id, collection_name)
@@ -280,15 +298,19 @@ def execute_job(db: Session, job: Any) -> None:
             item = enricher.enrich(item)
             result = item_to_processor_result(item, processor_id)
             validate_processor_result(result, processor_id)
-            # Merge into context (no DB write)
-            ctx.mutable_changes.update(result.metadata)
+            # Merge into context (no DB write); skip operator-owned keys (ProcessorMetadataContract).
             for k, v in result.metadata.items():
+                if FIELD_OWNERSHIP.get(k) == "operator":
+                    continue
+                ctx.mutable_changes[k] = v
                 if k in ("duration_ms", "video_codec", "audio_codec", "container", "bitrate", "resolution"):
                     ctx.mutable_probed[k] = v
                 elif k in ("loudness_lufs", "gain_db", "loudness_range_lu"):
                     ctx.mutable_probed[k] = v
                 elif k in ("interstitial_type",):
                     ctx.mutable_editorial[k] = v
+            if result.flexible:
+                flexible_outputs.append((processor_id, dict(result.flexible)))
             completed_at = datetime.now(UTC)
             run_record["completed_at"] = completed_at
             duration_ms = (completed_at - started_at).total_seconds() * 1000
@@ -329,16 +351,18 @@ def execute_job(db: Session, job: Any) -> None:
             raise
         run_records.append(run_record)
 
-    # Single transaction: apply mutable changes to asset and persist; insert processor_runs
+    # Single transaction: apply mutable changes to asset (skip operator-owned); persist; processor_runs; processor_outputs.
     asset = ctx.target_entity
-    if ctx.mutable_changes.get("duration_ms") is not None:
-        try:
-            asset.duration_ms = int(ctx.mutable_changes["duration_ms"])
-        except (ValueError, TypeError):
-            pass
-    for key in ("video_codec", "audio_codec", "container"):
-        if ctx.mutable_changes.get(key) is not None:
-            setattr(asset, key, ctx.mutable_changes[key])
+    for key, v in ctx.mutable_changes.items():
+        if FIELD_OWNERSHIP.get(key) == "operator":
+            continue
+        if key == "duration_ms" and v is not None:
+            try:
+                asset.duration_ms = int(v)
+            except (ValueError, TypeError):
+                pass
+        elif key in ("video_codec", "audio_codec", "container") and v is not None:
+            setattr(asset, key, v)
     probed_to_persist = {**ctx.existing_probed, **ctx.mutable_probed}
     if probed_to_persist:
         persist_asset_metadata(db, asset, probed=probed_to_persist)
@@ -367,3 +391,27 @@ def execute_job(db: Session, job: Any) -> None:
                 error_message=rec.get("error_message"),
             )
         )
+
+    for processor_id, payload in flexible_outputs:
+        existing = (
+            db.query(ProcessorOutput)
+            .filter(
+                ProcessorOutput.processor_id == processor_id,
+                ProcessorOutput.target_type == job.target_type,
+                ProcessorOutput.target_id == job.target_id,
+            )
+            .first()
+        )
+        if existing:
+            existing.payload_json = payload
+            db.add(existing)
+        else:
+            db.add(
+                ProcessorOutput(
+                    id=uuid.uuid4(),
+                    processor_id=processor_id,
+                    target_type=job.target_type,
+                    target_id=job.target_id,
+                    payload_json=payload,
+                )
+            )

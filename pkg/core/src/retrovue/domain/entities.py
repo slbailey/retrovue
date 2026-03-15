@@ -373,6 +373,32 @@ class ProcessorRun(Base):
     )
 
 
+class ProcessorOutput(Base):
+    """Flexible/processor-specific metadata. One row per (processor_id, target_type, target_id).
+
+    Contract: ProcessorMetadataContract. Runtime upserts from result.flexible.
+    """
+
+    __tablename__ = "processor_outputs"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    processor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[uuid_module.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(
+        PG_JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_processor_outputs_processor_target", "processor_id", "target_type", "target_id", unique=True),
+    )
+
+
 class AssetEditorial(Base):
     __tablename__ = "asset_editorial"
 
