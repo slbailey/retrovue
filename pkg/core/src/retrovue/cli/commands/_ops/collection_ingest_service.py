@@ -660,9 +660,13 @@ class CollectionIngestService:
             except Exception:
                 importer_editorial = None
 
-            # Apply enricher pipeline (unchanged order)
+            # Apply enricher pipeline (unchanged order) — skip when workers are the single enrichment path (State 3).
+            run_inline_enrichment = not (
+                getattr(settings, "enable_processor_queue", False)
+                and getattr(settings, "enable_runtime_execution", False)
+            )
             try:
-                if pipeline:
+                if run_inline_enrichment and pipeline:
                     try:
                         enriched = item
                         for _, _, enr in pipeline:
@@ -675,7 +679,7 @@ class CollectionIngestService:
                         pass
                 # Attach pipeline checksum so ingest can detect enricher changes
                 try:
-                    if pipeline_checksum:
+                    if pipeline_checksum and run_inline_enrichment:
                         item.enricher_checksum = pipeline_checksum
                 except Exception:
                     pass

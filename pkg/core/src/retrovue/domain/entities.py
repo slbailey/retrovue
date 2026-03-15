@@ -316,6 +316,33 @@ class Asset(Base):
         return f"<Asset(uuid={self.uuid}, uri={self.uri}, size={self.size}, state={self.state}, approved_for_broadcast={self.approved_for_broadcast})>"
 
 
+class ProcessorJob(Base):
+    """Processor job queue: one row per (target_type, target_id) when pending/running.
+
+    Contract: ProcessorJobQueueContract. Runtime runs all applicable processors for the target.
+    """
+
+    __tablename__ = "processor_jobs"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[uuid_module.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sa.text("1"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_processor_jobs_status_priority", "status", "priority"),
+    )
+
+
 class AssetEditorial(Base):
     __tablename__ = "asset_editorial"
 

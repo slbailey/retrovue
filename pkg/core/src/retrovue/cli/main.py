@@ -27,6 +27,7 @@ from .commands import (
     runtime,
     schedule,
     source,
+    worker,
     zone,
     programming,
 )
@@ -127,6 +128,13 @@ router.register(
     config.app,
     help_text="Configuration management (reload YAML configs)",
     doc_path="config.md",
+)
+
+router.register(
+    "worker",
+    worker.app,
+    help_text="Processor job queue worker",
+    doc_path="worker.md",
 )
 
 
