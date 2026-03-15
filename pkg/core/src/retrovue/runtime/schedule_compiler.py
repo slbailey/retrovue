@@ -610,6 +610,28 @@ def validate_dsl(dsl: dict[str, Any], resolver: AssetResolver) -> list[str]:
                     if start:
                         errors.extend(_validate_start_grid_alignment(start, grid_min))
 
+    # INV-SBLOCK-PROGRAM-002 (early): validate program references across all
+    # schedule layers so typos surface at validation, not deep in assembly.
+    programs_defs = dsl.get("programs", {})
+    for day_key, day_value in schedule.items():
+        blocks = [day_value] if isinstance(day_value, dict) else (day_value if isinstance(day_value, list) else [])
+        for item in blocks:
+            if not isinstance(item, dict):
+                continue
+            prog_field = item.get("program", "")
+            if isinstance(prog_field, str):
+                refs = [prog_field] if prog_field else []
+            elif isinstance(prog_field, list):
+                refs = prog_field
+            else:
+                refs = []
+            for ref in refs:
+                if ref not in programs_defs:
+                    errors.append(
+                        f"INV-SBLOCK-PROGRAM-002: program '{ref}' in "
+                        f"schedule.{day_key} not found in program definitions"
+                    )
+
     return errors
 
 

@@ -2105,6 +2105,18 @@ void PipelineManager::Run() {
           committed_b_frame_this_tick = true;
           degraded_take_active_ = false;
         }
+      } else {
+        // Legacy TryPopFrame miss: buffer temporarily empty. Hold last good
+        // frame or emit pad. Without this fallback chosen_video stays nullptr
+        // and encodeFrame dereferences NULL → SIGSEGV.
+        if (has_last_good_video_frame_) {
+          chosen_video = &last_good_video_frame_;
+          decision = TakeDecision::kRepeat;
+        } else {
+          chosen_video = &pad_producer_->VideoFrame();
+          decision = TakeDecision::kPad;
+          pad_cause_tag = "legacy_pop_miss";
+        }
       }
     } else if (take_b) {
       chosen_video = &pad_producer_->VideoFrame();  // default for all take_b pad paths

@@ -172,6 +172,52 @@ class TestValidation:
         errors = validate_program_blocks([b1, b2])
         assert errors == []
 
+    def test_unresolvable_program_ref_in_all_day(self):
+        """validate_dsl must catch program references that don't exist in programs defs."""
+        dsl = {
+            "channel": "test", "broadcast_day": "2024-01-01", "timezone": "UTC",
+            "programs": {"real_prog": {"pool": "movies", "grid_blocks": 2, "fill_mode": "single"}},
+            "schedule": {"all_day": [{"start": "06:00", "slots": 4, "program": "nonexistent_prog"}]},
+        }
+        errors = validate_dsl(dsl, StubAssetResolver())
+        assert any("nonexistent_prog" in e for e in errors)
+
+    def test_unresolvable_program_ref_in_dow_layer(self):
+        """Program ref typos in DOW overrides must be caught at validation, not assembly."""
+        dsl = {
+            "channel": "test", "broadcast_day": "2024-01-01", "timezone": "UTC",
+            "programs": {"real_prog": {"pool": "movies", "grid_blocks": 2, "fill_mode": "single"}},
+            "schedule": {
+                "all_day": [{"start": "06:00", "slots": 4, "program": "real_prog"}],
+                "sunday": [{"start": "14:00", "slots": 2, "program": "typo_prog"}],
+            },
+        }
+        errors = validate_dsl(dsl, StubAssetResolver())
+        assert any("typo_prog" in e for e in errors)
+
+    def test_unresolvable_program_ref_in_list(self):
+        """Program lists with one bad ref must be caught at validation."""
+        dsl = {
+            "channel": "test", "broadcast_day": "2024-01-01", "timezone": "UTC",
+            "programs": {"prog_a": {"pool": "movies", "grid_blocks": 2, "fill_mode": "single"}},
+            "schedule": {"all_day": [{"start": "06:00", "slots": 4, "program": ["prog_a", "prog_b"]}]},
+        }
+        errors = validate_dsl(dsl, StubAssetResolver())
+        assert any("prog_b" in e for e in errors)
+
+    def test_valid_program_refs_no_errors(self):
+        """All valid program refs should produce no reference errors."""
+        dsl = {
+            "channel": "test", "broadcast_day": "2024-01-01", "timezone": "UTC",
+            "programs": {"prog_a": {"pool": "m", "grid_blocks": 2, "fill_mode": "single"}},
+            "schedule": {
+                "all_day": [{"start": "06:00", "slots": 4, "program": "prog_a"}],
+                "sunday": [{"start": "14:00", "slots": 2, "program": "prog_a"}],
+            },
+        }
+        errors = validate_dsl(dsl, StubAssetResolver())
+        assert errors == []
+
 
 # ---------------------------------------------------------------------------
 # Grid alignment tests
