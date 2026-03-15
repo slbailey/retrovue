@@ -77,7 +77,7 @@ Responsible for scheduling metadata processors when new or updated media is dete
 
 Defined by: **ProcessorJobQueueContract**
 
-Processor jobs are queued asynchronously to avoid blocking catalog reconciliation.
+One **job per target** (target_type, target_id) is queued; jobs are executed asynchronously so reconciliation is not blocked. The queue does not store processor_id—the processor runtime selects which processors run for each target when the job is executed.
 
 ### Processor Execution
 
@@ -85,7 +85,7 @@ Responsible for running processors that analyze media or assets.
 
 Defined by: **ProcessorExecutionContract**
 
-Workers retrieve processor jobs and execute processors through the processor runtime. The runtime loads the processor, passes execution context, validates results, and writes metadata; the worker does not need to know processor internals.
+Workers retrieve a job (target), hand it to the processor runtime. The runtime **loads the target and related metadata once**, builds a **shared ProcessingContext** (target entity, existing metadata, processor outputs, mutable changes), and runs processors **sequentially**; each processor reads from the context and returns structured updates; the runtime **merges** results into the context (no database read or write per processor). After all processors succeed, the runtime **validates ownership rules** and **persists all changes in a single database transaction**. The worker does not need to know processor internals.
 
 ### Metadata Storage
 
@@ -116,9 +116,9 @@ A new video file is added to a filesystem container.
 1. ContainerDiscovery discovers the locator.
 2. CatalogReconciliation determines the media is new.
 3. A new Asset and Media record are created.
-4. The system determines which processors apply (via ProcessorCapabilityContract).
-5. Processor jobs (such as ffprobe) are enqueued.
-6. Workers execute processors through the processor runtime.
+4. One processor job per target is enqueued (job identity: target_type, target_id).
+5. The system determines which processors apply to each target via ProcessorCapabilityContract when the job runs.
+6. Workers pull jobs and hand them to the processor runtime; the runtime runs applicable processors (e.g. ffprobe, loudness) for that target in ascending order of execution_order (ProcessorCapabilityContract).
 7. Derived metadata is written to the catalog.
 
 ---

@@ -40,7 +40,24 @@ All previous tests have been moved to `_legacy/` to preserve existing work while
 3. **Phase 3**: Migrate useful test patterns from `_legacy/` to new contract tests
 4. **Phase 4**: Remove `_legacy/` when migration is complete
 
+## Catalog and processor contracts
+
+The following test modules enforce the catalog and processor contracts in `docs/contracts/core/`. Required test cases, naming, and phase mapping are defined in:
+
+- **[CONTRACT_TEST_HARNESS](../../../../docs/contracts/architecture/CONTRACT_TEST_HARNESS.md)** — specification for how contract tests enforce the contracts.
+
+Test modules (one per contract):
+
+- `test_container_discovery_contract.py` — ContainerDiscoveryContract
+- `test_catalog_reconciliation_contract.py` — CatalogReconciliationContract
+- `test_asset_media_identity_contract.py` — AssetMediaIdentityContract
+- `test_processor_job_queue_contract.py` — ProcessorJobQueueContract
+- `test_processor_execution_contract.py` — ProcessorExecutionContract
+- `test_processor_metadata_contract.py` — ProcessorMetadataContract
+
+These tests are the executable specification; implementations must pass them when the corresponding migration phase is complete.
+
 ## See Also
 
-- [Contract Documentation](../../docs/contracts/README.md) - Contract standards and patterns
+- [Contract Documentation](../../../../docs/contracts/README.md) - Contract standards and patterns
 - [Legacy Tests](_legacy/) - Previous test implementations

@@ -297,11 +297,6 @@ class TestReEnrichmentPath:
         """apply_enrichers_to_collection() MUST auto-inject
         InterstitialTypeEnricher for interstitial collections, just like
         the ingest path does.
-
-        VIOLATION: The current implementation only runs enrichers from
-        collection.config['enrichers']. It does not auto-inject
-        InterstitialTypeEnricher, so `collection sync --enrich-only`
-        on an interstitial collection silently skips the type stamp.
         """
         import inspect
         import textwrap
@@ -320,11 +315,6 @@ class TestReEnrichmentPath:
     def test_apply_enrichers_persists_editorial(self):
         """apply_enrichers_to_collection() MUST persist item.editorial into
         AssetEditorial.payload.
-
-        VIOLATION: The current implementation maps enricher labels back to
-        asset fields (duration_ms, codecs) but never persists item.editorial.
-        InterstitialTypeEnricher stamps into item.editorial, so the type
-        stamp is silently dropped.
         """
         import inspect
         import textwrap
@@ -334,8 +324,6 @@ class TestReEnrichmentPath:
         )
 
         source = textwrap.dedent(inspect.getsource(apply_enrichers_to_collection))
-        # Editorial persistence may be inline (AssetEditorial) or delegated
-        # to enrich_asset() which handles it in the unified lifecycle.
         has_inline = "AssetEditorial" in source
         has_delegation = "enrich_asset" in source
         assert has_inline or has_delegation, (

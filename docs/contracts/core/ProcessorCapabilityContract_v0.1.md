@@ -16,17 +16,25 @@ Processors MUST declare:
 - target type
 - required metadata
 - produced metadata
+- execution order
 
 Example:
 
 ```
 processor: ffprobe
 target: MEDIA
+execution_order: 10
 produces:
   duration_ms
   video_codec
   resolution
 ```
+
+---
+
+## Execution Order
+
+Processors MUST declare an **execution_order**. Processors are executed in **ascending order** of execution_order. The runtime uses this to run processors in a deterministic sequence (e.g. ffprobe → scene detection → loudness → thumbnail generator → AI tagging). Without a declared order, processor sequence would be undefined and could cause subtle bugs.
 
 ---
 
